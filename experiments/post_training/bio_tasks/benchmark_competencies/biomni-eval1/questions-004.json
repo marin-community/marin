@@ -45,15 +45,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_dbqa:401",
@@ -101,16 +103,18 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "genome-variation",
-        "clinical"
-      ],
-      "workflows": [
-        "database-query"
+        "genetic-variation",
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_dbqa:190",
@@ -157,15 +161,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_dbqa:309",
@@ -213,16 +219,18 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "genome-variation",
-        "clinical"
-      ],
-      "workflows": [
-        "database-query"
+        "genetic-variation",
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_dbqa:259",
@@ -268,16 +276,19 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics",
-        "epigenomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Epigenomics"
+      ]
     },
     {
       "task_id": "lab_bench_dbqa:105",
@@ -324,16 +335,18 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "rna-biology",
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "rna-processing",
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_dbqa:53",
@@ -380,15 +393,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "database-query"
+        "nucleotide-sequences"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_dbqa:389",
@@ -436,16 +451,18 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "genome-variation",
-        "clinical"
-      ],
-      "workflows": [
-        "database-query"
+        "genetic-variation",
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_dbqa:1",
@@ -492,16 +509,18 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "genome-variation",
-        "clinical"
-      ],
-      "workflows": [
-        "database-query"
+        "genetic-variation",
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_dbqa:460",
@@ -548,15 +567,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_dbqa:505",
@@ -604,15 +625,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_dbqa:49",
@@ -659,15 +682,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "database-query"
+        "nucleotide-sequences"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_dbqa:419",
@@ -715,16 +740,18 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "genome-variation",
-        "clinical"
-      ],
-      "workflows": [
-        "database-query"
+        "genetic-variation",
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_dbqa:80",
@@ -771,16 +798,18 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "rna-biology",
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "rna-processing",
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_dbqa:205",
@@ -827,15 +856,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_dbqa:34",
@@ -882,16 +913,18 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "genome-variation",
-        "clinical"
-      ],
-      "workflows": [
-        "database-query"
+        "genetic-variation",
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_dbqa:430",
@@ -939,16 +972,18 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "genome-variation",
-        "clinical"
-      ],
-      "workflows": [
-        "database-query"
+        "genetic-variation",
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_dbqa:263",
@@ -994,16 +1029,19 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics",
-        "epigenomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Epigenomics"
+      ]
     },
     {
       "task_id": "lab_bench_dbqa:427",
@@ -1051,16 +1089,18 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "genome-variation",
-        "clinical"
-      ],
-      "workflows": [
-        "database-query"
+        "genetic-variation",
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_dbqa:493",
@@ -1108,15 +1148,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_dbqa:366",
@@ -1164,16 +1206,18 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "genome-variation",
-        "clinical"
-      ],
-      "workflows": [
-        "database-query"
+        "genetic-variation",
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_dbqa:91",
@@ -1220,16 +1264,18 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "rna-biology",
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "rna-processing",
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_dbqa:339",
@@ -1277,16 +1323,18 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "genome-variation",
-        "clinical"
-      ],
-      "workflows": [
-        "database-query"
+        "genetic-variation",
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_dbqa:495",
@@ -1334,15 +1382,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_dbqa:52",
@@ -1389,15 +1439,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "database-query"
+        "nucleotide-sequences"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_dbqa:345",
@@ -1445,16 +1497,18 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "genome-variation",
-        "clinical"
-      ],
-      "workflows": [
-        "database-query"
+        "genetic-variation",
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_dbqa:264",
@@ -1500,16 +1554,19 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics",
-        "epigenomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Epigenomics"
+      ]
     },
     {
       "task_id": "lab_bench_dbqa:241",
@@ -1555,16 +1612,19 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics",
-        "epigenomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Epigenomics"
+      ]
     },
     {
       "task_id": "lab_bench_dbqa:13",
@@ -1611,16 +1671,18 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "genome-variation",
-        "clinical"
-      ],
-      "workflows": [
-        "database-query"
+        "genetic-variation",
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_dbqa:315",
@@ -1668,16 +1730,18 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "genome-variation",
-        "clinical"
-      ],
-      "workflows": [
-        "database-query"
+        "genetic-variation",
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_dbqa:88",
@@ -1724,16 +1788,18 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "rna-biology",
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "rna-processing",
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_dbqa:387",
@@ -1781,16 +1847,18 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "genome-variation",
-        "clinical"
-      ],
-      "workflows": [
-        "database-query"
+        "genetic-variation",
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_dbqa:273",
@@ -1836,16 +1904,19 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics",
-        "epigenomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Epigenomics"
+      ]
     },
     {
       "task_id": "lab_bench_dbqa:166",
@@ -1892,15 +1963,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_dbqa:328",
@@ -1948,16 +2021,18 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "genome-variation",
-        "clinical"
-      ],
-      "workflows": [
-        "database-query"
+        "genetic-variation",
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_dbqa:514",
@@ -2005,15 +2080,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_dbqa:134",
@@ -2060,15 +2137,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:767",
@@ -2111,16 +2190,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:619",
@@ -2163,16 +2243,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:760",
@@ -2215,16 +2296,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:645",
@@ -2267,16 +2349,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:755",
@@ -2319,16 +2402,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:556",
@@ -2371,16 +2455,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:812",
@@ -2423,16 +2508,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:577",
@@ -2475,16 +2561,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:85",
@@ -2527,17 +2614,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation",
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:242",
@@ -2580,16 +2668,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:159",
@@ -2632,16 +2721,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:524",
@@ -2684,17 +2774,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "metabolomics"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation",
+        "metabolism"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:35",
@@ -2737,16 +2828,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:540",
@@ -2789,17 +2881,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "metabolomics"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation",
+        "metabolism"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:170",
@@ -2842,16 +2935,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:654",
@@ -2894,18 +2988,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "clinical",
-        "systems-biology"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation",
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "gwas_causal_gene_opentargets:728",
@@ -2948,17 +3044,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation",
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:720",
@@ -3001,16 +3098,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:801",
@@ -3053,16 +3151,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:95",
@@ -3105,16 +3204,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:563",
@@ -3157,16 +3257,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:240",
@@ -3209,16 +3310,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:574",
@@ -3261,16 +3363,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:690",
@@ -3313,17 +3416,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "metabolomics"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation",
+        "metabolism"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:460",
@@ -3366,16 +3470,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:553",
@@ -3418,16 +3523,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:745",
@@ -3470,16 +3576,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:206",
@@ -3522,17 +3629,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "metabolomics"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation",
+        "metabolism"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:392",
@@ -3575,16 +3683,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:397",
@@ -3627,16 +3736,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:721",
@@ -3679,16 +3789,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:217",
@@ -3731,17 +3842,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
+        "genetic-variation",
         "physiology"
       ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:4",
@@ -3784,16 +3896,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:642",
@@ -3836,16 +3949,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:761",
@@ -3888,16 +4002,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:612",
@@ -3940,16 +4055,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:546",
@@ -3992,16 +4108,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:683",
@@ -4044,16 +4161,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:98",
@@ -4096,16 +4214,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:573",
@@ -4148,16 +4267,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:406",
@@ -4200,16 +4320,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:502",
@@ -4252,17 +4373,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "proteomics"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation",
+        "protein-abundance"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:47",
@@ -4305,17 +4427,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation",
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:32",
@@ -4358,16 +4481,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:200",
@@ -4410,16 +4534,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:134",
@@ -4462,17 +4587,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "immunology"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "gwas_causal_gene_opentargets:27",
@@ -4515,16 +4642,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:817",
@@ -4567,16 +4695,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:230",
@@ -4619,16 +4748,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_opentargets:489",
@@ -4671,17 +4801,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
+        "genetic-variation",
         "physiology"
       ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:630",
@@ -4724,16 +4855,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:591",
@@ -4776,16 +4908,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:541",
@@ -4828,17 +4961,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "metabolomics"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation",
+        "metabolism"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:85",
@@ -4881,17 +5015,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "metabolomics"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation",
+        "metabolism"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:242",
@@ -4934,16 +5069,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:159",
@@ -4986,17 +5122,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation",
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:35",
@@ -5039,16 +5176,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:170",
@@ -5091,16 +5229,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:543",
@@ -5143,16 +5282,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:535",
@@ -5195,16 +5335,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     }
   ]
 }

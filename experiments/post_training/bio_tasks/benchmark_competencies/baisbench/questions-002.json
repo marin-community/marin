@@ -39,14 +39,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "differential-expression",
-        "dose-response"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "discovery/10.1016/j.stem.2023.12.013/q1",
@@ -90,13 +89,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "differential-expression"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "discovery/10.1016/j.stem.2023.12.013/q2",
@@ -136,16 +135,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "immunology"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression"
       ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "discovery/10.1016/j.stem.2023.12.013/q3",
@@ -186,14 +188,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "differential-expression",
-        "dose-response"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "discovery/10.1016/j.stem.2023.12.013/q4",
@@ -234,15 +235,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "immunology"
-      ],
-      "workflows": [
-        "cell-annotation",
-        "integration"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "discovery/10.1016/j.stem.2023.12.013/q5",
@@ -283,15 +284,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "gene-expression"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "discovery/10.1038/s42255-022-00531-x/q1",
@@ -333,13 +336,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "discovery/10.1038/s42255-022-00531-x/q2",
@@ -381,13 +384,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "discovery/10.1038/s42255-022-00531-x/q3",
@@ -431,13 +434,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "differential-expression"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "discovery/10.1038/s42255-022-00531-x/q4",
@@ -478,15 +481,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "gene-expression"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "discovery/10.1038/s42255-022-00531-x/q5",
@@ -528,13 +533,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "discovery/10.1177/00220345221147908/q1",
@@ -576,13 +581,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "discovery/10.1177/00220345221147908/q2",
@@ -626,13 +631,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "differential-expression"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "discovery/10.1177/00220345221147908/q3",
@@ -674,14 +679,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "immunology"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "discovery/10.1177/00220345221147908/q4",
@@ -722,14 +728,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "functional-genomics"
-      ],
-      "workflows": [
-        "communication"
+        "gene-expression",
+        "molecular-function",
+        "molecular-interactions"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "discovery/10.1177/00220345221147908/q5",
@@ -771,13 +778,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "discovery/10.1016/j.jcmgh.2022.02.007/q1",
@@ -819,13 +826,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "discovery/10.1016/j.jcmgh.2022.02.007/q2",
@@ -865,13 +872,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "discovery/10.1016/j.jcmgh.2022.02.007/q3",
@@ -911,15 +918,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression"
       ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "discovery/10.1016/j.jcmgh.2022.02.007/q4",
@@ -959,16 +968,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "immunology"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression"
       ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "discovery/10.1016/j.jcmgh.2022.02.007/q5",
@@ -1009,15 +1021,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "gene-expression"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "discovery/10.1038/s41586-019-0903-2/q1",
@@ -1059,13 +1073,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "discovery/10.1038/s41586-019-0903-2/q2",
@@ -1105,13 +1119,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "discovery/10.1038/s41586-019-0903-2/q3",
@@ -1152,13 +1166,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "composition"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "discovery/10.1038/s41586-019-0903-2/q4",
@@ -1200,13 +1214,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "discovery/10.1038/s41586-019-0903-2/q5",
@@ -1247,15 +1261,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "immunology"
-      ],
-      "workflows": [
-        "cell-annotation",
-        "integration"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "discovery/10.3389/fcvm.2020.00052/q2",
@@ -1298,13 +1312,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "trajectory"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "discovery/10.3389/fcvm.2020.00052/q3",
@@ -1346,13 +1360,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "discovery/10.3389/fcvm.2020.00052/q4",
@@ -1395,14 +1409,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "immunology"
+        "gene-expression"
       ],
-      "workflows": [
-        "network"
+      "operations": [
+        "graph-analysis"
       ],
-      "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "discovery/10.3389/fcvm.2020.00052/q5",
@@ -1443,15 +1460,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "immunology"
-      ],
-      "workflows": [
-        "cell-annotation",
-        "integration"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "discovery/10.1002/pros.24020/q1",
@@ -1492,14 +1509,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "differential-expression",
-        "dose-response"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "discovery/10.1002/pros.24020/q2",
@@ -1541,13 +1557,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "discovery/10.1002/pros.24020/q3",
@@ -1588,13 +1604,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "composition"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "discovery/10.1002/pros.24020/q4",
@@ -1635,15 +1651,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "gene-expression"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "discovery/10.1002/pros.24020/q5",
@@ -1686,15 +1704,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "gene-expression"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "discovery/10.3390/genes15030298/q1",
@@ -1737,13 +1757,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "composition"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "discovery/10.3390/genes15030298/q2",
@@ -1783,13 +1803,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "discovery/10.3390/genes15030298/q3",
@@ -1831,14 +1851,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "immunology"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "discovery/10.3390/genes15030298/q5",
@@ -1880,13 +1901,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "discovery/10.1172/jci.insight.178499/q1",
@@ -1927,14 +1948,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "immunology"
-      ],
-      "workflows": [
-        "composition"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "discovery/10.1172/jci.insight.178499/q2",
@@ -1978,13 +2000,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "differential-expression"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "discovery/10.1172/jci.insight.178499/q3",
@@ -2028,14 +2050,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "immunology"
-      ],
-      "workflows": [
-        "differential-expression"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "discovery/10.1172/jci.insight.178499/q4",
@@ -2079,15 +2102,14 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "functional-genomics"
-      ],
-      "workflows": [
-        "differential-expression",
-        "enrichment"
+        "gene-expression",
+        "molecular-function"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "discovery/10.1172/jci.insight.178499/q5",
@@ -2128,13 +2150,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "composition"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "discovery/10.1016/j.celrep.2022.111838/q1",
@@ -2175,14 +2197,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "immunology"
-      ],
-      "workflows": [
-        "composition"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "discovery/10.1016/j.celrep.2022.111838/q2",
@@ -2222,15 +2245,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression"
       ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "discovery/10.1016/j.celrep.2022.111838/q3",
@@ -2271,13 +2296,14 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "communication"
+        "gene-expression",
+        "molecular-interactions"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "discovery/10.1016/j.celrep.2022.111838/q4",
@@ -2319,13 +2345,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "discovery/10.1016/j.celrep.2022.111838/q5",
@@ -2369,13 +2395,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "differential-expression"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "discovery/10.1016/j.cell.2020.08.013/q1",
@@ -2417,14 +2443,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "immunology"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "discovery/10.1016/j.cell.2020.08.013/q2",
@@ -2465,15 +2492,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "immunology"
-      ],
-      "workflows": [
-        "cell-annotation",
-        "integration"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "discovery/10.1016/j.cell.2020.08.013/q3",
@@ -2513,15 +2540,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression"
       ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "discovery/10.1016/j.cell.2020.08.013/q5",
@@ -2562,14 +2591,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "association",
-        "enrichment"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "discovery/10.1038/s42003-024-06225-2/q1",
@@ -2609,16 +2637,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "immunology"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression"
       ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "discovery/10.1038/s42003-024-06225-2/q2",
@@ -2662,14 +2693,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "immunology"
-      ],
-      "workflows": [
-        "differential-expression"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "discovery/10.1038/s42003-024-06225-2/q3",
@@ -2711,14 +2743,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "immunology"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "discovery/10.1038/s42003-024-06225-2/q4",
@@ -2762,16 +2795,16 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "functional-genomics",
-        "immunology"
-      ],
-      "workflows": [
-        "differential-expression",
-        "enrichment"
+        "gene-expression",
+        "molecular-function"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "discovery/10.1038/s42003-024-06225-2/q5",
@@ -2812,16 +2845,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "immunology"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "gene-expression"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "discovery/10.1016/j.devcel.2020.11.010/q1",
@@ -2865,13 +2901,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "differential-expression"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "discovery/10.1016/j.devcel.2020.11.010/q2",
@@ -2912,16 +2948,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "functional-genomics"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "gene-expression",
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "discovery/10.1016/j.devcel.2020.11.010/q3",
@@ -2962,13 +3000,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "composition"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "discovery/10.1016/j.devcel.2020.11.010/q4",
@@ -3011,13 +3049,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "trajectory"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "discovery/10.1016/j.devcel.2020.11.010/q5",
@@ -3058,15 +3096,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "gene-expression"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "annotation/Adipose",
@@ -3108,13 +3148,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "annotation/Blood",
@@ -3156,13 +3196,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "annotation/Bone_marrow",
@@ -3204,13 +3244,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "annotation/Breast",
@@ -3252,13 +3292,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "annotation/Eye",
@@ -3300,13 +3340,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "annotation/Heart",
@@ -3348,13 +3388,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "annotation/Intestine",
@@ -3396,13 +3436,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "annotation/Kidney",
@@ -3444,13 +3484,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "annotation/Liver",
@@ -3492,13 +3532,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "annotation/Ovary",
@@ -3540,13 +3580,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "annotation/Pancreas",
@@ -3588,13 +3628,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "annotation/Salivary_gland",
@@ -3636,13 +3676,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "annotation/Skin",
@@ -3684,13 +3724,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "annotation/Testis",
@@ -3732,13 +3772,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "annotation/Trachea",
@@ -3780,13 +3820,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     }
   ]
 }

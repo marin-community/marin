@@ -42,15 +42,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/polaris-posebusters-v1",
@@ -94,14 +96,13 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "molecular-structure",
-        "chemical-biology"
-      ],
-      "workflows": [
-        "structure-prediction"
+        "molecular-structure"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/recursion-rxrx-compound-gene-activity-benchmark",
@@ -145,17 +146,20 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology",
-        "functional-genomics",
-        "bioimaging"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "disease-treatment-response",
+        "molecular-function"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "classification"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Biological imaging"
+      ]
     },
     {
       "task_id": "polarishub-extended/tdcommons-ames",
@@ -199,15 +203,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "classification"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/tdcommons-bbb-martins",
@@ -251,15 +257,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "classification"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/tdcommons-bioavailability-ma",
@@ -303,15 +311,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "classification"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/tdcommons-caco2-wang",
@@ -355,15 +365,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/tdcommons-clearance-hepatocyte-az",
@@ -407,15 +419,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/tdcommons-clearance-microsome-az",
@@ -459,15 +473,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/tdcommons-cyp2c9-substrate-carbonmangels",
@@ -511,15 +527,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "classification"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/tdcommons-cyp2c9-veith",
@@ -563,15 +581,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "classification"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/tdcommons-cyp2d6-substrate-carbonmangels",
@@ -615,15 +635,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "classification"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/tdcommons-cyp2d6-veith",
@@ -667,15 +689,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "classification"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/tdcommons-cyp3a4-substrate-carbonmangels",
@@ -719,15 +743,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "classification"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/tdcommons-cyp3a4-veith",
@@ -771,15 +797,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "classification"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/tdcommons-dili",
@@ -823,15 +851,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "classification"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/tdcommons-half-life-obach",
@@ -875,15 +905,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/tdcommons-herg",
@@ -927,15 +959,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "classification"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/tdcommons-hia-hou",
@@ -979,15 +1013,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "classification"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/tdcommons-ld50-zhu",
@@ -1031,15 +1067,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/tdcommons-lipophilicity-astrazeneca",
@@ -1083,15 +1121,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/tdcommons-pgp-broccatelli",
@@ -1135,15 +1175,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "classification"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/tdcommons-ppbr-az",
@@ -1187,15 +1229,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/tdcommons-solubility-aqsoldb",
@@ -1239,15 +1283,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/tdcommons-vdss-lombardo",
@@ -1291,15 +1337,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/vishrut64-cho-dna-expression-prediction-dataset-task",
@@ -1343,15 +1391,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/vishrut64-rna-expression-prediction-dataset-task",
@@ -1395,15 +1445,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/A0A140D2T1_ZIKV_Sourisseau_2019",
@@ -1447,16 +1499,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/A0A192B1T2_9HIV1_Haddox_2018",
@@ -1500,16 +1554,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/A0A1I9GEU1_NEIME_Kennouche_2019",
@@ -1553,16 +1609,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/A0A247D711_LISMN_Stadelmann_2021",
@@ -1606,16 +1664,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/A0A2Z5U3Z0_9INFA_Doud_2016",
@@ -1659,16 +1719,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/A0A2Z5U3Z0_9INFA_Wu_2014",
@@ -1712,16 +1774,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/A4D664_9INFA_Soh_2019",
@@ -1765,16 +1829,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/A4GRB6_PSEAI_Chen_2020",
@@ -1818,16 +1884,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/A4_HUMAN_Seuma_2022",
@@ -1871,16 +1939,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/A4_HUMAN_Seuma_2022_indels",
@@ -1924,16 +1994,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/AACC1_PSEAI_Dandage_2018",
@@ -1977,16 +2049,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/ACE2_HUMAN_Chan_2020",
@@ -2030,16 +2104,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/ADRB2_HUMAN_Jones_2020",
@@ -2083,16 +2159,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/AICDA_HUMAN_Gajula_2014_3cycles",
@@ -2136,16 +2214,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/AMFR_HUMAN_Tsuboyama_2023_4G3O",
@@ -2189,16 +2269,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/AMFR_HUMAN_Tsuboyama_2023_4G3O_indels",
@@ -2242,16 +2324,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/AMIE_PSEAE_Wrenbeck_2017",
@@ -2295,16 +2379,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/ANCSZ_Hobbs_2022",
@@ -2348,16 +2434,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/ARGR_ECOLI_Tsuboyama_2023_1AOY",
@@ -2401,16 +2489,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/ARGR_ECOLI_Tsuboyama_2023_1AOY_indels",
@@ -2454,16 +2544,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/B1LPA6_ECOSM_Russ_2020_indels",
@@ -2507,16 +2599,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/B2L11_HUMAN_Dutta_2010_binding-Mcl-1",
@@ -2560,16 +2654,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/BBC1_YEAST_Tsuboyama_2023_1TG0",
@@ -2613,16 +2709,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/BBC1_YEAST_Tsuboyama_2023_1TG0_indels",
@@ -2666,16 +2764,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/BCHB_CHLTE_Tsuboyama_2023_2KRU",
@@ -2719,16 +2819,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/BCHB_CHLTE_Tsuboyama_2023_2KRU_indels",
@@ -2772,16 +2874,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/BLAT_ECOLX_Deng_2012",
@@ -2825,16 +2929,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/BLAT_ECOLX_Firnberg_2014",
@@ -2878,16 +2984,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/BLAT_ECOLX_Gonzalez_2019_indels",
@@ -2931,16 +3039,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/BLAT_ECOLX_Jacquier_2013",
@@ -2984,16 +3094,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/BLAT_ECOLX_Stiffler_2015",
@@ -3037,16 +3149,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/BRCA1_HUMAN_Findlay_2018",
@@ -3090,16 +3204,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     }
   ]
 }

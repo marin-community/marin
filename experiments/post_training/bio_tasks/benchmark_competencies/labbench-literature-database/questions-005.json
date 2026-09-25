@@ -45,15 +45,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:8f89afaa-9fbb-4a67-8dbc-f74d00c90510",
@@ -100,15 +102,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:a5892ac6-4ba7-4479-9a58-f47b9dadbe21",
@@ -155,15 +159,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:b7d66443-572b-4ffd-b72d-8839db7afc5c",
@@ -210,15 +216,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:1245a3ba-26a9-4daa-b08a-d73371d37f1e",
@@ -265,15 +273,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:717cab73-5c39-4653-ae75-f0937159bab0",
@@ -320,15 +330,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:b33e162a-7589-4e76-8dd3-7722b0e35f83",
@@ -375,15 +387,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:02a0cb49-6a28-47b0-9bc3-4311640a9f00",
@@ -430,15 +444,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:bbb05801-8c72-4314-80fb-793877ea2cf1",
@@ -485,15 +501,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:4cfdcc17-0cea-4bbd-b440-e2127f675405",
@@ -540,15 +558,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:c2ede898-0976-4a95-ba08-9cc68875868b",
@@ -595,15 +615,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:9a5fe936-c5fc-422d-8307-fa6503a08b32",
@@ -650,15 +672,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:89e967b8-b1ff-4b06-a995-9a2b8f68458b",
@@ -705,15 +729,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:b8f1eb37-22db-4f20-8ba6-a52ace0b153a",
@@ -760,15 +786,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:5f1cbe72-c29b-40d5-905b-33daafc9e818",
@@ -815,15 +843,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:d71fdd87-ee3f-4c3f-8988-8058062b6860",
@@ -870,15 +900,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:cee51a3f-9e9d-457f-8a00-3a86e176f74f",
@@ -925,15 +957,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:872da43c-2a54-498d-8046-b082b77b755d",
@@ -980,15 +1014,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:da79c577-6a45-4d11-ab03-5a02b67ad8b7",
@@ -1035,15 +1071,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:56fa5328-9e7b-43c2-8905-fe0238766232",
@@ -1090,15 +1128,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:f6ff903c-5704-4ce1-aa65-3644590c8f34",
@@ -1145,15 +1185,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:c372e579-1cf8-4d95-8bb3-9e0c5c83dcfd",
@@ -1200,15 +1242,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:16d86938-0cd8-4a18-a2bd-29823b7f9e7e",
@@ -1255,15 +1299,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:b090c7ea-9400-4595-9383-757dd0b9763f",
@@ -1310,15 +1356,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:0fa4cc67-821c-4883-89ce-b9e55b99e477",
@@ -1365,15 +1413,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:eb3a2ce6-a069-4dd2-8664-b31f90b0e5e0",
@@ -1420,15 +1470,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:490f065d-7f28-4418-bb03-de298ad6d7ec",
@@ -1475,15 +1527,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:8f035bc2-be06-4880-b217-33b4b844f5c2",
@@ -1530,15 +1584,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:08dd88d4-b500-49f0-a8a9-78c3ec243978",
@@ -1585,15 +1641,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:b3fc0a7b-5c05-4ed1-a9f3-61ee68455745",
@@ -1640,15 +1698,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:21f68c28-a60a-4ac4-af35-5769614c082d",
@@ -1695,15 +1755,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:f0f1ff6f-0f6d-4fcf-b2d9-5f80683c3fa6",
@@ -1750,15 +1812,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:8b837dac-c6d3-4f49-aa38-cc141c625708",
@@ -1806,15 +1870,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:bc2acb68-69a7-4bbe-9b62-3f4b6ddec8ad",
@@ -1862,15 +1928,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:959e24de-f6c1-479d-9c8b-c4d1318e1812",
@@ -1918,15 +1986,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:50958738-df09-4693-8bcf-e2005af66199",
@@ -1974,15 +2044,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:1a198a80-1d78-4d00-bb09-5171b1c7f25c",
@@ -2030,15 +2102,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:c407b209-4033-4480-bda7-0696c3406376",
@@ -2086,15 +2160,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:9f1f11ff-f91a-4da1-a8a6-cd3167019af9",
@@ -2142,15 +2218,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:269c3c37-ff81-4596-89c4-f6d66e8b1dd0",
@@ -2198,15 +2276,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:be0f1160-9b16-49a3-bbe3-c1e7bf3638a9",
@@ -2254,15 +2334,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:a4b43b64-ed28-4220-b5af-8f65f6bb9f40",
@@ -2310,15 +2392,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:136d478f-4576-41a2-a8ee-77e115ce7b59",
@@ -2366,15 +2450,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:8f043091-4be9-4787-b551-74f99218eb08",
@@ -2422,15 +2508,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:718f88e8-4301-41cc-965a-bb2005190dca",
@@ -2478,15 +2566,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:af95e496-d1d1-458a-8869-0fb1a10bce14",
@@ -2534,15 +2624,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:b2a32bae-6c4a-4bcf-8262-79c946ba08fc",
@@ -2590,15 +2682,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:c2e89977-c85e-46cd-b40a-ba496a3a271b",
@@ -2646,15 +2740,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:bb011b36-83dc-4fbb-bb9e-0ce7a5258a75",
@@ -2702,15 +2798,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:f873cce9-b2a7-4ee0-ae82-6c8a2a5824fb",
@@ -2758,15 +2856,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:217530cf-ff5f-4ff6-997b-7479abc72a0b",
@@ -2814,15 +2914,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:100d2da8-537d-48b3-9b75-8d4c561283aa",
@@ -2870,15 +2972,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:c37dd0a6-c989-4cea-9df2-52fb145a54bd",
@@ -2926,15 +3030,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:ee2ebb06-d7e8-4122-88ac-b97a422fc9c0",
@@ -2982,15 +3088,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:576edeb8-2cf8-450e-8f84-5b540346e983",
@@ -3038,15 +3146,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:4398bf0d-62f8-4a35-9c64-b77f92bac7c1",
@@ -3094,15 +3204,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:59a0f64d-24ac-4288-8185-f29a573672ec",
@@ -3150,15 +3262,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:9b59969e-83b8-4bc7-8b10-953f481aba9c",
@@ -3206,15 +3320,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:b5a99fec-bb7d-4e4e-9a41-8de39b543042",
@@ -3262,15 +3378,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:8f5745ba-4dca-4776-a1c1-4f55ae4b6ecd",
@@ -3318,15 +3436,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:9770c7c5-bfab-4ce7-aa5a-2b1b6959e26a",
@@ -3374,15 +3494,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:21453b83-a5cc-403b-8975-ec8163783244",
@@ -3430,15 +3552,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:9db006e7-5aed-4b44-be89-91f7f2a7b89c",
@@ -3486,15 +3610,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:1be15bdf-3e45-43d9-be45-1062bec9c2b1",
@@ -3542,15 +3668,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:055485da-456c-4152-8c85-b3386f9524b1",
@@ -3598,15 +3726,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:9df7e0fe-771e-428c-8d83-c0cef15bd0b4",
@@ -3654,15 +3784,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:9869b7d5-8e3e-41ba-93b4-aa54094b04c7",
@@ -3710,15 +3842,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:e1f8fa00-1420-4c8b-974b-310edf54a63c",
@@ -3766,15 +3900,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:3e5c66ac-14d8-4701-9423-5b21a2541086",
@@ -3822,15 +3958,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:74f0f10c-0a2a-4d47-9308-c3ceb3f7d5c8",
@@ -3878,15 +4016,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:1816e2d2-a9ee-4134-bc84-0823440c78ea",
@@ -3934,15 +4074,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:d49178fa-5eb0-4dc3-b459-6905bc730970",
@@ -3990,15 +4132,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "LitQA2:e3b5a4af-41d9-48db-becf-29a08d0ad28e",
@@ -4031,16 +4175,18 @@
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
       "recipes": [],
-      "scientific_context": [
-        "microbiology"
-      ],
-      "workflows": [
-        "evidence-extraction"
-      ],
+      "scientific_context": [],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Microbiology"
+      ]
     },
     {
       "task_id": "LitQA2:76184ccf-4bf0-469e-a442-11d04b4ff8b0",
@@ -4074,13 +4220,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "LitQA2:39129e1c-096f-4414-bf4f-37fadbbe364c",
@@ -4114,13 +4262,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "LitQA2:27234279-f50c-4cfc-86e2-af68364a8f94",
@@ -4154,15 +4304,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "nucleotide-sequences"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "LitQA2:517e7cf8-c5d2-4391-9e2a-235b79d93050",
@@ -4196,15 +4348,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "LitQA2:cb710074-73a8-4407-b0c7-7dc868f1bc76",
@@ -4238,15 +4392,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "LitQA2:2c05315d-6898-4667-b454-d99b7381bedb",
@@ -4280,16 +4436,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-sequence",
-        "epigenomics"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "nucleotide-sequences"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Epigenomics"
+      ]
     },
     {
       "task_id": "LitQA2:5c4c602c-9624-4eae-ac44-efe4c0dd10e6",
@@ -4323,13 +4482,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "LitQA2:c9bdb9b5-28c1-44da-93b6-b1fc9d8bf369",
@@ -4363,16 +4524,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "gene-expression",
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "LitQA2:e6b0f9e5-e976-47dc-b839-0b2fca967e9e",
@@ -4406,15 +4569,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "gene-expression"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "LitQA2:247eeb85-a552-4b87-b83e-327538fcb8a9",
@@ -4450,17 +4615,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "clinical",
-        "immunology"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "gene-expression",
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "LitQA2:39c985ce-70e8-48e4-bd76-744cd07cb56a",
@@ -4494,16 +4662,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-sequence",
-        "epigenomics"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "nucleotide-sequences"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Epigenomics"
+      ]
     },
     {
       "task_id": "LitQA2:a214f5f8-0de8-43cf-82e0-7930003e4a0c",
@@ -4537,13 +4708,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "LitQA2:a43e5166-d0e8-48f8-a113-648acac7ed59",
@@ -4577,13 +4750,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "LitQA2:dd29920d-cb70-440f-961c-3e1103776c4f",
@@ -4616,16 +4791,18 @@
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
       "recipes": [],
-      "scientific_context": [
-        "immunology"
-      ],
-      "workflows": [
-        "evidence-extraction"
-      ],
+      "scientific_context": [],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "LitQA2:7d805bb8-4c7c-431f-b068-acf5e5459985",
@@ -4659,16 +4836,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "systems-biology"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "gene-expression"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "LitQA2:8d7fa642-ee46-4a13-8ea9-61cc2d4f4ddd",
@@ -4701,16 +4881,18 @@
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
       "recipes": [],
-      "scientific_context": [
-        "immunology"
-      ],
-      "workflows": [
-        "evidence-extraction"
-      ],
+      "scientific_context": [],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "LitQA2:487539f9-2f17-4009-aa4a-c41322445f11",
@@ -4744,13 +4926,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "LitQA2:5049c648-b1bb-4624-8824-9d93dfb04e51",
@@ -4784,15 +4968,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "gene-expression"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "LitQA2:a18883e9-218a-4719-8d2c-cf94d740de1a",
@@ -4826,13 +5012,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "LitQA2:d7833c0f-2a16-40d2-b6a0-6764aa3003a6",
@@ -4866,13 +5054,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "LitQA2:1ccdc348-50e1-4941-9151-5e50411a2b41",
@@ -4906,15 +5096,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "LitQA2:1e5f5199-84f4-4133-ab87-2372fa6ca722",
@@ -4947,16 +5139,18 @@
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
       "recipes": [],
-      "scientific_context": [
-        "epigenomics"
-      ],
-      "workflows": [
-        "evidence-extraction"
-      ],
+      "scientific_context": [],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Epigenomics"
+      ]
     },
     {
       "task_id": "LitQA2:d2860d38-dfb9-4b80-905f-812c32573915",
@@ -4990,17 +5184,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "microbiology",
-        "ecology",
-        "immunology"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "ecology"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Microbiology",
+        "Immunology"
+      ]
     },
     {
       "task_id": "LitQA2:77a41274-cd9c-48bc-a347-e0746907840d",
@@ -5034,17 +5231,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-sequence",
-        "immunology"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "gene-expression",
+        "nucleotide-sequences"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "LitQA2:5a2128ad-3127-4595-b810-db128d1a2335",
@@ -5078,13 +5278,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "LitQA2:d65103ae-c881-4116-a0a7-1b233eb6275a",
@@ -5118,15 +5320,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "nucleotide-sequences"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "LitQA2:ab5eb050-d134-4445-9307-6faa08be7474",
@@ -5159,16 +5363,18 @@
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
       "recipes": [],
-      "scientific_context": [
-        "microbiology"
-      ],
-      "workflows": [
-        "evidence-extraction"
-      ],
+      "scientific_context": [],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Microbiology"
+      ]
     },
     {
       "task_id": "LitQA2:82de3e92-abe2-46ac-ad17-23417b9c4da7",
@@ -5202,13 +5408,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "LitQA2:7cf0fcde-fea8-420c-8531-2f2fe9e38980",
@@ -5242,13 +5450,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "LitQA2:da5b2a8f-ba08-4692-851f-2e0bf142a02f",
@@ -5282,13 +5492,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "LitQA2:e2fb56b7-08cd-4dc0-bc63-b45931a74fc9",
@@ -5322,13 +5534,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "LitQA2:eda34fde-798e-43a1-a9d3-a804d3d8ee4e",
@@ -5362,13 +5576,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "LitQA2:0eede7a8-fe1f-42d3-a2c6-478083648644",
@@ -5402,15 +5618,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "gene-expression"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "LitQA2:d1307e50-3c03-4c76-81ee-2decb5de5f14",
@@ -5444,15 +5662,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "gene-expression"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "LitQA2:10cece36-a507-4a93-9600-13f3e0e677f8",
@@ -5486,16 +5706,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "epigenomics"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "gene-expression"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Epigenomics"
+      ]
     },
     {
       "task_id": "LitQA2:f5a84803-3917-43eb-801b-8dc0c5400da1",
@@ -5529,15 +5752,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "proteomics"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "protein-abundance"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "LitQA2:c47dd378-dde3-4a45-9184-6abfa6163717",
@@ -5570,16 +5795,18 @@
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
       "recipes": [],
-      "scientific_context": [
-        "epigenomics"
-      ],
-      "workflows": [
-        "evidence-extraction"
-      ],
+      "scientific_context": [],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Epigenomics"
+      ]
     },
     {
       "task_id": "LitQA2:0bac8974-554c-439a-a9a2-22fa509c8d5d",
@@ -5613,13 +5840,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "LitQA2:aaa85379-1e4b-4642-9ec4-e1a6d6c29c3b",
@@ -5653,15 +5882,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "LitQA2:aa1835b2-2b1c-4986-b7af-e174da0124b0",
@@ -5695,15 +5926,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "LitQA2:5a9c6697-a65c-49c0-9e02-38b2a276fde7",
@@ -5737,13 +5970,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "LitQA2:37a4d007-793e-4a89-922a-c1b05f4f82c1",
@@ -5777,13 +6012,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "LitQA2:c9baf8e0-c4c7-4ba3-b5c4-18e9af8b2df1",
@@ -5817,13 +6054,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "LitQA2:d0f69626-66ee-4807-937d-c3a024441812",
@@ -5857,13 +6096,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "LitQA2:462a9f38-7cbe-4e12-a6e2-b1d7028c3a8b",
@@ -5897,15 +6138,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "nucleotide-sequences"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "LitQA2:86f111e5-402b-4ef5-b101-8be1bf5be7c6",
@@ -5939,16 +6182,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "epigenomics",
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Epigenomics"
+      ]
     },
     {
       "task_id": "LitQA2:cbe93a43-09cd-4cb4-9edd-f22fe8c28415",
@@ -5982,15 +6228,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "proteomics"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "protein-abundance"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "LitQA2:7a88e6f7-fb8e-4a24-b08d-9b7a6edafe57",
@@ -6024,15 +6272,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "nucleotide-sequences"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "LitQA2:91387526-9268-4a3c-9abe-73819707d0b0",
@@ -6065,16 +6315,18 @@
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
       "recipes": [],
-      "scientific_context": [
-        "microbiology"
-      ],
-      "workflows": [
-        "evidence-extraction"
-      ],
+      "scientific_context": [],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Microbiology"
+      ]
     },
     {
       "task_id": "LitQA2:7b98796f-25be-4c58-a52a-4e366c0ffd95",
@@ -6108,13 +6360,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "LitQA2:5e20e26d-6192-4563-abb3-a4857e3dbc7c",
@@ -6148,15 +6402,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "gene-expression"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "LitQA2:b105af85-833e-48bc-ac78-48f73c9673fd",
@@ -6190,15 +6446,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "gene-expression"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "LitQA2:5b6d6f82-a585-4aa8-9fe6-e7d35f7cb2ae",
@@ -6232,13 +6490,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     }
   ]
 }

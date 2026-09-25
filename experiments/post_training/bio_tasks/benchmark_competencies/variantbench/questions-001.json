@@ -39,19 +39,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "metabolomics",
-        "clinical"
-      ],
-      "workflows": [
-        "association",
-        "variant-analysis",
-        "population-genetics"
+        "genetic-variation",
+        "metabolism",
+        "disease-treatment-response"
       ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "fine_mapping_effector_gene_prioritization",
@@ -92,19 +92,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence",
-        "clinical"
+        "gene-expression",
+        "genetic-variation",
+        "nucleotide-sequences",
+        "disease-treatment-response"
       ],
-      "workflows": [
-        "variant-analysis",
-        "variant-consequence",
-        "spatial",
-        "evidence-ranking"
+      "operations": [
+        "spatial-analysis"
       ],
-      "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "chry_father_son_concordance_11",
@@ -145,18 +144,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "clinical"
-      ],
-      "workflows": [
-        "variant-analysis",
-        "evidence-ranking"
+        "genetic-variation",
+        "disease-treatment-response"
       ],
       "operations": [
+        "descriptive-analysis",
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "ont_rfc1_repeat_expansion_pathogenicity",
@@ -199,18 +200,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "genome-sequence",
-        "clinical"
-      ],
-      "workflows": [
-        "variant-analysis",
-        "variant-consequence"
+        "genetic-variation",
+        "nucleotide-sequences",
+        "disease-treatment-response"
       ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "small_variant_calling_mnv_codon_consequence",
@@ -249,24 +251,23 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-alignment",
-        "sequence-query",
-        "variant-analysis",
-        "variant-consequence",
-        "population-genetics",
-        "database-query"
+        "gene-expression",
+        "genetic-variation",
+        "nucleotide-sequences"
       ],
       "operations": [
+        "alignment-matching",
+        "information-retrieval",
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "sequence-alignment",
         "record-retrieval",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "sv_chromosome_end_signal",
@@ -307,15 +308,14 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
+        "genetic-variation",
         "molecular-structure"
       ],
-      "workflows": [
-        "read-qc",
-        "variant-analysis"
-      ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "osteosarcoma_wes_stage3_called_vcf_neoantigen_gene_recall",
@@ -357,24 +357,25 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence",
+        "gene-expression",
+        "genetic-variation",
+        "nucleotide-sequences",
         "molecular-structure",
-        "clinical"
-      ],
-      "workflows": [
-        "predictive-modeling",
-        "variant-analysis",
-        "image-analysis",
-        "database-query"
+        "disease-treatment-response"
       ],
       "operations": [
+        "predictive-modeling",
+        "information-retrieval",
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction",
         "record-retrieval",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "eval_stage4_annotated_vcf",
@@ -416,20 +417,21 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-variation",
-        "clinical"
-      ],
-      "workflows": [
-        "variant-analysis",
-        "database-query",
-        "evidence-ranking"
+        "gene-expression",
+        "genetic-variation",
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval",
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     }
   ]
 }

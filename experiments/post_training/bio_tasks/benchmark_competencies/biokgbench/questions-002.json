@@ -44,17 +44,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-096",
@@ -100,17 +101,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-097",
@@ -156,17 +158,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-098",
@@ -212,17 +215,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-099",
@@ -268,17 +272,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-100",
@@ -324,17 +329,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-101",
@@ -380,17 +386,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-102",
@@ -436,17 +443,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-103",
@@ -492,17 +500,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-104",
@@ -548,17 +557,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-105",
@@ -604,17 +614,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-106",
@@ -660,17 +671,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-107",
@@ -716,17 +728,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-108",
@@ -772,17 +785,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-109",
@@ -828,17 +842,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-110",
@@ -884,17 +899,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-111",
@@ -940,17 +956,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-112",
@@ -996,17 +1013,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-113",
@@ -1052,17 +1070,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-114",
@@ -1108,17 +1127,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-115",
@@ -1164,17 +1184,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-116",
@@ -1220,17 +1241,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-117",
@@ -1276,17 +1298,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-118",
@@ -1332,17 +1355,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-119",
@@ -1388,17 +1412,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-120",
@@ -1444,17 +1469,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-121",
@@ -1500,17 +1526,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-122",
@@ -1556,17 +1583,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-123",
@@ -1612,17 +1640,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-124",
@@ -1668,17 +1697,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-125",
@@ -1724,17 +1754,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-126",
@@ -1780,17 +1811,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-127",
@@ -1836,17 +1868,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-128",
@@ -1892,17 +1925,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-129",
@@ -1948,17 +1982,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-130",
@@ -2004,17 +2039,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-131",
@@ -2060,17 +2096,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-132",
@@ -2116,17 +2153,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-133",
@@ -2172,17 +2210,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-134",
@@ -2228,17 +2267,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-135",
@@ -2284,17 +2324,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-136",
@@ -2340,17 +2381,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-137",
@@ -2396,17 +2438,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-138",
@@ -2452,17 +2495,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-139",
@@ -2508,17 +2552,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-140",
@@ -2564,17 +2609,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-141",
@@ -2620,17 +2666,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-142",
@@ -2676,17 +2723,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-143",
@@ -2732,17 +2780,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-144",
@@ -2788,17 +2837,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-145",
@@ -2844,17 +2894,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-146",
@@ -2900,17 +2951,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-147",
@@ -2956,17 +3008,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-148",
@@ -3012,17 +3065,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-149",
@@ -3068,17 +3122,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-150",
@@ -3124,17 +3179,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-151",
@@ -3180,17 +3236,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-152",
@@ -3236,17 +3293,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-153",
@@ -3292,17 +3350,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-154",
@@ -3348,17 +3407,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-155",
@@ -3404,17 +3464,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-156",
@@ -3460,17 +3521,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-157",
@@ -3516,17 +3578,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-158",
@@ -3572,17 +3635,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-159",
@@ -3628,17 +3692,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-160",
@@ -3684,17 +3749,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-161",
@@ -3740,17 +3806,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-162",
@@ -3796,17 +3863,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-163",
@@ -3852,17 +3920,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-164",
@@ -3908,17 +3977,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-165",
@@ -3964,17 +4034,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-166",
@@ -4020,17 +4091,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-167",
@@ -4076,17 +4148,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-168",
@@ -4132,17 +4205,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-169",
@@ -4188,17 +4262,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-170",
@@ -4244,17 +4319,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-171",
@@ -4300,17 +4376,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-172",
@@ -4356,17 +4433,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-173",
@@ -4412,17 +4490,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-174",
@@ -4468,17 +4547,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-175",
@@ -4524,17 +4604,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-176",
@@ -4580,17 +4661,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-177",
@@ -4636,17 +4718,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-178",
@@ -4692,17 +4775,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-179",
@@ -4748,17 +4832,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-180",
@@ -4804,17 +4889,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-181",
@@ -4860,17 +4946,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-182",
@@ -4916,17 +5003,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-183",
@@ -4972,17 +5060,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-184",
@@ -5028,17 +5117,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-185",
@@ -5084,17 +5174,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-186",
@@ -5140,17 +5231,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-187",
@@ -5196,17 +5288,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-188",
@@ -5252,17 +5345,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-189",
@@ -5308,17 +5402,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-190",
@@ -5364,17 +5459,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-191",
@@ -5420,17 +5516,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-192",
@@ -5476,17 +5573,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-193",
@@ -5532,17 +5630,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-194",
@@ -5588,17 +5687,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-195",
@@ -5644,17 +5744,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-196",
@@ -5700,17 +5801,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-197",
@@ -5756,17 +5858,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-198",
@@ -5812,17 +5915,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-199",
@@ -5868,17 +5972,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "kgcheck-test-200",
@@ -5924,17 +6029,18 @@
         "note": "Check a stored protein attribute, entry or directed relation against source evidence. A single-edge lookup is not network analysis. Literature evidence extraction is required by the directed-relation protocol; other protocols reconcile structured database records."
       },
       "scientific_context": [
-        "protein-function"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     }
   ]
 }

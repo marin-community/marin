@@ -41,16 +41,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:95",
@@ -93,16 +94,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:240",
@@ -145,16 +147,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:460",
@@ -197,16 +200,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:557",
@@ -249,16 +253,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:206",
@@ -301,16 +306,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:392",
@@ -353,16 +359,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:397",
@@ -405,16 +412,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:536",
@@ -457,16 +465,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:217",
@@ -509,16 +518,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:4",
@@ -561,16 +571,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:568",
@@ -613,16 +624,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:98",
@@ -665,17 +677,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "metabolomics"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation",
+        "metabolism"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:406",
@@ -718,16 +731,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:502",
@@ -770,16 +784,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:47",
@@ -822,16 +837,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:32",
@@ -874,16 +890,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:200",
@@ -926,16 +943,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:134",
@@ -978,16 +996,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:27",
@@ -1030,16 +1049,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:559",
@@ -1082,16 +1102,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:230",
@@ -1134,16 +1155,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:489",
@@ -1186,16 +1208,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:378",
@@ -1238,16 +1261,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:288",
@@ -1290,16 +1314,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:418",
@@ -1342,16 +1367,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:391",
@@ -1394,16 +1420,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:498",
@@ -1446,17 +1473,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation",
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:138",
@@ -1499,17 +1527,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "metabolomics"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation",
+        "metabolism"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:62",
@@ -1552,16 +1581,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:471",
@@ -1604,16 +1634,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:128",
@@ -1656,16 +1687,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:623",
@@ -1708,16 +1740,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:520",
@@ -1760,16 +1793,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:64",
@@ -1812,16 +1846,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:14",
@@ -1864,16 +1899,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:156",
@@ -1916,16 +1952,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:40",
@@ -1968,16 +2005,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:492",
@@ -2020,16 +2058,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gwas_causal_gene_gwas_catalog:379",
@@ -2072,16 +2111,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     }
   ]
 }

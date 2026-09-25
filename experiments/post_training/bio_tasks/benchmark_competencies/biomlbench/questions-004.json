@@ -42,16 +42,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/C6KNH7_9INFA_Lee_2018",
@@ -95,16 +97,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/CALM1_HUMAN_Weile_2017",
@@ -148,16 +152,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/CAPSD_AAV2S_Sinai_2021",
@@ -201,16 +207,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/CAPSD_AAV2S_Sinai_2021_designed_indels",
@@ -254,16 +262,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/CAPSD_AAV2S_Sinai_2021_library_indels",
@@ -307,16 +317,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/CAR11_HUMAN_Meitlis_2020_gof",
@@ -360,16 +372,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/CAR11_HUMAN_Meitlis_2020_lof",
@@ -413,16 +427,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/CAS9_STRP1_Spencer_2017_positive",
@@ -466,16 +482,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/CASP3_HUMAN_Roychowdhury_2020",
@@ -519,16 +537,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/CASP7_HUMAN_Roychowdhury_2020",
@@ -572,16 +592,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/CATR_CHLRE_Tsuboyama_2023_2AMI",
@@ -625,16 +647,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/CATR_CHLRE_Tsuboyama_2023_2AMI_indels",
@@ -678,16 +702,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/CBPA2_HUMAN_Tsuboyama_2023_1O6X",
@@ -731,16 +757,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/CBPA2_HUMAN_Tsuboyama_2023_1O6X_indels",
@@ -784,16 +812,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/CBS_HUMAN_Sun_2020",
@@ -837,16 +867,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/CBX4_HUMAN_Tsuboyama_2023_2K28",
@@ -890,16 +922,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/CBX4_HUMAN_Tsuboyama_2023_2K28_indels",
@@ -943,16 +977,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/CCDB_ECOLI_Adkar_2012",
@@ -996,16 +1032,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/CCDB_ECOLI_Tripathi_2016",
@@ -1049,16 +1087,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/CCR5_HUMAN_Gill_2023",
@@ -1102,16 +1142,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/CD19_HUMAN_Klesmith_2019_FMC_singles",
@@ -1155,16 +1197,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/CP2C9_HUMAN_Amorosi_2021_abundance",
@@ -1208,16 +1252,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/CP2C9_HUMAN_Amorosi_2021_activity",
@@ -1261,16 +1307,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/CSN4_MOUSE_Tsuboyama_2023_1UFM",
@@ -1314,16 +1362,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/CSN4_MOUSE_Tsuboyama_2023_1UFM_indels",
@@ -1367,16 +1417,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/CUE1_YEAST_Tsuboyama_2023_2MYX",
@@ -1420,16 +1472,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/CUE1_YEAST_Tsuboyama_2023_2MYX_indels",
@@ -1473,16 +1527,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/D7PM05_CLYGR_Somermeyer_2022",
@@ -1526,16 +1582,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/DLG4_HUMAN_Faure_2021",
@@ -1579,16 +1637,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/DLG4_RAT_McLaughlin_2012",
@@ -1634,16 +1694,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/DN7A_SACS2_Tsuboyama_2023_1JIC",
@@ -1687,16 +1749,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/DN7A_SACS2_Tsuboyama_2023_1JIC_indels",
@@ -1740,16 +1804,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/DNJA1_HUMAN_Tsuboyama_2023_2LO1",
@@ -1793,16 +1859,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/DNJA1_HUMAN_Tsuboyama_2023_2LO1_indels",
@@ -1846,16 +1914,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/DOCK1_MOUSE_Tsuboyama_2023_2M0Y",
@@ -1899,16 +1969,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/DOCK1_MOUSE_Tsuboyama_2023_2M0Y_indels",
@@ -1952,16 +2024,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/DYR_ECOLI_Nguyen_2023",
@@ -2005,16 +2079,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/DYR_ECOLI_Thompson_2019",
@@ -2058,16 +2134,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/ENVZ_ECOLI_Ghose_2023",
@@ -2111,16 +2189,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/ENV_HV1B9_DuenasDecamp_2016",
@@ -2164,16 +2244,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/ENV_HV1BR_Haddox_2016",
@@ -2217,16 +2299,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/EPHB2_HUMAN_Tsuboyama_2023_1F0M",
@@ -2270,16 +2354,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/EPHB2_HUMAN_Tsuboyama_2023_1F0M_indels",
@@ -2323,16 +2409,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/ERBB2_HUMAN_Elazar_2016",
@@ -2376,16 +2464,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/ESTA_BACSU_Nutschel_2020",
@@ -2429,16 +2519,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/F7YBW8_MESOW_Aakre_2015",
@@ -2482,16 +2574,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "proteingym-dms/F7YBW8_MESOW_Ding_2023",
@@ -2535,16 +2629,18 @@
         "note": "Produce protein fitness predictions for every required held-out fold. Splits and leakage constraints belong to prediction; Spearman correlation is computed by the benchmark grader."
       },
       "scientific_context": [
-        "protein-function",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "molecular-function",
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     }
   ]
 }

@@ -39,16 +39,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-variation"
-      ],
-      "workflows": [
-        "database-query"
+        "gene-expression",
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bam-infer-read-length-q1",
@@ -89,13 +91,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "read-qc"
+        "genetic-variation"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "differential-composition-q1",
@@ -138,14 +140,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "immunology"
-      ],
-      "workflows": [
-        "composition"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "genomic-state-q1",
@@ -186,20 +189,21 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence",
-        "epigenomics",
-        "functional-genomics"
-      ],
-      "workflows": [
-        "chromatin",
-        "database-query"
+        "gene-expression",
+        "genetic-variation",
+        "nucleotide-sequences",
+        "chromatin-organization",
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "cryptic-exon-q1",
@@ -238,17 +242,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-alignment",
-        "sequence-query"
+        "gene-expression",
+        "nucleotide-sequences"
       ],
       "operations": [
+        "alignment-matching"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "sequence-alignment"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "read-paper-download-file-parse-q1",
@@ -289,17 +294,21 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "epigenomics"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval",
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Epigenomics"
+      ]
     },
     {
       "task_id": "huggingface-entropy-q1",
@@ -340,16 +349,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "model-evaluation"
+        "nucleotide-sequences"
       ],
       "operations": [
+        "predictive-modeling",
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "model-evaluation",
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "ml-model-track-overlap-q1",
@@ -390,18 +402,22 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "genome-sequence",
-        "epigenomics"
-      ],
-      "workflows": [
-        "database-query"
+        "genetic-variation",
+        "nucleotide-sequences"
       ],
       "operations": [
+        "information-retrieval",
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Epigenomics"
+      ]
     },
     {
       "task_id": "compute-gc-content-interval-q1",
@@ -440,15 +456,14 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-query",
-        "intervals"
+        "genetic-variation",
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "reverse-search-gwas-q1",
@@ -489,16 +504,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval",
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "pathogenic-variant-lookup-q1",
@@ -539,16 +557,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence"
-      ],
-      "workflows": [
-        "variant-consequence",
-        "evidence-ranking"
+        "gene-expression",
+        "genetic-variation",
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "identify-donor-q1",
@@ -589,16 +606,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "genome-sequence"
-      ],
-      "workflows": [
-        "variant-analysis"
+        "genetic-variation",
+        "nucleotide-sequences"
       ],
       "operations": [
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "contaminated-rna-q3",
@@ -639,17 +658,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-alignment",
-        "taxonomic-profiling"
+        "gene-expression",
+        "nucleotide-sequences"
       ],
       "operations": [
+        "alignment-matching"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "sequence-alignment"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "hic-differential-loop-q1",
@@ -690,15 +710,14 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "epigenomics"
-      ],
-      "workflows": [
-        "chromatin",
-        "group-comparison"
+        "genetic-variation",
+        "chromatin-organization"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "encode-atac-pipeline-q1",
@@ -739,17 +758,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "epigenomics"
-      ],
-      "workflows": [
-        "sequence-alignment",
-        "chromatin"
+        "genetic-variation",
+        "chromatin-organization"
       ],
       "operations": [
+        "alignment-matching"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "sequence-alignment"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "pooled-infer-donors-q1",
@@ -792,16 +812,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-variation"
-      ],
-      "workflows": [
-        "variant-analysis"
+        "gene-expression",
+        "genetic-variation"
       ],
       "operations": [
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "overexpress-tf-q1",
@@ -842,17 +864,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-variation",
-        "epigenomics",
-        "functional-genomics"
-      ],
-      "workflows": [
-        "motifs",
-        "enrichment"
+        "gene-expression",
+        "genetic-variation",
+        "molecular-function"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Epigenomics"
+      ]
     },
     {
       "task_id": "conservation-lookup-q1",
@@ -893,19 +915,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence",
-        "molecular-evolution"
-      ],
-      "workflows": [
-        "orthology",
-        "sequence-alignment"
+        "gene-expression",
+        "genetic-variation",
+        "nucleotide-sequences",
+        "evolutionary-relationships"
       ],
       "operations": [
+        "alignment-matching"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "sequence-alignment"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "splice-pred-q1",
@@ -946,17 +969,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "gene-expression",
+        "genetic-variation",
+        "nucleotide-sequences"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "borzoi-rnaseq-q1",
@@ -997,17 +1022,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "gene-expression",
+        "genetic-variation",
+        "nucleotide-sequences"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "calculate-average-gene-expression-q1",
@@ -1050,18 +1077,21 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "immunology"
+        "gene-expression"
       ],
-      "workflows": [
+      "operations": [
         "descriptive-analysis",
         "data-preparation"
       ],
-      "operations": [
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "covid-patient-q1",
@@ -1104,14 +1134,14 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking"
+        "gene-expression",
+        "disease-treatment-response"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "saluki-setup-optimize-q1",
@@ -1150,18 +1180,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-sequence",
-        "molecular-evolution"
-      ],
-      "workflows": [
-        "sequence-design",
-        "model-evaluation"
+        "gene-expression",
+        "nucleotide-sequences",
+        "evolutionary-relationships"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "model-evaluation"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "identify-related-q1",
@@ -1202,13 +1233,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "population-genetics"
+        "genetic-variation"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "ep-interactions-q1",
@@ -1249,17 +1280,16 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-variation",
-        "epigenomics",
-        "functional-genomics"
-      ],
-      "workflows": [
-        "chromatin",
-        "evidence-ranking"
+        "gene-expression",
+        "genetic-variation",
+        "chromatin-organization",
+        "molecular-function"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "sample-swap-rna-q1",
@@ -1302,15 +1332,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "data-preparation"
+        "gene-expression"
       ],
       "operations": [
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gene-fusion-q2",
@@ -1349,17 +1381,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-alignment",
-        "sequence-query"
+        "gene-expression",
+        "nucleotide-sequences"
       ],
       "operations": [
+        "alignment-matching"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "sequence-alignment"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "retina-score-snps-q1",
@@ -1400,17 +1433,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "epigenomics"
-      ],
-      "workflows": [
-        "variant-consequence",
-        "model-evaluation"
+        "genetic-variation"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "model-evaluation"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Epigenomics"
+      ]
     },
     {
       "task_id": "atac-tn5-shift-q1",
@@ -1451,16 +1486,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "genome-sequence",
-        "epigenomics"
-      ],
-      "workflows": [
-        "read-qc",
-        "chromatin"
+        "genetic-variation",
+        "nucleotide-sequences",
+        "chromatin-organization"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "finding-geo-q1",
@@ -1503,16 +1537,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "database-query"
+        "gene-expression"
       ],
       "operations": [
+        "information-retrieval",
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "deg-simple-q1",
@@ -1557,17 +1594,18 @@
         "real-rnaseq-normalized-contrast"
       ],
       "scientific_context": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-alignment",
-        "differential-expression"
+        "gene-expression",
+        "nucleotide-sequences"
       ],
       "operations": [
+        "alignment-matching"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "sequence-alignment"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bigwig-density-q1",
@@ -1608,16 +1646,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "epigenomics"
-      ],
-      "workflows": [
-        "intervals"
+        "genetic-variation"
       ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Epigenomics"
+      ]
     },
     {
       "task_id": "gtf-5-utr-median-len-q1",
@@ -1656,18 +1697,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-query",
-        "database-query"
+        "gene-expression",
+        "genetic-variation",
+        "nucleotide-sequences"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "contaminated-rna-q2",
@@ -1708,17 +1750,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-alignment",
-        "taxonomic-profiling"
+        "gene-expression",
+        "nucleotide-sequences"
       ],
       "operations": [
+        "alignment-matching"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "sequence-alignment"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "sample-swap-rna-q2",
@@ -1761,15 +1804,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "data-preparation"
+        "gene-expression"
       ],
       "operations": [
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "multiome-match-atac-rna-q1",
@@ -1810,14 +1855,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "epigenomics"
-      ],
-      "workflows": [
-        "integration"
+        "genetic-variation"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Epigenomics"
+      ]
     },
     {
       "task_id": "spatial-sim-q2",
@@ -1861,16 +1907,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "immunology",
-        "bioimaging"
+        "gene-expression"
       ],
-      "workflows": [
-        "deconvolution",
-        "spatial"
+      "operations": [
+        "spatial-analysis"
       ],
-      "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology",
+        "Biological imaging"
+      ]
     },
     {
       "task_id": "reverse-encode-q1",
@@ -1911,17 +1959,21 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "epigenomics"
-      ],
-      "workflows": [
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval",
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Epigenomics"
+      ]
     },
     {
       "task_id": "compute-hvg-jaccard-q1",
@@ -1962,16 +2014,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "data-preparation"
+        "gene-expression"
       ],
       "operations": [
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "normalization",
         "feature-selection"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "deleterious-mutation-q1",
@@ -2012,18 +2066,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-alignment",
-        "variant-analysis",
-        "variant-consequence"
+        "genetic-variation",
+        "nucleotide-sequences"
       ],
       "operations": [
+        "alignment-matching"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "sequence-alignment"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "genome-assembly-contiguity-q1",
@@ -2066,14 +2120,14 @@
         "real-phix-assembly"
       ],
       "scientific_context": [
-        "genome-variation",
-        "genome-sequence"
-      ],
-      "workflows": [
-        "assembly"
+        "genetic-variation",
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "1000G-retrieve-genotype-q1",
@@ -2114,16 +2168,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "variant-analysis",
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "annotate-variant-regulatory-overlap-q1",
@@ -2162,16 +2217,16 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "epigenomics",
-        "functional-genomics"
-      ],
-      "workflows": [
-        "intervals",
-        "sequence-query"
+        "genetic-variation",
+        "molecular-function"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Epigenomics"
+      ]
     },
     {
       "task_id": "extract-rna-secondary-structure-q1",
@@ -2212,13 +2267,14 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "rna-structure"
+        "gene-expression",
+        "molecular-structure"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "protein-shape-q1",
@@ -2262,14 +2318,15 @@
       "scientific_context": [
         "molecular-structure"
       ],
-      "workflows": [
-        "sequence-alignment",
-        "protein-structure"
-      ],
       "operations": [
+        "alignment-matching"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "sequence-alignment"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "deg-simple-q2",
@@ -2312,17 +2369,18 @@
         "splice-psi"
       ],
       "scientific_context": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-alignment",
-        "differential-expression"
+        "gene-expression",
+        "nucleotide-sequences"
       ],
       "operations": [
+        "alignment-matching"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "sequence-alignment"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "match-genotypes-q1",
@@ -2363,15 +2421,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "variant-analysis"
+        "genetic-variation"
       ],
       "operations": [
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "spatial-sim-q1",
@@ -2415,16 +2475,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "immunology",
-        "bioimaging"
+        "gene-expression"
       ],
-      "workflows": [
-        "deconvolution",
-        "spatial"
+      "operations": [
+        "spatial-analysis"
       ],
-      "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology",
+        "Biological imaging"
+      ]
     },
     {
       "task_id": "compute-nonoverlapping-exonic-length-q1",
@@ -2463,17 +2525,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-query",
-        "database-query"
+        "gene-expression",
+        "nucleotide-sequences"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "atac-doublet-q1",
@@ -2516,14 +2579,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "epigenomics"
-      ],
-      "workflows": [
-        "cell-qc"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Epigenomics"
+      ]
     },
     {
       "task_id": "enriched-motif-identification-q1",
@@ -2564,16 +2628,16 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "genome-sequence",
-        "epigenomics"
-      ],
-      "workflows": [
-        "motifs",
-        "enrichment"
+        "genetic-variation",
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Epigenomics"
+      ]
     },
     {
       "task_id": "find-deletion-q1",
@@ -2614,15 +2678,14 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "genome-sequence"
-      ],
-      "workflows": [
-        "read-qc",
-        "variant-analysis"
+        "genetic-variation",
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "three-way-barnyard-q1",
@@ -2665,18 +2728,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-alignment",
-        "taxonomic-profiling",
-        "cell-qc"
+        "gene-expression",
+        "nucleotide-sequences"
       ],
       "operations": [
+        "alignment-matching"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "sequence-alignment"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "subtype-inflammation-q1",
@@ -2718,15 +2781,16 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-sequence",
-        "immunology"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression",
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "read-proportions-q1",
@@ -2767,17 +2831,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-alignment"
+        "genetic-variation",
+        "nucleotide-sequences"
       ],
       "operations": [
+        "alignment-matching",
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "sequence-alignment",
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "sample-swap-atac-q2",
@@ -2820,16 +2887,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "epigenomics"
-      ],
-      "workflows": [
-        "data-preparation"
+        "gene-expression"
       ],
       "operations": [
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Epigenomics"
+      ]
     },
     {
       "task_id": "exogenous-mix-reads-q1",
@@ -2870,15 +2940,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-sequence",
-        "functional-genomics"
-      ],
-      "workflows": [
-        "deconvolution"
+        "gene-expression",
+        "nucleotide-sequences",
+        "molecular-function"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "perturb-seq-align-q1",
@@ -2921,16 +2991,16 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "functional-genomics",
-        "immunology"
-      ],
-      "workflows": [
-        "differential-expression",
-        "evidence-ranking"
+        "gene-expression",
+        "molecular-function"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "gwas-ancestry-q1",
@@ -2971,13 +3041,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "population-genetics"
+        "genetic-variation"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gene-info-grab-q1",
@@ -3016,18 +3086,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-query",
-        "database-query"
+        "gene-expression",
+        "genetic-variation",
+        "nucleotide-sequences"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "genome-coords-q1",
@@ -3070,17 +3141,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-variation",
-        "epigenomics",
-        "systems-biology"
-      ],
-      "workflows": [
-        "association",
-        "chromatin"
+        "gene-expression",
+        "genetic-variation",
+        "chromatin-organization"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "mystery-peak-set-q1",
@@ -3121,17 +3192,16 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "genome-sequence",
-        "epigenomics",
-        "functional-genomics"
-      ],
-      "workflows": [
-        "chromatin",
-        "evidence-ranking"
+        "genetic-variation",
+        "nucleotide-sequences",
+        "chromatin-organization",
+        "molecular-function"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "phase-chain-q1",
@@ -3172,16 +3242,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "sequence-alignment",
-        "population-genetics"
+        "genetic-variation"
       ],
       "operations": [
+        "alignment-matching"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "sequence-alignment"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "enformer-basic-q1",
@@ -3222,11 +3293,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "model-inspection"
-      ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bedtools-ops-q1",
@@ -3265,15 +3336,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "epigenomics"
-      ],
-      "workflows": [
-        "intervals",
-        "sequence-query"
+        "genetic-variation"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Epigenomics"
+      ]
     },
     {
       "task_id": "orf-annot-q1",
@@ -3312,16 +3383,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence",
-        "systems-biology"
-      ],
-      "workflows": [
-        "sequence-query"
+        "gene-expression",
+        "genetic-variation",
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "reverse-search-gwas-q2",
@@ -3362,16 +3434,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval",
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "disease-samples-q1",
@@ -3412,14 +3487,14 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking"
+        "gene-expression",
+        "disease-treatment-response"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "contaminated-rna-q1",
@@ -3460,17 +3535,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-alignment",
-        "taxonomic-profiling"
+        "gene-expression",
+        "nucleotide-sequences"
       ],
       "operations": [
+        "alignment-matching"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "sequence-alignment"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "variant-coordinate-lookup-q1",
@@ -3511,16 +3587,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "genome-sequence"
-      ],
-      "workflows": [
-        "database-query"
+        "genetic-variation",
+        "nucleotide-sequences"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "histone-chip-q1",
@@ -3561,15 +3639,14 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "epigenomics"
-      ],
-      "workflows": [
-        "chromatin",
-        "evidence-ranking"
+        "genetic-variation",
+        "chromatin-organization"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "cell-proportions-q1",
@@ -3612,13 +3689,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "composition"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "three-way-barnyard-q2",
@@ -3661,18 +3738,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-alignment",
-        "taxonomic-profiling",
-        "cell-qc"
+        "gene-expression",
+        "nucleotide-sequences"
       ],
       "operations": [
+        "alignment-matching"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "sequence-alignment"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "chip-pioneer-q1",
@@ -3713,17 +3790,16 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-variation",
-        "epigenomics",
-        "functional-genomics"
-      ],
-      "workflows": [
-        "chromatin",
-        "group-comparison"
+        "gene-expression",
+        "genetic-variation",
+        "chromatin-organization",
+        "molecular-function"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "deleterious-mutation-q2",
@@ -3764,17 +3840,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "sequence-alignment",
-        "variant-analysis",
-        "variant-consequence"
+        "genetic-variation"
       ],
       "operations": [
+        "alignment-matching"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "sequence-alignment"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bam-ops-q1",
@@ -3815,13 +3891,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "read-qc"
+        "genetic-variation"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "perturb-seq-effect-q1",
@@ -3862,15 +3938,14 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "functional-genomics"
-      ],
-      "workflows": [
-        "differential-expression",
-        "evidence-ranking"
+        "gene-expression",
+        "molecular-function"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "exogenous-mix-reads-q2",
@@ -3911,15 +3986,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-sequence",
-        "functional-genomics"
-      ],
-      "workflows": [
-        "deconvolution"
+        "gene-expression",
+        "nucleotide-sequences",
+        "molecular-function"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "align-one-sequence-to-reference-q1",
@@ -3960,16 +4035,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-alignment"
+        "genetic-variation",
+        "nucleotide-sequences"
       ],
       "operations": [
+        "alignment-matching"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "sequence-alignment"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "promoter-sequence-retrieval-q1",
@@ -4008,16 +4085,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-query",
-        "intervals"
+        "gene-expression",
+        "genetic-variation",
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bedtools-chromhmm-q1",
@@ -4056,16 +4132,16 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "genome-sequence",
-        "epigenomics"
-      ],
-      "workflows": [
-        "intervals",
-        "sequence-query"
+        "genetic-variation",
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Epigenomics"
+      ]
     },
     {
       "task_id": "lung-cancer-sc-q1",
@@ -4107,16 +4183,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-sequence",
-        "clinical",
-        "immunology"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression",
+        "nucleotide-sequences",
+        "disease-treatment-response"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "tissue-fibroblast-q1",
@@ -4158,14 +4235,14 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression",
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "characterize-response-q1",
@@ -4206,16 +4283,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "functional-genomics",
-        "immunology",
-        "systems-biology"
-      ],
-      "workflows": [
-        "evidence-ranking"
+        "gene-expression",
+        "molecular-function"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology",
+        "Systems biology"
+      ]
     },
     {
       "task_id": "geo-lookup-read-matrix-market-q1",
@@ -4258,16 +4336,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "database-query"
+        "gene-expression"
       ],
       "operations": [
+        "information-retrieval",
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "annotate-variant-gene-impact-q1",
@@ -4308,18 +4389,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "genome-sequence",
-        "clinical"
-      ],
-      "workflows": [
-        "variant-consequence",
-        "database-query"
+        "genetic-variation",
+        "nucleotide-sequences",
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "vcf-infer-build-q1",
@@ -4358,15 +4440,14 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "genome-sequence"
-      ],
-      "workflows": [
-        "variant-analysis",
-        "sequence-query"
+        "genetic-variation",
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gene-pair-ordering-fraction-q1",
@@ -4407,18 +4488,21 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "immunology"
+        "gene-expression"
       ],
-      "workflows": [
+      "operations": [
         "descriptive-analysis",
         "data-preparation"
       ],
-      "operations": [
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "1000G-retrieve-genotype-q2",
@@ -4459,17 +4543,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "genome-sequence"
-      ],
-      "workflows": [
-        "variant-analysis",
-        "database-query"
+        "genetic-variation",
+        "nucleotide-sequences"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "odd-one-out-q1",
@@ -4510,15 +4595,14 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "epigenomics"
-      ],
-      "workflows": [
-        "chromatin",
-        "evidence-ranking"
+        "genetic-variation",
+        "chromatin-organization"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gene-expression-query-q1",
@@ -4559,16 +4643,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "database-query"
+        "gene-expression"
       ],
       "operations": [
+        "descriptive-analysis",
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics",
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "afgr-1000g-intersect-atac-q1",
@@ -4609,17 +4696,21 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "epigenomics"
-      ],
-      "workflows": [
-        "database-query"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval",
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Epigenomics"
+      ]
     },
     {
       "task_id": "borzoi-basic-q1",
@@ -4660,11 +4751,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "model-inspection"
-      ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "annotate-variant-gene-impact-q2",
@@ -4705,17 +4796,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "genome-sequence"
-      ],
-      "workflows": [
-        "variant-consequence",
-        "database-query"
+        "genetic-variation",
+        "nucleotide-sequences"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gene-fusion-q1",
@@ -4754,17 +4846,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-alignment",
-        "sequence-query"
+        "gene-expression",
+        "nucleotide-sequences"
       ],
       "operations": [
+        "alignment-matching"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "sequence-alignment"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "compute-gccontent-promoter-q1",
@@ -4803,16 +4896,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-query",
-        "intervals"
+        "gene-expression",
+        "genetic-variation",
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "vcf-infer-ancestry-q1",
@@ -4853,13 +4945,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "population-genetics"
+        "genetic-variation"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "find-amplification-q1",
@@ -4900,15 +4992,14 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "genome-sequence"
-      ],
-      "workflows": [
-        "read-qc",
-        "variant-analysis"
+        "genetic-variation",
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "sample-swap-atac-q1",
@@ -4949,17 +5040,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-sequence",
-        "epigenomics"
-      ],
-      "workflows": [
-        "data-preparation"
+        "gene-expression",
+        "nucleotide-sequences"
       ],
       "operations": [
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Epigenomics"
+      ]
     },
     {
       "task_id": "variant-status-q1",
@@ -5000,14 +5094,14 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-variation"
-      ],
-      "workflows": [
-        "variant-analysis"
+        "gene-expression",
+        "genetic-variation"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     }
   ]
 }

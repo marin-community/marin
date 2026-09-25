@@ -42,18 +42,21 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "functional-genomics"
-      ],
-      "workflows": [
-        "cell-annotation",
-        "spatial"
+        "gene-expression",
+        "molecular-function"
       ],
       "operations": [
+        "exploratory-analysis",
+        "descriptive-analysis",
+        "spatial-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "clustering",
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "curio_ovary_follicle_count_immature",
@@ -96,17 +99,21 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
-      "workflows": [
-        "spatial"
+        "gene-expression",
+        "nucleotide-sequences"
       ],
       "operations": [
+        "exploratory-analysis",
+        "descriptive-analysis",
+        "spatial-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "clustering",
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "curio_ovary_oocyte_count_per_timepoint",
@@ -149,15 +156,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "spatial"
+        "gene-expression"
       ],
       "operations": [
+        "descriptive-analysis",
+        "spatial-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "visium_bone_celltype_lineage_resolution_limit",
@@ -200,24 +210,26 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "clinical",
-        "immunology"
-      ],
-      "workflows": [
-        "predictive-modeling",
-        "cell-annotation",
-        "deconvolution",
-        "trajectory",
-        "spatial",
-        "network"
+        "gene-expression",
+        "disease-treatment-response"
       ],
       "operations": [
+        "exploratory-analysis",
+        "predictive-modeling",
+        "descriptive-analysis",
+        "spatial-analysis",
+        "graph-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "clustering",
         "prediction",
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "xenium_kidney_celltype_fib_immune_temporal",
@@ -260,16 +272,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "immunology"
-      ],
-      "workflows": [
-        "descriptive-analysis"
+        "gene-expression"
       ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "curio_ovary_batch_driven_clustering",
@@ -313,19 +328,23 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
-      "workflows": [
-        "integration",
-        "spatial"
+        "gene-expression",
+        "nucleotide-sequences"
       ],
       "operations": [
+        "exploratory-analysis",
+        "descriptive-analysis",
+        "data-preparation",
+        "spatial-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "clustering",
         "descriptive-statistics",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "MOTIF04_neuronal_female_tf_family",
@@ -368,20 +387,22 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "epigenomics",
+        "gene-expression",
+        "chromatin-organization",
         "physiology"
       ],
-      "workflows": [
-        "enrichment",
-        "spatial",
-        "chromatin"
-      ],
       "operations": [
+        "exploratory-analysis",
+        "descriptive-analysis",
+        "spatial-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "clustering",
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SPATIAL10_genome_wide_de_pct",
@@ -424,19 +445,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-sequence",
-        "epigenomics"
-      ],
-      "workflows": [
-        "differential-expression",
-        "spatial",
-        "chromatin"
+        "gene-expression",
+        "nucleotide-sequences",
+        "chromatin-organization"
       ],
       "operations": [
+        "descriptive-analysis",
+        "spatial-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DR01_batch_confounded_clustering",
@@ -478,19 +500,21 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
+      "operations": [
         "data-preparation",
         "exploratory-analysis",
         "descriptive-analysis"
       ],
-      "operations": [
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "normalization",
         "transformation",
         "dimension-reduction",
         "clustering",
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "NORM01_batch_correction",
@@ -531,12 +555,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "read-qc"
+        "disease-treatment-response"
       ],
       "operations": [
+        "data-preparation",
+        "exploratory-analysis",
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "normalization",
         "dimension-reduction",
         "feature-selection",
@@ -544,7 +571,8 @@
         "descriptive-statistics",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "norm_01_opc_olig_maturation_foldchange",
@@ -587,17 +615,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
+        "gene-expression"
       ],
-      "workflows": [
+      "operations": [
         "data-preparation",
         "descriptive-analysis"
       ],
-      "operations": [
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "normalization",
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "norm_02_myelin_gene_coexpression_normalization",
@@ -640,16 +670,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
+        "gene-expression",
         "molecular-structure"
       ],
-      "workflows": [
-        "association"
-      ],
       "operations": [
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "normalization"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "qc_01_endothelial_doublet_assessment",
@@ -693,17 +725,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "spatial",
-        "image-analysis",
-        "cell-qc"
+        "gene-expression"
       ],
       "operations": [
+        "descriptive-analysis",
+        "spatial-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SPATIAL07_sex_housekeeping_de",
@@ -746,18 +779,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "epigenomics"
-      ],
-      "workflows": [
-        "differential-expression",
-        "spatial",
-        "chromatin"
+        "gene-expression",
+        "chromatin-organization"
       ],
       "operations": [
+        "descriptive-analysis",
+        "spatial-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "xenium_kidney_spatial_cn7_composition_day14",
@@ -800,18 +834,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "immunology"
-      ],
-      "workflows": [
-        "enrichment",
-        "composition",
-        "spatial"
+        "gene-expression"
       ],
       "operations": [
+        "descriptive-analysis",
+        "spatial-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "xenium_kidney_spatial_fibro_inflammatory_niche_emergence_2",
@@ -854,16 +890,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "immunology"
-      ],
-      "workflows": [
-        "spatial"
+        "gene-expression"
       ],
       "operations": [
+        "descriptive-analysis",
+        "spatial-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     }
   ]
 }

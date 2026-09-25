@@ -10,7 +10,7 @@
 </head>
 <body>
 <nav class="site-links" aria-label="Benchmark site">
-<a data-route="statistics">Categories</a><a data-route="benchmarks">Benchmarks</a>
+<a data-route="statistics/operations">Operations</a><a data-route="statistics/scientific_context">Scientific contexts</a>
 </nav>
 <main>
 <noscript>This site needs JavaScript to display its embedded benchmark inventories.</noscript>
@@ -32,7 +32,7 @@ function routePage() {
   const kind = parts[0];
   if (['statistics', 'benchmarks', 'benchmark', 'question'].includes(kind)) renderBenchmarkRoute(parts);
   else { showPageError('This page is not available.'); return; }
-  const selected = ['benchmark', 'question'].includes(kind) ? 'benchmarks' : kind;
+  const selected = kind === 'statistics' ? 'statistics/' + (parts[1] || 'operations') : '';
   document.querySelectorAll('.site-links a').forEach(anchor => {
     if (anchor.dataset.route === selected) anchor.setAttribute('aria-current', 'page');
     else anchor.removeAttribute('aria-current');

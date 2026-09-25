@@ -38,18 +38,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "clinical"
-      ],
-      "workflows": [
-        "descriptive-analysis",
-        "exploratory-analysis"
+        "gene-expression",
+        "disease-treatment-response"
       ],
       "operations": [
-        "descriptive-statistics",
-        "visualization"
+        "descriptive-analysis"
       ],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [
+        "descriptive-statistics"
+      ],
+      "output_tags": [
+        "figure"
+      ],
+      "context_review_needed": []
     },
     {
       "task_id": "burdick2014_s8_aso_hepatotoxicity_sequence_screen_0007",
@@ -90,18 +92,21 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-sequence",
-        "chemical-biology"
+        "nucleotide-sequences"
       ],
-      "workflows": [
+      "operations": [
         "descriptive-analysis",
         "data-preparation"
       ],
-      "operations": [
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology"
+      ]
     },
     {
       "task_id": "eval_0012_s8_hepatic_biomarker_panel",
@@ -142,20 +147,23 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-sequence",
-        "chemical-biology",
-        "clinical"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "nucleotide-sequences",
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval",
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction",
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology"
+      ]
     },
     {
       "task_id": "eval_0056_prion_s8_pk",
@@ -196,17 +204,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "chemical-biology",
-        "clinical",
-        "systems-biology"
-      ],
-      "workflows": [
-        "descriptive-analysis"
+        "disease-treatment-response"
       ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology",
+        "Systems biology"
+      ]
     }
   ]
 }

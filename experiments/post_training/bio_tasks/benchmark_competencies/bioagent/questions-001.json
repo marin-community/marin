@@ -45,17 +45,17 @@
         "differential-expression-bh"
       ],
       "scientific_context": [
-        "transcriptomics",
-        "chemical-biology",
-        "functional-genomics",
-        "clinical"
-      ],
-      "workflows": [
-        "differential-expression",
-        "enrichment"
+        "gene-expression",
+        "molecular-function",
+        "disease-treatment-response"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology"
+      ]
     },
     {
       "task_id": "comparative-genomics",
@@ -105,18 +105,18 @@
         "real-protein-alignment"
       ],
       "scientific_context": [
-        "genome-sequence",
-        "molecular-evolution"
-      ],
-      "workflows": [
-        "orthology",
-        "sequence-alignment",
-        "phylogeny"
+        "nucleotide-sequences",
+        "evolutionary-relationships"
       ],
       "operations": [
+        "alignment-matching"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "sequence-alignment"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "cystic-fibrosis",
@@ -162,18 +162,16 @@
         "variant-coding-consequences"
       ],
       "scientific_context": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence",
-        "clinical"
-      ],
-      "workflows": [
-        "variant-analysis",
-        "variant-consequence",
-        "evidence-ranking"
+        "gene-expression",
+        "genetic-variation",
+        "nucleotide-sequences",
+        "disease-treatment-response"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "deseq",
@@ -219,17 +217,17 @@
         "differential-expression-bh"
       ],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "sequence-alignment",
-        "expression-quantification",
-        "differential-expression"
+        "gene-expression"
       ],
       "operations": [
+        "alignment-matching"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "sequence-alignment"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "evolution",
@@ -275,18 +273,18 @@
         "vcf-site-filtering"
       ],
       "scientific_context": [
-        "genome-variation",
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-alignment",
-        "variant-analysis",
-        "variant-consequence"
+        "genetic-variation",
+        "nucleotide-sequences"
       ],
       "operations": [
+        "alignment-matching"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "sequence-alignment"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "giab",
@@ -332,18 +330,19 @@
         "vcf-site-filtering"
       ],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "sequence-alignment",
-        "variant-analysis",
-        "model-evaluation"
+        "genetic-variation"
       ],
       "operations": [
+        "alignment-matching",
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "sequence-alignment",
         "model-evaluation"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "metagenomics",
@@ -389,15 +388,15 @@
         "bray-curtis"
       ],
       "scientific_context": [
-        "genome-variation",
-        "microbiology"
-      ],
-      "workflows": [
-        "taxonomic-profiling",
-        "composition"
+        "genetic-variation"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Microbiology"
+      ]
     },
     {
       "task_id": "single-cell",
@@ -446,16 +445,17 @@
         "cell-fractions"
       ],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "cell-annotation",
-        "differential-expression"
+        "gene-expression"
       ],
       "operations": [
+        "exploratory-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "clustering"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "transcript-quant",
@@ -499,13 +499,13 @@
         "transcript-tpm"
       ],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "expression-quantification"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "viral-metagenomics",
@@ -554,16 +554,16 @@
         "real-fastq-quality-yield"
       ],
       "scientific_context": [
-        "genome-variation",
-        "genome-sequence",
-        "microbiology"
-      ],
-      "workflows": [
-        "assembly",
-        "taxonomic-profiling"
+        "genetic-variation",
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Microbiology"
+      ]
     }
   ]
 }

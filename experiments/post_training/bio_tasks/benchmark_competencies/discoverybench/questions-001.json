@@ -40,16 +40,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "functional-genomics",
+        "molecular-function",
         "ecology"
       ],
-      "workflows": [
+      "operations": [
         "descriptive-analysis"
       ],
-      "operations": [
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "test/introduction_pathways_non-native_plants/metadata_0/group_0/q1",
@@ -91,16 +93,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "functional-genomics",
+        "molecular-function",
         "ecology"
       ],
-      "workflows": [
+      "operations": [
         "descriptive-analysis"
       ],
-      "operations": [
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "test/introduction_pathways_non-native_plants/metadata_0/group_0/q2",
@@ -142,16 +146,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "functional-genomics",
+        "molecular-function",
         "ecology"
       ],
-      "workflows": [
+      "operations": [
         "descriptive-analysis"
       ],
-      "operations": [
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "test/introduction_pathways_non-native_plants/metadata_1/group_0/q0",
@@ -193,11 +199,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "association"
-      ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "test/introduction_pathways_non-native_plants/metadata_1/group_0/q1",
@@ -241,11 +247,11 @@
       "scientific_context": [
         "ecology"
       ],
-      "workflows": [
-        "association"
-      ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "test/introduction_pathways_non-native_plants/metadata_2/group_0/q0",
@@ -289,11 +295,11 @@
       "scientific_context": [
         "ecology"
       ],
-      "workflows": [
-        "group-comparison"
-      ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "test/introduction_pathways_non-native_plants/metadata_2/group_0/q1",
@@ -335,14 +341,14 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "functional-genomics",
+        "molecular-function",
         "ecology"
       ],
-      "workflows": [
-        "group-comparison"
-      ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "test/introduction_pathways_non-native_plants/metadata_3/group_0/q0",
@@ -386,13 +392,15 @@
       "scientific_context": [
         "ecology"
       ],
-      "workflows": [
+      "operations": [
         "descriptive-analysis"
       ],
-      "operations": [
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "test/introduction_pathways_non-native_plants/metadata_3/group_0/q1",
@@ -436,13 +444,15 @@
       "scientific_context": [
         "ecology"
       ],
-      "workflows": [
+      "operations": [
         "descriptive-analysis"
       ],
-      "operations": [
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "test/introduction_pathways_non-native_plants/metadata_3/group_0/q2",
@@ -486,13 +496,15 @@
       "scientific_context": [
         "ecology"
       ],
-      "workflows": [
+      "operations": [
         "descriptive-analysis"
       ],
-      "operations": [
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "test/introduction_pathways_non-native_plants/metadata_4/group_0/q0",
@@ -534,16 +546,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "functional-genomics",
+        "molecular-function",
         "ecology"
       ],
-      "workflows": [
-        "regression"
-      ],
       "operations": [
+        "statistical-inference"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "model-fitting"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "test/introduction_pathways_non-native_plants/metadata_4/group_0/q1",
@@ -587,13 +601,15 @@
       "scientific_context": [
         "ecology"
       ],
-      "workflows": [
-        "regression"
-      ],
       "operations": [
+        "statistical-inference"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "model-fitting"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "test/introduction_pathways_non-native_plants/metadata_4/group_0/q2",
@@ -635,16 +651,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "functional-genomics",
+        "molecular-function",
         "ecology"
       ],
-      "workflows": [
-        "regression"
-      ],
       "operations": [
+        "statistical-inference"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "model-fitting"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "test/introduction_pathways_non-native_plants/metadata_5/group_0/q0",
@@ -690,11 +708,13 @@
       "scientific_context": [
         "ecology"
       ],
-      "workflows": [
-        "spatial"
+      "operations": [
+        "spatial-analysis"
       ],
-      "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "test/introduction_pathways_non-native_plants/metadata_5/group_0/q1",
@@ -740,11 +760,13 @@
       "scientific_context": [
         "ecology"
       ],
-      "workflows": [
-        "spatial"
+      "operations": [
+        "spatial-analysis"
       ],
-      "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "test/introduction_pathways_non-native_plants/metadata_5/group_0/q2",
@@ -790,11 +812,13 @@
       "scientific_context": [
         "ecology"
       ],
-      "workflows": [
-        "spatial"
+      "operations": [
+        "spatial-analysis"
       ],
-      "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "train/evolution_freshwater_fish/metadata_0/group_0/q0",
@@ -838,16 +862,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "molecular-evolution",
+        "evolutionary-relationships",
         "ecology"
       ],
-      "workflows": [
-        "regression"
-      ],
       "operations": [
+        "statistical-inference"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "model-fitting"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "train/evolution_freshwater_fish/metadata_0/group_0/q1",
@@ -893,14 +919,16 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "molecular-evolution",
+        "evolutionary-relationships",
         "ecology"
       ],
-      "workflows": [
-        "spatial"
+      "operations": [
+        "spatial-analysis"
       ],
-      "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "train/evolution_freshwater_fish/metadata_0/group_0/q2",
@@ -946,16 +974,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "molecular-evolution",
+        "evolutionary-relationships",
         "ecology"
       ],
-      "workflows": [
-        "spatial"
-      ],
       "operations": [
+        "data-preparation",
+        "spatial-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "train/evolution_freshwater_fish/metadata_1/group_0/q0",
@@ -999,16 +1030,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "molecular-evolution",
+        "evolutionary-relationships",
         "ecology"
       ],
-      "workflows": [
-        "regression"
-      ],
       "operations": [
+        "statistical-inference"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "model-fitting"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "train/evolution_freshwater_fish/metadata_1/group_0/q1",
@@ -1054,13 +1087,15 @@
       "scientific_context": [
         "ecology"
       ],
-      "workflows": [
-        "regression"
-      ],
       "operations": [
+        "statistical-inference"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "model-fitting"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "train/evolution_freshwater_fish/metadata_1/group_0/q2",
@@ -1104,14 +1139,14 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "molecular-evolution",
+        "evolutionary-relationships",
         "ecology"
       ],
-      "workflows": [
-        "phylogeny"
-      ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "train/evolution_freshwater_fish/metadata_2/group_0/q0",
@@ -1155,16 +1190,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "molecular-evolution",
+        "evolutionary-relationships",
         "ecology"
       ],
-      "workflows": [
-        "regression"
-      ],
       "operations": [
+        "statistical-inference"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "model-fitting"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "train/evolution_freshwater_fish/metadata_2/group_0/q1",
@@ -1208,16 +1245,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "molecular-evolution",
+        "evolutionary-relationships",
         "ecology"
       ],
-      "workflows": [
-        "regression"
-      ],
       "operations": [
+        "statistical-inference"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "model-fitting"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "train/evolution_freshwater_fish/metadata_3/group_0/q0",
@@ -1261,11 +1300,11 @@
       "scientific_context": [
         "ecology"
       ],
-      "workflows": [
-        "association"
-      ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "train/evolution_freshwater_fish/metadata_3/group_0/q1",
@@ -1309,11 +1348,11 @@
       "scientific_context": [
         "ecology"
       ],
-      "workflows": [
-        "association"
-      ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     }
   ]
 }

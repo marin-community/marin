@@ -73,7 +73,7 @@ def benchmark_pages() -> tuple[list[dict], list[str]]:
             inputs.append(review_file)
             review = load_benchmark_review(review_file)
             inputs.extend(review["task_files"])
-            if review["schema_version"] != 3 or review["benchmark"] != name:
+            if review["schema_version"] != 4 or review["benchmark"] != name:
                 raise ValueError(f"Competency review schema/source mismatch: {name}")
             if review["inventory_sha256"] != hashlib.sha256((SOURCE / release["tasks_file"]).read_bytes()).hexdigest():
                 raise ValueError(f"Inventory changed since review: {name}")
@@ -100,16 +100,17 @@ def benchmark_pages() -> tuple[list[dict], list[str]]:
                     annotation["operations"] or not annotation.get("decomposition_note")
                 ):
                     raise ValueError(f"Invalid unresolved input stage: {identity}")
-                for facet in ("workflows", "operations", "scientific_context"):
+                for facet in ("operations", "scientific_context", "analysis_tags"):
                     labels = annotation[facet]
                     allowed = {row["id"] for row in definitions[facet]}
-                    if (
-                        len(labels) != len(set(labels))
-                        or not set(labels) <= allowed
-                        or (labels and not eligible)
-                        or (eligible and facet == "workflows" and not labels)
-                    ):
+                    if len(labels) != len(set(labels)) or not set(labels) <= allowed or (labels and not eligible):
                         raise ValueError(f"Invalid {facet} assignment: {identity}")
+                for field in ("output_tags", "context_review_needed"):
+                    labels = annotation[field]
+                    if len(labels) != len(set(labels)) or (labels and not eligible):
+                        raise ValueError(f"Invalid {field} assignment: {identity}")
+                if not set(annotation["output_tags"]) <= {"figure"}:
+                    raise ValueError(f"Unknown output tag: {identity}")
                 if eligible and not all(
                     annotation[key] for key in ("source_question", "reframed_question", "outputs", "verification")
                 ):
@@ -163,17 +164,18 @@ def benchmark_pages() -> tuple[list[dict], list[str]]:
 
 
 def benchmark_markdown(review: dict) -> str:
-    """Render question-level workflow, operation and context assignments."""
+    """Render question-level operation families, fine tags and scientific contexts."""
     taxonomy = load("benchmark_competencies/taxonomy.json")
-    facets = ("workflows", "operations", "scientific_context")
+    facets = ("operations", "scientific_context")
     names = {facet: {row["id"]: row["name"] for row in taxonomy[facet]} for facet in facets}
+    tag_names = {tag["id"]: tag["name"] for tag in taxonomy["analysis_tags"]}
     included = [row for row in review["tasks"] if row["disposition"] == "reframe"]
     lines = [
-        "# BixBench-Verified: workflows, operations and scientific context",
+        "# BixBench-Verified: operation families and scientific contexts",
         "",
-        "A workflow connects operations to a scientific question. Differential expression and enrichment "
-        "are workflow types. Operations such as effect estimation, hypothesis testing and multiple-testing "
-        "correction describe required work; scientific context describes the measurements and study setting.",
+        "Two category axes describe each task: a general operation family and a scientific context. "
+        "For example, differential-expression analysis is usually Statistical inference in Gene expression. "
+        "Finer requirements such as effect estimation, testing and correction remain analysis tags.",
         "",
         "Plan new connected workflows and vary their input stage, design and biological context. Do not "
         "infer every operation from a workflow name: calculating a contrast from counts differs from "
@@ -186,8 +188,8 @@ def benchmark_markdown(review: dict) -> str:
         "",
         "## Question assignments",
         "",
-        "| Question | Workflows | Analytical operations | Scientific context |",
-        "| --- | --- | --- | --- |",
+        "| Question | Operation families | Scientific context |",
+        "| --- | --- | --- |",
     ]
     for row in included:
         cells = ["; ".join(names[facet][key] for key in row[facet]) or "Unresolved" for facet in facets]
@@ -198,6 +200,8 @@ def benchmark_markdown(review: dict) -> str:
         if row["disposition"] != "reframe":
             lines += [row["reason"], ""]
             continue
+        if row["analysis_tags"]:
+            lines += ["**Analysis tags:** " + "; ".join(tag_names[tag] for tag in row["analysis_tags"]), ""]
         lines += ["**Decomposition:** " + row["decomposition_note"], ""]
         lines += ["**Proposed framing:** " + row["reframed_question"], "", "**Check:** " + row["verification"], ""]
         lines += ["- " + item for item in row["decisions"] + row["scope_changes"]]
@@ -215,7 +219,7 @@ def benchmark_statistics(benchmarks: list[dict]) -> dict:
     }
     taxonomy = load("benchmark_competencies/taxonomy.json")
     facets = {}
-    for facet in ("workflows", "operations", "scientific_context"):
+    for facet in ("operations", "scientific_context"):
         counts = []
         for category in taxonomy[facet]:
             sources = []
@@ -227,6 +231,7 @@ def benchmark_statistics(benchmarks: list[dict]) -> dict:
                 {
                     "id": category["id"],
                     "name": category["name"],
+                    "description": category["outcome"] if facet == "operations" else category["scope"],
                     "count": sum(source["count"] for source in sources),
                     "benchmarks": len(sources),
                     "sources": sorted(sources, key=lambda row: (-row["count"], row["benchmark"])),
@@ -238,6 +243,7 @@ def benchmark_statistics(benchmarks: list[dict]) -> dict:
         "source_records": sum(len(benchmark["questions"]) for benchmark in reviewed),
         "eligible_records": sum(len(questions) for questions in eligible.values()),
         "unresolved_context": sum(not q["scientific_context"] for rows in eligible.values() for q in rows),
+        "context_review_pending": sum(bool(q["context_review_needed"]) for rows in eligible.values() for q in rows),
         "decomposed_records": sum(
             q["decomposition_status"] == "question-reviewed" for rows in eligible.values() for q in rows
         ),
@@ -269,23 +275,25 @@ def category_markdown(statistics: dict) -> str:
         f"{statistics['records_without_operations']:,} records have no operation annotations yet; "
         "other migrated operation lists can also be incomplete. "
         f"{statistics['unresolved_context']:,} records have no resolved scientific context. "
+        f"{statistics['context_review_pending']:,} retain a broad context requiring a more specific review. "
         "All eligible records remain in the denominator; missing annotations are not zero demand.",
     ]
     for facet, title in (
-        ("workflows", "Workflows"),
-        ("operations", "Analytical operations"),
+        ("operations", "Operation families"),
         ("scientific_context", "Scientific context"),
     ):
         lines += [
             "",
             f"## {title}",
             "",
-            "| Category | Question records | % of eligible records | ID releases |",
-            "| --- | ---: | ---: | ---: |",
+            "| Category | Description | Question records | % of eligible records | ID releases |",
+            "| --- | --- | ---: | ---: | ---: |",
         ]
         for row in statistics["facets"][facet]:
             percentage = 100 * row["count"] / total if total else 0
-            lines.append(f"| {row['name']} | {row['count']} | {percentage:.1f}% | {row['benchmarks']} |")
+            lines.append(
+                f"| {row['name']} | {row['description']} | {row['count']} | {percentage:.1f}% | {row['benchmarks']} |"
+            )
     lines += [
         "",
         "## Inventory gaps",

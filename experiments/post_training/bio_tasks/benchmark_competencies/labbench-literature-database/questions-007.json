@@ -37,13 +37,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:7faf65d7-55c9-4586-9e1e-9d4e39e93601",
@@ -81,17 +83,19 @@
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
       "recipes": [],
-      "scientific_context": [
-        "chemical-biology",
-        "bioimaging"
-      ],
-      "workflows": [
-        "evidence-extraction"
-      ],
+      "scientific_context": [],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology",
+        "Biological imaging"
+      ]
     },
     {
       "task_id": "SuppQA:70be3149-5beb-443f-bfe8-cf14da0dd59c",
@@ -130,13 +134,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:b5dbe6b5-95e5-4c1a-810f-8877c6d46c72",
@@ -175,15 +181,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "nucleotide-sequences"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:ea25f382-3885-4294-875e-10fccf6f4b3c",
@@ -222,13 +230,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:2af1880c-a4dc-4da2-b4d5-131ef96c6350",
@@ -262,13 +272,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:2a34cefb-d28e-426e-a925-829bda3435d8",
@@ -307,13 +319,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:72434cfd-5cda-48e3-942f-12c99104b8a1",
@@ -347,13 +361,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:a140f0c0-8b5c-4670-8716-22c93ad45c06",
@@ -392,16 +408,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "gene-expression",
+        "nucleotide-sequences"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:823bc7ee-a275-46a2-8143-7aaf057fe331",
@@ -434,16 +452,18 @@
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
       "recipes": [],
-      "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "evidence-extraction"
-      ],
+      "scientific_context": [],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology"
+      ]
     },
     {
       "task_id": "SuppQA:05e60207-57a7-4b6b-b294-354893a3d246",
@@ -482,13 +502,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:37730e76-f5dc-42be-91c1-3f69147b465a",
@@ -527,13 +549,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:3041bea7-5161-44e8-abcd-ebfb404a1553",
@@ -572,13 +596,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:d454257b-b65f-4ed8-9873-07d0d685fb40",
@@ -617,15 +643,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "nucleotide-sequences"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:de9956c2-4b42-4529-8926-48848c8237f6",
@@ -664,13 +692,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:311df379-df7a-4410-a32a-8bbb79376304",
@@ -709,13 +739,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:5a974da2-cca9-49e1-a421-e6d3ad9c17ee",
@@ -754,15 +786,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:b3d8ddd1-4829-405c-b72b-f5dcf114636f",
@@ -796,13 +830,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:74884486-15bc-45de-9174-2efe35a2c8fc",
@@ -843,13 +879,15 @@
       "scientific_context": [
         "molecular-structure"
       ],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:27685d85-ec01-4ba0-a690-35a89b609105",
@@ -882,16 +920,18 @@
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
       "recipes": [],
-      "scientific_context": [
-        "immunology"
-      ],
-      "workflows": [
-        "evidence-extraction"
-      ],
+      "scientific_context": [],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "SuppQA:0348e600-f5cc-4fa8-89eb-d2cb3ae18752",
@@ -929,16 +969,18 @@
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
       "recipes": [],
-      "scientific_context": [
-        "immunology"
-      ],
-      "workflows": [
-        "evidence-extraction"
-      ],
+      "scientific_context": [],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "SuppQA:e77c9e8d-087c-4be1-90b5-987f36cbc27a",
@@ -972,13 +1014,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:aa904a36-3656-45a8-a0d2-912c04dd2558",
@@ -1017,16 +1061,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "immunology"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "gene-expression"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "SuppQA:966e60e1-6b15-4105-b2a4-b1859e1963fc",
@@ -1064,16 +1111,18 @@
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
       "recipes": [],
-      "scientific_context": [
-        "bioimaging"
-      ],
-      "workflows": [
-        "evidence-extraction"
-      ],
+      "scientific_context": [],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Biological imaging"
+      ]
     },
     {
       "task_id": "SuppQA:c81b515b-c24d-4937-b972-67d89fc7a09f",
@@ -1107,16 +1156,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "gene-expression",
+        "nucleotide-sequences"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:0284e566-0c84-4333-a44d-12bd6c4c9a9c",
@@ -1150,13 +1201,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:11c0a95f-70e6-4e5b-9ace-0cf6b97ad83b",
@@ -1195,16 +1248,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "immunology"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "gene-expression"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "SuppQA:8ba7a888-70c6-404e-949d-60e4145b8eb6",
@@ -1243,15 +1299,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "nucleotide-sequences"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:d540a38e-6247-4a19-8752-873b792ff3d4",
@@ -1290,13 +1348,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:38217b58-50a4-4376-b35a-78b8c5c1a980",
@@ -1335,15 +1395,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "genetic-variation"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:3bee1e75-3b9c-4270-bb9e-e65b1a941b48",
@@ -1382,13 +1444,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:02af18a7-aa18-4f4a-bc40-a8e81b4258dc",
@@ -1422,13 +1486,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:d57031ac-e7d7-4274-876b-36449ecdd640",
@@ -1467,15 +1533,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "nucleotide-sequences"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:5dd6b784-487d-48bd-ac36-9653fc11c0ad",
@@ -1508,16 +1576,18 @@
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
       "recipes": [],
-      "scientific_context": [
-        "bioimaging"
-      ],
-      "workflows": [
-        "evidence-extraction"
-      ],
+      "scientific_context": [],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Biological imaging"
+      ]
     },
     {
       "task_id": "SuppQA:9379deb7-21f2-4263-86f8-2d15d1a82160",
@@ -1556,15 +1626,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "nucleotide-sequences"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:41478c97-f6f8-47f5-818b-1db407be9075",
@@ -1603,15 +1675,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "nucleotide-sequences"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:a5eff44a-ec71-44a8-bdb6-173fd9ea92ce",
@@ -1650,15 +1724,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "nucleotide-sequences"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:e3857371-2a36-4019-b23e-177b4b5a4be5",
@@ -1697,13 +1773,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:6b6dda99-3651-4bce-86c9-4fc2032479db",
@@ -1742,15 +1820,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:3417bcfa-c37a-4e25-8a0c-1fd963741eea",
@@ -1789,13 +1869,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:f13fbc77-553f-4a4c-b29b-ca178262eeef",
@@ -1834,15 +1916,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:93566dc3-5f5c-491e-b723-60712cca625d",
@@ -1881,13 +1965,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:e5ed958b-1cc9-4848-8e37-a895beb835e2",
@@ -1926,13 +2012,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:ebb6a0ef-5421-4392-8717-f574c9600842",
@@ -1971,15 +2059,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "nucleotide-sequences"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:59bf5188-9844-459c-94cf-89ed8cd3287f",
@@ -2018,13 +2108,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:c8e4f3d2-2fb3-428f-bb02-8593513efc54",
@@ -2063,13 +2155,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:ceeac89d-59c1-48a7-93db-46b045391906",
@@ -2108,13 +2202,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:8c2e99ce-7af0-4e73-a058-151135647076",
@@ -2153,13 +2249,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:1026513d-a087-427b-ab16-8a7c199e039e",
@@ -2193,13 +2291,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:a8b1cd02-4bd9-43ad-927e-c2c4eb7c528b",
@@ -2238,15 +2338,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "nucleotide-sequences"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:97e98c7d-105b-4af5-99be-6e1fe4a2cce6",
@@ -2285,15 +2387,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "nucleotide-sequences"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:19b4836a-0635-4aad-9817-8934cbb7ca73",
@@ -2332,15 +2436,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "nucleotide-sequences"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:9b972351-d2f8-4491-8a7c-3fb5a3e429a9",
@@ -2374,13 +2480,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:dce3628e-905d-4b90-a6d0-877a2ccbbc33",
@@ -2419,15 +2527,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "gene-expression"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:befeb56e-6f04-4be7-9304-4ede1bdd25bc",
@@ -2461,13 +2571,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:bd08e5ba-e26b-4258-b3a2-543c842d028a",
@@ -2506,15 +2618,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "nucleotide-sequences"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:c04cc31d-9aee-46bf-9628-e153c72a44e3",
@@ -2553,15 +2667,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "nucleotide-sequences"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:4f3bd821-52d6-4875-b8ec-d92ca0fe644f",
@@ -2595,15 +2711,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "nucleotide-sequences"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:8719a6b8-76e9-44ae-b26b-65821de0ac99",
@@ -2642,13 +2760,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:93099819-56be-40bf-b54d-427b663a2381",
@@ -2687,13 +2807,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:df1365b0-4731-4f40-8dd7-64f4793a1729",
@@ -2727,15 +2849,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "gene-expression"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:bbc4ff4f-89f6-4f27-99e1-f03482feeffb",
@@ -2774,13 +2898,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:459ee10b-aa46-47ad-af55-8c0e5a0015ef",
@@ -2814,13 +2940,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:03f5a91c-f167-475e-8ccb-4c7561c767a9",
@@ -2859,13 +2987,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:4b3bbf7d-e352-4ff9-b79a-65d15566de13",
@@ -2904,13 +3034,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:cdab2021-feed-497f-992a-a8f73df33957",
@@ -2944,13 +3076,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:bc806521-164f-4f66-90e7-9d28f5fc319e",
@@ -2984,13 +3118,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:404f6ac4-0605-406b-b32e-0fc14d1600f4",
@@ -3023,16 +3159,18 @@
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
       "recipes": [],
-      "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "evidence-extraction"
-      ],
+      "scientific_context": [],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology"
+      ]
     },
     {
       "task_id": "SuppQA:cf4608f5-2241-4c3b-a85a-7d2cda3733ee",
@@ -3071,13 +3209,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:20c5295d-7cce-4a70-b950-640ea6e69806",
@@ -3116,13 +3256,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:181019ef-1151-4668-9178-13641d24bd85",
@@ -3156,13 +3298,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:9dbf4365-801d-42f9-80a9-357b4d93c793",
@@ -3196,13 +3340,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:ed0ad27f-c1ed-4796-a8f6-dd49c66b2515",
@@ -3236,13 +3382,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:a1cf5586-4afc-48e6-a0d2-9554f9413983",
@@ -3281,13 +3429,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:b226af16-8f63-4e2d-bf3c-c94a1cc2e32e",
@@ -3326,13 +3476,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:30fce0db-9bb8-4a89-ae5c-78f665da41f6",
@@ -3371,13 +3523,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:5d457a9d-4f9b-4ad9-aac3-dd15e60f00cd",
@@ -3416,13 +3570,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "SuppQA:10512e71-a619-42ab-8e1a-3b5b4decda5d",
@@ -3460,16 +3616,18 @@
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
       "recipes": [],
-      "scientific_context": [
-        "immunology"
-      ],
-      "workflows": [
-        "evidence-extraction"
-      ],
+      "scientific_context": [],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "SuppQA:bbb9143b-6f7c-4960-bd44-ab8972a1da27",
@@ -3508,13 +3666,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "evidence-extraction"
-      ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     }
   ]
 }

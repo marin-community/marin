@@ -41,18 +41,16 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "epigenomics",
-        "immunology"
-      ],
-      "workflows": [
-        "differential-expression",
-        "chromatin",
-        "motifs",
-        "integration"
+        "gene-expression",
+        "chromatin-organization"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "10x_5p_melanoma_swapped_sortgate_cd8_state_data_fidelity_probe_v1",
@@ -95,17 +93,14 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "immunology"
-      ],
-      "workflows": [
-        "cell-annotation",
-        "composition",
-        "repertoire",
-        "differential-expression"
+        "gene-expression",
+        "immune-repertoires"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gse155381_q7_xspecies_epi_communication",
@@ -148,14 +143,14 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "communication",
-        "orthology"
+        "gene-expression",
+        "molecular-interactions"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gse297023_q2_senescence_not_mechanism",
@@ -198,16 +193,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "differential-expression",
-        "enrichment"
+        "gene-expression"
       ],
       "operations": [
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     }
   ]
 }

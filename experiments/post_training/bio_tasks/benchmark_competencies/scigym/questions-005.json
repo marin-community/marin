@@ -36,16 +36,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000651",
@@ -83,16 +85,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000560",
@@ -130,16 +134,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000840",
@@ -177,16 +183,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000489",
@@ -224,16 +232,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000930",
@@ -271,16 +281,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000467",
@@ -318,16 +330,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000259",
@@ -365,16 +379,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000354",
@@ -412,16 +428,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000431",
@@ -459,16 +477,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000861",
@@ -506,16 +526,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000106",
@@ -553,16 +575,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000205",
@@ -600,16 +624,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000745",
@@ -647,16 +673,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000648",
@@ -694,16 +722,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000579",
@@ -741,16 +771,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000033",
@@ -788,16 +820,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000143",
@@ -835,16 +869,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000504",
@@ -882,16 +918,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000347",
@@ -929,16 +967,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000001055",
@@ -976,16 +1016,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000730",
@@ -1023,16 +1065,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000074",
@@ -1070,16 +1114,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000444",
@@ -1117,16 +1163,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000433",
@@ -1164,16 +1212,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000887",
@@ -1211,16 +1261,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000964",
@@ -1258,16 +1310,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000708",
@@ -1305,16 +1359,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000332",
@@ -1352,16 +1408,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000476",
@@ -1399,16 +1457,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000921",
@@ -1446,16 +1506,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000046",
@@ -1493,16 +1555,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000492",
@@ -1540,16 +1604,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000754",
@@ -1587,16 +1653,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000364",
@@ -1634,16 +1702,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000653",
@@ -1681,16 +1751,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000160",
@@ -1728,16 +1800,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000089",
@@ -1775,16 +1849,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000067",
@@ -1822,16 +1898,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000010",
@@ -1869,16 +1947,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000788",
@@ -1916,16 +1996,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000766",
@@ -1963,16 +2045,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000616",
@@ -2010,16 +2094,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000661",
@@ -2057,16 +2143,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000226",
@@ -2104,16 +2192,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000515",
@@ -2151,16 +2241,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000028",
@@ -2198,16 +2290,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000022",
@@ -2245,16 +2339,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000055",
@@ -2292,16 +2388,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000848",
@@ -2339,16 +2437,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000412",
@@ -2386,16 +2486,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000465",
@@ -2433,16 +2535,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000468",
@@ -2480,16 +2584,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "BIOMD0000000565",
@@ -2527,16 +2633,18 @@
         "scope": "source-protocol",
         "note": "The shared instruction requires choosing experiments to recover missing mechanisms and submitting an SBML model. Final model similarity is evaluated by the environment. These 350 model instances share one operation protocol."
       },
-      "scientific_context": [
-        "systems-biology"
-      ],
-      "workflows": [
-        "mechanistic-modeling"
-      ],
+      "scientific_context": [],
       "operations": [
+        "simulation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "experimental-design"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     }
   ]
 }

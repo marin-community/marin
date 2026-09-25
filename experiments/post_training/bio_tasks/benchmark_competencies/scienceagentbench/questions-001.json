@@ -38,16 +38,18 @@
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
       "recipes": [],
-      "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "model-evaluation"
-      ],
+      "scientific_context": [],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "model-evaluation"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology"
+      ]
     },
     {
       "task_id": "6",
@@ -86,16 +88,16 @@
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
       "recipes": [],
-      "scientific_context": [
-        "chemical-biology"
+      "scientific_context": [],
+      "operations": [],
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [
+        "figure"
       ],
-      "workflows": [
-        "exploratory-analysis"
-      ],
-      "operations": [
-        "visualization"
-      ],
-      "decomposition_status": "provisional"
+      "context_review_needed": [
+        "Chemical biology"
+      ]
     },
     {
       "task_id": "7",
@@ -134,16 +136,16 @@
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
       "recipes": [],
-      "scientific_context": [
-        "chemical-biology"
+      "scientific_context": [],
+      "operations": [],
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [
+        "figure"
       ],
-      "workflows": [
-        "exploratory-analysis"
-      ],
-      "operations": [
-        "visualization"
-      ],
-      "decomposition_status": "provisional"
+      "context_review_needed": [
+        "Chemical biology"
+      ]
     },
     {
       "task_id": "8",
@@ -183,20 +185,23 @@
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
       "recipes": [],
-      "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "regression",
-        "model-evaluation"
-      ],
+      "scientific_context": [],
       "operations": [
+        "data-preparation",
+        "statistical-inference"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "feature-selection",
         "model-fitting",
-        "model-evaluation",
-        "visualization"
+        "model-evaluation"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [
+        "figure"
+      ],
+      "context_review_needed": [
+        "Chemical biology"
+      ]
     },
     {
       "task_id": "11",
@@ -236,17 +241,20 @@
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
       "recipes": [],
-      "scientific_context": [
-        "bioimaging"
-      ],
-      "workflows": [
-        "model-evaluation"
-      ],
+      "scientific_context": [],
       "operations": [
+        "predictive-modeling",
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "model-evaluation",
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Biological imaging"
+      ]
     },
     {
       "task_id": "12",
@@ -286,18 +294,19 @@
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
       "recipes": [],
-      "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling",
-        "model-evaluation"
-      ],
+      "scientific_context": [],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction",
         "model-evaluation"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology"
+      ]
     },
     {
       "task_id": "13",
@@ -338,16 +347,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling",
-        "molecular-descriptors"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "15",
@@ -386,16 +396,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "model-evaluation",
-        "molecular-descriptors"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "model-evaluation"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "18",
@@ -437,19 +448,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling",
-        "model-evaluation",
-        "molecular-descriptors"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling",
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "classification",
         "model-evaluation",
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "19",
@@ -491,19 +503,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling",
-        "model-evaluation",
-        "molecular-descriptors"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling",
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "classification",
         "model-evaluation",
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "20",
@@ -543,14 +556,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
+      "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "model-evaluation"
       ],
-      "operations": [
-        "model-evaluation",
-        "visualization"
+      "output_tags": [
+        "figure"
       ],
-      "decomposition_status": "provisional"
+      "context_review_needed": []
     },
     {
       "task_id": "27",
@@ -589,16 +605,16 @@
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
       "recipes": [],
-      "scientific_context": [
-        "chemical-biology"
+      "scientific_context": [],
+      "operations": [],
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [
+        "figure"
       ],
-      "workflows": [
-        "exploratory-analysis"
-      ],
-      "operations": [
-        "visualization"
-      ],
-      "decomposition_status": "provisional"
+      "context_review_needed": [
+        "Chemical biology"
+      ]
     },
     {
       "task_id": "40",
@@ -639,16 +655,18 @@
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
       "recipes": [],
-      "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
+      "scientific_context": [],
+      "operations": [
         "predictive-modeling"
       ],
-      "operations": [
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "classification"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology"
+      ]
     },
     {
       "task_id": "41",
@@ -689,16 +707,18 @@
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
       "recipes": [],
-      "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
+      "scientific_context": [],
+      "operations": [
         "predictive-modeling"
       ],
-      "operations": [
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "classification"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology"
+      ]
     },
     {
       "task_id": "69",
@@ -745,19 +765,23 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "immunology"
+        "gene-expression"
       ],
-      "workflows": [
+      "operations": [
         "exploratory-analysis",
         "data-preparation"
       ],
-      "operations": [
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "dimension-reduction",
-        "data-management",
-        "visualization"
+        "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [
+        "figure"
+      ],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "70",
@@ -799,16 +823,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "differential-expression"
+        "gene-expression"
       ],
       "operations": [
-        "clustering",
-        "visualization"
+        "exploratory-analysis"
       ],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [
+        "clustering"
+      ],
+      "output_tags": [
+        "figure"
+      ],
+      "context_review_needed": []
     },
     {
       "task_id": "75",
@@ -851,17 +878,21 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "composition"
+        "gene-expression"
       ],
       "operations": [
-        "dimension-reduction",
-        "descriptive-statistics",
-        "visualization"
+        "exploratory-analysis",
+        "descriptive-analysis"
       ],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [
+        "dimension-reduction",
+        "descriptive-statistics"
+      ],
+      "output_tags": [
+        "figure"
+      ],
+      "context_review_needed": []
     },
     {
       "task_id": "78",
@@ -900,19 +931,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "genome-sequence",
+        "genetic-variation",
+        "nucleotide-sequences",
         "molecular-structure"
       ],
-      "workflows": [
-        "model-evaluation",
-        "network",
-        "protein-structure"
-      ],
       "operations": [
+        "predictive-modeling",
+        "graph-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "model-evaluation"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "79",
@@ -959,17 +991,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "descriptive-analysis",
-        "exploratory-analysis"
+        "gene-expression"
       ],
       "operations": [
-        "descriptive-statistics",
-        "visualization"
+        "descriptive-analysis"
       ],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [
+        "descriptive-statistics"
+      ],
+      "output_tags": [
+        "figure"
+      ],
+      "context_review_needed": []
     },
     {
       "task_id": "80",
@@ -1016,18 +1050,21 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "immunology"
-      ],
-      "workflows": [
-        "descriptive-analysis",
-        "exploratory-analysis"
+        "gene-expression"
       ],
       "operations": [
-        "descriptive-statistics",
-        "visualization"
+        "descriptive-analysis"
       ],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [
+        "descriptive-statistics"
+      ],
+      "output_tags": [
+        "figure"
+      ],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "81",
@@ -1073,18 +1110,23 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "immunology"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression"
       ],
       "operations": [
-        "dimension-reduction",
-        "descriptive-statistics",
-        "visualization"
+        "exploratory-analysis",
+        "descriptive-analysis"
       ],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [
+        "dimension-reduction",
+        "descriptive-statistics"
+      ],
+      "output_tags": [
+        "figure"
+      ],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "82",
@@ -1129,14 +1171,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
+      "operations": [
         "exploratory-analysis"
       ],
-      "operations": [
-        "clustering",
-        "visualization"
+      "decomposition_status": "provisional",
+      "analysis_tags": [
+        "clustering"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [
+        "figure"
+      ],
+      "context_review_needed": []
     },
     {
       "task_id": "85",
@@ -1177,13 +1222,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
+      "operations": [
         "descriptive-analysis"
       ],
-      "operations": [
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "96",
@@ -1231,19 +1278,22 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
+        "gene-expression"
       ],
-      "workflows": [
+      "operations": [
         "exploratory-analysis",
         "data-preparation"
       ],
-      "operations": [
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "dimension-reduction",
         "feature-selection",
-        "clustering",
-        "visualization"
+        "clustering"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [
+        "figure"
+      ],
+      "context_review_needed": []
     },
     {
       "task_id": "98",
@@ -1291,16 +1341,16 @@
         "note": "Classify receptor-chain pairing quality from single-cell receptor data and plot counts. No sequencing-read quality or input-image analysis is requested."
       },
       "scientific_context": [
-        "immunology",
-        "transcriptomics"
+        "immune-repertoires",
+        "gene-expression"
       ],
-      "workflows": [
-        "repertoire"
+      "operations": [],
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [
+        "figure"
       ],
-      "operations": [
-        "visualization"
-      ],
-      "decomposition_status": "provisional"
+      "context_review_needed": []
     },
     {
       "task_id": "99",
@@ -1344,18 +1394,23 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "spatial"
+        "gene-expression"
       ],
       "operations": [
+        "exploratory-analysis",
+        "descriptive-analysis",
+        "spatial-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "dimension-reduction",
         "clustering",
-        "descriptive-statistics",
-        "visualization"
+        "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [
+        "figure"
+      ],
+      "context_review_needed": []
     },
     {
       "task_id": "100",
@@ -1399,15 +1454,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "spatial"
-      ],
       "operations": [
-        "clustering",
-        "descriptive-statistics",
-        "visualization"
+        "exploratory-analysis",
+        "descriptive-analysis",
+        "spatial-analysis"
       ],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [
+        "clustering",
+        "descriptive-statistics"
+      ],
+      "output_tags": [
+        "figure"
+      ],
+      "context_review_needed": []
     }
   ]
 }

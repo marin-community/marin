@@ -42,15 +42,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub/tdcommons-bbb-martins",
@@ -94,15 +96,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "classification"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub/tdcommons-bioavailability-ma",
@@ -146,15 +150,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "classification"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub/tdcommons-caco2-wang",
@@ -198,15 +204,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub/tdcommons-clearance-hepatocyte-az",
@@ -250,15 +258,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub/tdcommons-cyp2d6-substrate-carbonmangels",
@@ -302,15 +312,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "classification"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub/tdcommons-herg",
@@ -354,15 +366,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "classification"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub/tdcommons-hia-hou",
@@ -406,15 +420,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "classification"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub/tdcommons-lipophilicity-astrazeneca",
@@ -458,15 +474,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub/tdcommons-pgp-broccatelli",
@@ -510,15 +528,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "classification"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/adaptyv-bio-egfr-binders-binary-cls-v0",
@@ -562,15 +582,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "classification"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/biogen-adme-fang-hclint-reg-v1",
@@ -614,15 +636,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/biogen-adme-fang-hppb-reg-v1",
@@ -666,15 +690,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/biogen-adme-fang-perm-reg-v1",
@@ -718,15 +744,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/biogen-adme-fang-rclint-reg-v1",
@@ -770,15 +798,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/biogen-adme-fang-reg-v1",
@@ -822,15 +852,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/biogen-adme-fang-rppb-reg-v1",
@@ -874,15 +906,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/biogen-adme-fang-solu-reg-v1",
@@ -926,15 +960,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/graphium-l1000-mcf7-v1",
@@ -978,15 +1014,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/graphium-l1000-vcap-v1",
@@ -1030,15 +1068,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/graphium-pcba-1328-1564k-v1",
@@ -1082,15 +1122,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "classification"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/graphium-qm9-v1",
@@ -1134,15 +1176,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/graphium-tox21-v1",
@@ -1186,15 +1230,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "classification"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/graphium-zinc12k-v1",
@@ -1238,15 +1284,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/novartis-adme-novartis-cyp3a4-cls",
@@ -1290,15 +1338,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "classification"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/novartis-adme-novartis-cyp3a4-reg",
@@ -1342,15 +1392,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/polaris-adme-fang-hclint-1",
@@ -1394,15 +1446,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/polaris-adme-fang-hppb-1",
@@ -1446,15 +1500,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/polaris-adme-fang-perm-1",
@@ -1498,15 +1554,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/polaris-adme-fang-r-1",
@@ -1550,15 +1608,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/polaris-adme-fang-rclint-1",
@@ -1602,15 +1662,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/polaris-adme-fang-rppb-1",
@@ -1654,15 +1716,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/polaris-adme-fang-solu-1",
@@ -1706,15 +1770,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/polaris-hello-world-benchmark",
@@ -1758,15 +1824,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/polaris-molprop-250k-leadlike-r-1",
@@ -1810,15 +1878,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/polaris-molprop-250k-r-1",
@@ -1862,15 +1932,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/polaris-molprop-250k-reg-v2",
@@ -1914,15 +1986,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/polaris-molprop-leadlike-250k-reg-v2",
@@ -1966,15 +2040,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/polaris-pkis1-egfr-wt-mut-c-1",
@@ -2018,15 +2094,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "classification"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/polaris-pkis1-egfr-wt-mut-r-1",
@@ -2070,15 +2148,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/polaris-pkis1-kit-wt-mut-c-1",
@@ -2122,15 +2202,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "classification"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/polaris-pkis1-kit-wt-mut-r-1",
@@ -2174,15 +2256,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/polaris-pkis1-ret-wt-mut-c-1",
@@ -2226,15 +2310,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "classification"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/polaris-pkis1-ret-wt-mut-r-1",
@@ -2278,15 +2364,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/polaris-pkis2-egfr-wt-c-1",
@@ -2330,15 +2418,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "classification"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/polaris-pkis2-egfr-wt-r-1",
@@ -2382,15 +2472,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/polaris-pkis2-egfr-wt-reg-v2",
@@ -2434,15 +2526,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/polaris-pkis2-kit-wt-c-1",
@@ -2486,15 +2580,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "classification"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/polaris-pkis2-kit-wt-cls-v2",
@@ -2538,15 +2634,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "classification"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/polaris-pkis2-kit-wt-r-1",
@@ -2590,15 +2688,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/polaris-pkis2-kit-wt-reg-v2",
@@ -2642,15 +2742,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/polaris-pkis2-lok-slk-c-1",
@@ -2694,15 +2796,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "classification"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/polaris-pkis2-lok-slk-cls-v2",
@@ -2746,15 +2850,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "classification"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/polaris-pkis2-lok-slk-r-1",
@@ -2798,15 +2904,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/polaris-pkis2-ret-wt-c-1",
@@ -2850,15 +2958,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "classification"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/polaris-pkis2-ret-wt-cls-v2",
@@ -2902,15 +3012,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "classification"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "polarishub-extended/polaris-pkis2-ret-wt-r-1",
@@ -2954,15 +3066,17 @@
         "note": "Required source output reviewed by workflow family. Prediction files do not earn model-evaluation credit for the grader metric. Optional preprocessing and background applications are omitted."
       },
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     }
   ]
 }

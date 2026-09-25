@@ -39,19 +39,22 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression"
       ],
       "operations": [
+        "data-preparation",
+        "exploratory-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "normalization",
         "transformation",
         "feature-selection",
         "dimension-reduction",
         "clustering"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "tapestri_ccus_clustering_12_largest_mutant_clone",
@@ -93,14 +96,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "variant-analysis",
-        "composition"
+        "genetic-variation"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DE01_pseudobulk_de",
@@ -143,14 +145,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "immunology"
-      ],
-      "workflows": [
-        "differential-expression"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "dr_05_pca_preprocessing_sentinels",
@@ -192,15 +195,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "association"
+        "gene-expression"
       ],
       "operations": [
+        "exploratory-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "dimension-reduction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "NRM01_sparse_normalization",
@@ -240,17 +245,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
+        "gene-expression"
       ],
-      "workflows": [
+      "operations": [
         "data-preparation",
         "descriptive-analysis"
       ],
-      "operations": [
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "feature-selection",
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bd_rhapsody_tnbc_panel_aware_qc",
@@ -292,17 +299,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "immunology"
-      ],
-      "workflows": [
-        "cell-qc",
-        "cell-annotation"
+        "gene-expression"
       ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     }
   ]
 }

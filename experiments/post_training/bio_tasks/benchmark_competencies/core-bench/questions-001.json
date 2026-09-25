@@ -39,17 +39,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
+        "disease-treatment-response"
       ],
-      "workflows": [
+      "operations": [
         "descriptive-analysis",
         "data-preparation"
       ],
-      "operations": [
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "capsule-0325493",
@@ -89,16 +91,18 @@
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
       "recipes": [],
-      "scientific_context": [
-        "bioimaging"
-      ],
-      "workflows": [
+      "scientific_context": [],
+      "operations": [
         "descriptive-analysis"
       ],
-      "operations": [
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Biological imaging"
+      ]
     },
     {
       "task_id": "capsule-1854976",
@@ -141,11 +145,11 @@
       "scientific_context": [
         "physiology"
       ],
-      "workflows": [
-        "signal-analysis"
-      ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "capsule-0201225",
@@ -186,15 +190,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "model-evaluation"
+        "disease-treatment-response"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "model-evaluation"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "capsule-9070543",
@@ -235,18 +241,22 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "chemical-biology"
-      ],
-      "workflows": [
-        "dose-response"
+        "gene-expression",
+        "disease-treatment-response"
       ],
       "operations": [
-        "normalization",
-        "descriptive-statistics",
-        "visualization"
+        "data-preparation",
+        "descriptive-analysis"
       ],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [
+        "normalization",
+        "descriptive-statistics"
+      ],
+      "output_tags": [
+        "figure"
+      ],
+      "context_review_needed": []
     },
     {
       "task_id": "capsule-6746514",
@@ -289,13 +299,15 @@
       "scientific_context": [
         "physiology"
       ],
-      "workflows": [
+      "operations": [
         "descriptive-analysis"
       ],
-      "operations": [
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "capsule-1683542",
@@ -335,14 +347,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "intervals"
-      ],
       "operations": [
-        "descriptive-statistics",
-        "visualization"
+        "descriptive-analysis"
       ],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [
+        "descriptive-statistics"
+      ],
+      "output_tags": [
+        "figure"
+      ],
+      "context_review_needed": []
     },
     {
       "task_id": "capsule-3894632",
@@ -383,14 +398,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "association",
-        "survival"
+        "disease-treatment-response"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "capsule-5496369",
@@ -431,16 +445,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "metabolomics",
-        "clinical"
-      ],
-      "workflows": [
-        "model-evaluation"
+        "metabolism",
+        "disease-treatment-response"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "model-evaluation"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "capsule-3497606",
@@ -481,15 +497,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "bioimaging"
-      ],
-      "workflows": [
-        "image-analysis"
+        "morphology"
       ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "capsule-7156696",
@@ -529,13 +547,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "exploratory-analysis"
+      "operations": [],
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [
+        "figure"
       ],
-      "operations": [
-        "visualization"
-      ],
-      "decomposition_status": "provisional"
+      "context_review_needed": []
     },
     {
       "task_id": "capsule-3269870",
@@ -575,17 +593,21 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "model-evaluation"
+        "disease-treatment-response"
       ],
       "operations": [
-        "model-evaluation",
-        "descriptive-statistics",
-        "visualization"
+        "predictive-modeling",
+        "descriptive-analysis"
       ],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [
+        "model-evaluation",
+        "descriptive-statistics"
+      ],
+      "output_tags": [
+        "figure"
+      ],
+      "context_review_needed": []
     },
     {
       "task_id": "capsule-2816027",
@@ -626,15 +648,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "enrichment"
+        "gene-expression"
       ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "capsule-9054015",
@@ -675,15 +699,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "descriptive-analysis"
+        "disease-treatment-response"
       ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "capsule-0851068",
@@ -723,16 +749,18 @@
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
       "recipes": [],
-      "scientific_context": [
-        "bioimaging"
-      ],
-      "workflows": [
-        "model-evaluation"
-      ],
+      "scientific_context": [],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "model-evaluation"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Biological imaging"
+      ]
     },
     {
       "task_id": "capsule-1394704",
@@ -773,15 +801,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "model-evaluation"
+        "disease-treatment-response"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "model-evaluation"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "capsule-9911222",
@@ -822,13 +852,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
+      "operations": [
         "descriptive-analysis"
       ],
-      "operations": [
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "capsule-7716865",
@@ -869,13 +901,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
+      "operations": [
         "descriptive-analysis"
       ],
-      "operations": [
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "capsule-4933686",
@@ -916,19 +950,22 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "clinical"
-      ],
-      "workflows": [
-        "survival",
-        "intervals"
+        "genetic-variation",
+        "disease-treatment-response"
       ],
       "operations": [
-        "descriptive-statistics",
-        "data-management",
-        "visualization"
+        "descriptive-analysis",
+        "data-preparation"
       ],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [
+        "descriptive-statistics",
+        "data-management"
+      ],
+      "output_tags": [
+        "figure"
+      ],
+      "context_review_needed": []
     },
     {
       "task_id": "capsule-1175539",
@@ -969,16 +1006,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical",
-        "bioimaging"
-      ],
-      "workflows": [
-        "descriptive-analysis"
+        "disease-treatment-response"
       ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Biological imaging"
+      ]
     },
     {
       "task_id": "capsule-4180912",
@@ -1019,14 +1059,16 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
-        "model-evaluation",
-        "network"
-      ],
       "operations": [
+        "predictive-modeling",
+        "graph-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "model-evaluation"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "capsule-2708693",
@@ -1067,13 +1109,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
+      "operations": [
         "descriptive-analysis"
       ],
-      "operations": [
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "capsule-4252248",
@@ -1114,19 +1158,23 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "genome-sequence",
-        "chemical-biology"
-      ],
-      "workflows": [
-        "model-evaluation",
-        "network"
+        "genetic-variation",
+        "nucleotide-sequences"
       ],
       "operations": [
+        "predictive-modeling",
+        "descriptive-analysis",
+        "graph-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "model-evaluation",
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology"
+      ]
     },
     {
       "task_id": "capsule-7186268",
@@ -1167,13 +1215,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
+      "operations": [
         "data-preparation"
       ],
-      "operations": [
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "capsule-3849634",
@@ -1214,13 +1264,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "signal-analysis"
+        "disease-treatment-response"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     }
   ]
 }

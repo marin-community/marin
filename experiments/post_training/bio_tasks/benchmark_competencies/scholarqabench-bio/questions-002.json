@@ -22,9 +22,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_261",
@@ -48,9 +50,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_262",
@@ -74,9 +78,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_263",
@@ -100,9 +106,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_264",
@@ -126,9 +134,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_265",
@@ -152,9 +162,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_266",
@@ -178,9 +190,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_267",
@@ -204,9 +218,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_268",
@@ -230,9 +246,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_269",
@@ -256,9 +274,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_270",
@@ -282,9 +302,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_271",
@@ -308,9 +330,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_272",
@@ -334,9 +358,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_273",
@@ -360,9 +386,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_274",
@@ -386,9 +414,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_275",
@@ -412,9 +442,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_276",
@@ -438,9 +470,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_277",
@@ -464,9 +498,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_278",
@@ -490,9 +526,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_279",
@@ -516,9 +554,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_280",
@@ -542,9 +582,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_281",
@@ -568,9 +610,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_282",
@@ -594,9 +638,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_283",
@@ -620,9 +666,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_284",
@@ -646,9 +694,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_285",
@@ -672,9 +722,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_286",
@@ -698,9 +750,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_287",
@@ -724,9 +778,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_288",
@@ -750,9 +806,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_289",
@@ -776,9 +834,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_290",
@@ -802,9 +862,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_291",
@@ -828,9 +890,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_292",
@@ -854,9 +918,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_293",
@@ -880,9 +946,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_294",
@@ -906,9 +974,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_295",
@@ -932,9 +1002,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_296",
@@ -958,9 +1030,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_297",
@@ -984,9 +1058,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_298",
@@ -1010,9 +1086,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_299",
@@ -1036,9 +1114,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_300",
@@ -1062,9 +1142,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_301",
@@ -1088,9 +1170,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_302",
@@ -1114,9 +1198,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_303",
@@ -1140,9 +1226,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_304",
@@ -1166,9 +1254,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_305",
@@ -1192,9 +1282,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_306",
@@ -1218,9 +1310,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_307",
@@ -1244,9 +1338,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_308",
@@ -1270,9 +1366,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_309",
@@ -1296,9 +1394,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_310",
@@ -1322,9 +1422,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_311",
@@ -1348,9 +1450,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_312",
@@ -1374,9 +1478,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_313",
@@ -1400,9 +1506,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_314",
@@ -1426,9 +1534,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_315",
@@ -1452,9 +1562,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_316",
@@ -1478,9 +1590,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_317",
@@ -1504,9 +1618,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_318",
@@ -1530,9 +1646,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_319",
@@ -1556,9 +1674,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_320",
@@ -1582,9 +1702,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_321",
@@ -1608,9 +1730,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_322",
@@ -1634,9 +1758,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_323",
@@ -1660,9 +1786,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_324",
@@ -1686,9 +1814,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_325",
@@ -1712,9 +1842,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_326",
@@ -1738,9 +1870,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_327",
@@ -1764,9 +1898,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_328",
@@ -1790,9 +1926,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_329",
@@ -1816,9 +1954,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_330",
@@ -1842,9 +1982,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_331",
@@ -1868,9 +2010,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_332",
@@ -1894,9 +2038,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_333",
@@ -1920,9 +2066,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_334",
@@ -1946,9 +2094,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_335",
@@ -1972,9 +2122,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_336",
@@ -1998,9 +2150,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_337",
@@ -2024,9 +2178,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_338",
@@ -2050,9 +2206,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_339",
@@ -2076,9 +2234,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_340",
@@ -2102,9 +2262,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_341",
@@ -2128,9 +2290,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_342",
@@ -2154,9 +2318,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_343",
@@ -2180,9 +2346,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_344",
@@ -2206,9 +2374,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_345",
@@ -2232,9 +2402,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_346",
@@ -2258,9 +2430,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_347",
@@ -2284,9 +2458,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_348",
@@ -2310,9 +2486,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_349",
@@ -2336,9 +2514,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_350",
@@ -2362,9 +2542,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_351",
@@ -2388,9 +2570,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_352",
@@ -2414,9 +2598,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_353",
@@ -2450,17 +2636,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_354",
@@ -2484,9 +2671,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_355",
@@ -2510,9 +2699,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_356",
@@ -2536,9 +2727,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_357",
@@ -2562,9 +2755,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_358",
@@ -2588,9 +2783,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_359",
@@ -2614,9 +2811,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_360",
@@ -2640,9 +2839,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_361",
@@ -2666,9 +2867,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_362",
@@ -2692,9 +2895,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_363",
@@ -2718,9 +2923,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_364",
@@ -2744,9 +2951,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_365",
@@ -2770,9 +2979,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_366",
@@ -2796,9 +3007,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_367",
@@ -2822,9 +3035,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_368",
@@ -2848,9 +3063,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_369",
@@ -2874,9 +3091,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_370",
@@ -2900,9 +3119,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_371",
@@ -2926,9 +3147,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_372",
@@ -2952,9 +3175,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_373",
@@ -2978,9 +3203,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_374",
@@ -3004,9 +3231,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_375",
@@ -3030,9 +3259,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_376",
@@ -3056,9 +3287,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_377",
@@ -3082,9 +3315,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_378",
@@ -3108,9 +3343,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_379",
@@ -3134,9 +3371,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_380",
@@ -3160,9 +3399,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_381",
@@ -3186,9 +3427,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_382",
@@ -3212,9 +3455,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_383",
@@ -3238,9 +3483,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_384",
@@ -3264,9 +3511,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_385",
@@ -3290,9 +3539,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_386",
@@ -3316,9 +3567,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_387",
@@ -3342,9 +3595,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_388",
@@ -3368,9 +3623,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_389",
@@ -3394,9 +3651,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_390",
@@ -3420,9 +3679,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_391",
@@ -3446,9 +3707,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_392",
@@ -3472,9 +3735,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_393",
@@ -3498,9 +3763,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_394",
@@ -3524,9 +3791,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_395",
@@ -3550,9 +3819,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_396",
@@ -3576,9 +3847,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_397",
@@ -3602,9 +3875,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_398",
@@ -3628,9 +3903,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_399",
@@ -3654,9 +3931,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_400",
@@ -3680,9 +3959,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_401",
@@ -3706,9 +3987,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_402",
@@ -3732,9 +4015,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_403",
@@ -3758,9 +4043,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_404",
@@ -3784,9 +4071,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_405",
@@ -3810,9 +4099,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_406",
@@ -3836,9 +4127,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_407",
@@ -3862,9 +4155,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_408",
@@ -3888,9 +4183,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_409",
@@ -3914,9 +4211,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_410",
@@ -3940,9 +4239,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_411",
@@ -3966,9 +4267,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_412",
@@ -3992,9 +4295,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_413",
@@ -4018,9 +4323,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_414",
@@ -4044,9 +4351,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_415",
@@ -4070,9 +4379,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_416",
@@ -4096,9 +4407,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_417",
@@ -4122,9 +4435,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_418",
@@ -4148,9 +4463,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_419",
@@ -4174,9 +4491,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_420",
@@ -4200,9 +4519,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_421",
@@ -4226,9 +4547,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_422",
@@ -4252,9 +4575,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_423",
@@ -4278,9 +4603,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_424",
@@ -4304,9 +4631,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_425",
@@ -4330,9 +4659,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_426",
@@ -4356,9 +4687,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_427",
@@ -4382,9 +4715,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_428",
@@ -4408,9 +4743,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_429",
@@ -4434,9 +4771,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_430",
@@ -4460,9 +4799,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_431",
@@ -4486,9 +4827,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_432",
@@ -4512,9 +4855,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_433",
@@ -4538,9 +4883,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_434",
@@ -4564,9 +4911,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_435",
@@ -4590,9 +4939,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_436",
@@ -4616,9 +4967,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_437",
@@ -4642,9 +4995,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_438",
@@ -4668,9 +5023,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_439",
@@ -4694,9 +5051,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_440",
@@ -4720,9 +5079,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_441",
@@ -4746,9 +5107,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_442",
@@ -4772,9 +5135,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_443",
@@ -4798,9 +5163,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_444",
@@ -4824,9 +5191,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_445",
@@ -4850,9 +5219,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_446",
@@ -4876,9 +5247,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_447",
@@ -4902,9 +5275,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_448",
@@ -4928,9 +5303,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_449",
@@ -4954,9 +5331,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_450",
@@ -4980,9 +5359,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_451",
@@ -5006,9 +5387,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_452",
@@ -5032,9 +5415,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_453",
@@ -5058,9 +5443,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_454",
@@ -5084,9 +5471,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_455",
@@ -5110,9 +5499,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_456",
@@ -5136,9 +5527,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_457",
@@ -5162,9 +5555,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_458",
@@ -5188,9 +5583,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_459",
@@ -5214,9 +5611,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_460",
@@ -5240,9 +5639,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_461",
@@ -5266,9 +5667,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_462",
@@ -5292,9 +5695,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_463",
@@ -5318,9 +5723,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_464",
@@ -5344,9 +5751,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_465",
@@ -5370,9 +5779,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_466",
@@ -5396,9 +5807,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_467",
@@ -5422,9 +5835,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_468",
@@ -5448,9 +5863,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_469",
@@ -5474,9 +5891,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_470",
@@ -5500,9 +5919,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_471",
@@ -5526,9 +5947,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_472",
@@ -5552,9 +5975,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_473",
@@ -5578,9 +6003,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_474",
@@ -5604,9 +6031,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_475",
@@ -5630,9 +6059,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_476",
@@ -5656,9 +6087,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_477",
@@ -5682,9 +6115,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_478",
@@ -5708,9 +6143,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_479",
@@ -5734,9 +6171,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_480",
@@ -5760,9 +6199,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_481",
@@ -5786,9 +6227,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_482",
@@ -5812,9 +6255,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_483",
@@ -5838,9 +6283,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_484",
@@ -5864,9 +6311,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_485",
@@ -5890,9 +6339,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_486",
@@ -5916,9 +6367,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_487",
@@ -5942,9 +6395,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_488",
@@ -5968,9 +6423,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_489",
@@ -5994,9 +6451,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_490",
@@ -6020,9 +6479,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_491",
@@ -6046,9 +6507,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_492",
@@ -6072,9 +6535,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_493",
@@ -6098,9 +6563,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_494",
@@ -6124,9 +6591,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_495",
@@ -6150,9 +6619,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_496",
@@ -6176,9 +6647,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_497",
@@ -6202,9 +6675,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_498",
@@ -6228,9 +6703,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_499",
@@ -6254,9 +6731,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_500",
@@ -6280,9 +6759,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_501",
@@ -6306,9 +6787,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_502",
@@ -6332,9 +6815,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_503",
@@ -6358,9 +6843,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_504",
@@ -6384,9 +6871,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_505",
@@ -6410,9 +6899,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_506",
@@ -6436,9 +6927,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_507",
@@ -6462,9 +6955,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_508",
@@ -6488,9 +6983,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_509",
@@ -6514,9 +7011,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_510",
@@ -6540,9 +7039,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_511",
@@ -6566,9 +7067,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_512",
@@ -6592,9 +7095,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_513",
@@ -6618,9 +7123,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_514",
@@ -6644,9 +7151,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_515",
@@ -6670,9 +7179,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_516",
@@ -6696,9 +7207,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_517",
@@ -6722,9 +7235,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bio_518",
@@ -6748,9 +7263,11 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [],
       "operations": [],
-      "decomposition_status": "not-applicable"
+      "decomposition_status": "not-applicable",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     }
   ]
 }

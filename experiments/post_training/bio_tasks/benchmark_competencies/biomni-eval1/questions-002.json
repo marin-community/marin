@@ -44,13 +44,13 @@
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
       },
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-design"
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_seqqa:547",
@@ -97,13 +97,13 @@
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
       },
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-design"
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_seqqa:571",
@@ -150,13 +150,13 @@
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
       },
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-design"
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_seqqa:213",
@@ -202,13 +202,13 @@
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
       },
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-design"
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_seqqa:359",
@@ -254,13 +254,13 @@
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
       },
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-design"
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_seqqa:171",
@@ -306,13 +306,13 @@
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
       },
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-design"
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_seqqa:98",
@@ -358,13 +358,13 @@
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
       },
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-query"
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_seqqa:292",
@@ -410,13 +410,13 @@
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
       },
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-design"
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_seqqa:215",
@@ -462,13 +462,13 @@
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
       },
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-design"
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_seqqa:61",
@@ -514,13 +514,13 @@
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
       },
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-query"
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_seqqa:406",
@@ -566,13 +566,13 @@
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
       },
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-design"
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_seqqa:47",
@@ -618,13 +618,13 @@
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
       },
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-query"
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_seqqa:32",
@@ -670,13 +670,13 @@
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
       },
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-query"
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_seqqa:417",
@@ -722,13 +722,13 @@
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
       },
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-design"
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_seqqa:267",
@@ -774,13 +774,13 @@
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
       },
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-design"
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_seqqa:327",
@@ -826,13 +826,13 @@
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
       },
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-design"
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_seqqa:200",
@@ -878,13 +878,13 @@
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
       },
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-design"
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_seqqa:134",
@@ -931,14 +931,13 @@
         "note": "Sequence-derived translation-context features can support a declared ranking. This is a proxy for translation efficiency; a valid measured or independently validated scoring reference is still required before authoring."
       },
       "scientific_context": [
-        "rna-biology"
-      ],
-      "workflows": [
-        "sequence-query",
-        "evidence-ranking"
+        "rna-processing"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_seqqa:27",
@@ -984,13 +983,13 @@
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
       },
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-query"
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_seqqa:524",
@@ -1037,13 +1036,13 @@
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
       },
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-design"
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_seqqa:505",
@@ -1089,13 +1088,13 @@
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
       },
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-query"
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_seqqa:230",
@@ -1141,13 +1140,13 @@
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
       },
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-design"
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_seqqa:489",
@@ -1193,13 +1192,13 @@
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
       },
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-query"
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_seqqa:260",
@@ -1245,13 +1244,13 @@
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
       },
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-design"
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_seqqa:378",
@@ -1297,13 +1296,13 @@
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
       },
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-design"
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_seqqa:288",
@@ -1349,13 +1348,13 @@
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
       },
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-design"
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_seqqa:418",
@@ -1401,13 +1400,13 @@
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
       },
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-design"
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_seqqa:391",
@@ -1453,13 +1452,13 @@
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
       },
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-design"
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_seqqa:498",
@@ -1505,13 +1504,13 @@
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
       },
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-query"
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_seqqa:138",
@@ -1558,14 +1557,13 @@
         "note": "Sequence-derived translation-context features can support a declared ranking. This is a proxy for translation efficiency; a valid measured or independently validated scoring reference is still required before authoring."
       },
       "scientific_context": [
-        "rna-biology"
-      ],
-      "workflows": [
-        "sequence-query",
-        "evidence-ranking"
+        "rna-processing"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_seqqa:62",
@@ -1611,13 +1609,13 @@
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
       },
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-query"
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_seqqa:471",
@@ -1663,13 +1661,13 @@
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
       },
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-design"
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_seqqa:128",
@@ -1716,14 +1714,13 @@
         "note": "Sequence-derived translation-context features can support a declared ranking. This is a proxy for translation efficiency; a valid measured or independently validated scoring reference is still required before authoring."
       },
       "scientific_context": [
-        "rna-biology"
-      ],
-      "workflows": [
-        "sequence-query",
-        "evidence-ranking"
+        "rna-processing"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_seqqa:583",
@@ -1770,13 +1767,13 @@
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
       },
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-design"
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_seqqa:520",
@@ -1823,13 +1820,13 @@
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
       },
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-design"
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_seqqa:64",
@@ -1875,13 +1872,13 @@
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
       },
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-query"
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_seqqa:14",
@@ -1927,13 +1924,13 @@
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
       },
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-query"
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_seqqa:156",
@@ -1980,14 +1977,13 @@
         "note": "Sequence-derived translation-context features can support a declared ranking. This is a proxy for translation efficiency; a valid measured or independently validated scoring reference is still required before authoring."
       },
       "scientific_context": [
-        "rna-biology"
-      ],
-      "workflows": [
-        "sequence-query",
-        "evidence-ranking"
+        "rna-processing"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_seqqa:40",
@@ -2033,13 +2029,13 @@
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
       },
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-query"
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_seqqa:492",
@@ -2085,13 +2081,13 @@
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
       },
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-query"
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_seqqa:379",
@@ -2137,13 +2133,13 @@
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
       },
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-design"
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_seqqa:187",
@@ -2189,13 +2185,13 @@
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
       },
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-design"
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_seqqa:216",
@@ -2241,13 +2237,13 @@
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
       },
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-design"
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lab_bench_seqqa:52",
@@ -2293,13 +2289,13 @@
         "note": "The required operation is sequence/construct analysis. Literal sequence strings are input data; substrings such as ATAC provide no evidence of chromatin analysis. Count and compatibility calculations are part of the sequence operation."
       },
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-query"
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "patient_gene_detection:212",
@@ -2342,16 +2338,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "patient_gene_detection:295",
@@ -2394,16 +2391,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "patient_gene_detection:457",
@@ -2446,16 +2444,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "patient_gene_detection:251",
@@ -2498,16 +2497,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "patient_gene_detection:488",
@@ -2550,16 +2550,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "patient_gene_detection:486",
@@ -2602,16 +2603,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "patient_gene_detection:303",
@@ -2654,16 +2656,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "patient_gene_detection:350",
@@ -2706,16 +2709,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "patient_gene_detection:269",
@@ -2758,16 +2762,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "patient_gene_detection:201",
@@ -2810,16 +2815,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "patient_gene_detection:161",
@@ -2862,16 +2868,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "patient_gene_detection:43",
@@ -2914,16 +2921,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "patient_gene_detection:217",
@@ -2966,16 +2974,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "patient_gene_detection:401",
@@ -3018,16 +3027,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "patient_gene_detection:190",
@@ -3070,16 +3080,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "patient_gene_detection:309",
@@ -3122,16 +3133,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "patient_gene_detection:259",
@@ -3174,16 +3186,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "patient_gene_detection:105",
@@ -3226,16 +3239,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "patient_gene_detection:53",
@@ -3278,16 +3292,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "patient_gene_detection:389",
@@ -3330,16 +3345,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "patient_gene_detection:1",
@@ -3382,16 +3398,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "patient_gene_detection:441",
@@ -3434,16 +3451,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "patient_gene_detection:482",
@@ -3486,16 +3504,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "patient_gene_detection:49",
@@ -3538,16 +3557,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "patient_gene_detection:419",
@@ -3590,16 +3610,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "patient_gene_detection:80",
@@ -3642,16 +3663,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "patient_gene_detection:205",
@@ -3694,16 +3716,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "patient_gene_detection:34",
@@ -3746,16 +3769,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "patient_gene_detection:263",
@@ -3798,16 +3822,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "patient_gene_detection:427",
@@ -3850,16 +3875,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "patient_gene_detection:366",
@@ -3902,16 +3928,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "patient_gene_detection:91",
@@ -3954,16 +3981,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "patient_gene_detection:339",
@@ -4006,16 +4034,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "patient_gene_detection:473",
@@ -4058,16 +4087,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "patient_gene_detection:52",
@@ -4110,16 +4140,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "patient_gene_detection:345",
@@ -4162,16 +4193,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "patient_gene_detection:264",
@@ -4214,16 +4246,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "patient_gene_detection:241",
@@ -4266,16 +4299,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "patient_gene_detection:13",
@@ -4318,16 +4352,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "patient_gene_detection:315",
@@ -4370,16 +4405,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "patient_gene_detection:88",
@@ -4422,16 +4458,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "patient_gene_detection:387",
@@ -4474,16 +4511,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "patient_gene_detection:273",
@@ -4526,16 +4564,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "evidence-ranking",
-        "database-query"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     }
   ]
 }

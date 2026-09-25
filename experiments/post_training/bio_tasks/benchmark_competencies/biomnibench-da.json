@@ -1,12 +1,12 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "benchmark": "BiomniBench-DA",
   "status": "draft-for-review",
   "source_revision": null,
   "inventory_sha256": "04ff8de4ffacc3e8f9b5e01471790043fb02b7be4a2efb40461342d3d79df20a",
-  "method": "Workflow/context assignments retain the prior source review. Direct general-operation labels are migrated provisionally; question-level decomposition is identified separately. Source instructions, review rationale and executable-framing proposals are preserved.",
+  "method": "Two-axis draft: operation families and scientific contexts. Prior fine analytical requirements survive as tags; direct family migrations remain provisional except where question-level decomposition is recorded. Broad context labels without a supported narrower mapping are retained as review gaps. Original instructions and verifier proposals are preserved.",
   "eligibility_policy": "Include source tasks whose scientific purpose admits a clear executable framing, even when the original scorer is an LLM. Freeze missing conventions or scope narrative interpretation to computed evidence. Exclude a replacement objective, unavailable source instruction or unbounded subjective synthesis.",
-  "counting": "Count each eligible record once per workflow, operation or context label. Operation annotation can be incomplete. Overlapping releases and shared protocols are not deduplicated; counts are requirements, not demonstrated competence.",
+  "counting": "Count each eligible record once per operation family and scientific context. Fine tags do not multiply counts. Annotation gaps, overlapping releases and repeated source protocols remain explicit; these counts do not establish validated coverage.",
   "task_files": [
     "benchmark_competencies/biomnibench-da/questions-001.json"
   ],

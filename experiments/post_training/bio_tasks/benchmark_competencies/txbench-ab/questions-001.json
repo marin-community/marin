@@ -39,20 +39,22 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "genome-sequence",
-        "immunology"
-      ],
-      "workflows": [
-        "association",
-        "model-evaluation",
-        "variant-analysis"
+        "genetic-variation",
+        "nucleotide-sequences"
       ],
       "operations": [
+        "predictive-modeling",
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "model-evaluation",
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "tcellengagerengineering_s6_imaging_flow_cytometry_0100",
@@ -93,24 +95,27 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-sequence",
-        "immunology",
-        "bioimaging"
-      ],
-      "workflows": [
-        "model-evaluation",
-        "image-analysis",
-        "database-query",
-        "evidence-extraction"
+        "nucleotide-sequences",
+        "morphology"
       ],
       "operations": [
+        "predictive-modeling",
+        "information-retrieval",
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "model-evaluation",
         "record-retrieval",
         "evidence-extraction",
-        "descriptive-statistics",
-        "visualization"
+        "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [
+        "figure"
+      ],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "cd98hccrossspeciesengineering_s8_pk_0035",
@@ -149,17 +154,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "immunology"
-      ],
-      "workflows": [
-        "sequence-query",
-        "intervals"
+        "gene-expression"
       ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "cd98hctessiershuttle_s8_tissue_biodistribution_imaging_0084",
@@ -198,17 +205,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "immunology",
-        "bioimaging"
-      ],
-      "workflows": [
-        "image-analysis"
+        "gene-expression",
+        "morphology"
       ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "adc_doxlinker_nuclear_signal_nocall",
@@ -249,17 +259,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "chemical-biology",
-        "immunology"
-      ],
-      "workflows": [
-        "descriptive-analysis"
+        "genetic-variation"
       ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology",
+        "Immunology"
+      ]
     },
     {
       "task_id": "denton2022_s6_dose_selection_readout_choice",
@@ -300,19 +313,23 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "chemical-biology",
-        "functional-genomics",
-        "clinical",
-        "immunology"
-      ],
-      "workflows": [
-        "trajectory"
+        "molecular-function",
+        "disease-treatment-response"
       ],
       "operations": [
+        "descriptive-analysis",
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology",
+        "Immunology"
+      ]
     }
   ]
 }

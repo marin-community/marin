@@ -4,17 +4,36 @@ These files support planning Harbor tasks with executable rewards. Each inventor
 
 ## Planning units
 
-The vocabulary has three independent facets:
+The vocabulary has two independent axes:
 
-| Facet | Meaning | Example |
+| Axis | Meaning | Example |
 | --- | --- | --- |
-| Workflow | Connected operations and scientific decisions that answer a question | Differential expression between conditions |
-| Analytical operation | Work required by the question or its explicit adaptation | Model fitting, effect estimation, hypothesis testing, multiple-testing correction |
-| Scientific context | Measurements, biological objects and study setting | Transcriptomics; paired bulk RNA-seq samples |
+| Operation family | General analytical work required by the question | Statistical inference |
+| Scientific context | Biological measurements, objects or phenomena being analyzed | Gene expression |
 
-Use workflows as the primary unit for choosing new tasks. Operations reveal shared requirements and reusable components; scientific context identifies meaningful variants. The context labels are overlapping descriptors, not a hierarchy of biological domains. The source question and decomposition notes retain finer assay and study-design detail. Formats and repositories remain separate metadata.
+The 11 operation families and 19 scientific contexts are defined in
+[`taxonomy.json`](taxonomy.json). That version-controlled file is authoritative
+for category IDs, names, descriptions and assignment rules. Both HTML explorers
+and the Markdown rankings are generated from it. Edit definitions there, then
+regenerate the views so descriptions and assignments can be reviewed together.
 
-Split an operation when it changes task construction, a scientific decision or an executable output. Routine file loading and incidental arithmetic do not need separate labels. Some operations, such as sequence alignment, retain a specific input type when that distinction changes how a task is built and checked. This is a practical planning vocabulary, not a claim that operations are irreducible or universally domain-free.
+Use operation–context combinations to identify gaps and design connected tasks.
+For example, differential expression can combine Statistical inference with Gene
+expression. Normalization belongs to Data preparation when the solver must
+perform it. Fine requirements such as hypothesis testing, effect estimation and
+multiple-testing correction remain `analysis_tags`; they are not a third ranked
+axis. Source benchmark identity supplies provenance.
+
+Contexts overlap and do not form a hierarchy. Single-cell, spatial, longitudinal
+and perturbational study characteristics remain context tags. Formats and
+repositories are separate metadata. Broad source labels such as immunology or
+microbiology do not establish Immune repertoires or Ecology without evidence.
+Unresolved mappings remain explicit annotation gaps.
+
+Visualization is an output property. A required figure can have executable
+checks on its data, labels, scales or geometry, but aesthetic or communication
+quality is outside the reward. No visualization category receives frequency
+credit.
 
 ## Input stage and decomposition
 
@@ -22,13 +41,15 @@ A workflow name does not establish which operations the solver must perform. Com
 
 BixBench-Verified's 50 questions were reviewed individually for the first decomposition draft. One question (`bix-46-q4`) has no assigned operations because its input stage remains unresolved. Other assumptions appear in each question's `decomposition_note`; some proposed connected workflows explicitly start upstream of supplied result tables and require that adaptation to be recorded. Question review does not certify a runnable verifier.
 
-Other benchmarks retain provisional workflow/context mappings from the previous category review. Existing labels that already describe general operations migrate directly; a specialized workflow label never automatically expands into a fixed operation list. Empty and partial lists are annotation gaps, not evidence that no operations are needed. Global rankings expose these gaps and count all eligible records in their denominator.
+Other benchmarks retain provisional mappings from the previous category review. Fine operations are grouped into families without inferring a complete workflow. A specialized source description never automatically expands into a fixed operation list. Empty and partial lists are annotation gaps, not evidence that no operations are needed. Global rankings expose these gaps and count all eligible records in their denominator.
 
-`taxonomy.json` defines the three vocabularies and assignment policy. Each benchmark JSON is a schema-3 manifest linking bounded question files under its same-named directory. Question records contain:
+Each benchmark JSON is a schema-4 manifest linking bounded question files under its same-named directory. Question records contain:
 
 - `workflow`: the specific source-family description.
-- `workflows`: normalized planning workflow types; a connected task can span several.
-- `operations`: explicit analytical requirements, potentially incomplete.
+- `operations`: broad operation families, potentially incomplete.
+- `analysis_tags`: finer analytical requirements.
+- `output_tags`: required output properties, currently `figure`.
+- `context_review_needed`: previous broad labels awaiting a supported context mapping.
 - `scientific_context` and `context_tags`: overlapping scientific descriptors.
 - `decomposition_status`: `question-reviewed`, `input-stage-unresolved`, `provisional` or `not-applicable`.
 - `decomposition_note`: question-level rationale when reviewed.
@@ -65,7 +86,7 @@ uv run python -m experiments.post_training.bio_tasks.coverage_site
 uv run python -m experiments.post_training.bio_tasks.coverage_site --check
 ```
 
-The standalone [benchmark site](../../../../docs/experiments/bio-benchmarks.html) has Categories and Benchmarks navigation. Global rankings open on `#statistics/workflows`, with `#statistics/operations` and `#statistics/scientific_context` as the other facets. Select a category to inspect benchmark contributions. Benchmark and question routes are `#benchmark/<encoded-release>` and `#question/<encoded-release>/<encoded-question-id>`.
+The standalone [benchmark site](../../../../docs/experiments/bio-benchmarks.html) has Operations and Scientific contexts navigation. Global rankings open on `#statistics/operations`; the other axis is `#statistics/scientific_context`. The benchmark directory remains accessible through the provenance links. Select a category to inspect benchmark contributions. Benchmark and question routes are `#benchmark/<encoded-release>` and `#question/<encoded-release>/<encoded-question-id>`.
 
 Source links and access notes live on each benchmark page. OOD exclusions appear below the benchmark directory. Missing source inventories remain visible without invented question IDs. The broader task-generation explorer is a separate artifact.
 

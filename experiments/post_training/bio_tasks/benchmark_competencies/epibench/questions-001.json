@@ -37,20 +37,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "epigenomics"
-      ],
-      "workflows": [
-        "intervals",
-        "chromatin",
-        "database-query",
-        "evidence-ranking"
+        "gene-expression",
+        "chromatin-organization"
       ],
       "operations": [
+        "information-retrieval",
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "chipseq_K2",
@@ -91,24 +91,23 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-sequence",
-        "epigenomics",
-        "functional-genomics",
-        "clinical",
-        "immunology"
-      ],
-      "workflows": [
-        "enrichment",
-        "cell-annotation",
-        "trajectory",
-        "chromatin",
-        "motifs"
+        "gene-expression",
+        "nucleotide-sequences",
+        "chromatin-organization",
+        "molecular-function",
+        "disease-treatment-response"
       ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "cold_03b",
@@ -149,21 +148,22 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "epigenomics"
-      ],
-      "workflows": [
-        "differential-expression",
-        "intervals",
-        "chromatin",
-        "evidence-extraction"
+        "gene-expression",
+        "chromatin-organization"
       ],
       "operations": [
+        "information-retrieval",
+        "descriptive-analysis",
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction",
         "descriptive-statistics",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gse149608_c3_enhancer_methylation",
@@ -202,23 +202,23 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-sequence",
-        "epigenomics",
+        "gene-expression",
+        "nucleotide-sequences",
+        "dna-methylation",
+        "chromatin-organization",
         "molecular-structure",
-        "functional-genomics",
-        "clinical"
-      ],
-      "workflows": [
-        "intervals",
-        "chromatin",
-        "methylation",
-        "protein-structure"
+        "molecular-function",
+        "disease-treatment-response"
       ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gse149608_wnt2_promoter_genome_build",
@@ -259,20 +259,21 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence",
-        "epigenomics",
-        "clinical"
-      ],
-      "workflows": [
-        "intervals",
-        "methylation"
+        "gene-expression",
+        "genetic-variation",
+        "nucleotide-sequences",
+        "dna-methylation",
+        "disease-treatment-response"
       ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "zebrafish_009c_cutnrun_vs_chip_h3k9me3",
@@ -313,20 +314,23 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-variation",
-        "epigenomics",
-        "immunology"
-      ],
-      "workflows": [
-        "enrichment",
-        "chromatin"
+        "gene-expression",
+        "genetic-variation",
+        "chromatin-organization"
       ],
       "operations": [
+        "descriptive-analysis",
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "zebrafish_014g_h2az_bivalent_promoters",
@@ -367,24 +371,22 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence",
-        "epigenomics",
+        "gene-expression",
+        "genetic-variation",
+        "nucleotide-sequences",
+        "dna-methylation",
+        "chromatin-organization",
         "molecular-structure"
       ],
-      "workflows": [
-        "association",
-        "enrichment",
-        "intervals",
-        "variant-analysis",
-        "chromatin",
-        "methylation"
-      ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     }
   ]
 }

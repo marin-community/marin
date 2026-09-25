@@ -42,14 +42,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
+        "gene-expression"
       ],
-      "workflows": [
-        "cell-annotation",
-        "spatial"
+      "operations": [
+        "spatial-analysis"
       ],
-      "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "visium_perineural_proximity",
@@ -92,16 +93,16 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "bioimaging"
+        "gene-expression",
+        "morphology"
       ],
-      "workflows": [
-        "spatial",
-        "image-analysis",
-        "group-comparison"
+      "operations": [
+        "spatial-analysis"
       ],
-      "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lineage_metastasis_multilayer_niche_mapping",
@@ -144,17 +145,16 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "transcriptomics"
+        "genetic-variation",
+        "gene-expression"
       ],
-      "workflows": [
-        "phylogeny",
-        "spatial",
-        "differential-expression",
-        "enrichment"
+      "operations": [
+        "spatial-analysis"
       ],
-      "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "xenium_organoid_spatial_niche_disruption",
@@ -198,17 +198,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "bioimaging"
+        "gene-expression"
       ],
-      "workflows": [
-        "integration",
-        "cell-annotation",
-        "spatial",
-        "composition"
+      "operations": [
+        "spatial-analysis"
       ],
-      "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Biological imaging"
+      ]
     }
   ]
 }

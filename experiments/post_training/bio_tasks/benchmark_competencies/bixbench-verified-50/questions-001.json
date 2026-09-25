@@ -40,18 +40,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "molecular-evolution",
-        "genome-sequence"
-      ],
-      "workflows": [
-        "alignment-signal"
+        "evolutionary-relationships",
+        "nucleotide-sequences"
       ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "question-reviewed",
+      "decomposition_note": "Compute informative-site counts or percentages from gene alignments, then aggregate them. Alignment construction is not requested.",
+      "analysis_tags": [
         "sequence-characterization",
         "descriptive-statistics"
       ],
-      "decomposition_status": "question-reviewed",
-      "decomposition_note": "Compute informative-site counts or percentages from gene alignments, then aggregate them. Alignment construction is not requested."
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bix-11-q1",
@@ -95,18 +97,22 @@
         "real-cox1-tree-comparison"
       ],
       "scientific_context": [
-        "molecular-evolution"
-      ],
-      "workflows": [
-        "phylogeny"
+        "evolutionary-relationships"
       ],
       "operations": [
+        "graph-analysis",
+        "descriptive-analysis",
+        "statistical-inference"
+      ],
+      "decomposition_status": "question-reviewed",
+      "decomposition_note": "Compute the requested tree properties and group medians, then a difference or ratio. A descriptive contrast does not imply hypothesis testing or tree inference.",
+      "analysis_tags": [
         "graph-measurement",
         "descriptive-statistics",
         "effect-estimation"
       ],
-      "decomposition_status": "question-reviewed",
-      "decomposition_note": "Compute the requested tree properties and group medians, then a difference or ratio. A descriptive contrast does not imply hypothesis testing or tree inference."
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bix-35-q1",
@@ -148,17 +154,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "molecular-evolution"
-      ],
-      "workflows": [
-        "phylogeny"
+        "evolutionary-relationships"
       ],
       "operations": [
+        "graph-analysis",
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "question-reviewed",
+      "decomposition_note": "Measure the specified evolutionary-rate, branch, path or treeness quantity from gene trees. No tree reconstruction or significance test is requested.",
+      "analysis_tags": [
         "graph-measurement",
         "descriptive-statistics"
       ],
-      "decomposition_status": "question-reviewed",
-      "decomposition_note": "Measure the specified evolutionary-rate, branch, path or treeness quantity from gene trees. No tree reconstruction or significance test is requested."
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bix-43-q2",
@@ -200,21 +209,22 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "differential-expression",
-        "enrichment"
+        "gene-expression"
       ],
       "operations": [
+        "statistical-inference"
+      ],
+      "decomposition_status": "question-reviewed",
+      "decomposition_note": "Fit the expression model using all specified groups for dispersion; test the requested contrast, apply adjusted-significance and effect thresholds, and compute pathway enrichment and its odds ratio.",
+      "analysis_tags": [
         "model-fitting",
         "effect-estimation",
         "hypothesis-testing",
         "multiple-testing",
         "record-selection"
       ],
-      "decomposition_status": "question-reviewed",
-      "decomposition_note": "Fit the expression model using all specified groups for dispersion; test the requested contrast, apply adjusted-significance and effect thresholds, and compute pathway enrichment and its odds ratio."
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bix-28-q3",
@@ -256,17 +266,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "molecular-evolution"
-      ],
-      "workflows": [
-        "phylogeny"
+        "evolutionary-relationships"
       ],
       "operations": [
+        "graph-analysis",
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "question-reviewed",
+      "decomposition_note": "Measure the specified evolutionary-rate, branch, path or treeness quantity from gene trees. No tree reconstruction or significance test is requested.",
+      "analysis_tags": [
         "graph-measurement",
         "descriptive-statistics"
       ],
-      "decomposition_status": "question-reviewed",
-      "decomposition_note": "Measure the specified evolutionary-rate, branch, path or treeness quantity from gene trees. No tree reconstruction or significance test is requested."
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bix-34-q2",
@@ -310,17 +323,20 @@
         "real-cox1-tree-comparison"
       ],
       "scientific_context": [
-        "molecular-evolution"
-      ],
-      "workflows": [
-        "phylogeny"
+        "evolutionary-relationships"
       ],
       "operations": [
+        "graph-analysis",
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "question-reviewed",
+      "decomposition_note": "Measure the specified evolutionary-rate, branch, path or treeness quantity from gene trees. No tree reconstruction or significance test is requested.",
+      "analysis_tags": [
         "graph-measurement",
         "descriptive-statistics"
       ],
-      "decomposition_status": "question-reviewed",
-      "decomposition_note": "Measure the specified evolutionary-rate, branch, path or treeness quantity from gene trees. No tree reconstruction or significance test is requested."
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bix-52-q2",
@@ -364,17 +380,19 @@
         "real-anole-age-cpg-density"
       ],
       "scientific_context": [
-        "epigenomics"
-      ],
-      "workflows": [
-        "methylation"
+        "dna-methylation"
       ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "question-reviewed",
+      "decomposition_note": "The endpoints filter or summarize CpG records and methylation measurements. They do not independently require testing which CpGs are age-associated. Resolve whether the supplied table already contains age-association results before authoring.",
+      "analysis_tags": [
         "record-selection",
         "descriptive-statistics"
       ],
-      "decomposition_status": "question-reviewed",
-      "decomposition_note": "The endpoints filter or summarize CpG records and methylation measurements. They do not independently require testing which CpGs are age-associated. Resolve whether the supplied table already contains age-association results before authoring."
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bix-52-q6",
@@ -419,17 +437,19 @@
         "real-anole-age-cpg-density"
       ],
       "scientific_context": [
-        "epigenomics"
-      ],
-      "workflows": [
-        "methylation"
+        "dna-methylation"
       ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "question-reviewed",
+      "decomposition_note": "The endpoints filter or summarize CpG records and methylation measurements. They do not independently require testing which CpGs are age-associated. Resolve whether the supplied table already contains age-association results before authoring.",
+      "analysis_tags": [
         "record-selection",
         "descriptive-statistics"
       ],
-      "decomposition_status": "question-reviewed",
-      "decomposition_note": "The endpoints filter or summarize CpG records and methylation measurements. They do not independently require testing which CpGs are age-associated. Resolve whether the supplied table already contains age-association results before authoring."
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bix-49-q4",
@@ -472,21 +492,23 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-variation"
-      ],
-      "workflows": [
-        "differential-expression"
+        "gene-expression",
+        "genetic-variation"
       ],
       "operations": [
+        "statistical-inference"
+      ],
+      "decomposition_status": "question-reviewed",
+      "decomposition_note": "Fit the disease/control expression model with sex as a covariate, shrink effects and select genes by adjusted significance. Gene counting belongs to the requested selection result.",
+      "analysis_tags": [
         "model-fitting",
         "effect-estimation",
         "hypothesis-testing",
         "multiple-testing",
         "record-selection"
       ],
-      "decomposition_status": "question-reviewed",
-      "decomposition_note": "Fit the disease/control expression model with sex as a covariate, shrink effects and select genes by adjusted significance. Gene counting belongs to the requested selection result."
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bix-6-q4",
@@ -528,16 +550,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "association"
+        "molecular-function"
       ],
       "operations": [
-        "association-estimation"
+        "statistical-inference"
       ],
       "decomposition_status": "question-reviewed",
-      "decomposition_note": "Compute the rank correlation between matched replicate MAGeCK p-values. The inputs already contain p-values; no new hypothesis test or candidate ranking is requested."
+      "decomposition_note": "Compute the rank correlation between matched replicate MAGeCK p-values. The inputs already contain p-values; no new hypothesis test or candidate ranking is requested.",
+      "analysis_tags": [
+        "association-estimation"
+      ],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bix-61-q5",
@@ -579,17 +603,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation"
-      ],
-      "workflows": [
-        "variant-analysis"
+        "genetic-variation"
       ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "question-reviewed",
+      "decomposition_note": "Identify transition and transversion calls and compute their ratio. Variant calling is not explicitly required by this question; resolve the supplied call stage.",
+      "analysis_tags": [
         "record-selection",
         "descriptive-statistics"
       ],
-      "decomposition_status": "question-reviewed",
-      "decomposition_note": "Identify transition and transversion calls and compute their ratio. Variant calling is not explicitly required by this question; resolve the supplied call stage."
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bix-53-q2",
@@ -631,21 +657,22 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "differential-expression",
-        "sensitivity"
+        "gene-expression"
       ],
       "operations": [
+        "statistical-inference"
+      ],
+      "decomposition_status": "question-reviewed",
+      "decomposition_note": "Repeat the expression analysis after excluding the specified replicates and compare the selected-gene counts. The source specifies raw p-values, so adjusted-significance correction is not added automatically.",
+      "analysis_tags": [
         "model-fitting",
         "effect-estimation",
         "hypothesis-testing",
         "record-selection",
         "sensitivity"
       ],
-      "decomposition_status": "question-reviewed",
-      "decomposition_note": "Repeat the expression analysis after excluding the specified replicates and compare the selected-gene counts. The source specifies raw p-values, so adjusted-significance correction is not added automatically."
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bix-27-q5",
@@ -687,17 +714,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "exploratory-analysis"
+        "gene-expression"
       ],
       "operations": [
+        "data-preparation",
+        "exploratory-analysis"
+      ],
+      "decomposition_status": "question-reviewed",
+      "decomposition_note": "Log10-transform the count matrix with the specified pseudocount and compute PCA variance. This mathematical transformation is not a normalization requirement.",
+      "analysis_tags": [
         "transformation",
         "dimension-reduction"
       ],
-      "decomposition_status": "question-reviewed",
-      "decomposition_note": "Log10-transform the count matrix with the specified pseudocount and compute PCA variance. This mathematical transformation is not a normalization requirement."
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bix-54-q7",
@@ -739,19 +769,23 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "microbiology",
-        "bioimaging"
-      ],
-      "workflows": [
-        "regression"
+        "morphology"
       ],
       "operations": [
+        "statistical-inference",
+        "optimization"
+      ],
+      "decomposition_status": "question-reviewed",
+      "decomposition_note": "Fit and compare quadratic, cubic and spline models, then optimize the selected response over a stated mixture-proportion domain. Freeze the fit-selection criterion; image-derived measurements are already the input.",
+      "analysis_tags": [
         "model-fitting",
         "model-evaluation",
         "optimization"
       ],
-      "decomposition_status": "question-reviewed",
-      "decomposition_note": "Fit and compare quadratic, cubic and spline models, then optimize the selected response over a stated mixture-proportion domain. Freeze the fit-selection criterion; image-derived measurements are already the input."
+      "output_tags": [],
+      "context_review_needed": [
+        "Microbiology"
+      ]
     },
     {
       "task_id": "bix-51-q2",
@@ -797,17 +831,19 @@
         "real-clinical-univariable-logit-audit"
       ],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "regression"
+        "disease-treatment-response"
       ],
       "operations": [
+        "statistical-inference"
+      ],
+      "decomposition_status": "question-reviewed",
+      "decomposition_note": "Fit the BMI-only logistic model and report AIC. This is solver-side model fit evaluation, not a hidden benchmark prediction score.",
+      "analysis_tags": [
         "model-fitting",
         "model-evaluation"
       ],
-      "decomposition_status": "question-reviewed",
-      "decomposition_note": "Fit the BMI-only logistic model and report AIC. This is solver-side model fit evaluation, not a hidden benchmark prediction score."
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bix-12-q5",
@@ -849,18 +885,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "molecular-evolution",
-        "genome-sequence"
-      ],
-      "workflows": [
-        "alignment-signal"
+        "evolutionary-relationships",
+        "nucleotide-sequences"
       ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "question-reviewed",
+      "decomposition_note": "Compute informative-site counts or percentages from gene alignments, then aggregate them. Alignment construction is not requested.",
+      "analysis_tags": [
         "sequence-characterization",
         "descriptive-statistics"
       ],
-      "decomposition_status": "question-reviewed",
-      "decomposition_note": "Compute informative-site counts or percentages from gene alignments, then aggregate them. Alignment construction is not requested."
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bix-30-q3",
@@ -902,18 +940,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "multiple-testing"
+        "gene-expression"
       ],
       "operations": [
+        "statistical-inference"
+      ],
+      "decomposition_status": "question-reviewed",
+      "decomposition_note": "Apply and compare the two specified adjustments to the same family of miRNA p-values. The question does not itself establish that raw expression modeling must be repeated.",
+      "analysis_tags": [
         "multiple-testing",
         "record-selection",
         "set-comparison"
       ],
-      "decomposition_status": "question-reviewed",
-      "decomposition_note": "Apply and compare the two specified adjustments to the same family of miRNA p-values. The question does not itself establish that raw expression modeling must be repeated."
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bix-31-q2",
@@ -956,17 +996,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "differential-expression"
+        "gene-expression"
       ],
       "operations": [
+        "statistical-inference"
+      ],
+      "decomposition_status": "question-reviewed",
+      "decomposition_note": "Use the supplied batch-corrected counts, retain batch in the design, estimate and shrink the sex contrast, and report the requested gene effect. Do not credit batch correction already performed in the input.",
+      "analysis_tags": [
         "model-fitting",
         "effect-estimation"
       ],
-      "decomposition_status": "question-reviewed",
-      "decomposition_note": "Use the supplied batch-corrected counts, retain batch in the design, estimate and shrink the sex contrast, and report the requested gene effect. Do not credit batch correction already performed in the input."
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bix-47-q3",
@@ -1008,18 +1050,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "clinical"
-      ],
-      "workflows": [
-        "variant-analysis"
+        "genetic-variation",
+        "disease-treatment-response"
       ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "question-reviewed",
+      "decomposition_note": "Filter the supplied variant/cohort records and summarize the requested count or proportion. Existing consequence and ClinVar annotations do not require re-annotation or a pathogenicity prediction.",
+      "analysis_tags": [
         "record-selection",
         "descriptive-statistics"
       ],
-      "decomposition_status": "question-reviewed",
-      "decomposition_note": "Filter the supplied variant/cohort records and summarize the requested count or proportion. Existing consequence and ClinVar annotations do not require re-annotation or a pathogenicity prediction."
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bix-26-q3",
@@ -1061,13 +1105,14 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "differential-expression",
-        "enrichment"
+        "gene-expression"
       ],
       "operations": [
+        "statistical-inference"
+      ],
+      "decomposition_status": "question-reviewed",
+      "decomposition_note": "The proposed connected workflow starts with expression contrasts and proceeds to gene-set enrichment and the requested overlap or directional comparison. If source inputs already contain contrast results, remove those upstream operations and record that input-stage adaptation.",
+      "analysis_tags": [
         "model-fitting",
         "effect-estimation",
         "hypothesis-testing",
@@ -1075,8 +1120,8 @@
         "record-selection",
         "set-comparison"
       ],
-      "decomposition_status": "question-reviewed",
-      "decomposition_note": "The proposed connected workflow starts with expression contrasts and proceeds to gene-set enrichment and the requested overlap or directional comparison. If source inputs already contain contrast results, remove those upstream operations and record that input-stage adaptation."
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bix-35-q2",
@@ -1118,18 +1163,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "molecular-evolution"
-      ],
-      "workflows": [
-        "phylogeny",
-        "group-comparison"
+        "evolutionary-relationships"
       ],
       "operations": [
+        "graph-analysis",
+        "statistical-inference"
+      ],
+      "decomposition_status": "question-reviewed",
+      "decomposition_note": "Compute evolutionary rates from trees and the requested Mann–Whitney test statistic across clades. Tree inference and predictive modeling are not required.",
+      "analysis_tags": [
         "graph-measurement",
         "hypothesis-testing"
       ],
-      "decomposition_status": "question-reviewed",
-      "decomposition_note": "Compute evolutionary rates from trees and the requested Mann–Whitney test statistic across clades. Tree inference and predictive modeling are not required."
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bix-34-q5",
@@ -1173,18 +1220,22 @@
         "real-cox1-tree-comparison"
       ],
       "scientific_context": [
-        "molecular-evolution"
-      ],
-      "workflows": [
-        "phylogeny"
+        "evolutionary-relationships"
       ],
       "operations": [
+        "graph-analysis",
+        "descriptive-analysis",
+        "statistical-inference"
+      ],
+      "decomposition_status": "question-reviewed",
+      "decomposition_note": "Compute the requested tree properties and group medians, then a difference or ratio. A descriptive contrast does not imply hypothesis testing or tree inference.",
+      "analysis_tags": [
         "graph-measurement",
         "descriptive-statistics",
         "effect-estimation"
       ],
-      "decomposition_status": "question-reviewed",
-      "decomposition_note": "Compute the requested tree properties and group medians, then a difference or ratio. A descriptive contrast does not imply hypothesis testing or tree inference."
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bix-16-q3",
@@ -1226,18 +1277,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "functional-genomics"
-      ],
-      "workflows": [
-        "association"
+        "gene-expression",
+        "molecular-function"
       ],
       "operations": [
+        "statistical-inference"
+      ],
+      "decomposition_status": "question-reviewed",
+      "decomposition_note": "Estimate the requested rank or linear correlations and select the requested gene, cell type or thresholded set. Correlation estimation alone does not imply a significance test.",
+      "analysis_tags": [
         "association-estimation",
         "record-selection"
       ],
-      "decomposition_status": "question-reviewed",
-      "decomposition_note": "Estimate the requested rank or linear correlations and select the requested gene, cell type or thresholded set. Correlation estimation alone does not imply a significance test."
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bix-14-q1",
@@ -1279,18 +1332,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "clinical"
-      ],
-      "workflows": [
-        "variant-analysis"
+        "genetic-variation",
+        "disease-treatment-response"
       ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "question-reviewed",
+      "decomposition_note": "Filter the supplied variant/cohort records and summarize the requested count or proportion. Existing consequence and ClinVar annotations do not require re-annotation or a pathogenicity prediction.",
+      "analysis_tags": [
         "record-selection",
         "descriptive-statistics"
       ],
-      "decomposition_status": "question-reviewed",
-      "decomposition_note": "Filter the supplied variant/cohort records and summarize the requested count or proportion. Existing consequence and ClinVar annotations do not require re-annotation or a pathogenicity prediction."
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bix-20-q3",
@@ -1332,18 +1387,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "clinical"
-      ],
-      "workflows": [
-        "variant-analysis"
+        "genetic-variation",
+        "disease-treatment-response"
       ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "question-reviewed",
+      "decomposition_note": "Filter the supplied variant/cohort records and summarize the requested count or proportion. Existing consequence and ClinVar annotations do not require re-annotation or a pathogenicity prediction.",
+      "analysis_tags": [
         "record-selection",
         "descriptive-statistics"
       ],
-      "decomposition_status": "question-reviewed",
-      "decomposition_note": "Filter the supplied variant/cohort records and summarize the requested count or proportion. Existing consequence and ClinVar annotations do not require re-annotation or a pathogenicity prediction."
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bix-55-q1",
@@ -1385,18 +1442,21 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "proteomics",
-        "molecular-evolution"
-      ],
-      "workflows": [
-        "orthology"
+        "protein-abundance",
+        "evolutionary-relationships"
       ],
       "operations": [
+        "alignment-matching",
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "question-reviewed",
+      "decomposition_note": "Run the specified BUSCO reference assessment and intersect complete single-copy matches across four proteomes. The endpoint is reference completeness/shared membership, not a phylogenetic tree.",
+      "analysis_tags": [
         "reference-assessment",
         "set-comparison"
       ],
-      "decomposition_status": "question-reviewed",
-      "decomposition_note": "Run the specified BUSCO reference assessment and intersect complete single-copy matches across four proteomes. The endpoint is reference completeness/shared membership, not a phylogenetic tree."
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bix-32-q2",
@@ -1439,13 +1499,14 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "differential-expression",
-        "enrichment"
+        "gene-expression"
       ],
       "operations": [
+        "statistical-inference"
+      ],
+      "decomposition_status": "question-reviewed",
+      "decomposition_note": "The proposed connected workflow starts with expression contrasts and proceeds to gene-set enrichment and the requested overlap or directional comparison. If source inputs already contain contrast results, remove those upstream operations and record that input-stage adaptation.",
+      "analysis_tags": [
         "model-fitting",
         "effect-estimation",
         "hypothesis-testing",
@@ -1453,8 +1514,8 @@
         "record-selection",
         "set-comparison"
       ],
-      "decomposition_status": "question-reviewed",
-      "decomposition_note": "The proposed connected workflow starts with expression contrasts and proceeds to gene-set enrichment and the requested overlap or directional comparison. If source inputs already contain contrast results, remove those upstream operations and record that input-stage adaptation."
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bix-53-q5",
@@ -1496,21 +1557,23 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "differential-expression",
-        "enrichment"
+        "gene-expression"
       ],
       "operations": [
+        "statistical-inference",
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "question-reviewed",
+      "decomposition_note": "Use the stated expression contrast and shrinkage, rank WikiPathways enrichment results, and compute the named top-20 fraction. Do not add a multiple-testing operation solely from the unadjusted expression p-value threshold.",
+      "analysis_tags": [
         "model-fitting",
         "effect-estimation",
         "hypothesis-testing",
         "record-selection",
         "descriptive-statistics"
       ],
-      "decomposition_status": "question-reviewed",
-      "decomposition_note": "Use the stated expression contrast and shrinkage, rank WikiPathways enrichment results, and compute the named top-20 fraction. Do not add a multiple-testing operation solely from the unadjusted expression p-value threshold."
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bix-12-q4",
@@ -1552,19 +1615,21 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-sequence",
-        "molecular-evolution"
-      ],
-      "workflows": [
-        "alignment-signal",
-        "group-comparison"
+        "nucleotide-sequences",
+        "evolutionary-relationships"
       ],
       "operations": [
+        "descriptive-analysis",
+        "statistical-inference"
+      ],
+      "decomposition_status": "question-reviewed",
+      "decomposition_note": "Calculate the requested informative-site or composition measures and perform the between-clade Mann–Whitney comparison. A supplied alignment does not require sequence alignment.",
+      "analysis_tags": [
         "sequence-characterization",
         "hypothesis-testing"
       ],
-      "decomposition_status": "question-reviewed",
-      "decomposition_note": "Calculate the requested informative-site or composition measures and perform the between-clade Mann–Whitney comparison. A supplied alignment does not require sequence alignment."
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bix-16-q1",
@@ -1606,18 +1671,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "functional-genomics"
-      ],
-      "workflows": [
-        "association"
+        "gene-expression",
+        "molecular-function"
       ],
       "operations": [
+        "statistical-inference"
+      ],
+      "decomposition_status": "question-reviewed",
+      "decomposition_note": "Estimate the requested rank or linear correlations and select the requested gene, cell type or thresholded set. Correlation estimation alone does not imply a significance test.",
+      "analysis_tags": [
         "association-estimation",
         "record-selection"
       ],
-      "decomposition_status": "question-reviewed",
-      "decomposition_note": "Estimate the requested rank or linear correlations and select the requested gene, cell type or thresholded set. Correlation estimation alone does not imply a significance test."
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bix-41-q5",
@@ -1659,18 +1726,21 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "microbiology",
-        "bioimaging"
-      ],
-      "workflows": [
-        "descriptive-analysis"
+        "morphology"
       ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "question-reviewed",
+      "decomposition_note": "Aggregate supplied area and circularity measurements and select the closest condition under a frozen distance/scale rule. No input-image processing is required.",
+      "analysis_tags": [
         "descriptive-statistics",
         "record-selection"
       ],
-      "decomposition_status": "question-reviewed",
-      "decomposition_note": "Aggregate supplied area and circularity measurements and select the closest condition under a frozen distance/scale rule. No input-image processing is required."
+      "output_tags": [],
+      "context_review_needed": [
+        "Microbiology"
+      ]
     },
     {
       "task_id": "bix-43-q4",
@@ -1712,13 +1782,14 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "differential-expression",
-        "enrichment"
+        "gene-expression"
       ],
       "operations": [
+        "statistical-inference"
+      ],
+      "decomposition_status": "question-reviewed",
+      "decomposition_note": "The proposed connected workflow starts with expression contrasts and proceeds to gene-set enrichment and the requested overlap or directional comparison. If source inputs already contain contrast results, remove those upstream operations and record that input-stage adaptation.",
+      "analysis_tags": [
         "model-fitting",
         "effect-estimation",
         "hypothesis-testing",
@@ -1726,8 +1797,8 @@
         "record-selection",
         "set-comparison"
       ],
-      "decomposition_status": "question-reviewed",
-      "decomposition_note": "The proposed connected workflow starts with expression contrasts and proceeds to gene-set enrichment and the requested overlap or directional comparison. If source inputs already contain contrast results, remove those upstream operations and record that input-stage adaptation."
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bix-37-q1",
@@ -1769,16 +1840,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "proteomics"
-      ],
-      "workflows": [
-        "abundance"
+        "protein-abundance"
       ],
       "operations": [
-        "effect-estimation"
+        "statistical-inference"
       ],
       "decomposition_status": "question-reviewed",
-      "decomposition_note": "Estimate the requested tumor/normal abundance ratio on its stated linear or log2 scale. Significance testing is not requested; resolve replicate aggregation and the input measurement scale."
+      "decomposition_note": "Estimate the requested tumor/normal abundance ratio on its stated linear or log2 scale. Significance testing is not requested; resolve replicate aggregation and the input measurement scale.",
+      "analysis_tags": [
+        "effect-estimation"
+      ],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bix-52-q7",
@@ -1822,17 +1895,19 @@
         "real-anole-age-cpg-density"
       ],
       "scientific_context": [
-        "epigenomics"
-      ],
-      "workflows": [
-        "methylation"
+        "dna-methylation"
       ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "question-reviewed",
+      "decomposition_note": "The endpoints filter or summarize CpG records and methylation measurements. They do not independently require testing which CpGs are age-associated. Resolve whether the supplied table already contains age-association results before authoring.",
+      "analysis_tags": [
         "record-selection",
         "descriptive-statistics"
       ],
-      "decomposition_status": "question-reviewed",
-      "decomposition_note": "The endpoints filter or summarize CpG records and methylation measurements. They do not independently require testing which CpGs are age-associated. Resolve whether the supplied table already contains age-association results before authoring."
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bix-22-q1",
@@ -1874,18 +1949,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "functional-genomics"
-      ],
-      "workflows": [
-        "association"
+        "gene-expression",
+        "molecular-function"
       ],
       "operations": [
+        "statistical-inference"
+      ],
+      "decomposition_status": "question-reviewed",
+      "decomposition_note": "Estimate the requested rank or linear correlations and select the requested gene, cell type or thresholded set. Correlation estimation alone does not imply a significance test.",
+      "analysis_tags": [
         "association-estimation",
         "record-selection"
       ],
-      "decomposition_status": "question-reviewed",
-      "decomposition_note": "Estimate the requested rank or linear correlations and select the requested gene, cell type or thresholded set. Correlation estimation alone does not imply a significance test."
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bix-12-q6",
@@ -1927,19 +2004,21 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-sequence",
-        "molecular-evolution"
-      ],
-      "workflows": [
-        "alignment-signal",
-        "group-comparison"
+        "nucleotide-sequences",
+        "evolutionary-relationships"
       ],
       "operations": [
+        "descriptive-analysis",
+        "statistical-inference"
+      ],
+      "decomposition_status": "question-reviewed",
+      "decomposition_note": "Calculate the requested informative-site or composition measures and perform the between-clade Mann–Whitney comparison. A supplied alignment does not require sequence alignment.",
+      "analysis_tags": [
         "sequence-characterization",
         "hypothesis-testing"
       ],
-      "decomposition_status": "question-reviewed",
-      "decomposition_note": "Calculate the requested informative-site or composition measures and perform the between-clade Mann–Whitney comparison. A supplied alignment does not require sequence alignment."
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bix-24-q2",
@@ -1981,13 +2060,14 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "differential-expression",
-        "enrichment"
+        "gene-expression"
       ],
       "operations": [
+        "statistical-inference"
+      ],
+      "decomposition_status": "question-reviewed",
+      "decomposition_note": "The proposed connected workflow starts with expression contrasts and proceeds to gene-set enrichment and the requested overlap or directional comparison. If source inputs already contain contrast results, remove those upstream operations and record that input-stage adaptation.",
+      "analysis_tags": [
         "model-fitting",
         "effect-estimation",
         "hypothesis-testing",
@@ -1995,8 +2075,8 @@
         "record-selection",
         "set-comparison"
       ],
-      "decomposition_status": "question-reviewed",
-      "decomposition_note": "The proposed connected workflow starts with expression contrasts and proceeds to gene-set enrichment and the requested overlap or directional comparison. If source inputs already contain contrast results, remove those upstream operations and record that input-stage adaptation."
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bix-46-q4",
@@ -2038,15 +2118,16 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "microbiology"
-      ],
-      "workflows": [
-        "differential-expression"
+        "gene-expression"
       ],
       "operations": [],
       "decomposition_status": "input-stage-unresolved",
-      "decomposition_note": "The question requests one expression effect but does not specify whether it is supplied or must be estimated. Resolve the input stage before assigning fitting or estimation operations; do not infer them from the workflow label."
+      "decomposition_note": "The question requests one expression effect but does not specify whether it is supplied or must be estimated. Resolve the input stage before assigning fitting or estimation operations; do not infer them from the workflow label.",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Microbiology"
+      ]
     },
     {
       "task_id": "bix-37-q4",
@@ -2088,16 +2169,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "proteomics"
-      ],
-      "workflows": [
-        "abundance"
+        "protein-abundance"
       ],
       "operations": [
-        "effect-estimation"
+        "statistical-inference"
       ],
       "decomposition_status": "question-reviewed",
-      "decomposition_note": "Estimate the requested tumor/normal abundance ratio on its stated linear or log2 scale. Significance testing is not requested; resolve replicate aggregation and the input measurement scale."
+      "decomposition_note": "Estimate the requested tumor/normal abundance ratio on its stated linear or log2 scale. Significance testing is not requested; resolve replicate aggregation and the input measurement scale.",
+      "analysis_tags": [
+        "effect-estimation"
+      ],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bix-26-q5",
@@ -2139,13 +2222,14 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "differential-expression",
-        "enrichment"
+        "gene-expression"
       ],
       "operations": [
+        "statistical-inference"
+      ],
+      "decomposition_status": "question-reviewed",
+      "decomposition_note": "The proposed connected workflow starts with expression contrasts and proceeds to gene-set enrichment and the requested overlap or directional comparison. If source inputs already contain contrast results, remove those upstream operations and record that input-stage adaptation.",
+      "analysis_tags": [
         "model-fitting",
         "effect-estimation",
         "hypothesis-testing",
@@ -2153,8 +2237,8 @@
         "record-selection",
         "set-comparison"
       ],
-      "decomposition_status": "question-reviewed",
-      "decomposition_note": "The proposed connected workflow starts with expression contrasts and proceeds to gene-set enrichment and the requested overlap or directional comparison. If source inputs already contain contrast results, remove those upstream operations and record that input-stage adaptation."
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bix-38-q1",
@@ -2198,18 +2282,22 @@
         "real-cox1-tree-comparison"
       ],
       "scientific_context": [
-        "molecular-evolution"
-      ],
-      "workflows": [
-        "phylogeny"
+        "evolutionary-relationships"
       ],
       "operations": [
+        "graph-analysis",
+        "descriptive-analysis",
+        "statistical-inference"
+      ],
+      "decomposition_status": "question-reviewed",
+      "decomposition_note": "Compute the requested tree properties and group medians, then a difference or ratio. A descriptive contrast does not imply hypothesis testing or tree inference.",
+      "analysis_tags": [
         "graph-measurement",
         "descriptive-statistics",
         "effect-estimation"
       ],
-      "decomposition_status": "question-reviewed",
-      "decomposition_note": "Compute the requested tree properties and group medians, then a difference or ratio. A descriptive contrast does not imply hypothesis testing or tree inference."
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bix-45-q1",
@@ -2251,19 +2339,21 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-sequence",
-        "molecular-evolution"
-      ],
-      "workflows": [
-        "alignment-signal",
-        "group-comparison"
+        "nucleotide-sequences",
+        "evolutionary-relationships"
       ],
       "operations": [
+        "descriptive-analysis",
+        "statistical-inference"
+      ],
+      "decomposition_status": "question-reviewed",
+      "decomposition_note": "Calculate the requested informative-site or composition measures and perform the between-clade Mann–Whitney comparison. A supplied alignment does not require sequence alignment.",
+      "analysis_tags": [
         "sequence-characterization",
         "hypothesis-testing"
       ],
-      "decomposition_status": "question-reviewed",
-      "decomposition_note": "Calculate the requested informative-site or composition measures and perform the between-clade Mann–Whitney comparison. A supplied alignment does not require sequence alignment."
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bix-18-q3",
@@ -2305,18 +2395,22 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "microbiology",
-        "bioimaging"
-      ],
-      "workflows": [
-        "descriptive-analysis"
+        "morphology"
       ],
       "operations": [
+        "descriptive-analysis",
+        "statistical-inference"
+      ],
+      "decomposition_status": "question-reviewed",
+      "decomposition_note": "Compute the percentage reduction from supplied colony-area measurements under explicit group means and denominator conventions.",
+      "analysis_tags": [
         "descriptive-statistics",
         "effect-estimation"
       ],
-      "decomposition_status": "question-reviewed",
-      "decomposition_note": "Compute the percentage reduction from supplied colony-area measurements under explicit group means and denominator conventions."
+      "output_tags": [],
+      "context_review_needed": [
+        "Microbiology"
+      ]
     },
     {
       "task_id": "bix-11-q2",
@@ -2360,17 +2454,20 @@
         "real-cox1-tree-comparison"
       ],
       "scientific_context": [
-        "molecular-evolution"
-      ],
-      "workflows": [
-        "phylogeny"
+        "evolutionary-relationships"
       ],
       "operations": [
+        "graph-analysis",
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "question-reviewed",
+      "decomposition_note": "Measure the specified evolutionary-rate, branch, path or treeness quantity from gene trees. No tree reconstruction or significance test is requested.",
+      "analysis_tags": [
         "graph-measurement",
         "descriptive-statistics"
       ],
-      "decomposition_status": "question-reviewed",
-      "decomposition_note": "Measure the specified evolutionary-rate, branch, path or treeness quantity from gene trees. No tree reconstruction or significance test is requested."
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bix-16-q4",
@@ -2412,21 +2509,24 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "functional-genomics"
-      ],
-      "workflows": [
-        "association"
+        "gene-expression",
+        "molecular-function"
       ],
       "operations": [
+        "statistical-inference",
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "question-reviewed",
+      "decomposition_note": "Test rank associations, apply the named Benjamini–Hochberg correction and report the significant fraction over the tested gene universe.",
+      "analysis_tags": [
         "association-estimation",
         "hypothesis-testing",
         "multiple-testing",
         "record-selection",
         "descriptive-statistics"
       ],
-      "decomposition_status": "question-reviewed",
-      "decomposition_note": "Test rank associations, apply the named Benjamini–Hochberg correction and report the significant fraction over the tested gene universe."
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bix-22-q4",
@@ -2470,18 +2570,20 @@
         "real-cd14-gene-length-association"
       ],
       "scientific_context": [
-        "transcriptomics",
-        "functional-genomics"
-      ],
-      "workflows": [
-        "association"
+        "gene-expression",
+        "molecular-function"
       ],
       "operations": [
+        "statistical-inference"
+      ],
+      "decomposition_status": "question-reviewed",
+      "decomposition_note": "Estimate the requested rank or linear correlations and select the requested gene, cell type or thresholded set. Correlation estimation alone does not imply a significance test.",
+      "analysis_tags": [
         "association-estimation",
         "record-selection"
       ],
-      "decomposition_status": "question-reviewed",
-      "decomposition_note": "Estimate the requested rank or linear correlations and select the requested gene, cell type or thresholded set. Correlation estimation alone does not imply a significance test."
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bix-61-q2",
@@ -2523,18 +2625,22 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-sequence",
-        "microbiology"
-      ],
-      "workflows": [
-        "read-qc"
+        "nucleotide-sequences"
       ],
       "operations": [
+        "alignment-matching",
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "question-reviewed",
+      "decomposition_note": "Map the trimmed reads using the prescribed read group and compute genome-wide mean depth, including the stated reference denominator. Read trimming is already done.",
+      "analysis_tags": [
         "sequence-alignment",
         "descriptive-statistics"
       ],
-      "decomposition_status": "question-reviewed",
-      "decomposition_note": "Map the trimmed reads using the prescribed read group and compute genome-wide mean depth, including the stated reference denominator. Read trimming is already done."
+      "output_tags": [],
+      "context_review_needed": [
+        "Microbiology"
+      ]
     },
     {
       "task_id": "bix-51-q8",
@@ -2580,17 +2686,19 @@
         "real-clinical-univariable-logit-audit"
       ],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "regression"
+        "disease-treatment-response"
       ],
       "operations": [
+        "statistical-inference"
+      ],
+      "decomposition_status": "question-reviewed",
+      "decomposition_note": "Fit the age-only logistic response model and report the age coefficient on the log-odds scale. No held-out prediction or significance test is requested.",
+      "analysis_tags": [
         "model-fitting",
         "effect-estimation"
       ],
-      "decomposition_status": "question-reviewed",
-      "decomposition_note": "Fit the age-only logistic response model and report the age coefficient on the log-odds scale. No held-out prediction or significance test is requested."
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bix-17-q2",
@@ -2632,18 +2740,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "clinical"
-      ],
-      "workflows": [
-        "variant-analysis"
+        "genetic-variation",
+        "disease-treatment-response"
       ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "question-reviewed",
+      "decomposition_note": "Filter the supplied variant/cohort records and summarize the requested count or proportion. Existing consequence and ClinVar annotations do not require re-annotation or a pathogenicity prediction.",
+      "analysis_tags": [
         "record-selection",
         "descriptive-statistics"
       ],
-      "decomposition_status": "question-reviewed",
-      "decomposition_note": "Filter the supplied variant/cohort records and summarize the requested count or proportion. Existing consequence and ClinVar annotations do not require re-annotation or a pathogenicity prediction."
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "bix-18-q1",
@@ -2685,18 +2795,21 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "microbiology",
-        "bioimaging"
-      ],
-      "workflows": [
-        "descriptive-analysis"
+        "morphology"
       ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "question-reviewed",
+      "decomposition_note": "Aggregate supplied colony measurements by genotype, select the greatest mean area and return its mean circularity.",
+      "analysis_tags": [
         "descriptive-statistics",
         "record-selection"
       ],
-      "decomposition_status": "question-reviewed",
-      "decomposition_note": "Aggregate supplied colony measurements by genotype, select the greatest mean area and return its mean circularity."
+      "output_tags": [],
+      "context_review_needed": [
+        "Microbiology"
+      ]
     }
   ]
 }

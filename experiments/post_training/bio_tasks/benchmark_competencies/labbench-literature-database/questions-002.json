@@ -45,15 +45,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:3eb40b8d-b777-4cf7-998d-e6cd51b7c3c5",
@@ -100,15 +102,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:49544a8a-e2d8-45f3-ad33-36cbea3fae79",
@@ -155,15 +159,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:55d3ed6f-9252-45a1-91be-5312b664c20d",
@@ -210,15 +216,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:80a8c666-fb7e-4491-8f25-0b19b5a63f9b",
@@ -265,15 +273,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:243c205e-b940-4dcb-a3fc-72bff7142766",
@@ -320,15 +330,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:8e1e6e4f-15e9-4667-9ada-be384ca4be24",
@@ -375,15 +387,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:b08c5d21-f3ea-43fd-8c38-6cec81cae612",
@@ -430,15 +444,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:0b9ac5d2-f16d-4f83-acc6-507db6d19fde",
@@ -485,15 +501,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:21947569-8395-4f2e-9cab-5c54adbb4051",
@@ -540,15 +558,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:817c9d50-65c9-434b-8a72-42aac84f95f4",
@@ -595,15 +615,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:7ce66aac-20dc-4997-ae3f-172d4c638263",
@@ -650,15 +672,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:e83b8361-e842-46eb-a3b7-f7179b73d926",
@@ -705,15 +729,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:92a784e3-9d25-4218-be24-fd2312323f78",
@@ -760,15 +786,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:cc29f1a1-f61c-47c5-8b6d-58d5f72829ca",
@@ -815,15 +843,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:5fc1121c-6cb8-425a-8f0d-4895e0060f87",
@@ -870,15 +900,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:99addad8-784e-4a59-9721-f961c2c25275",
@@ -925,15 +957,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:9699d1da-4e99-4caa-a3fa-0c2a185da4d4",
@@ -980,15 +1014,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:be2b9c29-2ff3-48cc-8613-ffa56da44060",
@@ -1035,15 +1071,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:a2214c20-8e01-4765-bd44-13d18e980f09",
@@ -1090,15 +1128,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:e5d4206b-cef5-4d65-936f-c17c1b6487d2",
@@ -1145,15 +1185,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:3b6116b5-91a7-422c-ab94-b9c3ab8d3969",
@@ -1200,15 +1242,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:6efb0f2a-a362-4b8b-8d0f-680c731e3e70",
@@ -1255,15 +1299,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:16fa45dc-093b-42e7-b0b8-f080829f6f35",
@@ -1310,15 +1356,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:de35f777-fd4b-4c69-9bd0-d0501ead23e3",
@@ -1365,15 +1413,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:2e81c82f-82b0-4791-8a63-ae4e430df3e1",
@@ -1420,15 +1470,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:d0a97363-964a-433b-be90-84cdbb228009",
@@ -1475,15 +1527,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:46d695cb-95ef-40c0-8c30-a5afba9c4746",
@@ -1530,15 +1584,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:c0463353-9a1f-45f5-9064-8490ea55fd3f",
@@ -1585,15 +1641,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:c1c5d431-1f23-4eac-ac84-7d185e788ea9",
@@ -1640,15 +1698,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:ec003711-dc88-4059-b693-3111db0930d3",
@@ -1695,15 +1755,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:34e0f01a-dcfa-4262-89d0-4f1c9b73f93c",
@@ -1750,15 +1812,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:51aab2cb-1465-4aea-8450-1f9f9b3123fe",
@@ -1805,15 +1869,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:dff20c26-8c56-40c7-88a5-45baaae1f272",
@@ -1860,15 +1926,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:f16471fe-27eb-4248-ba62-814aed10de86",
@@ -1915,15 +1983,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:442cbf67-4779-4af1-97e3-5c858ebff57c",
@@ -1970,15 +2040,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:b106a538-f330-4877-9c38-e21e5620253a",
@@ -2025,15 +2097,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:7bb8a8d9-42cb-450a-b275-af9b869dbf88",
@@ -2080,15 +2154,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:912f138d-ca63-441f-9330-9eb02aabc7b6",
@@ -2135,15 +2211,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:1d445f89-d6ce-418e-8af3-dca141f89b31",
@@ -2190,15 +2268,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:00c59b68-711f-4fd4-b257-5ac1432f1edd",
@@ -2245,15 +2325,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:c4bbd90d-a0a5-4600-813a-e6f5d7592d6d",
@@ -2300,15 +2382,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:9b25b165-1222-42be-b52b-9a3d1c1372d5",
@@ -2355,15 +2439,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:1bccbf34-5011-43cb-9e38-e65328805dc2",
@@ -2410,15 +2496,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:130432a8-e388-48b0-87fa-424ca699653d",
@@ -2465,15 +2553,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:f15fad2c-c928-4e59-8776-59c32371d3d8",
@@ -2520,15 +2610,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:a1594903-453d-4126-8998-3ea32d5eecac",
@@ -2575,15 +2667,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:2cc15454-1722-45ff-b797-73b5a488af22",
@@ -2630,15 +2724,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:ebc9f843-220f-491e-8aa7-7fee5cca23a3",
@@ -2685,15 +2781,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:2c08cdc7-a955-4273-9997-f263f8c04c29",
@@ -2740,15 +2838,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:4e94e449-0aa6-4ee5-be54-8cf9128f9119",
@@ -2795,15 +2895,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:953863f7-82fc-453e-bc22-1bcbc43bfc35",
@@ -2850,15 +2952,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:3c5e947d-46b6-46fe-8732-1d7272ca8759",
@@ -2905,15 +3009,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:21d56804-0ba5-46ec-a6f0-2817fe05a66f",
@@ -2960,15 +3066,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:a87c6187-3bc8-4fda-916c-7e55c47d07d3",
@@ -3015,15 +3123,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:2ca99fe5-fe3c-49cc-bec2-c86d6b3b9820",
@@ -3070,15 +3180,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:f2ff7697-2174-4b3e-800a-5aca94387226",
@@ -3125,15 +3237,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:dc144aa6-f1ae-4f5c-b04a-3ba999d05a60",
@@ -3180,15 +3294,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:52748068-c96e-4d2c-92d6-01b320f5ba9a",
@@ -3235,15 +3351,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:2d2d4733-8762-44f9-881a-8e86a3ec7f5c",
@@ -3290,15 +3408,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:968e76f2-88f8-403e-b628-a15f41bf3bfc",
@@ -3345,15 +3465,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:e21c8dfb-54c1-4ca9-9d41-20167a06e262",
@@ -3400,15 +3522,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:189a4f63-35de-43b3-b200-b42f7bb16e9c",
@@ -3455,15 +3579,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:7e7a3993-59fd-47f1-9928-66e5148e229d",
@@ -3510,15 +3636,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:4c96adfe-38a6-428c-b75e-ed4f4c7d5b1d",
@@ -3565,15 +3693,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:fed45c92-0ebd-4d48-9efc-5336f3ad515c",
@@ -3620,15 +3750,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:05aea9e6-fa3e-421b-b8c4-2db16da9bc48",
@@ -3675,15 +3807,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:7a841012-af10-4362-b990-748c97551f84",
@@ -3730,15 +3864,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:d6043336-4d83-4f6d-9c10-33f450215811",
@@ -3785,15 +3921,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:f3c65787-eded-4320-99aa-3b2fe6bfb31a",
@@ -3840,15 +3978,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:2616d09a-045b-4379-a261-2ffb670290cf",
@@ -3895,15 +4035,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:af5d6e1f-b433-4080-846e-533955fc204f",
@@ -3950,15 +4092,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:4446d797-39cb-4993-a3e7-4c3a74207a9d",
@@ -4005,15 +4149,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:174059b2-3fd2-42bf-836c-bb559c7ca61f",
@@ -4060,15 +4206,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:3e834859-cacb-4b36-8cd5-7a326e2ca60c",
@@ -4115,15 +4263,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:7827cf73-61aa-4c5e-8496-e9a5574fd76c",
@@ -4170,15 +4320,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:40817d24-8f44-4b62-bc9e-0fbdffda22ec",
@@ -4225,15 +4377,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:7849c4df-5bc8-4650-9098-02d9046164b7",
@@ -4280,15 +4434,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:d5fb8db9-6de2-436c-8a55-ea2d959e8f50",
@@ -4335,15 +4491,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:70bf8bd5-d674-4585-8325-a92eca932545",
@@ -4390,15 +4548,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:c1df4a98-147f-419b-9a78-c47977e17486",
@@ -4445,15 +4605,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:ed2faddf-4a42-485b-9a57-6139cdc2a473",
@@ -4500,15 +4662,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:7d39a3c0-330d-41e1-b93d-9bba4fd9c781",
@@ -4555,15 +4719,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:306eda47-7c69-460e-a482-d6ad5bb62910",
@@ -4610,15 +4776,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:f8e0dc89-775c-405d-8bc6-ff7e2d027601",
@@ -4665,15 +4833,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:95795ee7-e328-4c61-af4d-365661d31975",
@@ -4720,15 +4890,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:38c50fe0-ea37-44f7-8c48-2a6364763b4d",
@@ -4775,15 +4947,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:9cdb7d1b-fbdd-4d2a-a482-1201869efb2e",
@@ -4830,15 +5004,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:1f8efa75-7370-4a57-8e5e-bc48dafade42",
@@ -4885,15 +5061,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:9ce7579d-543e-439d-af78-4c87f3f701d6",
@@ -4940,15 +5118,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:5dff18e0-0f43-4663-8135-4ba49395cb0b",
@@ -4995,15 +5175,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:9d2df1ec-c62e-440b-9fe5-5a905ec53470",
@@ -5050,15 +5232,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:04fe6f2b-73ec-4d63-8bde-9a20d6b1715f",
@@ -5105,15 +5289,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:8fc24cf3-0cd1-4c94-9afb-3c252eeff1f5",
@@ -5160,15 +5346,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:0ddf5a90-e8dc-48f4-8a20-2caf8bed13a6",
@@ -5215,15 +5403,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:6d340c41-182a-4183-8d14-3debd401e4bc",
@@ -5270,15 +5460,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:a87485dd-807d-4def-9e70-9682f224f46d",
@@ -5325,15 +5517,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:b3d65c29-04b0-4199-b66f-f047de625802",
@@ -5380,15 +5574,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:01238ca6-3a19-418f-baa7-66357f99be9e",
@@ -5435,15 +5631,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:a13af4dc-ef8e-4569-8bbb-c238cfb4d73b",
@@ -5490,15 +5688,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:8c0420c4-ed04-484b-b092-78c0cf6b81e3",
@@ -5545,15 +5745,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:74e4791c-3669-4323-ae3a-e99dd28aeeb5",
@@ -5600,15 +5802,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:1b46a1f7-de75-4bf1-9b9e-7ec9af2cf1f2",
@@ -5655,15 +5859,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:bc678c93-f07b-4c44-a721-d23cbf48e581",
@@ -5710,15 +5916,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:9c09c33b-9b36-4742-8aca-345cbfc37b8c",
@@ -5765,15 +5973,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:71287064-7ade-4985-a0b7-0d8fbf29dc89",
@@ -5820,15 +6030,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:9d7eeeea-1085-4f15-96f6-cf6faca98832",
@@ -5875,15 +6087,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:6e503f8c-328d-493d-a4d9-7876574be6ad",
@@ -5930,15 +6144,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:f4147894-9169-40a3-a0cd-50622790bfe7",
@@ -5985,15 +6201,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:c7c4edfa-b883-4cac-82af-bc9cf1877cbe",
@@ -6040,15 +6258,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:6fc506a7-9a2e-4c41-9837-2a7396d640fa",
@@ -6095,15 +6315,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:f9d5a71d-cb11-4dd0-bc35-1f5d74a09f21",
@@ -6150,15 +6372,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:02a60f97-8024-401a-9e2d-0b212ac26e6a",
@@ -6205,15 +6429,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:918f970f-354c-4e84-afca-58b48e3ffd81",
@@ -6260,15 +6486,17 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "DbQA:1d156edf-a955-4732-a7dc-d77c6f590bc2",
@@ -6316,16 +6544,19 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics",
-        "epigenomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Epigenomics"
+      ]
     },
     {
       "task_id": "DbQA:d54547c3-373b-4e87-885b-0f86483a7d19",
@@ -6373,16 +6604,19 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics",
-        "epigenomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Epigenomics"
+      ]
     },
     {
       "task_id": "DbQA:74471e41-ceb0-4353-86a2-c14677101056",
@@ -6430,16 +6664,19 @@
         "note": "The question asks for an existing database assertion under named source/version constraints. Retrieving ClinVar classifications, binding sites, targets or gene-set membership does not require recomputing their biological inference."
       },
       "scientific_context": [
-        "functional-genomics",
-        "epigenomics"
-      ],
-      "workflows": [
-        "database-query"
+        "molecular-function"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Epigenomics"
+      ]
     }
   ]
 }

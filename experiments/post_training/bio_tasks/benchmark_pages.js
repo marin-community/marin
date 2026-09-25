@@ -1,8 +1,9 @@
-// Workflows guide authoring; operations and scientific context describe their requirements and variants.
+// Two category axes describe the same source tasks; benchmark identity supplies provenance.
 const benchmarkById = new Map(D.benchmarks.map(benchmark => [benchmark.id, benchmark]));
-const facetTitles = {workflows: 'Workflows', operations: 'Analytical operations', scientific_context: 'Scientific context'};
+const facetTitles = {operations: 'Operation families', scientific_context: 'Scientific contexts'};
 const facetDefinitions = Object.fromEntries(Object.keys(facetTitles).map(facet => [facet, new Map(D.review_taxonomy[facet].map(row => [row.id, row]))]));
 const benchmarkFacetOptions = selected => Object.entries(facetTitles).map(([id, title]) => `<option value="${id}" ${selected === id ? 'selected' : ''}>${title}</option>`).join('');
+const analysisTagById = new Map(D.review_taxonomy.analysis_tags.map(tag => [tag.id, tag]));
 const categoryNames = (annotation, facet) => annotation[facet].map(id => facetDefinitions[facet].get(id).name);
 const routeHref = path => location.href.split('#')[0] + '#' + path;
 const benchmarkHref = id => routeHref('benchmark/' + encodeURIComponent(id));
@@ -16,11 +17,11 @@ function benchmarkForSource(source) {
 }
 
 function renderBenchmarkIndex() {
-  el('benchmark-entry').innerHTML = `<p><a href="${routeHref('benchmarks')}">Browse benchmark questions, workflows and proposed executable checks</a></p>
+  el('benchmark-entry').innerHTML = `<p><a href="${routeHref('benchmarks')}">Browse source questions, categories and proposed executable checks</a></p>
     <p><a href="${routeHref('statistics')}">Global category statistics across all inventoried ID releases</a></p><p>Includes straightforward reframings of source tasks scored by an LLM. These are authoring proposals; missing source instructions and questions without a faithful executable framing are listed separately.</p>`;
 }
 
-function renderGlobalStatistics(facet = 'workflows', categoryId = '') {
+function renderGlobalStatistics(facet = 'operations', categoryId = '') {
   if (!Object.hasOwn(facetTitles, facet)) { showPageError('Unknown category facet.'); return; }
   const statistics = D.category_statistics;
   const counts = statistics.facets[facet];
@@ -35,7 +36,7 @@ function renderGlobalStatistics(facet = 'workflows', categoryId = '') {
     <p>${total.toLocaleString()} candidate verifiable records · ${statistics.inventoried_releases} inventoried ID releases. Each record counts once per assigned category; categories overlap.</p>
     <p class="reference-note">Provisional annotations. Raw counts include overlapping releases and repeated protocols; they measure requirements, not validated tasks or independent scientific demand.</p>
     ${facet === 'operations' ? `<p class="reference-note">Partial annotation: ${statistics.decomposed_records} question-level decompositions; ${statistics.records_without_operations} eligible records still have no assigned operations. Other lists may also be incomplete.</p>` : ''}
-    ${facet === 'scientific_context' ? `<p class="reference-note">${statistics.unresolved_context} eligible records have no resolved scientific context and remain in the denominator.</p>` : ''}
+    ${facet === 'scientific_context' ? `<p class="reference-note">${statistics.unresolved_context} eligible records have no resolved scientific context; ${statistics.context_review_pending} have a broad context pending review. They remain in the denominator.</p>` : ''}
     ${selected ? `<p><strong>${selected.count.toLocaleString()}</strong> records (${pct(selected.count)} of eligible records) across <strong>${selected.benchmarks}</strong> ID releases.</p>
       <p>${esc(definition.outcome || definition.scope)}</p>${definition.include ? `<p><strong>Include:</strong> ${esc(definition.include)}</p><p><strong>Exclude:</strong> ${esc(definition.exclude)}</p>` : ''}
       <div class="table-scroll"><table><thead><tr><th>Benchmark</th><th>Records with category</th><th>Eligible records</th><th>Within-benchmark share</th></tr></thead><tbody>${selected.sources.map(source => `<tr><td><a href="${benchmarkHref(source.benchmark)}">${esc(source.benchmark)}</a></td><td>${source.count}</td><td>${source.eligible}</td><td>${(100 * source.count / source.eligible).toFixed(1)}%</td></tr>`).join('')}</tbody></table></div>` :
@@ -44,7 +45,7 @@ function renderGlobalStatistics(facet = 'workflows', categoryId = '') {
       <p class="reference-note">Ranked by question-record count. Select a category to inspect its benchmark contributions.</p><div id="global-category-table" class="table-scroll"></div>`}
     <details class="set-aside"><summary>${statistics.missing_inventories.length} ID sources without task inventories</summary><p>These sources are absent from the numerical denominator. Their unknown counts are not evidence of zero demand.</p>${listItems(statistics.missing_inventories)}</details>
     <details><summary>Assignment rules and review scope</summary>${listItems(D.review_taxonomy.annotation_policy)}<p>${statistics.decomposed_records.toLocaleString()} records have a question-level operation decomposition. Other decompositions remain provisional; ${statistics.records_without_operations.toLocaleString()} have no operation annotations yet. Missing annotations are not zero demand. No category review certifies individual verifier feasibility.</p></details>
-    <p class="reference-note">${link('docs/experiments/bio-benchmark-categories.md', 'Rankings as Markdown')}</p>`;
+    <p class="reference-note">${link('experiments/post_training/bio_tasks/benchmark_competencies/taxonomy.json', 'Version-controlled category definitions')} · ${link('docs/experiments/bio-benchmark-categories.md', 'Descriptions and rankings as Markdown')}</p>`;
   if (!selected) {
     el('global-facet').onchange = () => { location.hash = 'statistics/' + el('global-facet').value; };
     const render = () => {
@@ -63,8 +64,8 @@ function renderBenchmarkDirectory() {
   el('benchmark-page').innerHTML = `<div class="breadcrumbs"><a href="${routeHref('statistics')}">Categories</a> / Benchmarks</div>
     <h2 tabindex="-1">Benchmark questions</h2><p><a href="${routeHref('statistics')}">Global category rankings and benchmark contributions →</a></p>
     <p>${reviewed.length} inventoried ID releases · ${included.length.toLocaleString()} proposed verifiable framings. Category labels are a provisional review aid, not validation credit. Source releases and shared protocols overlap.</p>
-    <details><summary>How to use the categories</summary><p>A workflow connects operations to a scientific question. An operation names required work, such as hypothesis testing; scientific context describes measurements and study setting. Plan connected workflows and their input-stage or design variants. Frequency is a signal, not a generation quota.</p>
-    <p>Most workflow assignments and operation decompositions remain provisional. The question page identifies their basis and preserves the original instruction for correction. A proposed verifier does not establish that the whole source question is already solved or validated.</p></details>
+    <details><summary>How to use the categories</summary><p>Operation families describe general analytical work; scientific contexts describe the biological measurements or phenomena. Finer requirements remain tags. Inspect operation–context combinations to design connected tasks. Frequency is a signal, not a generation quota.</p>
+    <p>Most category assignments remain provisional. The question page identifies their basis and preserves the original instruction for correction. A proposed verifier does not establish that the whole source question is already solved or validated.</p></details>
     <div class="toolbar"><label for="benchmark-search">Search benchmarks</label><input id="benchmark-search" type="search"></div>
     <div id="benchmark-list" class="table-scroll"></div>
     <details class="set-aside"><summary>OOD benchmarks · excluded</summary><p>Their question content is not used for category assignments.</p><ul>${D.benchmarks.filter(b => b.distribution === 'OOD').map(b => `<li><a href="${benchmarkHref(b.id)}">${esc(b.name)}</a></li>`).join('')}</ul></details>`;
@@ -99,11 +100,11 @@ function renderBenchmark(benchmark) {
     ${benchmark.inventory ? ' · ' + link('experiments/post_training/bio_tasks/' + benchmark.inventory, 'Inventory') : ''}
     ${benchmark.review_file ? ' · ' + link('experiments/post_training/bio_tasks/' + benchmark.review_file, 'Annotations') : ''}</p>
     ${benchmark.review ? `<p>${included.length} proposed verifiable framings out of ${benchmark.questions.length} source records. Draft labels; counts overlap. Click a bar to filter questions.</p>
-      <div class="toolbar"><label for="facet-select">Rank by</label><select id="facet-select">${benchmarkFacetOptions('workflows')}</select></div>
+      <div class="toolbar"><label for="facet-select">Rank by</label><select id="facet-select">${benchmarkFacetOptions('operations')}</select></div>
       <div id="competency-bars" class="competency-bars"></div>` :
       `<p>${benchmark.distribution === 'OOD' ? 'Held out: question content and training mappings are excluded.' : 'Question inventory unavailable.'}</p><p>${esc(benchmark.inspection)}</p>`}
     ${benchmark.review ? `<h3>Questions with proposed executable checks <span class="count-muted">(${included.length})</span>
-      </h3><div class="toolbar"><label for="question-search">Search</label><input id="question-search" type="search" placeholder="Question, workflow, operation or context"></div>
+      </h3><div class="toolbar"><label for="question-search">Search</label><input id="question-search" type="search" placeholder="Question, operation, context or analysis tag"></div>
       <p id="question-count" class="reference-note" aria-live="polite"></p><div id="question-table" class="table-scroll"></div>` : ''}
     ${excluded.length ? `<details class="set-aside"><summary>${excluded.length} questions set aside</summary><p>No faithful executable framing established. No category labels or frequency credit.</p>${asideTable(benchmark, excluded)}</details>` : ''}
     ${unavailable.length ? `<details class="set-aside"><summary>${unavailable.length} original instructions unavailable</summary>${asideTable(benchmark, unavailable)}</details>` : ''}
@@ -145,11 +146,11 @@ function renderQuestionTable(benchmark) {
   const candidates = includedQuestions(benchmark);
   const questions = candidates.filter(question => {
     const annotation = question.annotation;
-    const text = [question.id, annotation.source_question, ...Object.keys(facetTitles).flatMap(facet => categoryNames(annotation, facet))].join(' ').toLowerCase();
+    const text = [question.id, annotation.source_question, ...Object.keys(facetTitles).flatMap(facet => categoryNames(annotation, facet)), ...annotation.analysis_tags.map(id => analysisTagById.get(id).name)].join(' ').toLowerCase();
     return (!selected || annotation[facet].includes(selected)) && text.includes(query);
   });
   el('question-count').textContent = `${questions.length} of ${candidates.length} shown${selected ? ' · Click the selected bar to clear the filter' : ''}`;
-  el('question-table').innerHTML = `<table><thead><tr><th>Question</th><th>Workflows</th><th>Operations</th><th>Scientific context</th></tr></thead><tbody>${questions.map(question =>
+  el('question-table').innerHTML = `<table><thead><tr><th>Question</th><th>Operations</th><th>Scientific context</th></tr></thead><tbody>${questions.map(question =>
     `<tr><td><a href="${questionHref(benchmark.id, question.id)}">${esc(question.id)}</a><br>${esc(questionTitle(question))}</td>
     ${Object.keys(facetTitles).map(facet => `<td>${categoryNames(question.annotation, facet).map(esc).join('<br>') || 'Unresolved'}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
 }
@@ -167,11 +168,13 @@ function renderQuestion(benchmark, question) {
     ${a?.source_question ? `<div class="source-question"><div class="eyebrow">${shared ? 'Original shared protocol / instruction template' : stem ? 'Original question stem · answer options not retained' : 'Original question'}</div><p>${esc(a.source_question)}</p></div>` : '<p>Original instruction unavailable in the inspected release.</p>'}
     ${included ? `<h3>Proposed verifiable framing</h3><p>${esc(a.reframed_question)}</p>
       ${a.scope_changes.length ? `<div class="scope-note"><h4>Scope of the adaptation</h4>${listItems(a.scope_changes)}</div>` : ''}
-      <h3>Workflows</h3><p>${a.workflows.map(id => `<a href="${routeHref('statistics/workflows/' + id)}">${esc(facetDefinitions.workflows.get(id).name)}</a>`).join(' · ')}</p>
-      <h3>Analytical operations</h3><p class="reference-note">${a.decomposition_status === 'question-reviewed' ? 'Question-level decomposition; assumptions below.' : a.decomposition_status === 'input-stage-unresolved' ? 'Input stage unresolved; operations need review.' : 'Provisional, partial decomposition. Workflow labels do not imply all underlying operations.'}</p>
+      <h3>Operation families</h3><p class="reference-note">${a.decomposition_status === 'question-reviewed' ? 'Question-level decomposition; assumptions below.' : a.decomposition_status === 'input-stage-unresolved' ? 'Input stage unresolved; operations need review.' : 'Provisional, partial annotation. Source-family names do not establish all required work.'}</p>
       <div class="competency-cards">${a.operations.map(id => {const operation = facetDefinitions.operations.get(id);return `<div class="competency-card"><h4><a href="${routeHref('statistics/operations/' + id)}">${esc(operation.name)}</a></h4><p>${esc(operation.outcome)}</p></div>`;}).join('') || '<p>No operations assigned yet.</p>'}</div>
+      ${a.analysis_tags.length ? `<p><strong>Analysis tags:</strong> ${a.analysis_tags.map(id => esc(analysisTagById.get(id).name)).join(' · ')}</p>` : ''}
+      ${a.output_tags.includes('figure') ? '<p class="reference-note">Figure output: only specified content and numerical or structural properties admit executable checks; visual quality receives no category credit.</p>' : ''}
       ${a.decomposition_note ? `<p>${esc(a.decomposition_note)}</p>` : ''}
       <p><strong>Scientific context:</strong> ${categoryNames(a, 'scientific_context').map(esc).join(' · ') || 'Context not resolved'}${a.context_tags.length ? '<br><strong>Context tags:</strong> ' + esc(a.context_tags.join(' · ')) : ''}</p>
+      ${a.context_review_needed.length ? `<details><summary>Context mapping needs review</summary><p>Previous broad labels have not been mapped to a narrower context: ${a.context_review_needed.map(esc).join(' · ')}. Their absence from context counts is an annotation gap.</p></details>` : ''}
       ${a.category_review ? `<details><summary>Prior category-boundary review</summary><p>${esc(a.category_review.note)}</p><p class="reference-note">${esc(a.category_review.scope)}; this is not an operation decomposition or verifier validation.</p></details>` : ''}
       <h3>Outputs to check</h3>${listItems(a.outputs)}<h3>Executable reward</h3><p>${esc(a.verification)}</p>
       ${a.decisions.length ? `<details><summary>Scientific decisions to specify</summary>${listItems(a.decisions)}</details>` : ''}
@@ -179,7 +182,7 @@ function renderQuestion(benchmark, question) {
       `<p class="notice">${a?.disposition === 'unavailable' ? 'Source access gap' : 'Set aside'} · No category labels assigned.</p><p>${esc(a?.reason || benchmark.inspection)}</p>`}
     <details class="set-aside"><summary>Source and inventory details</summary><p><a href="${esc(a?.source_url || question.source_url)}">Original source</a>
       ${benchmark.review_file ? ' · ' + link('experiments/post_training/bio_tasks/' + benchmark.review_file, 'Editable annotations') : ''}</p>
-      <p>Workflow: ${esc(a?.workflow || question.family)}.</p>
+      <p>Source analysis description: ${esc(a?.workflow || question.family)}.</p>
       ${a?.source_group ? '<p>Source group: ' + esc(a.source_group) + '.</p>' : ''}
       ${a?.source_question_sha256 ? `<p>Instruction SHA-256: <code class="hash-value">${esc(a.source_question_sha256)}</code></p>` : ''}</details>
     <div class="question-pagination">${previous ? `<a href="${questionHref(benchmark.id, previous.id)}">← Previous</a>` : '<span></span>'}
@@ -189,7 +192,7 @@ function renderQuestion(benchmark, question) {
 function renderBenchmarkRoute(parts) {
   const [kind, benchmarkId, questionId] = parts;
   if (kind === 'statistics') {
-    renderGlobalStatistics(benchmarkId || 'workflows', questionId || '');
+    renderGlobalStatistics(benchmarkId || 'operations', questionId || '');
     tab('benchmark-page');
     document.title = 'Global categories · Biology benchmarks';
   } else if (kind === 'benchmarks') {

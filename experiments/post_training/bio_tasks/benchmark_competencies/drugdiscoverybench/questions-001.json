@@ -39,17 +39,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "clinical"
-      ],
-      "workflows": [
-        "survival",
-        "evidence-extraction"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval",
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction",
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69b03699a937c74c3ac42225",
@@ -88,22 +90,22 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence",
-        "epigenomics"
-      ],
-      "workflows": [
-        "variant-analysis",
-        "chromatin",
-        "database-query",
-        "sequence-design"
+        "gene-expression",
+        "genetic-variation",
+        "nucleotide-sequences",
+        "chromatin-organization"
       ],
       "operations": [
+        "information-retrieval",
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69b03699a937c74c3ac4222a",
@@ -143,14 +145,13 @@
       "recipes": [],
       "scientific_context": [
         "molecular-structure",
-        "chemical-biology"
-      ],
-      "workflows": [
-        "protein-structure",
-        "molecular-descriptors"
+        "small-molecule-properties"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69b03699a937c74c3ac4222b",
@@ -191,19 +192,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "epigenomics",
-        "molecular-structure",
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling",
-        "methylation",
-        "protein-structure"
+        "dna-methylation",
+        "molecular-structure"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology"
+      ]
     },
     {
       "task_id": "69b03699a937c74c3ac4222c",
@@ -244,13 +246,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [],
-      "workflows": [
+      "operations": [
         "data-preparation"
       ],
-      "operations": [
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69b03699a937c74c3ac4222f",
@@ -291,20 +295,21 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-variation",
-        "clinical"
-      ],
-      "workflows": [
-        "variant-analysis",
-        "variant-consequence",
-        "database-query"
+        "gene-expression",
+        "genetic-variation",
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval",
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69b03699a937c74c3ac42233",
@@ -345,19 +350,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "chemical-biology",
-        "clinical"
-      ],
-      "workflows": [
-        "variant-analysis",
-        "variant-consequence",
-        "database-query"
+        "genetic-variation",
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology"
+      ]
     },
     {
       "task_id": "69b34fde93a696047cbf9c6d",
@@ -397,16 +403,17 @@
       "recipes": [],
       "scientific_context": [
         "molecular-structure",
-        "chemical-biology"
-      ],
-      "workflows": [
-        "protein-structure",
-        "molecular-descriptors"
+        "small-molecule-properties"
       ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69b34fde93a696047cbf9c73",
@@ -445,14 +452,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "molecular-structure",
-        "chemical-biology"
-      ],
-      "workflows": [
-        "protein-structure"
+        "molecular-structure"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology"
+      ]
     },
     {
       "task_id": "69b34fde93a696047cbf9c76",
@@ -491,16 +499,16 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "epigenomics",
-        "molecular-structure",
-        "chemical-biology"
-      ],
-      "workflows": [
-        "chromatin",
-        "protein-structure"
+        "chromatin-organization",
+        "molecular-structure"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology"
+      ]
     },
     {
       "task_id": "69b34fde93a696047cbf9c77",
@@ -539,15 +547,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "molecular-descriptors"
+        "small-molecule-properties"
       ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69b34fde93a696047cbf9c78",
@@ -588,17 +598,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "chemical-biology",
-        "clinical",
-        "immunology"
-      ],
-      "workflows": [
-        "evidence-extraction"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology",
+        "Immunology"
+      ]
     },
     {
       "task_id": "69b34fde93a696047cbf9c7c",
@@ -637,14 +650,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "molecular-structure",
-        "chemical-biology"
-      ],
-      "workflows": [
-        "protein-structure"
+        "molecular-structure"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology"
+      ]
     },
     {
       "task_id": "69b34fde93a696047cbf9c7f",
@@ -684,17 +698,19 @@
       "recipes": [],
       "scientific_context": [
         "molecular-structure",
-        "chemical-biology",
-        "microbiology"
-      ],
-      "workflows": [
-        "protein-structure",
-        "molecular-descriptors"
+        "small-molecule-properties"
       ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Microbiology"
+      ]
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c5e2",
@@ -736,17 +752,17 @@
       "recipes": [],
       "scientific_context": [
         "molecular-structure",
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling",
-        "protein-structure",
-        "molecular-descriptors"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c5e9",
@@ -787,16 +803,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "dose-response",
-        "evidence-extraction"
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c5f0",
@@ -837,18 +854,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-variation",
-        "epigenomics"
-      ],
-      "workflows": [
-        "chromatin",
-        "methylation"
+        "gene-expression",
+        "genetic-variation",
+        "dna-methylation",
+        "chromatin-organization"
       ],
       "operations": [
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c5f1",
@@ -887,13 +906,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "proteomics"
-      ],
-      "workflows": [
-        "molecular-descriptors"
+        "protein-abundance"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c5f3",
@@ -932,19 +951,23 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-sequence",
+        "nucleotide-sequences",
         "molecular-structure",
-        "chemical-biology",
-        "clinical"
-      ],
-      "workflows": [
-        "protein-structure"
+        "disease-treatment-response"
       ],
       "operations": [
+        "exploratory-analysis",
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "clustering",
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology"
+      ]
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c5f5",
@@ -986,17 +1009,17 @@
       "recipes": [],
       "scientific_context": [
         "molecular-structure",
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling",
-        "protein-structure",
-        "molecular-descriptors"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c5f6",
@@ -1038,17 +1061,17 @@
       "recipes": [],
       "scientific_context": [
         "molecular-structure",
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling",
-        "protein-structure",
-        "molecular-descriptors"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c5f8",
@@ -1089,19 +1112,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "epigenomics",
-        "molecular-structure",
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling",
-        "methylation",
-        "protein-structure"
+        "dna-methylation",
+        "molecular-structure"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology"
+      ]
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c5f9",
@@ -1143,17 +1167,17 @@
       "recipes": [],
       "scientific_context": [
         "molecular-structure",
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling",
-        "protein-structure",
-        "molecular-descriptors"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c5fa",
@@ -1193,17 +1217,18 @@
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
       "recipes": [],
-      "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-ranking"
-      ],
+      "scientific_context": [],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology"
+      ]
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c5fb",
@@ -1242,17 +1267,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "molecular-structure",
-        "chemical-biology"
-      ],
-      "workflows": [
-        "network",
-        "protein-structure"
+        "molecular-structure"
       ],
       "operations": [
+        "descriptive-analysis",
+        "graph-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology"
+      ]
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c5fc",
@@ -1294,17 +1322,17 @@
       "recipes": [],
       "scientific_context": [
         "molecular-structure",
-        "chemical-biology"
-      ],
-      "workflows": [
-        "predictive-modeling",
-        "protein-structure",
-        "molecular-descriptors"
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c600",
@@ -1343,17 +1371,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "molecular-descriptors",
-        "dose-response",
-        "evidence-extraction"
+        "small-molecule-properties",
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c603",
@@ -1392,14 +1421,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "molecular-structure",
-        "chemical-biology"
-      ],
-      "workflows": [
-        "protein-structure"
+        "molecular-structure"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology"
+      ]
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c606",
@@ -1440,19 +1470,23 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "chemical-biology"
-      ],
-      "workflows": [
-        "alignment-signal",
-        "evidence-extraction"
+        "gene-expression"
       ],
       "operations": [
+        "information-retrieval",
+        "descriptive-analysis",
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction",
         "descriptive-statistics",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology"
+      ]
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c60b",
@@ -1493,22 +1527,23 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "functional-genomics",
-        "clinical"
-      ],
-      "workflows": [
-        "enrichment",
-        "spatial",
-        "database-query",
-        "evidence-extraction"
+        "gene-expression",
+        "molecular-function",
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval",
+        "descriptive-analysis",
+        "spatial-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction",
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c60e",
@@ -1548,14 +1583,13 @@
       "recipes": [],
       "scientific_context": [
         "molecular-structure",
-        "chemical-biology"
-      ],
-      "workflows": [
-        "protein-structure",
-        "molecular-descriptors"
+        "small-molecule-properties"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c611",
@@ -1594,13 +1628,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "sequence-query"
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c615",
@@ -1639,16 +1673,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "molecular-structure",
-        "chemical-biology"
-      ],
-      "workflows": [
-        "protein-structure"
+        "molecular-structure"
       ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology"
+      ]
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c616",
@@ -1689,20 +1726,23 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "regression",
-        "dose-response",
-        "evidence-extraction"
+        "disease-treatment-response"
       ],
       "operations": [
+        "statistical-inference",
+        "information-retrieval",
+        "descriptive-analysis",
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "model-fitting",
         "evidence-extraction",
         "descriptive-statistics",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c617",
@@ -1741,17 +1781,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "molecular-descriptors",
-        "evidence-extraction"
+        "small-molecule-properties"
       ],
       "operations": [
+        "information-retrieval",
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction",
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c618",
@@ -1790,16 +1832,16 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "genome-sequence",
-        "chemical-biology"
-      ],
-      "workflows": [
-        "molecular-descriptors",
-        "dose-response"
+        "genetic-variation",
+        "nucleotide-sequences",
+        "small-molecule-properties",
+        "disease-treatment-response"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c61f",
@@ -1840,22 +1882,24 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "chemical-biology",
-        "functional-genomics",
-        "clinical"
-      ],
-      "workflows": [
-        "variant-analysis",
-        "database-query",
-        "evidence-extraction"
+        "genetic-variation",
+        "molecular-function",
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval",
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology"
+      ]
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c620",
@@ -1894,19 +1938,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-sequence",
+        "nucleotide-sequences",
         "molecular-structure",
-        "chemical-biology",
-        "clinical"
-      ],
-      "workflows": [
-        "protein-structure",
-        "molecular-descriptors"
+        "small-molecule-properties",
+        "disease-treatment-response"
       ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c625",
@@ -1945,19 +1990,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "chemical-biology",
-        "clinical"
-      ],
-      "workflows": [
-        "molecular-descriptors",
-        "dose-response",
-        "database-query"
+        "genetic-variation",
+        "small-molecule-properties",
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c626",
@@ -1996,15 +2041,16 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-sequence",
-        "microbiology"
-      ],
-      "workflows": [
-        "sequence-query"
+        "gene-expression",
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Microbiology"
+      ]
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c62b",
@@ -2043,18 +2089,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "molecular-structure",
-        "chemical-biology"
-      ],
-      "workflows": [
-        "protein-structure",
-        "database-query"
+        "genetic-variation",
+        "molecular-structure"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology"
+      ]
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c634",
@@ -2095,11 +2143,11 @@
       "scientific_context": [
         "molecular-structure"
       ],
-      "workflows": [
-        "protein-structure"
-      ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c637",
@@ -2139,14 +2187,13 @@
       "recipes": [],
       "scientific_context": [
         "molecular-structure",
-        "chemical-biology"
-      ],
-      "workflows": [
-        "protein-structure",
-        "molecular-descriptors"
+        "small-molecule-properties"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c638",
@@ -2187,11 +2234,11 @@
       "scientific_context": [
         "molecular-structure"
       ],
-      "workflows": [
-        "protein-structure"
-      ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c63b",
@@ -2231,14 +2278,13 @@
       "recipes": [],
       "scientific_context": [
         "molecular-structure",
-        "chemical-biology"
-      ],
-      "workflows": [
-        "protein-structure",
-        "molecular-descriptors"
+        "small-molecule-properties"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c63e",
@@ -2278,17 +2324,18 @@
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
       "recipes": [],
-      "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-ranking"
-      ],
+      "scientific_context": [],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology"
+      ]
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c63f",
@@ -2329,19 +2376,21 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-variation",
-        "genome-sequence"
-      ],
-      "workflows": [
-        "variant-analysis",
-        "database-query"
+        "gene-expression",
+        "genetic-variation",
+        "nucleotide-sequences"
       ],
       "operations": [
+        "information-retrieval",
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69b43e08f5a8ac5b38e3c642",
@@ -2381,17 +2430,18 @@
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
       "recipes": [],
-      "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-ranking"
-      ],
+      "scientific_context": [],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology"
+      ]
     },
     {
       "task_id": "69e6b5dade74c4d1f5fa9329",
@@ -2430,18 +2480,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "molecular-descriptors",
-        "dose-response",
-        "evidence-extraction"
+        "small-molecule-properties",
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval",
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69e6b5dade74c4d1f5fa9335",
@@ -2480,16 +2532,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "molecular-structure",
-        "chemical-biology"
-      ],
-      "workflows": [
-        "protein-structure"
+        "molecular-structure"
       ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology"
+      ]
     },
     {
       "task_id": "69e6b5dade74c4d1f5fa9338",
@@ -2528,18 +2583,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "molecular-descriptors",
-        "dose-response",
-        "evidence-extraction"
+        "small-molecule-properties",
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval",
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69e6b5dade74c4d1f5fa933a",
@@ -2579,14 +2636,13 @@
       "recipes": [],
       "scientific_context": [
         "molecular-structure",
-        "chemical-biology"
-      ],
-      "workflows": [
-        "protein-structure",
-        "molecular-descriptors"
+        "small-molecule-properties"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69e6b5dade74c4d1f5fa933c",
@@ -2626,14 +2682,13 @@
       "recipes": [],
       "scientific_context": [
         "molecular-structure",
-        "chemical-biology"
-      ],
-      "workflows": [
-        "protein-structure",
-        "molecular-descriptors"
+        "small-molecule-properties"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69e6b5dade74c4d1f5fa934c",
@@ -2672,15 +2727,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-sequence"
-      ],
-      "workflows": [
-        "database-query"
+        "nucleotide-sequences"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69e6b5dade74c4d1f5fa9350",
@@ -2720,16 +2777,18 @@
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
       "recipes": [],
-      "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
+      "scientific_context": [],
+      "operations": [
         "descriptive-analysis"
       ],
-      "operations": [
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology"
+      ]
     },
     {
       "task_id": "69e6b5dade74c4d1f5fa9351",
@@ -2769,14 +2828,13 @@
       "recipes": [],
       "scientific_context": [
         "molecular-structure",
-        "chemical-biology"
-      ],
-      "workflows": [
-        "protein-structure",
-        "molecular-descriptors"
+        "small-molecule-properties"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69e6b5dade74c4d1f5fa935f",
@@ -2815,19 +2873,22 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "chemical-biology"
-      ],
-      "workflows": [
-        "molecular-descriptors",
-        "evidence-extraction"
+        "gene-expression",
+        "small-molecule-properties"
       ],
       "operations": [
+        "information-retrieval",
+        "descriptive-analysis",
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction",
         "descriptive-statistics",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69e6b5dade74c4d1f5fa9360",
@@ -2867,14 +2928,13 @@
       "recipes": [],
       "scientific_context": [
         "molecular-structure",
-        "chemical-biology"
-      ],
-      "workflows": [
-        "protein-structure",
-        "molecular-descriptors"
+        "small-molecule-properties"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69e6b5dade74c4d1f5fa9368",
@@ -2914,18 +2974,18 @@
       "recipes": [],
       "scientific_context": [
         "molecular-structure",
-        "chemical-biology",
-        "clinical"
-      ],
-      "workflows": [
-        "protein-structure",
-        "molecular-descriptors",
-        "evidence-extraction"
+        "small-molecule-properties",
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69e6b5dade74c4d1f5fa936a",
@@ -2964,14 +3024,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "molecular-structure",
-        "chemical-biology"
-      ],
-      "workflows": [
-        "protein-structure"
+        "molecular-structure"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology"
+      ]
     },
     {
       "task_id": "69e6b5dade74c4d1f5fa9371",
@@ -3010,14 +3071,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "molecular-structure",
-        "chemical-biology"
-      ],
-      "workflows": [
-        "protein-structure"
+        "molecular-structure"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology"
+      ]
     },
     {
       "task_id": "69e6b5dade74c4d1f5fa937e",
@@ -3057,14 +3119,13 @@
       "recipes": [],
       "scientific_context": [
         "molecular-structure",
-        "chemical-biology"
-      ],
-      "workflows": [
-        "protein-structure",
-        "molecular-descriptors"
+        "small-molecule-properties"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69e6b5dade74c4d1f5fa9387",
@@ -3104,14 +3165,13 @@
       "recipes": [],
       "scientific_context": [
         "molecular-structure",
-        "chemical-biology"
-      ],
-      "workflows": [
-        "protein-structure",
-        "molecular-descriptors"
+        "small-molecule-properties"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69fa3ea7653acbc6d63b0177",
@@ -3151,14 +3211,13 @@
       "recipes": [],
       "scientific_context": [
         "molecular-structure",
-        "chemical-biology"
-      ],
-      "workflows": [
-        "protein-structure",
-        "molecular-descriptors"
+        "small-molecule-properties"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69fa3ea7653acbc6d63b017a",
@@ -3197,18 +3256,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "molecular-descriptors",
-        "dose-response",
-        "evidence-extraction"
+        "small-molecule-properties",
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval",
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69fa3ea7653acbc6d63b017f",
@@ -3247,16 +3308,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "genome-sequence",
-        "molecular-structure",
-        "chemical-biology"
-      ],
-      "workflows": [
-        "protein-structure"
+        "genetic-variation",
+        "nucleotide-sequences",
+        "molecular-structure"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology"
+      ]
     },
     {
       "task_id": "69fa3ea7653acbc6d63b0183",
@@ -3295,15 +3357,16 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "molecular-structure",
-        "chemical-biology",
-        "microbiology"
-      ],
-      "workflows": [
-        "protein-structure"
+        "molecular-structure"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology",
+        "Microbiology"
+      ]
     },
     {
       "task_id": "69fa3ea7653acbc6d63b0184",
@@ -3343,16 +3406,17 @@
       "recipes": [],
       "scientific_context": [
         "molecular-structure",
-        "chemical-biology"
-      ],
-      "workflows": [
-        "protein-structure",
-        "molecular-descriptors"
+        "small-molecule-properties"
       ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69fa3ea7653acbc6d63b0192",
@@ -3391,19 +3455,22 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "molecular-descriptors",
-        "dose-response",
-        "evidence-extraction"
+        "small-molecule-properties",
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval",
+        "descriptive-analysis",
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction",
         "descriptive-statistics",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69fa3ea7653acbc6d63b01ab",
@@ -3442,17 +3509,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "molecular-descriptors",
-        "evidence-extraction"
+        "small-molecule-properties"
       ],
       "operations": [
+        "information-retrieval",
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction",
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69fa3ea7653acbc6d63b01b1",
@@ -3491,18 +3560,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "molecular-descriptors",
-        "dose-response",
-        "evidence-extraction"
+        "small-molecule-properties",
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval",
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69fa3ea7653acbc6d63b01b2",
@@ -3541,14 +3612,15 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "molecular-structure",
-        "chemical-biology"
-      ],
-      "workflows": [
-        "protein-structure"
+        "molecular-structure"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology"
+      ]
     },
     {
       "task_id": "69fa3ea7653acbc6d63b01b5",
@@ -3587,16 +3659,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "molecular-descriptors",
-        "evidence-extraction"
+        "small-molecule-properties"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "69fa3ea7653acbc6d63b01c1",
@@ -3635,16 +3708,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "molecular-descriptors",
-        "evidence-extraction"
+        "small-molecule-properties"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "6a172cd01d78a1a5ec9f5bc7",
@@ -3685,22 +3759,22 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-sequence",
-        "molecular-evolution",
-        "chemical-biology",
-        "clinical"
-      ],
-      "workflows": [
-        "predictive-modeling",
-        "orthology",
-        "molecular-descriptors",
-        "evidence-extraction"
+        "nucleotide-sequences",
+        "evolutionary-relationships",
+        "small-molecule-properties",
+        "disease-treatment-response"
       ],
       "operations": [
+        "predictive-modeling",
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction",
         "evidence-extraction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "6a172cd01d78a1a5ec9f5bca",
@@ -3741,19 +3815,21 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-sequence",
-        "clinical"
-      ],
-      "workflows": [
-        "differential-expression",
-        "database-query"
+        "gene-expression",
+        "nucleotide-sequences",
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval",
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "6a19dd9c5446b4eb01f76209",
@@ -3793,17 +3869,18 @@
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
       "recipes": [],
-      "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-ranking"
-      ],
+      "scientific_context": [],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology"
+      ]
     },
     {
       "task_id": "6a19dd9c5446b4eb01f7620b",
@@ -3844,22 +3921,23 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "epigenomics",
-        "clinical"
-      ],
-      "workflows": [
-        "model-evaluation",
-        "intervals",
-        "methylation",
-        "evidence-extraction"
+        "gene-expression",
+        "dna-methylation",
+        "disease-treatment-response"
       ],
       "operations": [
+        "predictive-modeling",
+        "information-retrieval",
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "model-evaluation",
         "evidence-extraction",
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "6a1d2459970e88cd7cd5b551",
@@ -3900,17 +3978,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-sequence",
-        "chemical-biology",
-        "microbiology"
-      ],
-      "workflows": [
-        "database-query"
+        "nucleotide-sequences"
       ],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology",
+        "Microbiology"
+      ]
     },
     {
       "task_id": "6a1d2459970e88cd7cd5b556",
@@ -3951,19 +4032,22 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-sequence",
-        "chemical-biology"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
+        "nucleotide-sequences"
       ],
       "operations": [
+        "information-retrieval",
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction",
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology"
+      ]
     },
     {
       "task_id": "6a1d2459970e88cd7cd5b558",
@@ -4003,17 +4087,18 @@
       "annotation_basis": "workflow-family draft",
       "existing_mapping_status": "unmapped",
       "recipes": [],
-      "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-ranking"
-      ],
+      "scientific_context": [],
       "operations": [
+        "information-retrieval"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology"
+      ]
     },
     {
       "task_id": "6a232796afa0e46251ad3d57",
@@ -4053,19 +4138,21 @@
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
       "recipes": [],
-      "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "database-query",
-        "evidence-extraction"
-      ],
+      "scientific_context": [],
       "operations": [
+        "information-retrieval",
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "evidence-extraction",
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology"
+      ]
     }
   ]
 }

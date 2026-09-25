@@ -41,18 +41,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
-      "workflows": [
-        "predictive-modeling",
-        "cell-annotation"
+        "gene-expression",
+        "nucleotide-sequences"
       ],
       "operations": [
+        "predictive-modeling",
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "classification",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "decoupler",
@@ -95,16 +97,16 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-sequence",
-        "immunology"
-      ],
-      "workflows": [
-        "group-comparison",
-        "enrichment",
-        "cell-annotation"
+        "gene-expression",
+        "nucleotide-sequences"
       ],
       "operations": [
+        "data-preparation",
+        "exploratory-analysis",
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "normalization",
         "transformation",
         "dimension-reduction",
@@ -113,7 +115,10 @@
         "descriptive-statistics",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "paga",
@@ -156,20 +161,24 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "immunology"
-      ],
-      "workflows": [
-        "trajectory",
-        "spatial",
-        "network"
+        "gene-expression"
       ],
       "operations": [
+        "exploratory-analysis",
+        "descriptive-analysis",
+        "spatial-analysis",
+        "graph-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "dimension-reduction",
         "clustering",
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "scvelo",
@@ -210,21 +219,25 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "systems-biology"
-      ],
-      "workflows": [
-        "variant-analysis",
-        "trajectory",
-        "network"
+        "gene-expression"
       ],
       "operations": [
+        "data-preparation",
+        "exploratory-analysis",
+        "descriptive-analysis",
+        "graph-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "normalization",
         "clustering",
         "descriptive-statistics",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "scgen",
@@ -267,17 +280,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "functional-genomics"
-      ],
-      "workflows": [
-        "predictive-modeling"
+        "gene-expression",
+        "molecular-function"
       ],
       "operations": [
+        "exploratory-analysis",
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "dimension-reduction",
         "prediction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "destvi",
@@ -322,22 +338,25 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "immunology"
-      ],
-      "workflows": [
-        "composition",
-        "deconvolution",
-        "spatial"
+        "gene-expression"
       ],
       "operations": [
+        "data-preparation",
+        "descriptive-analysis",
+        "spatial-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "normalization",
         "transformation",
         "feature-selection",
         "descriptive-statistics",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "stereoscope",
@@ -382,24 +401,26 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-sequence",
-        "immunology"
-      ],
-      "workflows": [
-        "read-qc",
-        "cell-annotation",
-        "deconvolution",
-        "spatial"
+        "gene-expression",
+        "nucleotide-sequences"
       ],
       "operations": [
+        "data-preparation",
+        "descriptive-analysis",
+        "spatial-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "normalization",
         "transformation",
         "feature-selection",
         "descriptive-statistics",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "cell2location",
@@ -443,20 +464,22 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "regression",
-        "composition",
-        "deconvolution",
-        "spatial"
+        "gene-expression"
       ],
       "operations": [
+        "statistical-inference",
+        "descriptive-analysis",
+        "data-preparation",
+        "spatial-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "model-fitting",
         "descriptive-statistics",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "squidpy",
@@ -499,19 +522,22 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
-      "workflows": [
-        "enrichment",
-        "spatial",
-        "network"
+        "gene-expression",
+        "nucleotide-sequences"
       ],
       "operations": [
+        "exploratory-analysis",
+        "descriptive-analysis",
+        "spatial-analysis",
+        "graph-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "clustering",
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "leiden",
@@ -552,25 +578,29 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
-      "workflows": [
-        "read-qc",
-        "network",
-        "cell-qc"
+        "gene-expression",
+        "nucleotide-sequences"
       ],
       "operations": [
+        "data-preparation",
+        "exploratory-analysis",
+        "descriptive-analysis",
+        "graph-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "normalization",
         "transformation",
         "dimension-reduction",
         "feature-selection",
         "clustering",
         "descriptive-statistics",
-        "data-management",
-        "visualization"
+        "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [
+        "figure"
+      ],
+      "context_review_needed": []
     },
     {
       "task_id": "doucling",
@@ -611,15 +641,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "cell-annotation",
-        "network",
-        "evidence-extraction",
-        "cell-qc"
+        "gene-expression"
       ],
       "operations": [
+        "data-preparation",
+        "exploratory-analysis",
+        "information-retrieval",
+        "descriptive-analysis",
+        "graph-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "normalization",
         "transformation",
         "dimension-reduction",
@@ -629,7 +661,8 @@
         "descriptive-statistics",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "mira",
@@ -672,17 +705,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "epigenomics"
-      ],
-      "workflows": [
-        "chromatin",
-        "network"
+        "gene-expression",
+        "chromatin-organization"
       ],
       "operations": [
+        "data-preparation",
+        "graph-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "mofa",
@@ -723,21 +758,23 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-sequence",
-        "epigenomics"
-      ],
-      "workflows": [
-        "integration",
-        "spatial",
-        "chromatin",
-        "network"
+        "gene-expression",
+        "nucleotide-sequences",
+        "chromatin-organization"
       ],
       "operations": [
+        "exploratory-analysis",
+        "descriptive-analysis",
+        "spatial-analysis",
+        "graph-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "clustering",
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "scmomat",
@@ -780,22 +817,26 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "epigenomics"
-      ],
-      "workflows": [
-        "integration",
-        "chromatin",
-        "network"
+        "gene-expression",
+        "chromatin-organization"
       ],
       "operations": [
+        "exploratory-analysis",
+        "descriptive-analysis",
+        "data-preparation",
+        "graph-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "dimension-reduction",
         "clustering",
         "descriptive-statistics",
-        "data-management",
-        "visualization"
+        "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [
+        "figure"
+      ],
+      "context_review_needed": []
     },
     {
       "task_id": "scpoli",
@@ -836,19 +877,24 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "epigenomics"
-      ],
-      "workflows": [
-        "chromatin"
+        "gene-expression",
+        "chromatin-organization"
       ],
       "operations": [
+        "exploratory-analysis",
+        "descriptive-analysis",
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "dimension-reduction",
         "descriptive-statistics",
-        "data-management",
-        "visualization"
+        "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [
+        "figure"
+      ],
+      "context_review_needed": []
     },
     {
       "task_id": "cellrank",
@@ -891,22 +937,26 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "systems-biology"
-      ],
-      "workflows": [
-        "variant-analysis",
-        "trajectory",
-        "spatial",
-        "network"
+        "gene-expression"
       ],
       "operations": [
+        "data-preparation",
+        "exploratory-analysis",
+        "descriptive-analysis",
+        "spatial-analysis",
+        "graph-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "normalization",
         "dimension-reduction",
         "descriptive-statistics",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Systems biology"
+      ]
     },
     {
       "task_id": "scgen-integration",
@@ -949,19 +999,23 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
-      "workflows": [
-        "integration",
-        "network"
+        "gene-expression",
+        "nucleotide-sequences"
       ],
       "operations": [
-        "dimension-reduction",
-        "descriptive-statistics",
-        "visualization"
+        "exploratory-analysis",
+        "descriptive-analysis",
+        "graph-analysis"
       ],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [
+        "dimension-reduction",
+        "descriptive-statistics"
+      ],
+      "output_tags": [
+        "figure"
+      ],
+      "context_review_needed": []
     },
     {
       "task_id": "triku",
@@ -1004,19 +1058,23 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "network"
+        "gene-expression"
       ],
       "operations": [
+        "data-preparation",
+        "exploratory-analysis",
+        "graph-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "normalization",
         "transformation",
         "dimension-reduction",
         "feature-selection",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "hotspot",
@@ -1059,23 +1117,28 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "association",
-        "spatial",
-        "network"
+        "gene-expression"
       ],
       "operations": [
+        "data-preparation",
+        "exploratory-analysis",
+        "descriptive-analysis",
+        "spatial-analysis",
+        "graph-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "normalization",
         "transformation",
         "dimension-reduction",
         "feature-selection",
         "descriptive-statistics",
-        "data-management",
-        "visualization"
+        "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [
+        "figure"
+      ],
+      "context_review_needed": []
     },
     {
       "task_id": "scvi",
@@ -1116,18 +1179,23 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "integration"
+        "gene-expression"
       ],
       "operations": [
+        "exploratory-analysis",
+        "data-preparation",
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "dimension-reduction",
         "feature-selection",
-        "descriptive-statistics",
-        "visualization"
+        "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [
+        "figure"
+      ],
+      "context_review_needed": []
     },
     {
       "task_id": "scanvi",
@@ -1168,18 +1236,23 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "integration"
+        "gene-expression"
       ],
       "operations": [
+        "exploratory-analysis",
+        "data-preparation",
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "dimension-reduction",
         "feature-selection",
-        "descriptive-statistics",
-        "visualization"
+        "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [
+        "figure"
+      ],
+      "context_review_needed": []
     },
     {
       "task_id": "scanorama",
@@ -1222,22 +1295,26 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "read-qc",
-        "integration",
-        "spatial"
+        "gene-expression"
       ],
       "operations": [
+        "data-preparation",
+        "exploratory-analysis",
+        "descriptive-analysis",
+        "spatial-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "normalization",
         "dimension-reduction",
         "feature-selection",
         "clustering",
-        "descriptive-statistics",
-        "visualization"
+        "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [
+        "figure"
+      ],
+      "context_review_needed": []
     },
     {
       "task_id": "harmony",
@@ -1278,18 +1355,23 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "integration"
+        "gene-expression"
       ],
       "operations": [
+        "exploratory-analysis",
+        "data-preparation",
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "dimension-reduction",
         "feature-selection",
-        "descriptive-statistics",
-        "visualization"
+        "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [
+        "figure"
+      ],
+      "context_review_needed": []
     },
     {
       "task_id": "cellassign",
@@ -1332,19 +1414,22 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
-      "workflows": [
-        "predictive-modeling",
-        "cell-annotation"
+        "gene-expression",
+        "nucleotide-sequences"
       ],
       "operations": [
-        "normalization",
-        "classification",
-        "visualization"
+        "data-preparation",
+        "predictive-modeling"
       ],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [
+        "normalization",
+        "classification"
+      ],
+      "output_tags": [
+        "figure"
+      ],
+      "context_review_needed": []
     },
     {
       "task_id": "contrastivevi",
@@ -1385,17 +1470,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "functional-genomics",
-        "immunology"
-      ],
-      "workflows": [
-        "exploratory-analysis"
+        "gene-expression",
+        "molecular-function"
       ],
       "operations": [
+        "exploratory-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "dimension-reduction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "peakvi",
@@ -1436,19 +1524,23 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "epigenomics"
-      ],
-      "workflows": [
-        "chromatin"
+        "gene-expression",
+        "chromatin-organization"
       ],
       "operations": [
+        "exploratory-analysis",
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "dimension-reduction",
         "clustering",
-        "data-management",
-        "visualization"
+        "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [
+        "figure"
+      ],
+      "context_review_needed": []
     },
     {
       "task_id": "poissonvi",
@@ -1489,20 +1581,25 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "epigenomics"
-      ],
-      "workflows": [
-        "chromatin"
+        "gene-expression",
+        "chromatin-organization"
       ],
       "operations": [
+        "exploratory-analysis",
+        "descriptive-analysis",
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "dimension-reduction",
         "clustering",
         "descriptive-statistics",
-        "data-management",
-        "visualization"
+        "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [
+        "figure"
+      ],
+      "context_review_needed": []
     },
     {
       "task_id": "totalvi",
@@ -1545,20 +1642,24 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-variation"
-      ],
-      "workflows": [
-        "predictive-modeling",
-        "integration"
+        "gene-expression",
+        "genetic-variation"
       ],
       "operations": [
+        "data-preparation",
+        "predictive-modeling",
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "feature-selection",
         "prediction",
-        "descriptive-statistics",
-        "visualization"
+        "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [
+        "figure"
+      ],
+      "context_review_needed": []
     },
     {
       "task_id": "multivi",
@@ -1599,22 +1700,25 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "epigenomics"
-      ],
-      "workflows": [
-        "predictive-modeling",
-        "integration",
-        "chromatin"
+        "gene-expression",
+        "chromatin-organization"
       ],
       "operations": [
+        "data-preparation",
+        "exploratory-analysis",
+        "predictive-modeling"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "normalization",
         "dimension-reduction",
         "prediction",
-        "data-management",
-        "visualization"
+        "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [
+        "figure"
+      ],
+      "context_review_needed": []
     },
     {
       "task_id": "tangram",
@@ -1658,21 +1762,22 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "epigenomics",
-        "bioimaging"
-      ],
-      "workflows": [
-        "deconvolution",
-        "spatial",
-        "chromatin",
-        "image-analysis"
+        "gene-expression",
+        "chromatin-organization",
+        "morphology"
       ],
       "operations": [
-        "data-management",
-        "visualization"
+        "data-preparation",
+        "spatial-analysis"
       ],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [
+        "data-management"
+      ],
+      "output_tags": [
+        "figure"
+      ],
+      "context_review_needed": []
     },
     {
       "task_id": "spage",
@@ -1716,22 +1821,22 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "association",
-        "predictive-modeling",
-        "model-evaluation",
-        "integration",
-        "spatial"
+        "gene-expression"
       ],
       "operations": [
+        "data-preparation",
+        "predictive-modeling",
+        "spatial-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "normalization",
         "prediction",
         "model-evaluation",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "graphst",
@@ -1774,18 +1879,22 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "integration",
-        "spatial"
+        "gene-expression"
       ],
       "operations": [
+        "exploratory-analysis",
+        "descriptive-analysis",
+        "data-preparation",
+        "spatial-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "clustering",
         "descriptive-statistics",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gimvi",
@@ -1829,21 +1938,27 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "predictive-modeling",
-        "spatial"
+        "gene-expression"
       ],
       "operations": [
+        "exploratory-analysis",
+        "data-preparation",
+        "predictive-modeling",
+        "descriptive-analysis",
+        "spatial-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "dimension-reduction",
         "feature-selection",
         "prediction",
         "descriptive-statistics",
-        "data-management",
-        "visualization"
+        "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [
+        "figure"
+      ],
+      "context_review_needed": []
     },
     {
       "task_id": "sedr",
@@ -1886,22 +2001,25 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "association",
-        "predictive-modeling",
-        "spatial",
-        "network"
+        "gene-expression"
       ],
       "operations": [
+        "data-preparation",
+        "predictive-modeling",
+        "spatial-analysis",
+        "graph-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "normalization",
         "feature-selection",
         "prediction",
-        "data-management",
-        "visualization"
+        "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [
+        "figure"
+      ],
+      "context_review_needed": []
     },
     {
       "task_id": "spagcn",
@@ -1944,23 +2062,25 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "bioimaging"
-      ],
-      "workflows": [
-        "integration",
-        "spatial",
-        "network",
-        "image-analysis"
+        "gene-expression",
+        "morphology"
       ],
       "operations": [
+        "data-preparation",
+        "spatial-analysis",
+        "graph-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "normalization",
         "transformation",
         "feature-selection",
-        "data-management",
-        "visualization"
+        "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [
+        "figure"
+      ],
+      "context_review_needed": []
     },
     {
       "task_id": "cellphonedb",
@@ -2001,22 +2121,27 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
+        "gene-expression",
         "molecular-structure",
-        "immunology"
-      ],
-      "workflows": [
-        "deconvolution",
-        "communication",
-        "database-query"
+        "molecular-interactions"
       ],
       "operations": [
+        "data-preparation",
+        "exploratory-analysis",
+        "information-retrieval",
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "normalization",
         "clustering",
         "record-retrieval",
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "deeptree",
@@ -2057,13 +2182,16 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "association",
-        "database-query"
+        "gene-expression"
       ],
       "operations": [
+        "data-preparation",
+        "exploratory-analysis",
+        "information-retrieval",
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "normalization",
         "feature-selection",
         "clustering",
@@ -2071,7 +2199,8 @@
         "descriptive-statistics",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "scdemon",
@@ -2114,17 +2243,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "association",
-        "network"
+        "gene-expression"
       ],
       "operations": [
-        "dimension-reduction",
-        "visualization"
+        "exploratory-analysis",
+        "graph-analysis"
       ],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [
+        "dimension-reduction"
+      ],
+      "output_tags": [
+        "figure"
+      ],
+      "context_review_needed": []
     },
     {
       "task_id": "deseq2",
@@ -2165,17 +2297,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-sequence"
-      ],
-      "workflows": [
-        "differential-expression"
+        "gene-expression",
+        "nucleotide-sequences"
       ],
       "operations": [
+        "descriptive-analysis",
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "resolvi",
@@ -2218,17 +2353,22 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "spatial"
+        "gene-expression"
       ],
       "operations": [
-        "dimension-reduction",
-        "descriptive-statistics",
-        "visualization"
+        "exploratory-analysis",
+        "descriptive-analysis",
+        "spatial-analysis"
       ],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [
+        "dimension-reduction",
+        "descriptive-statistics"
+      ],
+      "output_tags": [
+        "figure"
+      ],
+      "context_review_needed": []
     },
     {
       "task_id": "novosparc",
@@ -2270,15 +2410,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "data-preparation"
+        "gene-expression"
       ],
       "operations": [
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "normalization"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "cellchat",
@@ -2319,20 +2461,24 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "chemical-biology",
-        "functional-genomics"
-      ],
-      "workflows": [
-        "communication",
-        "network",
-        "database-query"
+        "gene-expression",
+        "molecular-function",
+        "molecular-interactions"
       ],
       "operations": [
-        "record-retrieval",
-        "visualization"
+        "information-retrieval",
+        "graph-analysis"
       ],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [
+        "record-retrieval"
+      ],
+      "output_tags": [
+        "figure"
+      ],
+      "context_review_needed": [
+        "Chemical biology"
+      ]
     },
     {
       "task_id": "seurat-1",
@@ -2375,18 +2521,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "proteomics"
-      ],
-      "workflows": [
-        "integration",
-        "abundance"
+        "gene-expression",
+        "protein-abundance"
       ],
       "operations": [
-        "clustering",
-        "visualization"
+        "exploratory-analysis"
       ],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [
+        "clustering"
+      ],
+      "output_tags": [
+        "figure"
+      ],
+      "context_review_needed": []
     },
     {
       "task_id": "seurat-2",
@@ -2430,21 +2578,24 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "immunology"
-      ],
-      "workflows": [
-        "differential-expression",
-        "cell-annotation",
-        "integration",
-        "spatial"
+        "gene-expression"
       ],
       "operations": [
-        "clustering",
-        "descriptive-statistics",
-        "visualization"
+        "exploratory-analysis",
+        "descriptive-analysis",
+        "spatial-analysis"
       ],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [
+        "clustering",
+        "descriptive-statistics"
+      ],
+      "output_tags": [
+        "figure"
+      ],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "sctransform",
@@ -2486,20 +2637,25 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression"
       ],
       "operations": [
+        "data-preparation",
+        "exploratory-analysis",
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "normalization",
         "dimension-reduction",
         "clustering",
         "descriptive-statistics",
-        "data-management",
-        "visualization"
+        "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [
+        "figure"
+      ],
+      "context_review_needed": []
     },
     {
       "task_id": "singlecellhaystack",
@@ -2542,18 +2698,22 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "differential-expression"
+        "gene-expression"
       ],
       "operations": [
+        "exploratory-analysis",
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "dimension-reduction",
         "feature-selection",
-        "clustering",
-        "visualization"
+        "clustering"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [
+        "figure"
+      ],
+      "context_review_needed": []
     },
     {
       "task_id": "scpnmf",
@@ -2594,18 +2754,21 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "association",
-        "integration"
+        "gene-expression"
       ],
       "operations": [
+        "exploratory-analysis",
+        "data-preparation",
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "dimension-reduction",
         "feature-selection",
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "scry",
@@ -2646,17 +2809,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
+        "gene-expression"
       ],
-      "workflows": [
+      "operations": [
         "data-preparation",
         "exploratory-analysis"
       ],
-      "operations": [
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "feature-selection",
         "clustering"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "scorpius",
@@ -2699,17 +2864,19 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "cell-annotation",
-        "trajectory"
+        "gene-expression"
       ],
       "operations": [
-        "feature-selection",
-        "visualization"
+        "data-preparation"
       ],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [
+        "feature-selection"
+      ],
+      "output_tags": [
+        "figure"
+      ],
+      "context_review_needed": []
     },
     {
       "task_id": "nichenet",
@@ -2750,18 +2917,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "chemical-biology",
-        "functional-genomics",
-        "immunology"
+        "gene-expression",
+        "molecular-function",
+        "molecular-interactions"
       ],
-      "workflows": [
-        "communication",
-        "network",
-        "evidence-ranking"
+      "operations": [
+        "graph-analysis"
       ],
-      "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology",
+        "Immunology"
+      ]
     },
     {
       "task_id": "decoupler--data2",
@@ -2803,15 +2972,16 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-sequence",
-        "immunology"
-      ],
-      "workflows": [
-        "cell-annotation"
+        "gene-expression",
+        "nucleotide-sequences"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "paga--data2",
@@ -2854,17 +3024,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "immunology"
-      ],
-      "workflows": [
-        "trajectory",
-        "network"
+        "gene-expression"
       ],
       "operations": [
+        "exploratory-analysis",
+        "graph-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "clustering"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "destvi--data2",
@@ -2909,16 +3082,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "deconvolution",
-        "spatial"
+        "gene-expression"
       ],
       "operations": [
+        "descriptive-analysis",
+        "spatial-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "leiden--data2",
@@ -2961,18 +3136,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
+        "gene-expression"
       ],
-      "workflows": [
+      "operations": [
         "exploratory-analysis",
         "data-preparation"
       ],
-      "operations": [
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "dimension-reduction",
         "clustering",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "mofa--data2",
@@ -3015,13 +3192,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "integration"
+        "gene-expression"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "triku--data2",
@@ -3064,15 +3241,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "data-preparation"
+        "gene-expression"
       ],
       "operations": [
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "feature-selection"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "hotspot--data2",
@@ -3115,17 +3294,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-variation",
-        "immunology"
-      ],
-      "workflows": [
-        "data-preparation"
+        "gene-expression",
+        "genetic-variation"
       ],
       "operations": [
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Immunology"
+      ]
     },
     {
       "task_id": "scanvi--data2",
@@ -3166,15 +3348,17 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "integration"
+        "gene-expression"
       ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "contrastivevi--data2",
@@ -3215,16 +3399,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "functional-genomics"
-      ],
-      "workflows": [
-        "exploratory-analysis"
+        "gene-expression",
+        "molecular-function"
       ],
       "operations": [
+        "exploratory-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "dimension-reduction"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "peakvi--data2",
@@ -3265,16 +3451,18 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "epigenomics"
-      ],
-      "workflows": [
-        "chromatin"
+        "gene-expression",
+        "chromatin-organization"
       ],
       "operations": [
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "gimvi--data2",
@@ -3318,17 +3506,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics"
-      ],
-      "workflows": [
-        "predictive-modeling",
-        "spatial"
+        "gene-expression"
       ],
       "operations": [
+        "predictive-modeling",
+        "data-preparation",
+        "spatial-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "cellchat--data2",
@@ -3376,14 +3567,16 @@
         "note": "CellChat uses annotated spatial expression and JSON scale factors. A directory named spatial_imaging_data does not imply pixel analysis."
       },
       "scientific_context": [
-        "transcriptomics"
+        "gene-expression",
+        "molecular-interactions"
       ],
-      "workflows": [
-        "communication",
-        "spatial"
+      "operations": [
+        "spatial-analysis"
       ],
-      "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "sctransform--data2",
@@ -3425,20 +3618,22 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-variation"
+        "gene-expression",
+        "genetic-variation"
       ],
-      "workflows": [
+      "operations": [
         "data-preparation",
         "descriptive-analysis"
       ],
-      "operations": [
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "normalization",
         "transformation",
         "descriptive-statistics",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     }
   ]
 }

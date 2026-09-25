@@ -37,17 +37,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "chemical-biology",
-        "functional-genomics",
-        "clinical"
-      ],
-      "workflows": [
-        "descriptive-analysis"
+        "molecular-function",
+        "disease-treatment-response"
       ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology"
+      ]
     },
     {
       "task_id": "PRISM_S4_10_mechanism_family_mining",
@@ -88,24 +91,23 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "genome-sequence",
-        "chemical-biology"
-      ],
-      "workflows": [
-        "association",
-        "model-evaluation",
-        "cell-annotation",
-        "trajectory",
-        "dose-response",
-        "database-query"
+        "genetic-variation",
+        "nucleotide-sequences",
+        "disease-treatment-response"
       ],
       "operations": [
+        "predictive-modeling",
+        "information-retrieval",
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "model-evaluation",
         "record-retrieval",
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "PRISM_V10_C_primary_hit_triage",
@@ -146,14 +148,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
-        "dose-response",
-        "evidence-ranking"
+        "disease-treatment-response"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "de_10_cross_modality_herg_convergence",
@@ -194,22 +195,24 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-sequence",
-        "chemical-biology"
-      ],
-      "workflows": [
-        "enrichment",
-        "predictive-modeling",
-        "molecular-descriptors",
-        "database-query"
+        "nucleotide-sequences",
+        "small-molecule-properties"
       ],
       "operations": [
+        "predictive-modeling",
+        "information-retrieval",
+        "descriptive-analysis",
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "prediction",
         "record-retrieval",
         "descriptive-statistics",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "lee2024_RNA1_raw_scrna_target_specificity",
@@ -252,20 +255,22 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "transcriptomics",
-        "genome-sequence",
-        "chemical-biology",
-        "clinical",
-        "immunology"
-      ],
-      "workflows": [
-        "enrichment",
-        "trajectory"
+        "gene-expression",
+        "nucleotide-sequences",
+        "disease-treatment-response"
       ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology",
+        "Immunology"
+      ]
     },
     {
       "task_id": "lee2024_SRC2_calcium_response_mode",
@@ -306,17 +311,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "chemical-biology",
-        "bioimaging",
+        "morphology",
         "physiology"
       ],
-      "workflows": [
-        "image-analysis"
-      ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology"
+      ]
     },
     {
       "task_id": "DMA_02_mechanism_sign",
@@ -357,21 +365,24 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "genome-sequence",
-        "functional-genomics",
-        "clinical"
-      ],
-      "workflows": [
-        "trajectory",
-        "database-query"
+        "genetic-variation",
+        "nucleotide-sequences",
+        "molecular-function",
+        "disease-treatment-response"
       ],
       "operations": [
+        "information-retrieval",
+        "descriptive-analysis",
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "record-retrieval",
         "descriptive-statistics",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "sp_01_plate_well_position_confounder",
@@ -412,18 +423,20 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "genome-variation",
-        "chemical-biology",
-        "bioimaging"
-      ],
-      "workflows": [
-        "association",
-        "image-analysis"
+        "genetic-variation",
+        "morphology"
       ],
       "operations": [
+        "descriptive-analysis"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology"
+      ]
     },
     {
       "task_id": "CTRL01_no_cc1_gate_for_crizotinib_hits",
@@ -463,16 +476,18 @@
       "annotation_basis": "rule-assisted draft; review required",
       "existing_mapping_status": "unmapped",
       "recipes": [],
-      "scientific_context": [
-        "chemical-biology"
-      ],
-      "workflows": [
+      "scientific_context": [],
+      "operations": [
         "descriptive-analysis"
       ],
-      "operations": [
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology"
+      ]
     },
     {
       "task_id": "H2_toxfree_advance_image",
@@ -513,13 +528,13 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "bioimaging"
-      ],
-      "workflows": [
-        "image-analysis"
+        "morphology"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "txbx_org_organoid_doseresponse_resistant_fraction",
@@ -560,15 +575,14 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "chemical-biology",
-        "bioimaging"
-      ],
-      "workflows": [
-        "image-analysis",
-        "dose-response"
+        "disease-treatment-response",
+        "morphology"
       ],
       "operations": [],
-      "decomposition_status": "provisional"
+      "decomposition_status": "provisional",
+      "analysis_tags": [],
+      "output_tags": [],
+      "context_review_needed": []
     },
     {
       "task_id": "txbx_org_program_ti_exposure_gonogo",
@@ -609,17 +623,21 @@
       "existing_mapping_status": "unmapped",
       "recipes": [],
       "scientific_context": [
-        "chemical-biology",
-        "bioimaging"
-      ],
-      "workflows": [
-        "image-analysis"
+        "morphology"
       ],
       "operations": [
+        "descriptive-analysis",
+        "data-preparation"
+      ],
+      "decomposition_status": "provisional",
+      "analysis_tags": [
         "descriptive-statistics",
         "data-management"
       ],
-      "decomposition_status": "provisional"
+      "output_tags": [],
+      "context_review_needed": [
+        "Chemical biology"
+      ]
     }
   ]
 }
