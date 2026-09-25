@@ -35,7 +35,7 @@ from levanter.models.snowball import (
     SnowballLMHeadModel,
     validate_single_name_config,
 )
-from levanter.testing.cpu_devices import run_on_cpu_devices
+from levanter.testing.cpu_devices import run_on_cpu_devices, skip_if_not_enough_devices
 
 SNOWBALL_LOAD_TEST_DEVICE_COUNT = 8
 
@@ -271,10 +271,9 @@ def test_snowball_rejects_off_recipe(overrides, message):
         SnowballConfig.from_hf_config(hf)
 
 
+@skip_if_not_enough_devices(SNOWBALL_LOAD_TEST_DEVICE_COUNT)
 def test_snowball_load_path_multidevice_sharding():
     """Preserve logits when loading a state dict sharded over eight data devices."""
-    if jax.device_count() < SNOWBALL_LOAD_TEST_DEVICE_COUNT:
-        pytest.skip("Requires eight devices")
     # All parallel dims divide 8 so they actually shard on data=8 (E=16 => router_bias shards).
     cfg = SnowballConfig(
         vocab_size=128,

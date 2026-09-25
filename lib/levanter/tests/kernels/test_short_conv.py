@@ -36,6 +36,7 @@ from levanter.kernels.pallas.short_conv import (
     short_conv_reference,
 )
 from levanter.kernels.pallas.short_conv.pallas_gpu import interpret_mode
+from levanter.testing.cpu_devices import skip_if_not_enough_devices
 
 pytestmark = pytest.mark.skipif(
     jax.default_backend() == "tpu",
@@ -407,7 +408,7 @@ def test_short_conv_rejects_mixed_dtypes():
         short_conv(weight, x)
 
 
-@pytest.mark.skipif(jax.device_count() < 8, reason="Requires eight devices")
+@skip_if_not_enough_devices(8)
 @pytest.mark.parametrize("implementation", ["reference", "pallas_gpu"])
 @pytest.mark.parametrize("context", [2, 4])
 @pytest.mark.parametrize("packed", [True, False])
@@ -467,7 +468,7 @@ def test_context_parallel_halo_matches_the_unsharded_reference(implementation, c
             np.testing.assert_allclose(np.asarray(dw_got), np.asarray(dw_want), rtol=1e-6, atol=1e-6)
 
 
-@pytest.mark.skipif(jax.device_count() < 8, reason="Requires eight devices")
+@skip_if_not_enough_devices(8)
 def test_channel_axis_gate_reads_concrete_shardings_on_an_auto_mesh():
     mesh = Mesh(np.asarray(jax.devices()[:8]).reshape(2, 4), ("data", "model"), axis_types=(AxisType.Auto,) * 2)
     weight = jnp.ones((4, 8), jnp.bfloat16)

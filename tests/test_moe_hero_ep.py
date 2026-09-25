@@ -33,6 +33,7 @@ from levanter.grug.grug_moe import (
     MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC,
     MOE_VALID_ASSIGNMENTS_METRIC,
 )
+from levanter.testing.cpu_devices import skip_if_not_enough_devices
 from levanter.utils.mesh import MeshConfig
 from marin.execution.lazy import StepContext
 from marin.testing.moe import ragged_ep
@@ -631,10 +632,8 @@ def test_ep_newton_schulz_preserves_context_bank_sharding():
     assert output.sharding == NamedSharding(mesh, param_spec)
 
 
+@skip_if_not_enough_devices(2)
 def test_ep_newton_schulz_matches_replicated_path():
-    if jax.device_count() < 2:
-        pytest.skip("Requires 2 devices")
-
     mesh = Mesh(
         np.asarray(jax.devices()[:2]).reshape(1, 1, 1, 2, 1),
         ("replica_dcn", "data", "context", "expert", "model"),
@@ -667,11 +666,9 @@ def test_ep_newton_schulz_matches_replicated_path():
     np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), atol=1e-5, rtol=1e-5)
 
 
+@skip_if_not_enough_devices(4)
 def test_ep_newton_schulz_context_bank_avoids_gather():
     # Output placement alone cannot detect an intermediate gather of the full bank.
-    if jax.device_count() < 4:
-        pytest.skip("Requires 4 devices")
-
     mesh = Mesh(
         np.asarray(jax.devices()[:4]).reshape(1, 1, 4, 1, 1),
         ("replica_dcn", "data", "context", "expert", "model"),
@@ -832,10 +829,8 @@ def test_odd_depth_config_is_not_silently_rounded():
     assert cfg.num_layers == 3
 
 
+@skip_if_not_enough_devices(4)
 def test_hybrid_kv_branches_agree_on_sharding_when_model_axis_is_wide():
-    if jax.device_count() < 4:
-        pytest.skip("Requires 4 devices")
-
     mesh = Mesh(
         np.asarray(jax.devices()[:4]).reshape(1, 1, 1, 2, 2),
         ("replica_dcn", "data", "context", "expert", "model"),

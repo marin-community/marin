@@ -7,9 +7,10 @@ import pytest
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
 from levanter.sharding import partitioning_axes, partition_spec_of
+from levanter.testing.cpu_devices import skip_if_not_enough_devices
 
 
-@pytest.mark.skipif(jax.device_count() < 2, reason="Requires two devices")
+@skip_if_not_enough_devices(2)
 @pytest.mark.parametrize("axis_type", [AxisType.Auto, AxisType.Explicit])
 def test_partition_inspection_preserves_concrete_and_traced_placement(axis_type):
     mesh = Mesh(np.array(jax.devices()[:2]).reshape(2, 1), ("context", "model"), axis_types=(axis_type, axis_type))

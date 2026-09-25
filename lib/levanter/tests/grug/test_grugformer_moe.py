@@ -40,6 +40,7 @@ from levanter.grug.grug_moe import (
     _expert_granular_a2a_params,
     moe_mlp,
 )
+from levanter.testing.cpu_devices import skip_if_not_enough_devices
 from levanter.utils.activation import ActivationFunctionEnum
 
 
@@ -1136,6 +1137,7 @@ def test_fixed_pooled_wave_all_to_all_reports_sender_and_receiver_drops():
     assert int(overflow.receiver_dropped) == 3
 
 
+@skip_if_not_enough_devices(4)
 @pytest.mark.parametrize("implementation", ["ring", "fixed_all_to_all", "fixed_pooled_wave_all_to_all"])
 @pytest.mark.parametrize(
     "token_valid",
@@ -1146,9 +1148,6 @@ def test_portable_ep_backends_match_dense_cross_shard_value_and_gradients(
     implementation: MoeImplementation,
     token_valid: list[bool],
 ):
-    if jax.device_count() < 4:
-        pytest.skip("Requires 4 devices")
-
     mesh = Mesh(
         np.asarray(jax.devices()[:4]).reshape(2, 2, 1),
         axis_names=("data", "expert", "model"),

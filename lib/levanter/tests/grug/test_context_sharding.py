@@ -16,8 +16,9 @@ from jax.sharding import AxisType, Mesh, reshard, set_mesh
 
 from levanter.grug.grug_moe import MoEExpertMlp
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
+from levanter.testing.cpu_devices import skip_if_not_enough_devices
 
-pytestmark = pytest.mark.skipif(jax.device_count() < 4, reason="Requires four devices")
+pytestmark = skip_if_not_enough_devices(4)
 
 BATCH_AXES = ("replica_dcn", "data", "expert")
 
