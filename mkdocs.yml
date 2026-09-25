@@ -80,6 +80,14 @@ nav:
       - Lazy artifacts: explanations/lazy-artifacts.md
       - Guidelines: explanations/guidelines.md
   - Experiments:
+      - Computational Biology Tasks:
+          - Overview: experiments/bio-task-generation/index.md
+          - Requirements: experiments/bio-task-generation/requirements.md
+          - Repository Discovery: experiments/bio-task-generation/discovery.md
+          - Task Authoring: experiments/bio-task-generation/task-authoring.md
+          - Validation: experiments/bio-task-generation/validation.md
+          - Storage and Publication: experiments/bio-task-generation/storage.md
+          - Transcriptomics Examples: experiments/bio-task-generation/examples/transcriptomics.md
       - Daily Ferry Log: experiments/daily-ferry-log.md
       - Report Index: reports/index.md
       - Agent MoE Experiment Digest: reports/agent-moe-experiments.md
