@@ -29,31 +29,29 @@ gh workflow run ops-pulumi-rollout.yaml --ref main -f service=echo
 
 ## Agent prose cleanup
 
-`ops-agent-prose-cleanup.yaml` cleans issue and PR descriptions carrying the
-`agent-generated` label. It runs when an item is opened, edited, reopened, or
-labeled. The workflow executes `scripts/ci/github_prose_cleanup.py` from the
-default branch; `pull_request_target` never checks out the PR head.
+`ops-agent-prose-cleanup.yaml` launches a Loom session for an issue or PR carrying
+the `agent-generated` label. Its goal directs the session to follow the
+writing-style guide and apply the archive, validation, and stale-body checks
+in `scripts/ci/github_prose_cleanup.py` before any update. Actions checks out
+only the trusted default-branch launch action. The `marin-prose-cleanup` marker prevents an edit
+from retriggering another cleanup.
 
-Claude reads the common writing-style guide, the AI-writing checklist, and the
-applicable issue or pull request guide from `.agents/skills/writing-style/`, then
-rewrites the description as a permanent record for a technical reader. The
-workflow prompt narrows that policy to a soft edit: preserve source facts,
-measurements, caveats, links, and useful code examples; do not import facts from
-the diff or comments; do not target a word count; and leave compliant text and
-titles unchanged.
+## Agentic lint
 
-The model job has read-only repository permissions, receives only the filesystem
-`Read` tool, and returns a schema-validated body. A separate write job runs the
-Python finalizer, which applies deterministic presentation checks outside fenced
-and inline code, rejects empty or oversized rewrites, and prepares the GitHub
-update.
+`agentic-lint.yaml` launches a Loom lint review on each eligible PR head,
+including PRs opened by `marin-ops-agent[bot]`. The launcher removes a prior
+`agentic-lint` label when the head changes. The Loom session runs the read-only
+lint catalog review, reports findings, checks that the PR head still matches,
+then adds the label. The `pull_request` policy job remains red until that label
+is present. Loom's `agentic-lint` profile and the workflow's OIDC federation are
+declared in `infra/loom/Pulumi.marin-loom.yaml`; the GitHub profile variable is
+published from `infra/pulumi/github`.
 
-Before an edit, the workflow stores the exact prior description in a collapsed
-`github-actions[bot]` comment. The edited description ends with an `Original
-description` link to that comment. Content hashes make archive creation
-idempotent across retries, and the workflow rechecks the current description
-before writing so a queued run cannot overwrite a newer edit. It skips cleanup
-when the archive or updated body would exceed GitHub's size limit.
+Other GitHub agent entry points use the `github-automation` Loom profile.
+Canary failure workflows launch an independent triage session and continue to
+send the immediate Slack fallback notification. `ops-iris-screenshot-review.yaml`
+reads the artifact from a completed `Marin - Unit` run and launches a Loom
+visual review only when screenshots were uploaded.
 
 ## External dependency updates
 

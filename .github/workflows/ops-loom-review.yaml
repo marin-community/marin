@@ -5,7 +5,7 @@ name: "Ops - Loom Review"
 # SHA after Loom verifies this workflow's OIDC identity.
 on:
   pull_request_target:
-    types: [opened, ready_for_review, reopened]
+    types: [opened, ready_for_review, reopened, synchronize]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
@@ -19,7 +19,8 @@ jobs:
       (
         github.event.pull_request.author_association == 'OWNER' ||
         github.event.pull_request.author_association == 'MEMBER' ||
-        github.event.pull_request.author_association == 'COLLABORATOR'
+        github.event.pull_request.author_association == 'COLLABORATOR' ||
+        github.event.pull_request.user.login == 'marin-ops-agent[bot]'
       )
     runs-on: ubuntu-latest
     timeout-minutes: 5

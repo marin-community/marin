@@ -16,8 +16,7 @@ on:
 
 permissions:
   contents: read
-  issues: write    # claude triage files issues
-  id-token: write  # claude-code-action OIDC
+  id-token: write  # Loom federation OIDC
 
 jobs:
   canary-ferry:
@@ -118,8 +117,8 @@ jobs:
 
       # Bound the wait below the job timeout (360) so a hung ferry fails this
       # *step* rather than tripping the job timeout. A step timeout is failure(),
-      # which keeps the runner alive and lets Claude triage run with its full
-      # budget; a job timeout is cancelled(), which force-kills triage after
+      # which keeps the runner alive and lets the Loom launch run
+      # before the job deadline; a job timeout is cancelled(), which force-kills triage after
       # GitHub's short cancellation grace (exit 143). --child-wait-timeout only
       # bounds the queue wait — once a child is RUNNING the monitor relies on
       # this wall clock. Healthy runs finish in ~2h, so 300 leaves 60m for
@@ -196,35 +195,20 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
-      - name: Claude triage
-        id: claude_triage
+      - name: Launch Loom triage
+        id: loom_triage
         if: (failure() || cancelled()) && github.event_name == 'schedule'
-        uses: ./.github/actions/claude-triage
-        timeout-minutes: 30
+        uses: ./.github/actions/loom-canary-triage
+        timeout-minutes: 5
         with:
-          oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
+          profile: ${{ vars.LOOM_GITHUB_AUTOMATION_PROFILE }}
           lane: tpu
           job-id: ${{ steps.submit.outputs.job_id }}
           run-id: ${{ env.RUN_ID }}
           iris-config: ${{ env.IRIS_CONFIG }}
           wandb-entity: ${{ env.WANDB_ENTITY }}
           wandb-project: ${{ env.WANDB_PROJECT }}
-          wandb-api-key: ${{ secrets.WANDB_API_KEY }}
           gha-run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
-      # Upload Claude's Slack message (if it was written) so the separate
-      # notify-slack job can pick it up. We run Slack notify in a separate
-      # job because a job-level timeout can force-kill this runner before
-      # in-job steps after Claude triage ever execute — see
-      # https://github.com/marin-community/marin/actions/runs/24498461666.
-      - name: Upload Slack message
-        if: failure() || cancelled()
-        uses: actions/upload-artifact@v7
-        with:
-          name: slack-message
-          path: slack_message.md
-          retention-days: 1
-          if-no-files-found: ignore
 
       # Keep this last so expected capacity exhaustion does not trigger the
       # failure-gated diagnostics and scheduled triage above.

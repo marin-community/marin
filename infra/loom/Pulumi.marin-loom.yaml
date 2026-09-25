@@ -149,6 +149,50 @@ config:
         - marin-community/marin
       allowedTools: []
       mcpAccess: *builtinMcpAccess
+    agentic-lint:
+      agent: codex
+      description: Review pull-request lint catalog findings at an immutable head
+      model: *codexModel
+      effort: xhigh
+      protocol: acp
+      mode: auto
+      class: automation
+      strict: true
+      envClear: true
+      ambientAllowlist: []
+      idleArchiveSeconds: 3600
+      maxConcurrent: 4
+      turnBudget: 200
+      prelude: weaver
+      instructionsFile: profiles/agentic-lint/AGENTS.md
+      env: *loomIrisUser
+      restricted: false
+      githubRepositories:
+        - marin-community/marin
+      allowedTools: []
+      mcpAccess: *builtinMcpAccess
+    github-automation:
+      agent: codex
+      description: Run trusted GitHub and scheduled Marin agent tasks
+      model: *codexModel
+      effort: xhigh
+      protocol: acp
+      mode: auto
+      class: automation
+      strict: true
+      envClear: true
+      ambientAllowlist: []
+      idleArchiveSeconds: 3600
+      maxConcurrent: 8
+      turnBudget: 250
+      prelude: weaver
+      instructionsFile: profiles/github-automation/AGENTS.md
+      env: *loomIrisUser
+      restricted: false
+      githubRepositories:
+        - marin-community/marin
+      allowedTools: []
+      mcpAccess: *builtinMcpAccess
     codehealth-refinement:
       agent: codex
       description: Refine agentic-lint from persisted review and lint activity
@@ -219,11 +263,90 @@ config:
       serviceAccountId: marin-grafana
       createServiceAccount: false
   marin-loom:githubFederations:
-    - name: fork-ferry
+    - name: agentic-lint
       repositoryId: &marinRepositoryId "775839592"
+      workflowRef: marin-community/marin/.github/workflows/agentic-lint.yaml@refs/heads/main
+      profile: agentic-lint
+      serviceTag: agentic-lint
+      event: pull_request_target
+      ref: refs/heads/main
+    - name: fork-ferry
+      repositoryId: *marinRepositoryId
       workflowRef: marin-community/marin/.github/workflows/ops-fork-ferry.yaml@refs/heads/main
       profile: fork-ferry
       serviceTag: fork-ferry
+      ref: refs/heads/main
+    - name: ops-claude
+      repositoryId: *marinRepositoryId
+      workflowRef: marin-community/marin/.github/workflows/ops-claude.yaml@refs/heads/main
+      profile: github-automation
+      serviceTag: github-automation
+    - name: nightshift-cleanup
+      repositoryId: *marinRepositoryId
+      workflowRef: marin-community/marin/.github/workflows/ops-nightshift-cleanup.yaml@refs/heads/main
+      profile: github-automation
+      serviceTag: github-automation
+      ref: refs/heads/main
+    - name: nightshift-ci-tests
+      repositoryId: *marinRepositoryId
+      workflowRef: marin-community/marin/.github/workflows/ops-nightshift-ci-tests.yaml@refs/heads/main
+      profile: github-automation
+      serviceTag: github-automation
+      ref: refs/heads/main
+    - name: nightshift-doc-drift
+      repositoryId: *marinRepositoryId
+      workflowRef: marin-community/marin/.github/workflows/ops-nightshift-doc-drift.yaml@refs/heads/main
+      profile: github-automation
+      serviceTag: github-automation
+      ref: refs/heads/main
+    - name: agent-prose-cleanup
+      repositoryId: *marinRepositoryId
+      workflowRef: marin-community/marin/.github/workflows/ops-agent-prose-cleanup.yaml@refs/heads/main
+      profile: github-automation
+      serviceTag: github-automation
+      ref: refs/heads/main
+    - name: canary-ferry
+      repositoryId: *marinRepositoryId
+      workflowRef: marin-community/marin/.github/workflows/marin-canary-ferry.yaml@refs/heads/main
+      profile: github-automation
+      serviceTag: github-automation
+      ref: refs/heads/main
+    - name: canary-ferry-coreweave
+      repositoryId: *marinRepositoryId
+      workflowRef: marin-community/marin/.github/workflows/marin-canary-ferry-coreweave.yaml@refs/heads/main
+      profile: github-automation
+      serviceTag: github-automation
+      ref: refs/heads/main
+    - name: canary-datakit-tier1
+      repositoryId: *marinRepositoryId
+      workflowRef: marin-community/marin/.github/workflows/marin-canary-datakit-tier1.yaml@refs/heads/main
+      profile: github-automation
+      serviceTag: github-automation
+      ref: refs/heads/main
+    - name: canary-datakit-tier2
+      repositoryId: *marinRepositoryId
+      workflowRef: marin-community/marin/.github/workflows/marin-canary-datakit-tier2.yaml@refs/heads/main
+      profile: github-automation
+      serviceTag: github-automation
+      ref: refs/heads/main
+    - name: canary-datakit-tier3
+      repositoryId: *marinRepositoryId
+      workflowRef: marin-community/marin/.github/workflows/marin-canary-datakit-tier3.yaml@refs/heads/main
+      profile: github-automation
+      serviceTag: github-automation
+      ref: refs/heads/main
+    - name: canary-grug-multislice
+      repositoryId: *marinRepositoryId
+      workflowRef: marin-community/marin/.github/workflows/marin-canary-grug-multislice.yaml@refs/heads/main
+      profile: github-automation
+      serviceTag: github-automation
+      ref: refs/heads/main
+    - name: iris-screenshot-review
+      repositoryId: *marinRepositoryId
+      workflowRef: marin-community/marin/.github/workflows/ops-iris-screenshot-review.yaml@refs/heads/main
+      profile: github-automation
+      serviceTag: github-automation
+      event: workflow_run
       ref: refs/heads/main
     - name: pr-review
       repositoryId: *marinRepositoryId
