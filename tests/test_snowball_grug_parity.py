@@ -22,9 +22,9 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from haliax import Axis
-from jax.sharding import AxisType, Mesh
 from jax.sharding import PartitionSpec as P
 from levanter.grug.attention import AttentionMask
+from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 
 import experiments.grug.moe.model as gm
@@ -105,17 +105,8 @@ def _capture_snowball(model: SnowballLMHeadModel, tokens: jax.Array) -> list[np.
     return outs
 
 
-@pytest.fixture
-def mesh():
-    return Mesh(
-        np.asarray(jax.devices()[:1]).reshape((1,) * 5),
-        ("replica_dcn", "data", "context", "expert", "model"),
-        axis_types=(AxisType.Explicit,) * 5,
-    )
-
-
-def test_snowball_matches_grug_experiment_per_layer_and_logits(mesh):
-    with jax.set_mesh(mesh):
+def test_snowball_matches_grug_experiment_per_layer_and_logits():
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
         exp = gm.Transformer.init(_experiment_config(), key=jax.random.key(7))
         snow = SnowballLMHeadModel.init(Axis("vocab", _COMMON["vocab_size"]), _snowball_config(), key=jax.random.key(0))
         snow = snow.from_state_dict(exp.to_state_dict())
@@ -142,8 +133,8 @@ def test_snowball_matches_grug_experiment_per_layer_and_logits(mesh):
 
 
 @pytest.mark.parametrize("seq_len", [1, 4, 5, 16])
-def test_snowball_matches_grug_across_lengths(seq_len, mesh):
-    with jax.set_mesh(mesh):
+def test_snowball_matches_grug_across_lengths(seq_len):
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
         exp = gm.Transformer.init(_experiment_config(), key=jax.random.key(11))
         snow = SnowballLMHeadModel.init(Axis("vocab", _COMMON["vocab_size"]), _snowball_config(), key=jax.random.key(1))
         snow = snow.from_state_dict(exp.to_state_dict())

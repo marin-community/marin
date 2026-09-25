@@ -36,6 +36,7 @@ from levanter.kernels.pallas.short_conv import (
     short_conv_reference,
 )
 from levanter.kernels.pallas.short_conv.pallas_gpu import interpret_mode
+from levanter.testing.cpu_devices import run_on_cpu_devices
 
 pytestmark = pytest.mark.skipif(
     jax.default_backend() == "tpu",
@@ -407,35 +408,53 @@ def test_short_conv_rejects_mixed_dtypes():
         short_conv(weight, x)
 
 
-@pytest.mark.skipif(jax.device_count() < 8, reason="Requires eight devices")
-@pytest.mark.parametrize("implementation", ["reference", "pallas_gpu"])
-@pytest.mark.parametrize("context", [2, 4])
-@pytest.mark.parametrize("packed", [True, False])
-@pytest.mark.parametrize("width", [1, 4, 17])
-@pytest.mark.parametrize("dtype", [jnp.bfloat16, jnp.float32])
-def test_context_parallel_halo_matches_the_unsharded_reference(implementation, context, packed, width, dtype):
-    """Check packed/unpacked values and gradients across context shards and halo sizes."""
-    batch, seq, channels = 2, 32, 8
+_HALO_SCRIPT = """
+import itertools
+
+import jax
+import jax.numpy as jnp
+import numpy as np
+from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+
+from levanter.kernels.pallas.short_conv import ShortConvBlockSizes, short_conv, short_conv_reference
+from levanter.kernels.pallas.short_conv.pallas_gpu import interpret_mode
+
+IMPLEMENTATION = "__IMPLEMENTATION__"
+BATCH, SEQ, CHANNELS = 2, 32, 8
+DEVICES = np.asarray(jax.devices())
+assert DEVICES.size == 8
+
+
+def bits(array):
+    array = np.asarray(array)
+    return array.view({2: np.uint16, 4: np.uint32}[array.dtype.itemsize])
+
+
+def inputs(width, packed, dtype):
+    rng = np.random.default_rng(width)
+    weight = jnp.asarray(rng.standard_normal((width, CHANNELS)) * 0.5, dtype)
+    x = jnp.asarray(rng.standard_normal((BATCH, SEQ, CHANNELS)), dtype)
+    cotangent = jnp.asarray(rng.standard_normal((BATCH, SEQ, CHANNELS)), dtype)
+    if not packed:
+        return weight, x, cotangent, None
+    # Short runs, and a document boundary inside the context=4 left halo.
+    seg = np.concatenate([np.zeros((BATCH, 5)), np.full((BATCH, 2), 7), np.full((BATCH, SEQ - 7), 9)], axis=1)
+    return weight, x, cotangent, jnp.asarray(seg, jnp.int32)
+
+
+def check(context, packed, width):
+    # `data` splits the batch; what is left goes on an axis nothing names, so every device is in
+    # the mesh. Blocks are small so the padded local block spans several sequence tiles with a
+    # ragged tail, and just wide enough for the kernel's `s_block_size >= kernel_size - 1` rule.
     mesh = Mesh(
-        np.asarray(jax.devices()[:8]).reshape(batch, context, 8 // (batch * context)),
+        DEVICES.reshape(BATCH, context, 8 // (BATCH * context)),
         ("data", "context", "spare"),
         axis_types=(AxisType.Explicit,) * 3,
     )
     blocks = ShortConvBlockSizes(s_block_size=max(8, width - 1), c_block_size=8)
-    rng = np.random.default_rng(width)
-    weight = jnp.asarray(rng.standard_normal((width, channels)) * 0.5, dtype)
-    x = jnp.asarray(rng.standard_normal((batch, seq, channels)), dtype)
-    cotangent = jnp.asarray(rng.standard_normal((batch, seq, channels)), dtype)
-    segment_ids = None
-    if packed:
-        # Put a document boundary inside the context=4 left halo.
-        segment_ids = jnp.asarray(
-            np.concatenate([np.zeros((batch, 5)), np.full((batch, 2), 7), np.full((batch, seq - 7), 9)], axis=1),
-            jnp.int32,
-        )
 
     def conv(w, xx, seg):
-        return short_conv(w, xx, seg, implementation=implementation, block_sizes=blocks, batch_axes=("data",))
+        return short_conv(w, xx, seg, implementation=IMPLEMENTATION, block_sizes=blocks, batch_axes=("data",))
 
     def loss(w, xx, seg):
         return jnp.sum(conv(w, xx, seg) * cotangent)
@@ -443,37 +462,77 @@ def test_context_parallel_halo_matches_the_unsharded_reference(implementation, c
     def reference_loss(w, xx, seg):
         return jnp.sum(short_conv_reference(w, xx, seg) * cotangent)
 
-    with jax.set_mesh(mesh), interpret_mode():
-        x_sharded = jax.device_put(x, NamedSharding(mesh, P("data", "context", None)))
-        seg_sharded = None
-        if segment_ids is not None:
-            seg_sharded = jax.device_put(segment_ids, NamedSharding(mesh, P("data", "context")))
+    for dtype in (jnp.bfloat16, jnp.float32):
+        weight, x, cotangent, segment_ids = inputs(width, packed, dtype)
+        with jax.set_mesh(mesh), interpret_mode():
+            x_sharded = jax.device_put(x, NamedSharding(mesh, P("data", "context", None)))
+            seg_sharded = None
+            if segment_ids is not None:
+                seg_sharded = jax.device_put(segment_ids, NamedSharding(mesh, P("data", "context")))
 
-        if width - 1 > seq // context:
-            with pytest.raises(ValueError, match="halo"):
-                conv(weight, x_sharded, seg_sharded)
-            return
+            if width - 1 > SEQ // context:
+                try:
+                    conv(weight, x_sharded, seg_sharded)
+                except ValueError as error:
+                    assert "halo" in str(error), error
+                else:
+                    raise AssertionError("a halo longer than the local sequence must be rejected")
+                return
 
-        got = jax.jit(conv)(weight, x_sharded, seg_sharded)
-        want = short_conv_reference(weight, x, segment_ids)
-        if dtype == jnp.bfloat16:
-            np.testing.assert_array_equal(_bits(got), _bits(want))
-        else:
-            # CPU fusion and the sum of partial gradients can change fp32 rounding.
-            np.testing.assert_allclose(np.asarray(got), np.asarray(want), rtol=1e-6, atol=1e-6)
-            dw_want, dx_want = jax.jit(jax.grad(reference_loss, argnums=(0, 1)))(weight, x, segment_ids)
-            dw_got, dx_got = jax.jit(jax.grad(loss, argnums=(0, 1)))(weight, x_sharded, seg_sharded)
-            np.testing.assert_allclose(np.asarray(dx_got), np.asarray(dx_want), rtol=1e-6, atol=1e-6)
-            np.testing.assert_allclose(np.asarray(dw_got), np.asarray(dw_want), rtol=1e-6, atol=1e-6)
+            # The bf16 forward is bitwise. XLA:CPU contracts the fp32 reference into FMAs
+            # differently per fusion, and dx reassociates at shard boundaries in any dtype
+            # (see the `short_conv` docstring), so those are held to fp32 rounding instead.
+            got = jax.jit(conv)(weight, x_sharded, seg_sharded)
+            want = short_conv_reference(weight, x, segment_ids)
+            if dtype == jnp.bfloat16:
+                np.testing.assert_array_equal(bits(got), bits(want))
+            else:
+                np.testing.assert_allclose(np.asarray(got), np.asarray(want), rtol=1e-6, atol=1e-6)
+                dw_want, dx_want = jax.jit(jax.grad(reference_loss, argnums=(0, 1)))(weight, x, segment_ids)
+                dw_got, dx_got = jax.jit(jax.grad(loss, argnums=(0, 1)))(weight, x_sharded, seg_sharded)
+                np.testing.assert_allclose(np.asarray(dx_got), np.asarray(dx_want), rtol=1e-6, atol=1e-6)
+                np.testing.assert_allclose(np.asarray(dw_got), np.asarray(dw_want), rtol=1e-6, atol=1e-6)
 
 
-@pytest.mark.skipif(jax.device_count() < 8, reason="Requires eight devices")
-def test_channel_axis_gate_reads_concrete_shardings_on_an_auto_mesh():
-    mesh = Mesh(np.asarray(jax.devices()[:8]).reshape(2, 4), ("data", "model"), axis_types=(AxisType.Auto,) * 2)
-    weight = jnp.ones((4, 8), jnp.bfloat16)
-    x = jax.device_put(jnp.ones((2, 32, 8), jnp.bfloat16), NamedSharding(mesh, P("data", None, "model")))
-    with jax.set_mesh(mesh), interpret_mode(), pytest.raises(ValueError, match="unsharded channel axis"):
+for case in itertools.product((2, 4), (True, False), (1, 4, 17)):
+    try:
+        check(*case)
+    except Exception as error:
+        raise AssertionError(f"context, packed, width = {case}") from error
+"""
+
+_AUTO_MESH_GATE_SCRIPT = """
+import jax
+import jax.numpy as jnp
+import numpy as np
+from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+
+from levanter.kernels.pallas.short_conv import ShortConvBlockSizes, short_conv
+from levanter.kernels.pallas.short_conv.pallas_gpu import interpret_mode
+
+# A concrete array on an Auto-axis mesh shows its placement only on `array.sharding`; the
+# channel gate must still see it rather than reshard the axis away.
+mesh = Mesh(np.asarray(jax.devices()).reshape(2, 4), ("data", "model"), axis_types=(AxisType.Auto,) * 2)
+weight = jnp.ones((4, 8), jnp.bfloat16)
+x = jax.device_put(jnp.ones((2, 32, 8), jnp.bfloat16), NamedSharding(mesh, P("data", None, "model")))
+with jax.set_mesh(mesh), interpret_mode():
+    try:
         short_conv(weight, x, implementation="pallas_gpu", block_sizes=ShortConvBlockSizes(8, 8))
+    except ValueError as error:
+        assert "unsharded channel axis" in str(error), error
+    else:
+        raise AssertionError("a concrete channel-sharded array slipped past the gate")
+"""
+
+
+@pytest.mark.parametrize("implementation", ["reference", "pallas_gpu"])
+def test_context_parallel_halo_matches_the_unsharded_reference(implementation):
+    """Check packed/unpacked values and gradients across context shards and halo sizes."""
+    run_on_cpu_devices(_HALO_SCRIPT.replace("__IMPLEMENTATION__", implementation), device_count=8)
+
+
+def test_channel_axis_gate_reads_concrete_shardings_on_an_auto_mesh():
+    run_on_cpu_devices(_AUTO_MESH_GATE_SCRIPT, device_count=8)
 
 
 @pytest.mark.parametrize("width", [1, 4])

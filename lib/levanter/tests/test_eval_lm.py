@@ -44,13 +44,12 @@ def test_eval_lm():
                 data=data_config,
                 model=model_config,
                 trainer=eval_lm.TrainerConfig(
-                    per_device_eval_parallelism=1,
+                    per_device_eval_parallelism=len(jax.devices()),
                     max_eval_batches=1,
                     tracker=NoopConfig(),
                     require_accelerator=False,
                     distributed=DistributedConfig(initialize_jax_distributed=False),
                 ),
-                max_eval_length=model_config.max_seq_len,
                 checkpoint_path=f"{f}/ckpt",
             )
             eval_lm.main(config)
@@ -90,13 +89,12 @@ def test_eval_lm_from_hf(local_gpt2_tokenizer_path):
                 data=data_config,
                 model=model_config,
                 trainer=eval_lm.TrainerConfig(
-                    per_device_eval_parallelism=1,
+                    per_device_eval_parallelism=len(jax.devices()),
                     max_eval_batches=1,
                     tracker=NoopConfig(),
                     require_accelerator=False,
                     distributed=DistributedConfig(initialize_jax_distributed=False),
                 ),
-                max_eval_length=model_config.max_seq_len,
                 checkpoint_path=f"{f}/ckpt",
             )
             eval_lm.main(config)

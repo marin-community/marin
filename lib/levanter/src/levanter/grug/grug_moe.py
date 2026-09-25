@@ -293,6 +293,8 @@ class QBRoutedMoE(eqx.Module):
             selected_experts = selected_experts[:, :-1]
             selected_logits = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
             combine_weights = jax.nn.sigmoid(selected_logits)
+            # Keep sigmoid rounding consistent when AD fuses expert-weight renormalization.
+            combine_weights = jax.lax.optimization_barrier(combine_weights)
             combine_weights *= self.routing_renorm_sum / (jnp.sum(combine_weights, axis=-1, keepdims=True) + 1e-9)
             combine_weights = combine_weights.astype(x.dtype)
 
@@ -330,6 +332,9 @@ class QBRoutedMoE(eqx.Module):
             routed, dispatch_counts = cast(tuple[Float[Array, "T D"], MoeDispatchCounts], moe_out)
             router_stats["capacity_overflow"] = dispatch_counts.dropped.astype(jnp.float32)
             router_stats["skipped_assignments"] = dispatch_counts.padding_skipped.astype(jnp.float32)
+            router_stats["routing_assignments"] = jnp.asarray(x.shape[0] * self.num_experts_per_token, dtype=jnp.int32)
+            router_stats["routing_sender_drops"] = dispatch_counts.sender_dropped
+            router_stats["routing_receiver_drops"] = dispatch_counts.receiver_dropped
         else:
             routed = cast(Float[Array, "T D"], moe_out)
             router_stats["capacity_overflow"] = jnp.zeros((), dtype=jnp.float32)

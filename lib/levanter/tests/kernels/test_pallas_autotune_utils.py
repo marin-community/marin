@@ -14,7 +14,7 @@ from levanter.kernels.pallas import autotune_utils
 
 
 def test_autotune_utils_wraps_in_shard_map_for_global_named_sharding():
-    mesh = Mesh(jax.devices()[:4], ("data",))
+    mesh = Mesh(jax.devices(), ("data",))
     x = jax.device_put(jnp.ones((4, 8), dtype=jnp.float32), NamedSharding(mesh, P("data", None)))
     y = jax.device_put(jnp.zeros((4,), dtype=jnp.int32), NamedSharding(mesh, P("data")))
     w = jax.device_put(jnp.ones((8, 16), dtype=jnp.float32), NamedSharding(mesh, P(None, None)))
@@ -38,7 +38,7 @@ def test_autotune_utils_wraps_in_shard_map_for_global_named_sharding():
 
 
 def test_autotune_utils_skip_nested_shard_map_for_manual_sharding():
-    mesh = Mesh(jax.devices()[:4], ("data",))
+    mesh = Mesh(jax.devices(), ("data",))
     x = jax.device_put(jnp.ones((4, 8), dtype=jnp.float32), NamedSharding(mesh, P("data", None)))
     y = jax.device_put(jnp.zeros((4,), dtype=jnp.int32), NamedSharding(mesh, P("data")))
     w = jax.device_put(jnp.ones((8, 16), dtype=jnp.float32), NamedSharding(mesh, P(None, None)))
@@ -72,7 +72,7 @@ def test_autotune_utils_skip_nested_shard_map_for_manual_sharding():
 
 
 def test_shape_dtype_struct_for_benchmark_drops_manual_sharding_from_shard_map_tracer():
-    mesh = Mesh(jax.devices()[:4], ("data",))
+    mesh = Mesh(jax.devices(), ("data",))
     sharding = NamedSharding(mesh, P("data", None))
     x = jax.device_put(jnp.ones((4, 8), dtype=jnp.float32), sharding)
 
@@ -99,7 +99,7 @@ def test_shape_dtype_struct_for_benchmark_drops_manual_sharding_from_shard_map_t
 
 
 def test_benchmark_lowering_args_preserve_tracers():
-    mesh = Mesh(jax.devices()[:4], ("data",))
+    mesh = Mesh(jax.devices(), ("data",))
     sharding = NamedSharding(mesh, P("data", None))
     x = jax.device_put(jnp.ones((4, 8), dtype=jnp.float32), sharding)
 
