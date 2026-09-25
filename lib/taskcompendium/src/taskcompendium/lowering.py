@@ -4,8 +4,11 @@
 """Export a direct-chat TaskSpec rendering as a Harbor task package."""
 
 import dataclasses
+import hashlib
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 
 from taskcompendium.models import AnswerFormat, ExactAnswer, Source, TaskRequirements, TaskSpec
@@ -24,6 +27,61 @@ class HarborTaskBinding:
     def __post_init__(self) -> None:
         if self.environment != DIRECT_CHAT_ENVIRONMENT or self.tools:
             raise ValueError("This lowering supports direct chat without tools")
+
+
+@dataclass(frozen=True)
+class LoweringCandidate:
+    """A compatible rendering and Harbor environment binding."""
+
+    rendering: Rendering
+    binding: HarborTaskBinding
+
+
+class SelectionPolicy(StrEnum):
+    """How a caller chooses from compatible lowerings."""
+
+    ALL = "all"
+    FIRST = "first"
+    SAMPLE = "sample"
+
+
+def compatible_lowerings(
+    specification: TaskSpec,
+    rendering_library: Sequence[Rendering],
+    bindings: Sequence[HarborTaskBinding],
+) -> tuple[LoweringCandidate, ...]:
+    """Enumerate renderings and bindings that preserve this task's contract."""
+    if specification.requirements.capabilities or specification.requirements.action_interfaces:
+        return ()
+    return tuple(
+        LoweringCandidate(rendering, binding)
+        for rendering in rendering_library
+        if rendering.answer_format in specification.permitted_answer_formats
+        for binding in bindings
+    )
+
+
+def select_lowerings(
+    candidates: Sequence[LoweringCandidate],
+    policy: SelectionPolicy,
+    *,
+    rng_key: int | None = None,
+) -> tuple[LoweringCandidate, ...]:
+    """Select all, the first, or one keyed sample without global RNG state."""
+    if not candidates:
+        raise ValueError("No compatible lowerings")
+    if policy == SelectionPolicy.SAMPLE:
+        if rng_key is None:
+            raise ValueError("Sample selection requires an RNG key")
+        digest = hashlib.sha256(str(rng_key).encode()).digest()
+        return (candidates[int.from_bytes(digest, "big") % len(candidates)],)
+    if rng_key is not None:
+        raise ValueError("An RNG key is only used by sample selection")
+    if policy == SelectionPolicy.ALL:
+        return tuple(candidates)
+    if policy == SelectionPolicy.FIRST:
+        return (candidates[0],)
+    raise ValueError(f"Unknown selection policy: {policy}")
 
 
 def validate_binding(specification: TaskSpec, binding: HarborTaskBinding) -> None:
