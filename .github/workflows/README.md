@@ -30,10 +30,11 @@ gh workflow run ops-pulumi-rollout.yaml --ref main -f service=echo
 ## Agent prose cleanup
 
 `ops-agent-prose-cleanup.yaml` launches a Loom session for an issue or PR carrying
-the `agent-generated` label. Its goal directs the session to follow the
+the `agent-generated` label whose author has write access or is `marin-ops-agent[bot]`
+or `loom-oa-dev[bot]`; external issues and PRs are not cleaned up. Its goal directs the session to follow the
 writing-style guide and apply the archive, validation, and stale-body checks
 in `scripts/ci/github_prose_cleanup.py` before any update. Actions checks out
-only the trusted default-branch launch action. The workflow runs on open, reopen, and label
+only the trusted default-branch launch and access-check actions. The workflow runs on open, reopen, and label
 events, not edits. The launch uses the low-effort `prose-cleanup` Loom profile published as
 `LOOM_PROSE_CLEANUP_PROFILE`, and its idempotency key is the issue or PR number, so later label
 and reopen events return the existing run instead of starting another. A body that already carries
