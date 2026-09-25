@@ -140,7 +140,7 @@ def curriculum_grug_sft(
     generated: Mapping[str, ArtifactStep[Artifact]] | None = None,
     checkpoint: ArtifactStep[LevanterCheckpoint],
     checkpoint_subpath: str,
-    tokenizer: ArtifactStep,
+    tokenizer: str,
     optimizer: OptimizerConfig,
     resources: ResourceConfig,
     context_length: int,
@@ -150,8 +150,9 @@ def curriculum_grug_sft(
 ) -> ArtifactStep[LevanterCheckpoint]:
     """Generate, render, and mix curriculum conversations for native Grug SFT.
 
-    The checkpoint and tokenizer must belong to the same Grug architecture. A
-    native checkpoint is required; an HF export cannot initialize this trainer.
+    The checkpoint and tokenizer must belong to the same Grug architecture. Pass
+    a Hugging Face tokenizer ID, which Levanter can stage on each trainer rank.
+    A native checkpoint is required; an HF export cannot initialize this trainer.
     """
     ids = tuple(sorted(curriculum_ids))
     if not ids or len(set(ids)) != len(ids):
@@ -181,7 +182,7 @@ def curriculum_grug_sft(
                     capability_id: ctx.artifact_path(step) for capability_id, step in zip(ids, rendered, strict=True)
                 },
                 cache_path=prefix_join(output_path, "token-cache"),
-                tokenizer=ctx.artifact_path(tokenizer),
+                tokenizer=tokenizer,
                 context_length=context_length,
             ),
             output_path=output_path,
@@ -209,7 +210,7 @@ def curriculum_grug_sft(
         artifact_type=LevanterCheckpoint,
         run=run_grug_moe_sft_trial,
         build_config=build_train_config,
-        deps=(*rendered, checkpoint, tokenizer),
+        deps=(*rendered, checkpoint),
     )
 
 

@@ -33,7 +33,7 @@ answers.
 `curriculum_grug_sft(curriculum_ids=[...], ...)` in `grug_pipeline.py` creates one generation and
 render step per capability, then mixes their Parquet sources at equal weight. Levanter packs the
 rendered conversations with attention blocked across conversation boundaries. Pass a native Grug
-checkpoint, its matching tokenizer, optimizer, resources, and an explicit training budget.
+checkpoint, its matching Hugging Face tokenizer ID, optimizer, resources, and an explicit training budget.
 
 `math_trial.py` declares a bounded first loop: deterministic OlympiadBench and Math500 on the
 pinned September 20 HF model, three algebra capabilities, four Grug updates, an HF export, and
@@ -44,7 +44,10 @@ transfer the large `us-central2` checkpoint across regions. Run `--stage generat
 `cw-us-east-08a`, where the GLM relay is registered, with `MARIN_PREFIX` set to the
 `S3_TRIAL_PREFIX` in `math_trial.py`. Then run `train`, `export`, and `after` on RNO2A with the
 same prefix. Both clusters read the pinned catalog and generated Parquet from east-region S3.
-`--stage full` binds both evaluations and training in one graph after generation has completed.
+Generation and the imported base checkpoint use `SOURCE_VERSION`; the SFT and its re-evaluation
+use the CLI `--version`, so a failed SFT can be retried under a new version without regenerating
+data or importing weights. `--stage full` binds both evaluations and training in one graph after
+generation has completed.
 
 This trial has not established an improvement. Its GLM answers are structurally checked but not
 oracle-verified, and it has no matched task-only control. A before/after change would measure the

@@ -105,7 +105,7 @@ def grug_hf_export(
     checkpoint: ArtifactStep[LevanterCheckpoint],
     *,
     model: GrugModelConfig,
-    tokenizer: ArtifactStep,
+    tokenizer: str,
     version: str,
     resources: ResourceConfig,
 ) -> ArtifactStep[Artifact]:
@@ -114,7 +114,7 @@ def grug_hf_export(
     def build_config(ctx: StepContext) -> GrugHfExportConfig:
         return GrugHfExportConfig(
             checkpoint_path=prefix_join(ctx.artifact_path(checkpoint), GRUG_CHECKPOINTS_DIR),
-            tokenizer=ctx.artifact_path(tokenizer),
+            tokenizer=tokenizer,
             model_config=draccus.encode(model),
             output_path=ctx.output_path,
             resources=ctx.runtime_arg("export_resources"),
@@ -126,6 +126,6 @@ def grug_hf_export(
         artifact_type=Artifact,
         run=_run_export,
         build_config=build_config,
-        deps=(checkpoint, tokenizer),
+        deps=(checkpoint,),
         runtime_args={"export_resources": resources},
     )

@@ -34,6 +34,7 @@ HF_MODEL = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.20"
 HF_REVISION = "9f2ee50f3d4a12c79b0808bb2414ddba2cdf0098"
 CLUSTER = "cw-rno2a"
 S3_TRIAL_PREFIX = "s3://marin-us-east-02a/tmp/ttl=30d/curriculum-math-20260924"
+SOURCE_VERSION = "2026.09.24"
 CURRICULUM_IDS = (
     "d01.algebra.exact-symbolic-evaluation",
     "d01.algebra.scalar-equations",
@@ -123,11 +124,12 @@ def build_generation(version: str) -> dict[str, ArtifactStep[Artifact]]:
 def _staged_generation(version: str) -> dict[str, ArtifactStep[Artifact]]:
     sources: dict[str, ArtifactStep[Artifact]] = {}
     for capability_id in CURRICULUM_IDS:
-        name = user_owned_name(f"documents/curriculum-sft/{capability_id}/generated-chat")
+        name = user_owned_name(f"documents/curriculum-sft/{capability_id}/staged-chat")
+        generated_name = user_owned_name(f"documents/curriculum-sft/{capability_id}/generated-chat")
         sources[capability_id] = ArtifactStep.adopt(
             name=name,
             version=version,
-            source=prefix_join(S3_TRIAL_PREFIX, f"{name}/{version}"),
+            source=prefix_join(S3_TRIAL_PREFIX, f"{generated_name}/{version}"),
             kind=Artifact,
         )
     return sources
@@ -140,17 +142,17 @@ def build_trial(version: str) -> dict[str, ArtifactStep]:
         HF_MODEL,
         hf_revision=HF_REVISION,
         model=training_model,
-        version=version,
+        version=SOURCE_VERSION,
         resources=_gpu_resources(1),
     )
     trained: ArtifactStep[LevanterCheckpoint] = curriculum_grug_sft(
         CURRICULUM_IDS,
         version=version,
         generation=GENERATION,
-        generated=_staged_generation(version),
+        generated=_staged_generation(SOURCE_VERSION),
         checkpoint=imported,
         checkpoint_subpath=GRUG_CHECKPOINTS_DIR,
-        tokenizer=imported,
+        tokenizer=HF_MODEL,
         optimizer=_optimizer(),
         resources=_gpu_resources(8),
         context_length=CONTEXT_LENGTH,
@@ -161,7 +163,7 @@ def build_trial(version: str) -> dict[str, ArtifactStep]:
     exported: ArtifactStep[Artifact] = grug_hf_export(
         trained,
         model=dataclasses.replace(training_model, max_seq_len=EXPORT_CONTEXT_LENGTH),
-        tokenizer=imported,
+        tokenizer=HF_MODEL,
         version=version,
         resources=_gpu_resources(1),
     )
