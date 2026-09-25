@@ -127,6 +127,6 @@ class Machine(Protocol):
 
 
 class MachineFactory(Protocol):
-    """Create a fresh machine from a prepared source."""
+    """Create a fresh machine from an image source."""
 
     async def create(self, spec: MachineSpec) -> Machine: ...
