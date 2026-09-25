@@ -41,7 +41,8 @@ def test_pinned_nemo_row_keeps_expected_action_private(tmp_path):
     task = lower_to_harbor(specification, rendering, HarborTaskBinding(), tmp_path / "task")
     public = (task / "instruction.md").read_text() + (task / "rendering.json").read_text()
     assert row["expected_action"]["arguments"] not in public
-    assert "authenticate_user" in public
+    rendering_data = json.loads((task / "rendering.json").read_text())
+    assert "authenticate_user" in {function["name"] for function in rendering_data["functions"]}
     assert not (task / "tests").exists()
     with pytest.raises(ValueError, match="pinned canonical hash"):
         import_row(row, "0" * 64)
@@ -100,6 +101,18 @@ def test_predicted_action_rejects_crafted_message_target_on_private_read(tmp_pat
     task = lower_to_harbor(specification, rendering, HarborTaskBinding(), tmp_path / "task")
     data = json.loads((task / "specification.json").read_text())
     data["verifier"]["parameters"] = {"expected_message": "Any response"}
+    (task / "specification.json").write_text(json.dumps(data))
+
+    with pytest.raises(ValueError, match="Invalid 'nemo_predicted_action' verifier parameters"):
+        read_specification(task / "specification.json")
+
+
+def test_predicted_action_rejects_boolean_numeric_tolerance_on_private_read(tmp_path):
+    row = json.loads((FIXTURES / "predicted-action.json").read_text())
+    specification, rendering = import_row(row, canonical_sha256(row))
+    task = lower_to_harbor(specification, rendering, HarborTaskBinding(), tmp_path / "task")
+    data = json.loads((task / "specification.json").read_text())
+    data["verifier"]["parameters"]["numeric_tolerance"] = True
     (task / "specification.json").write_text(json.dumps(data))
 
     with pytest.raises(ValueError, match="Invalid 'nemo_predicted_action' verifier parameters"):

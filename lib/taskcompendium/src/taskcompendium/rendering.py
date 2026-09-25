@@ -58,7 +58,7 @@ def _object_with_unique_fields(pairs: list[tuple[str, object]]) -> dict[str, obj
 
 
 def render_instruction(specification: TaskSpec, rendering: Rendering) -> str:
-    """Return the public request with only its answer convention attached."""
+    """Return Harbor instruction text for the selected rendering."""
     if rendering.answer_format not in specification.permitted_answer_formats:
         raise ValueError(
             f"Task {specification.id!r} does not permit the {rendering.answer_format.value!r} answer format"

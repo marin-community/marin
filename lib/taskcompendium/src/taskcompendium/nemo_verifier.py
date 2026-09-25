@@ -5,7 +5,7 @@
 
 import json
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from taskcompendium.grading import GradeResult, GradingAttempt, Outcome, VerifierHandler
 from taskcompendium.models import FunctionCall, ToolCallComparatorConfig, VerifierSpec
@@ -34,6 +34,13 @@ class PredictedActionPayload(BaseModel):
 
     expected_calls: tuple[FunctionCallPayload, ...]
     numeric_tolerance: float | None = None
+
+    @field_validator("numeric_tolerance", mode="before")
+    @classmethod
+    def validate_numeric_type(cls, value: object) -> object:
+        if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))):
+            raise ValueError("Numeric tolerance must be a number")
+        return value
 
     @model_validator(mode="after")
     def validate_action(self) -> "PredictedActionPayload":
