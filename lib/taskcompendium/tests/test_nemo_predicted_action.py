@@ -61,11 +61,11 @@ def test_exported_nemo_verifier_grades_in_fresh_process(tmp_path):
     task = lower_to_harbor(specification, convention, HarborTaskBinding(), tmp_path / "task")
     script = (
         "import json, sys; from pathlib import Path; "
-        "from taskcompendium.grading import GradingAttempt, grade_attempt; "
+        "from taskcompendium.grading import grade_answer; "
         "from taskcompendium.lowering import read_submission_convention, read_specification; "
         "root = Path(sys.argv[1]); "
-        "result = grade_attempt(read_specification(root / 'specification.json'), "
-        "GradingAttempt(read_submission_convention(root / 'submission_convention.json'), sys.argv[2], object())); "
+        "result = grade_answer(read_specification(root / 'specification.json'), "
+        "read_submission_convention(root / 'submission_convention.json'), sys.argv[2], object()); "
         "print(json.dumps({'status': result.status, 'reward': result.reward}))"
     )
     response = json.dumps(_action(row["expected_action"]["name"], row["expected_action"]["arguments"]))

@@ -70,15 +70,11 @@ def validate_verifier(verifier: VerifierSpec) -> None:
     _resolved(verifier)
 
 
-def grade_attempt(specification: TaskSpec, attempt: GradingAttempt) -> GradeResult:
-    handler, payload = _resolved(specification.verifier)
-    return handler.grade(payload, attempt)
-
-
 def grade_answer(
     specification: TaskSpec, convention: SubmissionConvention, response: str | None, environment: object
 ) -> GradeResult:
-    return grade_attempt(specification, GradingAttempt(convention, response, environment))
+    handler, payload = _resolved(specification.verifier)
+    return handler.grade(payload, GradingAttempt(convention, response, environment))
 
 
 class ExactAnswerPayload(BaseModel):
