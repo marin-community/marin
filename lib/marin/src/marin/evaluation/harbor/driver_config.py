@@ -74,7 +74,7 @@ _DRIVER_STORAGE_ENV_KEYS = (
     "GOOGLE_CLOUD_PROJECT",
 )
 
-HARBOR_PACKAGES = (HARBOR.requirement(("archive",)), *HARBOR.runtime_requirements)
+HARBOR_PACKAGES = (HARBOR.requirement(("archive", "tau3")), *HARBOR.runtime_requirements)
 HARBOR_RUNTIME = "; ".join(HARBOR_PACKAGES)
 
 # The isolated driver runs against the fully pinned lock under this directory, not a loose ``--with``
