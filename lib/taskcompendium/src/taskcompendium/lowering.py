@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Export a direct-chat TaskSpec submission as a Harbor task package."""
+"""Export a direct-chat TaskSpec convention as a Harbor task package."""
 
 import hashlib
 import json
@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 
 from taskcompendium.grading import validate_verifier
 from taskcompendium.models import SCHEMA_VERSION, TaskSpec
-from taskcompendium.submission import SubmissionConvention, render_instruction
+from taskcompendium.submission import SubmissionConvention, render_instruction, submission_compatible
 
 DIRECT_CHAT_ENVIRONMENT = "direct_chat"
 SPECIFICATION_FILE = "specification.json"
@@ -39,7 +39,7 @@ class HarborTaskBinding(BaseModel):
 
 @dataclass(frozen=True)
 class LoweringCandidate:
-    """A compatible submission convention and Harbor environment binding."""
+    """A compatible convention and Harbor environment binding."""
 
     convention: SubmissionConvention
     binding: HarborTaskBinding
@@ -64,7 +64,7 @@ def compatible_lowerings(
     return tuple(
         LoweringCandidate(convention, binding)
         for convention in convention_library
-        if convention.supports(specification.answer_type)
+        if submission_compatible(specification, convention)
         for binding in bindings
     )
 
