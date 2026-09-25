@@ -12,7 +12,7 @@ import jax.numpy as jnp
 import optax
 from optax import tree_utils as otu
 
-_HYPERBALL_NORM_FLOOR = 1e-10
+_MIN_NORM = 1e-10
 
 
 class ScaleByAdamHState(NamedTuple):
@@ -54,8 +54,8 @@ def scale_by_adamh(
             """Core update for a 2-D (matrix) parameter."""
             p_norm = jnp.linalg.norm(p)
             u_norm = jnp.linalg.norm(u)
-            new_p = p - learning_rate * u * p_norm / jnp.maximum(u_norm, _HYPERBALL_NORM_FLOOR)
-            return new_p / jnp.maximum(jnp.linalg.norm(new_p), _HYPERBALL_NORM_FLOOR) * p_norm - p
+            new_p = p - learning_rate * u * p_norm / jnp.maximum(u_norm, _MIN_NORM)
+            return new_p / jnp.maximum(jnp.linalg.norm(new_p), _MIN_NORM) * p_norm - p
 
         def scale_invariant_update(p, u):
             if p is None:

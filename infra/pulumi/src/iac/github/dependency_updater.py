@@ -116,9 +116,10 @@ def dependency_updater_config(
 def dependency_updater_plan(config: DependencyUpdaterConfig) -> DependencyUpdaterPlan:
     """Compute the app's credentials and non-overlapping merge rules."""
     repository = repository_name(config.organization, config.repository)
+    # Administrators may bypass only when merging a pull request; direct pushes to main stay blocked.
     organization_admin = RulesetBypassActorPlan(
         actor_type="OrganizationAdmin",
-        bypass_mode="always",
+        bypass_mode="pull_request",
     )
     return DependencyUpdaterPlan(
         repository=repository,

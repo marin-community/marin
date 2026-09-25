@@ -1,0 +1,30 @@
+#!/harbor/busybox sh
+busybox=/harbor/busybox
+$busybox mkdir -p /dev /dev/pts /proc /sys /tmp /workspace /logs/agent /logs/verifier /logs/artifacts
+$busybox mount -t proc proc /proc
+$busybox mount -t sysfs sysfs /sys
+$busybox mount -t devtmpfs devtmpfs /dev
+$busybox mkdir -p /dev/pts
+$busybox mount -t devpts devpts /dev/pts
+$busybox stty -F /dev/ttyS0 -echo
+printf 'READY\n' > /dev/ttyS0
+while IFS= read -r request < /dev/ttyS0; do
+  case "$request" in
+    BEGIN)
+      : > /tmp/harbor-request.b64
+      ;;
+    DATA\|*)
+      printf '%s' "${request#DATA|}" >> /tmp/harbor-request.b64
+      ;;
+    END)
+      $busybox base64 -d /tmp/harbor-request.b64 > /tmp/harbor-command.sh
+      if [ -x /bin/bash ]; then shell=/bin/bash; else shell=/bin/sh; fi
+      (cd /workspace; "$shell" /tmp/harbor-command.sh) > /tmp/harbor-out 2> /tmp/harbor-err
+      code=$?
+      printf 'RESULT|%s\n' "$code" > /dev/ttyS0
+      $busybox base64 -w 4096 /tmp/harbor-out | $busybox sed 's/^/OUT|/' > /dev/ttyS0
+      $busybox base64 -w 4096 /tmp/harbor-err | $busybox sed 's/^/ERR|/' > /dev/ttyS0
+      printf 'ENDRESULT\n' > /dev/ttyS0
+      ;;
+  esac
+done

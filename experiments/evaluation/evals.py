@@ -287,6 +287,7 @@ _STANDARD_EVALCHEMY_EVALS: tuple[str, ...] = (
     "gsm8k-0shot",
     "aime24",
     "olympiadbench",
+    "olympiadbench-deterministic",
     "humanevalplus",
     "mbppplus",
     "mmlu-smoke",

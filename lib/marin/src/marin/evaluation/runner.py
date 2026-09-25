@@ -24,6 +24,7 @@ from marin.evaluation.records import (
     EvalRunRecord,
     EvalTaskRef,
     HardwareRef,
+    HostedJudgeRef,
     InferenceMetrics,
     ModelConfigRef,
     ModelRef,
@@ -43,9 +44,11 @@ logger = logging.getLogger(__name__)
 
 _INFERENCE_ROLE = "inference"
 _ORCHESTRATOR_ROLE = "orchestrator"
+_JUDGE_ROLE = "judge"
 _ORCHESTRATOR_CPU = 4.0
 _ORCHESTRATOR_MEMORY = "16g"
 _ORCHESTRATOR_DISK = "16g"
+_UNCONSTRAINED = "unconstrained"
 _REPORT_TAIL_LINES = 15
 
 
@@ -86,6 +89,8 @@ class EvalExecutor(Protocol):
         session: RemoteInferenceSession,
         output_dir: str,
         env_vars: Mapping[str, str],
+        *,
+        judge: RemoteInferenceSession | None = None,
     ) -> EvaluationOutcome: ...
 
 
@@ -112,6 +117,15 @@ class Evaluation:
 
 
 @dataclass(frozen=True)
+class HostedJudge:
+    """A second model served beside the evaluated model for verifier requests."""
+
+    model: ModelConfig
+    accelerator: AcceleratorChoice
+    api_model: str | None
+
+
+@dataclass(frozen=True)
 class EvaluationBatch:
     group_id: str
     user: str
@@ -126,6 +140,7 @@ class EvaluationBatch:
     evaluations: tuple[Evaluation, ...]
     provenance: LaunchProvenance
     submission_cluster: str
+    judge: HostedJudge | None = None
     secret_env: Mapping[str, SecretSpec] = field(default_factory=dict)
 
 
@@ -190,12 +205,31 @@ def _record(
             backend=batch.model.serve.backend.value,
             config=ModelConfigRef.model_validate(asdict(batch.model)),
         ),
+        judge=(
+            HostedJudgeRef(
+                model=ModelRef(
+                    name=batch.judge.model.name,
+                    location=batch.judge.model.location,
+                    backend=batch.judge.model.serve.backend.value,
+                    config=ModelConfigRef.model_validate(asdict(batch.judge.model)),
+                ),
+                hardware=HardwareRef(
+                    platform=batch.judge.accelerator.platform.value,
+                    accelerator=batch.judge.accelerator.label,
+                    region_or_cluster=(
+                        batch.judge.accelerator.target_cluster or batch.judge.accelerator.region or _UNCONSTRAINED
+                    ),
+                ),
+            )
+            if batch.judge is not None
+            else None
+        ),
         eval=evaluation,
         hardware=HardwareRef(
             task_count=serving.task_count,
             platform=batch.accelerator.platform.value,
             accelerator=batch.accelerator.label,
-            region_or_cluster=(batch.accelerator.target_cluster or batch.accelerator.region or "unconstrained"),
+            region_or_cluster=(batch.accelerator.target_cluster or batch.accelerator.region or _UNCONSTRAINED),
         ),
         status=status,
         serving=serving,
@@ -218,12 +252,12 @@ def _record(
     return path
 
 
-def _inference_role(index: int) -> str:
-    return _INFERENCE_ROLE if index == 0 else f"{_INFERENCE_ROLE}-{index}"
+def _job_role(role: str, index: int) -> str:
+    return role if index == 0 else f"{role}-{index}"
 
 
-def _inference_job_ids(session: RemoteInferenceSession) -> dict[str, str]:
-    return {_inference_role(index): str(job.job_id) for index, job in enumerate(session.jobs)}
+def _session_job_ids(session: RemoteInferenceSession, role: str) -> dict[str, str]:
+    return {_job_role(role, index): str(job.job_id) for index, job in enumerate(session.jobs)}
 
 
 def _job_tail(handle: JobHandle) -> tuple[str, ...]:
@@ -234,18 +268,14 @@ def _job_tail(handle: JobHandle) -> tuple[str, ...]:
         return ()
 
 
-def _startup_diagnostics(exc: RemoteInferenceStartupError) -> tuple[dict[str, str], dict[str, tuple[str, ...]]]:
-    jobs: dict[str, str] = {}
-    tails: dict[str, tuple[str, ...]] = {}
-    for index, handle in enumerate(exc.jobs):
-        role = _inference_role(index)
-        jobs[role] = str(handle.job_id)
-        tails[role] = _job_tail(handle)
+def _job_diagnostics(handles: tuple[JobHandle, ...], role: str) -> tuple[dict[str, str], dict[str, tuple[str, ...]]]:
+    jobs = {_job_role(role, index): str(handle.job_id) for index, handle in enumerate(handles)}
+    tails = {_job_role(role, index): _job_tail(handle) for index, handle in enumerate(handles)}
     return jobs, tails
 
 
-def _session_tail(session: RemoteInferenceSession) -> dict[str, tuple[str, ...]]:
-    return {_inference_role(index): _job_tail(handle) for index, handle in enumerate(session.jobs)}
+def _session_tails(session: RemoteInferenceSession, role: str) -> dict[str, tuple[str, ...]]:
+    return {_job_role(role, index): _job_tail(handle) for index, handle in enumerate(session.jobs)}
 
 
 def _record_unstarted(
@@ -286,9 +316,12 @@ def _run_one_evaluation(
     session: RemoteInferenceSession,
     orchestrator_job_id: str,
     env_vars: Mapping[str, str],
+    judge: RemoteInferenceSession | None,
 ) -> _EvaluationExecution:
     jobs = {_ORCHESTRATOR_ROLE: orchestrator_job_id}
-    jobs.update(_inference_job_ids(session))
+    jobs.update(_session_job_ids(session, _INFERENCE_ROLE))
+    if judge is not None:
+        jobs.update(_session_job_ids(judge, _JUDGE_ROLE))
     tails: dict[str, tuple[str, ...]] = {}
     metrics: dict[str, dict[str, float]] = {}
     coverage: dict[str, TaskCoverage] = {}
@@ -301,6 +334,8 @@ def _run_one_evaluation(
     metric_window: InferenceMetricWindow | None = None
     try:
         session.check_alive()
+        if judge is not None:
+            judge.check_alive()
         if session.metrics_url is not None:
             try:
                 metric_window = InferenceMetricWindow.start(
@@ -315,7 +350,12 @@ def _run_one_evaluation(
                 )
         allowed_env_keys = (*EVAL_RUNTIME_ENV_KEYS, *evaluation.secret_env_keys)
         evaluation_env = {key: env_vars[key] for key in allowed_env_keys if key in env_vars}
-        outcome = evaluation.executor(session, evaluation.identity.output_dir, evaluation_env)
+        outcome = evaluation.executor(
+            session,
+            evaluation.identity.output_dir,
+            evaluation_env,
+            judge=judge,
+        )
         metrics = outcome.metrics
         coverage = outcome.coverage
         canonical_metrics = outcome.canonical_metrics
@@ -336,8 +376,16 @@ def _run_one_evaluation(
         except Exception as serve_exc:
             status = RunStatus.INFRA_FAILED
             error = f"{error}; inference failed: {serve_exc}"
-            tails |= _session_tail(session)
+            tails |= _session_tails(session, _INFERENCE_ROLE)
             inference_failure = serve_exc
+        if judge is not None:
+            try:
+                judge.check_alive()
+            except Exception as serve_exc:
+                status = RunStatus.INFRA_FAILED
+                error = f"{error}; judge inference failed: {serve_exc}"
+                tails |= _session_tails(judge, _JUDGE_ROLE)
+                inference_failure = serve_exc
 
     if metric_window is not None:
         try:
@@ -399,13 +447,14 @@ def evaluate_batch(
     *,
     orchestrator_job_id: str,
     env_vars: Mapping[str, str],
+    judge: RemoteInferenceSession | None = None,
 ) -> list[str]:
     """Run a batch against one inference context and persist a record per evaluation."""
     paths: list[str] = []
     failed: list[str] = []
 
     for index, evaluation in enumerate(batch.evaluations):
-        execution = _run_one_evaluation(batch, evaluation, session, orchestrator_job_id, env_vars)
+        execution = _run_one_evaluation(batch, evaluation, session, orchestrator_job_id, env_vars, judge)
         paths.append(execution.record_path)
         if execution.failure is not None:
             failed.append(execution.failure)
@@ -426,6 +475,61 @@ def evaluate_batch(
     if failed:
         raise RuntimeError(f"{len(failed)} of {len(batch.evaluations)} evals failed: {', '.join(failed)}")
     return paths
+
+
+def _record_startup_failure(
+    batch: EvaluationBatch,
+    orchestrator_job_id: str,
+    exc: RemoteInferenceStartupError,
+    role: str,
+    existing_jobs: Mapping[str, str] | None = None,
+) -> None:
+    failed_jobs, tails = _job_diagnostics(exc.jobs, role)
+    jobs = {_ORCHESTRATOR_ROLE: orchestrator_job_id, **(existing_jobs or {}), **failed_jobs}
+    paths: list[str] = []
+    _record_unstarted(batch, batch.evaluations, exc, jobs, tails, paths)
+
+
+def _evaluate_with_hosted_judge(
+    batch: EvaluationBatch,
+    session: RemoteInferenceSession,
+    orchestrator_job_id: str,
+    runtime_env: Mapping[str, str],
+    evaluation_env: Mapping[str, str],
+) -> list[str]:
+    if batch.judge is None:
+        return evaluate_batch(
+            batch,
+            session,
+            orchestrator_job_id=orchestrator_job_id,
+            env_vars=evaluation_env,
+        )
+    judge_inference = inference_config_for_model(
+        batch.judge.model,
+        batch.judge.accelerator,
+        env_vars=runtime_env,
+        capability_origin=batch.capability_origin,
+        api_model=batch.judge.api_model,
+        priority=batch.priority_band,
+    )
+    try:
+        with remote_inference(judge_inference) as judge:
+            return evaluate_batch(
+                batch,
+                session,
+                orchestrator_job_id=orchestrator_job_id,
+                env_vars=evaluation_env,
+                judge=judge,
+            )
+    except RemoteInferenceStartupError as exc:
+        _record_startup_failure(
+            batch,
+            orchestrator_job_id,
+            exc,
+            _JUDGE_ROLE,
+            _session_job_ids(session, _INFERENCE_ROLE),
+        )
+        raise RuntimeError(f"evaluation batch judge inference failed: {exc}") from exc
 
 
 def run_evaluation_batch(batch: EvaluationBatch) -> list[str]:
@@ -449,18 +553,15 @@ def run_evaluation_batch(batch: EvaluationBatch) -> list[str]:
     )
     try:
         with remote_inference(inference) as session:
-            return evaluate_batch(
+            return _evaluate_with_hosted_judge(
                 batch,
                 session,
-                orchestrator_job_id=orchestrator_job_id,
-                env_vars=evaluation_env,
+                orchestrator_job_id,
+                runtime_env,
+                evaluation_env,
             )
     except RemoteInferenceStartupError as exc:
-        inference_jobs, tails = _startup_diagnostics(exc)
-        jobs = {_ORCHESTRATOR_ROLE: orchestrator_job_id}
-        jobs.update(inference_jobs)
-        paths: list[str] = []
-        _record_unstarted(batch, batch.evaluations, exc, jobs, tails, paths)
+        _record_startup_failure(batch, orchestrator_job_id, exc, _INFERENCE_ROLE)
         raise RuntimeError(f"evaluation batch inference failed: {exc}") from exc
 
 

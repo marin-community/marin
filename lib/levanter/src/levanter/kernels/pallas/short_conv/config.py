@@ -49,6 +49,3 @@ class ShortConvBlockSizes:
     @classmethod
     def get_default(cls) -> "ShortConvBlockSizes":
         return cls()
-
-    def as_key(self) -> str:
-        return f"s{self.s_block_size}_c{self.c_block_size}_w{self.num_warps}_st{self.num_stages}"

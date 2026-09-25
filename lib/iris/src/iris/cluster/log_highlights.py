@@ -17,7 +17,7 @@ from collections.abc import Sequence
 
 _DEFAULT_MAX_LINES = 20
 
-# The multi-GPU supervisor (``iris.hooks.multigpu_main``) tags each line it
+# The multi-GPU supervisor (``iris.jax.multigpu_main``) tags each line it
 # forwards with the child's local rank, so a task's log lines can arrive as
 # "[rank2] Traceback (most recent call last):". Level parsing and the anchored
 # patterns below read the child's own text, so the tag is stripped before

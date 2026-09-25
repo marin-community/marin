@@ -446,22 +446,26 @@ def test_wandb_run_history_preserves_parent_and_samples_child_separately():
     assert [(row["step"], row["value"]) for row in rows] == [(99, 1.25), (100, 1.20), (101, 1.22)]
 
 
-def _activity_handler(found_in: str, run: dict, asked: list[str], tps_points: list[dict] = ()):
-    """Serve `run` for the activity query and `tps_points` for the reference-rate history.
+def _activity_handler(
+    found_in: str, run: dict, asked: list[str], tps_points: list[dict] = (), history_reads: list[int] | None = None
+):
+    """Serve `run` for the activity query and `tps_points` for its history read.
 
-    Only the activity search is recorded in `asked`; the token-rate history read that
-    follows it asks the project the run was already found in, so it carries no new
-    routing information.
+    Only the activity search is recorded in `asked`; the history read that follows it
+    asks the project the run was already found in, so it carries no new routing
+    information. `history_reads` records the number of specs in each history read.
     """
 
     def handler(request: httpx.Request) -> httpx.Response:
         variables = json.loads(request.content)["variables"]
-        if "specs" in variables:  # the reference-tps history read, not the activity search
+        if "specs" in variables:  # the history read, not the activity search
             if variables["project"] != found_in:
                 return httpx.Response(200, json={"data": {"project": None}})
-            spec = json.loads(variables["specs"][0])
-            points = [point for point in tps_points if point["_step"] >= spec.get("minStep", 0)]
-            history = {"state": "running", "sampledHistory": [points]}
+            if history_reads is not None:
+                history_reads.append(len(variables["specs"]))
+            specs = [json.loads(spec) for spec in variables["specs"]]
+            sampled = [[point for point in tps_points if point["_step"] >= spec.get("minStep", 0)] for spec in specs]
+            history = {"state": "running", "sampledHistory": sampled}
             return httpx.Response(200, json={"data": {"project": {"run": history}}})
         asked.append(variables["project"])
         if variables["project"] != found_in:
@@ -544,6 +548,7 @@ def test_wandb_run_activity_excludes_inherited_fork_history(has_child_history):
         {
             "_step": step,
             "_timestamp": created.timestamp() + elapsed,
+            "run_progress": step / 200,
             "throughput/total_tokens": tokens,
             "throughput/tokens_per_second": tps,
         }
@@ -614,44 +619,75 @@ def test_wandb_run_activity_reports_no_active_time_before_the_first_log():
     assert (row["reference_tps"], row["progress_efficiency"], row["projected_finish_ms"]) == (None, None, None)
 
 
-def test_wandb_run_activity_projects_the_finish_from_this_runs_own_steps():
-    # A completion date extrapolates this run's own step rate, measured from its first
-    # sampled step to the summary's last over the wall clock between them, to the stop step
-    # that `_step / run_progress` recovers. This run is a fresh id resumed at step 81,000 that
-    # has done 4,320 steps in the 24 hours since its first sample: 20 s a step, and 304,680
-    # steps to go on a 390,000-step schedule is another 70.5 days. Crediting it with the
-    # 85,320 steps of the global counter over the same day would put the finish 3.6 days
-    # out. The half hour between creation and the first sample is startup, and does not
-    # count against the rate.
-    asked: list[str] = []
-    first_sample = datetime(2026, 9, 9, 22, 30, tzinfo=UTC)
-    heartbeat = datetime(2026, 9, 10, 22, 30, tzinfo=UTC)
-    run = {
-        "state": "running",
-        "createdAt": "2026-09-09T22:00:00Z",
-        "heartbeatAt": "2026-09-10T22:30:00Z",
+def _projection_run(state: str, heartbeat: datetime) -> dict:
+    return {
+        "state": state,
+        "createdAt": "2026-09-09T16:00:00Z",
+        "heartbeatAt": heartbeat.isoformat(),
         "summaryMetrics": json.dumps(
             {"_runtime": 86_000, "_step": 85_320, "run_progress": 85_320 / 390_000, "throughput/total_tokens": 1.0}
         ),
     }
-    tps_points = [
+
+
+def test_wandb_run_activity_projects_the_finish_from_the_recent_step_rate():
+    # A completion date extrapolates the step rate over the last 1,000 steps, between the
+    # first and last logged points in that window, to the stop step that the last point's
+    # `_step / run_progress` recovers. This run is a fresh id resumed at step 81,000. A
+    # six-hour outage early on means its whole-life rate is 25 s a step (4,320 steps in 30
+    # hours); its last 1,000 steps took 20 s each. With 304,680 steps to go on a
+    # 390,000-step schedule, the recent rate puts the finish 70.5 days out. The whole-life
+    # rate would add another 17.6 days for an outage the run has trained past.
+    last_step_at = datetime(2026, 9, 10, 22, 30, tzinfo=UTC)
+    # The process has been alive but silent for 100 minutes since its last step. The
+    # heartbeat moves on while no step is logged, so it must not enter the rate.
+    heartbeat = last_step_at + timedelta(minutes=100)
+    points = [
         {
-            "_step": 81_000,
-            "_timestamp": first_sample.timestamp(),
+            "_step": step,
+            "_timestamp": (last_step_at - timedelta(seconds=before)).timestamp(),
+            "run_progress": step / 390_000,
             "throughput/total_tokens": 1.0,
             "throughput/tokens_per_second": 1.0,
         }
+        for step, before in [(81_000, 30 * 3_600), (84_320, 1_000 * 20), (85_320, 0)]
     ]
+    history_reads: list[int] = []
 
-    (row,) = _wandb(_activity_handler("marin_moe", run, asked, tps_points)).run_activity("hero-run")
+    handler = _activity_handler("marin_moe", _projection_run("running", heartbeat), [], points, history_reads)
+    (row,) = _wandb(handler).run_activity("hero-run")
 
     projected = datetime.fromtimestamp(row["projected_finish_ms"] / 1000, UTC)
-    assert projected == heartbeat + timedelta(seconds=304_680 * 20)
+    assert projected == last_step_at + timedelta(seconds=304_680 * 20)
     assert projected == datetime(2026, 11, 20, 11, 10, tzinfo=UTC)
+    # The token baseline and the rate window share one history request.
+    assert history_reads == [2]
 
-    # Before the run advances past its first sample there is no rate, and so no date.
-    run["summaryMetrics"] = json.dumps({"_step": 81_000, "run_progress": 81_000 / 390_000})
-    (row,) = _wandb(_activity_handler("marin_moe", run, asked, tps_points)).run_activity("hero-run")
+    # A window holding a single logged step has no rate, and so no date.
+    (row,) = _wandb(_activity_handler("marin_moe", _projection_run("running", heartbeat), [], points[-1:])).run_activity(
+        "hero-run"
+    )
+    assert row["projected_finish_ms"] is None
+
+
+def test_wandb_run_activity_projects_no_finish_for_a_run_that_stopped():
+    # A crashed run a fork replaced will never reach its stop step.
+    heartbeat = datetime(2026, 9, 10, 22, 30, tzinfo=UTC)
+    points = [
+        {
+            "_step": step,
+            "_timestamp": (heartbeat - timedelta(seconds=(85_320 - step) * 20)).timestamp(),
+            "run_progress": step / 390_000,
+            "throughput/total_tokens": 1.0,
+            "throughput/tokens_per_second": 1.0,
+        }
+        for step in (84_320, 85_320)
+    ]
+
+    (row,) = _wandb(_activity_handler("marin_moe", _projection_run("crashed", heartbeat), [], points)).run_activity(
+        "hero-run"
+    )
+
     assert row["projected_finish_ms"] is None
 
 

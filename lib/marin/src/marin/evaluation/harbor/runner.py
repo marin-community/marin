@@ -38,7 +38,7 @@ from marin.evaluation.harbor.driver_config import (
 from marin.evaluation.records import BenchmarkMetadataRef, EvalTaskRef, RunStatus, TaskCoverage
 from marin.evaluation.rollouts import normalize_rollouts
 from marin.evaluation.runner import EvaluationError, EvaluationOutcome
-from marin.inference.iris import RemoteInferenceSession
+from marin.inference.iris import InferenceBackendState, RemoteInferenceSession
 from marin.inference.types import RunningModel
 
 logger = logging.getLogger(__name__)
@@ -50,6 +50,7 @@ _HARBOR_JOBS_SUBDIR = "harbor_jobs"
 _TRIAL_READ_WORKERS = 16
 _JOB_DATASET_LENGTH = 32
 _JOB_DIGEST_LENGTH = 12
+_HOSTED_JUDGE_API_KEY = "EMPTY"
 
 # The reward at or above which a Harbor trial counts as solved (rewards are typically 0.0 / 1.0; the
 # margin tolerates float noise).
@@ -312,6 +313,15 @@ def _aggregate(
     )
 
 
+def _backend_state(inference_sessions: tuple[RemoteInferenceSession, ...]) -> InferenceBackendState:
+    states = tuple(session.backend_state() for session in inference_sessions)
+    if InferenceBackendState.FINISHED in states:
+        return InferenceBackendState.FINISHED
+    if InferenceBackendState.RECOVERING in states:
+        return InferenceBackendState.RECOVERING
+    return InferenceBackendState.READY
+
+
 def _run_harbor_job(
     *,
     job_name: str,
@@ -321,7 +331,7 @@ def _run_harbor_job(
     environment: str,
     output_dir: str,
     driver_env: Mapping[str, str],
-    inference_session: RemoteInferenceSession,
+    inference_sessions: tuple[RemoteInferenceSession, ...],
     benchmark: BenchmarkMetadataRef,
     trials_per_task: int,
 ) -> HarborRunResult:
@@ -329,12 +339,13 @@ def _run_harbor_job(
     logger.info("starting Harbor job %s (dataset=%s env=%s jobs_dir=%s)", job_name, dataset, environment, job_dir)
     while True:
         try:
-            run_harbor_driver(config, overlay, driver_env, inference_session.backend_state)
+            run_harbor_driver(config, overlay, driver_env, lambda: _backend_state(inference_sessions))
             break
         except HarborBackendsUnavailable as exc:
             logger.warning("pausing Harbor job %s while inference recovers: %s", job_name, exc)
             _remove_unscored_trials(job_dir, config.error_taxonomy)
-            inference_session.wait_until_ready()
+            for inference_session in inference_sessions:
+                inference_session.wait_until_ready()
             logger.info("inference recovered; resuming Harbor job %s", job_name)
 
     normalize_rollouts(output_dir, writer_id=f"marin-harbor-rollouts-{job_name}")
@@ -452,12 +463,17 @@ class HarborExecutor:
         model: RunningModel,
         output_dir: str,
         driver_env: Mapping[str, str],
-        inference_session: RemoteInferenceSession,
+        inference_sessions: tuple[RemoteInferenceSession, ...],
+        verifier_env: Mapping[str, str],
+        judge_model: RunningModel | None,
     ) -> HarborRunResult:
         dataset = self.config.record_dataset
+        identity: tuple[object, ...] = (self.config.digest, model.endpoint.model, self.task_limit)
+        if judge_model is not None:
+            identity += ("hosted-judge", judge_model.endpoint.model)
         job_name = _job_name(
             dataset,
-            (self.config.digest, model.endpoint.model, self.task_limit),
+            identity,
         )
         dataset_path = local_harbor_dataset_path(self.config)
         overlay = HarborRuntimeOverlay(
@@ -468,6 +484,7 @@ class HarborExecutor:
             served_model=model.endpoint.model,
             task_limit=self.task_limit,
             model_agent_kwargs=self.model_agent_kwargs,
+            verifier_env=verifier_env,
             archive_root=output_dir,
             archive_dataset=dataset,
         )
@@ -483,7 +500,7 @@ class HarborExecutor:
             environment=self.config.environment,
             output_dir=output_dir,
             driver_env=driver_env,
-            inference_session=inference_session,
+            inference_sessions=inference_sessions,
             benchmark=benchmark,
             trials_per_task=self.config.trials_per_task,
         )
@@ -493,14 +510,34 @@ class HarborExecutor:
         session: RemoteInferenceSession,
         output_dir: str,
         env_vars: Mapping[str, str],
+        *,
+        judge: RemoteInferenceSession | None = None,
     ) -> EvaluationOutcome:
-        """Run Harbor while supervising a managed inference dependency."""
+        """Run Harbor while supervising the candidate and any hosted judge inference sessions."""
         driver_env = {key: env_vars[key] for key in self.secret_env_keys}
         hf_token = env_vars.get("HF_TOKEN")
         if hf_token:
             driver_env["HF_TOKEN"] = hf_token
+        verifier_env = {}
+        inference_sessions = (session,)
+        judge_model = None
+        if judge is not None:
+            judge_model = judge.model
+            verifier_env = {
+                "OPENAI_API_KEY": judge_model.endpoint.api_key or _HOSTED_JUDGE_API_KEY,
+                "OPENAI_BASE_URL": judge_model.endpoint.base_url,
+                "MODEL_NAME": judge_model.endpoint.model,
+            }
+            inference_sessions += (judge,)
         return _evaluation_outcome(
-            lambda: self._run(session.model, output_dir, driver_env, session),
+            lambda: self._run(
+                session.model,
+                output_dir,
+                driver_env,
+                inference_sessions,
+                verifier_env,
+                judge_model,
+            ),
             output_dir,
             self.min_completion_rate,
         )
