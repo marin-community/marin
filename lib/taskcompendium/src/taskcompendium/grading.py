@@ -41,7 +41,6 @@ class GradingAttempt:
     rendering: Rendering
     response: str | None
     environment: object
-    transcript: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -90,7 +89,7 @@ class ExactAnswerPayload(BaseModel):
 
     expected: str
     ignore_case: bool = True
-    ignore_whitespace: bool = True
+    collapse_whitespace: bool = True
 
     @field_validator("expected")
     @classmethod
@@ -100,14 +99,14 @@ class ExactAnswerPayload(BaseModel):
         return value
 
 
-def exact_answer(expected: str, ignore_case: bool = True, ignore_whitespace: bool = True) -> VerifierSpec:
+def exact_answer(expected: str, ignore_case: bool = True, collapse_whitespace: bool = True) -> VerifierSpec:
     """Construct a pinned exact-answer verifier descriptor."""
-    payload = ExactAnswerPayload(expected=expected, ignore_case=ignore_case, ignore_whitespace=ignore_whitespace)
+    payload = ExactAnswerPayload(expected=expected, ignore_case=ignore_case, collapse_whitespace=collapse_whitespace)
     return VerifierSpec(kind=EXACT_ANSWER_KIND, parameters=payload.model_dump())
 
 
 def _normalize_exact(value: str, payload: ExactAnswerPayload) -> str:
-    value = WHITESPACE.sub(" ", value).strip() if payload.ignore_whitespace else value.strip()
+    value = WHITESPACE.sub(" ", value).strip() if payload.collapse_whitespace else value.strip()
     return value.casefold() if payload.ignore_case else value
 
 

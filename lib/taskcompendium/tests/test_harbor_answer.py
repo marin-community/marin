@@ -231,7 +231,7 @@ def test_exported_specification_resolves_verifier_in_fresh_process(tmp_path, spe
 
 
 def test_verifier_parameters_cannot_change_exported_or_live_grading(tmp_path, specification):
-    parameters = {"expected": "12", "ignore_case": True, "ignore_whitespace": True}
+    parameters = {"expected": "12", "ignore_case": True, "collapse_whitespace": True}
     verifier = VerifierSpec(kind="exact_answer", parameters=parameters)
     specification = specification.model_copy(update={"verifier": verifier})
     parameters["expected"] = "13"
