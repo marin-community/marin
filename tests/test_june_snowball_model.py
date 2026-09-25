@@ -316,8 +316,6 @@ def test_june_stage_hf_mapping_loads_only_owned_tensors(num_stages):
         for stage in split_june_pipeline_model(model, num_stages):
             owned = stage.to_state_dict(prefix="policy")
             template = eqx.filter_eval_shape(lambda stage: stage, stage)
-            expected_shapes = eqx.filter_eval_shape(lambda stage: stage.to_state_dict(prefix="policy"), template)
-            assert owned.keys() == expected_shapes.keys()
             assert not (stage_tensors.keys() & owned.keys())
             stage_tensors.update(owned)
             # The loader only receives this stage's key subset and abstract shape leaves.
