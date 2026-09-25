@@ -1,0 +1,31 @@
+{
+  "source_id": "GEO:GSE285624-anole-age-methylation-AnoSag2.1",
+  "study": "Shealy et al. 2025, DNA methylation-based age prediction and sex-specific epigenetic aging in a lizard with female-biased longevity",
+  "study_doi": "10.1126/sciadv.adq3589",
+  "source_data_url": "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE285nnn/GSE285624/suppl/GSE285624_MethylationMatrix_allSamples.tab.gz",
+  "source_data_bytes": 798986992,
+  "source_data_last_modified": "Tue, 31 Dec 2024 19:56:44 GMT",
+  "source_metadata_url": "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE285nnn/GSE285624/matrix/GSE285624_series_matrix.txt.gz",
+  "source_metadata_sha256": "8afe976b9fa5bfa3afd8e6a59d922c339d3d30a402cceb15ef0755cf946b5022",
+  "assembly_accession": "GCF_025583915.1",
+  "assembly_report_url": "https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/025/583/915/GCF_025583915.1_AnoSag2.1/GCF_025583915.1_AnoSag2.1_assembly_report.txt",
+  "assembly_report_sha256": "67e975649cc8a24017f3db519cb9be7520eb8608199bc2c3d8082544c0529c33",
+  "assembly_sizes_url": "https://hgdownload.soe.ucsc.edu/hubs/GCF/025/583/915/GCF_025583915.1/GCF_025583915.1.chrom.sizes",
+  "assembly_sizes_sha256": "780f86917adf58d186eaea1d38e5822b09b89680d99c6b76dccd7a7372ad6155",
+  "reuse": "NCBI GEO states it places no restrictions on use or distribution; https://www.ncbi.nlm.nih.gov/geo/info/disclaimer.html",
+  "benchmark_exclusion": "https://doi.org/10.5061/dryad.wm37pvmw8",
+  "dryad_parallel_release": "https://doi.org/10.5061/dryad.3j9kd51sw",
+  "protocol": {
+    "scaffold_rule": "14 longest AnoSag2.1 scaffolds by reference length",
+    "sample_rule": "All 37 GEO matrix sample columns with unique age-in-months metadata; no sex restriction",
+    "canonical_cpg_coordinate": "plus-strand cytosine coordinate, or minus-strand cytosine coordinate minus one; 1-based",
+    "strand_collapse": "Unweighted arithmetic mean of available strand-specific methylation percentages per sample",
+    "minimum_observed_samples": 30,
+    "age_test": "Two-sided Spearman rho between age in months and percent methylation, pairwise nonmissing, scipy 1.17.0 asymptotic t p-value; constant rows p=1",
+    "multiple_testing": "Benjamini-Hochberg over every tested collapsed CpG dyad on the 14 scaffolds; q<0.05",
+    "extreme_definition": "Per-sample methylation percentage strictly below 10 or strictly above 90",
+    "density_definition": "Unique extreme age-associated CpG dyads per Mb of each scaffold; arithmetic mean of all 14 scaffold densities",
+    "distribution_null": "Unique extreme-site counts proportional to full reference scaffold base lengths"
+  },
+  "limits": "GEO matrix is unfiltered and stranded; the source transformation is not identical to Dryad's coverage-filtered, de-stranded matrix. Original Verified avian study and answers are excluded."
+}

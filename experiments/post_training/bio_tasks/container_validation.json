@@ -6191,6 +6191,289 @@
         }
       ],
       "limitations": "One observed licorice trial and fixed no-pain endpoint. This verifies binary-logit/AIC machinery, not the exact camrelizumab efficacy-PR q51-q2/q51-q8 endpoints; those remain unmapped. BMI and age reduced models also include arm and gender, unlike sole-predictor benchmark models. No disease-remission, transportability, interaction or human-performance claim."
+    },
+    {
+      "job_id": "/exedev/bio-clinical-univariable-harbor-20260925-130007",
+      "source_revision": "4a634229b73497ddc57ada1adcc193a61236e519 + frozen source bundle overlay",
+      "harbor_revision": "d072bef08e54050880b484eb81d892944d1d82fb",
+      "status": "passed",
+      "validation_role": "one-instance age-only/BMI-only clinical method; adapted q51-q2/q8 workflow coverage, no direct source-answer reproduction",
+      "worker_exit_code": 0,
+      "harbor_exit_code": 0,
+      "cleanup_exit_code": 0,
+      "model_calls": 0,
+      "agent": "fresh private pinned-package oracle with terminal setup check",
+      "agent_and_verifier_backend": "Daytona",
+      "concurrent_trials": 1,
+      "attempts_per_case": 1,
+      "positive_cases": 1,
+      "negative_cases": 8,
+      "discriminating_negative_cases": 7,
+      "source_bundle_sha256": "dad39d8e98d96155c37c6251f1460f8c3752f1129687d5e209667135adacf6f7",
+      "package_evidence_sha256": "dde403b8ecc39aad27e12119fe070084bd918f7d55eb37394e12128bb6c59dec",
+      "environment_lock_sha256": "ef8c7bfc2ed4b37f3c3ca076a7a10b45a24e726048d03760ecac4c98dbce7772",
+      "reference_contract_sha256": "264ecaed3cf50ec5e1ff58fe2a86faf525d420a90c0324adbc4938f04dbd6c72",
+      "reference_oracle_archive_sha256": "949adb23bc2b4093d5df9a0466606ad7d6648bca5f8325dc381c38512977f3ee",
+      "canonical_task_id": "real-clinical-univariable-logit-audit-v1-20260925-00000",
+      "canonical_task_sha256": "95806c3f162fc2b1554a2370e13388a76f43a50315b840d102978580f911aa24",
+      "instruction_sha256": "bb5607f7759aa19c48ba2a27578ff0cf708a821291ba908c5ee242f6e1f9821e",
+      "task_toml_sha256": "aa3766f4c21cd30da86548a47446511d10238d284fe1f2046dd6e6f871e7c30f",
+      "canonical_task_uri": "gs://marin-us-central2/bio-tasks/authoring/harbor-corpus/sha256/95806c3f162fc2b1554a2370e13388a76f43a50315b840d102978580f911aa24/harbor/train/real-clinical-univariable-logit-audit-v1-20260925-00000",
+      "private_oracle_uri": "gs://marin-us-central2/bio-tasks/authoring/harbor-corpus/sha256/95806c3f162fc2b1554a2370e13388a76f43a50315b840d102978580f911aa24/oracles/real-clinical-univariable-logit-audit-v1-20260925-00000",
+      "canonical_corpus_files": 13,
+      "canonical_corpus_bytes": 189611,
+      "archive": {
+        "uri": "gs://marin-us-central2/tmp/ttl=7d/iris/task-outputs/exedev/bio-clinical-univariable-harbor-20260925-130007/0/d43c3038ebcf745e/outputs.tar.zst",
+        "bytes": 42198,
+        "sha256": "1dc130d52335476887c3a8b514e8259b3d48e7f08c85f2d4d4786e6d0b16356e",
+        "retention": "Iris regional temporary seven-day output"
+      },
+      "evidence": {
+        "local_sanitized_file": "/tmp/bio-clinical-univariable-harbor-20260925/verified-evidence/evidence.json",
+        "sha256": "4c632363a031dc9f342315de9edac71d066148e46e7b76c180adbbc26b2b09c9"
+      },
+      "controller_placement": {
+        "region": "us-central2",
+        "tpu_name": "t1v-n-50c80a11",
+        "existing_reserved_slice": "marin-tpu-v4-reserved-256-us-central2-b-20260923-0013-f592489a",
+        "worker_id": "marin-tpu-v4-reserved-256-us-central2-b-20260923-0013-f592489a-worker-0"
+      },
+      "resources": {
+        "cpu": 1,
+        "memory_gib": 16,
+        "disk_gib": 16,
+        "timeout_seconds": 3600,
+        "harbor_timeout_seconds": 2400,
+        "automatic_retries": 0,
+        "accelerators": 0
+      },
+      "cleanup": {
+        "trials": 9,
+        "actions": 0,
+        "remaining": 0
+      },
+      "summary_identity_check": "Four artifact-only controls preserved exact answer bytes and all seven summary fields; event, BMI AIC and age-slope summary controls each failed only its declared field while all artifacts passed.",
+      "cases": [
+        {
+          "control": "fresh-native-oracle",
+          "reward": 1.0,
+          "passed": true,
+          "artifact_failures": [],
+          "summary_checks_passed": 7,
+          "summary_checks_total": 7,
+          "summary_failure_fields": []
+        },
+        {
+          "control": "changed-response-coding",
+          "reward": 0.0,
+          "passed": true,
+          "artifact_failures": [
+            "cohort.tsv"
+          ],
+          "summary_checks_passed": 7,
+          "summary_checks_total": 7,
+          "summary_failure_fields": []
+        },
+        {
+          "control": "changed-age-coefficient",
+          "reward": 0.0,
+          "passed": true,
+          "artifact_failures": [
+            "coefficients.tsv"
+          ],
+          "summary_checks_passed": 7,
+          "summary_checks_total": 7,
+          "summary_failure_fields": []
+        },
+        {
+          "control": "wrong-bmi-aic",
+          "reward": 0.0,
+          "passed": true,
+          "artifact_failures": [
+            "model_fit.tsv"
+          ],
+          "summary_checks_passed": 7,
+          "summary_checks_total": 7,
+          "summary_failure_fields": []
+        },
+        {
+          "control": "wrong-prediction-profile",
+          "reward": 0.0,
+          "passed": true,
+          "artifact_failures": [
+            "predictions.tsv"
+          ],
+          "summary_checks_passed": 7,
+          "summary_checks_total": 7,
+          "summary_failure_fields": []
+        },
+        {
+          "control": "wrong-event-orientation",
+          "reward": 0.0,
+          "passed": true,
+          "artifact_failures": [],
+          "summary_checks_passed": 6,
+          "summary_checks_total": 7,
+          "summary_failure_fields": [
+            "no_pain_responses"
+          ]
+        },
+        {
+          "control": "wrong-summary-bmi-aic",
+          "reward": 0.0,
+          "passed": true,
+          "artifact_failures": [],
+          "summary_checks_passed": 6,
+          "summary_checks_total": 7,
+          "summary_failure_fields": [
+            "bmi_only_aic"
+          ]
+        },
+        {
+          "control": "wrong-summary-age-slope",
+          "reward": 0.0,
+          "passed": true,
+          "artifact_failures": [],
+          "summary_checks_passed": 6,
+          "summary_checks_total": 7,
+          "summary_failure_fields": [
+            "age_only_age_coefficient"
+          ]
+        },
+        {
+          "control": "empty-output",
+          "reward": 0.0,
+          "passed": true,
+          "artifact_failures": [
+            "coefficients.tsv",
+            "cohort.tsv",
+            "model_fit.tsv",
+            "predictions.tsv"
+          ],
+          "summary_checks_passed": 0,
+          "summary_checks_total": 0,
+          "summary_failure_fields": []
+        }
+      ],
+      "limitations": "Sole-predictor binomial-logit operations were validated on an independent licorice-gargle RCT with no-pain response. This is not the camrelizumab efficacy cohort or a direct reproduction of BixBench-Verified q51-q2/q8 numerical answers."
+    },
+    {
+      "job_id": "/exedev/bio-anole-cpg-harbor-20260925-125739",
+      "source_revision": "4a634229b73497ddc57ada1adcc193a61236e519 + frozen CpG-only source bundle overlay",
+      "harbor_revision": "d072bef08e54050880b484eb81d892944d1d82fb",
+      "status": "passed",
+      "validation_role": "canonical registered task; adapted q52 workflow coverage, no original avian numerical-answer credit",
+      "worker_exit_code": 0,
+      "harbor_exit_code": 0,
+      "cleanup_exit_code": 0,
+      "model_calls": 0,
+      "agent": "task-only exact native-tested SciPy solver with terminal package check",
+      "agent_and_verifier_backend": "Daytona",
+      "concurrent_trials": 1,
+      "attempts_per_case": 1,
+      "positive_cases": 1,
+      "negative_cases": 4,
+      "discriminating_negative_cases": 3,
+      "source_bundle_sha256": "1e33f4622f0f4f34efa6778d5b427932d9d70e8ac0b6f2b0f7874d79127ca855",
+      "package_evidence_sha256": "e617cb49f8a529030257aaa77250a5021d1aa0c5b6bfb3b58b57d86b41008e5c",
+      "environment_lock_sha256": "ef8c7bfc2ed4b37f3c3ca076a7a10b45a24e726048d03760ecac4c98dbce7772",
+      "reference_contract_sha256": "79af3e9b64dd46fb2f19281c6d80717a470cd8e638909cbe7f148d8c99a8c9a2",
+      "reference_oracle_archive_sha256": "25c05fa4b787f5b3f8381c5558d9a779ebea69cb1217e5b1046f7f79189d45ed",
+      "canonical_task_id": "real-anole-age-cpg-density-v1-20260925-00000",
+      "canonical_task_sha256": "d1624172fefc84a33ff9f073c1d68ec0bcd744a7a5dd508f5344574eb19ed9fb",
+      "instruction_sha256": "46408d21331ce02e2cad940820a250aa0ffc172820782816cf2db815603d298d",
+      "task_toml_sha256": "5cdbf8d84b7527c82ca46e78403da97a41f7e0401b9b27b28f75200edf4dcca3",
+      "canonical_corpus_location": "inside the recorded regional Iris output archive, corpus/harbor/train/real-anole-age-cpg-density-v1-20260925-00000",
+      "private_oracle_location": "inside the recorded regional Iris output archive, corpus/oracles/real-anole-age-cpg-density-v1-20260925-00000",
+      "archive": {
+        "uri": "gs://marin-us-central2/tmp/ttl=7d/iris/task-outputs/exedev/bio-anole-cpg-harbor-20260925-125739/0/6951279fe493cfc7/outputs.tar.zst",
+        "bytes": 780978,
+        "sha256": "b76d40ff87a95b7489b76b22fa5d9657ea55d4b7b070ddd8983bc9e3fb31f171",
+        "retention": "Iris regional temporary seven-day output"
+      },
+      "evidence": {
+        "local_sanitized_file": "/tmp/bio-anole-harbor-20260925/verified-evidence.json",
+        "sha256": "e9409e744376be3e35220f7cc3925b8c20a75d14fa84642107229958589d17ab"
+      },
+      "controller_placement": {
+        "region": "us-central2",
+        "tpu_name": "t1v-n-f2cbfd93",
+        "existing_reserved_slice": "marin-tpu-v4-reserved-256-us-central2-b-20260923-0702-5ab9aeff",
+        "worker_id": "marin-tpu-v4-reserved-256-us-central2-b-20260923-0702-5ab9aeff-worker-0"
+      },
+      "resources": {
+        "cpu": 1,
+        "memory_gib": 4,
+        "disk_gib": 12,
+        "timeout_seconds": 4800,
+        "automatic_retries": 0,
+        "accelerators": 0
+      },
+      "cleanup": {
+        "trials": 5,
+        "actions": 0,
+        "remaining": 0
+      },
+      "summary_identity_check": "Three artifact corruptions retained all 12 passing summary fields; site and scaffold tables still failed independently.",
+      "cases": [
+        {
+          "control": "fresh-native-oracle",
+          "reward": 1.0,
+          "passed": true,
+          "artifact_failures": [],
+          "summary_checks_passed": 12,
+          "summary_checks_total": 12,
+          "summary_failure_fields": []
+        },
+        {
+          "control": "site-threshold",
+          "reward": 0.0,
+          "passed": true,
+          "artifact_failures": [
+            "sites.tsv"
+          ],
+          "summary_checks_passed": 12,
+          "summary_checks_total": 12,
+          "summary_failure_fields": []
+        },
+        {
+          "control": "scaffold-age-density",
+          "reward": 0.0,
+          "passed": true,
+          "artifact_failures": [
+            "scaffolds.tsv"
+          ],
+          "summary_checks_passed": 12,
+          "summary_checks_total": 12,
+          "summary_failure_fields": []
+        },
+        {
+          "control": "missing-site-row",
+          "reward": 0.0,
+          "passed": true,
+          "artifact_failures": [
+            "sites.tsv"
+          ],
+          "summary_checks_passed": 12,
+          "summary_checks_total": 12,
+          "summary_failure_fields": []
+        },
+        {
+          "control": "empty-output",
+          "reward": 0.0,
+          "passed": true,
+          "artifact_failures": [
+            "scaffolds.tsv",
+            "sites.tsv"
+          ],
+          "summary_checks_passed": 0,
+          "summary_checks_total": 0,
+          "summary_failure_fields": []
+        }
+      ],
+      "limitations": "Independent brown-anole red-blood-cell GEO input, 37 age-joined animals and 14 longest AnoSag2.1 scaffolds replace Jackdaw/Zebra Finch Dryad inputs. Strict extreme threshold, unique CpG identity, nonzero-only scaffold-density mean, all-age-site density argmax and removed measurement-row count match Verified q52-q2/q6/q7 output semantics; no direct avian numerical-answer reproduction. Original q52-q2 has an ambiguous genome-wide denominator and original q52-q7 asks removed sites, not rows; these remain component-only. Broad release-level lineage/weighting review is separate.",
+      "harbor_version": "0.8.1",
+      "daytona_version": "0.203.0"
     }
   ]
 }

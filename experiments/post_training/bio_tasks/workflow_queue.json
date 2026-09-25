@@ -752,7 +752,7 @@
     {
       "id": "clinical-binary-response",
       "title": "Fit and compare prespecified models for an observed binary clinical response",
-      "status": "harbor-validated-method-component; exact benchmark endpoints unmapped",
+      "status": "harbor-validated-adapted-univariable-workflow",
       "targets": [
         {
           "benchmark": "BixBench",
@@ -783,8 +783,8 @@
           "task_id": "bix-51-q8"
         }
       ],
-      "missing_distinct_task_targets": 7,
-      "validated_new_task_mappings": 0,
+      "missing_distinct_task_targets": 5,
+      "validated_new_task_mappings": 2,
       "related_protocol_records": [
         {
           "benchmark": "BixBench-Verified-50",
@@ -793,7 +793,9 @@
           "canonical_task_id": "bix-51-q2",
           "relation": "identical-question",
           "additional_rank_credit": 0,
-          "protocol_validation": "Shared binomial-logit machinery passed on independent trial; exact q51 outcome/model specification remains unmapped."
+          "protocol_validation": "workflow-validated on independent observed licorice trial; direct source-answer reproduction is zero",
+          "adapted_workflow_covered": true,
+          "direct_source_answer_reproduced": false
         },
         {
           "benchmark": "BixBench-Verified-50",
@@ -802,7 +804,9 @@
           "canonical_task_id": "bix-51-q8",
           "relation": "identical-question",
           "additional_rank_credit": 0,
-          "protocol_validation": "Shared binomial-logit machinery passed on independent trial; exact q51 outcome/model specification remains unmapped."
+          "protocol_validation": "workflow-validated on independent observed licorice trial; direct source-answer reproduction is zero",
+          "adapted_workflow_covered": true,
+          "direct_source_answer_reproduced": false
         }
       ],
       "coverage_estimate": "Conditional target count after inspecting required stages. This is neither measured coverage nor a probability-weighted prediction; blockers can reduce the count.",
@@ -820,9 +824,8 @@
       ],
       "data_readiness": "medicaldata 0.2.0 licorice-gargle RCT: 235 observed patients, recorded age/BMI/gender/arm and 30-minute throat-pain outcome. Original RDA agrees with independent CSV conversion on every source field.",
       "blockers": [
-        "BixBench-Verified-50 q51-q2 requires BMI as the sole predictor of camrelizumab efficacy PR; the validated licorice BMI model also includes arm and recorded gender, and its outcome is no postoperative pain.",
-        "BixBench-Verified-50 q51-q8 requires a simple age model for camrelizumab response; the validated licorice age model includes arm and gender. An independently validated age-only coefficient is still needed.",
-        "A new prespecified independent-data task must fit BMI-only and age-only models and validate exact artifacts before any endpoint-level method mapping; the different clinical outcome remains an explicit adaptation limit."
+        "The independent licorice trial measures no postoperative pain, while q51-q2/q8 ask about camrelizumab efficacy PR; no direct cohort or numerical-answer reproduction is claimed.",
+        "The other five targeted q51 endpoints remain unmapped; this task validates only the exact BMI-only AIC and age-only coefficient operations."
       ],
       "effort_tiebreak": "Medium after source validation; model summaries and independent likelihood checks required.",
       "validation_evidence": [
@@ -840,8 +843,19 @@
           "job_id": "/exedev/bio-clinical-harbor-20260925-120003",
           "status": "passed eight deterministic Harbor cases; no exact BixBench endpoint mapping",
           "canonical_task_sha256": "f27c68c0592806c07103f40654b578f380d9d62dfbcaa72df586a3a39cc73404"
+        },
+        {
+          "job_id": "/exedev/bio-clinical-univariable-reference-20260925-122444",
+          "status": "passed task-specific statsmodels and independent Newton reference/artifact checks",
+          "archive_sha256": "dde403b8ecc39aad27e12119fe070084bd918f7d55eb37394e12128bb6c59dec"
+        },
+        {
+          "job_id": "/exedev/bio-clinical-univariable-harbor-20260925-130007",
+          "status": "passed nine deterministic Harbor cases; q51-q2/q8 adapted operations validated",
+          "canonical_task_sha256": "95806c3f162fc2b1554a2370e13388a76f43a50315b840d102978580f911aa24"
         }
-      ]
+      ],
+      "direct_source_answer_reproductions": 0
     },
     {
       "id": "reference-gene-model-audit",
@@ -1224,7 +1238,7 @@
       "disposition_source": "benchmark_sources.json: sources[name].inventory_disposition"
     },
     {
-      "name": "BioSecBench-Refusal \u2014 direct framing",
+      "name": "BioSecBench-Refusal — direct framing",
       "source_url": "https://github.com/latchbio/biosecbench-refusal",
       "priority_score": null,
       "reason": "The reviewed release overview describes Routine and Red-Team tasks and paired public examples. Its refusal objective differs from successful analysis of observed data.",
@@ -1256,7 +1270,7 @@
       "disposition_source": "benchmark_sources.json: sources[name].inventory_disposition"
     },
     {
-      "name": "ABLE \u2014 agentic biological AI tool use",
+      "name": "ABLE — agentic biological AI tool use",
       "source_url": "https://arxiv.org/abs/2609.05818",
       "priority_score": null,
       "reason": "The inspected primary abstract describes structure retrieval, sequence generation and design validation with biological AI tools; no task-level manifest has been inspected.",
@@ -1264,7 +1278,7 @@
       "disposition_source": "benchmark_sources.json: sources[name].inventory_disposition"
     },
     {
-      "name": "BioASQ \u2014 retrieval / end-to-end QA",
+      "name": "BioASQ — retrieval / end-to-end QA",
       "source_url": "https://www.bioasq.org/",
       "priority_score": null,
       "reason": "Official Synergy guidelines specify iterative retrieval against versioned PubMed snapshots with expert feedback. The official Synergy 2025 dataset link redirects to the participant login; no rows were retrieved.",

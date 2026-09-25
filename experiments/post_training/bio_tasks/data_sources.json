@@ -1819,6 +1819,14 @@
           "vendored_sha256": "5075a890b9a9bae35a51735fda65d1967da995a82758f632dc6aa1388814adc2",
           "vendored_bytes": 3438,
           "transformation": "Full typed row-keyed statsmodels reference from the original RDA; gzip level 9, mtime 0."
+        },
+        "licorice-gargle-univariable-reference.json.gz": {
+          "role": "private reference for two sole-predictor models; never solver input",
+          "content_sha256": "820d2b2499a3bb91425ad1757095020755047c7862188c20a638096282a39f01",
+          "content_bytes": 30867,
+          "vendored_sha256": "fb08eb235605d9318143147b662af19f636d0bf3ecd975c240c251bc184546f7",
+          "vendored_bytes": 2227,
+          "transformation": "Observed trial reference for separate age-only and BMI-only binomial logits on one common complete-case cohort; deterministic gzip, mtime 0."
         }
       },
       "independent_conversion": {
@@ -1851,6 +1859,126 @@
         "checks_sha256": "c7d1b0cfc97b10c723def38a3e8d4f7f20f774eb2396ad521f80b21f6f37c999",
         "status": "passed all five row-keyed artifact tables and seven summary fields; Harbor separate"
       }
+    },
+    "GEO:GSE285624-anole-age-methylation-AnoSag2.1": {
+      "landing_page": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE285624",
+      "lineage": "Shealy-2025-brown-anole-red-blood-cell-methylation",
+      "license": "NCBI GEO places no restrictions on use or distribution of data records",
+      "license_source": "https://www.ncbi.nlm.nih.gov/geo/info/disclaimer.html",
+      "citation": "Shealy et al. DNA methylation-based age prediction and sex-specific epigenetic aging in a lizard with female-biased longevity. Science Advances (2025), doi:10.1126/sciadv.adq3589.",
+      "retrieved_at": "2026-09-25",
+      "data_origin": "real",
+      "source_role": "37 observed methylomes, matched age metadata and 14 longest AnoSag2.1 scaffold lengths",
+      "benchmark_screening": "Independent Anolis sagrei lineage; excludes the Verified Jackdaw/Zebra Finch capsule study and Dryad 10.5061/dryad.wm37pvmw8. q52-q2/q6/q7 are candidate adaptation mappings only; no reviewed endpoint credit.",
+      "original_dimensions": {
+        "matrix_stranded_rows": 33421767,
+        "rows_on_selected_scaffolds": 33320853,
+        "collapsed_cpg_dyads": 18008144,
+        "tested_dyads_at_least_30_samples": 1575437,
+        "bh_selected_dyads": 3417,
+        "age_joined_samples": 37,
+        "matched_reference_scaffolds": 14
+      },
+      "assets": {
+        "anole-age-associated-sites.tsv.gz": {
+          "content_bytes": 1374960,
+          "content_sha256": "a3de0cfa2135546b205c18b18ef3b1e4fc1d4c27422a7ea86d0996687cf8b60c",
+          "role": "observed GEO-derived input",
+          "vendored_bytes": 342732,
+          "vendored_sha256": "8215ead5dd327ba4f1ca2fe398c2999cc362f8721e9965a735f792f4b823acd7",
+          "url": "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE285nnn/GSE285624/suppl/GSE285624_MethylationMatrix_allSamples.tab.gz",
+          "download_sha256": "21a39e255d339cad065904306ad5e95a518d78232648988adefe3cb15c990871",
+          "download_bytes": 798986992,
+          "transformation": "One complete GEO matrix streamed on reserved regional CPU. Retained all 37 age-joined animals on the 14 longest matched AnoSag2.1 scaffolds; complementary strand cytosines collapsed by unweighted per-sample means at canonical CpG dyads. At least 30 measured samples; two-sided Spearman and BH q<0.05 over all 1,575,437 tested dyads. All 3,417 selected dyads retained without top-k or effect thinning."
+        },
+        "anole-chromosomes.tsv.gz": {
+          "content_bytes": 311,
+          "content_sha256": "dff299f6d37d37ef36e71e63d08d3faf2eba41328a1eba52b6b11f1661805fd0",
+          "role": "matched metadata input",
+          "vendored_bytes": 163,
+          "vendored_sha256": "4a27c8fddf0147e249416ff7d0b5bfa09b3c8a416ffd79e54a6148ff2b5148c8",
+          "urls": [
+            "https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/025/583/915/GCF_025583915.1_AnoSag2.1/GCF_025583915.1_AnoSag2.1_assembly_report.txt",
+            "https://hgdownload.soe.ucsc.edu/hubs/GCF/025/583/915/GCF_025583915.1/GCF_025583915.1.chrom.sizes"
+          ],
+          "upstream_sha256": [
+            "67e975649cc8a24017f3db519cb9be7520eb8608199bc2c3d8082544c0529c33",
+            "780f86917adf58d186eaea1d38e5822b09b89680d99c6b76dccd7a7372ad6155"
+          ],
+          "transformation": "Lengths of the 14 longest AnoSag2.1 RefSeq scaffolds matched to GEO scaffold_1 through scaffold_14; deterministic gzip mtime 0."
+        },
+        "anole-samples.tsv.gz": {
+          "content_bytes": 781,
+          "content_sha256": "a81b8d832c0f21fbe49c978328d8f05b9e7fda9dc8c2186d78344fbd5abcec8b",
+          "role": "matched metadata input",
+          "vendored_bytes": 275,
+          "vendored_sha256": "5cce74eb3222bce52c79ec9c861b3c1c626053a8dc58e21a3283483bd65ea6fe",
+          "url": "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE285nnn/GSE285624/matrix/GSE285624_series_matrix.txt.gz",
+          "upstream_sha256": "8afe976b9fa5bfa3afd8e6a59d922c339d3d30a402cceb15ef0755cf946b5022",
+          "transformation": "All 37 matrix IDs joined uniquely to title, age in months, sex and GEO accession from the 40-sample series metadata; deterministic gzip mtime 0."
+        }
+      },
+      "source_preparation": {
+        "job_id": "/exedev/bio-anole-cpg-source-20260925-115014",
+        "output_uri": "gs://marin-us-central2/tmp/ttl=7d/iris/task-outputs/exedev/bio-anole-cpg-source-20260925-115014/0/9677a41e99eb6683/outputs.tar.zst",
+        "output_sha256": "0afdd99599c4dd0be9a52aa756fa619043d69621128aca2c0ffba32c3a14394c",
+        "output_bytes": 346956,
+        "worker": "marin-tpu-v4-reserved-256-us-central2-b-20260923-0702-5ab9aeff-worker-0",
+        "duration_seconds": 1033.224,
+        "retries": 0,
+        "manifest": "sources/anole_cpg_preparation.json"
+      },
+      "adaptation_limits": "GEO matrix is unfiltered and stranded; unweighted strand collapse and >=30-sample filter differ from the parallel Dryad processed matrix. The task spans only the 14 longest reference scaffolds. Downstream q2-style mean and q6-style maximum were corrected from the frozen source-preparation spec before inspecting derived signal; source selection and BH testing were unchanged."
+    },
+    "Parse:WT-Mini-v3-PBMC": {
+      "landing_page": "https://www.parsebiosciences.com/datasets/performance-of-evercode-wt-mini-v3-in-human-pbmcs/",
+      "lineage": "Parse Evercode WT Mini v3 four-donor human PBMC",
+      "license": "CC BY 4.0 for the dataset",
+      "license_source": "https://www.parsebiosciences.com/datasets/performance-of-evercode-wt-mini-v3-in-human-pbmcs/",
+      "citation": "Parse Biosciences, Performance of Evercode WT Mini v3 in Human PBMCs; Ensembl GRCh38 release 111 gene annotation.",
+      "retrieved_at": "2026-09-25",
+      "data_origin": "real",
+      "source_role": "observed four-donor single-cell UMI matrix and matching genome gene features",
+      "benchmark_screening": "Independent Parse PBMC observations; original BixBench CLUSTER sorted-cell source and capsule data excluded. CD14-only bix-22-q4 adaptation is provisional pending Harbor and endpoint review; bix-22-q1 remains uncovered.",
+      "assets": {
+        "parse-wt-mini-v3-cd14-reference.json.gz": {
+          "url": "gs://marin-us-central2/tmp/ttl=7d/iris/task-outputs/exedev/bio-cd14-gene-length-native-20260925-122419/0/591426b118046ce7/outputs.tar.zst",
+          "content_sha256": "3c7f9aad5d745aa15cb2c077088eeebfdb7081e7f192ea94f1648c66133be541",
+          "vendored_sha256": "44422b1ffba0ccf1fb108d07b8f43766025d16cd4242f8f3cac26e79092cf21d",
+          "content_bytes": 7169356,
+          "vendored_bytes": 1196642,
+          "transformation": "Private 4,861-cell/4-donor/20,012-coding-gene native SciPy reference from checksum-verified Parse counts and release-111 GTF; never supplied to solver."
+        }
+      },
+      "file_inputs": {
+        "matrix.mtx.gz": {
+          "sha256": "ced2e6e6bfbd33cc1954407f81a61324fa494fe7c6966da9337fcb86feede5ec",
+          "bytes": 31458838,
+          "source_url": "https://cdn.parsebiosciences.com/pbmc/v3/wt-mini/count_matrix.mtx",
+          "source_sha256": "f764402a7cfa05842d7f9a1b004b15e41c3ccedcaa004ba3f4cc9f7820f762af",
+          "transformation": "Deterministic gzip level 6, mtime 0; original MatrixMarket bytes unchanged."
+        },
+        "genes.csv": {
+          "sha256": "8efea9061252bf0e5c021fc6125e576cead0ad5621a337cb655fde6403820f33",
+          "bytes": 1974562,
+          "source_url": "https://cdn.parsebiosciences.com/pbmc/v3/wt-mini/all_genes.csv",
+          "transformation": "Original Parse gene metadata bytes unchanged."
+        },
+        "cells.csv": {
+          "sha256": "d5fb16e0a7ef1533127569989ec18bda38f41dc4b366bca0e8f2f24fa88acf8a",
+          "bytes": 266304,
+          "source_url": "https://cdn.parsebiosciences.com/pbmc/v3/wt-mini/cell_metadata.csv",
+          "transformation": "Original Parse cell metadata bytes unchanged."
+        },
+        "annotations.tsv.gz": {
+          "sha256": "d6984edb8b69e76af4dfdb320384a16a35bbe4e8d23306c10703a65ab7f99938",
+          "bytes": 874207,
+          "source_url": "https://ftp.ensembl.org/pub/release-111/gtf/homo_sapiens/Homo_sapiens.GRCh38.111.gtf.gz",
+          "source_sha256": "a52356765a41264e17a2076aff1abab703ec3ba239b78f88560756e85c169831",
+          "transformation": "All 63,241 GTF gene features exported as gene ID, chromosome, start, end and biotype TSV; deterministic gzip mtime 0."
+        }
+      },
+      "storage_status": "Pinned public sources and source-prep code reproduce offline assets on reserved CPU; durable regional source/reference copy awaits task-specific approval."
     }
   },
   "excluded_candidate_lineages": [

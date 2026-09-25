@@ -20,10 +20,13 @@ from experiments.post_training.bio_tasks.solvers.networks import SOLVERS as NETW
 from experiments.post_training.bio_tasks.solvers.phylogeny import SOLVERS as PHYLOGENY_SOLVERS
 from experiments.post_training.bio_tasks.solvers.protein_alignment import OUTPUT_SOLVERS as ALIGNMENT_OUTPUT_SOLVERS
 from experiments.post_training.bio_tasks.solvers.reads import SOLVERS as READ_SOLVERS
+from experiments.post_training.bio_tasks.solvers.real_anole_cpg import solve_anole_cpg
 from experiments.post_training.bio_tasks.solvers.real_assembly import solve_assembly
 from experiments.post_training.bio_tasks.solvers.real_bam import solve_bam
+from experiments.post_training.bio_tasks.solvers.real_cd14_gene_length import solve_cd14_gene_length
 from experiments.post_training.bio_tasks.solvers.real_clinical import SOLVERS as REAL_CLINICAL_SOLVERS
 from experiments.post_training.bio_tasks.solvers.real_clinical_binary import solve_clinical_binary
+from experiments.post_training.bio_tasks.solvers.real_clinical_univariable import solve_clinical_univariable
 from experiments.post_training.bio_tasks.solvers.real_clusters import solve_clusters
 from experiments.post_training.bio_tasks.solvers.real_domains import solve_domains
 from experiments.post_training.bio_tasks.solvers.real_enrichment import solve_enrichment
@@ -57,10 +60,13 @@ OUTPUT_SOLVERS = {
     "real-rnaseq-population-interaction": solve_interaction,
     "real-phix-assembly": solve_assembly,
     "real-phix-bam-read-structure": solve_bam,
+    "real-cd14-gene-length-association": solve_cd14_gene_length,
     "real-rnaseq-shrinkage-enrichment-audit": solve_enrichment,
     "real-singlecell-representation-audit": solve_representation,
     "real-dmel-gene-model-audit": solve_gene_model,
     "real-clinical-binary-response": solve_clinical_binary,
+    "real-clinical-univariable-logit-audit": solve_clinical_univariable,
+    "real-anole-age-cpg-density": solve_anole_cpg,
 }
 
 

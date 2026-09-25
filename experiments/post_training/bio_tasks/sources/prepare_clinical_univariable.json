@@ -1,0 +1,76 @@
+{
+  "recipe_id": "real-clinical-univariable-logit-audit",
+  "task_version": "1",
+  "instances_per_recipe": 1,
+  "source_id": "medicaldata:licorice_gargle",
+  "source_asset": "experiments/post_training/bio_tasks/data/medicaldata_0.2.0.tar.gz",
+  "source_archive_sha256": "56dab0c6078e6f9a9f183427a4481c5497e5d107b795bf965cc7ce4ac4c39236",
+  "original_rda_sha256": "aa0fe8957848031e6bd9df8d327ad31b19633bdf4b918f937bba5346acc3b9d4",
+  "solver_input_asset": "experiments/post_training/bio_tasks/data/licorice-gargle-trial.tsv.gz",
+  "solver_input_content_sha256": "5727ac676777c6ef57d3479d92a2afbcc7fa302b6dd830ca02cc1cca412b0f03",
+  "observations": "Every original randomized-trial participant in preserved source order with stable P0001-P0235 IDs; no simulated participants or outcomes",
+  "endpoint": {
+    "source_column": "throat_pain_30min",
+    "event": "recorded 30-minute throat-pain score equals zero",
+    "non_event": "recorded positive 30-minute throat-pain score",
+    "missing": "exclude from both fits; no imputation",
+    "clinical_scope": "absence of postoperative sore throat at 30 minutes, not camrelizumab efficacy or partial remission"
+  },
+  "common_cohort": {
+    "required_columns": ["age_years", "bmi_kg_m2", "throat_pain_30min"],
+    "exclude_if_any_required_missing": true,
+    "use_identical_cohort_for_models": true,
+    "cohort_table_all_input_rows": true,
+    "excluded_response_marker": "NA",
+    "exclusion_reason_policy": "comma-separated missing_<column_name> tokens in required-column order; empty for included rows"
+  },
+  "models": {
+    "age_only": {
+      "terms": ["intercept", "age_years"],
+      "linear_predictor": "intercept + age_years * recorded_age_years",
+      "slope_unit": "log odds per one year"
+    },
+    "bmi_only": {
+      "terms": ["intercept", "bmi_kg_m2"],
+      "linear_predictor": "intercept + bmi_kg_m2 * recorded_BMI_kg_per_m2",
+      "slope_unit": "log odds per one kg/m^2"
+    }
+  },
+  "fit": {
+    "link": "logit",
+    "likelihood": "Bernoulli",
+    "estimator": "unpenalized maximum likelihood",
+    "native_package": "statsmodels==0.14.6",
+    "fit_maxiter": 100,
+    "fit_tol": 1e-12,
+    "standard_error": "inverse observed Fisher information; no sandwich estimator",
+    "wald_pvalue": "two-sided standard normal tail",
+    "aic": "2 * number_of_coefficients - 2 * maximized_Bernoulli_log_likelihood",
+    "predictor_policy": "Never include recorded gender or randomized arm as a model term; no interactions, centering, scaling or other covariates"
+  },
+  "profiles": {
+    "age_only": [{"id": "age40", "age_years": 40}, {"id": "age60", "age_years": 60}, {"id": "age80", "age_years": 80}],
+    "bmi_only": [{"id": "bmi20", "bmi_kg_m2": 20}, {"id": "bmi25", "bmi_kg_m2": 25}, {"id": "bmi35", "bmi_kg_m2": 35}]
+  },
+  "artifacts": {
+    "cohort.tsv": "One row per source participant: included, binary response or NA, exclusion reason",
+    "coefficients.tsv": "Exactly four model/term rows: coefficient, model-based standard error, Wald z/p, odds ratio",
+    "model_fit.tsv": "Exactly two model rows: common cohort size/events, two parameters, maximized log likelihood, AIC and convergence",
+    "predictions.tsv": "Exactly six model/profile rows: named raw-unit covariate value and fitted event probability",
+    "answer.json": "One study row: all patients, complete cases, no-pain responses, age-only and BMI-only AICs, age-only per-year slope and BMI-only per-unit slope"
+  },
+  "comparison_policy": "The two models are nonnested; report their AICs but do not use a likelihood-ratio test between them",
+  "validation": {
+    "independent_check": "statsmodels native fit must agree with separately implemented Newton score/information solution and direct Bernoulli log likelihood",
+    "complete_artifact_grading": true,
+    "numeric_atol": 1e-8,
+    "numeric_rtol": 1e-7,
+    "negative_controls": ["wrong BMI-only AIC", "wrong age-only per-year slope", "wrong event orientation", "missing output"],
+    "llm_judge": false
+  },
+  "benchmark_relation": {
+    "bix_51_q2": "BMI as sole predictor of camrelizumab efficacy PR; this task reproduces only the single-predictor logit/AIC method on a different observed endpoint",
+    "bix_51_q8": "Simple age coefficient for camrelizumab response; this task reproduces only the single-predictor per-year log-odds method on a different observed endpoint",
+    "endpoint_coverage_credit": 0
+  }
+}

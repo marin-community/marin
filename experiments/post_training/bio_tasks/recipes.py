@@ -18,10 +18,15 @@ from experiments.post_training.bio_tasks.generators.intervals import RECIPES as 
 from experiments.post_training.bio_tasks.generators.networks import RECIPES as NETWORKS_RECIPES
 from experiments.post_training.bio_tasks.generators.phylogeny import RECIPES as PHYLOGENY_RECIPES
 from experiments.post_training.bio_tasks.generators.reads import RECIPES as READ_RECIPES
+from experiments.post_training.bio_tasks.generators.real_anole_cpg import RECIPES as REAL_ANOLE_CPG_RECIPES
 from experiments.post_training.bio_tasks.generators.real_assembly import RECIPES as REAL_ASSEMBLY_RECIPES
 from experiments.post_training.bio_tasks.generators.real_bam import RECIPES as REAL_BAM_RECIPES
+from experiments.post_training.bio_tasks.generators.real_cd14_gene_length import RECIPES as REAL_CD14_GENE_LENGTH_RECIPES
 from experiments.post_training.bio_tasks.generators.real_clinical import RECIPES as REAL_CLINICAL_RECIPES
 from experiments.post_training.bio_tasks.generators.real_clinical_binary import RECIPES as REAL_CLINICAL_BINARY_RECIPES
+from experiments.post_training.bio_tasks.generators.real_clinical_univariable import (
+    RECIPES as REAL_CLINICAL_UNIVARIABLE_RECIPES,
+)
 from experiments.post_training.bio_tasks.generators.real_clusters import RECIPES as REAL_CLUSTER_RECIPES
 from experiments.post_training.bio_tasks.generators.real_domains import RECIPES as REAL_DOMAIN_RECIPES
 from experiments.post_training.bio_tasks.generators.real_enrichment import RECIPES as REAL_ENRICHMENT_RECIPES
@@ -917,8 +922,10 @@ RECIPES = (
     *REAL_SINGLECELL_REPRESENTATION_RECIPES,
     *REAL_CLINICAL_RECIPES,
     *REAL_CLINICAL_BINARY_RECIPES,
+    *REAL_CLINICAL_UNIVARIABLE_RECIPES,
     *REAL_GENOMES_RECIPES,
     *REAL_GENE_MODEL_RECIPES,
+    *REAL_ANOLE_CPG_RECIPES,
     *REAL_READS_RECIPES,
     *REAL_PROTEINS_RECIPES,
     *REAL_PHYLOGENY_RECIPES,
@@ -928,6 +935,7 @@ RECIPES = (
     *REAL_CLUSTER_RECIPES,
     *REAL_ASSEMBLY_RECIPES,
     *REAL_BAM_RECIPES,
+    *REAL_CD14_GENE_LENGTH_RECIPES,
     *INTERVAL_RECIPES,
     *READ_RECIPES,
     *STATISTICS_RECIPES,
@@ -948,7 +956,7 @@ RECIPES = (
 
 DOMAIN_RECIPES = {
     "sequence": SEQUENCE_RECIPES + REPO_SEQUENCES_RECIPES + REAL_GENOMES_RECIPES,
-    "genomic-intervals": INTERVAL_RECIPES + REAL_GENE_MODEL_RECIPES,
+    "genomic-intervals": INTERVAL_RECIPES + REAL_GENE_MODEL_RECIPES + REAL_ANOLE_CPG_RECIPES,
     "sequencing-reads": READ_RECIPES + REAL_READS_RECIPES + REAL_BAM_RECIPES,
     "variants": VARIANTS_RECIPES,
     "expression": (
@@ -959,8 +967,11 @@ DOMAIN_RECIPES = {
         + REAL_ENRICHMENT_RECIPES
         + REAL_SINGLECELL_RECIPES
         + REAL_SINGLECELL_REPRESENTATION_RECIPES
+        + REAL_CD14_GENE_LENGTH_RECIPES
     ),
-    "statistics": STATISTICS_RECIPES + REAL_CLINICAL_RECIPES + REAL_CLINICAL_BINARY_RECIPES,
+    "statistics": (
+        STATISTICS_RECIPES + REAL_CLINICAL_RECIPES + REAL_CLINICAL_BINARY_RECIPES + REAL_CLINICAL_UNIVARIABLE_RECIPES
+    ),
     "phylogeny": PHYLOGENY_RECIPES + REAL_PROTEINS_RECIPES + REAL_PHYLOGENY_RECIPES,
     "assembly-and-ecology": ASSEMBLY_RECIPES + REAL_ASSEMBLY_RECIPES,
     "structures-and-proteomics": (

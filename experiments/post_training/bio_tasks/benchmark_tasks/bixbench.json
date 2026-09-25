@@ -6358,34 +6358,54 @@
       "source_tags": [
         "Other"
       ],
-      "status": "unmapped",
-      "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
-      "recipes": [],
+      "status": "workflow-validated",
+      "assessment": "Exact sole-predictor endpoint operation and complete artifacts validated on independent observed clinical data under the workflow_adaptation_policy; no direct source-study answer reproduction.",
+      "recipes": [
+        "real-clinical-univariable-logit-audit"
+      ],
       "required_stages": [
         "join binary clinical outcome and eligible covariates",
         "encode success and reference categories",
         "fit the requested single- or multi-predictor binomial model",
         "derive coefficients, Wald evidence, AIC or predicted probability"
       ],
-      "remaining_gaps": [
-        "Use a real independent cohort with explicit response coding and missingness; fitted binomial likelihood and predictions are not linear regression.",
-        "Validate this endpoint and its dependencies on independent real observations."
-      ],
+      "remaining_gaps": [],
       "required_formats": [
         "clinical outcome table",
         "patient covariates"
       ],
       "required_tools": [],
-      "independent_data_sources": [],
-      "validation_evidence": [],
-      "runtime_seconds": null,
+      "independent_data_sources": [
+        "medicaldata:licorice_gargle"
+      ],
+      "validation_evidence": [
+        {
+          "recipe": "real-clinical-univariable-logit-audit",
+          "task_id": "real-clinical-univariable-logit-audit-v1-20260925-00000",
+          "canonical_task_sha256": "95806c3f162fc2b1554a2370e13388a76f43a50315b840d102978580f911aa24",
+          "native_job_id": "/exedev/bio-clinical-univariable-reference-20260925-122444",
+          "harbor_job_id": "/exedev/bio-clinical-univariable-harbor-20260925-130007",
+          "harbor_archive_sha256": "1dc130d52335476887c3a8b514e8259b3d48e7f08c85f2d4d4786e6d0b16356e",
+          "original_and_authored_context": "Original question: camrelizumab efficacy PR binary response. Authored context: independent medicaldata licorice-gargle randomized trial, absence of postoperative throat pain at 30 minutes; 235 observed rows, 233 outcome-complete rows, no missing age or BMI. No source-study or numerical-answer reproduction.",
+          "source_question_operation": "BMI as the sole predictor of treatment response: report binomial-logit model AIC",
+          "preserved_method": "Intercept plus raw BMI, unpenalized binomial-logit MLE, AIC = 2k - 2 log likelihood",
+          "artifact_mapping": "model_fit.tsv row bmi_only column aic; answer.json study.bmi_only_aic",
+          "negative_controls": [
+            "wrong-bmi-aic",
+            "wrong-summary-bmi-aic",
+            "wrong-event-orientation"
+          ],
+          "direct_source_answer_reproduced": false
+        }
+      ],
+      "runtime_seconds": 173.84766320401104,
       "workflow_family": "clinical-logistic-regression",
       "endpoint_review": {
         "source_group": "bix-51",
         "question_sha256": "414c51bf9b9c3e6c3765222cc8f31bafc0118c2c1ac7ad85bfc45b2c0b176af2",
         "proposed_design_id": "bix-design-binary-clinical-response",
         "inspection_tier": "question-endpoint-reviewed",
-        "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+        "equivalence_status": "independent-data-workflow-validated-context-adapted"
       }
     },
     {
@@ -6533,34 +6553,54 @@
       "source_tags": [
         "Other"
       ],
-      "status": "unmapped",
-      "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
-      "recipes": [],
+      "status": "workflow-validated",
+      "assessment": "Exact sole-predictor endpoint operation and complete artifacts validated on independent observed clinical data under the workflow_adaptation_policy; no direct source-study answer reproduction.",
+      "recipes": [
+        "real-clinical-univariable-logit-audit"
+      ],
       "required_stages": [
         "join binary clinical outcome and eligible covariates",
         "encode success and reference categories",
         "fit the requested single- or multi-predictor binomial model",
         "derive coefficients, Wald evidence, AIC or predicted probability"
       ],
-      "remaining_gaps": [
-        "Use a real independent cohort with explicit response coding and missingness; fitted binomial likelihood and predictions are not linear regression.",
-        "Validate this endpoint and its dependencies on independent real observations."
-      ],
+      "remaining_gaps": [],
       "required_formats": [
         "clinical outcome table",
         "patient covariates"
       ],
       "required_tools": [],
-      "independent_data_sources": [],
-      "validation_evidence": [],
-      "runtime_seconds": null,
+      "independent_data_sources": [
+        "medicaldata:licorice_gargle"
+      ],
+      "validation_evidence": [
+        {
+          "recipe": "real-clinical-univariable-logit-audit",
+          "task_id": "real-clinical-univariable-logit-audit-v1-20260925-00000",
+          "canonical_task_sha256": "95806c3f162fc2b1554a2370e13388a76f43a50315b840d102978580f911aa24",
+          "native_job_id": "/exedev/bio-clinical-univariable-reference-20260925-122444",
+          "harbor_job_id": "/exedev/bio-clinical-univariable-harbor-20260925-130007",
+          "harbor_archive_sha256": "1dc130d52335476887c3a8b514e8259b3d48e7f08c85f2d4d4786e6d0b16356e",
+          "original_and_authored_context": "Original question: camrelizumab efficacy PR binary response. Authored context: independent medicaldata licorice-gargle randomized trial, absence of postoperative throat pain at 30 minutes; 235 observed rows, 233 outcome-complete rows, no missing age or BMI. No source-study or numerical-answer reproduction.",
+          "source_question_operation": "Age in a simple logistic model: report the age log-odds coefficient",
+          "preserved_method": "Intercept plus raw age in years, unpenalized binomial-logit MLE; slope is log-odds per year",
+          "artifact_mapping": "coefficients.tsv row age_only/age_years column coefficient; answer.json study.age_only_age_coefficient",
+          "negative_controls": [
+            "changed-age-coefficient",
+            "wrong-summary-age-slope",
+            "wrong-event-orientation"
+          ],
+          "direct_source_answer_reproduced": false
+        }
+      ],
+      "runtime_seconds": 173.84766320401104,
       "workflow_family": "clinical-logistic-regression",
       "endpoint_review": {
         "source_group": "bix-51",
         "question_sha256": "c7bb46cc2e7abc72a546beb2d86a9d9ac291de498bd6c693cc2696f099beaf3a",
         "proposed_design_id": "bix-design-binary-clinical-response",
         "inspection_tier": "question-endpoint-reviewed",
-        "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+        "equivalence_status": "independent-data-workflow-validated-context-adapted"
       }
     },
     {
@@ -6603,9 +6643,11 @@
       "source_tags": [
         "Epigenomics"
       ],
-      "status": "unmapped",
-      "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
-      "recipes": [],
+      "status": "component-only",
+      "assessment": "The validated Anolis task supplies unique extreme-site densities and the Verified nonzero-only mean, but the original question's 'genome-wide average chromosomal density' does not fix that denominator. The original endpoint therefore has component evidence only.",
+      "recipes": [
+        "real-anole-age-cpg-density"
+      ],
       "required_stages": [
         "join CpG coordinates, methylation fractions and chromosome lengths",
         "apply extreme-methylation thresholds",
@@ -6613,24 +6655,29 @@
         "compute chromosome-normalized densities or distribution tests"
       ],
       "remaining_gaps": [
-        "Use matching genome builds and explicit unique-site denominators; clarify whether uniformity means equal chromosome counts or counts proportional to chromosome lengths.",
-        "Validate this endpoint and its dependencies on independent real observations."
+        "Resolve the original q2 genome-wide versus per-chromosome mean and zero-site scaffold policy, then grade that exact scalar; the Verified clarification is validated separately.",
+        "This uses independent Anolis GEO observations and AnoSag2.1 rather than the original avian Dryad inputs; source numerical answers are not reproduced. Broad release-level benchmark-lineage review and training weighting remain separate."
       ],
       "required_formats": [
         "methylation table or bedGraph",
         "assembly chromosome sizes"
       ],
       "required_tools": [],
-      "independent_data_sources": [],
-      "validation_evidence": [],
-      "runtime_seconds": null,
+      "independent_data_sources": [
+        "GEO:GSE285624-anole-age-methylation-AnoSag2.1"
+      ],
+      "validation_evidence": [
+        "native_validation_runs/46f74cba0ebd.json",
+        "container_validation.json: /exedev/bio-anole-cpg-harbor-20260925-125739"
+      ],
+      "runtime_seconds": 1.165592031989945,
       "workflow_family": "chromosomal-cpg-density",
       "endpoint_review": {
         "source_group": "bix-52",
         "question_sha256": "ac32c7f91421bdc592794dcf65058ff340c1740017222a699d9ac8966f671c71",
         "proposed_design_id": "bix-design-methylation-genome-density",
         "inspection_tier": "question-endpoint-reviewed",
-        "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+        "equivalence_status": "related-verified-workflow-component-only"
       }
     },
     {
@@ -6708,9 +6755,11 @@
       "source_tags": [
         "Epigenomics"
       ],
-      "status": "unmapped",
-      "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
-      "recipes": [],
+      "status": "workflow-validated",
+      "assessment": "The observed Anolis task identifies the scaffold with maximum density of all age-associated CpG sites per reference base before extreme filtering, with a separately reported filtered maximum. Native and Harbor oracle/artifact checks passed. This validates the original/Verified question's complete operation in an independent biological context, not the Jackdaw chromosome answer.",
+      "recipes": [
+        "real-anole-age-cpg-density"
+      ],
       "required_stages": [
         "join CpG coordinates, methylation fractions and chromosome lengths",
         "apply extreme-methylation thresholds",
@@ -6718,24 +6767,28 @@
         "compute chromosome-normalized densities or distribution tests"
       ],
       "remaining_gaps": [
-        "Use matching genome builds and explicit unique-site denominators; clarify whether uniformity means equal chromosome counts or counts proportional to chromosome lengths.",
-        "Validate this endpoint and its dependencies on independent real observations."
+        "This uses independent Anolis GEO observations and AnoSag2.1 rather than the original avian Dryad inputs; source numerical answers are not reproduced. Broad release-level benchmark-lineage review and training weighting remain separate."
       ],
       "required_formats": [
         "methylation table or bedGraph",
         "assembly chromosome sizes"
       ],
       "required_tools": [],
-      "independent_data_sources": [],
-      "validation_evidence": [],
-      "runtime_seconds": null,
+      "independent_data_sources": [
+        "GEO:GSE285624-anole-age-methylation-AnoSag2.1"
+      ],
+      "validation_evidence": [
+        "native_validation_runs/46f74cba0ebd.json",
+        "container_validation.json: /exedev/bio-anole-cpg-harbor-20260925-125739"
+      ],
+      "runtime_seconds": 1.165592031989945,
       "workflow_family": "chromosomal-cpg-density",
       "endpoint_review": {
         "source_group": "bix-52",
         "question_sha256": "a374fe13571c82e3f360ed04a6dc24f79f746bb573bb731d2f271cf27d4ab346",
         "proposed_design_id": "bix-design-methylation-genome-density",
         "inspection_tier": "question-endpoint-reviewed",
-        "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+        "equivalence_status": "independent-anole-workflow-validated"
       }
     },
     {
@@ -6743,9 +6796,11 @@
       "source_tags": [
         "Epigenomics"
       ],
-      "status": "unmapped",
-      "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
-      "recipes": [],
+      "status": "component-only",
+      "assessment": "The validated Anolis task classifies each unique age-associated site and reports an extreme-site flag, but its graded scalar counts removed measurement rows. Original q7 asks removed unique sites, so only the shared filtering component is validated.",
+      "recipes": [
+        "real-anole-age-cpg-density"
+      ],
       "required_stages": [
         "join CpG coordinates, methylation fractions and chromosome lengths",
         "apply extreme-methylation thresholds",
@@ -6753,24 +6808,29 @@
         "compute chromosome-normalized densities or distribution tests"
       ],
       "remaining_gaps": [
-        "Use matching genome builds and explicit unique-site denominators; clarify whether uniformity means equal chromosome counts or counts proportional to chromosome lengths.",
-        "Validate this endpoint and its dependencies on independent real observations."
+        "Add and independently grade the original q7 removed-unique-sites count as a final scalar; the Verified row-count endpoint is validated separately.",
+        "This uses independent Anolis GEO observations and AnoSag2.1 rather than the original avian Dryad inputs; source numerical answers are not reproduced. Broad release-level benchmark-lineage review and training weighting remain separate."
       ],
       "required_formats": [
         "methylation table or bedGraph",
         "assembly chromosome sizes"
       ],
       "required_tools": [],
-      "independent_data_sources": [],
-      "validation_evidence": [],
-      "runtime_seconds": null,
+      "independent_data_sources": [
+        "GEO:GSE285624-anole-age-methylation-AnoSag2.1"
+      ],
+      "validation_evidence": [
+        "native_validation_runs/46f74cba0ebd.json",
+        "container_validation.json: /exedev/bio-anole-cpg-harbor-20260925-125739"
+      ],
+      "runtime_seconds": 1.165592031989945,
       "workflow_family": "chromosomal-cpg-density",
       "endpoint_review": {
         "source_group": "bix-52",
         "question_sha256": "9cd0c7040c6a74609cee8b76181f57dce72b8b279ee201006ff937c88c620ae6",
         "proposed_design_id": "bix-design-methylation-genome-density",
         "inspection_tier": "question-endpoint-reviewed",
-        "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+        "equivalence_status": "related-verified-workflow-component-only"
       }
     },
     {

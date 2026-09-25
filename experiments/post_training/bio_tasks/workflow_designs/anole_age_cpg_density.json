@@ -1,0 +1,101 @@
+{
+  "design_id": "real-anole-age-cpg-density",
+  "status": "native-and-harbor-validated-independent-context-workflow-mapped",
+  "benchmark": "BixBench-Verified-50",
+  "candidate_endpoints": [
+    {
+      "task_id": "bix-52-q2",
+      "source_question_sha256": "834d809effea09d1b90f3dac2c83adb4dbeb902422e61fe83d203546f4c0e8df",
+      "covered_operation": "Deduplicate extreme CpG sites per scaffold, divide by matched reference base length, then average only scaffold densities with at least one filtered CpG.",
+      "input_equivalence_verified": false
+    },
+    {
+      "task_id": "bix-52-q6",
+      "source_question_sha256": "a374fe13571c82e3f360ed04a6dc24f79f746bb573bb731d2f271cf27d4ab346",
+      "covered_operation": "Identify the scaffold with the highest density of all age-associated CpG sites per reference base, with the extreme-filtered maximum also reported. The task retains a separate chi-square distribution audit as an additional output.",
+      "input_equivalence_verified": false
+    },
+    {
+      "task_id": "bix-52-q7",
+      "source_question_sha256": "d167ebfab9d62283e9fedc241a62a91a2f6ddcc3f9b705898906391c6a9c3a76",
+      "covered_operation": "Count removed nonextreme site-by-sample measurement rows at strict <10% and >90% cutoffs.",
+      "input_equivalence_verified": false
+    }
+  ],
+  "exact_question_review": "Question fields only from the pinned BixBench-Verified-50 JSONL were reviewed on 2026-09-25 before inspecting selected CpG values. q2 excludes zero-filtered-site chromosomes; q6 asks for the highest age-related-site density rather than a chi-square test; q7 counts individual removed measurements. No capsule files or expected answers were used.",
+  "independent_observation": {
+    "organism": "Anolis sagrei",
+    "tissue": "red blood cells",
+    "source": "GEO GSE285624 processed methylation matrix and sample metadata",
+    "source_url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE285624",
+    "assembly": "AnoSag2.1, GCF_025583915.1",
+    "reuse": "NCBI GEO places no restriction on data use or distribution: https://www.ncbi.nlm.nih.gov/geo/info/disclaimer.html",
+    "excluded_benchmark_study": "https://doi.org/10.5061/dryad.wm37pvmw8",
+    "source_study": "https://doi.org/10.1126/sciadv.adq3589"
+  },
+  "predeclared_source_transformation": {
+    "scaffolds": "14 longest matched AnoSag2.1 scaffolds, including the putative X",
+    "samples": "all 37 GEO matrix sample columns with uniquely joined ages in months",
+    "dyad": "plus coordinate or minus coordinate minus one; mean available strand percentages per animal",
+    "coverage": "at least 30 nonmissing sample percentages per collapsed dyad",
+    "age_association": "two-sided Spearman test and Benjamini-Hochberg q<0.05 across every eligible dyad on all 14 scaffolds",
+    "thinning": "none after BH selection",
+    "methylation_extremes": "strictly below 10% or strictly above 90%; missing is not measured",
+    "denominator": "full reference scaffold length in base pairs; filtered-density mean excludes scaffolds with no filtered CpGs",
+    "density_maximum": "argmax of all supplied age-associated site counts per reference base, before extreme filtering; also report filtered argmax",
+    "distribution_null": "expected unique-site counts proportional to full reference scaffold lengths"
+  },
+  "source_preparation_evidence": {
+    "job_id": "/exedev/bio-anole-cpg-source-20260925-115014",
+    "attempt": 0,
+    "reserved_worker": "marin-tpu-v4-reserved-256-us-central2-b-20260923-0702-5ab9aeff-worker-0",
+    "archive_uri": "gs://marin-us-central2/tmp/ttl=7d/iris/task-outputs/exedev/bio-anole-cpg-source-20260925-115014/0/9677a41e99eb6683/outputs.tar.zst",
+    "archive_bytes": 346956,
+    "archive_sha256": "0afdd99599c4dd0be9a52aa756fa619043d69621128aca2c0ffba32c3a14394c",
+    "source_matrix_bytes": 798986992,
+    "source_matrix_sha256": "21a39e255d339cad065904306ad5e95a518d78232648988adefe3cb15c990871",
+    "raw_stranded_rows": 33421767,
+    "collapsed_dyads": 18008144,
+    "tested_dyads": 1575437,
+    "bh_significant_dyads": 3417,
+    "source_preparation_seconds": 1033.224,
+    "complete_record": "../sources/anole_cpg_preparation.json"
+  },
+  "requested_artifacts": [
+    "sites.tsv: one row per supplied age-associated CpG with complete sample-row classifications",
+    "scaffolds.tsv: all 14 scaffold age-associated and filtered counts/densities, expected filtered counts, and chi-square contributions",
+    "answer.json: complete cohort counts, nonzero-filtered mean per base, age-associated and filtered density maxima, chi-square statistic, df, and p-value"
+  ],
+  "adaptation_limits": [
+    "This is an independent lizard cohort; the Verified avian capsule inputs, code, and expected answers are excluded.",
+    "The GEO file is unfiltered and stranded. Unweighted within-sample strand collapse and >=30-sample filtering differ from the parallel Dryad processed matrix, whose public content endpoint returned 401/403 in the source audit.",
+    "The source-preparation payload was submitted before exact Verified question review and retains superseded downstream wording of an all-14 mean per megabase. That wording did not affect source selection or age testing. Before examining derived CpG signal, the task output policy was corrected to the q2 nonzero-only mean per base and q6 age-site density maximum; the exact submitted source payload hash remains preserved in the Iris source plan.",
+    "Age association is computed during source preparation and exposed as a fixed input set; the Harbor solver grades the subsequent connected extreme-filter, deduplication, density, and distribution workflow.",
+    "The exact Verified q2 mean excludes chromosomes with no filtered CpG; the task applies that rule to 14 predeclared anole scaffolds and uses CpGs per base pair. Verified q6 asks for the highest age-related CpG density, which the task reports before the extreme filter; the additional filtered maximum makes the interpretation explicit.",
+    "Full reference bases, rather than measured/callable CpG opportunities, define the explicit distribution null. Interpret this as a per-base distribution test, not a test of biological enrichment after callability correction.",
+    "Verified q2/q6/q7 match the task's nonzero-only mean, highest all-age-site density, and removed measurement-row count, respectively. Original q6 has the same wording; original q2 leaves the averaging denominator ambiguous and original q7 asks removed sites rather than measurement rows.",
+    "The independent anole task validates those workflow operations, not the avian study's direct numerical answers. Broader release-level lineage screening and training weighting remain provisional."
+  ],
+  "validated_benchmark_credit": true,
+  "credit_unit": "independent-context workflow coverage, shared original/Verified source groups counted once",
+  "workflow_validated_endpoint_ids": [
+    "bix-52-q2",
+    "bix-52-q6",
+    "bix-52-q7"
+  ],
+  "original_alias_status": {
+    "bix-52-q2": "component-only: original genome-wide averaging denominator ambiguous",
+    "bix-52-q6": "workflow-validated: identical highest age-related CpG density operation",
+    "bix-52-q7": "component-only: original asks removed sites, Verified asks removed measurement rows"
+  },
+  "direct_source_answer_reproduction": false,
+  "harbor_validation": {
+    "job_id": "/exedev/bio-anole-cpg-harbor-20260925-125739",
+    "canonical_task_sha256": "d1624172fefc84a33ff9f073c1d68ec0bcd744a7a5dd508f5344574eb19ed9fb",
+    "archive_sha256": "b76d40ff87a95b7489b76b22fa5d9657ea55d4b7b070ddd8983bc9e3fb31f171",
+    "positive_cases": 1,
+    "negative_cases": 4,
+    "cleanup_remaining": 0,
+    "model_calls": 0
+  }
+}

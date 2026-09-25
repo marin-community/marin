@@ -45,6 +45,9 @@ PROFILES = {
     "real-phix-bam-read-structure": EnvironmentProfile(3, "native_validation_runs/81c78459a53b.json", 2048),
     "real-dmel-gene-model-audit": EnvironmentProfile(19, "native_validation_runs/1d21faa8f7b0.json", 2048),
     "real-clinical-binary-response": EnvironmentProfile(None, "native_validation_runs/ccfe0192a504.json", 2048),
+    "real-clinical-univariable-logit-audit": EnvironmentProfile(None, "native_validation_runs/dde403b8ecc3.json", 2048),
+    "real-anole-age-cpg-density": EnvironmentProfile(None, "native_validation_runs/46f74cba0ebd.json", 2048),
+    "real-cd14-gene-length-association": EnvironmentProfile(None, "native_validation_runs/8aba016940bf.json", 4096),
 }
 
 

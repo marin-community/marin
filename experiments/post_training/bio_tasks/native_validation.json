@@ -1394,6 +1394,115 @@
         "distinct_biological_inputs": 1
       },
       "limitations": "Package oracle and separate native reference agree for this fixed complete-case logit workflow. Harbor image build, terminal transfer, verifier and model-agent behavior remain separate gates."
+    },
+    {
+      "checked_at": "2026-09-25",
+      "source_revision": "4a634229b73497ddc57ada1adcc193a61236e519",
+      "environment_kind": "Task-specific statsmodels 0.14.6 native run on existing reserved TRC CPU; independent NumPy Newton and packaged oracle comparison; environment lock reused from the checked clinical binary profile",
+      "region": "us-central2",
+      "storage_backend": "GCS",
+      "job_id": "/exedev/bio-clinical-univariable-reference-20260925-122444",
+      "parent_job_state": "succeeded",
+      "base_image": "python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c",
+      "resources": {
+        "cpu": 1,
+        "memory_gib": 16,
+        "disk_gib": 16,
+        "automatic_retries": 0,
+        "model_calls": 0
+      },
+      "input_bundle_sha256": "4dbdf2357b6bab4fe5cd76856a48d99cfb29dfc1eb2d11a0d376de47b34859c5",
+      "output_archive_sha256": "dde403b8ecc39aad27e12119fe070084bd918f7d55eb37394e12128bb6c59dec",
+      "output_archive_bytes": 7728,
+      "output_archive_url": "gs://marin-us-central2/tmp/ttl=7d/iris/task-outputs/exedev/bio-clinical-univariable-reference-20260925-122444/0/febb4b0730964bb6/outputs.tar.zst",
+      "archive_storage_status": "Iris 7-day temporary regional output; compact privacy-safe reference evidence and deterministic compressed private reference retained in this repository",
+      "checks_file": "native_validation_runs/dde403b8ecc3.json",
+      "checks_sha256": "1e66887eba2a5434bf321ac313ea7612d43597340365a7e540c4e1b5c0c0c5b4",
+      "summary": {
+        "expected_repositories": 0,
+        "attempted_repositories": 0,
+        "passed_repositories": 0,
+        "planned_cases": 1,
+        "completed_cases": 1,
+        "passing_cases": 1,
+        "distinct_biological_inputs": 1,
+        "complete_case_rows": 233,
+        "artifact_tables": 4
+      },
+      "limitations": "The same observed trial supports sole-predictor BMI and age binomial-logit operations, but its outcome is absence of postoperative throat pain, not camrelizumab efficacy. Local contract corruption controls passed; Harbor execution and reviewed adapted BixBench endpoint credit remain separate gates."
+    },
+    {
+      "checked_at": "2026-09-25",
+      "source_revision": "4a634229b7",
+      "environment_kind": "Task-specific checksum-locked NumPy 2.3.5 and SciPy 1.17.0 on existing reserved TRC CPU; independent complete artifact grading and nine corruption controls",
+      "region": "us-central2",
+      "storage_backend": "GCS",
+      "job_id": "/exedev/bio-anole-cpg-native-20260925-121844",
+      "parent_job_state": "succeeded",
+      "base_image": "python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c",
+      "resources": {
+        "cpu": 1,
+        "memory_gib": 4,
+        "disk_gib": 8,
+        "automatic_retries": 0,
+        "model_calls": 0
+      },
+      "input_bundle_sha256": "c876d7897865c164e732068baa411aefdef1b86f34407ad054b21bf5598353b0",
+      "output_archive_sha256": "46f74cba0ebdcfca88b47d01a26ca7ae4a4a36fcd754c638f98a034038add50a",
+      "output_archive_bytes": 43588,
+      "output_archive_url": "gs://marin-us-central2/tmp/ttl=7d/iris/task-outputs/exedev/bio-anole-cpg-native-20260925-121844/0/c9bdd006fb3db8c4/outputs.tar.zst",
+      "archive_storage_status": "Iris 7-day temporary regional output; exact resolved package lock and privacy-safe validation evidence preserved in this repository",
+      "checks_file": "native_validation_runs/46f74cba0ebd.json",
+      "checks_sha256": "e617cb49f8a529030257aaa77250a5021d1aa0c5b6bfb3b58b57d86b41008e5c",
+      "summary": {
+        "expected_repositories": 0,
+        "attempted_repositories": 0,
+        "passed_repositories": 0,
+        "planned_cases": 10,
+        "completed_cases": 10,
+        "passing_cases": 1,
+        "negative_checks": 9,
+        "distinct_biological_inputs": 1,
+        "site_rows": 3417,
+        "scaffold_rows": 14
+      },
+      "limitations": "Observed brown-anole cohort on 14 predeclared scaffolds, with age-association sites fixed during source preparation. Native package and full deterministic artifact checks passed. Harbor execution and exact BixBench-Verified-50 adaptation review remain separate gates; no endpoint or competency credit is awarded."
+    },
+    {
+      "checked_at": "2026-09-25",
+      "source_revision": "4a634229b7",
+      "environment_kind": "Checksum-locked NumPy 2.3.5 and SciPy 1.17.0 on existing reserved TRC CPU; CD14 source preparation and native oracle",
+      "region": "us-central2",
+      "storage_backend": "GCS",
+      "job_id": "/exedev/bio-cd14-gene-length-native-20260925-122419",
+      "parent_job_state": "succeeded",
+      "base_image": "python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c",
+      "resources": {
+        "cpu": 1,
+        "memory_gib": 6,
+        "disk_gib": 10,
+        "automatic_retries": 0,
+        "model_calls": 0
+      },
+      "input_bundle_sha256": "b990281a2534d6d289f1cf823cd81bf4fd52d8289622a51f3c6810e78235c8ce",
+      "output_archive_sha256": "8aba016940bf2a065cb5a4cb3c53c9ea595dd480dc41d8f262fd9482cb0207ed",
+      "output_archive_bytes": 1201606,
+      "output_archive_url": "gs://marin-us-central2/tmp/ttl=7d/iris/task-outputs/exedev/bio-cd14-gene-length-native-20260925-122419/0/591426b118046ce7/outputs.tar.zst",
+      "archive_storage_status": "Iris 7-day temporary regional output; private reference retained in task data with exact hash",
+      "checks_file": "native_validation_runs/8aba016940bf.json",
+      "checks_sha256": "5f70acea65959482810ac4efc6f365bc1fae1b0d12c60cfb54ad9395d712ea1e",
+      "summary": {
+        "expected_repositories": 0,
+        "attempted_repositories": 0,
+        "passed_repositories": 0,
+        "planned_cases": 1,
+        "completed_cases": 1,
+        "passing_cases": 1,
+        "distinct_biological_inputs": 1,
+        "selected_cells": 1219,
+        "eligible_genes": 13265
+      },
+      "limitations": "Observed Parse PBMC CD14 donor pseudobulks; raw inclusive gene span versus arithmetic mean donor CPM. Native package oracle passed. Separate artifact corruption, Harbor transfer, and exact Verified endpoint adaptation review remain pending; no endpoint or competency credit is awarded."
     }
   ],
   "numerical_portability": [

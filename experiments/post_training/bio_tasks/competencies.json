@@ -33,7 +33,10 @@
     "real-phix-bam-read-structure": "bio.read-quality",
     "real-heme-pocket-burial": "bio.ligand-structure-affinity",
     "real-dmel-gene-model-audit": "bio.genomic-interval-operations",
-    "real-clinical-binary-response": "bio.clinical-response-model"
+    "real-clinical-binary-response": "bio.clinical-response-model",
+    "real-clinical-univariable-logit-audit": "bio.clinical-response-model",
+    "real-anole-age-cpg-density": "bio.age-cpg-density",
+    "real-cd14-gene-length-association": "bio.gene-span-expression-association"
   },
   "validated_assignments": [],
   "release_ready_assignments": [],
@@ -636,6 +639,39 @@
         "sample_tasks": []
       },
       {
+        "id": "bio.gene-span-expression-association",
+        "parent_id": "bio.transcriptomics.contrasts",
+        "name": "Associate genomic gene span with mean expression in a filtered cell population",
+        "kind": "capability",
+        "outcome": "Join genomic gene spans to donor-aware expression estimates and quantify a declared gene-level association after explicit eligibility filtering.",
+        "includes": [
+          "Cell-label and donor QC, pseudobulk count totals, matched annotation coordinates, per-gene eligibility and mean expression, and the complete correlation result"
+        ],
+        "excludes": [
+          "Between-population comparisons, causal gene-length effects, and reproduction of an original study's numerical answer."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "cell population and donor design"
+          },
+          {
+            "id": "variation-3",
+            "description": "counting and annotation release"
+          },
+          {
+            "id": "variation-4",
+            "description": "declared eligibility and association method"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
         "id": "bio.transcriptomics.states",
         "parent_id": "bio.transcriptomics",
         "name": "Expression and cell states",
@@ -1062,6 +1098,48 @@
           }
         ],
         "sample_tasks": []
+      },
+      {
+        "id": "bio.age-cpg-density",
+        "parent_id": "bio.epigenomics.chromatin",
+        "name": "Audit age-associated CpG measurements and chromosome-normalized densities",
+        "kind": "capability",
+        "outcome": "Classify age-associated CpG measurements, deduplicate sites and compare scaffold-normalized densities.",
+        "includes": [
+          "Age and sample joins, canonical CpG dyad coordinates, multiple-testing-aware age association, strict methylation thresholds, unique-site and measurement-row counts, matched assembly lengths"
+        ],
+        "excludes": [
+          "Expression association without matched expression observations; direct reproduction of benchmark organism-specific answers; unscored narrative judgments."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism and tissue"
+          },
+          {
+            "id": "variation-3",
+            "description": "methylation assay and sample scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "age association and density decision"
+          }
+        ],
+        "sample_tasks": [
+          {
+            "kind": "entry",
+            "instruction": "Given age-associated CpG coordinates and matched reference lengths, count unique sites per chromosome, calculate density per base, and identify the highest-density chromosome."
+          },
+          {
+            "kind": "representative",
+            "instruction": "Join observed per-sample methylation measurements to age-associated CpG sites, count individual rows removed by a strict extreme-value filter, deduplicate retained sites, and report auditable per-chromosome densities, the nonzero-chromosome mean, and the highest-density chromosome."
+          }
+        ]
       },
       {
         "id": "bio.differential-binding",
@@ -2525,6 +2603,20 @@
         "single-cell"
       ]
     },
+    "bio.gene-span-expression-association": {
+      "workstream_ids": [],
+      "definition_status": "draft",
+      "operations": [
+        "reference-and-format-semantics",
+        "replicate-aware-inference"
+      ],
+      "question_examples": [
+        "Across eligible protein-coding genes, how does genomic span relate to mean CD14 donor expression?"
+      ],
+      "facets": [
+        "single-cell"
+      ]
+    },
     "bio.single-cell-qc-embedding": {
       "workstream_ids": [
         "single-cell-qc-embedding"
@@ -3127,6 +3219,23 @@
         "Which inferred dose differences persist after measurement uncertainty and geometry sensitivity checks?"
       ],
       "facets": []
+    },
+    "bio.age-cpg-density": {
+      "workstream_ids": [],
+      "definition_status": "draft",
+      "operations": [
+        "reference-and-format-semantics",
+        "replicate-aware-inference",
+        "integration-and-provenance"
+      ],
+      "question_examples": [
+        "Which age-associated CpG dyads remain after sample and multiplicity checks?",
+        "Which scaffolds have the highest unique-site density after strict methylation filtering?",
+        "How many individual measurements are removed without conflating rows and loci?"
+      ],
+      "facets": [
+        "gene-regulation"
+      ]
     }
   },
   "cross_cutting_workstreams": [
