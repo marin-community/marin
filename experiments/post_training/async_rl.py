@@ -428,7 +428,6 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
             # Symmetric PPO clip.
             "eps_clip_low": 0.2,
             "eps_clip_high": 0.2,
-            "ratio_diagnostics": {"pooled": preset.telemetry},
         },
         "policy": {
             "optimizer_config": {
