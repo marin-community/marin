@@ -374,6 +374,8 @@ class EvalchemyExecutor:
         session: RemoteInferenceSession,
         output_dir: str,
         env_vars: Mapping[str, str],
+        *,
+        judge: RemoteInferenceSession | None = None,
     ) -> EvaluationOutcome:
         try:
             outcome = run_evalchemy(session.model, self.config, output_dir, env_vars=env_vars)
