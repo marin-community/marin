@@ -290,6 +290,8 @@ class GrugModelConfig:
     """Total combine weight of a token's K routed experts (``RouterCombine``)."""
     latent_out_norm: bool = False
     """Kimi K3 normalized LatentMoE: a learnable RMSNorm on the combined routed output before ``W_latent_up``."""
+    learnable_qk_mult: bool = False
+    """A learnable scalar per softmax-attention layer (init ``qk_mult``) in place of the fixed ``qk_mult``."""
     aux_lm_layer: int | None = None
     """Early auxiliary LM loss: the residual stream after this layer (the plain sum of the AttnRes
     sources) goes through a parameter-free RMS norm and the shared lm_head. None disables it."""
@@ -428,6 +430,7 @@ class CausalSelfAttention(eqx.Module):
     value_embed: Float[Array, "V NH"] | None
     ve_lambda: Float[Array, " 2"] | None  # (lambda1 on v, lambda2 on the value embedding)
     ve_gate: Float[Array, "D N"] | None
+    qk_mult: Float[Array, ""] | None  # learnable logit scale (cfg.learnable_qk_mult); else cfg.qk_mult
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -456,6 +459,7 @@ class CausalSelfAttention(eqx.Module):
                 ),
                 ve_lambda=jnp.array([1.0, 0.0]) if use_ve else None,
                 ve_gate=(reshard(jnp.zeros((d, n)), P(None, None)) if cfg.value_embeds == ValueEmbeds.GATED else None),
+                qk_mult=jnp.asarray(cfg.qk_mult, jnp.float32) if cfg.learnable_qk_mult else None,
                 cfg=cfg,
             )
         k_q, k_k, k_v, k_o, k_rel = random.split(key, 5)
@@ -474,6 +478,7 @@ class CausalSelfAttention(eqx.Module):
             value_embed=None,
             ve_lambda=None,
             ve_gate=None,
+            qk_mult=jnp.asarray(cfg.qk_mult, jnp.float32) if cfg.learnable_qk_mult else None,
             cfg=cfg,
         )
 
@@ -599,7 +604,7 @@ class CausalSelfAttention(eqx.Module):
             keep = ~jnp.asarray(disable_rope, dtype=jnp.bool_)
             q = jnp.where(keep, q_roped, q)
             k = jnp.where(keep, k_roped, k)
-        q = q * self.cfg.qk_mult
+        q = q * (self.cfg.qk_mult if self.qk_mult is None else self.qk_mult.astype(q.dtype))
         # The fa4-cute kernel is GPU-only; fall back to auto-select off-GPU so the model still lowers
         # on CPU (e.g. the grug variant-contract tests).
         attn_impl = "gpu_fa4_cute" if jax.default_backend() == "gpu" else None
@@ -1618,6 +1623,8 @@ class Transformer(eqx.Module):
             ),
         }
         for i, layer in enumerate(layers):
+            if isinstance(layer.attn, CausalSelfAttention) and layer.attn.qk_mult is not None:
+                final_stats[f"attn_res_qk_mult_L{i}"] = jax.lax.stop_gradient(layer.attn.qk_mult)
             if layer.attn_out_scale is not None and layer.mlp_out_scale is not None:
                 final_stats[f"attn_res_scale_attn_L{i}"] = jax.lax.stop_gradient(layer.attn_out_scale)
                 final_stats[f"attn_res_scale_mlp_L{i}"] = jax.lax.stop_gradient(layer.mlp_out_scale)
