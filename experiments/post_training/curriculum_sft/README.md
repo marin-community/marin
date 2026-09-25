@@ -30,31 +30,29 @@ The step needs an Iris client, the GLM relay, and `GLM_BULK_TOKEN` at execution 
 finance pilot used oracle-derived arithmetic conversations; this GLM recipe produces unverified
 answers.
 
-`curriculum_grug_sft(curriculum_ids=[...], ...)` in `grug_pipeline.py` creates one generation and
-chat-preparation step per capability, then mixes their Parquet sources at equal weight. Levanter
-packs complete conversations with attention blocked across their boundaries. The Marin chat
-template masks user turns from the loss; conversations longer than the configured context length
-are dropped without slicing. Pass a native Grug checkpoint, its matching Hugging Face tokenizer
-ID, optimizer, resources, and an explicit training budget.
+`pipeline.py` creates one generation and chat-preparation step per capability. The prepared
+Parquet artifacts carry canonical OpenAI `messages` and feed `sft_step` through
+`ArtifactDatasetSpec`. The shared launcher tokenizes the chat, masks user turns from the loss,
+and trains `SnowballLMHeadModel` directly from the pinned Hugging Face checkpoint. Conversations
+stay separate (`pack=False`) because Snowball does not consume packed-document attention masks.
+The launcher saves a sharded bfloat16 Hugging Face checkpoint at the final training step under
+the training artifact's `hf/` directory.
 
 `math_trial.py` declares a bounded first loop: deterministic OlympiadBench and Math500 on the
-pinned September 20 HF model, three algebra capabilities, four Grug updates, an HF export, and
+pinned September 20 HF model, three algebra capabilities, four Snowball updates, and
 the same evaluations after training. The deterministic OlympiadBench variant uses Minerva/SymPy
 equivalence without an LLM judge. Its scores are not comparable to historical judge-backed
-OlympiadBench runs. The HF importer materializes native weights on RNO2A, so the trial does not
-transfer the large `us-central2` checkpoint across regions. The trial prefix is resolved through
+OlympiadBench runs. The trial prefix is resolved through
 `marin_temp_bucket(ttl_days=30)` to the east-region lifecycle-managed bucket. Run `--stage generate` on
 `cw-us-east-08a`, where the GLM relay is registered, with `MARIN_PREFIX` set to the
-`S3_TRIAL_PREFIX` in `math_trial.py`. Then run `train`, `export`, and `after` on RNO2A with the
+`S3_TRIAL_PREFIX` in `math_trial.py`. Then run `train` and `after` on RNO2A with the
 same prefix. Both clusters read the pinned catalog and generated Parquet from east-region S3.
-Generation and the imported base checkpoint use `SOURCE_VERSION`; the SFT and its re-evaluation
-use the CLI `--version`, so a failed SFT can be retried under a new version without regenerating
-data or importing weights. The math SFT enables finite-state diagnostics; a non-finite update fails
-before checkpointing, and export must use the final configured training step. `--stage full` binds
-both evaluations and training in one graph after generation has completed.
+Generation uses `SOURCE_VERSION`; the SFT and its re-evaluation use the CLI `--version`, so a failed
+SFT can be retried under a new version without regenerating data. `--stage full` binds both
+evaluations and training in one graph after generation has completed.
 
 This trial has not established an improvement. Its GLM answers are structurally checked but not
 oracle-verified, and it has no matched task-only control. A before/after change would measure the
-whole synthetic-SFT recipe, not the curriculum's independent contribution. The native Grug adapter
-also does not reproduce Will's special-token learning-rate or frozen-router-bias changes; it is a
-weights-only continuation from the published September 20 model.
+whole synthetic-SFT recipe, not the curriculum's independent contribution. The standard Levanter
+Adam optimizer does not reproduce Will's special-token learning-rate or frozen-router-bias changes;
+it starts a fresh optimizer from the published September 20 weights.
