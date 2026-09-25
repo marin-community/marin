@@ -148,6 +148,7 @@ def restore_grug_state_from_checkpoint(
                 allow_partial=allow_partial,
                 load_fn=_load_fn,
             )
+            logger.info("Process %d finished reading checkpoint %s; waiting for peers", jax.process_index(), candidate)
             barrier_sync_named(RESTORE_COMPLETE_BARRIER, timeout=RESTORE_BARRIER_TIMEOUT)
             if candidate not in checkpoint_search_paths:
                 logger.info("Loaded checkpoint from %s while searching %s", candidate, checkpoint_search_paths)
