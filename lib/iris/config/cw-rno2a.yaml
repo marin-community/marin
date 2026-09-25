@@ -29,6 +29,9 @@ name: cw-rno2a
 # reach serving endpoints through the federation parent.
 dashboard_url: https://iris-cw-rno2a.oa.dev
 federation_public_parent: https://iris.oa.dev
+endpoints:
+  /system/zephyr-history:
+    uri: https://marina.oa.dev/zephyr/
 
 # External finelog log server (in-cluster k8s Deployment, namespace `iris`).
 # Resolves to k8s://finelog-cw-rno2a.iris; see lib/finelog/config/cw-rno2a.yaml.

@@ -11,7 +11,6 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from zephyr.dashboard.app import (
-    SOURCE_STAGE_TYPE,
     CounterPage,
     CounterQuery,
     PipelineList,
@@ -31,7 +30,7 @@ from zephyr.dashboard.app import (
     counter_value,
     pipeline_plan,
 )
-from zephyr.plan import PhysicalPlan
+from zephyr.plan import SOURCE_STAGE_TYPE, PhysicalPlan
 from zephyr.stage_io import ZephyrTaskResources
 from zephyr.stats import ZEPHYR_WORKER_CPU_PCT_CURRENT_KEY, ZEPHYR_WORKER_MEM_CURRENT_KEY, StatsWriter
 from zephyr.worker_context import Aggregation, CounterEntry, CounterSnapshot, merge_counter_entries

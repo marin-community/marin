@@ -16,6 +16,17 @@ See `lib/iris/OPS.md` → "Cluster Lifecycle" for `iris cluster dashboard` and
 
 Zephyr reports reducer input rows, encoded payload bytes, and mapper counts to `zephyr.shuffle` in Finelog when each reducer attempt finishes. Use the [Zephyr Grafana dashboard](https://grafana.oa.dev/d/marin-zephyr) to debug slow shuffles; null sizes mean unreported and numeric zero means an empty target.
 
+## Execution history
+
+Coordinator task status links to Marina's execution page. The page joins
+`zephyr.execution`, `zephyr.stage`, `zephyr.worker`, and `zephyr.shuffle` records
+to show stage dependencies, progress, and reducer input sizes. Execution
+records exclude source values and callables.
+
+Local runs need `ZephyrContext(stats_config=StatsConfig(url))`; their job IDs
+are empty. Records remain available after coordinator shutdown according to
+Finelog retention, but failed delivery leaves no discoverable execution record.
+
 ## Architecture
 
 Pull-based coordinator/worker model. Coordinator queues tasks per stage; workers poll `pull_task()`, execute shards, report results. Stages are sequential barriers — all shards in a stage must complete before the next starts (`_wait_for_stage`).
