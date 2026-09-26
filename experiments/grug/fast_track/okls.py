@@ -102,8 +102,11 @@ def _okls_core_2d(
     momentum: jax.Array,
     s_a: jax.Array,
     s_b: jax.Array,
+    p_a_prev: jax.Array,
+    p_b_prev: jax.Array,
     is_first: jax.Array,
     *,
+    refresh: bool,
     beta1: float,
     beta2: float,
     eps: float,
@@ -113,8 +116,13 @@ def _okls_core_2d(
     lr_peak: float,
     weight_decay: float,
     hyperball: bool,
-) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
-    """One OKLS step on a single 2-D matrix. Returns (delta, momentum, S_a, S_b), all fp32.
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
+    """One OKLS step on a single 2-D matrix. Returns (delta, momentum, S_a, S_b, P_a, P_b), all fp32.
+
+    ``p_a_prev`` / ``p_b_prev`` are the stored inverse roots from the last refresh. With ``refresh`` (a
+    static flag) the roots of the updated S are recomputed and returned; otherwise the stored roots are
+    reused (Shampoo's stale-preconditioner schedule). On the first step the stored roots are zeros, so a
+    scaled identity from the warm-start factors stands in for them.
 
     ``delta`` is the parameter increment (optax adds it). Default: muP-scaled, AdamC-weight-decayed
     ``param(1 - wd*lr*lr/lr_peak) - lr*c*s*U``. With ``hyperball``: the whitened direction ``U`` is
@@ -128,9 +136,11 @@ def _okls_core_2d(
     s_a = jnp.where(is_first, s_a_warm, s_a)
     s_b = jnp.where(is_first, s_b_warm, s_b)
 
-    # Preconditioners entering this step's EMA (previous-step roots, recomputed from stored S).
-    p_a = scaled_cans_inv_sqrt(s_a, cans_steps, matmul_dtype)
-    p_b = scaled_cans_inv_sqrt(s_b, cans_steps, matmul_dtype)
+    # Preconditioners entering this step's EMA: the stored roots (a scaled identity on the first step).
+    ident_a = jnp.eye(m, dtype=s_a.dtype) * jax.lax.rsqrt(jnp.mean(jnp.diag(s_a)) + eps)
+    ident_b = jnp.eye(n, dtype=s_b.dtype) * jax.lax.rsqrt(jnp.mean(jnp.diag(s_b)) + eps)
+    p_a = jnp.where(is_first, ident_a, p_a_prev)
+    p_b = jnp.where(is_first, ident_b, p_b_prev)
 
     # Nesterov momentum.
     momentum = beta1 * momentum + (1.0 - beta1) * grad
@@ -144,9 +154,10 @@ def _okls_core_2d(
     s_b = beta2 * s_b + ((1.0 - beta2) / m) * (pag.T @ pag)
     s_b = 0.5 * (s_b + s_b.T) + eps * jnp.eye(n, dtype=s_b.dtype)
 
-    # Fresh roots and whitening.
-    p_a = scaled_cans_inv_sqrt(s_a, cans_steps, matmul_dtype)
-    p_b = scaled_cans_inv_sqrt(s_b, cans_steps, matmul_dtype)
+    # Fresh roots on refresh steps; stored ones otherwise. Then whiten.
+    if refresh:
+        p_a = scaled_cans_inv_sqrt(s_a, cans_steps, matmul_dtype)
+        p_b = scaled_cans_inv_sqrt(s_b, cans_steps, matmul_dtype)
     whitened = p_a @ nesterov @ p_b
 
     if hyperball:
@@ -157,7 +168,7 @@ def _okls_core_2d(
         moved = param - lr * whitened * param_norm / jnp.maximum(u_norm, 1e-10)
         moved_norm = jnp.sqrt(jnp.sum(jnp.square(moved)))
         delta = moved / jnp.maximum(moved_norm, 1e-10) * param_norm - param
-        return delta, momentum, s_a, s_b
+        return delta, momentum, s_a, s_b, p_a, p_b
 
     # Nesterov variance correction and muP shape scale. Here (m, n) = (fan_in, fan_out) in the
     # levanter convention (matmul contracts the leading axis), so d_out = n, d_in = m.
@@ -168,7 +179,7 @@ def _okls_core_2d(
 
     wd_coeff = weight_decay * lr * (lr / lr_peak)  # AdamC decoupled weight decay
     delta = -wd_coeff * param - lr * c_momentum * s_shape * whitened
-    return delta, momentum, s_a, s_b
+    return delta, momentum, s_a, s_b, p_a, p_b
 
 
 class ScaleByOklsState(NamedTuple):
@@ -178,6 +189,8 @@ class ScaleByOklsState(NamedTuple):
     momentum: optax.Updates
     S_a: optax.Updates
     S_b: optax.Updates
+    P_a: optax.Updates
+    P_b: optax.Updates
 
 
 def _replicate_matrix_spec(sharding) -> PartitionSpec | None:
@@ -209,12 +222,17 @@ def scale_with_grug_okls(
     learning_rate: jax.Array,
     lr_peak: float,
     hyperball: bool = False,
+    root_every: int = 1,
 ) -> optax.GradientTransformation:
     """Online KL-Shampoo transform for the stacked model (2D/3D/4D matrix leaves).
 
     Returns parameter *increments* (LR, muP scale and decoupled weight decay baked in), matching the
-    MuonH group's convention so it plugs into the same ``optax.multi_transform`` slot.
+    MuonH group's convention so it plugs into the same ``optax.multi_transform`` slot. The inverse roots
+    are stored and recomputed every ``root_every`` steps. The refresh decision is one step-level
+    ``lax.cond`` over the whole tree, so non-refresh steps skip Scaled CANS entirely.
     """
+    if root_every < 1:
+        raise ValueError(f"root_every must be >= 1, got {root_every}")
 
     def init_fn(params):
         return ScaleByOklsState(
@@ -222,61 +240,64 @@ def scale_with_grug_okls(
             momentum=otu.tree_zeros_like(params),
             S_a=jax.tree.map(lambda p: _make_factor_zeros(p, "a"), params),
             S_b=jax.tree.map(lambda p: _make_factor_zeros(p, "b"), params),
+            P_a=jax.tree.map(lambda p: _make_factor_zeros(p, "a"), params),
+            P_b=jax.tree.map(lambda p: _make_factor_zeros(p, "b"), params),
         )
 
     def update_fn(updates, state, params=None):
         if params is None:
             raise ValueError("scale_with_grug_okls requires params (decoupled weight decay + muP scale)")
         is_first = state.count == 0
-
-        def leaf(update, param, momentum, s_a, s_b):
-            if not hasattr(param, "ndim") or param.ndim not in (2, 3, 4):
-                # No non-matrix leaves reach the muonh group today; pass through defensively.
-                return update, momentum, s_a, s_b
-
-            def core(g, p, mo, sa, sb):
-                return _okls_core_2d(
-                    g,
-                    p,
-                    mo,
-                    sa,
-                    sb,
-                    is_first,
-                    beta1=beta1,
-                    beta2=beta2,
-                    eps=eps,
-                    cans_steps=cans_steps,
-                    matmul_dtype=matmul_dtype,
-                    lr=learning_rate,
-                    lr_peak=lr_peak,
-                    weight_decay=weight_decay,
-                    hyperball=hyperball,
-                )
-
-            for _ in range(param.ndim - 2):
-                core = jax.vmap(core)
-
-            spec = _replicate_matrix_spec(_target_named_sharding(param))
-            g = update.astype(jnp.float32)
-            p = param.astype(jnp.float32)
-            if spec is not None:
-                g = reshard(g, spec)
-                p = reshard(p, spec)
-                momentum = reshard(momentum, spec)
-                s_a = reshard(s_a, spec)
-                s_b = reshard(s_b, spec)
-            return core(g, p, momentum, s_a, s_b)
-
         is_leaf = lambda x: x is None  # noqa: E731
         flat_updates, treedef = jax.tree.flatten(updates, is_leaf=is_leaf)
-        rest = [treedef.flatten_up_to(t) for t in (params, state.momentum, state.S_a, state.S_b)]
-        results = [leaf(u, p, m, a, b) for u, p, m, a, b in zip(flat_updates, *rest, strict=True)]
-        deltas, momenta, s_as, s_bs = (treedef.unflatten([r[i] for r in results]) for i in range(4))
+        fields = (params, state.momentum, state.S_a, state.S_b, state.P_a, state.P_b)
+        rest = [treedef.flatten_up_to(t) for t in fields]
+
+        def run(refresh: bool):
+            def leaf(update, param, momentum, s_a, s_b, p_a, p_b):
+                if not hasattr(param, "ndim") or param.ndim not in (2, 3, 4):
+                    return update, momentum, s_a, s_b, p_a, p_b
+
+                def core(g, p, mo, sa, sb, pa, pb):
+                    return _okls_core_2d(
+                        g,
+                        p,
+                        mo,
+                        sa,
+                        sb,
+                        pa,
+                        pb,
+                        is_first,
+                        refresh=refresh,
+                        beta1=beta1,
+                        beta2=beta2,
+                        eps=eps,
+                        cans_steps=cans_steps,
+                        matmul_dtype=matmul_dtype,
+                        lr=learning_rate,
+                        lr_peak=lr_peak,
+                        weight_decay=weight_decay,
+                        hyperball=hyperball,
+                    )
+
+                for _ in range(param.ndim - 2):
+                    core = jax.vmap(core)
+                spec = _replicate_matrix_spec(_target_named_sharding(param))
+                args = [update.astype(jnp.float32), param.astype(jnp.float32), momentum, s_a, s_b, p_a, p_b]
+                if spec is not None:
+                    args = [reshard(a, spec) for a in args]
+                return core(*args)
+
+            results = [leaf(u, *r) for u, *r in zip(flat_updates, *rest, strict=True)]
+            return tuple(treedef.unflatten([r[i] for r in results]) for i in range(6))
+
+        if root_every == 1:
+            outs = run(True)
+        else:
+            outs = jax.lax.cond(state.count % root_every == 0, lambda: run(True), lambda: run(False))
+        deltas, momenta, s_as, s_bs, p_as, p_bs = outs
         new_state = ScaleByOklsState(
-            count=optax.safe_increment(state.count),
-            momentum=momenta,
-            S_a=s_as,
-            S_b=s_bs,
+            count=optax.safe_increment(state.count), momentum=momenta, S_a=s_as, S_b=s_bs, P_a=p_as, P_b=p_bs
         )
         return deltas, new_state
 

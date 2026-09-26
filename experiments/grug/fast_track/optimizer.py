@@ -274,6 +274,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     okls_epsilon: float = 1e-9
     okls_cans_steps: int = 10
     okls_matmul_dtype: str = "float32"
+    okls_root_every: int = 1
+    """Recompute the OKLS inverse roots every this many steps (stored in between)."""
     lm_head_group: str = "adamh"
     """LR group of ``output_proj``: ``adamh`` or ``muonh``."""
     embed_group: str = "adam"
@@ -360,6 +362,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                         learning_rate=learning_rate,
                         lr_peak=self.learning_rate,
                         hyperball=True,
+                        root_every=self.okls_root_every,
                     ),
                     _match_named_update_sharding(),
                 ),
