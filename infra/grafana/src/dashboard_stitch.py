@@ -16,7 +16,8 @@ This keeps ``dashboards/*.json`` file-provisioned and git-reviewable end to end 
 no Grafana library-panel API, no runtime sync, no new credential — while killing
 copy-pasted panel bodies that drift out of sync with the bridge's actual schema.
 Dashboard links use ``{"linkRef": "<fragment-name>"}`` markers resolved from
-``SHARED_LINKS`` for the same reason.
+``SHARED_LINKS`` for the same reason. Template variables use ``{"variableRef": "<name>"}``
+markers resolved from ``_SHARED_VARIABLES``.
 
 A bridge target can be written as ``{"refId", "targetRef", "url", "view", "format",
 "columns"}``. The stitcher adds the Infinity fields and the query parameters of the
@@ -24,6 +25,7 @@ A bridge target can be written as ``{"refId", "targetRef", "url", "view", "forma
 """
 
 import argparse
+import copy
 import json
 import re
 from pathlib import Path
@@ -32,6 +34,7 @@ PANEL_REF_KEY = "panelRef"
 PANEL_VARS_KEY = "vars"
 LINK_REF_KEY = "linkRef"
 TARGET_REF_KEY = "targetRef"
+VARIABLE_REF_KEY = "variableRef"
 _VARIABLE = re.compile(r"\$\{([^}]+)\}")
 
 _RANGE_PARAMS = (("from", "${__from}"), ("to", "${__to}"), ("bucket_ms", "${__interval_ms}"))
@@ -122,6 +125,62 @@ _SHARED_LINKS = {
     "rl_sync_train_step": _RL_SYNC_TRAIN_STEP_LINK,
 }
 
+_RL_CLUSTER_VARIABLE = {
+    "name": "cluster",
+    "label": "Cluster",
+    "type": "custom",
+    "query": "cw-rno2a,cw-us-east-02a,cw-us-east-08a,marin,marin-dev",
+    "multi": True,
+    "includeAll": True,
+    "current": {"selected": True, "text": ["All"], "value": ["$__all"]},
+    "options": [],
+}
+_RL_SYNC_RUN_SQL = (
+    "SELECT run_id AS value FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name = 'policy_step'"
+    " AND COALESCE(json_get(resource_attributes_json, 'training_loop'), '') <> 'async'"
+    " AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring})"
+    " AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT)"
+    " AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT)"
+    " AND run_id IS NOT NULL GROUP BY 1 ORDER BY MAX(timestamp_ms) DESC"
+)
+_RL_SYNC_RUN_VARIABLE = {
+    "name": "run",
+    "label": "Run",
+    "type": "query",
+    "datasource": {"type": "yesoreyeram-infinity-datasource", "uid": "finelog-marin"},
+    "multi": False,
+    "includeAll": False,
+    "refresh": 2,
+    "sort": 0,
+    "current": {},
+    "options": [],
+    "query": {
+        "queryType": "infinity",
+        "refId": "variable-run",
+        "infinityQuery": {
+            "refId": "variable-run",
+            "type": "json",
+            "source": "url",
+            "format": "table",
+            "parser": "backend",
+            "url": "/query",
+            "url_options": {
+                "method": "GET",
+                "params": [
+                    {"key": "sql", "value": _RL_SYNC_RUN_SQL},
+                    {"key": "from", "value": "${__from}"},
+                    {"key": "to", "value": "${__to}"},
+                ],
+            },
+            "columns": [{"selector": "value", "text": "value", "type": "string"}],
+        },
+    },
+}
+_SHARED_VARIABLES = {
+    "rl_cluster": _RL_CLUSTER_VARIABLE,
+    "rl_sync_run": _RL_SYNC_RUN_VARIABLE,
+}
+
 
 def load_panel_fragments(panels_dir: Path) -> dict[str, dict]:
     """Read every panels/<name>.json fragment, keyed by its filename stem."""
@@ -188,28 +247,31 @@ def _stitch_panels(panels: list[dict], fragments: dict[str, dict]) -> list[dict]
     return resolved
 
 
-def _stitch_links(links: list[dict]) -> list[dict]:
+def _stitch_refs(items: list[dict], ref_key: str, shared: dict[str, dict]) -> list[dict]:
     resolved = []
-    for link in links:
-        ref = link.get(LINK_REF_KEY)
+    for item in items:
+        ref = item.get(ref_key)
         if ref is None:
-            resolved.append(link)
+            resolved.append(item)
             continue
-        if ref not in _SHARED_LINKS:
-            raise KeyError(f"unknown dashboard link fragment {ref!r}")
-        resolved.append(dict(_SHARED_LINKS[ref]))
+        if ref not in shared:
+            raise KeyError(f"unknown {ref_key} {ref!r}")
+        resolved.append(copy.deepcopy(shared[ref]))
     return resolved
 
 
 def stitch_dashboard(source: dict, fragments: dict[str, dict]) -> dict:
-    """Replace panelRef and linkRef markers with their fragment bodies.
+    """Replace panelRef, linkRef and variableRef markers with their fragment bodies.
 
     Raises:
-        KeyError: A panel or link references an unknown fragment.
+        KeyError: A panel, link or variable references an unknown fragment.
     """
     dashboard = {**source, "panels": _stitch_panels(source["panels"], fragments)}
     if "links" in source:
-        dashboard["links"] = _stitch_links(source["links"])
+        dashboard["links"] = _stitch_refs(source["links"], LINK_REF_KEY, _SHARED_LINKS)
+    if "templating" in source:
+        variables = _stitch_refs(source["templating"]["list"], VARIABLE_REF_KEY, _SHARED_VARIABLES)
+        dashboard["templating"] = {**source["templating"], "list": variables}
     return dashboard
 
 

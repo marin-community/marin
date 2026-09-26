@@ -114,6 +114,22 @@ def test_stitch_dashboard_returns_independent_shared_links():
     assert second["links"][0]["title"] == "RL Post-training (async)"
 
 
+def test_stitch_dashboard_resolves_shared_variables_into_independent_copies():
+    inline = {"name": "window", "type": "interval"}
+    source = {"panels": [], "templating": {"list": [{"variableRef": "rl_sync_run"}, inline]}}
+
+    run, kept = stitch_dashboard(source, {})["templating"]["list"]
+
+    assert run["name"] == "run"
+    assert kept == inline
+    run["query"]["infinityQuery"]["url_options"]["params"].clear()
+    again, _ = stitch_dashboard(source, {})["templating"]["list"]
+    (sql,) = [p["value"] for p in again["query"]["infinityQuery"]["url_options"]["params"] if p["key"] == "sql"]
+    assert "training_loop" in sql
+    with pytest.raises(KeyError, match="missing"):
+        stitch_dashboard({"panels": [], "templating": {"list": [{"variableRef": "missing"}]}}, {})
+
+
 def test_stitch_dashboard_rejects_an_unknown_fragment_name():
     source = {"panels": [{"id": 7, "gridPos": {}, "panelRef": "missing"}]}
     with pytest.raises(KeyError, match="missing"):
