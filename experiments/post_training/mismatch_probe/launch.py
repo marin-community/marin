@@ -83,7 +83,7 @@ def probe_recipe(
             "ckpt_interval": 1,
             "eval_before_train": False,
             "eval_interval": -1,
-            "resume_mode": "latest",
+            "resume_mode": "from_path" if resume_path else "latest",
             "resume_path": resume_path,
             "reset_global_step_on_resume": bool(resume_path),
             "logger": "console",
