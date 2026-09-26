@@ -43,6 +43,13 @@ goes stale on the next commit.
 - Purpose: canonical Mixture-of-Experts variant; carries its own model, optimizer, train loop, and launch wiring so it can iterate independently of the dense template.
 - Issue: https://github.com/marin-community/marin/pull/3046
 
+### grug-moe-boundary
+- Path: `experiments/grug/moe_boundary/`
+- Origin: moe
+- Status: active
+- Purpose: prelude–core–coda boundary operator (arXiv 2609.19107) on the grug MoE block; Phase 0 tests the operator alone at matched parameters/FLOPs against the May Recipe compute-optimal baselines.
+- Issue: https://github.com/marin-community/marin/issues/9280
+
 ### grug-moe-pipeline
 - Path: `experiments/grug/moe_pipeline/`
 - Origin: `moe`
