@@ -36,7 +36,7 @@ CLUSTER = "cw-rno2a"
 RUN_ID = "snowball-e6-rl-7786"
 NODES = ("h100-node-0", "h100-node-1")
 
-# The E6 step, as measured over 20/20 steps of dogml/snowball_67b_a2b_rl_7786/nk0ehfrv.
+# A measured 67B RL step.
 STEP_SECONDS = 4209.7
 DRIVER_PHASES = {
     "generate": 161.2,
