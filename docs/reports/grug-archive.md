@@ -60,6 +60,13 @@ goes stale on the next commit.
 - Purpose: one-rack GB200 EP64 throughput and MFU baseline.
 - Issue: https://github.com/marin-community/marin/issues/7279
 
+### grug-paper-rep
+- Path: `experiments/grug/paper_rep/`
+- Origin: base
+- Introduced: 3e6d0d8da0
+- Status: active
+- Purpose: dense replication of arXiv 2609.19107's base-size experiment (Table 6) under the paper's own recipes — vanilla vs Operator-1 vs Operator-1-under-vanilla-recipe at d8/1B tokens.
+
 ### grug-fast-track
 - Path: `experiments/grug/fast_track/`
 - Origin: `moe_hero_ep`
