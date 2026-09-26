@@ -51,7 +51,9 @@ S3_TRIAL_PREFIX = marin_temp_bucket(
     prefix="curriculum-math-20260924",
     source_prefix="s3://marin-us-east-02a/marin",
 )
-SOURCE_VERSION = "2026.09.26.1"
+# Problems and solutions carry separate versions so a solve-recipe change reuses the accepted problems.
+PROBLEMS_VERSION = "2026.09.26.1"
+SOLUTIONS_VERSION = "2026.09.26.2"
 CONVERSION_VERSION = "2026.09.25.2"
 CURRICULUM_IDS = (
     "d01.algebra.exact-symbolic-evaluation",
@@ -129,13 +131,13 @@ def _eval_model(name: str, location: str, revision: str | None) -> ModelConfig:
     )
 
 
-def build_generation(version: str) -> dict[str, ArtifactStep[Artifact]]:
+def build_generation() -> dict[str, ArtifactStep[Artifact]]:
     """Build GLM problem and blind-solve steps; run them on `cw-us-east-08a`, where the GLM relay is reachable."""
     steps: dict[str, ArtifactStep[Artifact]] = {}
     for capability_id in CURRICULUM_IDS:
         problems = generate_curriculum_problems(
             capability_id,
-            version=version,
+            version=PROBLEMS_VERSION,
             requested_problems=REQUESTED_PROBLEMS_PER_CAPABILITY,
             seed=SEED,
             max_completion_tokens=PROBLEM_MAX_COMPLETION_TOKENS,
@@ -144,7 +146,7 @@ def build_generation(version: str) -> dict[str, ArtifactStep[Artifact]]:
         steps[capability_id] = solve_curriculum_problems(
             problems,
             capability_id=capability_id,
-            version=version,
+            version=SOLUTIONS_VERSION,
             samples_per_problem=SAMPLES_PER_PROBLEM,
             solutions_per_problem=SOLUTIONS_PER_PROBLEM,
             max_solution_chars=MAX_SOLUTION_CHARS,
@@ -154,15 +156,15 @@ def build_generation(version: str) -> dict[str, ArtifactStep[Artifact]]:
     return steps
 
 
-def _staged_generation(version: str) -> dict[str, ArtifactStep[Artifact]]:
+def _staged_generation() -> dict[str, ArtifactStep[Artifact]]:
     sources: dict[str, ArtifactStep[Artifact]] = {}
     for capability_id in CURRICULUM_IDS:
         name = user_owned_name(f"documents/curriculum-sft/{capability_id}/staged-solved-chat")
         solved_name = user_owned_name(f"documents/curriculum-sft/{capability_id}/solved-chat")
         sources[capability_id] = ArtifactStep.adopt(
             name=name,
-            version=version,
-            source=prefix_join(prefix_join(SOURCE_PREFIX, solved_name), version),
+            version=SOLUTIONS_VERSION,
+            source=prefix_join(prefix_join(SOURCE_PREFIX, solved_name), SOLUTIONS_VERSION),
             kind=Artifact,
         )
     return sources
@@ -177,7 +179,7 @@ def build_trial(version: str, learning_rate: float, warmup: int) -> dict[str, Ar
         warmup: Linear warmup length in optimizer steps.
     """
     curriculum_key = hashlib.sha256(json.dumps(sorted(CURRICULUM_IDS)).encode()).hexdigest()[:12]
-    generated = _staged_generation(SOURCE_VERSION)
+    generated = _staged_generation()
     conversion = hf_to_levanter(
         HF_MODEL,
         model_type="snowball",
@@ -254,9 +256,9 @@ def build_trial(version: str, learning_rate: float, warmup: int) -> dict[str, Ar
 @click.option("--warmup", type=int, help="Linear warmup steps; required except for generation.")
 @build_options
 def main(stage: str, learning_rate: float | None, warmup: int | None) -> dict[str, ArtifactStep]:
-    version = resolve_version("curriculum-math-sep20", None)
     if stage == "generate":
-        return build_generation(version)
+        return build_generation()
+    version = resolve_version("curriculum-math-sep20", None)
     if learning_rate is None or warmup is None:
         raise click.UsageError(f"--stage {stage} requires --learning-rate and --warmup")
     trial = build_trial(version, learning_rate, warmup)
