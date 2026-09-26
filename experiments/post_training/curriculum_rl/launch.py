@@ -323,7 +323,6 @@ SNOWBALL_FULL = ScalePreset(
         inference_engine_expert_parallel_size=GPUS_PER_NODE,
         train_batch_size=128,
         policy_mini_batch_size=64,
-        # Four sequences per data-parallel rank per micro-step.
         micro_train_batch_size_per_gpu=4,
         n_samples_per_prompt=8,
     ),

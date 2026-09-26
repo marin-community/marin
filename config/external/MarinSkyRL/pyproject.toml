@@ -10,5 +10,4 @@ prerelease = "allow"
 required-environments = ["sys_platform == 'linux'"]
 
 [tool.uv.sources]
-# The isolated lock keeps the selected trainer revision immutable.
 marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", rev = "c7460f3ca28e02bdae0f1dfddb916f124cb08bb8" }
