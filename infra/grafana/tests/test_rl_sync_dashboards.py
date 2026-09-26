@@ -9,6 +9,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace as Record
+from typing import NamedTuple
 
 import duckdb
 import pyarrow as pa
@@ -123,23 +124,26 @@ RESET_GPU = ("h100-node-0", "1")
 RESET_BUCKET = 3
 AFTER_RESET = 2.0
 
-_COLUMNS = (
-    "cluster",
-    "service",
-    "run_id",
-    "job_id",
-    "execution_uid",
-    "node_name",
-    "process_index",
-    "name",
-    "value",
-    "timestamp_ms",
-    "seq",
-    "resource_attributes_json",
-    "attributes_json",
-    "body_json",
-    "kind",
-)
+
+class _Row(NamedTuple):
+    cluster: str
+    service: str
+    run_id: str | None
+    job_id: str
+    execution_uid: str
+    node_name: str | None
+    process_index: str | None
+    name: str
+    value: float
+    timestamp_ms: int
+    seq: int
+    resource_attributes_json: str
+    attributes_json: str
+    body_json: str
+    kind: str
+
+
+_COLUMNS = _Row._fields
 
 _SCHEMA = """(
     cluster VARCHAR,
@@ -188,31 +192,31 @@ def _row(
     attributes: dict[str, str] | None = None,
     body: dict[str, object] | None = None,
     execution_uid: str = EXECUTION,
-) -> tuple:
-    return (
-        CLUSTER,
-        service,
-        run_id,
-        "/atqamar/snowball-e6-rl-7786-attempt-0",
-        execution_uid,
-        node_name,
-        None,
-        name,
-        value,
-        _millis(moment),
-        seq,
-        json.dumps({"role": role} if role else {}),
-        json.dumps(attributes or {}),
-        json.dumps(body or {}),
+) -> _Row:
+    return _Row(
+        cluster=CLUSTER,
+        service=service,
+        run_id=run_id,
+        job_id="/atqamar/snowball-e6-rl-7786-attempt-0",
+        execution_uid=execution_uid,
+        node_name=node_name,
+        process_index=None,
+        name=name,
+        value=value,
+        timestamp_ms=_millis(moment),
+        seq=seq,
+        resource_attributes_json=json.dumps({"role": role} if role else {}),
+        attributes_json=json.dumps(attributes or {}),
+        body_json=json.dumps(body or {}),
         # Forwarded snapshots all arrive with kind 'gauge'; source_temporality carries the semantics.
-        "gauge",
+        kind="gauge",
     )
 
 
-def _driver_rows(moment: datetime, seq: int, execution_uid: str = EXECUTION) -> list[tuple]:
+def _driver_rows(moment: datetime, seq: int, execution_uid: str = EXECUTION) -> list[_Row]:
     """What FinelogTimingSink publishes: one row per phase, parented to the nearest recorded ancestor."""
 
-    def row(name: str, value: float, **attributes: str) -> tuple:
+    def row(name: str, value: float, **attributes: str) -> _Row:
         attributes = {**attributes, "role": "trainer", "step": str(seq)}
         return _row(
             name=name,
@@ -269,7 +273,7 @@ def _driver_rows(moment: datetime, seq: int, execution_uid: str = EXECUTION) -> 
     ]
 
 
-def _worker_rows(moment: datetime, seq: int) -> list[tuple]:
+def _worker_rows(moment: datetime, seq: int) -> list[_Row]:
     """Each node's worker forwards Ray metric snapshots. No panel reads this one, but it puts the run
     on the node, so the DCGM join credits both nodes to it."""
     return [
@@ -286,7 +290,7 @@ def _worker_rows(moment: datetime, seq: int) -> list[tuple]:
     ]
 
 
-def _node_agent_rows(moment: datetime, seq: int) -> list[tuple]:
+def _node_agent_rows(moment: datetime, seq: int) -> list[_Row]:
     """DCGM through the Iris node agent: node_name only, no run identity, ever."""
     rows = []
     for node in NODES:
@@ -329,7 +333,7 @@ def _node_agent_rows(moment: datetime, seq: int) -> list[tuple]:
     return rows
 
 
-def _vllm_rows(moment: datetime, seq: int) -> list[tuple]:
+def _vllm_rows(moment: datetime, seq: int) -> list[_Row]:
     """The engine registry as inference_observability publishes it: cumulative counters and
     histograms, and gauges as current snapshots."""
     rows = []
@@ -366,7 +370,7 @@ def _vllm_rows(moment: datetime, seq: int) -> list[tuple]:
     return rows
 
 
-def _run_rows() -> list[tuple]:
+def _run_rows() -> list[_Row]:
     rows = []
     for bucket in range(BUCKETS):
         moment = WINDOW_START + timedelta(minutes=5 * bucket)
@@ -425,10 +429,9 @@ def _empty_store() -> duckdb.DuckDBPyConnection:
 
 def _store() -> duckdb.DuckDBPyConnection:
     database = _empty_store()
-    service_index = _COLUMNS.index("service")
     routed: dict[str, list] = {}
     for row in _run_rows():
-        stream = _SEMANTIC_STREAM[row[service_index]]
+        stream = _SEMANTIC_STREAM[row.service]
         routed.setdefault(stream, []).append(row)
     for stream, stream_rows in routed.items():
         # DuckDB's executemany costs milliseconds a row; one Arrow batch costs microseconds.
@@ -801,7 +804,7 @@ def _long_run_store(nodes: int, steps: int = LONG_RUN_STEPS) -> duckdb.DuckDBPyC
     million rows built in Python would dominate the suite.
     """
     database = _empty_store()
-    template = [row for row in _run_rows() if row[_COLUMNS.index("seq")] == 0]
+    template = [row for row in _run_rows() if row.seq == 0]
     database.register(
         "template_rows", pa.table([list(column) for column in zip(*template, strict=True)], schema=_ARROW_SCHEMA)
     )
