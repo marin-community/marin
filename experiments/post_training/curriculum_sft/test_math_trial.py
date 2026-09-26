@@ -15,7 +15,7 @@ from experiments.post_training.curriculum_sft.math_trial import (
     HF_MODEL,
     HF_REVISION,
     S3_TRIAL_PREFIX,
-    SOURCE_VERSION,
+    SOLUTIONS_VERSION,
     STEPS,
     build_trial,
 )
@@ -59,7 +59,7 @@ def test_curriculum_sft_reuses_existing_generation_with_short_lived_outputs():
     for capability_id, staged in zip(CURRICULUM_IDS, trained.deps[:-1], strict=True):
         assert staged.path(S3_TRIAL_PREFIX) == prefix_join(
             source_prefix,
-            user_owned_name(f"documents/curriculum-sft/{capability_id}/solved-chat/{SOURCE_VERSION}"),
+            user_owned_name(f"documents/curriculum-sft/{capability_id}/solved-chat/{SOLUTIONS_VERSION}"),
         )
     assert trained.path(S3_TRIAL_PREFIX).startswith(output_prefix)
     assert trained.deps[-1].path(S3_TRIAL_PREFIX).startswith(output_prefix)
