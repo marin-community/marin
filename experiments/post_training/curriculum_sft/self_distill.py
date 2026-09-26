@@ -15,9 +15,12 @@ from __future__ import annotations
 
 import json
 import logging
+import math
+import re
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any
 
 import pyarrow as pa
@@ -57,6 +60,40 @@ CONCURRENT_REQUESTS = 128
 SAMPLES_FILENAME = "samples/{capability_id}.parquet"
 SELF_CHAT_FILENAME = "chat/{capability_id}.parquet"
 
+NUMBER_PATTERN = re.compile(r"-?\d+(?:\.\d+)?")
+
+
+class AnswerCheck(StrEnum):
+    """How a sample's last boxed answer is compared to a problem's reference answer."""
+
+    MATH = "math"
+    """math-verify equivalence of LaTeX expressions."""
+    NUMERIC = "numeric"
+    """First number in each answer, equal within ``NUMERIC_RELATIVE_TOLERANCE``; commas, units, and % are ignored."""
+    CHOICE = "choice"
+    """A single option letter, case-insensitive."""
+
+
+NUMERIC_RELATIVE_TOLERANCE = 0.01
+
+
+def _first_number(text: str) -> float | None:
+    match = NUMBER_PATTERN.search(text.replace(",", ""))
+    return float(match.group()) if match else None
+
+
+def answer_matches(check: AnswerCheck, reference: str, candidate: str) -> bool:
+    """Compare a candidate answer to the reference under ``check``."""
+    if check is AnswerCheck.MATH:
+        return answers_match(reference, candidate)
+    if check is AnswerCheck.NUMERIC:
+        expected, actual = _first_number(reference), _first_number(candidate)
+        if expected is None or actual is None:
+            return False
+        return math.isclose(actual, expected, rel_tol=NUMERIC_RELATIVE_TOLERANCE, abs_tol=1e-9)
+    return candidate.strip().strip("()").upper() == reference.strip().upper()
+
+
 SAMPLE_SCHEMA = pa.schema(
     [
         ("problem_request_id", pa.string()),
@@ -75,6 +112,7 @@ SAMPLE_SCHEMA = pa.schema(
 class SelfDistillConfig:
     problems_paths: dict[str, str]
     output_path: str
+    answer_check: AnswerCheck
     model: ModelConfig
     accelerator: AcceleratorChoice
     samples_per_problem: int
@@ -121,7 +159,7 @@ def grade_samples(
                 reason = "no_reasoning"
             elif extracted is None:
                 reason = "no_boxed_answer"
-            elif not (correct := answers_match(problem["answer"], extracted)):
+            elif not (correct := answer_matches(config.answer_check, problem["answer"], extracted)):
                 reason = "wrong_answer"
             else:
                 row = reasoning_chat_row(request_id, problem["problem"], content, reasoning)
@@ -216,6 +254,7 @@ def self_distill_step(
     *,
     name: str,
     version: str,
+    answer_check: AnswerCheck,
     model: ModelConfig,
     accelerator: AcceleratorChoice,
     samples_per_problem: int,
@@ -233,6 +272,7 @@ def self_distill_step(
         return SelfDistillConfig(
             problems_paths={capability_id: ctx.artifact_path(step) for capability_id, step in problems.items()},
             output_path=ctx.output_path,
+            answer_check=answer_check,
             model=model,
             accelerator=accelerator,
             samples_per_problem=samples_per_problem,
@@ -244,11 +284,12 @@ def self_distill_step(
         )
 
     def run(config: SelfDistillConfig) -> Artifact:
-        # The orchestrator is a small CPU job; remote inference launches the GPU serving job beside it.
+        # The orchestrator is a small CPU job on the submitting cluster; remote inference launches the GPU
+        # serving job beside it.
         remote(
             _serve_and_sample,
             name=name.replace("/", "-"),
-            resources=ResourceConfig.with_cpu(cpu=4, ram="32g", target_cluster=accelerator.target_cluster),
+            resources=ResourceConfig.with_cpu(cpu=4, ram="32g"),
             env_vars=env_vars_from_keys(EVAL_RUNTIME_ENV_KEYS),
         )(config)
         return Artifact(path=config.output_path)
