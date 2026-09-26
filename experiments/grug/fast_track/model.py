@@ -443,6 +443,7 @@ class CausalSelfAttention(eqx.Module):
     w_o: Float[Array, "NH D"]
     attn_gate: Float[Array, "D N"]
     sconv_k: "ShortConv | None"  # SConv after the K projection (cfg.sconv)
+    sconv_q: "ShortConv | None"  # MLA only: SConv after the q projection ("q" in cfg.sconv_sites)
     rel_pos: "InklingRelPos | None"  # Inkling relative-position bias (replaces RoPE when set)
     w_dkv: Float[Array, "D L"] | None
     kv_latent_norm: "RMSNorm | None"
@@ -472,6 +473,7 @@ class CausalSelfAttention(eqx.Module):
                 w_o=reshard(_init_weight(k_o, (n * h, d), std), P("model", _FSDP_AXES)),
                 attn_gate=attn_gate,
                 sconv_k=(ShortConv.init(n * h, cfg.sconv_kernel) if cfg.sconv and "k" in cfg.sconv_sites else None),
+                sconv_q=(ShortConv.init(n * h, cfg.sconv_kernel) if cfg.sconv and "q" in cfg.sconv_sites else None),
                 # Without Inkling the MLA layers are NoPE (they are global, so RoPE is disabled there).
                 rel_pos=InklingRelPos.init(cfg, key=k_rel) if cfg.inkling_relpos else None,
                 w_dkv=reshard(_init_weight(k_dkv, (d, kvl), std), P(_FSDP_AXES, None)),
@@ -498,6 +500,7 @@ class CausalSelfAttention(eqx.Module):
             w_o=reshard(_init_weight(k_o, (n * h, d), std), P("model", _FSDP_AXES)),
             attn_gate=attn_gate,
             sconv_k=(ShortConv.init(m * h, cfg.sconv_kernel) if cfg.sconv and "k" in cfg.sconv_sites else None),
+            sconv_q=None,
             rel_pos=InklingRelPos.init(cfg, key=k_rel) if cfg.inkling_relpos else None,
             w_dkv=None,
             kv_latent_norm=None,
@@ -526,6 +529,8 @@ class CausalSelfAttention(eqx.Module):
         if self.bias_q is not None and self.bias_dkv is not None:
             q_flat = q_flat + unshard(self.bias_q).astype(x.dtype)
             latent = latent + unshard(self.bias_dkv).astype(x.dtype)
+        if self.sconv_q is not None:
+            q_flat = self.sconv_q(q_flat, sconv_segment_ids)
         q = rearrange(q_flat, "... (n d) -> ... n d", d=head_dim)
         kv_latent = self.kv_latent_norm(latent)
         k_flat = jnp.einsum("bsl,ld->bsd", kv_latent, self.w_uk)
