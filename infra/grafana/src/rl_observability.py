@@ -71,7 +71,7 @@ def _bucket_sql(start_ms: int, bucket_ms: int) -> str:
     return f"{start_ms} + (timestamp_ms - {start_ms}) - (timestamp_ms - {start_ms}) % {bucket_ms}"
 
 
-def _run_scope(clusters: tuple[str, ...], run: str, start_ms: int, end_ms: int) -> str:
+def _run_filter_sql(clusters: tuple[str, ...], run: str, start_ms: int, end_ms: int) -> str:
     """The MarinSkyRL rows of one run, in the selected clusters and window."""
     return f"""service = 'marinskyrl'
       AND run_id = {sql_string(run)}
@@ -242,7 +242,7 @@ WHERE run_node.run = {run_sql}
 GROUP BY 1, 2 ORDER BY 1
 LIMIT {RL_MAX_GPU_ROWS + 1}
 """.strip()
-    scope = _run_scope(clusters, run, start_ms, end_ms)
+    scope = _run_filter_sql(clusters, run, start_ms, end_ms)
     spans_sql = f"""
 WITH {_phase_rows_cte(bucket, scope)}, terminal AS (
     SELECT execution_uid, role, status, reason,
@@ -454,7 +454,7 @@ WITH selected AS (
            json_get(attributes_json, 'counter') AS counter,
            value
     FROM "telemetry_v1.marinskyrl"
-    WHERE {_run_scope(clusters, run, start_ms, end_ms)}
+    WHERE {_run_filter_sql(clusters, run, start_ms, end_ms)}
       AND name IN ({names})
       AND json_get(attributes_json, 'role') = 'trainer'
 )
@@ -559,7 +559,7 @@ SELECT {bucket} AS t,
        SUM(value) AS sum_value,
        COUNT(value) AS sample_count
 FROM "telemetry_v1.marinskyrl"
-WHERE {_run_scope(clusters, run, start_ms, end_ms)}
+WHERE {_run_filter_sql(clusters, run, start_ms, end_ms)}
   AND name = 'phase_duration_seconds'
   AND json_get(attributes_json, 'clock_domain') = 'critical_path'
   AND json_get(attributes_json, 'phase') = 'train_step'
