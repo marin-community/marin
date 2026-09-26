@@ -11,7 +11,6 @@ exceeds the parent it decomposes.
 
 import json
 import re
-import statistics
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -96,7 +95,6 @@ WORKER_SPANS = {
 }
 PPO_TRAIN = {"0": 1900.0, "1": 2000.0}
 CRITICAL_RANK = "1"
-BARRIER_SPANS = ("policy_entry_barrier", "policy_final_barrier", "policy_metric_allreduce", "policy_entropy_allreduce")
 
 EXECUTION = "iris:/atqamar/snowball-e6-rl-7786-attempt-0/0:attempt:0"
 # The run restarts from a checkpoint and repeats RETRIED_STEP in the same bucket, with the ranks'
@@ -124,21 +122,6 @@ PUBLISHED_RESIDUAL = PPO_TRAIN[CRITICAL_RANK] - sum(WORKER_SPANS[CRITICAL_RANK].
 # stays out of the decomposition although its clock domain is exclusive.
 SPAN_PUBLISH_SECONDS = 3.0
 
-WORKER_COUNTERS = {
-    "0": {
-        "micro_step_count": 64.0,
-        "rank_tokens_real": 6000.0,
-        "rank_tokens_padded": 8000.0,
-        "attention_work_ratio": 1.9,
-    },
-    "1": {
-        "micro_step_count": 64.0,
-        "rank_tokens_real": 6400.0,
-        "rank_tokens_padded": 8000.0,
-        "attention_work_ratio": 1.7,
-    },
-}
-
 # The driver also publishes train_step and rollout_or_inference_wait on the critical_path clock, with
 # an outcome. One step fails, because a failed step renders like a fast one.
 CRITICAL_PATH = {"train_step": CONTAINER_SECONDS, "rollout_or_inference_wait": DRIVER_PHASES["generate"]}
@@ -162,13 +145,6 @@ ROLLOUT_COUNTERS = {
     "rollout_env_exec_seconds_sum": ENV_SPLIT["exec"],
     "rollout_env_resume_seconds_sum": ENV_SPLIT["resume"],
 }
-
-# Torch allocator counters per rank. Rank 1 holds the most memory and is the only rank that retried.
-WORKER_MEMORY = {
-    "0": {"peak_allocated_bytes": 61.0 * 1024**3, "peak_reserved_bytes": 71.0 * 1024**3},
-    "1": {"peak_allocated_bytes": 63.0 * 1024**3, "peak_reserved_bytes": 74.0 * 1024**3},
-}
-WORKER_ALLOCATOR = {"0": {"alloc_retries": 0.0, "alloc_ooms": 0.0}, "1": {"alloc_retries": 5.0, "alloc_ooms": 0.0}}
 
 # vLLM, per engine and per bucket. Two engines, one publishing under each namespace.
 ENGINES = ("0", "1")
@@ -339,7 +315,7 @@ def _driver_rows(moment: datetime, seq: int, execution_uid: str = EXECUTION) -> 
 
 
 def _worker_rows(moment: datetime, seq: int, clock: str, execution_uid: str = EXECUTION) -> list[tuple]:
-    """What WorkerTimingSink publishes: exclusive spans per rank, the inclusive parents, and counters.
+    """What WorkerTimingSink publishes: exclusive spans per rank and the inclusive parents.
 
     Ranks sit on different nodes, so the DCGM join credits both nodes to the run.
     """
@@ -382,11 +358,6 @@ def _worker_rows(moment: datetime, seq: int, clock: str, execution_uid: str = EX
             span(worker_rank, "policy_training_step", contained, "policy_ppo_train", "inclusive"),
             span(worker_rank, "policy_ppo_train", PPO_TRAIN[rank] * scale, "train_critic_and_policy", "inclusive"),
         ]
-        for instrument, counters in (
-            ("policy_train_count", {**WORKER_COUNTERS[rank], **WORKER_ALLOCATOR[rank]}),
-            ("policy_train_bytes", WORKER_MEMORY[rank]),
-        ):
-            rows += [row(worker_rank, instrument, value, counter=counter) for counter, value in counters.items()]
     return rows
 
 
@@ -551,9 +522,6 @@ def store(request) -> duckdb.DuckDBPyConnection:
     return _store(getattr(request, "param", "wall"))
 
 
-BOTH_CLOCKS = pytest.mark.parametrize("store", ["wall", "launch"], indirect=True)
-
-
 def _stitched() -> dict:
     return stitch_all(DASHBOARDS, DASHBOARDS / "panels")
 
@@ -585,15 +553,6 @@ BUCKET_MS = 5 * 60 * 1000
 BUCKET_TIMES = [_millis(WINDOW_START) + bucket * BUCKET_MS for bucket in range(BUCKETS)]
 # What a worker panel's mean over one bucket's steps reads, relative to a single attempt's step.
 BUCKET_SCALE = {t: (1.0 + RETRY_SCALE) / 2 if bucket == RETRIED_STEP else 1.0 for bucket, t in enumerate(BUCKET_TIMES)}
-# Every rank's policy_ppo_train in each bucket, across both attempts in the retried step's.
-BUCKET_PPO_TRAIN = {
-    t: sorted(
-        [*PPO_TRAIN.values(), *(RETRY_SCALE * seconds for seconds in PPO_TRAIN.values())]
-        if bucket == RETRIED_STEP
-        else PPO_TRAIN.values()
-    )
-    for bucket, t in enumerate(BUCKET_TIMES)
-}
 _DATASETS = {
     "/v1/rl/overview": rl_overview_dataset,
     "/v1/rl/generation": rl_sync_generation_dataset,
@@ -701,88 +660,14 @@ def test_the_generate_subtree_is_subtracted_from_generate(store) -> None:
     assert sum(bands[phase] for phase in subtree) == pytest.approx(DRIVER_PHASES["generate"])
 
 
-@BOTH_CLOCKS
-def test_the_decomposition_reads_the_slowest_rank(store) -> None:
-    # A NULL policy_ppo_train on the fast rank. Finelog sorts NULLs first under DESC, so without
-    # NULLS LAST this row would make rank 0 the slowest.
-    store.execute(
-        """INSERT INTO "telemetry_v1.marinskyrl"
-           SELECT * REPLACE (CAST(NULL AS DOUBLE) AS value, seq + 1000 AS seq)
-           FROM "telemetry_v1.marinskyrl"
-           WHERE json_get(attributes_json, 'phase') = 'policy_ppo_train' AND json_get(attributes_json, 'rank') = '0'"""
-    )
-    rows = _panel_rows(store, "policy_ppo_train spans on the slowest rank")
+def test_the_train_step_panel_is_the_mean_step_split_by_outcome(store) -> None:
+    rows = _panel_rows(store, "train_step duration")
 
-    bands = {(t, series): seconds for t, series, seconds in rows}
-    # Only exclusive spans that name policy_ppo_train as their parent are banded, so
-    # policy_training_step (inclusive) and policy_span_publish (another parent) drop out. The bands
-    # are the slow rank's own, so they close on its parent, with a negative residual where its spans
-    # overlap. The retried step's bucket holds two attempts with different slowest ranks, and each
-    # decomposes on its own.
-    expected = {**WORKER_SPANS[CRITICAL_RANK], "policy_span_residual": PUBLISHED_RESIDUAL}
-    assert bands == pytest.approx(
-        {(t, band): seconds * BUCKET_SCALE[t] for t in BUCKET_TIMES for band, seconds in expected.items()}
-    )
-
-    # A per-phase maximum over the two ranks would sum to 2705 s inside a 2000 s span, because the
-    # barrier and the compute come from different ranks.
-    per_phase_max = sum(max(WORKER_SPANS["0"][phase], WORKER_SPANS["1"][phase]) for phase in WORKER_SPANS["0"])
-    assert per_phase_max > PPO_TRAIN[CRITICAL_RANK], "per-phase maximum no longer exceeds the parent"
-
-
-@BOTH_CLOCKS
-def test_the_skew_panel_reports_the_spread_and_names_the_same_slowest_rank(store) -> None:
-    rows = _panel_rows(store, "policy_ppo_train spread across ranks")
-
-    expected = []
-    for t, seconds in BUCKET_PPO_TRAIN.items():
-        # DuckDB interpolates linearly, to a p95 of 1995 s over two ranks, where Finelog's DataFusion
-        # reports up to the slowest rank, and a median 5 s short over the retried bucket's four.
-        interpolated = statistics.quantiles(seconds, n=100, method="inclusive")[94]
-        p95 = pytest.approx(interpolated, abs=seconds[-1] - interpolated)
-        median = pytest.approx(statistics.median(seconds), abs=5.0)
-        expected.append((t, pytest.approx(seconds[-1]), p95, median, pytest.approx(seconds[0])))
-    assert rows == expected
-
-
-@BOTH_CLOCKS
-def test_the_derived_ratios_divide_the_quantities_they_name(store) -> None:
-    micro = _panel_rows(store, "policy_train ÷ micro-step count")
-    assert micro == [(t, pytest.approx(DRIVER_PHASES["policy_train"] / 64.0), pytest.approx(64.0)) for t in BUCKET_TIMES]
-
-    ratio = _panel_rows(store, "policy_backward ÷ policy_forward on the slowest rank")
-    expected = WORKER_SPANS[CRITICAL_RANK]["policy_backward"] / WORKER_SPANS[CRITICAL_RANK]["policy_forward"]
-    assert ratio == [(t, pytest.approx(expected)) for t in BUCKET_TIMES]
-
-    waiting = _panel_rows(store, "Barrier and all-reduce share on the slowest rank")
-    barriers = sum(WORKER_SPANS[CRITICAL_RANK][phase] for phase in BARRIER_SPANS)
-    assert waiting == [(t, pytest.approx(barriers / PPO_TRAIN[CRITICAL_RANK])) for t in BUCKET_TIMES]
-
-
-def test_the_waiting_share_is_null_without_barrier_spans(store) -> None:
-    """A step without barrier spans has an unknown wait. Coalescing it to 0 would plot 0%."""
-    store.execute(
-        f"""DELETE FROM "telemetry_v1.marinskyrl"
-            WHERE json_get(attributes_json, 'phase') IN ({", ".join("?" for _ in BARRIER_SPANS)})""",
-        list(BARRIER_SPANS),
-    )
-
-    waiting = _panel_rows(store, "Barrier and all-reduce share on the slowest rank")
-
-    assert waiting, "the panel still reports a bucket per step; only the share is unknown"
-    assert {value for _, value in waiting} == {None}, f"a missing barrier span read as a share: {waiting}"
-
-
-def test_padding_averages_the_per_rank_fractions(store) -> None:
-    rows = _panel_rows(store, "Padding fraction and attention_work_ratio")
-
-    # The mean of 0.25 and 0.20, which does not depend on how the batch is sharded the way a ratio of
-    # summed tokens would.
-    expected_padding = sum(
-        1.0 - counters["rank_tokens_real"] / counters["rank_tokens_padded"] for counters in WORKER_COUNTERS.values()
-    ) / len(WORKER_COUNTERS)
-    expected_work = sum(counters["attention_work_ratio"] for counters in WORKER_COUNTERS.values()) / len(WORKER_COUNTERS)
-    assert rows == [(t, pytest.approx(expected_padding), pytest.approx(expected_work)) for t in BUCKET_TIMES]
+    # The retried step's bucket holds both attempts' train_step, and a sum would read twice the step.
+    assert rows == [
+        (t, "train_step · failure" if bucket == FAILED_BUCKET else "train_step · success", CRITICAL_PATH["train_step"])
+        for bucket, t in enumerate(BUCKET_TIMES)
+    ]
 
 
 def test_the_accelerator_panels_join_dcgm_to_the_run_through_its_nodes(store) -> None:
@@ -969,25 +854,6 @@ def test_the_environment_split_is_a_partition_with_an_audit_band(store) -> None:
     assert sum(shares.values()) == pytest.approx(1.0)
 
 
-def test_memory_is_the_worst_rank_and_allocator_events_are_the_run_total(store) -> None:
-    rows = _panel_rows(store, "Allocator peaks, retries and OOMs")
-
-    # The peaks are the largest rank's. Retries and OOMs sum over ranks.
-    retries = sum(a["alloc_retries"] for a in WORKER_ALLOCATOR.values())
-    expected = [
-        (
-            t,
-            max(m["peak_reserved_bytes"] for m in WORKER_MEMORY.values()),
-            max(m["peak_allocated_bytes"] for m in WORKER_MEMORY.values()),
-            # Both attempts of the retried step retried their allocations.
-            2 * retries if bucket == RETRIED_STEP else retries,
-            0.0,
-        )
-        for bucket, t in enumerate(BUCKET_TIMES)
-    ]
-    assert rows == [tuple(map(pytest.approx, row)) for row in expected]
-
-
 LONG_RUN_STEPS = 500
 LONG_RUN_RANKS = 64
 RANKS_PER_NODE = 8
@@ -1026,7 +892,7 @@ def _long_run_store(ranks: int, steps: int = LONG_RUN_STEPS) -> duckdb.DuckDBPyC
             "node_name",
             "attributes_json",
         ),
-        # A worker's spans and counters: one copy per rank of the template rank's parity.
+        # A worker's spans: one copy per rank of the template rank's parity.
         (
             "telemetry_v1.marinskyrl",
             f"json_get(attributes_json, 'rank') = CAST(copy % 2 AS VARCHAR) AND copy < {ranks}",

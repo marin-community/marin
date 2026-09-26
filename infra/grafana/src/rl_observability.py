@@ -25,7 +25,6 @@ RL_MAX_CORE_ROWS = 100_000
 RL_MAX_ENGINE_ROWS = 100_000
 RL_MAX_GPU_ROWS = 50_000
 RL_MAX_SPAN_ROWS = 50_000
-RL_MAX_COUNTER_ROWS = 50_000
 RL_MAX_RESULT_ROWS = 100_000
 RL_RECENT_MAX_ROWS = 20
 RL_RECENT_WINDOW_PADDING_MS = 60_000
@@ -42,9 +41,6 @@ _CORE_NAMES = (
 )
 _INCLUSIVE_CLOCKS = "('inclusive_wall', 'inclusive_launch')"
 _EXCLUSIVE_CLOCKS = "('exclusive_wall', 'exclusive_launch')"
-_BARRIER_PHASES = (
-    "('policy_entry_barrier', 'policy_final_barrier', 'policy_metric_allreduce', 'policy_entropy_allreduce')"
-)
 _ROLLOUT_COUNTER_NAMES = ("rollout_wait_seconds", "rollout_count")
 _DCGM_SERIES = (
     "gpu_sm_active_ratio",
@@ -55,7 +51,6 @@ _DCGM_SERIES = (
 )
 _DCGM_COUNTERS = ("gpu_nvlink_errors", "gpu_pcie_replay_errors")
 _DCGM_DEVICE = ("gpu_power_watts", *_DCGM_COUNTERS)
-_ALLOCATOR_COUNTERS = ("peak_reserved_bytes", "peak_allocated_bytes", "alloc_retries", "alloc_ooms")
 
 
 def _rl_bucket_ms(
@@ -587,79 +582,23 @@ GROUP BY 1, 2 ORDER BY 1
 def rl_sync_train_step_dataset(
     clusters: tuple[str, ...], run: str, start_ms: int, end_ms: int, requested_bucket_ms: int
 ) -> DashboardDataset:
-    """Build slowest-rank worker spans, per-step worker counters, and DCGM on the run's nodes."""
+    """Build the driver's train_step timings and DCGM on the run's nodes."""
     bucket_ms = _rl_bucket_ms(clusters, run, start_ms, end_ms, requested_bucket_ms, "RL train step")
     bucket = _bucket_sql(start_ms, bucket_ms)
-    scope = _run_scope(clusters, run, start_ms, end_ms)
     clusters_sql = sql_values(clusters)
-    spans_sql = f"""
-WITH {_phase_rows_cte(bucket, scope)}, {_critical_rank_cte()}
-SELECT 'critical_rank' AS statistic, t, execution_uid, step, phase, parent, clock_domain,
-       SUM(value) AS sum_value, COUNT(value) AS sample_count, MAX(value) AS max_value,
-       MAX(parent_seconds) AS parent_seconds, MAX(covered_seconds) AS covered_seconds
-FROM tagged
-WHERE worker_rank = critical_rank
-GROUP BY t, execution_uid, step, phase, parent, clock_domain
-UNION ALL BY NAME
-SELECT 'rank_spread' AS statistic, t, 'policy_ppo_train' AS phase,
-       SUM(value) AS sum_value, COUNT(value) AS sample_count, MAX(value) AS max_value, MIN(value) AS min_value,
-       approx_percentile_cont(value, 0.50) AS p50, approx_percentile_cont(value, 0.95) AS p95
-FROM phase_rows
-WHERE role = 'worker' AND phase = 'policy_ppo_train' AND clock_domain IN {_INCLUSIVE_CLOCKS}
-GROUP BY t
-UNION ALL BY NAME
-SELECT 'driver' AS statistic, t, execution_uid, step, phase, clock_domain,
-       SUM(value) AS sum_value, COUNT(value) AS sample_count, MAX(value) AS max_value
-FROM phase_rows
-WHERE role = 'trainer' AND clock_domain = 'inclusive_wall' AND phase = 'policy_train'
-GROUP BY t, execution_uid, step, phase, clock_domain
-ORDER BY statistic, t, execution_uid, step
-LIMIT {RL_MAX_SPAN_ROWS + 1}
-""".strip()
-    counters_sql = f"""
-WITH samples AS (
-    SELECT {bucket} AS t,
-           execution_uid,
-           json_get(attributes_json, 'step') AS step,
-           json_get(attributes_json, 'rank') AS worker_rank,
-           json_get(attributes_json, 'role') AS role,
-           name,
-           json_get(attributes_json, 'counter') AS counter,
-           MAX(value) AS value
-    FROM "telemetry_v1.marinskyrl"
-    WHERE {scope}
-      AND name IN ('policy_train_count', 'policy_train_bytes')
-    GROUP BY 1, 2, 3, 4, 5, 6, 7
-), per_rank AS (
-    SELECT t, execution_uid, step, worker_rank,
-           MAX(CASE WHEN counter = 'rank_tokens_real' THEN value END) AS tokens_real,
-           MAX(CASE WHEN counter = 'rank_tokens_padded' THEN value END) AS tokens_padded,
-           MAX(CASE WHEN counter = 'attention_work_ratio' THEN value END) AS attention_work,
-           MAX(CASE WHEN counter = 'micro_step_count' THEN value END) AS micro_steps
-    FROM samples WHERE name = 'policy_train_count'
-    GROUP BY 1, 2, 3, 4
-), per_step AS (
-    SELECT t, execution_uid, step,
-           SUM(1.0 - tokens_real / NULLIF(tokens_padded, 0)) AS padded_sum,
-           COUNT(1.0 - tokens_real / NULLIF(tokens_padded, 0)) AS padded_count,
-           SUM(attention_work) AS attention_sum,
-           COUNT(attention_work) AS attention_count,
-           MAX(micro_steps) AS micro_steps
-    FROM per_rank GROUP BY t, execution_uid, step
-), worker AS (
-    SELECT t, execution_uid, step, worker_rank, counter, MAX(value) AS value
-    FROM samples WHERE role = 'worker' AND counter IN ({sql_values(_ALLOCATOR_COUNTERS)})
-    GROUP BY 1, 2, 3, 4, 5
-)
-SELECT 'per_step' AS statistic, * FROM per_step
-UNION ALL BY NAME
-SELECT 'worker' AS statistic, t, execution_uid, step, counter,
+    steps_sql = f"""
+SELECT {bucket} AS t,
+       json_get(attributes_json, 'outcome') AS outcome,
        SUM(value) AS sum_value,
-       COUNT(value) AS sample_count,
-       MAX(value) AS max_value
-FROM worker GROUP BY t, execution_uid, step, counter
-ORDER BY statistic, t, execution_uid, step, counter
-LIMIT {RL_MAX_COUNTER_ROWS + 1}
+       COUNT(value) AS sample_count
+FROM "telemetry_v1.marinskyrl"
+WHERE {_run_scope(clusters, run, start_ms, end_ms)}
+  AND name = 'phase_duration_seconds'
+  AND json_get(attributes_json, 'clock_domain') = 'critical_path'
+  AND json_get(attributes_json, 'phase') = 'train_step'
+GROUP BY 1, 2
+ORDER BY 1, 2
+LIMIT {RL_MAX_SPAN_ROWS + 1}
 """.strip()
     dcgm_scope = f"""COALESCE(NULLIF(cluster, ''), 'marin') IN ({clusters_sql})
       AND timestamp_ms >= {start_ms} AND timestamp_ms < {end_ms}"""
@@ -712,87 +651,10 @@ HAVING (GROUPING(node) = 1 AND name IN ({sql_values(_DCGM_SERIES)}))
 ORDER BY statistic, t, name
 LIMIT {RL_MAX_GPU_ROWS + 1}
 """.strip()
-    setup_sql = (
-        f"""
-CREATE VIEW critical_steps AS
-SELECT t, execution_uid, step,
-       MAX(CASE WHEN phase = 'policy_forward' THEN max_value END) AS forward_seconds,
-       MAX(CASE WHEN phase = 'policy_backward' THEN max_value END) AS backward_seconds,
-       SUM(CASE WHEN phase IN {_BARRIER_PHASES} THEN sum_value END) AS waiting_seconds,
-       MAX(parent_seconds) AS total_seconds
-FROM spans
-WHERE statistic = 'critical_rank' AND clock_domain IN {_EXCLUSIVE_CLOCKS}
-GROUP BY 1, 2, 3
-""".strip(),
-    )
     views = {
-        # Every band comes from the slowest rank's own rows. A per-phase maximum across ranks mixes
-        # ranks and sums past the parent.
-        "ppo_decomposition": (
-            f"""
-WITH banded AS (
-    SELECT t,
-           CASE WHEN clock_domain IN {_INCLUSIVE_CLOCKS} THEN 'policy_span_residual' ELSE phase END AS band,
-           CASE WHEN clock_domain IN {_INCLUSIVE_CLOCKS}
-                THEN (parent_seconds - covered_seconds) * sample_count ELSE sum_value END AS seconds,
-           sample_count
-    FROM spans
-    WHERE statistic = 'critical_rank'
-      AND ((parent = 'policy_ppo_train' AND clock_domain IN {_EXCLUSIVE_CLOCKS}
-            AND phase <> 'policy_span_residual')
-           OR (clock_domain IN {_INCLUSIVE_CLOCKS} AND phase = 'policy_ppo_train'))
-)
-SELECT t, band AS series,
-       SUM(seconds) / SUM(CASE WHEN seconds IS NOT NULL THEN sample_count END) AS value
-FROM banded GROUP BY 1, 2 ORDER BY 1
-""".strip()
-        ),
-        "rank_skew": (
-            "SELECT t, max_value AS slowest_rank, p95, p50, min_value AS fastest_rank "
-            "FROM spans WHERE statistic = 'rank_spread' ORDER BY 1"
-        ),
-        "micro_steps": (
-            """
-WITH driver AS (
-    SELECT t, execution_uid, step, max_value AS seconds FROM spans WHERE statistic = 'driver'
-), micro AS (
-    SELECT execution_uid, step, MAX(micro_steps) AS micro_steps FROM counters
-    WHERE statistic = 'per_step' GROUP BY 1, 2
-)
-SELECT driver.t,
-       AVG(driver.seconds / NULLIF(micro.micro_steps, 0)) AS seconds_per_micro_step,
-       AVG(micro.micro_steps) AS micro_steps
-FROM driver LEFT JOIN micro USING (execution_uid, step)
-GROUP BY 1 ORDER BY 1
-""".strip()
-        ),
-        "backward_over_forward": (
-            "SELECT t, AVG(backward_seconds / NULLIF(forward_seconds, 0)) AS backward_over_forward "
-            "FROM critical_steps GROUP BY 1 ORDER BY 1"
-        ),
-        # A step without barrier spans has an unknown wait, so its share is NULL. Coalescing to 0
-        # would plot a wait of zero.
-        "waiting_share": (
-            "SELECT t, AVG(waiting_seconds / NULLIF(total_seconds, 0)) AS waiting_share "
-            "FROM critical_steps GROUP BY 1 ORDER BY 1"
-        ),
-        "padding": (
-            """
-SELECT t,
-       SUM(padded_sum) / NULLIF(SUM(padded_count), 0) AS padded_fraction,
-       SUM(attention_sum) / NULLIF(SUM(attention_count), 0) AS attention_work_ratio
-FROM counters WHERE statistic = 'per_step' GROUP BY 1 ORDER BY 1
-""".strip()
-        ),
-        "allocator": (
-            """
-SELECT t,
-       MAX(CASE WHEN counter = 'peak_reserved_bytes' THEN max_value END) AS peak_reserved_bytes,
-       MAX(CASE WHEN counter = 'peak_allocated_bytes' THEN max_value END) AS peak_allocated_bytes,
-       SUM(CASE WHEN counter = 'alloc_retries' THEN sum_value END) AS alloc_retries,
-       SUM(CASE WHEN counter = 'alloc_ooms' THEN sum_value END) AS alloc_ooms
-FROM counters WHERE statistic = 'worker' GROUP BY 1 ORDER BY 1
-""".strip()
+        "train_step": (
+            "SELECT t, 'train_step · ' || outcome AS series, sum_value / NULLIF(sample_count, 0) AS value "
+            "FROM steps ORDER BY 1, 2"
         ),
         "sm_activity": (
             "SELECT t, CASE name WHEN 'gpu_sm_active_ratio' THEN 'SM active' ELSE 'tensor pipe active' END AS series, "
@@ -825,11 +687,10 @@ ORDER BY 4 DESC, 5 DESC
         name="RL train step",
         cache_key=(clusters, run, start_ms, end_ms, bucket_ms),
         sources=(
-            SourceQuery("spans", spans_sql, RL_MAX_SPAN_ROWS),
-            SourceQuery("counters", counters_sql, RL_MAX_COUNTER_ROWS),
+            SourceQuery("steps", steps_sql, RL_MAX_SPAN_ROWS),
             SourceQuery("gpu", gpu_sql, RL_MAX_GPU_ROWS),
         ),
-        setup_sql=setup_sql,
+        setup_sql=(),
         views=views,
         max_result_rows=RL_MAX_RESULT_ROWS,
     )

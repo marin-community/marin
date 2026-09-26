@@ -154,7 +154,7 @@ identity and time input, runs a small fixed set of domain queries, and projects 
 panel views locally. Concurrent panel requests coalesce on one logical cache key;
 the `view` parameter only filters the cached result. A cold traversal uses one
 Finelog source for Node and Zephyr, three for Training, two for Runs, four for RL,
-one and three for the sync RL generation and train-step boards, nine for async RL,
+one and two for the sync RL generation and train-step boards, nine for async RL,
 three for Accelerators, and five for Jobs. Those boundaries are intentional:
 crossing namespaces or mixing fleet-wide per-device data with compact summaries
 just to reach one RPC would make the query less predictable.
@@ -317,7 +317,7 @@ of repeating the Kubernetes object name.
 | Workload | Runs | `runs.json` | How is each Levanter training run doing? | cluster, run |
 | Workload | RL Post-training (sync) | `rl_runs.json` | How is one reinforcement-learning run doing? | cluster, run |
 | Workload | RL Post-training (sync): generation | `rl_sync_generation.json` | Where does `generate` spend its time: slow trajectories, vLLM, or the environment? | cluster, run |
-| Workload | RL Post-training (sync): train step | `rl_sync_train_step.json` | Where does `policy_train` spend its time on each rank, and were the GPUs busy? | cluster, run |
+| Workload | RL Post-training (sync): train step | `rl_sync_train_step.json` | How long does each train step take, and were the GPUs busy? | cluster, run |
 | Workload | RL Post-training (async) | `async_rl.json` | Is concurrent rollout work useful, fresh, and keeping the policy trainer busy? | cluster, run, job, execution |
 | Workload | Training run | `training.json` | Is one training run on track? | run |
 | Workload | Inference overview | `inference_overview.json` | Is inference progressing, and are responses slow or queues growing? | identity kind, serve |
@@ -331,10 +331,10 @@ its records. Each view's run picker offers only its own loop. MarinSkyRL documen
 
 RL Post-training (sync) and its drill-downs read datasets built in `src/rl_observability.py`:
 `/v1/rl/overview` (`core`, `engine`, `gpu`, `spans`), `/v1/rl/generation` (`driver`) and
-`/v1/rl/train-step` (`spans`, `counters`, `gpu`). Finelog reduces worker spans to each step's
-slowest rank and a per-bucket spread across ranks, so no source grows with the rank count, and the
-overview's `spans` source keeps one row per bucket. The generation board's vLLM row mounts
-Inference diagnostics panels with their `identity` variable set to the run.
+`/v1/rl/train-step` (`steps`, `gpu`). Finelog reduces the overview's worker spans to each step's
+slowest rank, so no source grows with the rank count, and the overview's `spans` source keeps one
+row per bucket. The generation board's vLLM row mounts Inference diagnostics panels with their
+`identity` variable set to the run.
 
 The two inference dashboards keep the selected identity and time range when
 linked. The existing `marin-inference` UID now opens diagnostics, preserving old

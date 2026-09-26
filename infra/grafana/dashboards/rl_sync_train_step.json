@@ -1,7 +1,7 @@
 {
   "uid": "marin-rl-sync-train-step",
   "title": "RL Post-training (sync): train step",
-  "description": "Drill-down of RL Post-training (sync) into `policy_train`: the per-rank spans and counters each policy worker publishes, and DCGM counters for the same nodes. The spans and counters need `trainer.policy_train_spans=true`, which is off by default.",
+  "description": "Drill-down of RL Post-training (sync) into the train step: how long each step took, and DCGM activity on the run's nodes.",
   "tags": [
     "marin",
     "rl",
@@ -102,50 +102,33 @@
   },
   "panels": [
     {
-      "type": "row",
-      "title": "Why is policy_train slow?",
-      "collapsed": false,
-      "id": 210,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 0
-      },
-      "panels": []
-    },
-    {
       "id": 211,
       "type": "timeseries",
-      "title": "policy_ppo_train spans on the slowest rank",
-      "description": "Exclusive spans on the rank with the longest `policy_ppo_train`. The driver waited for that rank. `policy_span_residual` is that rank's unaccounted time and can be negative.",
+      "title": "train_step duration",
+      "description": "Mean seconds per step the sync trainer spent in `train_step`, from its critical-path timing. Split by outcome, because a step that failed recorded only how long it ran before failing.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
       },
       "gridPos": {
-        "h": 10,
-        "w": 12,
+        "h": 9,
+        "w": 24,
         "x": 0,
-        "y": 1
+        "y": 0
       },
       "fieldConfig": {
         "defaults": {
           "custom": {
             "drawStyle": "line",
             "lineWidth": 1,
-            "fillOpacity": 60,
+            "fillOpacity": 8,
             "showPoints": "never",
             "spanNulls": false,
-            "axisLabel": "mean seconds per step, slowest rank",
-            "stacking": {
-              "mode": "normal",
-              "group": "A"
-            }
+            "axisLabel": "mean seconds per step"
           },
           "unit": "s",
-          "noValue": "No worker spans. The run did not set trainer.policy_train_spans=true, or its build predates the worker spans.",
           "min": 0,
+          "noValue": "No train_step timing for this run. The sync trainer records one per step, so its telemetry is not reaching Finelog.",
           "displayName": "${__field.labels.series}"
         },
         "overrides": []
@@ -167,7 +150,7 @@
           "refId": "A",
           "targetRef": "rl_run",
           "url": "/v1/rl/train-step",
-          "view": "ppo_decomposition",
+          "view": "train_step",
           "format": "timeseries",
           "columns": [
             {
@@ -191,506 +174,6 @@
       "interval": "1m"
     },
     {
-      "id": 212,
-      "type": "timeseries",
-      "title": "policy_ppo_train spread across ranks",
-      "description": "Max, p95, p50 and min of `policy_ppo_train` over all ranks and steps in the bucket. The driver waits for the last rank to return, which need not be the rank that ran longest.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "gridPos": {
-        "h": 10,
-        "w": 12,
-        "x": 12,
-        "y": 1
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 8,
-            "showPoints": "never",
-            "spanNulls": false,
-            "axisLabel": "seconds"
-          },
-          "unit": "s",
-          "min": 0,
-          "noValue": "No worker spans, so there is no spread to show."
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "showLegend": true,
-          "displayMode": "list",
-          "placement": "bottom",
-          "calcs": []
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "targetRef": "rl_run",
-          "url": "/v1/rl/train-step",
-          "view": "rank_skew",
-          "format": "timeseries",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "slowest_rank",
-              "text": "slowest_rank",
-              "type": "number"
-            },
-            {
-              "selector": "p95",
-              "text": "p95",
-              "type": "number"
-            },
-            {
-              "selector": "p50",
-              "text": "p50",
-              "type": "number"
-            },
-            {
-              "selector": "fastest_rank",
-              "text": "fastest_rank",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "interval": "1m"
-    },
-    {
-      "id": 213,
-      "type": "timeseries",
-      "title": "policy_train ÷ micro-step count",
-      "description": "Driver `policy_train` ÷ `micro_step_count` (count on the right axis). If the count halves and this ratio doubles, fewer micro-steps saved nothing.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 0,
-        "y": 11
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 8,
-            "showPoints": "never",
-            "spanNulls": false,
-            "axisLabel": "seconds per micro-step"
-          },
-          "unit": "s",
-          "min": 0,
-          "noValue": "No micro_step_count counter. Workers publish it only with trainer.policy_train_spans=true."
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "micro_steps"
-            },
-            "properties": [
-              {
-                "id": "custom.axisPlacement",
-                "value": "right"
-              },
-              {
-                "id": "unit",
-                "value": "none"
-              },
-              {
-                "id": "custom.axisLabel",
-                "value": "micro-steps per optimizer step"
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "legend": {
-          "showLegend": true,
-          "displayMode": "list",
-          "placement": "bottom",
-          "calcs": []
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "targetRef": "rl_run",
-          "url": "/v1/rl/train-step",
-          "view": "micro_steps",
-          "format": "timeseries",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "seconds_per_micro_step",
-              "text": "seconds_per_micro_step",
-              "type": "number"
-            },
-            {
-              "selector": "micro_steps",
-              "text": "micro_steps",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "interval": "1m"
-    },
-    {
-      "id": 214,
-      "type": "timeseries",
-      "title": "policy_backward ÷ policy_forward on the slowest rank",
-      "description": "Backward normally costs about twice forward. Gradient checkpointing recomputes forward inside backward, and a sharded trainer may gather parameters again, so a ratio well above 2 means recomputation or communication outweighs the compute. Compare only within one `clock_domain`.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 11
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 8,
-            "showPoints": "never",
-            "spanNulls": false,
-            "axisLabel": "ratio"
-          },
-          "unit": "none",
-          "min": 0,
-          "noValue": "No policy_forward or policy_backward span on the slowest rank."
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "showLegend": true,
-          "displayMode": "list",
-          "placement": "bottom",
-          "calcs": []
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "targetRef": "rl_run",
-          "url": "/v1/rl/train-step",
-          "view": "backward_over_forward",
-          "format": "timeseries",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "backward_over_forward",
-              "text": "backward_over_forward",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "interval": "1m"
-    },
-    {
-      "id": 215,
-      "type": "timeseries",
-      "title": "Barrier and all-reduce share on the slowest rank",
-      "description": "Share of `policy_ppo_train` the slowest rank spent in `policy_entry_barrier`, `policy_final_barrier` and the two all-reduces. That rank arrives last, so its entry barrier is near zero.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 16,
-        "y": 11
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 8,
-            "showPoints": "never",
-            "spanNulls": false,
-            "axisLabel": "fraction of policy_ppo_train"
-          },
-          "unit": "percentunit",
-          "min": 0,
-          "noValue": "No barrier or all-reduce spans on the slowest rank."
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "showLegend": true,
-          "displayMode": "list",
-          "placement": "bottom",
-          "calcs": []
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "targetRef": "rl_run",
-          "url": "/v1/rl/train-step",
-          "view": "waiting_share",
-          "format": "timeseries",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "waiting_share",
-              "text": "waiting_share",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "interval": "1m"
-    },
-    {
-      "id": 216,
-      "type": "timeseries",
-      "title": "Padding fraction and attention_work_ratio",
-      "description": "Left: 1 − `rank_tokens_real` ÷ `rank_tokens_padded`, averaged over ranks. Right: `attention_work_ratio`, padded over real attention work. Without sequence packing, eager attention cost grows with the square of the padded length, so the padding fraction understates the wasted work.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 19
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 8,
-            "showPoints": "never",
-            "spanNulls": false,
-            "axisLabel": "padding fraction of the batch"
-          },
-          "unit": "percentunit",
-          "min": 0,
-          "max": 1,
-          "noValue": "No token counters. Workers publish them only with trainer.policy_train_spans=true."
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "attention_work_ratio"
-            },
-            "properties": [
-              {
-                "id": "custom.axisPlacement",
-                "value": "right"
-              },
-              {
-                "id": "unit",
-                "value": "none"
-              },
-              {
-                "id": "custom.axisLabel",
-                "value": "B·S² ÷ ΣLᵢ²"
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "legend": {
-          "showLegend": true,
-          "displayMode": "list",
-          "placement": "bottom",
-          "calcs": []
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "targetRef": "rl_run",
-          "url": "/v1/rl/train-step",
-          "view": "padding",
-          "format": "timeseries",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "padded_fraction",
-              "text": "padded_fraction",
-              "type": "number"
-            },
-            {
-              "selector": "attention_work_ratio",
-              "text": "attention_work_ratio",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "interval": "1m"
-    },
-    {
-      "id": 217,
-      "type": "timeseries",
-      "title": "Allocator peaks, retries and OOMs",
-      "description": "`peak_allocated_bytes` and `peak_reserved_bytes` on the highest rank, and `alloc_retries` and `alloc_ooms` summed over ranks on the right axis. A retry is a failed `cudaMalloc` that made the allocator free its cache and try again. Retries usually come before an OOM.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 19
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 8,
-            "showPoints": "never",
-            "spanNulls": false,
-            "axisLabel": "peak bytes on the worst rank"
-          },
-          "unit": "bytes",
-          "noValue": "No allocator counters. Workers publish them only with trainer.policy_train_spans=true.",
-          "min": 0
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "alloc_.*"
-            },
-            "properties": [
-              {
-                "id": "custom.axisPlacement",
-                "value": "right"
-              },
-              {
-                "id": "unit",
-                "value": "none"
-              },
-              {
-                "id": "custom.axisLabel",
-                "value": "allocator events in the step"
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "legend": {
-          "showLegend": true,
-          "displayMode": "list",
-          "placement": "bottom",
-          "calcs": []
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "targetRef": "rl_run",
-          "url": "/v1/rl/train-step",
-          "view": "allocator",
-          "format": "timeseries",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "peak_reserved_bytes",
-              "text": "peak_reserved_bytes",
-              "type": "number"
-            },
-            {
-              "selector": "peak_allocated_bytes",
-              "text": "peak_allocated_bytes",
-              "type": "number"
-            },
-            {
-              "selector": "alloc_retries",
-              "text": "alloc_retries",
-              "type": "number"
-            },
-            {
-              "selector": "alloc_ooms",
-              "text": "alloc_ooms",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "interval": "1m"
-    },
-    {
       "type": "row",
       "title": "Were the GPUs computing or waiting?",
       "collapsed": false,
@@ -699,7 +182,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 27
+        "y": 9
       },
       "panels": []
     },
@@ -716,7 +199,7 @@
         "h": 9,
         "w": 12,
         "x": 0,
-        "y": 28
+        "y": 10
       },
       "fieldConfig": {
         "defaults": {
@@ -789,7 +272,7 @@
         "h": 9,
         "w": 12,
         "x": 12,
-        "y": 28
+        "y": 10
       },
       "fieldConfig": {
         "defaults": {
@@ -860,7 +343,7 @@
         "h": 9,
         "w": 12,
         "x": 0,
-        "y": 37
+        "y": 19
       },
       "fieldConfig": {
         "defaults": {
@@ -932,7 +415,7 @@
         "h": 9,
         "w": 12,
         "x": 12,
-        "y": 37
+        "y": 19
       },
       "fieldConfig": {
         "defaults": {
