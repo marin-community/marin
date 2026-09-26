@@ -93,6 +93,8 @@ _KDA_ATTN_LEAF = re.compile(r"kda_blocks\.stacked\.attn\.(\w+)")
 _KDA_ADAM_LEAVES = frozenset({"w_a_down", "w_a_up", "a_log", "dt_bias"})
 # Write-strength projection: MuonH at ``kda_beta_lr_mult`` x the MuonH LR.
 _KDA_BETA_LEAF = "w_beta"
+# Low-rank write-strength MLP (``kda_beta_rank``): LR group chosen by ``kda_beta_mlp_group``.
+_KDA_BETA_MLP_LEAVES = frozenset({"w_beta_down", "w_beta_up"})
 
 
 def _kda_leaf(path_lower: str) -> str | None:
@@ -243,6 +245,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     attn_res_query_lr_scale: float = 0.1
     kda_beta_lr_mult: float = 2.0
     muon_head_dim: int | None = None
+    kda_beta_mlp_group: str = "kda_beta"
+    """LR group of the low-rank KDA beta MLP: ``kda_beta`` (MuonH at ``kda_beta_lr_mult``) or ``adam``."""
     kda_decay_lr_mult: float = 1.0
     """Adam LR multiplier for the KDA decay parameters (``_KDA_ADAM_LEAVES``: dt_bias, A_log, the gate projections)."""
     kda_decay_beta1: float | None = None
@@ -333,6 +337,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     def __post_init__(self):
         if self.lm_head_group not in ("adamh", "muonh"):
             raise ValueError(f"lm_head_group must be adamh or muonh, got {self.lm_head_group!r}")
+        if self.kda_beta_mlp_group not in ("kda_beta", "adam"):
+            raise ValueError(f"kda_beta_mlp_group must be kda_beta or adam, got {self.kda_beta_mlp_group!r}")
         if self.embed_group not in ("adam", "adamh"):
             raise ValueError(f"embed_group must be adam or adamh, got {self.embed_group!r}")
 
@@ -345,6 +351,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             kda_leaf = _kda_leaf(path_lower)
             if kda_leaf == _KDA_BETA_LEAF:
                 return "kda_beta"
+            if kda_leaf in _KDA_BETA_MLP_LEAVES:
+                return self.kda_beta_mlp_group
             if kda_leaf in _KDA_ADAM_LEAVES:
                 return "kda_decay"
             # AttnRes pseudo-queries are per-layer vectors (2D once stacked, which would route to MuonH).

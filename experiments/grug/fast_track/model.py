@@ -75,6 +75,9 @@ _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
 _AUX_HIDDEN = "aux_lm_hidden"
 # Metrics-dict keys carrying the AttnRes z-loss term (with gradient) from the forward to the loss.
 _ATTN_RES_Z = "attn_res_z_term"
+# Per-gate token-mean AttnRes source weights (variable length per gate), popped into logging scalars.
+_ATTN_RES_W_ATTN = "attn_res_weights_attn"
+_ATTN_RES_W_MLP = "attn_res_weights_mlp"
 
 # Kimi K3's KDA layer: low-rank forget-gate width, and the per-token log-decay floor
 # ``g = -KDA_MIN_LOG_DECAY * sigmoid(...)``.
@@ -301,6 +304,11 @@ class GrugModelConfig:
     """GatedNorm after the embedding RMSNorm (else the RMSNorm alone)."""
     final_gated_norm: bool = True
     """GatedNorm after the final RMSNorm, before the lm_head (else the RMSNorm alone)."""
+    kda_beta_rank: int | None = None
+    """KDA write strength through a low-rank MLP of this hidden width,
+    ``beta = sigmoid(SiLU(x W_beta_down) W_beta_up)``, instead of the linear ``sigmoid(x W_beta)``."""
+    kda_beta_up_zero_init: bool = False
+    """Zero-init ``W_β↑`` (β = 0.5 everywhere at init)."""
     kda_gate_per_head: bool = False
     """KDA output gate ``sigmoid(x W_g)`` with one value per head instead of one per channel."""
     loop_passes: int = 1
@@ -713,7 +721,9 @@ class KimiDeltaAttention(eqx.Module):
     w_a_up: Float[Array, "R NH"]
     a_log: Float[Array, " N"]
     dt_bias: Float[Array, "N H"]
-    w_beta: Float[Array, "D N"]
+    w_beta: Float[Array, "D N"] | None
+    w_beta_down: Float[Array, "D R"] | None
+    w_beta_up: Float[Array, "R N"] | None
     o_norm: "RMSNorm"
     bias_qkv: Float[Array, "3 NH"] | None
     sconv_q: ShortConv
@@ -738,7 +748,24 @@ class KimiDeltaAttention(eqx.Module):
             w_a_up=reshard(_init_weight(k_au, (r, n * h), std), P(None, "model")),
             a_log=jnp.zeros((n,)),
             dt_bias=_kda_dt_bias_init(cfg, k_dt, (n, h)),
-            w_beta=reshard(_init_weight(k_b, (d, n), std), P(None, None)),
+            w_beta=None if cfg.kda_beta_rank else reshard(_init_weight(k_b, (d, n), std), P(None, None)),
+            w_beta_down=(
+                reshard(_init_weight(k_b, (d, cfg.kda_beta_rank), std), P(None, None)) if cfg.kda_beta_rank else None
+            ),
+            w_beta_up=(
+                None
+                if not cfg.kda_beta_rank
+                else reshard(
+                    (
+                        jnp.zeros((cfg.kda_beta_rank, n))
+                        if cfg.kda_beta_up_zero_init
+                        else _init_weight(
+                            random.fold_in(k_b, 1), (cfg.kda_beta_rank, n), 1.0 / math.sqrt(cfg.kda_beta_rank)
+                        )
+                    ),
+                    P(None, None),
+                )
+            ),
             o_norm=RMSNorm.init(h, 1e-6),
             bias_qkv=jnp.zeros((3, n * h)) if "qkv" in cfg.proj_biases else None,
             sconv_q=ShortConv.init(n * h, cfg.sconv_kernel),
@@ -767,7 +794,13 @@ class KimiDeltaAttention(eqx.Module):
         a = rearrange(a, "... (n d) -> ... n d", d=head_dim).astype(jnp.float32)
         scale = jnp.exp(self.a_log.astype(jnp.float32))[:, None]
         g = -KDA_MIN_LOG_DECAY * jax.nn.sigmoid(scale * (a + self.dt_bias.astype(jnp.float32)))
-        beta = jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.w_beta).astype(jnp.float32))
+        if self.w_beta_down is not None and self.w_beta_up is not None:
+            beta_hidden = jax.nn.silu(jnp.einsum("bsd,dr->bsr", x, self.w_beta_down))
+            beta_logits = jnp.einsum("bsr,rn->bsn", beta_hidden, self.w_beta_up.astype(beta_hidden.dtype))
+        else:
+            assert self.w_beta is not None
+            beta_logits = jnp.einsum("bsd,dn->bsn", x, self.w_beta)
+        beta = jax.nn.sigmoid(beta_logits.astype(jnp.float32))
 
         spec4 = P(_BATCH_AXES, None, "model", None)
         spec3 = P(_BATCH_AXES, None, "model")
@@ -1289,7 +1322,8 @@ def _attn_res_mix(
     """One AttnRes gate: softmax over the completed blocks (+ the running partial) and their weighted sum.
 
     ``logit_bias[g, n]`` is added to block ``n``'s logit and ``logit_bias[g, -1]`` to the partial's.
-    Also returns the gate's mean squared logsumexp (the z-loss term).
+    Also returns the gate's mean squared logsumexp (the z-loss term) and its token-mean source weights
+    (blocks in order, then the partial), for logging.
 
     ``block_logits[n]`` holds block ``n``'s precomputed logits against the queries of every gate from the
     first one that reads it to the end of the query stack (``_block_logit``); only the partial (new at
@@ -1301,8 +1335,9 @@ def _attn_res_mix(
         sources.append(partial)
         logits.append(_attn_res_source_logits(partial, queries[gate_index][None], eps)[0])
     logits = _bias_gate_logits(logits, logit_bias, gate_index, has_partial=partial is not None)
-    _, mixed = _softmax_mix(logits, sources)
-    return reshard(mixed.astype(sources[0].dtype), _batch_spec()), _gate_z(logits)
+    weights, mixed = _softmax_mix(logits, sources)
+    mean_weights = jax.lax.stop_gradient(jnp.mean(weights, axis=(1, 2)))
+    return reshard(mixed.astype(sources[0].dtype), _batch_spec()), _gate_z(logits), mean_weights
 
 
 def _bias_gate_logits(
@@ -1337,16 +1372,21 @@ def _attn_res_layer(
     case this layer starts a fresh partial sum.
     """
     layer, blocks, block_logits, partial, queries, logit_bias = diff_args
-    h, z_attn = _attn_res_mix(blocks, block_logits, partial, queries, 2 * layer_index, eps, logit_bias)
+    h, z_attn, w_attn = _attn_res_mix(blocks, block_logits, partial, queries, 2 * layer_index, eps, logit_bias)
     attn_branch = type(layer).attn_branch
     if layer.attn.cfg.attn_res_remat_attention:
         attn_branch = eqx.filter_checkpoint(attn_branch, policy=None)
     attn_out = attn_branch(layer, h, mask, use_long, use_long, token_ids)
     partial = attn_out if partial is None else partial + attn_out
     # The MLP re-attends over the history including this layer's attention write.
-    h, z_mlp = _attn_res_mix(blocks, block_logits, partial, queries, 2 * layer_index + 1, eps, logit_bias)
+    h, z_mlp, w_mlp = _attn_res_mix(blocks, block_logits, partial, queries, 2 * layer_index + 1, eps, logit_bias)
     mlp_out, router_stats = layer.mlp_branch(h, mask)
-    return partial + mlp_out, {**router_stats, _ATTN_RES_Z: z_attn + z_mlp}
+    return partial + mlp_out, {
+        **router_stats,
+        _ATTN_RES_Z: z_attn + z_mlp,
+        _ATTN_RES_W_ATTN: w_attn,
+        _ATTN_RES_W_MLP: w_mlp,
+    }
 
 
 def _attn_res_layer_passthrough(diff_args, mask, token_ids, use_long, layer_index, eps):
@@ -1705,6 +1745,8 @@ class Transformer(eqx.Module):
             else _attn_res_layer_passthrough
         )
 
+        weight_logs: dict[int, tuple[jax.Array, bool]] = {}
+
         def run_pass(state, pass_index):
             """One pass over the physical layers, extending the history; returns the new state, the
             per-layer router stats and the pass's gate z terms."""
@@ -1725,6 +1767,7 @@ class Transformer(eqx.Module):
                     inject = (scale * embedding.astype(jnp.float32)).astype(embedding.dtype)
                     partial = inject if partial is None else partial + inject
                 use_long = _is_long_layer(i, num_layers, cfg.global_every)
+                partial_before = partial
                 partial, blocks, block_logits, stats = layer_fn(
                     (layer, blocks, block_logits, partial, queries, logit_bias),
                     long_layer_mask if use_long else short_layer_mask,
@@ -1734,6 +1777,9 @@ class Transformer(eqx.Module):
                     eps,
                 )
                 z_out.append(stats.pop(_ATTN_RES_Z))
+                has_partial_attn = partial_before is not None
+                weight_logs[2 * eff] = (stats.pop(_ATTN_RES_W_ATTN), has_partial_attn)
+                weight_logs[2 * eff + 1] = (stats.pop(_ATTN_RES_W_MLP), True)
                 stats_out.append(stats)
             return (blocks, block_logits, partial), stats_out, z_out
 
@@ -1744,6 +1790,7 @@ class Transformer(eqx.Module):
             logits.append(_attn_res_source_logits(partial, queries[final_index][None], eps)[0])
             logits = _bias_gate_logits(logits, logit_bias, final_index, has_partial=True)
             weights, mixed = _softmax_mix(logits, [*blocks, partial])
+            weight_logs[final_index] = (jax.lax.stop_gradient(jnp.mean(weights, axis=(1, 2))), True)
             max_weight = jax.lax.stop_gradient(jnp.mean(jnp.max(weights, axis=0)))
             entropy = jax.lax.stop_gradient(jnp.mean(-jnp.sum(weights * jnp.log(jnp.maximum(weights, 1e-30)), axis=0)))
             return mixed, _gate_z(logits), max_weight, entropy
@@ -1783,6 +1830,13 @@ class Transformer(eqx.Module):
         run_all = passes == 1 or cfg.loop_grow_step is None or loop_active is None or loop_active
         mixed, layer_stats, z_total, max_weight, entropy = all_passes(state) if run_all else one_pass(state)
         final_stats = {"attn_res_final_max_weight": max_weight, "attn_res_final_entropy": entropy}
+        # Source n is block n (the embedding is block len(extra_sources)); "p" is the running partial.
+        for gate, (mean_weights, has_partial) in sorted(weight_logs.items()):
+            num_blocks = mean_weights.shape[0] - int(has_partial)
+            for n in range(num_blocks):
+                final_stats[f"attn_res_w_g{gate:02d}_b{n:02d}"] = mean_weights[n]
+            if has_partial:
+                final_stats[f"attn_res_w_g{gate:02d}_p"] = mean_weights[-1]
         for i, layer in enumerate(layers):
             if isinstance(layer.attn, CausalSelfAttention) and layer.attn.qk_mult is not None:
                 final_stats[f"attn_res_qk_mult_L{i}"] = jax.lax.stop_gradient(layer.attn.qk_mult)
