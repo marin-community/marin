@@ -309,6 +309,9 @@ class GrugModelConfig:
     mtp_weight: float = 0.0
     """Weight of a depth-1 multi-token-prediction loss (0 disables it): predict token t+2 from
     ``h_t + W_mtp rms_norm(embed(token_{t+1}))`` through a parameter-free RMS norm and the shared lm_head."""
+    kda_decay_conv: bool = False
+    """A causal ShortConv over KDA's rank-128 decay input (``x W_a↓``), so each position's decay sees a few
+    preceding tokens instead of only its own (still computed before the recurrence, so chunking holds)."""
     kda_decay_per_head: bool = False
     """Gated-DeltaNet-style decay: one log-decay per head (broadcast over its channels) instead of KDA's
     per-channel decay. ``W_a↑`` and ``dt_bias`` shrink to one column per head."""
@@ -759,6 +762,7 @@ class KimiDeltaAttention(eqx.Module):
     sconv_q: ShortConv
     sconv_k: ShortConv
     sconv_v: ShortConv
+    sconv_a: ShortConv | None
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -804,6 +808,7 @@ class KimiDeltaAttention(eqx.Module):
             sconv_q=ShortConv.init(n * h, cfg.sconv_kernel),
             sconv_k=ShortConv.init(n * h, cfg.sconv_kernel),
             sconv_v=ShortConv.init(n * h, cfg.sconv_kernel),
+            sconv_a=ShortConv.init(r, cfg.sconv_kernel) if cfg.kda_decay_conv else None,
             cfg=cfg,
         )
 
@@ -823,7 +828,10 @@ class KimiDeltaAttention(eqx.Module):
         q = project(self.w_q, self.sconv_q, 0)
         k = project(self.w_k, self.sconv_k, 1)
         v = project(self.w_v, self.sconv_v, 2)
-        a = jnp.einsum("bsd,dr,re->bse", x, self.w_a_down, self.w_a_up)
+        a_low = jnp.einsum("bsd,dr->bsr", x, self.w_a_down)
+        if self.sconv_a is not None:
+            a_low = self.sconv_a(a_low, segment_ids)
+        a = jnp.einsum("bsr,re->bse", a_low, self.w_a_up)
         a = rearrange(a, "... (n d) -> ... n d", d=1 if cfg.kda_decay_per_head else head_dim).astype(jnp.float32)
         scale = jnp.exp(self.a_log.astype(jnp.float32))[:, None]
         g = -KDA_MIN_LOG_DECAY * jax.nn.sigmoid(scale * (a + self.dt_bias.astype(jnp.float32)))
