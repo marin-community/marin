@@ -20,6 +20,7 @@ from haliax import Axis
 from haliax.jax_utils import named_call, tree_checkpoint_name
 from haliax.nn import ArrayStacked
 from jax import core, random
+from jax.ad_checkpoint import checkpoint_name
 from jax.sharding import NamedSharding, get_abstract_mesh, reshard
 from jax.sharding import PartitionSpec as P
 
@@ -520,6 +521,28 @@ class ShortConv(eqx.Module):
         return short_conv(weight, x, segment_ids, batch_axes=_BATCH_AXES)
 
 
+# Tag for attention weights gathered from their FSDP shards; see `_regathered_einsum`.
+_GATHERED_WEIGHT_REMAT_NAME = "grug_gathered_attention_weight"
+
+
+def _regathered_einsum(equation: str, x: jax.Array, w: jax.Array, gathered_spec: P, **kwargs) -> jax.Array:
+    """``einsum(equation, x, w)`` whose backward all-gathers ``w`` again instead of keeping it.
+
+    Under the layer remat, the recompute gathers the attention weights at the start of the
+    backward loop body, but attention's backward needs them only at the end, after the MoE
+    backward. XLA shortens that live range after scheduling by rematerializing the gathers as
+    synchronous all-gathers on the compute stream, fully exposed. Recomputing the gather at the
+    JAX level instead leaves an ordinary async all-gather that the scheduler can hide.
+    """
+
+    def project(x: jax.Array, w: jax.Array) -> jax.Array:
+        gathered = checkpoint_name(reshard(w, gathered_spec), _GATHERED_WEIGHT_REMAT_NAME)
+        return jnp.einsum(equation, x, gathered, **kwargs)
+
+    policy = jax.checkpoint_policies.save_anything_except_these_names(_GATHERED_WEIGHT_REMAT_NAME)
+    return jax.checkpoint(project, policy=policy)(x, w)
+
+
 class CausalSelfAttention(eqx.Module):
     w_q: Float[Array, "D NH"]
     w_k: Float[Array, "D MH"]
@@ -557,9 +580,9 @@ class CausalSelfAttention(eqx.Module):
         # stay in it, the attention output returns to it, and `w_o` writes it.
         residual_seq_axis = _sequence_axis_of(x)
 
-        q_flat = jnp.einsum("bsh,hd->bsd", x, self.w_q)
-        k_flat = jnp.einsum("bsh,hd->bsd", x, self.w_k)
-        v_flat = jnp.einsum("bsh,hd->bsd", x, self.w_v)
+        q_flat = _regathered_einsum("bsh,hd->bsd", x, self.w_q, P(None, "model"))
+        k_flat = _regathered_einsum("bsh,hd->bsd", x, self.w_k, P(None, "model"))
+        v_flat = _regathered_einsum("bsh,hd->bsd", x, self.w_v, P(None, "model"))
         # SConv: depthwise causal conv after the K projection. segment_ids (packed-document
         # boundaries) come from the mask so the conv never mixes across a document boundary.
         _seg = mask.segment_ids if isinstance(mask, AttentionMask) else None
@@ -682,7 +705,9 @@ class CausalSelfAttention(eqx.Module):
             (*attn_out.shape[:-2], attn_out.shape[-2] * attn_out.shape[-1]),
             out_sharding=P(_BATCH_AXES, residual_seq_axis, "model"),
         )
-        return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=P(_BATCH_AXES, residual_seq_axis, None))
+        return _regathered_einsum(
+            "bsh,hd->bsd", attn_out, self.w_o, P("model", None), out_sharding=P(_BATCH_AXES, residual_seq_axis, None)
+        )
 
 
 class RMSNorm(eqx.Module):
