@@ -1245,14 +1245,69 @@ class Block(eqx.Module):
         x = x + attn_out
         mlp_in = self._gated_rms_norm(self.rms_mlp, self.mlp_gated_norm, x)
         token_valid = token_validity_from_attention_mask(mask, batch_size=x.shape[0], sequence_length=x.shape[1])
-        mlp_out, router_stats = self.mlp(mlp_in, token_valid)
-        if self.shared is not None:
-            for shared_expert in self.shared:
+        mlp, shared = self.mlp, self.shared
+        if resolve_moe_implementation(mlp.cfg.moe_implementation) == "ragged_all_to_all":
+            mlp, shared, mlp_in = _prefetch_mlp_weights(mlp, shared, mlp_in)
+        mlp_out, router_stats = mlp(mlp_in, token_valid)
+        if shared is not None:
+            for shared_expert in shared:
                 mlp_out = mlp_out + shared_expert(mlp_in, activation=ActivationFunctionEnum.silu)
         if self.sconv_mlp is not None:
             mlp_out = self.sconv_mlp(mlp_out, sconv_segment_ids)
         x = x + mlp_out
         return x, router_stats
+
+
+@jax.custom_vjp
+def _forward_barrier(values):
+    """``optimization_barrier`` in the forward pass only; the backward passes cotangents through.
+
+    A barrier's transpose barriers the cotangents too. Between a weight gradient's all-reduce and
+    the slice back to its FSDP shard, that stops XLA from fusing the pair into a reduce-scatter.
+    """
+    return jax.lax.optimization_barrier(values)
+
+
+def _forward_barrier_fwd(values):
+    return _forward_barrier(values), None
+
+
+def _forward_barrier_bwd(_, cotangents):
+    return (cotangents,)
+
+
+_forward_barrier.defvjp(_forward_barrier_fwd, _forward_barrier_bwd)
+
+
+def _prefetch_mlp_weights(
+    mlp: "MoEMLP", shared: tuple[DenseMLP, ...] | None, mlp_in: Float[Array, "B S D"]
+) -> tuple["MoEMLP", tuple[DenseMLP, ...] | None, Float[Array, "B S D"]]:
+    """Gather the MLP section's FSDP-sharded weights before routing starts.
+
+    With one collective in flight at a time, a weight all-gather issued inside the MoE section
+    holds the collective slot through an expert GEMM, and the ragged transport that should overlap
+    that GEMM runs bare instead. Tying the gathered weights to ``mlp_in`` completes the gathers
+    before routing, so the scheduler issues them under attention.
+    """
+    latent_down = latent_up = None
+    if mlp.w_latent_down is not None and mlp.w_latent_up is not None:
+        latent_down = reshard(mlp.w_latent_down, P(None, "model"))
+        latent_up = reshard(mlp.w_latent_up, P("model", None))
+    shared_weights = ()
+    if shared is not None:
+        shared_weights = tuple(
+            (reshard(e.w_gate, P(None, "model")), reshard(e.w_up, P(None, "model")), reshard(e.w_down, P("model", None)))
+            for e in shared
+        )
+    mlp_in, latent_down, latent_up, shared_weights = _forward_barrier((mlp_in, latent_down, latent_up, shared_weights))
+    if latent_down is not None:
+        mlp = dataclasses.replace(mlp, w_latent_down=latent_down, w_latent_up=latent_up)
+    if shared is not None:
+        shared = tuple(
+            dataclasses.replace(e, w_gate=g, w_up=u, w_down=d)
+            for e, (g, u, d) in zip(shared, shared_weights, strict=True)
+        )
+    return mlp, shared, mlp_in
 
 
 def _long_layer_schedule(num_layers: int, global_every: int) -> jax.Array:
