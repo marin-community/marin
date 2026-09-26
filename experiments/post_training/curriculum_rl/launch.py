@@ -593,9 +593,14 @@ data:
     if policy is SNOWBALL_POLICY:
         if preset.trainer_tuning is not None and preset.trainer_tuning.optimizer.lower() == "muonh":
             # MuonH keeps full FP32 master weights and momentum on each policy
-            # rank. Four pipeline stages halve that per-rank state, while the
-            # reference model retains its two-stage inference geometry.
-            trainer["policy"]["megatron_config"]["pipeline_model_parallel_size"] = 4
+            # rank. The 26 layers occupy 6/7/7/6 pipeline stages, while the
+            # reference model uses two stages.
+            policy_megatron = trainer["policy"]["megatron_config"]
+            policy_megatron["pipeline_model_parallel_size"] = 4
+            policy_megatron["transformer_config_kwargs"] = {
+                "num_layers_in_first_pipeline_stage": 6,
+                "num_layers_in_last_pipeline_stage": 6,
+            }
         trainer["flash_attn"] = False
         trainer["gradient_checkpointing"] = True
         trainer["offload_optimizer_during_rollouts"] = True
