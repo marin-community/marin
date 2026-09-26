@@ -592,6 +592,11 @@ data:
     trainer["policy"]["megatron_config"] = megatron_config
     trainer["ref"] = {"megatron_config": megatron_config.copy()}
     if policy is SNOWBALL_POLICY:
+        if preset.trainer_tuning is not None and preset.trainer_tuning.optimizer.lower() == "muonh":
+            # MuonH keeps full FP32 master weights and momentum on each policy
+            # rank. Four pipeline stages halve that per-rank state, while the
+            # reference model retains its two-stage inference geometry.
+            trainer["policy"]["megatron_config"]["pipeline_model_parallel_size"] = 4
         trainer["flash_attn"] = False
         trainer["gradient_checkpointing"] = True
         trainer["offload_optimizer_during_rollouts"] = True
