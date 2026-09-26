@@ -32,6 +32,8 @@ fetch server-side, so nothing outside the container reaches it.
 GET /finelog/{cluster}/query?sql=&from=&to=      finelog SQL
 GET /finelog/{cluster}/v1/{node,training,runs,rl,async-rl,accelerator,jobs}/overview
                                                     bounded shared dashboard datasets
+GET /finelog/{cluster}/v1/rl/{generation,train-step}
+                                                    bounded sync RL drill-down datasets
 GET /finelog/{cluster}/v1/zephyr/overview        bounded ranked shuffle snapshot
 GET /finelog/{cluster}/v1/rl/recent              bounded recent RL runs
 GET /finelog/marin/fleet_health                  main query probe + k8s mirror readiness
@@ -151,8 +153,9 @@ and Home dashboards use the same shared-dataset contract. Each endpoint validate
 identity and time input, runs a small fixed set of domain queries, and projects all
 panel views locally. Concurrent panel requests coalesce on one logical cache key;
 the `view` parameter only filters the cached result. A cold traversal uses one
-Finelog source for Node and Zephyr, three for Training, two for Runs, three for RL,
-nine for async RL, three for Accelerators, and five for Jobs. Those boundaries are intentional:
+Finelog source for Node and Zephyr, three for Training, two for Runs, four for RL,
+one and two for the sync RL generation and train-step boards, nine for async RL,
+three for Accelerators, and five for Jobs. Those boundaries are intentional:
 crossing namespaces or mixing fleet-wide per-device data with compact summaries
 just to reach one RPC would make the query less predictable.
 
@@ -313,6 +316,8 @@ of repeating the Kubernetes object name.
 | Workload | Jobs | `jobs.json` | What is running, queued, and stuck? | cluster, job |
 | Workload | Runs | `runs.json` | How is each Levanter training run doing? | cluster, run |
 | Workload | RL Post-training (sync) | `rl_runs.json` | How is one reinforcement-learning run doing? | cluster, run |
+| Workload | RL Post-training (sync): generation | `rl_sync_generation.json` | Where does `generate` spend its time: slow trajectories, vLLM, or the environment? | cluster, run |
+| Workload | RL Post-training (sync): train step | `rl_sync_train_step.json` | How long does each train step take, and were the GPUs busy? | cluster, run |
 | Workload | RL Post-training (async) | `async_rl.json` | Is concurrent rollout work useful, fresh, and keeping the policy trainer busy? | cluster, run, job, execution |
 | Workload | Training run | `training.json` | Is one training run on track? | run |
 | Workload | Inference overview | `inference_overview.json` | Is inference progressing, and are responses slow or queues growing? | identity kind, serve |
@@ -323,6 +328,12 @@ Getting a run onto an RL Post-training view is a MarinSkyRL-side question: which
 the telemetry environment, what a run id should look like, and which training loop the run stamps on
 its records. Each view's run picker offers only its own loop. MarinSkyRL documents it at
 `docs/grafana-rl-runs.md`.
+
+RL Post-training (sync) and its drill-downs read datasets built in `src/rl_observability.py`:
+`/v1/rl/overview` (`core`, `engine`, `gpu`, `spans`), `/v1/rl/generation` (`driver`) and
+`/v1/rl/train-step` (`steps`, `gpu`). The overview's `spans` source keeps one row per bucket,
+however many steps the bucket holds. The generation board's vLLM row mounts Inference diagnostics
+panels with their `identity` variable set to the run.
 
 The two inference dashboards keep the selected identity and time range when
 linked. The existing `marin-inference` UID now opens diagnostics, preserving old
@@ -923,6 +934,16 @@ body:
 ```json
 { "id": 4, "gridPos": { "h": 8, "w": 24, "x": 0, "y": 7 }, "panelRef": "control_plane_components" }
 ```
+
+A stitch marker can also carry `"vars"`, which replaces each `${name}` in its copy of
+the fragment, including the query parameters a `targetRef` (below) expands to. The sync RL
+generation board mounts Inference diagnostics fragments with
+`"vars": {"identity_kind": "run_id", "identity": "${run}", "identity_override": ""}`.
+
+A bridge target can name a shared set of query parameters, which the stitch step
+expands into the full Infinity query: `{"refId": "A", "targetRef": "rl_run",
+"url": "/v1/rl/overview", "view": "spans", "format": "table", "columns": [...]}`.
+The sets are `_SHARED_TARGET_PARAMS` in `src/dashboard_stitch.py`.
 
 `src/dashboard_stitch.py` resolves every `panelRef` marker into its fragment body
 at image build time (Dockerfile), the same way the `marin-infra-panel` build above

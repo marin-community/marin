@@ -1,0 +1,465 @@
+{
+  "uid": "marin-rl-sync-train-step",
+  "title": "RL Post-training (sync): train step",
+  "description": "Drill-down of RL Post-training (sync) into the train step: how long each step took, and DCGM activity on the run's nodes.",
+  "tags": [
+    "marin",
+    "rl",
+    "sync",
+    "generated"
+  ],
+  "timezone": "utc",
+  "editable": false,
+  "schemaVersion": 39,
+  "refresh": "1m",
+  "time": {
+    "from": "now-3h",
+    "to": "now"
+  },
+  "links": [
+    {
+      "linkRef": "rl_post_training"
+    },
+    {
+      "linkRef": "rl_sync_generation"
+    },
+    {
+      "linkRef": "fleet_accelerators"
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "cluster",
+        "label": "Cluster",
+        "type": "custom",
+        "query": "cw-rno2a,cw-us-east-02a,cw-us-east-08a,marin,marin-dev",
+        "multi": true,
+        "includeAll": true,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": []
+      },
+      {
+        "name": "run",
+        "label": "Run",
+        "type": "query",
+        "datasource": {
+          "type": "yesoreyeram-infinity-datasource",
+          "uid": "finelog-marin"
+        },
+        "multi": false,
+        "includeAll": false,
+        "refresh": 2,
+        "sort": 0,
+        "current": {},
+        "options": [],
+        "query": {
+          "queryType": "infinity",
+          "refId": "variable-run",
+          "infinityQuery": {
+            "refId": "variable-run",
+            "type": "json",
+            "source": "url",
+            "format": "table",
+            "parser": "backend",
+            "url": "/query",
+            "url_options": {
+              "method": "GET",
+              "params": [
+                {
+                  "key": "sql",
+                  "value": "SELECT run_id AS value FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name = 'policy_step' AND COALESCE(json_get(resource_attributes_json, 'training_loop'), '') <> 'async' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND run_id IS NOT NULL GROUP BY 1 ORDER BY MAX(timestamp_ms) DESC"
+                },
+                {
+                  "key": "from",
+                  "value": "${__from}"
+                },
+                {
+                  "key": "to",
+                  "value": "${__to}"
+                }
+              ]
+            },
+            "columns": [
+              {
+                "selector": "value",
+                "text": "value",
+                "type": "string"
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 211,
+      "type": "timeseries",
+      "title": "train_step duration",
+      "description": "Mean seconds per step the sync trainer spent in `train_step`, from its critical-path timing. Split by outcome, because a step that failed recorded only how long it ran before failing.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "mean seconds per step"
+          },
+          "unit": "s",
+          "min": 0,
+          "noValue": "No train_step timing for this run. The sync trainer records one per step, so its telemetry is not reaching Finelog.",
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "targetRef": "rl_run",
+          "url": "/v1/rl/train-step",
+          "view": "train_step",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "type": "row",
+      "title": "Were the GPUs computing or waiting?",
+      "collapsed": false,
+      "id": 250,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 9
+      },
+      "panels": []
+    },
+    {
+      "id": 221,
+      "type": "timeseries",
+      "title": "SM and tensor-pipe activity on this run's nodes",
+      "description": "DCGM SM-active and tensor-active on this run's nodes. High SM-active with near-zero tensor-active means kernels run but do little matrix math. Joined by node, so per-rank values are unavailable.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 10
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "active"
+          },
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "noValue": "No node join: trainer rows carry no node_name, or the node agent is not reporting this cluster.",
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "targetRef": "rl_run",
+          "url": "/v1/rl/train-step",
+          "view": "sm_activity",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 222,
+      "type": "timeseries",
+      "title": "GPU memory in use on this run's nodes",
+      "description": "DCGM framebuffer bytes, mean and peak across the run's GPUs. Per device, so it counts everything else on the card.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 10
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "framebuffer in use"
+          },
+          "unit": "bytes",
+          "min": 0,
+          "noValue": "No node join: trainer rows carry no node_name, or the node agent is not reporting this cluster."
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "targetRef": "rl_run",
+          "url": "/v1/rl/train-step",
+          "view": "gpu_memory",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "mean_used_bytes",
+              "text": "mean_used_bytes",
+              "type": "number"
+            },
+            {
+              "selector": "peak_used_bytes",
+              "text": "peak_used_bytes",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 223,
+      "type": "timeseries",
+      "title": "NVLink against PCIe receive traffic",
+      "description": "DCGM NVLink and PCIe receive throughput, summed over the run's GPUs. NVLink traffic stayed within the NVLink domain; PCIe traffic left it. Neither shows the network beyond the host.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 19
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "throughput"
+          },
+          "unit": "Bps",
+          "min": 0,
+          "noValue": "No node join, or no NVLink or PCIe counters from this cluster's node agent.",
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "targetRef": "rl_run",
+          "url": "/v1/rl/train-step",
+          "view": "fabric_receive",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 224,
+      "type": "table",
+      "title": "Link faults and power on this run's GPUs",
+      "description": "Per GPU: peak board power, and the increase in the NVLink and PCIe error counters, summed over each GPU's error kinds. After a reset, the counter's new value counts as the increase. A degraded link shows here as a nonzero increase while throughput on the left stays flat.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 19
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "No GPU's NVLink or PCIe error counter rose. Empty means healthy."
+        },
+        "overrides": []
+      },
+      "options": {},
+      "targets": [
+        {
+          "refId": "A",
+          "targetRef": "rl_run",
+          "url": "/v1/rl/train-step",
+          "view": "link_faults",
+          "format": "table",
+          "columns": [
+            {
+              "selector": "node",
+              "text": "node",
+              "type": "string"
+            },
+            {
+              "selector": "gpu",
+              "text": "gpu",
+              "type": "string"
+            },
+            {
+              "selector": "peak_power_watts",
+              "text": "peak power (W)",
+              "type": "number"
+            },
+            {
+              "selector": "nvlink_error_increase",
+              "text": "NVLink errors in window",
+              "type": "number"
+            },
+            {
+              "selector": "pcie_replay_increase",
+              "text": "PCIe replays in window",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

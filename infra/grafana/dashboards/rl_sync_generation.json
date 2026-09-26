@@ -1,0 +1,522 @@
+{
+  "uid": "marin-rl-sync-generation",
+  "title": "RL Post-training (sync): generation",
+  "description": "Drill-down of RL Post-training (sync) into `generate`. The top rows read the driver's `generate` spans and rollout wait counters. The vLLM row mounts Inference diagnostics panels for this run. Those panels need a time range of 7 hours or less.",
+  "tags": [
+    "marin",
+    "rl",
+    "sync",
+    "generated"
+  ],
+  "timezone": "utc",
+  "editable": false,
+  "schemaVersion": 39,
+  "refresh": "1m",
+  "time": {
+    "from": "now-3h",
+    "to": "now"
+  },
+  "links": [
+    {
+      "linkRef": "rl_post_training"
+    },
+    {
+      "linkRef": "rl_sync_train_step"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Inference",
+      "type": "link",
+      "url": "/d/marin-inference?var-identity_kind=run_id&var-identity=${run}"
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "cluster",
+        "label": "Cluster",
+        "type": "custom",
+        "query": "cw-rno2a,cw-us-east-02a,cw-us-east-08a,marin,marin-dev",
+        "multi": true,
+        "includeAll": true,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": []
+      },
+      {
+        "name": "run",
+        "label": "Run",
+        "type": "query",
+        "datasource": {
+          "type": "yesoreyeram-infinity-datasource",
+          "uid": "finelog-marin"
+        },
+        "multi": false,
+        "includeAll": false,
+        "refresh": 2,
+        "sort": 0,
+        "current": {},
+        "options": [],
+        "query": {
+          "queryType": "infinity",
+          "refId": "variable-run",
+          "infinityQuery": {
+            "refId": "variable-run",
+            "type": "json",
+            "source": "url",
+            "format": "table",
+            "parser": "backend",
+            "url": "/query",
+            "url_options": {
+              "method": "GET",
+              "params": [
+                {
+                  "key": "sql",
+                  "value": "SELECT run_id AS value FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name = 'policy_step' AND COALESCE(json_get(resource_attributes_json, 'training_loop'), '') <> 'async' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND run_id IS NOT NULL GROUP BY 1 ORDER BY MAX(timestamp_ms) DESC"
+                },
+                {
+                  "key": "from",
+                  "value": "${__from}"
+                },
+                {
+                  "key": "to",
+                  "value": "${__to}"
+                }
+              ]
+            },
+            "columns": [
+              {
+                "selector": "value",
+                "text": "value",
+                "type": "string"
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "row",
+      "title": "How much of the step is generate?",
+      "collapsed": false,
+      "id": 300,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "panels": []
+    },
+    {
+      "id": 302,
+      "type": "timeseries",
+      "title": "generate: share of each child span",
+      "description": "`generate`'s direct child spans as shares of `generate`. `rollout_collect` is the fan-out over trajectories. `generate_span_residual` should stay near zero.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 60,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "share of the generate wall",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "noValue": "No generate child spans. This runner or build does not publish them. The generate total is on Step composition.",
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "targetRef": "rl_run",
+          "url": "/v1/rl/generation",
+          "view": "generate_breakdown",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 303,
+      "type": "timeseries",
+      "title": "Per-trajectory wait: rollout_engine_await and rollout_env_await",
+      "description": "`_seconds_sum` ÷ `rollout_trajectory_count` for `rollout_engine_await` and `rollout_env_await`, and `rollout_engine_await_seconds_max`. The sums overlap across coroutines, so the series do not stack. `rollout_engine_await` is the caller's wait on the inference client. For callers that pass text, it includes chat templating on the driver thread.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "seconds per trajectory"
+          },
+          "unit": "s",
+          "noValue": "No rollout wait counters. This build or runner does not publish them.",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "targetRef": "rl_run",
+          "url": "/v1/rl/generation",
+          "view": "trajectory_wait",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "engine_wait_per_trajectory",
+              "text": "engine_wait_per_trajectory",
+              "type": "number"
+            },
+            {
+              "selector": "env_wait_per_trajectory",
+              "text": "env_wait_per_trajectory",
+              "type": "number"
+            },
+            {
+              "selector": "engine_await_max",
+              "text": "engine_await_max",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "type": "row",
+      "title": "Is it the tail, or the whole batch?",
+      "collapsed": false,
+      "id": 310,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 9
+      },
+      "panels": []
+    },
+    {
+      "id": 306,
+      "type": "timeseries",
+      "title": "rollout_engine_await: slowest trajectory ÷ mean",
+      "description": "`rollout_engine_await_seconds_max` ÷ (`rollout_engine_await_seconds_sum` ÷ `rollout_trajectory_count`). A high ratio means a few trajectories stretch `generate`.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 10
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "slowest ÷ mean"
+          },
+          "unit": "none",
+          "min": 0,
+          "noValue": "No rollout wait counters or no per-trajectory maximum. Batched collection, Harbor and MiniSwe runners publish neither."
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "targetRef": "rl_run",
+          "url": "/v1/rl/generation",
+          "view": "tail_over_mean",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "tail_over_mean",
+              "text": "tail_over_mean",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 304,
+      "type": "timeseries",
+      "title": "Environment wait: queue, exec and resume",
+      "description": "`rollout_env_queue`, `rollout_env_exec` and `rollout_env_resume` as shares of `rollout_env_await`. A large resume share means event-loop backlog. The remainder should stay near zero.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 10
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 60,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "share of the environment wait",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "noValue": "No environment-wait counters. This build does not split the environment wait.",
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "targetRef": "rl_run",
+          "url": "/v1/rl/generation",
+          "view": "environment_split",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "type": "row",
+      "title": "Is vLLM slow, or under-filled?",
+      "collapsed": false,
+      "id": 320,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 18
+      },
+      "panels": []
+    },
+    {
+      "id": 231,
+      "gridPos": {
+        "h": 4,
+        "w": 24,
+        "x": 0,
+        "y": 19
+      },
+      "panelRef": "inference_status",
+      "vars": {
+        "identity_kind": "run_id",
+        "identity": "${run}",
+        "identity_override": ""
+      }
+    },
+    {
+      "id": 232,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 23
+      },
+      "panelRef": "inference_requests",
+      "vars": {
+        "identity_kind": "run_id",
+        "identity": "${run}",
+        "identity_override": ""
+      }
+    },
+    {
+      "id": 233,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 23
+      },
+      "panelRef": "inference_tokens",
+      "vars": {
+        "identity_kind": "run_id",
+        "identity": "${run}",
+        "identity_override": ""
+      }
+    },
+    {
+      "id": 234,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 31
+      },
+      "panelRef": "inference_tpot",
+      "vars": {
+        "identity_kind": "run_id",
+        "identity": "${run}",
+        "identity_override": ""
+      }
+    },
+    {
+      "id": 235,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 31
+      },
+      "panelRef": "inference_kv",
+      "vars": {
+        "identity_kind": "run_id",
+        "identity": "${run}",
+        "identity_override": ""
+      }
+    }
+  ]
+}

@@ -8,21 +8,36 @@ body: ``{"id": N, "gridPos": {...}, "panelRef": "<fragment-name>"}``. Every othe
 field of the rendered panel — type, title, description, datasource, fieldConfig,
 options, targets — comes from ``panels/<fragment-name>.json``, the single source of
 truth for a panel shared across dashboards. ``id`` and ``gridPos`` stay
-dashboard-local: they are the only two things that legitimately vary by placement.
+dashboard-local. A marker may also carry ``"vars": {"name": "value"}``, which replaces
+``${name}`` in the mounted copy, so a fragment written for another board's variables reads
+this board's.
 
 This keeps ``dashboards/*.json`` file-provisioned and git-reviewable end to end —
 no Grafana library-panel API, no runtime sync, no new credential — while killing
 copy-pasted panel bodies that drift out of sync with the bridge's actual schema.
 Dashboard links use ``{"linkRef": "<fragment-name>"}`` markers resolved from
 ``SHARED_LINKS`` for the same reason.
+
+A bridge target can be written as ``{"refId", "targetRef", "url", "view", "format",
+"columns"}``. The stitcher adds the Infinity fields and the query parameters of the
+``targetRef`` set, ending with ``view``.
 """
 
 import argparse
 import json
+import re
 from pathlib import Path
 
 PANEL_REF_KEY = "panelRef"
+PANEL_VARS_KEY = "vars"
 LINK_REF_KEY = "linkRef"
+TARGET_REF_KEY = "targetRef"
+_VARIABLE = re.compile(r"\$\{([^}]+)\}")
+
+_RANGE_PARAMS = (("from", "${__from}"), ("to", "${__to}"), ("bucket_ms", "${__interval_ms}"))
+_SHARED_TARGET_PARAMS = {
+    "rl_run": (("clusters", "${cluster:csv}"), ("run", "${run}"), *_RANGE_PARAMS),
+}
 
 _ASYNC_RL_LINK = {
     "asDropdown": False,
@@ -74,6 +89,26 @@ _RL_POST_TRAINING_LINK = {
     "type": "link",
     "url": "/d/marin-rl-runs",
 }
+_RL_SYNC_GENERATION_LINK = {
+    "asDropdown": False,
+    "icon": "dashboard",
+    "includeVars": True,
+    "keepTime": True,
+    "targetBlank": False,
+    "title": "RL Post-training (sync): generation",
+    "type": "link",
+    "url": "/d/marin-rl-sync-generation",
+}
+_RL_SYNC_TRAIN_STEP_LINK = {
+    "asDropdown": False,
+    "icon": "dashboard",
+    "includeVars": True,
+    "keepTime": True,
+    "targetBlank": False,
+    "title": "RL Post-training (sync): train step",
+    "type": "link",
+    "url": "/d/marin-rl-sync-train-step",
+}
 _SHARED_LINKS = {
     "async_rl": _ASYNC_RL_LINK,
     "cluster_capacity": _CLUSTER_CAPACITY_LINK,
@@ -83,12 +118,49 @@ _SHARED_LINKS = {
     "fleet_health": _FLEET_HEALTH_LINK,
     "fleet_health_without_vars": {**_FLEET_HEALTH_LINK, "includeVars": False},
     "rl_post_training": _RL_POST_TRAINING_LINK,
+    "rl_sync_generation": _RL_SYNC_GENERATION_LINK,
+    "rl_sync_train_step": _RL_SYNC_TRAIN_STEP_LINK,
 }
 
 
 def load_panel_fragments(panels_dir: Path) -> dict[str, dict]:
     """Read every panels/<name>.json fragment, keyed by its filename stem."""
     return {path.stem: json.loads(path.read_text()) for path in panels_dir.glob("*.json")}
+
+
+def _substitute(value, variables: dict[str, str]):
+    """Replace every ``${name}`` whose name is in ``variables`` in the strings of a JSON value.
+
+    One pass, so a replacement that names another variable stays as written.
+    """
+    if isinstance(value, str):
+        return _VARIABLE.sub(lambda match: variables.get(match.group(1), match.group(0)), value)
+    if isinstance(value, list):
+        return [_substitute(item, variables) for item in value]
+    if isinstance(value, dict):
+        return {key: _substitute(item, variables) for key, item in value.items()}
+    return value
+
+
+def _stitch_target(target: dict) -> dict:
+    ref = target.get(TARGET_REF_KEY)
+    if ref is None:
+        return target
+    if ref not in _SHARED_TARGET_PARAMS:
+        raise KeyError(f"unknown target parameter set {ref!r}")
+    params = (*_SHARED_TARGET_PARAMS[ref], ("view", target["view"]))
+    local = ("refId", "format", "url", "columns", "view", TARGET_REF_KEY)
+    return {
+        "refId": target["refId"],
+        "type": "json",
+        "source": "url",
+        "format": target["format"],
+        "parser": "backend",
+        "url": target["url"],
+        "url_options": {"method": "GET", "params": [{"key": key, "value": value} for key, value in params]},
+        "columns": target["columns"],
+        **{key: value for key, value in target.items() if key not in local},
+    }
 
 
 def _stitch_panels(panels: list[dict], fragments: dict[str, dict]) -> list[dict]:
@@ -100,14 +172,19 @@ def _stitch_panels(panels: list[dict], fragments: dict[str, dict]) -> list[dict]
     resolved = []
     for panel in panels:
         ref = panel.get(PANEL_REF_KEY)
-        if ref is None:
-            if panel.get("panels"):
-                panel = {**panel, "panels": _stitch_panels(panel["panels"], fragments)}
-            resolved.append(panel)
-            continue
-        if ref not in fragments:
-            raise KeyError(f"panel {panel.get('id')} references unknown panel fragment {ref!r}")
-        resolved.append({**fragments[ref], "id": panel["id"], "gridPos": panel["gridPos"]})
+        variables = panel.get(PANEL_VARS_KEY, {})
+        if ref is not None:
+            if ref not in fragments:
+                raise KeyError(f"panel {panel.get('id')} references unknown panel fragment {ref!r}")
+            panel = {**fragments[ref], "id": panel["id"], "gridPos": panel["gridPos"]}
+        if panel.get("panels"):
+            panel = {**panel, "panels": _stitch_panels(panel["panels"], fragments)}
+        if "targets" in panel:
+            panel = {**panel, "targets": [_stitch_target(target) for target in panel["targets"]]}
+        # After the targets expand, so the mount's variables reach the shared query parameters too.
+        if ref is not None:
+            panel = _substitute(panel, variables)
+        resolved.append(panel)
     return resolved
 
 

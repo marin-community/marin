@@ -16,11 +16,17 @@ from dashboard_dataset import DashboardDataset
 from dashboard_stitch import stitch_all
 from jobs_observability import jobs_overview_dataset
 from node_observability import node_overview_dataset
-from rl_observability import recent_rl_runs_dataset, rl_overview_dataset
+from rl_observability import (
+    recent_rl_runs_dataset,
+    rl_overview_dataset,
+    rl_sync_generation_dataset,
+    rl_sync_train_step_dataset,
+)
 from runs_observability import runs_overview_dataset
 from server import create_app
 from starlette.testclient import TestClient
 from training_observability import training_overview_dataset
+from vllm_observability import VLLM_OVERVIEW_SECTIONS
 from zephyr_observability import zephyr_overview_dataset
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -216,6 +222,9 @@ def test_priority_dashboards_use_only_bounded_panel_endpoints() -> None:
         "training": frozenset(training_overview_dataset("run", start_ms, end_ms, 15_000).views),
         "runs": frozenset(runs_overview_dataset(("cw-a",), ("run",), start_ms, end_ms, 15_000).views),
         "rl": frozenset(rl_overview_dataset(("cw-a",), "run", start_ms, end_ms, 15_000).views),
+        "rl_sync_generation": frozenset(rl_sync_generation_dataset(("cw-a",), "run", start_ms, end_ms, 15_000).views),
+        "rl_sync_train_step": frozenset(rl_sync_train_step_dataset(("cw-a",), "run", start_ms, end_ms, 15_000).views),
+        "vllm": VLLM_OVERVIEW_SECTIONS,
         "accelerator": frozenset(accelerator_overview_dataset(("cw-a",), start_ms, end_ms, 15_000).views),
         "jobs": frozenset(jobs_overview_dataset(("cw-a",), ("job",), start_ms, end_ms, 15_000).views),
         "recent_rl": frozenset(recent_rl_runs_dataset(start_ms, end_ms).views),
@@ -228,7 +237,12 @@ def test_priority_dashboards_use_only_bounded_panel_endpoints() -> None:
         "zephyr.json": {"/v1/zephyr/overview": (4, sections["zephyr"])},
         "training.json": {"/v1/training/overview": (16, sections["training"])},
         "runs.json": {"/v1/runs/overview": (8, sections["runs"])},
-        "rl_runs.json": {"/v1/rl/overview": (13, sections["rl"])},
+        "rl_runs.json": {"/v1/rl/overview": (17, sections["rl"])},
+        "rl_sync_generation.json": {
+            "/v1/rl/generation": (4, sections["rl_sync_generation"]),
+            "/v1/vllm/overview": (5, sections["vllm"]),
+        },
+        "rl_sync_train_step.json": {"/v1/rl/train-step": (5, sections["rl_sync_train_step"])},
         "async_rl.json": {"/v1/async-rl/overview": (48, sections["async_rl"])},
         "jobs.json": {"/v1/jobs/overview": (17, sections["jobs"])},
         "accelerators.json": {"/v1/accelerator/overview": (18, sections["accelerator"])},
@@ -274,6 +288,8 @@ def test_domain_source_counts_stay_within_the_declared_budget() -> None:
         "training": training_overview_dataset("run", start_ms, end_ms, 15_000),
         "runs": runs_overview_dataset(("cw-a",), ("run",), start_ms, end_ms, 15_000),
         "rl": rl_overview_dataset(("cw-a",), "run", start_ms, end_ms, 15_000),
+        "rl_sync_generation": rl_sync_generation_dataset(("cw-a",), "run", start_ms, end_ms, 15_000),
+        "rl_sync_train_step": rl_sync_train_step_dataset(("cw-a",), "run", start_ms, end_ms, 15_000),
         "accelerator": accelerator_overview_dataset(("cw-a",), start_ms, end_ms, 15_000),
         "jobs": jobs_overview_dataset(("cw-a",), ("job",), start_ms, end_ms, 15_000),
         "recent_rl": recent_rl_runs_dataset(start_ms, end_ms),
@@ -284,7 +300,9 @@ def test_domain_source_counts_stay_within_the_declared_budget() -> None:
         "zephyr": 1,
         "training": 3,
         "runs": 2,
-        "rl": 3,
+        "rl": 4,
+        "rl_sync_generation": 1,
+        "rl_sync_train_step": 2,
         "accelerator": 3,
         "jobs": 5,
         "recent_rl": 1,

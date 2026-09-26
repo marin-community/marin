@@ -26,6 +26,12 @@
       "url": "/d/marin-home"
     },
     {
+      "linkRef": "rl_sync_generation"
+    },
+    {
+      "linkRef": "rl_sync_train_step"
+    },
+    {
       "asDropdown": false,
       "icon": "dashboard",
       "includeVars": true,
@@ -490,6 +496,137 @@
       ]
     },
     {
+      "id": 20,
+      "type": "table",
+      "title": "Span coverage: clock domain and failed steps",
+      "description": "Rows per role and `clock_domain`, the steps they cover, and steps with `outcome=failure`. A failed step looks fast.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 9
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "No spans. The run reported a policy_step, so the trainer's timing sink is not reaching Finelog."
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "failed_steps"
+            },
+            "properties": [
+              {
+                "id": "noValue",
+                "value": "-"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {},
+      "targets": [
+        {
+          "refId": "A",
+          "targetRef": "rl_run",
+          "url": "/v1/rl/overview",
+          "view": "span_coverage",
+          "format": "table",
+          "columns": [
+            {
+              "selector": "role",
+              "text": "sink role",
+              "type": "string"
+            },
+            {
+              "selector": "clock",
+              "text": "clock domain",
+              "type": "string"
+            },
+            {
+              "selector": "steps",
+              "text": "steps",
+              "type": "number"
+            },
+            {
+              "selector": "failed_steps",
+              "text": "steps that failed",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 21,
+      "type": "table",
+      "title": "Terminal event and lost records",
+      "description": "The `terminal` event of each attempt's processes, by role: status, reason, and the exporter's queued and lost records summed over those processes. A nonzero lost count means every panel here reads an incomplete row set.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 9
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "No terminal event. The run is still going, or it exited without publishing one. Check the job's own state."
+        },
+        "overrides": []
+      },
+      "options": {},
+      "targets": [
+        {
+          "refId": "A",
+          "targetRef": "rl_run",
+          "url": "/v1/rl/overview",
+          "view": "run_outcome",
+          "format": "table",
+          "columns": [
+            {
+              "selector": "execution_uid",
+              "text": "attempt",
+              "type": "string"
+            },
+            {
+              "selector": "role",
+              "text": "process",
+              "type": "string"
+            },
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "string"
+            },
+            {
+              "selector": "reason",
+              "text": "reason",
+              "type": "string"
+            },
+            {
+              "selector": "lost_records",
+              "text": "records lost",
+              "type": "number"
+            },
+            {
+              "selector": "queued_records",
+              "text": "records queued",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
       "type": "row",
       "title": "Where did the wall clock go?",
       "collapsed": false,
@@ -498,9 +635,85 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 9
+        "y": 17
       },
       "panels": []
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Step composition: exclusive seconds per span",
+      "description": "Seconds each driver span spent outside its children, so the bands sum to `step`. The `step` band is time outside every child span. `generate` is near zero when its child spans are on. Harbor and MiniSwe runners publish no generate child spans, so all of `generate` lands in its own band. A negative band means a child is counted inside another.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 18
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 60,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "mean seconds per step",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "unit": "s",
+          "min": 0,
+          "noValue": "No inclusive-wall driver rows under root='step'. This build publishes no step timings.",
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "targetRef": "rl_run",
+          "url": "/v1/rl/overview",
+          "view": "step_composition",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
     },
     {
       "id": 2,
@@ -513,9 +726,9 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
+        "w": 12,
         "x": 0,
-        "y": 10
+        "y": 26
       },
       "fieldConfig": {
         "defaults": {
@@ -614,9 +827,9 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 10
+        "w": 12,
+        "x": 12,
+        "y": 26
       },
       "fieldConfig": {
         "defaults": {
@@ -707,6 +920,71 @@
       "interval": "1m"
     },
     {
+      "id": 23,
+      "type": "timeseries",
+      "title": "Signed span residual: generate",
+      "description": "`generate_span_residual` from the driver, unclamped. Negative means child spans overlap.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 34
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "seconds the children do not account for"
+          },
+          "unit": "s",
+          "noValue": "No residual rows. Builds without the generate span tree do not publish one."
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "targetRef": "rl_run",
+          "url": "/v1/rl/overview",
+          "view": "generate_residual",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "generate_span_residual",
+              "text": "generate_span_residual",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
       "type": "row",
       "title": "Why is generation slow?",
       "collapsed": false,
@@ -715,7 +993,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 18
+        "y": 42
       },
       "panels": []
     },
@@ -732,7 +1010,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 19
+        "y": 43
       },
       "fieldConfig": {
         "defaults": {
@@ -833,7 +1111,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 19
+        "y": 43
       },
       "fieldConfig": {
         "defaults": {
@@ -964,7 +1242,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 19
+        "y": 43
       },
       "fieldConfig": {
         "defaults": {
@@ -1066,7 +1344,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 27
+        "y": 51
       },
       "fieldConfig": {
         "defaults": {
@@ -1167,7 +1445,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 27
+        "y": 51
       },
       "fieldConfig": {
         "defaults": {
@@ -1269,7 +1547,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 27
+        "y": 51
       },
       "fieldConfig": {
         "defaults": {
@@ -1366,7 +1644,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 35
+        "y": 59
       },
       "panels": []
     },
@@ -1383,7 +1661,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 36
+        "y": 60
       },
       "fieldConfig": {
         "defaults": {
@@ -1484,7 +1762,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 44
+        "y": 68
       },
       "panels": []
     },
@@ -1501,7 +1779,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 45
+        "y": 69
       },
       "fieldConfig": {
         "defaults": {
@@ -1597,7 +1875,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 45
+        "y": 69
       },
       "fieldConfig": {
         "defaults": {

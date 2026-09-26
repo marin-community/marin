@@ -1,7 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Three bounded sources shared by the RL post-training dashboard."""
+"""Bounded datasets for the sync RL board and its generation and train-step drill-downs.
+
+A step is keyed by ``(execution_uid, step)`` because a run restarted from a checkpoint repeats step
+numbers.
+"""
 
 from dashboard_dataset import (
     DashboardDataset,
@@ -20,6 +24,7 @@ RL_MAX_CLUSTERS = 16
 RL_MAX_CORE_ROWS = 100_000
 RL_MAX_ENGINE_ROWS = 100_000
 RL_MAX_GPU_ROWS = 50_000
+RL_MAX_SPAN_ROWS = 50_000
 RL_MAX_RESULT_ROWS = 100_000
 RL_RECENT_MAX_ROWS = 20
 RL_RECENT_WINDOW_PADDING_MS = 60_000
@@ -34,24 +39,95 @@ _CORE_NAMES = (
     "ray_spill_manager_objects_bytes",
     "work_completed",
 )
+_ROLLOUT_COUNTER_NAMES = ("rollout_wait_seconds", "rollout_count")
+_DCGM_SERIES = (
+    "gpu_sm_active_ratio",
+    "gpu_tensor_active_ratio",
+    "gpu_memory_used_bytes",
+    "gpu_nvlink_receive_bytes_per_second",
+    "gpu_pcie_receive_bytes_per_second",
+)
+_DCGM_COUNTERS = ("gpu_nvlink_errors", "gpu_pcie_replay_errors")
+_DCGM_DEVICE = ("gpu_power_watts", *_DCGM_COUNTERS)
+
+
+def _rl_bucket_ms(
+    clusters: tuple[str, ...], run: str, start_ms: int, end_ms: int, requested_bucket_ms: int, label: str
+) -> int:
+    validate_values("clusters", clusters, max_values=RL_MAX_CLUSTERS, max_length=128)
+    validate_value("run", run, max_length=512)
+    return bounded_bucket_ms(
+        start_ms,
+        end_ms,
+        requested_bucket_ms,
+        max_window_ms=RL_MAX_WINDOW_MS,
+        max_window_error=f"{label} range must not exceed 7 days",
+        min_bucket_ms=RL_MIN_BUCKET_MS,
+        max_points=RL_MAX_POINTS,
+    )
+
+
+def _bucket_sql(start_ms: int, bucket_ms: int) -> str:
+    return f"{start_ms} + (timestamp_ms - {start_ms}) - (timestamp_ms - {start_ms}) % {bucket_ms}"
+
+
+def _run_scope(clusters: tuple[str, ...], run: str, start_ms: int, end_ms: int) -> str:
+    """The MarinSkyRL rows of one run, in the selected clusters and window."""
+    return f"""service = 'marinskyrl'
+      AND run_id = {sql_string(run)}
+      AND COALESCE(NULLIF(cluster, ''), 'marin') IN ({sql_values(clusters)})
+      AND timestamp_ms >= {start_ms} AND timestamp_ms < {end_ms}"""
+
+
+def _run_nodes_cte(bucket: str, clusters_sql: str, start_ms: int, end_ms: int) -> str:
+    """The run that wrote most MarinSkyRL rows from each node in each bucket.
+
+    The node agent stamps no run identity, so this is the only way to attribute its rows to a run.
+    """
+    return f"""run_node AS (
+    SELECT origin_cluster, t, node, run
+    FROM (
+        SELECT COALESCE(NULLIF(cluster, ''), 'marin') AS origin_cluster,
+               {bucket} AS t,
+               node_name AS node,
+               run_id AS run,
+               ROW_NUMBER() OVER (
+                   PARTITION BY COALESCE(NULLIF(cluster, ''), 'marin'), {bucket}, node_name
+                   ORDER BY COUNT(*) DESC, run_id
+               ) AS rn
+        FROM "telemetry_v1.marinskyrl"
+        WHERE service = 'marinskyrl' AND node_name <> ''
+          AND COALESCE(NULLIF(cluster, ''), 'marin') IN ({clusters_sql})
+          AND timestamp_ms >= {start_ms} AND timestamp_ms < {end_ms}
+        GROUP BY 1, 2, 3, 4
+    ) WHERE rn = 1
+)"""
+
+
+def _phase_rows_cte(bucket: str, scope: str) -> str:
+    return f"""phase_rows AS (
+    SELECT {bucket} AS t,
+           execution_uid,
+           json_get(attributes_json, 'role') AS role,
+           json_get(attributes_json, 'step') AS step,
+           json_get(attributes_json, 'phase') AS phase,
+           json_get(attributes_json, 'parent') AS parent,
+           json_get(attributes_json, 'root') AS root,
+           json_get(attributes_json, 'clock_domain') AS clock_domain,
+           json_get(attributes_json, 'outcome') AS outcome,
+           value
+    FROM "telemetry_v1.marinskyrl"
+    WHERE {scope}
+      AND name = 'phase_duration_seconds'
+)"""
 
 
 def rl_overview_dataset(
     clusters: tuple[str, ...], run: str, start_ms: int, end_ms: int, requested_bucket_ms: int
 ) -> DashboardDataset:
-    """Build bounded RL-core, engine, and node-attribution sources."""
-    validate_values("clusters", clusters, max_values=RL_MAX_CLUSTERS, max_length=128)
-    validate_value("run", run, max_length=512)
-    bucket_ms = bounded_bucket_ms(
-        start_ms,
-        end_ms,
-        requested_bucket_ms,
-        max_window_ms=RL_MAX_WINDOW_MS,
-        max_window_error="RL overview range must not exceed 7 days",
-        min_bucket_ms=RL_MIN_BUCKET_MS,
-        max_points=RL_MAX_POINTS,
-    )
-    bucket = f"{start_ms} + (timestamp_ms - {start_ms}) - (timestamp_ms - {start_ms}) % {bucket_ms}"
+    """Build bounded RL-core, engine, node-attribution and span sources."""
+    bucket_ms = _rl_bucket_ms(clusters, run, start_ms, end_ms, requested_bucket_ms, "RL overview")
+    bucket = _bucket_sql(start_ms, bucket_ms)
     clusters_sql = sql_values(clusters)
     run_sql = sql_string(run)
     core_sql = f"""
@@ -148,24 +224,7 @@ ORDER BY t, name, finished_reason
 LIMIT {RL_MAX_ENGINE_ROWS + 1}
 """.strip()
     gpu_sql = f"""
-WITH run_node AS (
-    SELECT origin_cluster, t, node, run
-    FROM (
-        SELECT COALESCE(NULLIF(cluster, ''), 'marin') AS origin_cluster,
-               {bucket} AS t,
-               node_name AS node,
-               run_id AS run,
-               ROW_NUMBER() OVER (
-                   PARTITION BY COALESCE(NULLIF(cluster, ''), 'marin'), {bucket}, node_name
-                   ORDER BY COUNT(*) DESC, run_id
-               ) AS rn
-        FROM "telemetry_v1.marinskyrl"
-        WHERE service = 'marinskyrl' AND node_name <> ''
-          AND COALESCE(NULLIF(cluster, ''), 'marin') IN ({clusters_sql})
-          AND timestamp_ms >= {start_ms} AND timestamp_ms < {end_ms}
-        GROUP BY 1, 2, 3, 4
-    ) WHERE rn = 1
-), gpu AS (
+WITH {_run_nodes_cte(bucket, clusters_sql, start_ms, end_ms)}, gpu AS (
     SELECT COALESCE(NULLIF(cluster, ''), 'marin') AS origin_cluster,
            {bucket} AS t,
            node_name AS node,
@@ -182,6 +241,44 @@ FROM gpu JOIN run_node USING (origin_cluster, t, node)
 WHERE run_node.run = {run_sql}
 GROUP BY 1, 2 ORDER BY 1
 LIMIT {RL_MAX_GPU_ROWS + 1}
+""".strip()
+    scope = _run_scope(clusters, run, start_ms, end_ms)
+    spans_sql = f"""
+WITH {_phase_rows_cte(bucket, scope)}, terminal AS (
+    SELECT execution_uid, role, status, reason,
+           CASE WHEN COUNT(lost) = COUNT(*) THEN SUM(lost) END AS lost_records,
+           CASE WHEN COUNT(queued) = COUNT(*) THEN SUM(queued) END AS queued_records
+    FROM (
+        SELECT execution_uid,
+               json_get(attributes_json, 'role') AS role,
+               json_get(body_json, 'status') AS status,
+               json_get(body_json, 'reason') AS reason,
+               TRY_CAST(json_get(body_json, 'export_lost_records') AS BIGINT) AS lost,
+               TRY_CAST(json_get(body_json, 'export_queued_records') AS BIGINT) AS queued
+        FROM "telemetry_v1.marinskyrl"
+        WHERE {scope}
+          AND name = 'terminal'
+    )
+    GROUP BY 1, 2, 3, 4
+)
+SELECT 'driver' AS statistic, t, phase, parent, clock_domain,
+       SUM(value) AS sum_value, COUNT(value) AS sample_count, MAX(value) AS max_value
+FROM phase_rows
+WHERE role = 'trainer'
+  AND ((clock_domain = 'inclusive_wall' AND root = 'step') OR phase = 'generate_span_residual')
+GROUP BY t, phase, parent, clock_domain
+UNION ALL BY NAME
+SELECT 'coverage' AS statistic, role, clock_domain,
+       COUNT(DISTINCT execution_uid || ' ' || step) AS steps,
+       CASE WHEN COUNT(outcome) = 0 THEN NULL
+            ELSE COUNT(DISTINCT CASE WHEN outcome = 'failure' THEN execution_uid || ' ' || step END) END
+           AS failed_steps
+FROM phase_rows
+GROUP BY role, clock_domain
+UNION ALL BY NAME
+SELECT 'terminal' AS statistic, execution_uid, role, status, reason, lost_records, queued_records FROM terminal
+ORDER BY statistic, t
+LIMIT {RL_MAX_SPAN_ROWS + 1}
 """.strip()
     views = {
         "policy_step": (
@@ -288,6 +385,40 @@ WHERE name = 'ray_spill_manager_objects_bytes' AND metric_source = 'ray'
 GROUP BY 1, 2 ORDER BY 1
 """.strip()
         ),
+        "span_coverage": (
+            "SELECT role, clock_domain AS clock, steps, failed_steps "
+            "FROM spans WHERE statistic = 'coverage' ORDER BY 1, 2"
+        ),
+        "run_outcome": (
+            "SELECT execution_uid, role, status, reason, lost_records, queued_records "
+            "FROM spans WHERE statistic = 'terminal' ORDER BY 1, 2, 3"
+        ),
+        # Each band is a phase's wall minus its children's walls, over the bucket's step count, so the
+        # bands sum to the mean step even when a phase such as save_checkpoints ran on only some of
+        # the bucket's steps. The step's own band is the time no phase covers.
+        "step_composition": (
+            """
+WITH driver AS (
+    SELECT * FROM spans WHERE statistic = 'driver' AND clock_domain = 'inclusive_wall'
+), contained AS (
+    SELECT t, parent AS phase, SUM(sum_value) AS child_seconds
+    FROM driver WHERE parent IS NOT NULL AND parent <> '' GROUP BY 1, 2
+), steps AS (
+    SELECT t, SUM(sample_count) AS step_count FROM driver WHERE phase = 'step' GROUP BY 1
+)
+SELECT driver.t,
+       driver.phase AS series,
+       SUM(driver.sum_value - COALESCE(contained.child_seconds, 0)) / MAX(steps.step_count) AS value
+FROM driver
+JOIN steps ON steps.t = driver.t
+LEFT JOIN contained ON contained.t = driver.t AND contained.phase = driver.phase
+GROUP BY 1, 2 ORDER BY 1
+""".strip()
+        ),
+        "generate_residual": (
+            "SELECT t, SUM(sum_value) / SUM(sample_count) AS generate_span_residual FROM spans "
+            "WHERE statistic = 'driver' AND phase = 'generate_span_residual' GROUP BY 1 ORDER BY 1"
+        ),
     }
     return DashboardDataset(
         name="RL overview",
@@ -295,6 +426,236 @@ GROUP BY 1, 2 ORDER BY 1
         sources=(
             SourceQuery("core", core_sql, RL_MAX_CORE_ROWS),
             SourceQuery("engine", engine_sql, RL_MAX_ENGINE_ROWS),
+            SourceQuery("gpu", gpu_sql, RL_MAX_GPU_ROWS),
+            SourceQuery("spans", spans_sql, RL_MAX_SPAN_ROWS),
+        ),
+        setup_sql=(),
+        views=views,
+        max_result_rows=RL_MAX_RESULT_ROWS,
+    )
+
+
+def rl_sync_generation_dataset(
+    clusters: tuple[str, ...], run: str, start_ms: int, end_ms: int, requested_bucket_ms: int
+) -> DashboardDataset:
+    """Build the driver's step spans and rollout counters, one row per step and phase or counter."""
+    bucket_ms = _rl_bucket_ms(clusters, run, start_ms, end_ms, requested_bucket_ms, "RL generation")
+    names = sql_values(("phase_duration_seconds", *_ROLLOUT_COUNTER_NAMES))
+    driver_sql = f"""
+WITH selected AS (
+    SELECT {_bucket_sql(start_ms, bucket_ms)} AS t,
+           name,
+           execution_uid,
+           json_get(attributes_json, 'step') AS step,
+           json_get(attributes_json, 'phase') AS phase,
+           json_get(attributes_json, 'parent') AS parent,
+           json_get(attributes_json, 'root') AS root,
+           json_get(attributes_json, 'clock_domain') AS clock_domain,
+           json_get(attributes_json, 'counter') AS counter,
+           value
+    FROM "telemetry_v1.marinskyrl"
+    WHERE {_run_scope(clusters, run, start_ms, end_ms)}
+      AND name IN ({names})
+      AND json_get(attributes_json, 'role') = 'trainer'
+)
+SELECT t, execution_uid, step, name, phase, parent, counter,
+       SUM(value) AS sum_value,
+       COUNT(value) AS sample_count,
+       MAX(value) AS max_value
+FROM selected
+WHERE name <> 'phase_duration_seconds'
+   OR (clock_domain = 'inclusive_wall' AND root = 'step' AND (phase = 'generate' OR parent = 'generate'))
+GROUP BY t, execution_uid, step, name, phase, parent, counter
+ORDER BY t, execution_uid, step, name
+LIMIT {RL_MAX_SPAN_ROWS + 1}
+""".strip()
+    # The rollout wait counters sum over concurrent coroutines and can exceed the step, so every
+    # view divides them.
+    setup_sql = (
+        f"""
+CREATE VIEW rollout_steps AS
+SELECT t, execution_uid, step,
+       MAX(CASE WHEN counter = 'rollout_trajectory_count' THEN max_value END) AS trajectories,
+       MAX(CASE WHEN counter = 'rollout_engine_await_seconds_sum' THEN max_value END) AS engine_seconds,
+       MAX(CASE WHEN counter = 'rollout_engine_await_seconds_max' THEN max_value END) AS slowest,
+       MAX(CASE WHEN counter = 'rollout_env_await_seconds_sum' THEN max_value END) AS env_seconds,
+       MAX(CASE WHEN counter = 'rollout_env_queue_seconds_sum' THEN max_value END) AS queued,
+       MAX(CASE WHEN counter = 'rollout_env_exec_seconds_sum' THEN max_value END) AS executed,
+       MAX(CASE WHEN counter = 'rollout_env_resume_seconds_sum' THEN max_value END) AS resumed
+FROM driver WHERE name IN ({sql_values(_ROLLOUT_COUNTER_NAMES)})
+GROUP BY 1, 2, 3
+""".strip(),
+    )
+    views = {
+        "generate_breakdown": (
+            """
+WITH spans AS (
+    SELECT * FROM driver WHERE name = 'phase_duration_seconds'
+), per_step AS (
+    SELECT t, execution_uid, step,
+           MAX(CASE WHEN phase = 'generate' THEN max_value END) AS generate_seconds,
+           SUM(CASE WHEN parent = 'generate' THEN sum_value END) AS child_seconds
+    FROM spans GROUP BY 1, 2, 3
+), banded AS (
+    SELECT spans.t, spans.phase AS band,
+           spans.sum_value / NULLIF(per_step.generate_seconds, 0) AS share_sum,
+           spans.sample_count AS samples
+    FROM spans JOIN per_step USING (t, execution_uid, step)
+    WHERE spans.parent = 'generate'
+    UNION ALL
+    SELECT t, 'generate_span_residual', (generate_seconds - child_seconds) / NULLIF(generate_seconds, 0), 1
+    FROM per_step WHERE child_seconds IS NOT NULL
+)
+SELECT t, band AS series,
+       SUM(share_sum) / SUM(CASE WHEN share_sum IS NOT NULL THEN samples END) AS value
+FROM banded GROUP BY 1, 2 ORDER BY 1
+""".strip()
+        ),
+        "trajectory_wait": (
+            """
+SELECT t,
+       AVG(engine_seconds / NULLIF(trajectories, 0)) AS engine_wait_per_trajectory,
+       AVG(env_seconds / NULLIF(trajectories, 0)) AS env_wait_per_trajectory,
+       AVG(slowest) AS engine_await_max
+FROM rollout_steps GROUP BY 1 ORDER BY 1
+""".strip()
+        ),
+        "tail_over_mean": (
+            "SELECT t, AVG(slowest / NULLIF(engine_seconds / NULLIF(trajectories, 0), 0)) AS tail_over_mean "
+            "FROM rollout_steps GROUP BY 1 ORDER BY 1"
+        ),
+        "environment_split": (
+            """
+SELECT t, band AS series,
+       AVG(CASE band WHEN 'rollout_env_queue' THEN queued WHEN 'rollout_env_exec' THEN executed
+                     WHEN 'rollout_env_resume' THEN resumed ELSE env_seconds - queued - executed - resumed END
+           / NULLIF(env_seconds, 0)) AS value
+FROM rollout_steps
+CROSS JOIN (VALUES ('rollout_env_queue'), ('rollout_env_exec'), ('rollout_env_resume'), ('remainder')) AS bands(band)
+GROUP BY 1, 2 ORDER BY 1
+""".strip()
+        ),
+    }
+    return DashboardDataset(
+        name="RL generation",
+        cache_key=(clusters, run, start_ms, end_ms, bucket_ms),
+        sources=(SourceQuery("driver", driver_sql, RL_MAX_SPAN_ROWS),),
+        setup_sql=setup_sql,
+        views=views,
+        max_result_rows=RL_MAX_RESULT_ROWS,
+    )
+
+
+def rl_sync_train_step_dataset(
+    clusters: tuple[str, ...], run: str, start_ms: int, end_ms: int, requested_bucket_ms: int
+) -> DashboardDataset:
+    """Build the driver's train_step timings and DCGM on the run's nodes."""
+    bucket_ms = _rl_bucket_ms(clusters, run, start_ms, end_ms, requested_bucket_ms, "RL train step")
+    bucket = _bucket_sql(start_ms, bucket_ms)
+    clusters_sql = sql_values(clusters)
+    steps_sql = f"""
+SELECT {bucket} AS t,
+       json_get(attributes_json, 'outcome') AS outcome,
+       SUM(value) AS sum_value,
+       COUNT(value) AS sample_count
+FROM "telemetry_v1.marinskyrl"
+WHERE {_run_scope(clusters, run, start_ms, end_ms)}
+  AND name = 'phase_duration_seconds'
+  AND json_get(attributes_json, 'clock_domain') = 'critical_path'
+  AND json_get(attributes_json, 'phase') = 'train_step'
+GROUP BY 1, 2
+ORDER BY 1, 2
+LIMIT {RL_MAX_SPAN_ROWS + 1}
+""".strip()
+    dcgm_scope = f"""COALESCE(NULLIF(cluster, ''), 'marin') IN ({clusters_sql})
+      AND timestamp_ms >= {start_ms} AND timestamp_ms < {end_ms}"""
+    # NVLink errors are one cumulative series per error_kind. Difference each series, then sum per
+    # GPU. A drop is a reset, so the new value counts in full.
+    gpu_sql = f"""
+WITH {_run_nodes_cte(bucket, clusters_sql, start_ms, end_ms)}, counter_samples AS (
+    SELECT COALESCE(NULLIF(cluster, ''), 'marin') AS origin_cluster,
+           {bucket} AS t,
+           node_name AS node,
+           json_get(attributes_json, 'gpu_uuid') AS gpu,
+           name,
+           value,
+           LAG(value) OVER (
+               PARTITION BY cluster, node_name, name, resource_attributes_json, attributes_json
+               ORDER BY timestamp_ms, seq
+           ) AS previous_value
+    FROM "telemetry_v1.node_agent"
+    WHERE name IN ({sql_values(_DCGM_COUNTERS)}) AND {dcgm_scope}
+      AND node_name IN (SELECT node FROM run_node WHERE run = {sql_string(run)})
+), gpu AS (
+    SELECT COALESCE(NULLIF(cluster, ''), 'marin') AS origin_cluster,
+           {bucket} AS t,
+           node_name AS node,
+           json_get(attributes_json, 'gpu_uuid') AS gpu,
+           name,
+           AVG(value) AS mean_value,
+           MAX(value) AS max_value
+    FROM "telemetry_v1.node_agent"
+    WHERE name IN ({sql_values((*_DCGM_SERIES, "gpu_power_watts"))}) AND {dcgm_scope}
+    GROUP BY 1, 2, 3, 4, 5
+    UNION ALL BY NAME
+    SELECT origin_cluster, t, node, gpu, name,
+           SUM(CASE WHEN value < previous_value THEN value ELSE value - previous_value END) AS increase
+    FROM counter_samples
+    GROUP BY 1, 2, 3, 4, 5
+), attributed AS (
+    SELECT gpu.* FROM gpu JOIN run_node USING (origin_cluster, t, node)
+    WHERE run_node.run = {sql_string(run)}
+)
+SELECT CASE WHEN GROUPING(node) = 1 THEN 'series' ELSE 'device' END AS statistic,
+       t, name, node, gpu,
+       CASE WHEN GROUPING(node) = 1 THEN AVG(mean_value) END AS mean_value,
+       CASE WHEN GROUPING(node) = 1 THEN SUM(mean_value) END AS total_value,
+       MAX(max_value) AS max_value,
+       CASE WHEN GROUPING(node) = 0 THEN SUM(increase) END AS increase
+FROM attributed
+GROUP BY GROUPING SETS ((t, name), (name, node, gpu))
+HAVING (GROUPING(node) = 1 AND name IN ({sql_values(_DCGM_SERIES)}))
+    OR (GROUPING(node) = 0 AND name IN ({sql_values(_DCGM_DEVICE)}))
+ORDER BY statistic, t, name
+LIMIT {RL_MAX_GPU_ROWS + 1}
+""".strip()
+    views = {
+        "train_step": (
+            "SELECT t, 'train_step · ' || outcome AS series, sum_value / NULLIF(sample_count, 0) AS value "
+            "FROM steps ORDER BY 1, 2"
+        ),
+        "sm_activity": (
+            "SELECT t, CASE name WHEN 'gpu_sm_active_ratio' THEN 'SM active' ELSE 'tensor pipe active' END AS series, "
+            "mean_value * 100.0 AS value FROM gpu WHERE statistic = 'series' "
+            "AND name IN ('gpu_sm_active_ratio', 'gpu_tensor_active_ratio') ORDER BY 1"
+        ),
+        "gpu_memory": (
+            "SELECT t, mean_value AS mean_used_bytes, max_value AS peak_used_bytes FROM gpu "
+            "WHERE statistic = 'series' AND name = 'gpu_memory_used_bytes' ORDER BY 1"
+        ),
+        "fabric_receive": (
+            "SELECT t, CASE name WHEN 'gpu_nvlink_receive_bytes_per_second' THEN 'NVLink receive' "
+            "ELSE 'PCIe receive' END AS series, total_value AS value FROM gpu WHERE statistic = 'series' "
+            "AND name IN ('gpu_nvlink_receive_bytes_per_second', 'gpu_pcie_receive_bytes_per_second') ORDER BY 1"
+        ),
+        "link_faults": (
+            f"""
+SELECT node, gpu,
+       MAX(CASE WHEN name = 'gpu_power_watts' THEN max_value END) AS peak_power_watts,
+       SUM(CASE WHEN name = 'gpu_nvlink_errors' THEN increase END) AS nvlink_error_increase,
+       SUM(CASE WHEN name = 'gpu_pcie_replay_errors' THEN increase END) AS pcie_replay_increase
+FROM gpu WHERE statistic = 'device'
+GROUP BY 1, 2
+HAVING SUM(CASE WHEN name IN ({sql_values(_DCGM_COUNTERS)}) THEN increase END) > 0
+ORDER BY 4 DESC, 5 DESC
+""".strip()
+        ),
+    }
+    return DashboardDataset(
+        name="RL train step",
+        cache_key=(clusters, run, start_ms, end_ms, bucket_ms),
+        sources=(
+            SourceQuery("steps", steps_sql, RL_MAX_SPAN_ROWS),
             SourceQuery("gpu", gpu_sql, RL_MAX_GPU_ROWS),
         ),
         setup_sql=(),

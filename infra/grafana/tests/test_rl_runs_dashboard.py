@@ -40,6 +40,7 @@ _COLUMNS = (
     "seq",
     "resource_attributes_json",
     "attributes_json",
+    "body_json",
 )
 
 
@@ -81,6 +82,7 @@ def _row(
         seq,
         json.dumps(resource),
         json.dumps(attributes or {}),
+        "{}",
     )
 
 
@@ -305,7 +307,8 @@ _SCHEMA = """(
     timestamp_ms BIGINT,
     seq BIGINT,
     resource_attributes_json VARCHAR,
-    attributes_json VARCHAR
+    attributes_json VARCHAR,
+    body_json VARCHAR
 )"""
 
 
@@ -337,7 +340,7 @@ def _in_window(sql: str) -> str:
 def _view_sql(view: str) -> str:
     dataset = rl_overview_dataset((CLUSTER,), RUN_ID, _WINDOW_START_MS, _NOW_MS, 5 * 60 * 1000)
     sources = ",\n".join(f"{source.name} AS ({source.sql})" for source in dataset.sources)
-    return f"WITH {sources}\n{dataset.views[view]}"
+    return f"WITH {sources},\nprojected AS ({dataset.views[view]})\nSELECT * FROM projected"
 
 
 def _panel_sql(title: str) -> str:
@@ -516,7 +519,8 @@ def test_every_timeseries_panel_declares_the_columns_its_projection_returns(stor
             continue
         for target in panel["targets"]:
             declared = {column["selector"]: column["type"] for column in target["columns"]}
-            store.execute(_panel_sql(panel["title"]))
+            (view,) = [param["value"] for param in target["url_options"]["params"] if param["key"] == "view"]
+            store.execute(_view_sql(view))
             selected = {column[0] for column in store.description}
 
             assert (
@@ -525,11 +529,11 @@ def test_every_timeseries_panel_declares_the_columns_its_projection_returns(stor
             assert "number" in declared.values(), f"{panel['title']}: no numeric column to plot"
 
 
-def test_every_panel_has_a_distinct_title_id_and_slot() -> None:
+@pytest.mark.parametrize("board", ["rl_runs.json", "rl_sync_generation.json", "rl_sync_train_step.json"])
+def test_every_panel_has_a_distinct_title_id_and_slot(board: str) -> None:
     # A duplicated panel renders twice and shares an id, and a test that looks panels up by
     # title cannot see it: the lookup keeps one and the dashboard keeps both.
-    dashboard = stitch_all(DASHBOARDS, DASHBOARDS / "panels")["rl_runs.json"]
-    panels = dashboard["panels"]
+    panels = stitch_all(DASHBOARDS, DASHBOARDS / "panels")[board]["panels"]
 
     titles = [panel["title"] for panel in panels]
     assert len(titles) == len(set(titles)), titles
