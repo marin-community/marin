@@ -106,6 +106,12 @@ _OKLS_FAMILIES: dict[str, re.Pattern] = {
     "shared": re.compile(r"\.shared\.\d+\.w_(gate|up|down)$"),
     "latent": re.compile(r"\.mlp\.w_latent_(down|up)$"),
     "gated_norm": re.compile(r"gated_norm\.w_(down|up)$"),
+    # Per-projection subsets of "attn" (KDA and MLA together).
+    "attn_q": re.compile(r"(stacked_blocks|kda_blocks)\.stacked\.attn\.w_q$"),
+    "attn_k": re.compile(r"(stacked_blocks|kda_blocks)\.stacked\.attn\.w_(k|uk)$"),
+    "attn_v": re.compile(r"(stacked_blocks|kda_blocks)\.stacked\.attn\.w_(v|uv)$"),
+    "attn_o": re.compile(r"(stacked_blocks|kda_blocks)\.stacked\.attn\.w_o$"),
+    "attn_other": re.compile(r"(stacked_blocks|kda_blocks)\.stacked\.attn\.w_(g|dkv)$"),
 }
 
 
@@ -278,6 +284,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     okls_epsilon: float = 1e-9
     okls_cans_steps: int = 10
     okls_matmul_dtype: str = "float32"
+    okls_lr_mult: float = 1.0
+    """LR multiplier of the OKLS group relative to the MuonH LR."""
     okls_root_every: int = 1
     """Recompute the OKLS inverse roots every this many steps (stored in between)."""
     lm_head_group: str = "adamh"
@@ -363,8 +371,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                         weight_decay=0.0,
                         cans_steps=self.okls_cans_steps,
                         matmul_dtype=OKLS_MATMUL_DTYPES[self.okls_matmul_dtype],
-                        learning_rate=learning_rate,
-                        lr_peak=self.learning_rate,
+                        learning_rate=learning_rate * self.okls_lr_mult,
+                        lr_peak=self.learning_rate * self.okls_lr_mult,
                         hyperball=True,
                         root_every=self.okls_root_every,
                     ),

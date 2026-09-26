@@ -340,6 +340,12 @@ class GrugModelConfig:
     the gate's current residual stream (one zero-init vector per gate)."""
     attn_res_mask_attn_for: tuple[int, ...] = ()
     """Full AttnRes only: layers whose attention gate cannot read any earlier attention output."""
+    attn_res_final_mode: str = "attn"
+    """Final AttnRes gate: ``attn`` (learned query), ``uniform`` (query fixed at 0: a plain average of all
+    sources) or ``sum`` (a straight sum of all sources, like a standard residual stream)."""
+    attn_res_sum_inputs: tuple[str, ...] = ()
+    """Full AttnRes only: components that read the straight sum of the visible sources instead of their
+    AttnRes mix: any of ``q``, ``k``, ``v`` (those attention projections) and ``mlp`` (the MoE input)."""
     attn_res_full: bool = False
     """Full (not Block) AttnRes: every attention and MoE sublayer output is its own source. Needs
     attn_res_layer_backward=SAVE."""
@@ -554,11 +560,13 @@ class CausalSelfAttention(eqx.Module):
         sconv_segment_ids: Int[Array, "B S"] | None,
         token_ids: Int[Array, "B S"] | None,
         kv_share: dict[str, jax.Array] | None = None,
+        proj_inputs: dict[str, jax.Array] | None = None,
     ) -> tuple[jax.Array, jax.Array, jax.Array]:
         """MLA with a compressed KV latent: full-rank q; k and v up-projected from one normed latent."""
         assert self.w_dkv is not None and self.kv_latent_norm is not None
         head_dim = self.cfg.inferred_head_dim
-        q_flat = jnp.einsum("bsh,hd->bsd", x, self.w_q)
+        proj_inputs = proj_inputs or {}
+        q_flat = jnp.einsum("bsh,hd->bsd", proj_inputs.get("q", x), self.w_q)
         latent = jnp.einsum("bsh,hl->bsl", x, self.w_dkv)
         if self.bias_q is not None and self.bias_dkv is not None:
             q_flat = q_flat + unshard(self.bias_q).astype(x.dtype)
@@ -572,11 +580,23 @@ class CausalSelfAttention(eqx.Module):
             kv_latent = self.kv_latent_norm(latent)
             if kv_share is not None:
                 kv_share["latent"] = kv_latent
-        k_flat = jnp.einsum("bsl,ld->bsd", kv_latent, self.w_uk)
+        # k / v may read a different stream than the shared latent (attn_res_sum_inputs); each then gets its
+        # own latent from that stream (same W_dkv and latent norm).
+        k_latent = (
+            kv_latent
+            if "k" not in proj_inputs
+            else self.kv_latent_norm(jnp.einsum("bsh,hl->bsl", proj_inputs["k"], self.w_dkv))
+        )
+        v_latent = (
+            kv_latent
+            if "v" not in proj_inputs
+            else self.kv_latent_norm(jnp.einsum("bsh,hl->bsl", proj_inputs["v"], self.w_dkv))
+        )
+        k_flat = jnp.einsum("bsl,ld->bsd", k_latent, self.w_uk)
         if self.sconv_k is not None:
             k_flat = self.sconv_k(k_flat, sconv_segment_ids)
         k = rearrange(k_flat, "... (n d) -> ... n d", d=head_dim)
-        v = rearrange(jnp.einsum("bsl,ld->bsd", kv_latent, self.w_uv), "... (n d) -> ... n d", d=head_dim)
+        v = rearrange(jnp.einsum("bsl,ld->bsd", v_latent, self.w_uv), "... (n d) -> ... n d", d=head_dim)
         if self.value_embed is not None:
             assert self.ve_lambda is not None and token_ids is not None
             ve = _embedding_gather(self.value_embed.astype(x.dtype), token_ids)
@@ -644,8 +664,10 @@ class CausalSelfAttention(eqx.Module):
         is_global: bool | jax.Array = False,
         token_ids: Int[Array, "B S"] | None = None,
         kv_share: dict[str, jax.Array] | None = None,
+        proj_inputs: dict[str, jax.Array] | None = None,
     ) -> Float[Array, "B S D"]:
-        """``kv_share`` (MLA only) is a per-forward mailbox for ``mla_share_kv_latent``."""
+        """``kv_share`` (MLA only) is a per-forward mailbox for ``mla_share_kv_latent``; ``proj_inputs``
+        optionally replaces the input of the ``q`` / ``k`` / ``v`` projections."""
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
         batch_spec = _batch_spec()
@@ -653,7 +675,7 @@ class CausalSelfAttention(eqx.Module):
         # document boundary.
         sconv_segment_ids = _sconv_segment_ids(mask)
         if self.cfg.mla:
-            q, k, v = self._mla_qkv(x, sconv_segment_ids, token_ids, kv_share)
+            q, k, v = self._mla_qkv(x, sconv_segment_ids, token_ids, kv_share, proj_inputs)
         else:
             q, k, v = self._gqa_qkv(x, sconv_segment_ids, is_global)
 
@@ -813,21 +835,29 @@ class KimiDeltaAttention(eqx.Module):
         )
 
     @named_call
-    def __call__(self, x: Float[Array, "B S D"], segment_ids: Int[Array, "B S"] | None = None) -> Float[Array, "B S D"]:
+    def __call__(
+        self,
+        x: Float[Array, "B S D"],
+        segment_ids: Int[Array, "B S"] | None = None,
+        proj_inputs: dict[str, jax.Array] | None = None,
+    ) -> Float[Array, "B S D"]:
+        """``proj_inputs`` optionally replaces the input of the ``q`` / ``k`` / ``v`` projections."""
         cfg = self.cfg
         head_dim = cfg.inferred_head_dim
         b, s, _ = x.shape
 
-        def project(w: jax.Array, conv: ShortConv, bias_row: int) -> jax.Array:
-            y = jnp.einsum("bsh,hd->bsd", x, w)
+        proj_inputs = proj_inputs or {}
+
+        def project(w: jax.Array, conv: ShortConv, bias_row: int, name: str) -> jax.Array:
+            y = jnp.einsum("bsh,hd->bsd", proj_inputs.get(name, x), w)
             if self.bias_qkv is not None:
                 y = y + unshard(self.bias_qkv[bias_row]).astype(x.dtype)
             y = jax.nn.silu(conv(y, segment_ids))
             return rearrange(y, "... (n d) -> ... n d", d=head_dim)
 
-        q = project(self.w_q, self.sconv_q, 0)
-        k = project(self.w_k, self.sconv_k, 1)
-        v = project(self.w_v, self.sconv_v, 2)
+        q = project(self.w_q, self.sconv_q, 0, "q")
+        k = project(self.w_k, self.sconv_k, 1, "k")
+        v = project(self.w_v, self.sconv_v, 2, "v")
         a_low = jnp.einsum("bsd,dr->bsr", x, self.w_a_down)
         if self.sconv_a is not None:
             a_low = self.sconv_a(a_low, segment_ids)
@@ -1277,14 +1307,30 @@ class Block(eqx.Module):
         is_global: bool | jax.Array,
         token_ids: Int[Array, "B S"] | None = None,
         kv_share: dict[str, jax.Array] | None = None,
+        sum_stream: Float[Array, "B S D"] | None = None,
+        sum_components: tuple[str, ...] = (),
     ) -> Float[Array, "B S D"]:
+        """``sum_stream`` (with ``sum_components``) feeds those q/k/v projections from the straight-sum
+        stream, through the same RMSNorm and GatedNorm, instead of the AttnRes mix ``h``."""
         attn_in = self.attn_gated_norm(self.rms_attn(h))
+        proj_inputs = None
+        attn_components = tuple(c for c in sum_components if c in ("q", "k", "v"))
+        if attn_components:
+            assert sum_stream is not None
+            sum_in = self.attn_gated_norm(self.rms_attn(sum_stream))
+            proj_inputs = {c: sum_in for c in attn_components}
         if isinstance(self.attn, KimiDeltaAttention):
             # KDA has no positional encoding or window; it only needs the document boundaries.
-            out = self.attn(attn_in, _sconv_segment_ids(mask))
+            out = self.attn(attn_in, _sconv_segment_ids(mask), proj_inputs=proj_inputs)
         else:
             out = self.attn(
-                attn_in, mask, disable_rope=disable_rope, is_global=is_global, token_ids=token_ids, kv_share=kv_share
+                attn_in,
+                mask,
+                disable_rope=disable_rope,
+                is_global=is_global,
+                token_ids=token_ids,
+                kv_share=kv_share,
+                proj_inputs=proj_inputs,
             )
         if self.bias_attn_out is not None:
             out = out + unshard(self.bias_attn_out).astype(out.dtype)
@@ -1462,14 +1508,27 @@ def _attn_res_layer_full(diff_args, mask, token_ids, use_long, layer_index, eps,
     ``(partial, blocks, block_logits, router_stats)`` like ``_attn_res_layer_passthrough``."""
     layer, blocks, block_logits, partial, queries, logit_bias = diff_args
     assert partial is None, "full AttnRes rolls every sublayer output into its own source"
+    sum_components = layer.attn.cfg.attn_res_sum_inputs
     h, z_attn, w_attn = _attn_res_mix(blocks, block_logits, None, queries, 2 * layer_index, eps, logit_bias)
-    attn_out = type(layer).attn_branch(layer, h, mask, use_long, use_long, token_ids, kv_share)
+    attn_out = type(layer).attn_branch(
+        layer, h, mask, use_long, use_long, token_ids, kv_share, _stream_sum(blocks), sum_components
+    )
     blocks = (*blocks, attn_out)
     block_logits = (*block_logits, _attn_res_source_logits(attn_out, queries[2 * layer_index + 1 :], eps))
     h, z_mlp, w_mlp = _attn_res_mix(blocks, block_logits, None, queries, 2 * layer_index + 1, eps, logit_bias)
+    if "mlp" in sum_components:
+        h = _stream_sum(blocks)
     mlp_out, router_stats = layer.mlp_branch(h, mask)
     stats = {**router_stats, _ATTN_RES_Z: z_attn + z_mlp, _ATTN_RES_W_ATTN: w_attn, _ATTN_RES_W_MLP: w_mlp}
     return mlp_out, blocks, block_logits, stats
+
+
+def _stream_sum(sources: tuple[jax.Array, ...]) -> jax.Array:
+    """The straight sum of the AttnRes sources (a standard residual stream), in the sources' dtype."""
+    total = sources[0].astype(jnp.float32)
+    for src in sources[1:]:
+        total = total + src.astype(jnp.float32)
+    return reshard(total.astype(sources[0].dtype), _batch_spec())
 
 
 def _attn_res_layer_passthrough(diff_args, mask, token_ids, use_long, layer_index, eps, kv_share=None):
@@ -1850,6 +1909,12 @@ class Transformer(eqx.Module):
         loop_queries = [] if self.attn_res_query_loop is None else list(self.attn_res_query_loop)
         queries = jnp.concatenate([jnp.stack(gate_queries), *loop_queries, self.attn_res_query_final[None]])
         logit_bias = _gate_extras(self, queries.shape[0])
+        if cfg.attn_res_final_mode not in ("attn", "uniform", "sum"):
+            raise ValueError(f"attn_res_final_mode must be attn, uniform or sum, got {cfg.attn_res_final_mode!r}")
+        if cfg.attn_res_sum_inputs and not cfg.attn_res_full:
+            raise ValueError("attn_res_sum_inputs needs attn_res_full")
+        if set(cfg.attn_res_sum_inputs) - {"q", "k", "v", "mlp"}:
+            raise ValueError(f"attn_res_sum_inputs must be a subset of q, k, v, mlp, got {cfg.attn_res_sum_inputs}")
         if cfg.attn_res_full and cfg.attn_res_layer_backward != AttnResLayerBackward.SAVE:
             raise ValueError("attn_res_full needs attn_res_layer_backward=SAVE")
         if cfg.mla_share_kv_latent and cfg.attn_res_layer_backward != AttnResLayerBackward.SAVE:
@@ -1913,7 +1978,11 @@ class Transformer(eqx.Module):
             logits = [_block_logit(bl, queries, final_index) for bl in block_logits]
             logits.append(_attn_res_source_logits(partial, queries[final_index][None], eps)[0])
             logits = _bias_gate_logits(logits, logit_bias, final_index, [*blocks, partial], eps, has_partial=True)
+            if cfg.attn_res_final_mode == "uniform":
+                logits = [jnp.zeros_like(logit) for logit in logits]
             weights, mixed = _softmax_mix(logits, [*blocks, partial])
+            if cfg.attn_res_final_mode == "sum":
+                mixed = _stream_sum((*blocks, partial)).astype(jnp.float32)
             weight_logs[final_index] = (jax.lax.stop_gradient(jnp.mean(weights, axis=(1, 2))), True)
             max_weight = jax.lax.stop_gradient(jnp.mean(jnp.max(weights, axis=0)))
             entropy = jax.lax.stop_gradient(jnp.mean(-jnp.sum(weights * jnp.log(jnp.maximum(weights, 1e-30)), axis=0)))
