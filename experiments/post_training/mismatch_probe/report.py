@@ -599,6 +599,30 @@ def write_plots(report: dict, output_dir: Path) -> None:
         plt.close(fig)
 
 
+def _display_metric(value, *, percent_digits: int | None = None) -> str:
+    if isinstance(value, dict) and "nonfinite" in value:
+        return f"nonfinite ({value['nonfinite']})"
+    if not isinstance(value, (int, float)):
+        return "unavailable"
+    if not math.isfinite(value):
+        return f"nonfinite ({value})"
+    return f"{value:.{percent_digits}%}" if percent_digits is not None else f"{value:.5g}"
+
+
+def _display_interval(value, *, percent_digits: int | None = None) -> str:
+    if value is None:
+        return "-"
+    low, high = value
+    return (
+        f"[{_display_metric(low, percent_digits=percent_digits)}, "
+        f"{_display_metric(high, percent_digits=percent_digits)}]"
+    )
+
+
+def _bucket_start(bucket: str) -> float:
+    return float(bucket.split("-")[0].removesuffix("+"))
+
+
 def render_markdown(report: dict) -> str:
     identity = report["token_identity"]
     lines = [
@@ -613,48 +637,137 @@ def render_markdown(report: dict) -> str:
     if report["comparisons"]:
         lines.extend(
             [
-                "| Comparison | p99 | 95% CI | k3 | share beyond 2x | route set agreement |",
-                "|---|---:|---:|---:|---:|---:|",
+                "Δ is target minus reference log probability on masked response tokens; p99 is the 99th "
+                "percentile of its absolute value.",
+                f"95% intervals resample whole prompts {report['bootstrap']['draws']} times "
+                f"with seed {report['bootstrap']['seed']}.",
+                "",
+            ]
+        )
+        lines.extend(
+            [
+                "| Comparison | p99 abs Δ | 95% CI | k3 | 95% CI | beyond 2x | 95% CI | route agreement | 95% CI |",
+                "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
             ]
         )
         for name, item in report["comparisons"].items():
             metrics, ci = item["metrics"], item["ci95"]
-            interval = ci.get("abs_p99", [math.nan, math.nan])
             route = item.get("route_set_agreement")
-            route_text = "-" if route is None else f"{route['value']:.1%}"
-            if route is not None and route["ci95"] is not None:
-                lo, hi = route["ci95"]
-                route_text += f" [{lo:.1%}, {hi:.1%}]"
+            route_text = "-" if route is None else _display_metric(route["value"], percent_digits=1)
+            route_interval = "-" if route is None else _display_interval(route["ci95"], percent_digits=1)
             lines.append(
-                f"| {name} | {metrics['abs_p99']:.5g} | [{interval[0]:.5g}, {interval[1]:.5g}] | "
-                f"{metrics['k3']:.5g} | {metrics['share_beyond_2x']:.3%} | {route_text} |"
+                f"| {name} | {_display_metric(metrics['abs_p99'])} | {_display_interval(ci.get('abs_p99'))} | "
+                f"{_display_metric(metrics['k3'])} | {_display_interval(ci.get('k3'))} | "
+                f"{_display_metric(metrics['share_beyond_2x'], percent_digits=3)} | "
+                f"{_display_interval(ci.get('share_beyond_2x'), percent_digits=3)} | "
+                f"{route_text} | {route_interval} |"
             )
         lines.append("")
         lines.extend(
             [
                 "## Numerical details",
                 "",
-                "| Comparison | tokens | p50 | p75 | p90 | p99.9 | max | signed mean | "
-                "raw token ESS | raw sequence ESS |",
+                "| Comparison | tokens | min abs Δ | mean abs Δ | p50 | p75 | p90 | p99.9 | max abs Δ | signed mean Δ |",
                 "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
             ]
         )
         for name, item in report["comparisons"].items():
             metrics = item["metrics"]
             lines.append(
-                f"| {name} | {metrics['tokens']} | {metrics['abs_p50']:.5g} | {metrics['abs_p75']:.5g} | "
-                f"{metrics['abs_p90']:.5g} | {metrics['abs_p999']:.5g} | {metrics['abs_max']:.5g} | "
-                f"{metrics['delta_mean']:.5g} | {metrics['token_ess_fraction_raw']:.3f} | "
-                f"{metrics['sequence_ess_fraction_raw']:.3f} |"
+                f"| {name} | {metrics['tokens']} | {_display_metric(metrics['abs_min'])} | "
+                f"{_display_metric(metrics['abs_mean'])} | {_display_metric(metrics['abs_p50'])} | "
+                f"{_display_metric(metrics['abs_p75'])} | {_display_metric(metrics['abs_p90'])} | "
+                f"{_display_metric(metrics['abs_p999'])} | {_display_metric(metrics['abs_max'])} | "
+                f"{_display_metric(metrics['delta_mean'])} |"
             )
         lines.append("")
-    if report.get("drift_scale"):
+        lines.extend(
+            [
+                "ESS is a ratio-weight concentration fraction, not a count of independent tokens. "
+                "Ratios against re-read or trainer references are probe diagnostics on the frozen tokens.",
+                "",
+                "| Comparison | Ratio interpretation | k1 | χ² sample moment | mean ratio | "
+                "raw token ESS | raw sequence ESS | "
+                "positive-advantage clip | negative-advantage clip |",
+                "|---|---|---:|---:|---:|---:|---:|---:|---:|",
+            ]
+        )
+        for name, item in report["comparisons"].items():
+            metrics = item["metrics"]
+            interpretation = (
+                "generation sample" if item["reference_distribution"] == "generation" else "probe diagnostic"
+            )
+            lines.append(
+                f"| {name} | {interpretation} | {_display_metric(metrics['k1'])} | "
+                f"{_display_metric(metrics['chi2_sample_moment'])} | {_display_metric(metrics['mean_ratio'])} | "
+                f"{_display_metric(metrics['token_ess_fraction_raw'])} | "
+                f"{_display_metric(metrics['sequence_ess_fraction_raw'])} | "
+                f"{_display_metric(metrics.get('positive_advantage_clip_occupancy'), percent_digits=3)} | "
+                f"{_display_metric(metrics.get('negative_advantage_clip_occupancy'), percent_digits=3)} |"
+            )
+        lines.append("")
+        if any("token_ess_fraction_capped" in item["metrics"] for item in report["comparisons"].values()):
+            lines.extend(
+                [
+                    "| Comparison | capped token ESS | capped sequence ESS | TIS cap occupancy |",
+                    "|---|---:|---:|---:|",
+                ]
+            )
+            for name, item in report["comparisons"].items():
+                metrics = item["metrics"]
+                lines.append(
+                    f"| {name} | {_display_metric(metrics.get('token_ess_fraction_capped'))} | "
+                    f"{_display_metric(metrics.get('sequence_ess_fraction_capped'))} | "
+                    f"{_display_metric(metrics.get('tis_cap_occupancy'), percent_digits=3)} |"
+                )
+            lines.append("")
+    if report.get("breakdowns"):
+        lines.extend(["## Breakdowns", ""])
+        for axis, title in (
+            ("reference_probability", "Reference-token probability"),
+            ("response_position", "Response position"),
+            ("answer_length", "Answer length"),
+        ):
+            lines.extend(
+                [
+                    f"### {title}",
+                    "",
+                    "| Comparison | Bucket | tokens | p99 abs Δ | mean squared Δ | signed mean Δ |",
+                    "|---|---:|---:|---:|---:|---:|",
+                ]
+            )
+            for name, axes in report["breakdowns"].items():
+                for bucket, values in sorted(axes[axis].items(), key=lambda entry: _bucket_start(entry[0])):
+                    lines.append(
+                        f"| {name} | {bucket} | {values['tokens']} | {_display_metric(values['abs_p99'])} | "
+                        f"{_display_metric(values['mean_squared_delta'])} | "
+                        f"{_display_metric(values['signed_mean'])} |"
+                    )
+            lines.append("")
+    drift_buckets = report.get("drift_scale", {}).get("probability_buckets", {})
+    if drift_buckets:
         lines.extend(["## Drift relative to mismatch", ""])
         equivalent = report["drift_scale"]["equivalent_updates"]
         if equivalent["status"] == "estimated":
             lines.append(f"Equivalent updates: {equivalent['steps']:.3g} from updates {equivalent['fit_updates']}.")
         else:
-            lines.append("Equivalent updates: unavailable with fewer than three nonzero drift measurements.")
+            lines.append("Equivalent updates: unavailable from the archived nonzero drift points.")
+        lines.extend(
+            [
+                "",
+                "| Update | Reference probability | tokens | mismatch mean squared Δ | "
+                "drift mean squared Δ | mismatch / drift |",
+                "|---|---:|---:|---:|---:|---:|",
+            ]
+        )
+        for update, buckets in sorted(drift_buckets.items(), key=lambda entry: int(entry[0])):
+            for bucket, values in sorted(buckets.items(), key=lambda entry: _bucket_start(entry[0])):
+                lines.append(
+                    f"| {update} | {bucket} | {values['tokens']} | "
+                    f"{_display_metric(values['mismatch_mean_squared'])} | "
+                    f"{_display_metric(values['drift_mean_squared'])} | "
+                    f"{_display_metric(values['mismatch_over_drift'])} |"
+                )
         lines.append("")
     if report["paired_improvements"]:
         lines.extend(["## Paired mode effects", ""])
@@ -668,60 +781,93 @@ def render_markdown(report: dict) -> str:
             [
                 "## Routing",
                 "",
-                "| Scoring | Valid coverage | Expert set agreement | Replacement rate |",
-                "|---|---:|---:|---:|",
+                "| Scoring | Valid coverage | Expert set agreement | 95% CI | Any-layer disagreement | "
+                "Mean differing layers | Replacement rate |",
+                "|---|---:|---:|---:|---:|---:|---:|",
             ]
         )
         for name, item in report["route_diagnostics"].items():
             metrics = item["metrics"]
             lines.append(
-                f"| {name} | {metrics['valid_coverage']:.1%} | {metrics['set_agreement']:.1%} | "
-                f"{metrics['replacement_fraction']:.1%} |"
+                f"| {name} | {_display_metric(metrics['valid_coverage'], percent_digits=1)} | "
+                f"{_display_metric(metrics['set_agreement'], percent_digits=1)} | "
+                f"{_display_interval(item['ci95'].get('set_agreement'), percent_digits=1)} | "
+                f"{_display_metric(metrics['any_layer_disagreement'], percent_digits=1)} | "
+                f"{_display_metric(metrics['mean_differing_layers'])} | "
+                f"{_display_metric(metrics['replacement_fraction'], percent_digits=1)} |"
             )
         lines.append("")
         lines.extend(
             [
-                "| Scoring | Layer | Expert set agreement | Exact slot agreement | Replacement rate |",
-                "|---|---:|---:|---:|---:|",
+                "| Scoring | Layer | Expert set agreement | 95% CI | Exact slot agreement | Replacement rate |",
+                "|---|---:|---:|---:|---:|---:|",
             ]
         )
         for name, item in report["route_diagnostics"].items():
             for layer, details in sorted(item["layers"].items(), key=lambda entry: int(entry[0])):
                 metrics = details["metrics"]
                 lines.append(
-                    f"| {name} | {layer} | {metrics['set_agreement']:.1%} | "
-                    f"{metrics['exact_slot_agreement']:.1%} | "
-                    f"{metrics['replacement_fraction']:.1%} |"
+                    f"| {name} | {layer} | {_display_metric(metrics['set_agreement'], percent_digits=1)} | "
+                    f"{_display_interval(details['ci95'].get('set_agreement'), percent_digits=1)} | "
+                    f"{_display_metric(metrics['exact_slot_agreement'], percent_digits=1)} | "
+                    f"{_display_metric(metrics['replacement_fraction'], percent_digits=1)} |"
                 )
         lines.append("")
     if report["timing"]:
-        lines.extend(["## Timing", ""])
+        lines.extend(["## Probe timing", "", "| Timer | seconds | ms per frozen token |", "|---|---:|---:|"])
+        token_count = report.get("step_metrics", {}).get("update@0", {}).get("token_count", 0)
         for name, seconds in sorted(report["timing"].items()):
             if isinstance(seconds, (int, float)):
-                lines.append(f"- {name}: {seconds:.3f} s")
+                per_token = _display_metric(seconds * 1000 / token_count) if token_count else "-"
+                lines.append(f"| {name} | {_display_metric(seconds)} | {per_token} |")
         lines.append("")
     if report.get("step_metrics"):
-        lines.extend(["## Step metrics and data movement", ""])
+        lines.extend(
+            [
+                "## Step metrics and data movement",
+                "",
+                "| Probe update | valid tokens | captured route bytes | optimizer steps |",
+                "|---|---:|---:|---:|",
+            ]
+        )
         for step, metrics in sorted(report["step_metrics"].items()):
             if not isinstance(metrics, dict) or not step.startswith("update@"):
                 continue
             route_bytes = metrics.get("route_bytes", 0)
             token_count = metrics.get("token_count", 0)
-            lines.append(
-                f"- {step}: {token_count} valid tokens, {route_bytes} captured route bytes, "
-                f"{metrics.get('optimizer_steps', 0)} optimizer steps."
-            )
+            lines.append(f"| {step} | {token_count} | {route_bytes} | {metrics.get('optimizer_steps', 0)} |")
         lines.append("")
+        step_timings = [
+            (step, name, seconds)
+            for step, metrics in sorted(report["step_metrics"].items())
+            if isinstance(metrics, dict) and step.startswith("update@")
+            for name, seconds in sorted(metrics.get("step_timings", {}).items())
+            if isinstance(seconds, (int, float))
+        ]
+        if step_timings:
+            lines.extend(["| Probe update | Training timer | seconds |", "|---|---|---:|"])
+            for step, name, seconds in step_timings:
+                lines.append(f"| {step} | {name} | {_display_metric(seconds)} |")
+            lines.append("")
     return "\n".join(lines)
 
 
 def render_archive_comparison(comparison: dict) -> str:
+    kind = (
+        "The archives contain the same frozen responses."
+        if comparison["kind"] == "shared_tokens"
+        else "The archives contain independently generated responses to matched prompts."
+    )
     lines = [
         "## Configuration comparison",
         "",
-        f"{comparison['kind']} on matched prompt groups.",
+        f"Left archive: `{comparison['left']}`",
         "",
-        "| Comparison | p99 difference (left - right) | 95% CI |",
+        f"Right archive: `{comparison['right']}`",
+        "",
+        kind,
+        "",
+        "| Comparison | p99 abs Δ difference (left minus right) | 95% paired CI |",
         "|---|---:|---:|",
     ]
     for label, item in comparison["comparisons"].items():
