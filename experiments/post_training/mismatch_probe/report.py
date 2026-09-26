@@ -26,6 +26,7 @@ ANALYSIS_VERSION = 1
 HEADLINE_METRICS = ("abs_p99", "k3", "share_beyond_2x", "token_ess_fraction_raw")
 PROBABILITY_BINS = ((0.0, 0.001), (0.001, 0.01), (0.01, 0.1), (0.1, 1.0))
 REPLAY_MODES = ("router_replay", "router_replay_filtered")
+NATIVE_MODE = "native"
 ROUTE_LAYER_METRICS = ("set_agreement", "exact_slot_agreement", "replacement_fraction")
 BOOTSTRAP_DRAWS = 1000
 GENERATION_SCORING = "vllm.generate@0"
@@ -40,7 +41,7 @@ def _rescore_scoring(update: int, cache_mode: str = "off") -> str:
     return f"vllm.rescore@{update}" if cache_mode == "off" else f"vllm.rescore@{update}:{cache_mode}"
 
 
-NATIVE_SCORING = _trainer_scoring(0, "native")
+NATIVE_SCORING = _trainer_scoring(0, NATIVE_MODE)
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,43 @@ class ArchiveData:
     manifest: ManifestRow
     probes: list[ProbeRow]
     scores: dict[str, dict[str, ScoreRow]]
+
+
+@dataclass(frozen=True)
+class ComparisonRows:
+    target: list[list[float]]
+    reference: list[list[float]]
+    masks: list[list[bool]]
+    advantages: list[float | None]
+
+    def metrics(
+        self,
+        indices: list[int],
+        *,
+        tis_cap: float | None,
+        eps_clip_low: float,
+        eps_clip_high: float,
+    ) -> dict[str, float | int]:
+        return comparison_metrics(
+            [self.target[index] for index in indices],
+            [self.reference[index] for index in indices],
+            [self.masks[index] for index in indices],
+            advantages=[self.advantages[index] for index in indices],
+            tis_cap=tis_cap,
+            eps_clip_low=eps_clip_low,
+            eps_clip_high=eps_clip_high,
+        )
+
+
+def _comparison_rows(
+    probes: list[ProbeRow], scores: dict[str, dict[str, ScoreRow]], target: str, reference: str
+) -> ComparisonRows:
+    return ComparisonRows(
+        target=[scores[target][row.sample_id].logprobs for row in probes],
+        reference=[scores[reference][row.sample_id].logprobs for row in probes],
+        masks=[row.loss_mask for row in probes],
+        advantages=[row.advantage for row in probes],
+    )
 
 
 def _clip_thresholds(manifest: ManifestRow) -> tuple[float, float]:
@@ -140,10 +178,10 @@ def _comparison_definitions(scores: dict[str, dict[str, ScoreRow]]) -> dict[str,
         add(f"{mode}_vs_reread", _trainer_scoring(0, mode), reread(0))
     updates = sorted({row.update for rows in scores.values() for row in rows.values() if row.update > 0})
     for update in updates:
-        add(f"trainer_drift_after_{update}", _trainer_scoring(update, "native"), NATIVE_SCORING)
-        add(f"observed_gap_after_{update}", _trainer_scoring(update, "native"), GENERATION_SCORING)
+        add(f"trainer_drift_after_{update}", _trainer_scoring(update, NATIVE_MODE), NATIVE_SCORING)
+        add(f"observed_gap_after_{update}", _trainer_scoring(update, NATIVE_MODE), GENERATION_SCORING)
         add(f"vllm_drift_after_{update}", reread(update), reread(0))
-        add(f"mismatch_after_{update}", _trainer_scoring(update, "native"), reread(update))
+        add(f"mismatch_after_{update}", _trainer_scoring(update, NATIVE_MODE), reread(update))
         add(f"prefix_cache_effect_at_{update}", _rescore_scoring(update, "on"), _rescore_scoring(update))
         for mode in REPLAY_MODES:
             add(f"{mode}_vs_reread_after_{update}", _trainer_scoring(update, mode), reread(update))
@@ -294,7 +332,7 @@ def _drift_scale(probes: list[ProbeRow], scores: dict[str, dict[str, ScoreRow]],
     drift_mean_squares = []
     baseline_squared = []
     for update in updates:
-        drift_name = _trainer_scoring(update, "native")
+        drift_name = _trainer_scoring(update, NATIVE_MODE)
         if drift_name not in scores:
             continue
         per_bucket: dict[str, dict[str, list[float]]] = {}
@@ -376,21 +414,15 @@ def analyze_archive(uri: str, *, bootstrap_draws: int = BOOTSTRAP_DRAWS, tis_cap
     report["route_diagnostics"] = _route_diagnostics(probes, scores, manifest.bootstrap_seed, bootstrap_draws)
 
     prompt_ids = [row.prompt_id for row in probes]
-    masks = [row.loss_mask for row in probes]
-    advantages = [row.advantage for row in probes]
     definitions = _comparison_definitions(scores)
     sampled_metrics = {}
     for label, (target_name, reference_name) in definitions.items():
         _require_same_weights_if_same_update(label, scores[target_name], scores[reference_name])
-        target = [scores[target_name][row.sample_id].logprobs for row in probes]
-        reference = [scores[reference_name][row.sample_id].logprobs for row in probes]
+        rows = _comparison_rows(probes, scores, target_name, reference_name)
 
-        def calculate(indices, *, target=target, reference=reference):
-            return comparison_metrics(
-                [target[index] for index in indices],
-                [reference[index] for index in indices],
-                [masks[index] for index in indices],
-                advantages=[advantages[index] for index in indices],
+        def calculate(indices, *, rows=rows):
+            return rows.metrics(
+                indices,
                 tis_cap=tis_cap,
                 eps_clip_low=eps_clip_low,
                 eps_clip_high=eps_clip_high,
@@ -436,7 +468,7 @@ def analyze_archive(uri: str, *, bootstrap_draws: int = BOOTSTRAP_DRAWS, tis_cap
 
     positive_updates = sorted({score.update for rows in scores.values() for score in rows.values() if score.update > 0})
     for update in positive_updates:
-        names = (_trainer_scoring(update, "native"), NATIVE_SCORING, GENERATION_SCORING)
+        names = (_trainer_scoring(update, NATIVE_MODE), NATIVE_SCORING, GENERATION_SCORING)
         if not all(name in scores for name in names):
             continue
         maximal_error = 0.0
@@ -532,29 +564,20 @@ def compare_archives(
         right_target, right_reference = right_definitions[label]
         _require_same_weights_if_same_update(label, left.scores[left_target], left.scores[left_reference])
         _require_same_weights_if_same_update(label, right.scores[right_target], right.scores[right_reference])
+        left_rows = _comparison_rows(left.probes, left.scores, left_target, left_reference)
+        right_rows = _comparison_rows(aligned_right_probes, right.scores, right_target, right_reference)
 
         def calculate(
             indices,
             *,
-            left_target=left_target,
-            left_reference=left_reference,
-            right_target=right_target,
-            right_reference=right_reference,
+            left_rows=left_rows,
+            right_rows=right_rows,
         ):
-            def metrics(probes, scores, target_name, reference_name, clip_low, clip_high):
-                return comparison_metrics(
-                    [scores[target_name][probes[index].sample_id].logprobs for index in indices],
-                    [scores[reference_name][probes[index].sample_id].logprobs for index in indices],
-                    [probes[index].loss_mask for index in indices],
-                    advantages=[probes[index].advantage for index in indices],
-                    tis_cap=tis_cap,
-                    eps_clip_low=clip_low,
-                    eps_clip_high=clip_high,
-                )
-
-            left_values = metrics(left.probes, left.scores, left_target, left_reference, left_clip_low, left_clip_high)
-            right_values = metrics(
-                aligned_right_probes, right.scores, right_target, right_reference, right_clip_low, right_clip_high
+            left_values = left_rows.metrics(
+                indices, tis_cap=tis_cap, eps_clip_low=left_clip_low, eps_clip_high=left_clip_high
+            )
+            right_values = right_rows.metrics(
+                indices, tis_cap=tis_cap, eps_clip_low=right_clip_low, eps_clip_high=right_clip_high
             )
             return {f"{name}_left_minus_right": left_values[name] - right_values[name] for name in HEADLINE_METRICS}
 
