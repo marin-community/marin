@@ -13,12 +13,10 @@ from types import MappingProxyType
 
 import yaml
 
-from marin.evaluation.eval_policy_sources import POLICY_SOURCE_DIGESTS
+from marin.evaluation.eval_policy_sources import POLICY_SOURCE_DIGESTS, SEPTEMBER_16_VERSION, SEPTEMBER_24_VERSION
 from marin.evaluation.model_identity import model_config_digest
 from marin.evaluation.records import EvalRef, EvalRunRecord, ModelRef
 
-SEPTEMBER_16_VERSION = "eval-policy-2026-09-16-verified"
-SEPTEMBER_24_VERSION = "eval-policy-2026-09-24-verified"
 EVALCHEMY_COMMIT = "c131e5ab84d3014490549ec06d45deb13b5673c2"
 HARBOR_COMMIT = "21e0ea6a0cc1a0b617aebd86988ea93e1795f84a"
 NUPA_SEED = 20222943
