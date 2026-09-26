@@ -11,7 +11,7 @@ import sys
 import tempfile
 import uuid
 from collections import deque
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import PurePosixPath
 from typing import Literal, cast
@@ -60,7 +60,11 @@ class SkyRLRuntime:
     """Identity-bearing SkyRL revision and locked dependency profile."""
 
     profile: SkyRLRuntimeProfile
-    commit: str = field(init=False, default=MARIN_SKYRL.commit)
+    commit: str = MARIN_SKYRL.commit
+
+    def __post_init__(self) -> None:
+        if len(self.commit) != 40 or any(character not in "0123456789abcdef" for character in self.commit):
+            raise ValueError("SkyRL runtime commit must be a full lowercase Git SHA")
 
 
 @dataclass(frozen=True)
@@ -730,9 +734,13 @@ def _launch_config_yaml(
     train_data: tuple[ResolvedDataSource, ...],
     validation_data: tuple[ResolvedDataSource, ...],
     output: SkyRLOutputPaths,
+    artifact_root: str,
 ) -> str:
     recipe = _parsed_config(spec.config_yaml)
     _materialize_role_plan_config(recipe, spec.topology.role_plan)
+    probe = recipe.get("trainer", {}).get("mismatch_probe", {})
+    if probe.get("enabled") and not probe.get("archive_uri"):
+        probe["archive_uri"] = prefix_join(artifact_root, "mismatch_probe")
     task_env = recipe.get("extra_env", {})
     if not isinstance(task_env, dict):
         raise ValueError("SkyRL extra_env must be a mapping")
@@ -875,6 +883,7 @@ def skyrl_step(
                 train_data=train_data,
                 validation_data=validation_data,
                 output=output,
+                artifact_root=ctx.output_path,
             ),
             run_id=run_id,
             attempt_id=attempt_id,
@@ -882,7 +891,11 @@ def skyrl_step(
             output=output,
             export_hf=export_hf,
             draft_checkpoint_root=draft_checkpoint_root,
-            launcher_requirement=MARIN_SKYRL.requirement(),
+            launcher_requirement=(
+                MARIN_SKYRL.requirement()
+                if spec.runtime.commit == MARIN_SKYRL.commit
+                else f"{MARIN_SKYRL.distribution} @ git+{MARIN_SKYRL.repository}@{spec.runtime.commit}"
+            ),
         )
 
     return ArtifactStep(
