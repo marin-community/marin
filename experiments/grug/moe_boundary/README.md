@@ -219,21 +219,23 @@ effective speedup):
 | d512 α=1.0 | **3.5415** | 393,000 | 0.909 | [moe_boundary_compute_opt_d512_ep1_alpha1_matched](https://wandb.ai/marin-community/marin_moe/runs/moe_boundary_compute_opt_d512_ep1_alpha1_matched) |
 | d512 α=0.707 | 3.5459 | 422,134 | — | [moe_boundary_compute_opt_d512_ep1_alpha0.707_matched](https://wandb.ai/marin-community/marin_moe/runs/moe_boundary_compute_opt_d512_ep1_alpha0.707_matched) |
 | d768 α=1.0 | **3.2186** | 285,558 | 1.026 | [moe_boundary_compute_opt_d768_ep1_alpha1_matched](https://wandb.ai/marin-community/marin_moe/runs/moe_boundary_compute_opt_d768_ep1_alpha1_matched) |
-| README baselines | 3.5422 / 3.2273 | 433,986 / 294,726 | — | — |
+| d1024 α=1.0 | **3.0129** | 218,728 | 1.046 | [moe_boundary_compute_opt_d1024_ep1_alpha1_matched](https://wandb.ai/marin-community/marin_moe/runs/moe_boundary_compute_opt_d1024_ep1_alpha1_matched) |
+| README baselines | 3.5422 / 3.2273 / 3.0195 | 433,986 / 294,726 / 219,720 | — | — |
 
 Reading:
 
 - **The recipe, not the operator, caused the exploratory deficits.** Under
-  the matched recipe both α=1.0 arms tie-or-beat the baseline on loss
-  (d512 −0.0007, d768 −0.0087) where the exploratory runs showed
-  +0.0038/+0.0198 deficits. α=1.0 stays the representative (α=0.707 loses
-  at d512).
-- **Gate 1 splits.** d512 fails on throughput (effective speedup 0.909:
-  the boundary vector-adds and the coda's `rms_norm` cost ~9% wall-clock at
-  3.82e17 FLOPs) while d768 passes (1.026: the loss gain −0.0087 outweighs
-  the remaining −3.1% throughput cost at 2.81e18 FLOPs). The boundary
-  overhead amortizes with scale, and the loss advantage grows with scale —
-  the same direction the paper reports for Operator-1.
+  the matched recipe every α=1.0 arm ties-or-beats the baseline on loss
+  (d512 −0.0007, d768 −0.0087, d1024 −0.0066) where the exploratory runs
+  showed +0.0038/+0.0198 deficits. α=1.0 stays the representative (α=0.707
+  loses at d512).
+- **Gate 1 splits; the d768–d1024 trend is the paper's direction.** d512
+  fails on throughput (effective speedup 0.909: the boundary vector-adds
+  and the coda's `rms_norm` cost ~9% wall-clock at 3.82e17 FLOPs) while
+  d768 passes (1.026) and d1024 passes stronger (1.046, with the remaining
+  throughput cost down to −0.4% at 1.16e19 FLOPs). The boundary overhead
+  amortizes with scale (−9.4% → −3.1% → −0.4%) and the loss advantage holds
+  at every scale — the same direction the paper reports for Operator-1.
 - The pre-fix d512/d768 runs (no `_matched` suffix) are exploratory: they
   used the heuristic-derived optimizer batch (d768: 128 vs the cell's 64)
   and a 5% LR floor, so their comparisons against the baseline table are
