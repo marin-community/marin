@@ -124,7 +124,7 @@ def test_downloaded_model_root_resolves_as_the_hf_snapshot(tmp_path: Path, monke
     (model_root / "tokenizer_config.json").write_text("{}")
     monkeypatch.setattr("marin.rl.skyrl.skyrl_temporary_run_path", lambda *_args, **_kwargs: str(tmp_path / "scratch"))
 
-    run = build_run(version="2026.09.26", preset="dry")
+    run = build_run(version="2026.09.26", preset="dry", job_timeout_seconds=1800)
     config = run.build_config(
         StepContext.for_run(
             output_path=str(tmp_path / "output"),
@@ -135,3 +135,4 @@ def test_downloaded_model_root_resolves_as_the_hf_snapshot(tmp_path: Path, monke
     )
 
     assert config.model.uri == str(model_root)
+    assert yaml.safe_load(config.launch_config_yaml)["iris"]["timeout"] == 1800

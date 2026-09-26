@@ -47,6 +47,7 @@ TRAIN_NS = DEFAULT_TRAIN_NS
 TRAIN_BATCH_SIZE = 32
 GROUP_SIZE = 8
 SEED = 17
+JOB_TIMEOUT_SECONDS = 7200
 
 
 @dataclass(frozen=True)
@@ -320,9 +321,12 @@ def build_run(
     group_size: int = GROUP_SIZE,
     train_ns: tuple[int, ...] = TRAIN_NS,
     seed: int = SEED,
+    job_timeout_seconds: int = JOB_TIMEOUT_SECONDS,
     version: str | None = None,
     settings: tuple[str, ...] = (),
 ) -> ArtifactStep[SkyRLRun]:
+    if job_timeout_seconds <= 0:
+        raise ValueError("job timeout must be positive")
     config = training_config(
         preset=preset,
         entrypoint=entrypoint,
@@ -388,6 +392,7 @@ def build_run(
             parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
             coordinator_timeout_hours=24,
             wandb_entity=None,
+            job_timeout_seconds=job_timeout_seconds,
         ),
         export_hf=True,
     )
@@ -401,6 +406,7 @@ def build_run(
 @click.option("--group-size", type=int, default=GROUP_SIZE)
 @click.option("--train-n", "train_ns", multiple=True, type=int)
 @click.option("--seed", type=int, default=SEED)
+@click.option("--job-timeout-seconds", type=int, default=JOB_TIMEOUT_SECONDS, show_default=True)
 @click.option("--set", "settings", multiple=True, metavar="KEY=VALUE")
 @rl_build_options
 def main(
@@ -411,6 +417,7 @@ def main(
     group_size: int,
     train_ns: tuple[int, ...],
     seed: int,
+    job_timeout_seconds: int,
     settings: tuple[str, ...],
 ) -> ArtifactStep[SkyRLRun]:
     return build_run(
@@ -421,6 +428,7 @@ def main(
         group_size=group_size,
         train_ns=train_ns or TRAIN_NS,
         seed=seed,
+        job_timeout_seconds=job_timeout_seconds,
         settings=settings,
     )
 
