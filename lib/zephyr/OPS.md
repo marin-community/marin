@@ -173,6 +173,14 @@ function that is the bottleneck; `idle` at `write_table` means I/O bound. Data
 skew looks like a handful of shards 10-100x slower and heavier than the rest,
 with the user-level reduce function holding the GIL.
 
+Zephyr automatically splits a reduce target whose payload exceeds both four
+times the non-empty target median and 256 MiB. The resulting tasks keep keys
+disjoint and report their shared target with `slice_index` and `slice_count` in
+`zephyr.shuffle`. Set `ZephyrContext(reducer_balance=None)` to disable this.
+Balancing does not help when one key dominates a target, and each slice scans
+the target's row groups, so splitting trades extra reads for a shorter critical
+path.
+
 ### Worker Failures / Reassignment
 
 Workers that failed and got reassigned show in the task table with `Worker ... failed: Request timed out`. The replacement worker starts fresh (low memory) and must re-pull a task — if no tasks remain queued, it idles.

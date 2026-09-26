@@ -290,6 +290,7 @@ def _run_stage_with_ctx(
         shard_idx=task.shard_idx,
         total_shards=task.total_shards,
         aux_shards=task.aux_shards,
+        reduce_target=task.reduce_target,
     )
     output_stage_name = re.sub(r"[^a-zA-Z0-9_.-]+", "-", task.stage_name).strip("-")
     stage_dir = f"{chunk_prefix}/{execution_id}/{output_stage_name}"

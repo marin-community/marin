@@ -23,6 +23,7 @@ from rigging.filesystem.atomic import unique_temp_path
 from rigging.filesystem.factory import open_url
 
 from zephyr.plan import PhysicalOp, Scatter
+from zephyr.reducer_balance import ReduceTarget
 from zephyr.shuffle import ListShard, _write_scatter
 from zephyr.stats import ZEPHYR_STAGE_BYTES_PROCESSED_KEY, ZEPHYR_STAGE_ITEM_COUNT_KEY, per_second
 from zephyr.worker_context import CounterEntry
@@ -293,6 +294,8 @@ class ShardTask:
     cost: ZephyrTaskResources
     stage_name: str = "output"
     aux_shards: dict[int, ListShard] | None = None
+    reduce_target: ReduceTarget | None = None
+    num_reduce_targets: int | None = None
 
 
 class StageRunner(Protocol):

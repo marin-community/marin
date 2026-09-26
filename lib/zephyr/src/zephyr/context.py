@@ -52,6 +52,7 @@ from zephyr.memory_store import (
     start_actor_calls,
 )
 from zephyr.plan import PhysicalPlan, compute_plan
+from zephyr.reducer_balance import DEFAULT_REDUCER_BALANCE, ReducerBalancePolicy
 from zephyr.runners import InlineRunner, SubprocessRunner
 from zephyr.stage_io import (
     StageRunner,
@@ -259,6 +260,8 @@ class ZephyrContext:
             for a driver that fans many pipelines onto one shared pool.
         stats_config: Explicit Finelog endpoint for local reporting.
             When absent, discover Finelog through the Iris context.
+        reducer_balance: Policy for splitting oversized shuffle targets.
+            Set to ``None`` to disable automatic balancing.
     """
 
     client: Client | None = None
@@ -277,6 +280,7 @@ class ZephyrContext:
     max_shard_infra_failures: int = MAX_SHARD_INFRA_FAILURES
     max_concurrent_pipelines: int = MAX_CONCURRENT_PIPELINES
     stats_config: StatsConfig | None = None
+    reducer_balance: ReducerBalancePolicy | None = DEFAULT_REDUCER_BALANCE
 
     _shared_data: ContextVar[dict[str, Any] | None] = field(init=False, repr=False)
     _state: _ContextState = field(init=False, default=_ContextState.NEW, repr=False)
@@ -576,6 +580,7 @@ class ZephyrContext:
                 self.name,
                 ZephyrTaskResources.from_resource_config(map_task_resources),
                 ZephyrTaskResources.from_resource_config(reduce_task_resources),
+                self.reducer_balance,
             ).result()
         except Exception:
             payload = _try_read_coordinator_result(result_path)

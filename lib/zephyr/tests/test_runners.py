@@ -405,7 +405,7 @@ def test_shuffle_diagnostics_persist_target_sizes(local_client, tmp_path, finelo
         }
 
 
-def test_shuffle_diagnostics_do_not_add_storage_reads(local_client, tmp_path, monkeypatch):
+def test_reducer_balancing_adds_one_coordinator_sidecar_pass(local_client, tmp_path, monkeypatch):
     metadata_reads = []
     read_file = LocalFileSystem.cat_file
 
@@ -429,7 +429,7 @@ def test_shuffle_diagnostics_do_not_add_storage_reads(local_client, tmp_path, mo
     ) as context:
         result = context.execute(dataset)
     assert sorted(result.results) == [(0, 63), (1, 70), (2, 57)]
-    assert len(metadata_reads) == 2 * 8
+    assert len(metadata_reads) == 2 * (8 + 1)
 
 
 def test_shuffle_diagnostics_preserve_retry_attempts(local_client, tmp_path, finelog_server, runner_factory):
@@ -465,16 +465,20 @@ def test_shuffle_diagnostics_preserve_retry_attempts(local_client, tmp_path, fin
     assert {row["input_rows"] for row in observations} == {3}
 
 
-def test_shuffle_placeholders_visible_before_metadata_read(local_client, tmp_path, finelog_server, monkeypatch):
+def test_shuffle_placeholders_visible_before_reducer_metadata_read(local_client, tmp_path, finelog_server, monkeypatch):
     initial_reports = []
+    metadata_reads = 0
     metadata_lock = Lock()
     read_file = LocalFileSystem.cat_file
 
     def read_after_placeholders(filesystem, path, *args, **kwargs):
-        nonlocal initial_reports
+        nonlocal initial_reports, metadata_reads
         if str(path).endswith("metadata.msgpack"):
             with metadata_lock:
-                if not initial_reports:
+                metadata_reads += 1
+                # The coordinator reads one sidecar per mapper before it can
+                # plan tasks. Placeholders must precede the reducers' reads.
+                if metadata_reads > 3 and not initial_reports:
                     query_client = LogClient.connect(finelog_server)
 
                     def placeholders_visible():

@@ -412,11 +412,16 @@ class ZephyrWorker:
         if not all(key in counters for key in keys):
             return
         input_rows, payload_bytes, num_sources = (int(counters[key].value) for key in keys)
+        reduce_target = active.task.reduce_target
+        if reduce_target is None:
+            return
         record = ZephyrShuffleStat(
             execution_id=active.execution_id,
             stage_name=active.task.stage_name,
-            target_shard=active.task.shard_idx,
-            num_targets=active.task.total_shards,
+            target_shard=reduce_target.target,
+            num_targets=active.task.num_reduce_targets or active.task.total_shards,
+            slice_index=reduce_target.slice_index,
+            slice_count=reduce_target.slice_count,
             attempt=active.attempt,
             input_rows=input_rows,
             payload_bytes=payload_bytes,
