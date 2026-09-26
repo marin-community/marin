@@ -233,25 +233,37 @@ tests/                  unit tests; journeys/ walks the app in a browser
 
 ## Develop
 
-Serve the fixture records with no database, no CoreWeave credentials and no Iris/finelog access --
-the fastest way to iterate on the UI. The live job and log panels degrade to "unreachable" exactly as
-they do off-VPC.
+Serve synthetic fixture records locally without a database or cloud credentials. Isolate
+EvalDash from other Marina apps, which may require a database. Live job and log panels show
+"unreachable".
+
+Run from the repository root:
 
 ```bash
 cd infra/marina
 uv run marina build --only evaldash
-uv run python -c "from apps.evaldash import fixtures; fixtures.build_fixtures('/tmp/evaldash-fixtures')"
-EVALDASH_STORE=local RECORDS_PREFIXES=/tmp/evaldash-fixtures uv run marina dev
+preview_records=$(mktemp -d /tmp/evaldash-records.XXXXXX)
+preview_apps=$(mktemp -d /tmp/evaldash-apps.XXXXXX)
+ln -s "$PWD/apps/evaldash" "$preview_apps/evaldash"
+uv run python -m apps.evaldash.fixtures "$preview_records"
+EVALDASH_STORE=local RECORDS_PREFIXES="$preview_records" \
+  uv run marina dev --apps-dir "$preview_apps"
 # -> http://127.0.0.1:8080/evaldash/
 ```
 
-Against a real Postgres, point the kernel at one and migrate first:
+Click `Rescan` to load the records. Fixture cohorts predate verified policies; select
+`Newest per benchmark (all cohorts)*` to view them. To inspect real
+runs, point `RECORDS_PREFIXES` at a local copy of their run directories. Keep dev storage
+local to avoid production writes. After frontend edits, rerun `marina build --only evaldash`
+and reload the browser; this command does not hot-reload the frontend.
+
+For a Postgres-backed preview, generate fixtures as above, then run from `infra/marina`:
 
 ```bash
-cd infra/marina
 export MARINA_DATABASE_URL=postgresql+pg8000://postgres:marina@127.0.0.1:5432/marina
 uv run marina migrate --only evaldash
-RECORDS_PREFIXES=/tmp/evaldash-fixtures uv run marina dev
+EVALDASH_STORE=postgres RECORDS_PREFIXES="$preview_records" \
+  uv run marina dev --apps-dir "$preview_apps"
 ```
 
 ## Test
