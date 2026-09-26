@@ -285,7 +285,15 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     okls_cans_steps: int = 10
     okls_matmul_dtype: str = "float32"
     okls_lr_mult: float = 1.0
-    """LR multiplier of the OKLS group relative to the MuonH LR."""
+    """LR multiplier of the OKLS group relative to the MuonH LR (hyperball mode)."""
+    okls_hyperball: bool = True
+    """True: OKLS direction + MuonH's norm-preserving hyperball step at the MuonH LR. False: the paper's
+    own update (muP shape scale, Nesterov variance correction, AdamC decoupled weight decay) at
+    ``okls_peak_lr`` on the same schedule shape."""
+    okls_peak_lr: float = 0.09434
+    """Paper-mode OKLS peak LR (the release's muP-scaled default)."""
+    okls_weight_decay: float = 0.0303
+    """Paper-mode AdamC decoupled weight decay."""
     okls_root_every: int = 1
     """Recompute the OKLS inverse roots every this many steps (stored in between)."""
     lm_head_group: str = "adamh"
@@ -368,12 +376,14 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                         beta1=self.okls_beta1,
                         beta2=self.okls_beta2,
                         eps=self.okls_epsilon,
-                        weight_decay=0.0,
+                        weight_decay=0.0 if self.okls_hyperball else self.okls_weight_decay,
                         cans_steps=self.okls_cans_steps,
                         matmul_dtype=OKLS_MATMUL_DTYPES[self.okls_matmul_dtype],
-                        learning_rate=learning_rate * self.okls_lr_mult,
-                        lr_peak=self.learning_rate * self.okls_lr_mult,
-                        hyperball=True,
+                        # Paper mode rescales the MuonH schedule to its own peak (same warmup/decay shape).
+                        learning_rate=learning_rate
+                        * (self.okls_lr_mult if self.okls_hyperball else self.okls_peak_lr / self.learning_rate),
+                        lr_peak=self.learning_rate * self.okls_lr_mult if self.okls_hyperball else self.okls_peak_lr,
+                        hyperball=self.okls_hyperball,
                         root_every=self.okls_root_every,
                     ),
                     _match_named_update_sharding(),
