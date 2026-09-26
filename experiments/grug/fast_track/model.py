@@ -297,6 +297,12 @@ class GrugModelConfig:
     ``attn_out`` (the attention sublayer output) and ``mlp_out`` (the MoE sublayer output)."""
     qb_freeze_step: int | None = None
     """Stop updating the QB router biases from this step on (they keep their last value)."""
+    embed_gated_norm: bool = True
+    """GatedNorm after the embedding RMSNorm (else the RMSNorm alone)."""
+    final_gated_norm: bool = True
+    """GatedNorm after the final RMSNorm, before the lm_head (else the RMSNorm alone)."""
+    kda_gate_per_head: bool = False
+    """KDA output gate ``sigmoid(x W_g)`` with one value per head instead of one per channel."""
     loop_passes: int = 1
     """Apply the whole layer stack this many times per forward (tied weights). Every pass keeps
     extending the AttnRes history and has its own gate queries; each extra pass starts its running
@@ -698,7 +704,7 @@ class KimiDeltaAttention(eqx.Module):
     w_k: Float[Array, "D NH"]
     w_v: Float[Array, "D NH"]
     w_o: Float[Array, "NH D"]
-    w_g: Float[Array, "D NH"]
+    w_g: Float[Array, "D NH"]  # [D, N] with cfg.kda_gate_per_head
     w_a_down: Float[Array, "D R"]
     w_a_up: Float[Array, "R NH"]
     a_log: Float[Array, " N"]
@@ -720,7 +726,10 @@ class KimiDeltaAttention(eqx.Module):
             w_k=reshard(_init_weight(k_k, (d, n * h), std), P(_FSDP_AXES, "model")),
             w_v=reshard(_init_weight(k_v, (d, n * h), std), P(_FSDP_AXES, "model")),
             w_o=reshard(_init_weight(k_o, (n * h, d), std), P("model", _FSDP_AXES)),
-            w_g=reshard(_init_weight(k_g, (d, n * h), std), P(_FSDP_AXES, "model")),
+            w_g=reshard(
+                _init_weight(k_g, (d, n if cfg.kda_gate_per_head else n * h), std),
+                P(None, None) if cfg.kda_gate_per_head else P(_FSDP_AXES, "model"),
+            ),
             w_a_down=reshard(_init_weight(k_ad, (d, r), std), P(_FSDP_AXES, None)),
             w_a_up=reshard(_init_weight(k_au, (r, n * h), std), P(None, "model")),
             a_log=jnp.zeros((n,)),
@@ -770,7 +779,10 @@ class KimiDeltaAttention(eqx.Module):
         o = jax.shard_map(run, mesh=get_abstract_mesh(), in_specs=in_specs, out_specs=spec4, check_vma=False)(*args)
         o = self.o_norm(o.astype(x.dtype))
         o = jnp.reshape(o, (b, s, cfg.num_heads * head_dim), out_sharding=P(_BATCH_AXES, None, "model"))
-        o = o * jax.nn.sigmoid(jnp.einsum("bsd,de->bse", x, self.w_g))
+        gate = jax.nn.sigmoid(jnp.einsum("bsd,de->bse", x, self.w_g))
+        if cfg.kda_gate_per_head:
+            gate = jnp.repeat(gate, head_dim, axis=-1, total_repeat_length=cfg.num_heads * head_dim)
+        o = o * gate
         return jnp.einsum("bsh,hd->bsd", o, self.w_o, out_sharding=_batch_spec())
 
 
@@ -1420,7 +1432,7 @@ def _unstack_layers(stacked: ArrayStacked[Block]) -> list[Block]:
 class Transformer(eqx.Module):
     token_embed: jax.Array
     embed_norm: RMSNorm
-    embed_gated_norm: GatedNorm
+    embed_gated_norm: GatedNorm | None
     output_proj: jax.Array
     stacked_blocks: ArrayStacked[Block]
     """The softmax-attention layers: every layer, or the global layers when the local layers are KDA."""
@@ -1428,7 +1440,7 @@ class Transformer(eqx.Module):
     """The KDA (local) layers. The AttnRes loop splits each stack whole into its layers (never slices
     it), so the hybrid keeps one stack per mixer kind: fewer, larger optimizer leaves."""
     final_norm: RMSNorm
-    final_gated_norm: GatedNorm
+    final_gated_norm: GatedNorm | None
     attn_res_query_final: Float[Array, " D"] | None
     """Pseudo-query of the final AttnRes gate, whose mix feeds the final norms and the lm_head."""
     token_embed2: jax.Array | None
@@ -1480,12 +1492,16 @@ class Transformer(eqx.Module):
         return Transformer(
             token_embed=token_embed,
             embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-            embed_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=embed_gn_key),
+            embed_gated_norm=(
+                GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=embed_gn_key) if cfg.embed_gated_norm else None
+            ),
             output_proj=output_proj,
             stacked_blocks=stack(softmax_layers, False),
             kda_blocks=stack(kda_layers, True) if kda_layers else None,
             final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-            final_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key),
+            final_gated_norm=(
+                GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key) if cfg.final_gated_norm else None
+            ),
             attn_res_query_final=(
                 reshard(jnp.zeros((cfg.hidden_dim,), dtype=jnp.float32), P(None)) if cfg.attn_res else None
             ),
@@ -1542,7 +1558,9 @@ class Transformer(eqx.Module):
 
         cfg = self.config
         hidden = _embedding_gather(self.token_embed, token_ids)
-        hidden = self.embed_gated_norm(self.embed_norm(hidden))
+        hidden = self.embed_norm(hidden)
+        if self.embed_gated_norm is not None:
+            hidden = self.embed_gated_norm(hidden)
 
         # Local layers use a sliding window; every global_every-th layer is full causal.
         segment_ids = None
@@ -1632,7 +1650,9 @@ class Transformer(eqx.Module):
                 "margin_max_per_layer": stacked_router_stats["margin_max"],
             }
         router_metrics.update(final_gate_stats)
-        hidden = self.final_gated_norm(self.final_norm(hidden))
+        hidden = self.final_norm(hidden)
+        if self.final_gated_norm is not None:
+            hidden = self.final_gated_norm(hidden)
         return hidden, router_metrics
 
     def _attn_res_layers(
