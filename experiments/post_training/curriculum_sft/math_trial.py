@@ -51,7 +51,7 @@ S3_TRIAL_PREFIX = marin_temp_bucket(
     prefix="curriculum-math-20260924",
     source_prefix="s3://marin-us-east-02a/marin",
 )
-SOURCE_VERSION = "2026.09.26"
+SOURCE_VERSION = "2026.09.26.1"
 CONVERSION_VERSION = "2026.09.25.2"
 CURRICULUM_IDS = (
     "d01.algebra.exact-symbolic-evaluation",

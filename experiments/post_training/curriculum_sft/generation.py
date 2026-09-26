@@ -22,7 +22,6 @@ from dataclasses import dataclass
 from typing import Any
 
 import pyarrow as pa
-import pyarrow.parquet as pq
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.namespacing import user_owned_name
@@ -32,6 +31,7 @@ from math_verify import parse, verify
 from pydantic import Field, ValidationError
 from rigging.filesystem.storage_path import StoragePath
 from tasktrove_verify.modes.extract import extract_boxed, strip_math_delimiters
+from zephyr.readers import load_parquet
 from zephyr.writers import write_parquet_file
 
 from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_BULK_TOKEN_ENV, GLM_MODEL, resolve_glm_base_url
@@ -55,6 +55,16 @@ DIFFICULTY_TARGETS = (
     "AMC 12 or early AIME: a concise statement whose solution needs insight and careful casework.",
 )
 
+# Without an explicit answer form, GLM converges on "find the sum of all real solutions" because it
+# turns any equation into one short scalar answer.
+ANSWER_FORMS = (
+    "Ask for one specific quantity: a value, a parameter, a residue, or an expression.",
+    "Ask for every solution or qualifying object, answered as a list or set.",
+    "Ask for a count of solutions or objects.",
+    "Ask for an extremal value: the smallest, largest, minimum, or maximum.",
+    "Ask for a sum or product over all solutions or objects.",
+)
+
 SOLVER_SYSTEM_PROMPT = (
     "Solve the math problem. After reasoning, write a concise solution that states the key steps "
     "and ends with the final answer in \\boxed{}."
@@ -66,6 +76,7 @@ PROBLEM_SCHEMA = pa.schema(
         pa.field("capability_id", pa.string(), nullable=False),
         pa.field("facet_id", pa.string(), nullable=False),
         pa.field("difficulty", pa.string(), nullable=False),
+        pa.field("answer_form", pa.string(), nullable=False),
         pa.field("problem", pa.string()),
         pa.field("answer", pa.string()),
         pa.field("accepted", pa.bool_(), nullable=False),
@@ -123,6 +134,7 @@ class ProblemAssignment:
     facet_id: str
     facet_description: str
     difficulty: str
+    answer_form: str
 
 
 @dataclass(frozen=True)
@@ -179,11 +191,17 @@ def problem_targets(packet: dict[str, Any]) -> list[dict[str, str]]:
 
 
 def problem_assignment(packet: dict[str, Any], index: int) -> ProblemAssignment:
-    """Cycle requests through every target, then every difficulty, so coverage does not depend on sampling luck."""
+    """Cycle requests through every target, difficulty, and answer form, so coverage does not depend on sampling luck."""
     targets = problem_targets(packet)
     target = targets[index % len(targets)]
     difficulty = DIFFICULTY_TARGETS[(index // len(targets)) % len(DIFFICULTY_TARGETS)]
-    return ProblemAssignment(facet_id=target["id"], facet_description=target["description"], difficulty=difficulty)
+    answer_form = ANSWER_FORMS[(index // (len(targets) * len(DIFFICULTY_TARGETS))) % len(ANSWER_FORMS)]
+    return ProblemAssignment(
+        facet_id=target["id"],
+        facet_description=target["description"],
+        difficulty=difficulty,
+        answer_form=answer_form,
+    )
 
 
 def problem_prompt(packet: dict[str, Any], assignment: ProblemAssignment, task_specification: str) -> str:
@@ -197,9 +215,12 @@ def problem_prompt(packet: dict[str, Any], assignment: ProblemAssignment, task_s
         "procedure, and avoid telling the solver which method, checks, or restrictions to use.\n"
         "- Do not copy published contest or benchmark problems, rely on external facts, or ask for a proof.\n"
         "- Solve the problem yourself before submitting, and change it if the answer is not unique.\n"
+        "- Phrase the question naturally for its content; do not open with a stock phrase such as "
+        "'Find the sum of all real numbers'.\n"
         f"Capability: {json.dumps(capability, ensure_ascii=False, sort_keys=True)}\n"
         f"Focus for this problem: {assignment.facet_description}\n"
         f"Difficulty target: {assignment.difficulty}\n"
+        f"Answer form: {assignment.answer_form}\n"
         f"Task specification: {task_specification}"
     )
 
@@ -299,6 +320,7 @@ def parse_problem_batch(raw_output: str, config: GenerateProblemsConfig, packet:
                 "capability_id": config.capability_id,
                 "facet_id": assignment.facet_id,
                 "difficulty": assignment.difficulty,
+                "answer_form": assignment.answer_form,
                 "problem": problem.problem.strip() if problem is not None else None,
                 "answer": problem.answer.strip() if problem is not None else None,
                 "accepted": reason is None,
@@ -444,8 +466,9 @@ def generate_problems(config: GenerateProblemsConfig) -> Artifact:
 
 def solve_problems(config: SolveProblemsConfig) -> Artifact:
     """Write graded solution audit Parquet, thinking-mode chat Parquet, exact GLM responses, and a manifest."""
-    problems_table = pq.read_table(str(StoragePath(config.problems_path) / PROBLEMS_FILENAME))
-    problems = [row for row in problems_table.to_pylist() if row["accepted"]]
+    problems = [
+        row for row in load_parquet(str(StoragePath(config.problems_path) / PROBLEMS_FILENAME)) if row["accepted"]
+    ]
     requests = solve_requests(config, problems)
     raw_output = _run_batch(
         _glm_client(config.relay_job), requests, f"curriculum-solutions-{config.capability_id}.jsonl"
