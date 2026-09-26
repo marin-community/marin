@@ -1200,7 +1200,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
                 return
 
             if files is None or source_is_temp:
-                upload_to_hub(local_dir, hf_repo_ref, **upload_kwargs)
+                _upload_folder_from_process_zero(local_dir, hf_repo_ref, **upload_kwargs)
                 return
 
             # if we're not sure source_is_temp, we have to be more careful to only upload the files we want
@@ -1546,19 +1546,24 @@ _sync_count = 0
 
 def upload_to_hub(local_path: str, repo_ref: Union[str, RepoRef], **hf_upload_kwargs):
     ref = _coerce_to_rr(repo_ref)
-
-    if jax.process_index() == 0:
-        logger.info(f"Uploading HF-compatible checkpoint to {ref.model_name_or_path}")
-        huggingface_hub.upload_folder(
-            folder_path=local_path, repo_id=(ref.model_name_or_path), revision=(ref.revision), **hf_upload_kwargs
-        )
-        logger.info(f"Finished uploading HF-compatible checkpoint to {ref.model_name_or_path}")
-    else:
+    _upload_folder_from_process_zero(local_path, ref, **hf_upload_kwargs)
+    if jax.process_index() != 0:
         logger.info(f"Finished waiting for rank 0 to upload checkpoint to {ref.model_name_or_path}")
 
     global _sync_count
     sync_global_devices(f"upload? {ref.model_name_or_path}{ref.revision} {_sync_count}")
     _sync_count += 1
+
+
+def _upload_folder_from_process_zero(local_path: str, ref: RepoRef, **hf_upload_kwargs) -> None:
+    """Upload a folder from process 0 without a multi-host collective, so export writer threads can call it."""
+    if jax.process_index() != 0:
+        return
+    logger.info(f"Uploading HF-compatible checkpoint to {ref.model_name_or_path}")
+    huggingface_hub.upload_folder(
+        folder_path=local_path, repo_id=(ref.model_name_or_path), revision=(ref.revision), **hf_upload_kwargs
+    )
+    logger.info(f"Finished uploading HF-compatible checkpoint to {ref.model_name_or_path}")
 
 
 def _convert_to_jnp(v, dtype):
