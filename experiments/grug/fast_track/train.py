@@ -596,6 +596,7 @@ def _loss_and_grads(
             return_router_metrics=True,
             aux_loss_weight=aux_weight,
             loop_active=loop_active,
+            train_terms=True,
         )
 
     return jax.value_and_grad(loss_fn, has_aux=True)(params)

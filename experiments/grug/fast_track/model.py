@@ -1999,8 +1999,11 @@ class Transformer(eqx.Module):
         return_router_metrics: bool = False,
         aux_loss_weight: jax.Array | None = None,
         loop_active: bool | None = None,
+        train_terms: bool = False,
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
-        """``aux_loss_weight`` scales the early auxiliary LM loss (``aux_lm_layer``); it is skipped at 0."""
+        """``aux_loss_weight`` scales the early auxiliary LM loss (``aux_lm_layer``); it is skipped at 0.
+        ``train_terms`` adds the training-only objectives (MTP, AttnRes z-loss); evals leave it off so they
+        score the plain next-token loss."""
         hidden, router_metrics = self(token_ids, mask=mask, loop_active=loop_active)
         aux_hidden = router_metrics.pop(_AUX_HIDDEN, None)
         attn_res_z = router_metrics.pop(_ATTN_RES_Z, None)
@@ -2033,10 +2036,11 @@ class Transformer(eqx.Module):
                 aux_in,
             )
             loss = loss + aux_loss_weight.astype(loss_dtype) * aux_loss
-        if attn_res_z is not None:
+        if attn_res_z is not None and train_terms:
             loss = loss + self.config.attn_res_z_loss * attn_res_z.astype(loss_dtype)
         mtp_loss = None
-        if self.w_mtp is not None:
+        # The MTP term is a training objective only; evals score plain next-token loss.
+        if self.w_mtp is not None and train_terms:
             next_ids = jnp.pad(token_ids[:, 1:], ((0, 0), (0, 1)))
             next_embed = rms_norm(_embedding_gather(self.token_embed, next_ids).astype(hidden.dtype))
             mtp_hidden = hidden + jnp.einsum("bsd,de->bse", next_embed, self.w_mtp.astype(hidden.dtype))
