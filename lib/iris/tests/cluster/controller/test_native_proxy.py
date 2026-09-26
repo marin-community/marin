@@ -3,7 +3,10 @@
 
 import json
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from itertools import count
 from typing import cast
 from urllib.parse import unquote
 
@@ -169,6 +172,49 @@ def test_native_listener_preserves_public_routes_and_streams_to_endpoint(
         assert received_bodies == [payload]
     finally:
         threads.stop()
+
+
+def test_native_proxy_reuses_upstream_connections(make_controller) -> None:
+    connections = count()
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def setup(self) -> None:
+            super().setup()
+            self.connection_id = next(connections)
+
+        def do_GET(self) -> None:
+            body = json.dumps({"connection": self.connection_id}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, _format: str, *_args) -> None:
+            pass
+
+    upstream = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=upstream.serve_forever, daemon=True)
+    thread.start()
+    try:
+        address = f"http://127.0.0.1:{upstream.server_port}"
+        controller = make_controller(host="127.0.0.1", port=0, endpoints={_ENDPOINT_NAME: address})
+        controller.start()
+
+        with httpx.Client(base_url=controller.url, trust_env=False) as client:
+            responses = [client.get(f"/proxy/{_ENCODED_NAME}/") for _ in range(16)]
+            with ThreadPoolExecutor(max_workers=16) as executor:
+                burst = list(executor.map(client.get, [f"/proxy/{_ENCODED_NAME}/"] * 64))
+
+        assert all(response.status_code == 200 for response in responses)
+        assert all(response.status_code == 200 for response in burst)
+        assert len({response.json()["connection"] for response in responses}) == 1
+    finally:
+        upstream.shutdown()
+        upstream.server_close()
+        thread.join(timeout=5)
 
 
 def test_controller_begin_shutdown_rejects_endpoint_discovery(make_controller) -> None:
