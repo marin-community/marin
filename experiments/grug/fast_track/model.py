@@ -306,6 +306,12 @@ class GrugModelConfig:
     """GatedNorm after the embedding RMSNorm (else the RMSNorm alone)."""
     final_gated_norm: bool = True
     """GatedNorm after the final RMSNorm, before the lm_head (else the RMSNorm alone)."""
+    mtp_weight: float = 0.0
+    """Weight of a depth-1 multi-token-prediction loss (0 disables it): predict token t+2 from
+    ``h_t + W_mtp rms_norm(embed(token_{t+1}))`` through a parameter-free RMS norm and the shared lm_head."""
+    kda_decay_per_head: bool = False
+    """Gated-DeltaNet-style decay: one log-decay per head (broadcast over its channels) instead of KDA's
+    per-channel decay. ``W_a↑`` and ``dt_bias`` shrink to one column per head."""
     kda_beta_rank: int | None = None
     """KDA write strength through a low-rank MLP of this hidden width,
     ``beta = sigmoid(SiLU(x W_beta_down) W_beta_up)``, instead of the linear ``sigmoid(x W_beta)``."""
@@ -761,9 +767,12 @@ class KimiDeltaAttention(eqx.Module):
                 P(None, None) if cfg.kda_gate_per_head else P(_FSDP_AXES, "model"),
             ),
             w_a_down=reshard(_init_weight(k_ad, (d, r), std), P(_FSDP_AXES, None)),
-            w_a_up=reshard(_init_weight(k_au, (r, n * h), std), P(None, "model")),
+            w_a_up=reshard(
+                _init_weight(k_au, (r, n if cfg.kda_decay_per_head else n * h), std),
+                P(None, None) if cfg.kda_decay_per_head else P(None, "model"),
+            ),
             a_log=jnp.zeros((n,)),
-            dt_bias=_kda_dt_bias_init(cfg, k_dt, (n, h)),
+            dt_bias=_kda_dt_bias_init(cfg, k_dt, (n, 1) if cfg.kda_decay_per_head else (n, h)),
             w_beta=None if cfg.kda_beta_rank else reshard(_init_weight(k_b, (d, n), std), P(None, None)),
             w_beta_down=(
                 reshard(_init_weight(k_b, (d, cfg.kda_beta_rank), std), P(None, None)) if cfg.kda_beta_rank else None
@@ -807,9 +816,11 @@ class KimiDeltaAttention(eqx.Module):
         k = project(self.w_k, self.sconv_k, 1)
         v = project(self.w_v, self.sconv_v, 2)
         a = jnp.einsum("bsd,dr,re->bse", x, self.w_a_down, self.w_a_up)
-        a = rearrange(a, "... (n d) -> ... n d", d=head_dim).astype(jnp.float32)
+        a = rearrange(a, "... (n d) -> ... n d", d=1 if cfg.kda_decay_per_head else head_dim).astype(jnp.float32)
         scale = jnp.exp(self.a_log.astype(jnp.float32))[:, None]
         g = -KDA_MIN_LOG_DECAY * jax.nn.sigmoid(scale * (a + self.dt_bias.astype(jnp.float32)))
+        if cfg.kda_decay_per_head:
+            g = jnp.broadcast_to(g, (*g.shape[:-1], head_dim))
         if self.w_beta_down is not None and self.w_beta_up is not None:
             beta_hidden = jax.nn.silu(jnp.einsum("bsd,dr->bsr", x, self.w_beta_down))
             beta_logits = jnp.einsum("bsr,rn->bsn", beta_hidden, self.w_beta_up.astype(beta_hidden.dtype))
@@ -1535,6 +1546,8 @@ class Transformer(eqx.Module):
     embed2_norm: RMSNorm | None
     attn_res_query_bias: Float[Array, "G N"] | None
     """AttnRes logit bias per (gate, source); the last column is the running partial."""
+    w_mtp: Float[Array, "D D"] | None
+    """Next-token-embedding projection of the MTP head (``mtp_weight``)."""
     attn_res_query_loop: Float[Array, "P G D"] | None
     """AttnRes pseudo-queries of the extra loop passes (``loop_passes - 1`` of them), zero-init."""
     loop_inject_scale: Float[Array, " P"] | None
@@ -1602,6 +1615,14 @@ class Transformer(eqx.Module):
             attn_res_query_bias=(
                 jnp.zeros((2 * cfg.num_layers * cfg.loop_passes + 1, _attn_res_num_sources(cfg)), jnp.float32)
                 if cfg.attn_res_logit_bias
+                else None
+            ),
+            w_mtp=(
+                reshard(
+                    _init_weight(random.fold_in(key, 3), (cfg.hidden_dim, cfg.hidden_dim), cfg.initializer_std),
+                    P(_FSDP_AXES, None),
+                )
+                if cfg.mtp_weight > 0
                 else None
             ),
             attn_res_query_loop=(
@@ -1974,6 +1995,27 @@ class Transformer(eqx.Module):
             loss = loss + aux_loss_weight.astype(loss_dtype) * aux_loss
         if attn_res_z is not None:
             loss = loss + self.config.attn_res_z_loss * attn_res_z.astype(loss_dtype)
+        mtp_loss = None
+        if self.w_mtp is not None:
+            next_ids = jnp.pad(token_ids[:, 1:], ((0, 0), (0, 1)))
+            next_embed = rms_norm(_embedding_gather(self.token_embed, next_ids).astype(hidden.dtype))
+            mtp_hidden = hidden + jnp.einsum("bsd,de->bse", next_embed, self.w_mtp.astype(hidden.dtype))
+            mtp_hidden = reshard(rms_norm(mtp_hidden), _batch_spec())
+            labels2 = jnp.pad(token_ids[:, 2:], ((0, 0), (0, 2))).astype(jnp.int32)
+            # The last two positions have no t+2 target.
+            weight2 = loss_weight * (jnp.arange(token_ids.shape[1]) < token_ids.shape[1] - 2)[None, :].astype(loss_dtype)
+            mtp_loss = fused_linear_softmax_cross_entropy_loss(
+                mtp_hidden,
+                self.output_proj,
+                labels2,
+                weight=weight2,
+                reduction=reduction,
+                logsumexp_weight=logsumexp_weight,
+                dtype=loss_dtype,
+                implementation="xla_fast_bwd",
+                block_sizes=_CE_BLOCK_SIZES,
+            )
+            loss = loss + self.config.mtp_weight * mtp_loss
         if return_router_metrics:
             final_gate_metrics = {
                 f"train/attn_res/{name.removeprefix('attn_res_')}": router_metrics.pop(name)
@@ -1988,6 +2030,8 @@ class Transformer(eqx.Module):
             summarized_metrics["train/cross_entropy_loss"] = cross_entropy_loss
             if aux_loss is not None:
                 summarized_metrics["train/attn_res/aux_lm_loss"] = aux_loss
+            if mtp_loss is not None:
+                summarized_metrics["train/attn_res/mtp_loss"] = mtp_loss
             num_moe_layers = router_metrics["router_z_loss_per_layer"].shape[0]
             summarized_metrics["train/router/z_loss_logging_only"] = (
                 jnp.sum(router_metrics["router_z_loss_per_layer"]) / num_moe_layers
