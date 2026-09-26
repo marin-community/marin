@@ -6,6 +6,7 @@
 import logging
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field, replace
+from enum import StrEnum
 from typing import Protocol
 
 from fray.client import JobHandle
@@ -95,6 +96,11 @@ class EvalExecutor(Protocol):
     ) -> EvaluationOutcome: ...
 
 
+class EndpointRoute(StrEnum):
+    DIRECT = "direct"
+    CAPABILITY = "capability"
+
+
 @dataclass(frozen=True)
 class EvaluationIdentity:
     run_id: str
@@ -114,6 +120,7 @@ class LaunchProvenance:
 class Evaluation:
     identity: EvaluationIdentity
     executor: EvalExecutor
+    endpoint_route: EndpointRoute
     secret_env_keys: tuple[str, ...] = ()
 
 
@@ -337,10 +344,17 @@ def _run_one_evaluation(
         session.check_alive()
         if judge is not None:
             judge.check_alive()
+        if evaluation.endpoint_route is EndpointRoute.DIRECT:
+            execution_session = _local_endpoint_session(session)
+        else:
+            execution_session = session
         if session.metrics_url is not None:
             try:
+                metric_session = execution_session
+                if evaluation.endpoint_route is EndpointRoute.CAPABILITY:
+                    metric_session = _local_endpoint_session(session)
                 metric_window = InferenceMetricWindow.start(
-                    session,
+                    metric_session,
                     speculative=batch.model.serve.speculative is not None,
                 )
             except Exception:
@@ -352,7 +366,7 @@ def _run_one_evaluation(
         allowed_env_keys = (*EVAL_RUNTIME_ENV_KEYS, *evaluation.secret_env_keys)
         evaluation_env = {key: env_vars[key] for key in allowed_env_keys if key in env_vars}
         outcome = evaluation.executor(
-            session,
+            execution_session,
             evaluation.identity.output_dir,
             evaluation_env,
             judge=judge,
@@ -520,7 +534,7 @@ def _evaluate_with_hosted_judge(
                 session,
                 orchestrator_job_id=orchestrator_job_id,
                 env_vars=evaluation_env,
-                judge=_local_endpoint_session(judge),
+                judge=judge,
             )
     except RemoteInferenceStartupError as exc:
         _record_startup_failure(
@@ -556,7 +570,7 @@ def run_evaluation_batch(batch: EvaluationBatch) -> list[str]:
         with remote_inference(inference) as session:
             return _evaluate_with_hosted_judge(
                 batch,
-                _local_endpoint_session(session),
+                session,
                 orchestrator_job_id,
                 runtime_env,
                 evaluation_env,
