@@ -95,16 +95,16 @@ def _gpu_resources(nodes: int) -> ResourceConfig:
     )
 
 
-def _optimizer() -> AdamConfig:
+def _optimizer(learning_rate: float, warmup: int) -> AdamConfig:
     return AdamConfig(
-        learning_rate=5e-5,
+        learning_rate=learning_rate,
         beta1=0.9,
         beta2=0.95,
         epsilon=1e-8,
         max_grad_norm=1.0,
         weight_decay=0.0,
         min_lr_ratio=0.1,
-        warmup=0,
+        warmup=warmup,
         lr_schedule="cosine",
     )
 
@@ -154,8 +154,14 @@ def _staged_generation(version: str) -> dict[str, ArtifactStep[Artifact]]:
     return sources
 
 
-def build_trial(version: str) -> dict[str, ArtifactStep]:
-    """Bind baseline and trained evaluations to Levanter's Snowball SFT run."""
+def build_trial(version: str, learning_rate: float, warmup: int) -> dict[str, ArtifactStep]:
+    """Bind baseline and trained evaluations to Levanter's Snowball SFT run.
+
+    Args:
+        version: Version shared by the SFT checkpoint and both evaluations.
+        learning_rate: Peak Adam learning rate; 0 exercises the train/export/eval path without updates.
+        warmup: Linear warmup length in optimizer steps.
+    """
     curriculum_key = hashlib.sha256(json.dumps(sorted(CURRICULUM_IDS)).encode()).hexdigest()[:12]
     generated = _staged_generation(SOURCE_VERSION)
     conversion = hf_to_levanter(
@@ -183,7 +189,7 @@ def build_trial(version: str) -> dict[str, ArtifactStep]:
         model=ConvertedCheckpointModel(conversion=conversion, eos_token_ids=LLAMA3_CHAT_EOS_TOKEN_IDS),
         chat_template=MARIN_CHAT_TEMPLATE,
         datasets=datasets,
-        optimizer=_optimizer(),
+        optimizer=_optimizer(learning_rate, warmup),
         # Snowball shards parameters over expert x (data, context). Placing context across nodes shards
         # fp32 weights and Adam moments over all 32 GPUs instead of replicating them on each node.
         mesh=MeshConfig(
@@ -232,12 +238,14 @@ def build_trial(version: str) -> dict[str, ArtifactStep]:
 
 @click.command()
 @click.option("--stage", type=click.Choice(["generate", "baseline", "train", "after", "full"]), default="baseline")
+@click.option("--learning-rate", type=float, required=True, help="Peak Adam learning rate.")
+@click.option("--warmup", type=int, required=True, help="Linear warmup steps.")
 @build_options
-def main(stage: str) -> dict[str, ArtifactStep]:
+def main(stage: str, learning_rate: float, warmup: int) -> dict[str, ArtifactStep]:
     version = resolve_version("curriculum-math-sep20", None)
     if stage == "generate":
         return build_generation(version)
-    trial = build_trial(version)
+    trial = build_trial(version, learning_rate, warmup)
     if stage == "full":
         return {"baseline": trial["baseline"], "after": trial["after"]}
     return {stage: trial[stage]}
