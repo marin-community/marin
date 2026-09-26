@@ -585,6 +585,7 @@ WITH {_run_nodes_cte(bucket, clusters_sql, start_ms, end_ms)}, counter_samples A
            ) AS previous_value
     FROM "telemetry_v1.node_agent"
     WHERE name IN ({sql_values(_DCGM_COUNTERS)}) AND {dcgm_scope}
+      AND node_name IN (SELECT node FROM run_node WHERE run = {sql_string(run)})
 ), gpu AS (
     SELECT COALESCE(NULLIF(cluster, ''), 'marin') AS origin_cluster,
            {bucket} AS t,
