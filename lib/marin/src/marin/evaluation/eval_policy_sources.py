@@ -6,9 +6,12 @@
 from collections.abc import Mapping
 from types import MappingProxyType
 
+SEPTEMBER_16_VERSION = "eval-policy-2026-09-16-verified"
+SEPTEMBER_24_VERSION = "eval-policy-2026-09-24-verified"
+
 POLICY_SOURCE_DIGESTS: Mapping[str, Mapping[str, str]] = MappingProxyType(
     {
-        "eval-policy-2026-09-16-verified": MappingProxyType(
+        SEPTEMBER_16_VERSION: MappingProxyType(
             {
                 "math500": "sha256:622f156a16b9c1d73981265af8e24cadde2408c5ff406c27758ce2bac72c3e94",
                 "aime24": "sha256:fdd8a49682d1b0819f11e4a286618f794b32ebb23b988ef9bcd48c820693955a",
@@ -36,7 +39,7 @@ POLICY_SOURCE_DIGESTS: Mapping[str, Mapping[str, str]] = MappingProxyType(
                 "ds-1000-local": "sha256:925e0762285639d16764e98b8bbc4f6d834689fb41c766f998178830875d025c",
             }
         ),
-        "eval-policy-2026-09-24-verified": MappingProxyType(
+        SEPTEMBER_24_VERSION: MappingProxyType(
             {
                 "math500": "sha256:6b6af99263e464b14b0fc18eb7affbf629063e113b11b5cacb488843103cab42",
                 "humanevalplus": "sha256:324195d75222508fabdc0a7f1a9287c0b0674589fc229ef709898e424751743e",
