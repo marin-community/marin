@@ -52,7 +52,6 @@ SPEC = SFTSpec(
         compute_mapping={
             "batch": ["replica_dcn", "data", "expert"],
             "position": "context",
-            "vocab": "model",
         },
     ),
     seq_len=32768,
