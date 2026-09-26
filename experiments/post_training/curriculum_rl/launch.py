@@ -348,8 +348,9 @@ SNOWBALL_MUONH_TUNING = TrainerTuning(
     sampling_reversion_mass=2.0,
 )
 
-# Memory probe for the round-4 recipe: four policy nodes and two reference
-# nodes, with micro_train raised to eight.
+# The round-4 recipe uses four policy nodes and two reference nodes. MuonH
+# keeps FP32 master weights and momentum, so each policy rank trains one
+# sequence per microbatch.
 SNOWBALL_SMOKE_R4 = ScalePreset(
     label="snowball-smoke-r4",
     num_nodes=7,
@@ -365,7 +366,7 @@ SNOWBALL_SMOKE_R4 = ScalePreset(
         inference_engine_expert_parallel_size=GPUS_PER_NODE,
         train_batch_size=64,
         policy_mini_batch_size=64,
-        micro_train_batch_size_per_gpu=8,
+        micro_train_batch_size_per_gpu=1,
         n_samples_per_prompt=8,
     ),
     max_steps=4,
@@ -392,8 +393,7 @@ SNOWBALL_FULL_R4 = ScalePreset(
         inference_engine_expert_parallel_size=GPUS_PER_NODE,
         train_batch_size=64,
         policy_mini_batch_size=64,
-        # Eight 3072-token sequences per micro-batch fit in HBM at this window.
-        micro_train_batch_size_per_gpu=8,
+        micro_train_batch_size_per_gpu=1,
         n_samples_per_prompt=8,
     ),
     max_steps=120,
@@ -409,8 +409,7 @@ SNOWBALL_FULL_R4 = ScalePreset(
 # same 1024-token prompt budget, sized so frontier-grade reasoning can finish
 # instead of truncating (at 2048, 40-48% of rollouts hit the cap and the
 # hardest bins truncated near-totally). Activation memory tracks tokens per
-# micro batch, and 8x3072-token micro batches sit at the OOM edge on these
-# nodes; micro_train=2 keeps 2x9216 safely below that.
+# micro batch; these presets use one sequence per policy rank per microbatch.
 SNOWBALL_SMOKE_R5 = ScalePreset(
     label="snowball-smoke-r5",
     num_nodes=7,
@@ -426,7 +425,7 @@ SNOWBALL_SMOKE_R5 = ScalePreset(
         inference_engine_expert_parallel_size=GPUS_PER_NODE,
         train_batch_size=64,
         policy_mini_batch_size=64,
-        micro_train_batch_size_per_gpu=2,
+        micro_train_batch_size_per_gpu=1,
         n_samples_per_prompt=8,
     ),
     max_steps=4,
@@ -453,7 +452,7 @@ SNOWBALL_FULL_R5 = ScalePreset(
         inference_engine_expert_parallel_size=GPUS_PER_NODE,
         train_batch_size=64,
         policy_mini_batch_size=64,
-        micro_train_batch_size_per_gpu=2,
+        micro_train_batch_size_per_gpu=1,
         n_samples_per_prompt=8,
     ),
     max_steps=120,
