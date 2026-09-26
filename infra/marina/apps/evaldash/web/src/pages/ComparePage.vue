@@ -9,7 +9,7 @@
  */
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useApi } from '@/composables/useApi'
+import { apiGet, useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
 import { formatCoverage, formatDelta, formatInterval, formatScore } from '@/utils/formatting'
 import { scoreTint } from '@/utils/score'
@@ -46,6 +46,13 @@ const comparabilityWarning = computed(() => {
   const selected = (Array.isArray(raw) ? raw[0] : raw) || meta.value.default_cohort
   return cohortWarning(selected, meta.value)
 })
+
+async function goToModel(model: string) {
+  const raw = route.query.cohort
+  const selected = Array.isArray(raw) ? raw[0] : raw
+  const cohort = selected || (meta.value ?? await apiGet<Meta>('api/meta')).default_cohort
+  await router.push({ path: `/models/${encodeURIComponent(model)}`, query: { cohort } })
+}
 
 function fromQuery(): string[] {
   const raw = route.query.models
@@ -204,7 +211,7 @@ const chartSeries = computed(() =>
               <span class="font-mono text-text-muted tabular-nums w-5">{{ i + 1 }}</span>
               <button
                 class="font-mono text-[13px] font-semibold text-accent hover:underline"
-                @click="router.push(`/models/${encodeURIComponent(entry.model)}`)"
+                @click="goToModel(entry.model)"
               >
                 {{ entry.model }}
               </button>

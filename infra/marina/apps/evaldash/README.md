@@ -48,6 +48,10 @@ expanding each serve group to its evals, plus a flat filterable table), run deta
 interval and ungraded-item breakdown, metrics, version + description, live iris job/attempt status,
 live finelog logs, a per-sample browser, and group siblings), and status (per-prefix ingest probes).
 
+Model detail links record the selected cohort in `?cohort=`, including `all` and `unversioned`,
+so reopening a link restores the same runs and scores. Links without a cohort resolve to the
+dashboard's default cohort and add it to the URL.
+
 The per-sample browser shows how each prediction was graded (the grader method, headline metric,
 score, and verbatim grader detail) and highlights the picked-versus-gold answer. Agentic (Harbor)
 samples reference a step trajectory by URI; the browser lazy-loads it through the artifact endpoint
