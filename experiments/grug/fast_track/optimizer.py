@@ -112,6 +112,8 @@ _OKLS_FAMILIES: dict[str, re.Pattern] = {
     "attn_v": re.compile(r"(stacked_blocks|kda_blocks)\.stacked\.attn\.w_(v|uv)$"),
     "attn_o": re.compile(r"(stacked_blocks|kda_blocks)\.stacked\.attn\.w_o$"),
     "attn_other": re.compile(r"(stacked_blocks|kda_blocks)\.stacked\.attn\.w_(g|dkv)$"),
+    # The softmax (MLA) layers' q and k: KDA L2-normalizes q and k, so their scale is inert there.
+    "mla_qk": re.compile(r"stacked_blocks\.stacked\.attn\.w_(q|uk)$"),
 }
 
 
