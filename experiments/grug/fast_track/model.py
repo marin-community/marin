@@ -309,6 +309,17 @@ class GrugModelConfig:
     mtp_weight: float = 0.0
     """Weight of a depth-1 multi-token-prediction loss (0 disables it): predict token t+2 from
     ``h_t + W_mtp rms_norm(embed(token_{t+1}))`` through a parameter-free RMS norm and the shared lm_head."""
+    kda_push_buckets: int = 0
+    """'Push' decay for KDA (0 disables it): M delta-rule states, each decaying at its own learned,
+    reader-independent per-channel rate; the writing token splits its write across them
+    (``beta * pi_m``), so a write chooses its own half-life. The read sums the M states."""
+    kda_push_mode: str = "pure"
+    """``pure``: the buckets' static decays replace the reader decay. ``hybrid``: each bucket decays at
+    the reader decay plus its own static rate."""
+    kda_push_weights: str = "softmax"
+    """How a token splits its write over the buckets: ``softmax`` (sums to 1) or ``sigmoid`` (independent)."""
+    kda_push_decay_range: tuple[float, float] = (0.02, 0.5)
+    """Initial per-token log-decay magnitudes |g| of the slowest / fastest bucket (log-spaced between)."""
     kda_no_decay_layers: tuple[int, ...] = ()
     """KDA layers (0-indexed model layers) run without decay (g = 0: the state never forgets)."""
     kda_no_beta_layers: tuple[int, ...] = ()
@@ -745,6 +756,14 @@ def _kda_dt_bias_init(cfg: GrugModelConfig, key: PRNGKeyArray, shape: tuple[int,
     return jax.scipy.special.logit(decay / KDA_MIN_LOG_DECAY)
 
 
+def _kda_push_decay_init(cfg: GrugModelConfig, num_heads: int, head_dim: int) -> jax.Array:
+    """Push-bucket decay logits: bucket m's |g| is log-spaced across ``kda_push_decay_range`` (slow first)."""
+    lo, hi = cfg.kda_push_decay_range
+    mags = jnp.exp(jnp.linspace(math.log(lo), math.log(hi), cfg.kda_push_buckets))
+    logits = jax.scipy.special.logit(mags / KDA_MIN_LOG_DECAY)
+    return jnp.broadcast_to(logits[:, None, None], (cfg.kda_push_buckets, num_heads, head_dim)).astype(jnp.float32)
+
+
 def _kda_kernel(q, k, v, g, beta, segment_ids=None, *, save_chunk_states: bool):
     """KDA on the model layout ``(B, S, H, d)``: the fused Pallas kernels on GPU, else the XLA
     ``chunk_kda`` (heads-first layout)."""
@@ -789,6 +808,10 @@ class KimiDeltaAttention(eqx.Module):
     sconv_k: ShortConv
     sconv_v: ShortConv
     sconv_a: ShortConv | None
+    push_decay: Float[Array, "M N H"] | None
+    """Per-bucket, per-channel log-decay logits of the push buckets (``kda_push_buckets``)."""
+    w_push: Float[Array, "D NM"] | None
+    """Writer's bucket weights, zero-init (uniform split)."""
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -835,6 +858,8 @@ class KimiDeltaAttention(eqx.Module):
             sconv_k=ShortConv.init(n * h, cfg.sconv_kernel),
             sconv_v=ShortConv.init(n * h, cfg.sconv_kernel),
             sconv_a=ShortConv.init(r, cfg.sconv_kernel) if cfg.kda_decay_conv else None,
+            push_decay=_kda_push_decay_init(cfg, n, h) if cfg.kda_push_buckets else None,
+            w_push=(reshard(jnp.zeros((d, n * cfg.kda_push_buckets)), P(None, None)) if cfg.kda_push_buckets else None),
             cfg=cfg,
         )
 
@@ -897,7 +922,27 @@ class KimiDeltaAttention(eqx.Module):
             args += (reshard(jnp.broadcast_to(segment_ids, (b, s)), P(_BATCH_AXES, None)),)
             in_specs += (P(_BATCH_AXES, None),)
         # The Pallas custom VJPs are not vma-annotated, so skip the varying-axes check.
-        o = jax.shard_map(run, mesh=get_abstract_mesh(), in_specs=in_specs, out_specs=spec4, check_vma=False)(*args)
+        kernel = jax.shard_map(run, mesh=get_abstract_mesh(), in_specs=in_specs, out_specs=spec4, check_vma=False)
+        if self.push_decay is None or self.w_push is None:
+            o = kernel(*args)
+        else:
+            # Push decay: bucket m is a delta-rule state with its own static decay; the writer's pi_m scales
+            # its write strength into that bucket. The read sums the buckets.
+            num_buckets = cfg.kda_push_buckets
+            pi_logits = rearrange(
+                jnp.einsum("bsd,de->bse", x, self.w_push).astype(jnp.float32), "b s (n m) -> b s n m", m=num_buckets
+            )
+            pi = jax.nn.softmax(pi_logits, axis=-1) if cfg.kda_push_weights == "softmax" else jax.nn.sigmoid(pi_logits)
+            o = None
+            for m in range(num_buckets):
+                g_m = -KDA_MIN_LOG_DECAY * jax.nn.sigmoid(self.push_decay[m].astype(jnp.float32))
+                g_m = jnp.broadcast_to(g_m, g.shape)
+                if cfg.kda_push_mode == "hybrid":
+                    # Keep the per-token floor the chunked kernels assume (see KDA_CHUNK_SIZE).
+                    g_m = jnp.maximum(g_m + g, -KDA_MIN_LOG_DECAY)
+                bucket_args = (q, k, v, reshard(g_m, spec4), reshard(beta * pi[..., m], spec3), *args[5:])
+                o_m = kernel(*bucket_args)
+                o = o_m if o is None else o + o_m
         o = self.o_norm(o.astype(x.dtype))
         o = jnp.reshape(o, (b, s, cfg.num_heads * head_dim), out_sharding=P(_BATCH_AXES, None, "model"))
         gate = jax.nn.sigmoid(jnp.einsum("bsd,de->bse", x, self.w_g))
