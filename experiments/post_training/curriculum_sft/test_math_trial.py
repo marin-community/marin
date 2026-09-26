@@ -27,7 +27,7 @@ def avoid_hf_config_fetch(monkeypatch):
 
 
 def test_curriculum_sft_uses_solved_chat_and_builtin_hf_save():
-    trial = build_trial("2026.09.25", learning_rate=5e-5, warmup=0)
+    trial = build_trial("2026.09.25", learning_rate=5e-5, warmup=0, data="glm")
     trained = trial["train"]
     train_config = materialized_config(trained, "s3://test-prefix").train_config
 
@@ -52,7 +52,7 @@ def test_curriculum_sft_uses_solved_chat_and_builtin_hf_save():
 
 
 def test_curriculum_sft_reuses_existing_generation_with_short_lived_outputs():
-    trained = build_trial("2026.09.25.11", learning_rate=5e-5, warmup=0)["train"]
+    trained = build_trial("2026.09.25.11", learning_rate=5e-5, warmup=0, data="glm")["train"]
     source_prefix = "s3://marin-us-east-02a/tmp/ttl=30d/curriculum-math-20260924"
     output_prefix = "s3://marin-us-east-02a/tmp/ttl=7d/curriculum-math-20260924"
 

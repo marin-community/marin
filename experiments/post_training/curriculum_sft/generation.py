@@ -399,7 +399,7 @@ def parse_solution_batch(
                     if not correct:
                         reason = "wrong_answer"
                     else:
-                        chat_row = _reasoning_chat_row(request_id, problem["problem"], content, message["reasoning"])
+                        chat_row = reasoning_chat_row(request_id, problem["problem"], content, message["reasoning"])
                         if sequence_tokens(chat_row) > config.max_sequence_tokens:
                             reason = "too_long"
             selected = reason is None and selected_per_problem[problem["request_id"]] < config.solutions_per_problem
@@ -420,7 +420,7 @@ def parse_solution_batch(
     return solution_records, chat_rows
 
 
-def _reasoning_chat_row(request_id: str, problem: str, content: str, reasoning: str) -> dict[str, Any]:
+def reasoning_chat_row(request_id: str, problem: str, content: str, reasoning: str) -> dict[str, Any]:
     return {
         "id": request_id,
         "messages": [
@@ -429,6 +429,23 @@ def _reasoning_chat_row(request_id: str, problem: str, content: str, reasoning: 
         ],
         "chat_template_kwargs": {"enable_thinking": True},
     }
+
+
+def sequence_token_counter(tokenizer: str, revision: str) -> Callable[[dict[str, Any]], int]:
+    """Count a chat row's tokens as SFT renders it with the Marin chat template."""
+    hf_tokenizer = AutoTokenizer.from_pretrained(tokenizer, revision=revision)
+
+    def sequence_tokens(row: dict[str, Any]) -> int:
+        tokens = hf_tokenizer.apply_chat_template(
+            row["messages"],
+            chat_template=MARIN_CHAT_TEMPLATE,
+            tokenize=True,
+            return_dict=False,
+            **row["chat_template_kwargs"],
+        )
+        return len(tokens)
+
+    return sequence_tokens
 
 
 def _glm_client(relay_job: str) -> OpenAIBatchClient:
@@ -443,7 +460,7 @@ def _run_batch(client: OpenAIBatchClient, requests: list[dict[str, Any]], filena
     return batch_output.output
 
 
-def _write_table(output: StoragePath, filename: str, rows: list[dict[str, Any]], schema: pa.Schema) -> None:
+def write_table(output: StoragePath, filename: str, rows: list[dict[str, Any]], schema: pa.Schema) -> None:
     path = output / filename
     path.parent.mkdirs()
     write_parquet_file(rows, str(path), schema=schema)
@@ -459,7 +476,7 @@ def generate_problems(config: GenerateProblemsConfig) -> Artifact:
 
     output = StoragePath(config.output_path)
     output.mkdirs()
-    _write_table(output, PROBLEMS_FILENAME, records, PROBLEM_SCHEMA)
+    write_table(output, PROBLEMS_FILENAME, records, PROBLEM_SCHEMA)
     (output / RAW_RESPONSES_FILENAME).write_text(raw_output)
     accepted = sum(record["accepted"] for record in records)
     manifest = {
@@ -485,26 +502,15 @@ def solve_problems(config: SolveProblemsConfig) -> Artifact:
     raw_output = _run_batch(
         _glm_client(config.relay_job), requests, f"curriculum-solutions-{config.capability_id}.jsonl"
     )
-    tokenizer = AutoTokenizer.from_pretrained(config.tokenizer, revision=config.tokenizer_revision)
-
-    def sequence_tokens(row: dict[str, Any]) -> int:
-        tokens = tokenizer.apply_chat_template(
-            row["messages"],
-            chat_template=MARIN_CHAT_TEMPLATE,
-            tokenize=True,
-            return_dict=False,
-            **row["chat_template_kwargs"],
-        )
-        return len(tokens)
-
+    sequence_tokens = sequence_token_counter(config.tokenizer, config.tokenizer_revision)
     solution_records, chat_rows = parse_solution_batch(raw_output, config, problems, sequence_tokens)
     if not chat_rows:
         raise ValueError(f"no GLM solution matched a reference answer for {config.capability_id}")
 
     output = StoragePath(config.output_path)
     output.mkdirs()
-    _write_table(output, SOLUTIONS_FILENAME, solution_records, SOLUTION_SCHEMA)
-    _write_table(output, CHAT_FILENAME, chat_rows, REASONING_CHAT_SCHEMA)
+    write_table(output, SOLUTIONS_FILENAME, solution_records, SOLUTION_SCHEMA)
+    write_table(output, CHAT_FILENAME, chat_rows, REASONING_CHAT_SCHEMA)
     (output / RAW_RESPONSES_FILENAME).write_text(raw_output)
     solved = len({record["problem_request_id"] for record in solution_records if record["correct"]})
     manifest = {
