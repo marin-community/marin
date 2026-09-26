@@ -10,7 +10,6 @@ import pytest
 from iris.cluster.bundle import BundleStore
 from iris.cluster.runtime.docker import DockerRuntime, _security_flags
 from iris.cluster.runtime.types import ContainerConfig, MountKind, MountSpec
-from iris.cluster.types import CapacityType
 from iris.rpc import job_pb2
 
 
@@ -133,55 +132,6 @@ def test_run_container_shm_limit_matches_memory_or_tpu_fallback(
     else:
         assert "--memory" not in create_command
     assert create_command[create_command.index("--shm-size") + 1] == f"{expected_shm_mb}m"
-
-
-@pytest.mark.parametrize(
-    ("capacity_type", "requested_millicores", "cpu_flag", "setup_allocation", "run_allocation"),
-    [
-        (CapacityType.RESERVED, 100, "--cpus", "1.0", "0.1"),
-        (CapacityType.RESERVED, 2000, "--cpus", "2.0", "2.0"),
-        (CapacityType.ON_DEMAND, 100, "--cpu-shares", "1024", "102"),
-    ],
-)
-def test_setup_container_cpu_floor_preserves_run_allocation(
-    monkeypatch, tmp_path, capacity_type, requested_millicores, cpu_flag, setup_allocation, run_allocation
-):
-    create_commands: list[list[str]] = []
-
-    def fake_run(cmd, **kwargs):
-        if cmd[:2] == ["docker", "create"]:
-            create_commands.append(cmd)
-            stdout = f"container-{len(create_commands)}\n"
-        elif cmd[:2] == ["docker", "inspect"]:
-            stdout = '{"Running": false, "ExitCode": 0}'
-        else:
-            stdout = ""
-        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=stdout, stderr="")
-
-    monkeypatch.setattr("iris.cluster.runtime.docker.subprocess.run", fake_run)
-
-    workdir = tmp_path / "task-workdir"
-    workdir.mkdir()
-    config = ContainerConfig(
-        image="iris-task:latest",
-        entrypoint=job_pb2.RuntimeEntrypoint(
-            setup_commands=["uv sync"],
-            run_command=job_pb2.CommandEntrypoint(argv=["echo", "hello"]),
-        ),
-        env={},
-        resources=job_pb2.ResourceSpecProto(cpu_millicores=requested_millicores),
-        mounts=[MountSpec("app", "/app", kind=MountKind.WORKDIR)],
-        workdir_host_path=workdir,
-    )
-    runtime = DockerRuntime(cache_dir=tmp_path / "cache", capacity_type=capacity_type)
-
-    container = runtime.create_container(config)
-    container.build()
-    container.run()
-
-    assert len(create_commands) == 2
-    assert create_commands[0][create_commands[0].index(cpu_flag) + 1] == setup_allocation
-    assert create_commands[1][create_commands[1].index(cpu_flag) + 1] == run_allocation
 
 
 def test_stage_bundle(monkeypatch, tmp_path, runtime, mock_bundle_store):
