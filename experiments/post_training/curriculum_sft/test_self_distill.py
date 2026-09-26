@@ -1,10 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import ModelConfig
 
-from experiments.post_training.curriculum_sft.self_distill import SelfDistillConfig, grade_samples
+from experiments.post_training.curriculum_sft.self_distill import (
+    AnswerCheck,
+    SelfDistillConfig,
+    answer_matches,
+    grade_samples,
+)
 
 
 def _character_count(row: dict) -> int:
@@ -15,6 +21,7 @@ def test_grade_samples_keeps_first_closed_correct_sample_that_fits():
     config = SelfDistillConfig(
         problems_paths={},
         output_path="unused",
+        answer_check=AnswerCheck.MATH,
         model=ModelConfig(name="unused", location="unused"),
         accelerator=AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=8),
         samples_per_problem=6,
@@ -55,3 +62,18 @@ def test_grade_samples_keeps_first_closed_correct_sample_that_fits():
             "chat_template_kwargs": {"enable_thinking": True},
         }
     ]
+
+
+@pytest.mark.parametrize(
+    ("check", "reference", "candidate", "expected"),
+    [
+        (AnswerCheck.NUMERIC, "93.86", "93.9 days", True),
+        (AnswerCheck.NUMERIC, "1,250", "$1250", True),
+        (AnswerCheck.NUMERIC, "0.83", "0.80", False),
+        (AnswerCheck.NUMERIC, "12.5%", "12.4", True),
+        (AnswerCheck.CHOICE, "C", "(c)", True),
+        (AnswerCheck.CHOICE, "C", "B", False),
+    ],
+)
+def test_answer_matches_numeric_and_choice(check, reference, candidate, expected):
+    assert answer_matches(check, reference, candidate) is expected

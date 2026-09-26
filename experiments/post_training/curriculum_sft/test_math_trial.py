@@ -10,15 +10,8 @@ from marin.experiment.namespacing import user_owned_name
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.post_training.curriculum_sft.generation import CHAT_FILENAME
-from experiments.post_training.curriculum_sft.math_trial import (
-    CURRICULUM_IDS,
-    HF_MODEL,
-    HF_REVISION,
-    S3_TRIAL_PREFIX,
-    SOLUTIONS_VERSION,
-    STEPS,
-    build_trial,
-)
+from experiments.post_training.curriculum_sft.math_trial import CURRICULUM_IDS, SOLUTIONS_VERSION, build_math_trial
+from experiments.post_training.curriculum_sft.trial import HF_MODEL, HF_REVISION, S3_TRIAL_PREFIX, STEPS
 
 
 @pytest.fixture(autouse=True)
@@ -27,7 +20,7 @@ def avoid_hf_config_fetch(monkeypatch):
 
 
 def test_curriculum_sft_uses_solved_chat_and_builtin_hf_save():
-    trial = build_trial("2026.09.25", learning_rate=5e-5, warmup=0, data="glm")
+    trial = build_math_trial("2026.09.25", learning_rate=5e-5, warmup=0, data="glm")
     trained = trial["train"]
     train_config = materialized_config(trained, "s3://test-prefix").train_config
 
@@ -52,7 +45,7 @@ def test_curriculum_sft_uses_solved_chat_and_builtin_hf_save():
 
 
 def test_curriculum_sft_reuses_existing_generation_with_short_lived_outputs():
-    trained = build_trial("2026.09.25.11", learning_rate=5e-5, warmup=0, data="glm")["train"]
+    trained = build_math_trial("2026.09.25.11", learning_rate=5e-5, warmup=0, data="glm")["train"]
     source_prefix = "s3://marin-us-east-02a/tmp/ttl=30d/curriculum-math-20260924"
     output_prefix = "s3://marin-us-east-02a/tmp/ttl=7d/curriculum-math-20260924"
 
