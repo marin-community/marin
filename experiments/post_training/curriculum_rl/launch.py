@@ -90,9 +90,7 @@ class PolicySpec:
     tokenizer_revision: str
     model_relative_path: str
     enable_thinking: bool | None
-    # Host memory for every training and engine task. The Snowball export
-    # streams ~134GB of bf16 shards through host buffers on load (per node,
-    # policy and engine alike); 128GB of host RAM OOM-killed its first smoke.
+    # Host memory for every training and engine task.
     task_memory: str
     # Evaluation serving profile: GPUs and host memory per serving instance,
     # engine data parallelism, and model-specific vLLM flags and sampling
@@ -139,7 +137,7 @@ SNOWBALL_POLICY = PolicySpec(
     tokenizer_revision=MARIN_TOKENIZER_REVISION,
     model_relative_path="",
     enable_thinking=None,
-    task_memory="512GB",
+    task_memory="1800GB",
     serve_gpus=GPUS_PER_NODE,
     serve_memory="512g",
     serve_data_parallel_size=GPUS_PER_NODE,
@@ -586,6 +584,11 @@ data:
     }
     trainer["policy"]["megatron_config"] = megatron_config
     trainer["ref"] = {"megatron_config": megatron_config.copy()}
+    if policy is SNOWBALL_POLICY:
+        trainer["flash_attn"] = False
+        trainer["gradient_checkpointing"] = True
+        trainer["offload_optimizer_during_rollouts"] = True
+        trainer["policy"]["megatron_config"]["optimizer_checkpoint_sharding_type"] = "dp_reshardable"
     generator = config["generator"]
     data = config["data"]
     trainer["hf_hub_repo_id"] = None
@@ -720,6 +723,8 @@ def build_arms(
     policy: PolicySpec = QWEN_POLICY,
     version: str | None = None,
 ) -> dict[str, CurriculumArm]:
+    if (policy is SNOWBALL_POLICY) != scale.startswith("snowball-"):
+        raise ValueError(f"Scale {scale!r} is incompatible with policy {policy.label!r}")
     preset = SCALES[scale]
     pool = pool_step(POOL_ARTIFACT_NAME, version or resolve_version(POOL_ARTIFACT_NAME, None))
     if policy.adopted_model is not None:

@@ -27,7 +27,7 @@ from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, Constra
 from iris.rpc import job_pb2
 from marin.evaluation.evalchemy.client import build_command
 from marin.evaluation.evalchemy.config import load_evalchemy_config
-from marin.evaluation.evalchemy.runner import EvalchemyExecutor, EvalchemyRunConfig
+from marin.evaluation.evalchemy.runner import EvalchemyExecutor, EvalchemyRunConfig, _run_config_json
 from marin.evaluation.evalchemy.runtime import EVALCHEMY_REQUIRED_EXTRAS
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.harbor.driver_config import (
@@ -1069,38 +1069,20 @@ def test_resolve_eval_keys_validates_programmatic_selections() -> None:
         resolve_eval_keys("gsm8k-smoke,missing")
 
 
-def test_aime24_smoke_passes_debug_and_limit_to_evalchemy() -> None:
+def test_aime24_smoke_passes_debug_and_limit_to_evalchemy(monkeypatch) -> None:
     definition = EVALS["aime24-smoke"]
     assert isinstance(definition, EvalchemyDefinition)
     config = evalchemy_run_config(definition.name, load_evalchemy_config(definition.config_path))
     assert config.debug and config.max_eval_instances == 2
     assert definition.record_ref_for(config).evalchemy.debug
 
-    command = build_command(
-        {
-            "apply_chat_template": True,
-            "base_url": "http://localhost/v1",
-            "model_id": "iceball",
-            "num_concurrent": 1,
-            "max_gen_toks": 256,
-            "max_eval_instances": config.max_eval_instances,
-            "out_path": "memory://eval",
-            "extra_model_args": {},
-            "extra_gen_kwargs": {},
-            "debug": config.debug,
-        },
-        {
-            "name": "AIME24",
-            "generation": True,
-            "completion_only": False,
-            "num_fewshot": 0,
-            "dir": "aime24",
-            "unsafe_code": False,
-        },
-        "/tmp/out",
-        "/tmp/bin/python",
-        4032,
+    model = RunningModel(
+        endpoint=OpenAIEndpoint(base_url="http://localhost/v1", model="iceball"),
+        tokenizer="iceball",
     )
+    client_config = json.loads(_run_config_json(model, config, "memory://eval"))
+    monkeypatch.setattr("marin.evaluation.evalchemy.client.is_evalchemy_benchmark", lambda _name: True)
+    command = build_command(client_config, client_config["tasks"][0], "/tmp/out", "/tmp/bin/python", 4032)
     assert "--debug" in command
     assert command[command.index("--limit") + 1] == "2"
 
