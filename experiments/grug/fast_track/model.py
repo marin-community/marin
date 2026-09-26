@@ -375,6 +375,14 @@ class GrugModelConfig:
     attn_res_stream_source: bool = False
     """Every AttnRes gate also scores the plain sum of its visible sources (the standard residual
     stream) as one extra source, so "take the plain residual" is a selectable option (logged as ``_p``)."""
+    attn_res_source_delta: bool = False
+    """Full AttnRes over output deltas: source n becomes ``x_n - x_{n-1}`` for the gate's source sequence
+    ``[embedding, sublayer outputs...]`` (source 0 stays the embedding); logits are scored on the deltas."""
+    attn_res_head_sub: str = "none"
+    """Hierarchical multi-head AttnRes (needs ``attn_res_heads``): each gate keeps one full-width query that
+    sets every source's overall strength, and head h adds a zero-init sub-query correction. ``slice``: the
+    sub-query is D/H wide and dots only its channel slice; ``full``: it is D wide and dots the whole key.
+    Each head then mixes its own channel slice. ``none``: plain multi-head (the query split into slices)."""
     attn_res_temperature: bool = False
     """A learnable logit multiplier per gate (and per head with ``attn_res_heads``), init 1."""
     attn_res_head_norm: bool = False
@@ -1576,6 +1584,10 @@ def _attn_res_source_logits(
     The key norm is parameter-free: a learnable gain would be redundant with the query.
     """
     inv_rms = jax.lax.rsqrt(jnp.mean(jnp.square(source.astype(jnp.float32)), axis=-1) + eps)
+    if queries.ndim == 3 and queries.shape[-1] == source.shape[-1]:
+        # Hierarchical multi-head AttnRes: full-width per-head queries [G, H, D] against the whole key.
+        dots = jnp.einsum("bsd,ghd->gbsh", source, queries.astype(source.dtype), preferred_element_type=jnp.float32)
+        return dots * inv_rms[None, ..., None]
     if queries.ndim == 3:
         # Multi-head AttnRes: queries are [G, H, D/H]; one logit per (gate, head) on that channel slice.
         heads = queries.shape[1]
@@ -1627,6 +1639,7 @@ def _attn_res_mix(
     head_norm: bool = False,
     additive: bool = False,
     stream_source: bool = False,
+    source_delta: bool = False,
 ) -> tuple[Float[Array, "B S D"], jax.Array]:
     """One AttnRes gate: softmax over the completed blocks (+ the running partial) and their weighted sum.
 
@@ -1644,6 +1657,11 @@ def _attn_res_mix(
     """
     sources = list(blocks)
     logits = [_block_logit(bl, queries, gate_index) for bl in block_logits]
+    if source_delta:
+        # Output deltas: the precomputed block logits score raw sources, so score the deltas here.
+        assert partial is None and extras is None, "attn_res_source_delta runs in full AttnRes without extras"
+        sources = [sources[0]] + [cur - prev for prev, cur in itertools.pairwise(sources)]
+        logits = [_attn_res_source_logits(src, queries[gate_index][None], eps, head_norm)[0] for src in sources]
     if partial is not None:
         sources.append(partial)
         logits.append(_attn_res_source_logits(partial, queries[gate_index][None], eps, head_norm)[0])
@@ -1753,6 +1771,7 @@ def _attn_res_layer(
         "head_norm": cfg.attn_res_head_norm,
         "additive": cfg.attn_res_additive,
         "stream_source": cfg.attn_res_stream_source,
+        "source_delta": cfg.attn_res_source_delta,
     }
     h, z_attn, w_attn = _attn_res_mix(blocks, block_logits, partial, queries, 2 * layer_index, eps, logit_bias, **opts)
     attn_branch = type(layer).attn_branch
@@ -1802,6 +1821,7 @@ def _attn_res_layer_full(diff_args, mask, token_ids, use_long, layer_index, eps,
         "head_norm": cfg.attn_res_head_norm,
         "additive": cfg.attn_res_additive,
         "stream_source": cfg.attn_res_stream_source,
+        "source_delta": cfg.attn_res_source_delta,
     }
     sum_components = cfg.attn_res_sum_inputs
     h, z_attn, w_attn = _attn_res_mix(blocks, block_logits, None, queries, 2 * layer_index, eps, logit_bias, **opts)
@@ -1969,6 +1989,8 @@ class Transformer(eqx.Module):
     """Pull-AttnRes source keys (``attn_res_pull``); the last row is the partial's."""
     attn_res_query_embed: Float[Array, "G D"] | None
     """Per-gate pull projection for the embedding logit (``attn_res_pull_embed``)."""
+    attn_res_query_sub: Float[Array, "G H S"] | None
+    """Hierarchical multi-head AttnRes sub-queries (``attn_res_head_sub``), zero-init, in query-stack order."""
     attn_res_query_temp: Float[Array, "G H"] | None
     """Per-gate (and per-head) logit multiplier (``attn_res_temperature``), init 1."""
     attn_res_query_dual: Float[Array, "G D"] | None
@@ -2055,6 +2077,18 @@ class Transformer(eqx.Module):
             attn_res_query_embed=(
                 jnp.zeros((2 * cfg.num_layers * cfg.loop_passes + 1, cfg.hidden_dim), jnp.float32)
                 if cfg.attn_res_pull_embed
+                else None
+            ),
+            attn_res_query_sub=(
+                jnp.zeros(
+                    (
+                        _attn_res_num_gates(cfg) + cfg.num_layers * int(cfg.attn_res_v_gate),
+                        cfg.attn_res_heads,
+                        cfg.hidden_dim if cfg.attn_res_head_sub == "full" else cfg.hidden_dim // cfg.attn_res_heads,
+                    ),
+                    jnp.float32,
+                )
+                if cfg.attn_res_head_sub != "none"
                 else None
             ),
             attn_res_query_temp=(
@@ -2281,8 +2315,18 @@ class Transformer(eqx.Module):
                 raise ValueError("attn_res_heads must divide hidden_dim")
             if cfg.attn_res_pull or cfg.attn_res_pull_embed:
                 raise ValueError("attn_res_heads > 1 is not implemented for pull AttnRes")
-            queries = queries_flat.reshape(queries_flat.shape[0], cfg.attn_res_heads, -1)
+            if cfg.attn_res_head_sub == "none":
+                queries = queries_flat.reshape(queries_flat.shape[0], cfg.attn_res_heads, -1)
+            else:
+                assert self.attn_res_query_sub is not None
+                queries = queries_flat[:, None, :] + _full_width_sub_queries(self.attn_res_query_sub, cfg)
         logit_bias = _gate_extras(self, queries.shape[0])
+        if cfg.attn_res_head_sub not in ("none", "slice", "full"):
+            raise ValueError(f"attn_res_head_sub must be none, slice or full, got {cfg.attn_res_head_sub!r}")
+        if cfg.attn_res_head_sub != "none" and (cfg.attn_res_heads < 2 or cfg.attn_res_head_norm):
+            raise ValueError("attn_res_head_sub needs attn_res_heads > 1 and no attn_res_head_norm")
+        if cfg.attn_res_source_delta and not cfg.attn_res_full:
+            raise ValueError("attn_res_source_delta needs attn_res_full")
         if cfg.attn_res_final_mode not in ("attn", "uniform", "sum"):
             raise ValueError(f"attn_res_final_mode must be attn, uniform or sum, got {cfg.attn_res_final_mode!r}")
         if cfg.attn_res_blend not in ("none", "static", "dynamic"):
@@ -2605,6 +2649,16 @@ def _gate_extras(model: "Transformer", num_gates: int) -> dict[str, jax.Array | 
         "temperature": _temperature_rows(model),
     }
     return extras if any(v is not None for v in extras.values()) else None
+
+
+def _full_width_sub_queries(sub: jax.Array, cfg: GrugModelConfig) -> jax.Array:
+    """Per-head sub-query corrections as full-width [G, H, D] rows: a ``slice`` sub-query [G, H, D/H]
+    lands in its own channel slice (zeros elsewhere); a ``full`` one is already [G, H, D]."""
+    if cfg.attn_res_head_sub == "full":
+        return sub
+    heads = cfg.attn_res_heads
+    placed = jnp.eye(heads, dtype=sub.dtype)[None, :, :, None] * sub[:, :, None, :]
+    return placed.reshape(sub.shape[0], heads, heads * sub.shape[-1])
 
 
 def _temperature_rows(model: "Transformer") -> jax.Array | None:
