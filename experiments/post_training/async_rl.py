@@ -39,7 +39,6 @@ from marin.execution.lazy import ArtifactStep
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import (
-    _STRATEGY_FOR_PROFILE,
     IRIS_HUB_CLUSTER_CONFIG,
     ArtifactDataSource,
     ArtifactHfModel,
@@ -134,15 +133,10 @@ class TrainingRecipe:
     max_grad_norm: float
     # Megatron parallelism for the policy and the reference model.
     megatron: MegatronGeometry
-    # Host memory per training task. Megatron checkpoint staging needs 1800GB; the policy spec's
-    # 512GB is sized for an FSDP load.
+    # Host memory per training task; Snowball checkpoint staging needs 1800GB.
     host_memory: str
     # vLLM engine settings the model needs beyond the ones the launcher writes itself.
     engine_init_kwargs: Mapping[str, object]
-
-    @property
-    def strategy(self) -> str:
-        return _STRATEGY_FOR_PROFILE[self.profile]
 
 
 # Snowball 67B-A2B on the 40-GPU topology: four policy nodes with the reference colocated,
@@ -380,7 +374,7 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
         "max_turns": 1,
     }
     config["trainer"] = {
-        "strategy": recipe.strategy,
+        "strategy": "megatron",
         # Keep Transformer Engine's attention backend; true forces the flash-attn package
         # (NVTE_FUSED_ATTN=0).
         "flash_attn": False,

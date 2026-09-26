@@ -142,7 +142,7 @@ terminal_bench:
     enabled: false
 
 trainer:
-  strategy: fsdp2
+  strategy: megatron
   flash_attn: true
   use_sample_packing: false
   algorithm:
@@ -152,7 +152,6 @@ trainer:
   max_steps: {MAX_STEPS}
   update_epochs_per_batch: 1
   eval_batch_size: {plan.train_batch_size}
-  micro_forward_batch_size_per_gpu: 8
   eval_before_train: false
   eval_interval: -1
   ckpt_interval: {MAX_STEPS}
@@ -165,9 +164,19 @@ trainer:
     optimizer_config:
       lr: 2.0e-6
       max_grad_norm: 1.0
-    fsdp_config:
-      cpu_offload: false
-      reshard_after_forward: true
+    megatron_config:
+      tensor_model_parallel_size: 1
+      pipeline_model_parallel_size: 1
+      context_parallel_size: 1
+      expert_model_parallel_size: 1
+      expert_tensor_parallel_size: 1
+  ref:
+    megatron_config:
+      tensor_model_parallel_size: 1
+      pipeline_model_parallel_size: 1
+      context_parallel_size: 1
+      expert_model_parallel_size: 1
+      expert_tensor_parallel_size: 1
 generator:
   backend: vllm
   model_dtype: bfloat16
@@ -202,7 +211,7 @@ def smoke_step(release: ArtifactStep) -> ArtifactStep[SkyRLRun]:
             name=name,
             version=resolve_version(name, None),
             config_yaml=rl_config_yaml(ROLE_PLAN),
-            runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.FSDP),
+            runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
             model=ArtifactHfModel(
                 step=model_step(MODEL_VERSION),
                 tokenizer_uri=QWEN3_MODEL,
@@ -235,7 +244,7 @@ def smoke_step(release: ArtifactStep) -> ArtifactStep[SkyRLRun]:
             cluster=CLUSTER,
             cluster_config=f"lib/iris/config/{CLUSTER}.yaml",
             cpu=16,
-            memory="128GB",
+            memory="512GB",
             disk="1TB",
             priority="interactive",
             max_retries=1,

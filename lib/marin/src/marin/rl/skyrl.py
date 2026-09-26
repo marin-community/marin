@@ -51,7 +51,6 @@ def skyrl_temporary_run_path(output_path: str, *, ttl_days: int) -> str:
 class SkyRLRuntimeProfile(StrEnum):
     """Frozen upstream dependency set for a SkyRL training strategy."""
 
-    FSDP = "fsdp"
     MEGATRON = "megatron"
 
 
@@ -415,13 +414,8 @@ class SkyRLOutputPaths:
     terminal_manifest_uri: str
 
 
-# The trainer strategy each runtime profile installs the closure for. A profile decides which
-# dependencies reach the pod; `trainer.strategy` decides which backend the trainer then asks for.
-# Nothing downstream reconciles them, so a mismatch installs one backend and runs another.
-_STRATEGY_FOR_PROFILE = {
-    SkyRLRuntimeProfile.FSDP: "fsdp2",
-    SkyRLRuntimeProfile.MEGATRON: "megatron",
-}
+# The runtime profile and trainer strategy must select the same installed backend.
+_MEGATRON_STRATEGY = "megatron"
 
 _MISSING_CONFIG_VALUE = object()
 
@@ -457,6 +451,7 @@ def _role_plan_config_values(role_plan: SkyRLRolePlan) -> dict[str, object]:
         "trainer.train_batch_size": role_plan.train_batch_size,
         "trainer.policy_mini_batch_size": role_plan.policy_mini_batch_size,
         "trainer.micro_train_batch_size_per_gpu": role_plan.micro_train_batch_size_per_gpu,
+        "trainer.micro_forward_batch_size_per_gpu": role_plan.micro_train_batch_size_per_gpu,
         "generator.num_inference_engines": role_plan.num_inference_engines,
         "generator.inference_engine_tensor_parallel_size": role_plan.inference_engine_tensor_parallel_size,
         "generator.inference_engine_pipeline_parallel_size": role_plan.inference_engine_pipeline_parallel_size,
@@ -514,10 +509,9 @@ def _effective_strategy(config: dict[str, object]) -> str | None:
 
 def _validate_runtime_strategy(config: dict[str, object], runtime: SkyRLRuntime) -> None:
     strategy = _effective_strategy(config)
-    expected = _STRATEGY_FOR_PROFILE.get(runtime.profile)
-    if strategy is not None and expected is not None and strategy != expected:
+    if strategy is not None and strategy != _MEGATRON_STRATEGY:
         raise ValueError(
-            f"runtime profile {runtime.profile.value!r} installs the {expected!r} backend, "
+            f"runtime profile {runtime.profile.value!r} installs the {_MEGATRON_STRATEGY!r} backend, "
             f"but config_yaml asks for trainer.strategy={strategy!r}"
         )
 
@@ -719,6 +713,13 @@ def _record_skyrl_run(config: SkyRLRunConfig, status: str, response: _SkyRLLaunc
     )
 
 
+def _launch_data_source(source: ResolvedDataSource) -> dict:
+    value = asdict(source)
+    if isinstance(source, ResolvedTaskTroveDataSource):
+        value["selection"]["tag_match"] = source.selection.tag_match.value
+    return value
+
+
 def _launch_config_yaml(
     spec: SkyRLSpec,
     execution: IrisSkyRLExecution,
@@ -806,8 +807,8 @@ def _launch_config_yaml(
                 if _declared_config_value(recipe, "data.kind") is not _MISSING_CONFIG_VALUE
                 else "tasks"
             ),
-            "train_data": [asdict(source) for source in train_data],
-            "validation_data": [asdict(source) for source in validation_data],
+            "train_data": [_launch_data_source(source) for source in train_data],
+            "validation_data": [_launch_data_source(source) for source in validation_data],
         },
         "skyrl": recipe,
     }

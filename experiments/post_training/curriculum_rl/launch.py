@@ -218,7 +218,6 @@ class ScalePreset:
     ckpt_interval: int
     request_window_tokens: int
     max_new_tokens: int
-    micro_forward_batch_size_per_gpu: int
     evals: str
     trainer_tuning: TrainerTuning | None = None
 
@@ -245,7 +244,6 @@ SMOKE = ScalePreset(
     ckpt_interval=2,
     request_window_tokens=2048,
     max_new_tokens=1024,
-    micro_forward_batch_size_per_gpu=8,
     evals="gsm8k-smoke",
 )
 
@@ -274,12 +272,11 @@ FULL = ScalePreset(
     ckpt_interval=10,
     request_window_tokens=2048,
     max_new_tokens=1024,
-    micro_forward_batch_size_per_gpu=16,
     evals="math500,gsm8k-0shot",
 )
 
-# The 67B-A2B smoke: four FSDP2 policy nodes hold the sharded parameters and
-# AdamW state (~34GB/GPU), one node-sized expert-parallel engine generates.
+# The 67B-A2B smoke: four Megatron policy nodes hold the sharded model and
+# optimizer state; one node-sized expert-parallel engine generates.
 # NCCL rank-drop failures on this stack appeared only at 32k contexts; this
 # preset stays at the 2k window.
 SNOWBALL_SMOKE = ScalePreset(
@@ -304,11 +301,10 @@ SNOWBALL_SMOKE = ScalePreset(
     ckpt_interval=4,
     request_window_tokens=2048,
     max_new_tokens=1024,
-    micro_forward_batch_size_per_gpu=2,
     evals="gsm8k-smoke",
 )
 
-# The 67B-A2B measurement point: 4 FSDP2 policy nodes + 4 expert-parallel
+# The 67B-A2B measurement point: 4 Megatron policy nodes + 4 expert-parallel
 # engine nodes. The smoke averaged 884 generated tokens against a 1024 cap,
 # so the full runs widen the window to 3072 with a 2048 response budget
 # (the 1024-token prompt budget still admits every pool row). 60 steps at
@@ -327,9 +323,7 @@ SNOWBALL_FULL = ScalePreset(
         inference_engine_expert_parallel_size=GPUS_PER_NODE,
         train_batch_size=128,
         policy_mini_batch_size=64,
-        # At micro=1 the FSDP update ran 32 sequential micro-steps, each
-        # re-gathering the full 134GB of shards; policy_train was ~1660s of a
-        # ~1770s step. micro=4 quarters the all-gather traffic per step.
+        # Four sequences per data-parallel rank per micro-step.
         micro_train_batch_size_per_gpu=4,
         n_samples_per_prompt=8,
     ),
@@ -338,7 +332,6 @@ SNOWBALL_FULL = ScalePreset(
     ckpt_interval=10,
     request_window_tokens=3072,
     max_new_tokens=2048,
-    micro_forward_batch_size_per_gpu=2,
     evals="math500,gsm8k-0shot",
 )
 
@@ -356,9 +349,8 @@ SNOWBALL_MUONH_TUNING = TrainerTuning(
     sampling_reversion_mass=2.0,
 )
 
-# Memory probe for the round-4 recipe: same 4-node FSDP sharding as the full
-# preset so per-GPU headroom is representative, micro_train raised to 8 to
-# halve the all-gather passes if MuonH's FP32 master weights leave room.
+# Memory probe for the round-4 recipe: the same four policy nodes as the full
+# preset, with micro_train raised to eight.
 SNOWBALL_SMOKE_R4 = ScalePreset(
     label="snowball-smoke-r4",
     num_nodes=5,
@@ -381,7 +373,6 @@ SNOWBALL_SMOKE_R4 = ScalePreset(
     ckpt_interval=4,
     request_window_tokens=3072,
     max_new_tokens=2048,
-    micro_forward_batch_size_per_gpu=2,
     evals="gsm8k-smoke",
     trainer_tuning=SNOWBALL_MUONH_TUNING,
 )
@@ -400,8 +391,7 @@ SNOWBALL_FULL_R4 = ScalePreset(
         inference_engine_expert_parallel_size=GPUS_PER_NODE,
         train_batch_size=64,
         policy_mini_batch_size=64,
-        # Eight 3072-token sequences per micro-batch fit in HBM at this window;
-        # fewer, larger micro-batches keep the per-step all-gather count low.
+        # Eight 3072-token sequences per micro-batch fit in HBM at this window.
         micro_train_batch_size_per_gpu=8,
         n_samples_per_prompt=8,
     ),
@@ -410,7 +400,6 @@ SNOWBALL_FULL_R4 = ScalePreset(
     ckpt_interval=10,
     request_window_tokens=3072,
     max_new_tokens=2048,
-    micro_forward_batch_size_per_gpu=2,
     evals="math500,gsm8k-0shot",
     trainer_tuning=SNOWBALL_MUONH_TUNING,
 )
@@ -443,7 +432,6 @@ SNOWBALL_SMOKE_R5 = ScalePreset(
     ckpt_interval=4,
     request_window_tokens=9216,
     max_new_tokens=8192,
-    micro_forward_batch_size_per_gpu=2,
     evals="gsm8k-smoke",
     trainer_tuning=SNOWBALL_MUONH_TUNING,
 )
@@ -470,7 +458,6 @@ SNOWBALL_FULL_R5 = ScalePreset(
     ckpt_interval=10,
     request_window_tokens=9216,
     max_new_tokens=8192,
-    micro_forward_batch_size_per_gpu=2,
     evals="math500,gsm8k-0shot",
     trainer_tuning=SNOWBALL_MUONH_TUNING,
 )
@@ -550,7 +537,7 @@ environment:
   env_class: gsm8k
 
 trainer:
-  strategy: fsdp2
+  strategy: megatron
   flash_attn: true
   use_sample_packing: false
   algorithm:
@@ -560,7 +547,6 @@ trainer:
   max_steps: {preset.max_steps}
   update_epochs_per_batch: 1
   eval_batch_size: 256
-  micro_forward_batch_size_per_gpu: {preset.micro_forward_batch_size_per_gpu}
   eval_before_train: {str(preset.eval_interval > 0).lower()}
   eval_interval: {preset.eval_interval}
   ckpt_interval: {preset.ckpt_interval}
@@ -571,9 +557,6 @@ trainer:
     optimizer_config:
       lr: 2.0e-6
       max_grad_norm: 1.0
-    fsdp_config:
-      cpu_offload: false
-      reshard_after_forward: true
 generator:
   backend: vllm
   model_dtype: bfloat16
@@ -595,6 +578,15 @@ data:
 """
     )
     trainer = config["trainer"]
+    megatron_config = {
+        "tensor_model_parallel_size": 1,
+        "pipeline_model_parallel_size": 2 if policy is SNOWBALL_POLICY else 1,
+        "context_parallel_size": 1,
+        "expert_model_parallel_size": GPUS_PER_NODE if policy is SNOWBALL_POLICY else 1,
+        "expert_tensor_parallel_size": 1,
+    }
+    trainer["policy"]["megatron_config"] = megatron_config
+    trainer["ref"] = {"megatron_config": megatron_config.copy()}
     generator = config["generator"]
     data = config["data"]
     trainer["hf_hub_repo_id"] = None
@@ -668,7 +660,7 @@ def build_arm(
             name=user_owned_name(rl_base_name),
             version=version or resolve_version(rl_base_name, None),
             config_yaml=rl_config_yaml(preset, spec, policy),
-            runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.FSDP),
+            runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
             model=ArtifactHfModel(
                 step=model,
                 tokenizer_uri=policy.tokenizer_uri,

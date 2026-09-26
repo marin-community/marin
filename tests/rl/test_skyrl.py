@@ -112,7 +112,7 @@ def _spec() -> SkyRLSpec:
         name="users/tester/tests/iceball-rl",
         version="2026.08.01",
         config_yaml=_config_yaml(),
-        runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.FSDP),
+        runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
         model=ArtifactHfModel(
             step=_model_step(),
             tokenizer_uri="Qwen/Qwen3-0.6B-Base",
@@ -191,6 +191,7 @@ def test_skyrl_launch_reserves_capacity_for_config_derived_draft_trainer() -> No
     launch = yaml.safe_load(launch_config.launch_config_yaml)
 
     assert launch["iris"]["allocation"]["num_nodes"] == 6
+    assert launch["skyrl"]["trainer"]["micro_forward_batch_size_per_gpu"] == plan.micro_train_batch_size_per_gpu
     assert launch["skyrl"]["generator"]["speculative_decoding"]["training"] == {}
     assert launch["run"]["export_hf"] is False
     assert launch_config.draft_checkpoint_root == "<temporary_output_path>/checkpoints/drafts"
@@ -265,13 +266,9 @@ def test_skyrl_step_fingerprint_includes_runtime_identity_and_excludes_placement
         spec,
         dataclasses.replace(_execution(), cpu=64, memory="400GB", disk="2TB"),
     )
-    changed_profile = skyrl_step(
-        dataclasses.replace(
-            spec,
-            runtime=dataclasses.replace(spec.runtime, profile=SkyRLRuntimeProfile.MEGATRON),
-        ),
-        _execution(),
-    )
+    repinned_runtime = dataclasses.replace(spec.runtime)
+    object.__setattr__(repinned_runtime, "commit", "a" * 40)
+    changed_runtime = skyrl_step(dataclasses.replace(spec, runtime=repinned_runtime), _execution())
     changed_plan = dataclasses.replace(spec.topology.role_plan, train_batch_size=32)
     changed_roles = skyrl_step(
         dataclasses.replace(
@@ -284,7 +281,7 @@ def test_skyrl_step_fingerprint_includes_runtime_identity_and_excludes_placement
 
     assert base.fingerprint() == moved.fingerprint()
     assert base.fingerprint() == resized.fingerprint()
-    assert base.fingerprint() != changed_profile.fingerprint()
+    assert base.fingerprint() != changed_runtime.fingerprint()
     assert base.fingerprint() != changed_roles.fingerprint()
 
 
@@ -501,6 +498,24 @@ def test_tasktrove_selection_rejects_ambiguous_inputs(selection: Callable[[], Ta
         selection()
 
 
+def test_tasktrove_launch_serializes_selection_for_runtime() -> None:
+    release = ArtifactStep.adopt("tests/tasktrove-release", "2026.08.01", "s3://test/tasktrove", kind=Artifact)
+    source = TaskTroveDataSource(release, TaskTroveSelection(sources=("source-a",), tags=("bash",)))
+    step = skyrl_step(dataclasses.replace(_spec(), train_data=(source,)), _execution())
+
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+    launch = yaml.safe_load(config.launch_config_yaml)
+
+    assert launch["inputs"]["train_data"][0]["selection"] == {
+        "sources": ["source-a"],
+        "tags": ["bash"],
+        "modes": [],
+        "tag_match": "all",
+        "limit": None,
+        "seed": 0,
+    }
+
+
 def test_launcher_failure_reports_the_launcher_stderr(monkeypatch: pytest.MonkeyPatch) -> None:
     """A launcher that dies before printing its terminal response must still say why."""
 
@@ -579,8 +594,7 @@ def test_a_runtime_profile_that_contradicts_the_config_strategy_is_refused() -> 
     with pytest.raises(ValueError, match="megatron"):
         dataclasses.replace(
             spec,
-            config_yaml=_config_yaml(strategy="megatron"),
-            runtime=dataclasses.replace(spec.runtime, profile=SkyRLRuntimeProfile.FSDP),
+            config_yaml=_config_yaml(strategy="fsdp2"),
         )
 
 

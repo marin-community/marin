@@ -41,7 +41,7 @@ def test_fineweb_slice_streams_only_the_declared_prefix(tmp_path: Path, monkeypa
     assert written == [{"text": "document 0"}, {"text": "document 1"}, {"text": "document 2"}]
 
 
-def test_workflow_is_one_dependency_chain_through_both_evaluators(monkeypatch) -> None:
+def test_workflow_is_one_dependency_chain_through_both_evaluations(monkeypatch) -> None:
     monkeypatch.setattr("marin.experiment.namespacing.username_segment", lambda: "alice")
     workflow = iceball_micro.build_workflow(version="2026.08.01")
 
@@ -49,18 +49,23 @@ def test_workflow_is_one_dependency_chain_through_both_evaluators(monkeypatch) -
     assert workflow.sft in workflow.rl.deps
     assert workflow.gsm8k in workflow.rl.deps
     assert workflow.evaluation.deps == (workflow.rl,)
-    assert workflow.evaluation.name.endswith("gsm8k-smoke,aime-smoke")
+    assert workflow.evaluation.name.endswith("gsm8k-smoke,aime24-smoke")
     assert workflow.rl.name == f"users/alice/checkpoints/{iceball_micro.ICEBALL_MODEL_NAME}-rl"
     rl_config = workflow.rl.build_config(StepContext.for_fingerprint(workflow.rl.runtime_args, workflow.rl.deps))
     launch = yaml.safe_load(rl_config.launch_config_yaml)
     assert launch["artifacts"]["resume_checkpoint_count"] == 1
     assert launch["iris"]["allocation"]["num_nodes"] == 2
+    assert launch["skyrl"]["trainer"]["strategy"] == "megatron"
+    assert (
+        launch["skyrl"]["trainer"]["micro_forward_batch_size_per_gpu"]
+        == launch["skyrl"]["trainer"]["micro_train_batch_size_per_gpu"]
+    )
     assert launch["skyrl"]["trainer"]["placement"] == {
         "colocate_all": False,
         "colocate_policy_ref": True,
         "policy_num_nodes": 1,
-        "policy_num_gpus_per_node": 4,
+        "policy_num_gpus_per_node": 8,
         "ref_num_nodes": 1,
-        "ref_num_gpus_per_node": 4,
+        "ref_num_gpus_per_node": 8,
     }
-    assert launch["skyrl"]["generator"]["num_inference_engines"] == 4
+    assert launch["skyrl"]["generator"]["num_inference_engines"] == 8

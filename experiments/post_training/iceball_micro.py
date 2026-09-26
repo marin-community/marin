@@ -5,7 +5,7 @@
 
 The graph trains the Qwen3-0.6B architecture from scratch, applies a short chat SFT,
 runs GSM8K GRPO through the pinned MarinSkyRL root package, then serves the
-terminal policy once for Evalchemy GSM8K and Harbor AIME smoke evaluations.
+terminal policy once for Evalchemy GSM8K and AIME24 smoke evaluations.
 
 Print or run the complete graph from the same entry point::
 
@@ -17,7 +17,7 @@ Programmatic callers use :func:`build_workflow` and select any stage handle.
 
 When the selected stage includes RL, ``--run`` validates the complete graph and submits a CPU
 coordinator to Iris. Earlier stages can be planned from this entry point but do not define an RL
-submission route. Set ``DAYTONA_API_KEY`` on the submit host when the selected stages include Harbor.
+submission route.
 """
 
 from __future__ import annotations
@@ -84,11 +84,12 @@ GSM8K_DATASET = "openai/gsm8k"
 GSM8K_REVISION = "e53f048"
 GSM8K_TRAIN_ROWS = 1024
 GSM8K_VALIDATION_ROWS = 128
-ICEBALL_EVALS = "gsm8k-smoke,aime-smoke"
-ICEBALL_CLUSTER = "cw-us-east-08a"
+ICEBALL_EVALS = "gsm8k-smoke,aime24-smoke"
+ICEBALL_CLUSTER = "cw-us-east-02a"
 ICEBALL_CLUSTER_CONFIG = f"lib/iris/config/{ICEBALL_CLUSTER}.yaml"
-ICEBALL_GPU_VARIANT = "GB200"
+ICEBALL_GPU_VARIANT = "H100"
 ICEBALL_TRAIN_GPUS = 4
+ICEBALL_RL_GPUS_PER_NODE = 8
 ICEBALL_TRAIN_ACCELERATOR = f"{ICEBALL_TRAIN_GPUS}x{ICEBALL_GPU_VARIANT}"
 ICEBALL_EVAL_ACCELERATOR = f"{ICEBALL_GPU_VARIANT}x1"
 ICEBALL_SEQUENCE_LENGTH = 512
@@ -125,8 +126,8 @@ ICEBALL_QWEN3_CONFIG = Qwen3Config(
 ICEBALL_RL_ROLE_PLAN = SkyRLRolePlan(
     colocate_all=False,
     policy_num_nodes=1,
-    policy_num_gpus_per_node=ICEBALL_TRAIN_GPUS,
-    num_inference_engines=ICEBALL_TRAIN_GPUS,
+    policy_num_gpus_per_node=ICEBALL_RL_GPUS_PER_NODE,
+    num_inference_engines=ICEBALL_RL_GPUS_PER_NODE,
     inference_engine_tensor_parallel_size=1,
     inference_engine_pipeline_parallel_size=1,
     inference_engine_data_parallel_size=1,
@@ -159,7 +160,7 @@ environment:
   env_class: {SKYRL_GSM8K_ENVIRONMENT}
 
 trainer:
-  strategy: fsdp2
+  strategy: megatron
   flash_attn: false
   use_sample_packing: false
   algorithm:
@@ -169,7 +170,6 @@ trainer:
   max_steps: 8
   update_epochs_per_batch: 1
   eval_batch_size: 16
-  micro_forward_batch_size_per_gpu: 2
   eval_before_train: false
   eval_interval: -1
   ckpt_interval: 2
@@ -181,9 +181,19 @@ trainer:
     optimizer_config:
       lr: 2.0e-6
       max_grad_norm: 1.0
-    fsdp_config:
-      cpu_offload: false
-      reshard_after_forward: true
+    megatron_config:
+      tensor_model_parallel_size: 1
+      pipeline_model_parallel_size: 1
+      context_parallel_size: 1
+      expert_model_parallel_size: 1
+      expert_tensor_parallel_size: 1
+  ref:
+    megatron_config:
+      tensor_model_parallel_size: 1
+      pipeline_model_parallel_size: 1
+      context_parallel_size: 1
+      expert_model_parallel_size: 1
+      expert_tensor_parallel_size: 1
 generator:
   backend: vllm
   model_dtype: bfloat16
@@ -420,7 +430,7 @@ def build_workflow(*, version: str | None = None) -> IceballMicroWorkflow:
             name=rl_name,
             version=version or resolve_version(rl_base_name, None),
             config_yaml=ICEBALL_RL_CONFIG,
-            runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.FSDP),
+            runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
             model=ArtifactHfModel(
                 step=sft,
                 tokenizer_uri=QWEN_TOKENIZER,
@@ -430,7 +440,7 @@ def build_workflow(*, version: str | None = None) -> IceballMicroWorkflow:
             validation_data=(ArtifactDataSource(gsm8k, relative_path=GSM8K_VALIDATION_FILENAME),),
             topology=SkyRLTopology(
                 num_nodes=2,
-                gpus_per_node=ICEBALL_TRAIN_GPUS,
+                gpus_per_node=ICEBALL_RL_GPUS_PER_NODE,
                 gpu_variant=ICEBALL_GPU_VARIANT,
                 role_plan=ICEBALL_RL_ROLE_PLAN,
             ),
