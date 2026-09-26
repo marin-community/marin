@@ -5,9 +5,9 @@ isolated runtime environments.
 
 The Evalchemy, Harbor, and MarinSkyRL uv projects are excluded from the root
 workspace so their dependency graphs do not have to resolve with Marin's
-training and serving dependencies. Each `pyproject.toml` follows the external
-repository's `main` branch, and its adjacent `uv.lock` records the exact commit
-Marin uses.
+training and serving dependencies. Evalchemy and Harbor select `main`;
+MarinSkyRL selects an explicit trainer revision. Each adjacent `uv.lock`
+records the exact commit Marin uses.
 
 `vllm/gpu.toml` records the promoted CUDA release, Torch backend, and
 architecture-specific wheel URLs and SHA-256 digests. It is updated from the
@@ -31,7 +31,7 @@ Advance one project with:
 uv run config/update-external.py evalchemy
 ```
 
-Omit the project name to advance all three Git projects. The command updates
+Omit the project name to refresh all three Git projects. The command updates
 the selected lockfiles and regenerates the packaged requirements. Regenerate
 only the promoted vLLM release after editing `vllm/gpu.toml` with:
 
@@ -57,10 +57,11 @@ package version and commit, followed by the upstream commit subjects in every
 changed range. Generate the same Markdown summary locally with `--summary-file
 <path>`; commit metadata is read through the authenticated GitHub CLI.
 
-The six-hour schedule is the update-discovery interval. Under normal GitHub
-Actions scheduling, a green update lands in the same run; a blocked update is
-visible within the workflow's 90-minute deadline. Launches continue to consume
-only commits already landed on Marin's default branch.
+The six-hour schedule discovers updates for main-tracking projects.
+MarinSkyRL's explicit revision stays fixed until its source selector changes.
+Under normal GitHub Actions scheduling, a green update lands in the same run;
+a blocked update is visible within the workflow's 90-minute deadline.
+Launches consume only commits already landed on Marin's default branch.
 
 The external configurations intentionally model only what Marin needs:
 
