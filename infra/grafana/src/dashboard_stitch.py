@@ -25,12 +25,14 @@ A bridge target can be written as ``{"refId", "targetRef", "url", "view", "forma
 
 import argparse
 import json
+import re
 from pathlib import Path
 
 PANEL_REF_KEY = "panelRef"
 PANEL_VARS_KEY = "vars"
 LINK_REF_KEY = "linkRef"
 TARGET_REF_KEY = "targetRef"
+_VARIABLE = re.compile(r"\$\{([^}]+)\}")
 
 _RANGE_PARAMS = (("from", "${__from}"), ("to", "${__to}"), ("bucket_ms", "${__interval_ms}"))
 _SHARED_TARGET_PARAMS = {
@@ -127,11 +129,12 @@ def load_panel_fragments(panels_dir: Path) -> dict[str, dict]:
 
 
 def _substitute(value, variables: dict[str, str]):
-    """Replace every ``${name}`` in the strings of a JSON value."""
+    """Replace every ``${name}`` whose name is in ``variables`` in the strings of a JSON value.
+
+    One pass, so a replacement that names another variable stays as written.
+    """
     if isinstance(value, str):
-        for name, replacement in variables.items():
-            value = value.replace("${" + name + "}", replacement)
-        return value
+        return _VARIABLE.sub(lambda match: variables.get(match.group(1), match.group(0)), value)
     if isinstance(value, list):
         return [_substitute(item, variables) for item in value]
     if isinstance(value, dict):
@@ -169,15 +172,18 @@ def _stitch_panels(panels: list[dict], fragments: dict[str, dict]) -> list[dict]
     resolved = []
     for panel in panels:
         ref = panel.get(PANEL_REF_KEY)
+        variables = panel.get(PANEL_VARS_KEY, {})
         if ref is not None:
             if ref not in fragments:
                 raise KeyError(f"panel {panel.get('id')} references unknown panel fragment {ref!r}")
-            body = _substitute(fragments[ref], panel.get(PANEL_VARS_KEY, {}))
-            panel = {**body, "id": panel["id"], "gridPos": panel["gridPos"]}
+            panel = {**fragments[ref], "id": panel["id"], "gridPos": panel["gridPos"]}
         if panel.get("panels"):
             panel = {**panel, "panels": _stitch_panels(panel["panels"], fragments)}
         if "targets" in panel:
             panel = {**panel, "targets": [_stitch_target(target) for target in panel["targets"]]}
+        # After the targets expand, so the mount's variables reach the shared query parameters too.
+        if ref is not None:
+            panel = _substitute(panel, variables)
         resolved.append(panel)
     return resolved
 

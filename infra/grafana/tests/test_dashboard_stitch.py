@@ -38,14 +38,16 @@ def test_stitch_dashboard_expands_target_refs_in_fragments_and_collapsed_rows():
     columns = [{"selector": "t", "text": "t", "type": "timestamp"}]
     short = {"refId": "A", "targetRef": "rl_run", "url": "/v1/rl/overview", "view": "spans", "format": "table"}
     fragment = {"type": "timeseries", "targets": [{**short, "columns": columns, "filterExpression": "x == 1"}]}
+    swap = {"run": "${identity}", "identity": "${run}"}
     source = {
         "panels": [
             {"id": 1, "gridPos": {"y": 0}, "panelRef": "shared"},
             {"id": 2, "type": "row", "panels": [{"id": 3, "targets": [{**short, "columns": columns}]}]},
+            {"id": 4, "gridPos": {"y": 9}, "panelRef": "shared", "vars": swap},
         ]
     }
 
-    first, row = stitch_dashboard(source, {"shared": fragment})["panels"]
+    first, row, mounted = stitch_dashboard(source, {"shared": fragment})["panels"]
 
     params = [
         {"key": "clusters", "value": "${cluster:csv}"},
@@ -67,6 +69,12 @@ def test_stitch_dashboard_expands_target_refs_in_fragments_and_collapsed_rows():
     }
     assert first["targets"] == [{**expanded, "filterExpression": "x == 1"}]
     assert row["panels"] == [{"id": 3, "targets": [expanded]}]
+    # The mount's vars reach the parameters the target expands to, and a replacement is not
+    # replaced again.
+    swapped = [{"key": "run", "value": "${identity}"} if param["key"] == "run" else param for param in params]
+    assert mounted["targets"] == [
+        {**expanded, "url_options": {"method": "GET", "params": swapped}, "filterExpression": "x == 1"}
+    ]
 
 
 def test_stitch_dashboard_leaves_non_ref_panels_untouched():
