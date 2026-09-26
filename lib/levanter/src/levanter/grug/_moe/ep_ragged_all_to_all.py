@@ -24,7 +24,7 @@ import logging
 import math
 from collections.abc import Callable
 from enum import auto, IntEnum
-from typing import Protocol
+from typing import NamedTuple, Protocol
 
 import jax
 import jax.numpy as jnp
@@ -55,6 +55,13 @@ RAGGED_REQUIRED_XLA_FLAGS = (
     "--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=true",
     "--xla_enable_nccl_symmetric_buffers_for_collectives=raggedalltoall",
 )
+
+
+class _ChunkPlan(NamedTuple):
+    dispatch_params: ExpertA2aParams
+    return_params: ExpertA2aParams
+    physical_group_sizes: Int[Array, "Echunk"]
+    active_group_sizes: Int[Array, "Echunk"]
 
 
 class _ExpertMlp(Protocol):
@@ -362,10 +369,7 @@ def _moe_mlp_ep_ragged_a2a_local(
 
     expert_mlp = _select_expert_mlp(activation_fn)
     chunk_of_expert = (jnp.arange(num_experts, dtype=jnp.int32) % local_experts) // chunk_experts  # [E]
-    # Unwritten rows remain zero for the final combine.
-    returned = _loop_local_zeros(
-        assignments_per_shard, hidden_dim, x_local.dtype, group_sizes, site=_LoopLocalZeroSite.RETURN_OUTPUT
-    )  # [TK, H]
+    chunk_plans = []
     accepted_local = jnp.zeros((), dtype=jnp.int32)
     for chunk_index in range(chunks):
         with jax.named_scope(f"moe_chunk_{chunk_index}"):
@@ -383,23 +387,6 @@ def _moe_mlp_ep_ragged_a2a_local(
                 shard_id,
                 local_expert_size=local_experts,
             )
-            # Serialize the chunks. Without this barrier, the scheduler can start the dispatch
-            # of every chunk at the same time. This causes the high memory use that the chunks
-            # prevent. A variant that overlaps one transport with the MLP stays within memory.
-            # But it does not increase the speed. The transport and the MLP compete for the
-            # same SMs.
-            chunk_source, _ = jax.lax.optimization_barrier((sorted_x, returned))
-            # Accepted rows are the prefix of each unclipped expert group and receiver offsets
-            # pack arrivals expert-major, so the received buffer feeds the grouped MLP
-            # directly: no sender compaction and no receiver-side permute.
-            dispatch_init = _loop_local_zeros(  # [C, H]
-                chunk_capacity,
-                hidden_dim,
-                x_local.dtype,
-                dispatch_params.send_sizes,
-                site=_LoopLocalZeroSite.DISPATCH_OUTPUT,
-            )
-            x_dispatch = _ragged_a2a(assignments_per_shard, chunk_source, dispatch_init, dispatch_params)  # [C, H]
             active_all = jnp.sum(  # [Elocal]
                 clipped_group_sizes.reshape(ep_size, ep_size, local_experts)[:, shard_id, :], axis=0
             )
@@ -408,20 +395,52 @@ def _moe_mlp_ep_ragged_a2a_local(
             ]  # [Echunk]
             total_valid = jnp.sum(active_group_sizes, dtype=jnp.int32)
             physical_group_sizes = active_group_sizes.at[-1].add(chunk_capacity - total_valid)  # [Echunk]
+            chunk_plans.append(_ChunkPlan(dispatch_params, return_params, physical_group_sizes, active_group_sizes))
+            accepted_local = accepted_local + jnp.sum(clipped_group_sizes[shard_id], dtype=jnp.int32)
+
+    def dispatch(chunk_index: int, source: Float[Array, "TK H"]) -> Float[Array, "C H"]:
+        # Accepted rows are the prefix of each unclipped expert group and receiver offsets
+        # pack arrivals expert-major, so the received buffer feeds the grouped MLP
+        # directly: no sender compaction and no receiver-side permute.
+        params = chunk_plans[chunk_index].dispatch_params
+        init = _loop_local_zeros(
+            chunk_capacity, hidden_dim, x_local.dtype, params.send_sizes, site=_LoopLocalZeroSite.DISPATCH_OUTPUT
+        )
+        return _ragged_a2a(assignments_per_shard, source, init, params)
+
+    # The chunks run as a two-stage pipeline: chunk c+1's dispatch is in flight during chunk c's
+    # expert MLP, and chunk c's return during chunk c+1's MLP. Two barriers bound it. The next
+    # dispatch starts only once this chunk's dispatch has landed, so at most two receiver
+    # buffers are live. This chunk's return starts only once the next dispatch has landed, so
+    # one transport is in flight at a time.
+    # Unwritten rows remain zero for the final combine.
+    returned = _loop_local_zeros(
+        assignments_per_shard, hidden_dim, x_local.dtype, group_sizes, site=_LoopLocalZeroSite.RETURN_OUTPUT
+    )  # [TK, H]
+    with jax.named_scope("moe_chunk_0"):
+        x_dispatch = dispatch(0, sorted_x)  # [C, H]
+    for chunk_index, plan in enumerate(chunk_plans):
+        with jax.named_scope(f"moe_chunk_{chunk_index}"):
+            next_x_dispatch = None
+            if chunk_index + 1 < chunks:
+                next_source, _ = jax.lax.optimization_barrier((sorted_x, x_dispatch))
+                next_x_dispatch = dispatch(chunk_index + 1, next_source)  # [C, H]
             out_dispatch = expert_mlp(  # [C, H]
                 x_dispatch,
                 moe_w13_local[chunk_index * chunk_experts : (chunk_index + 1) * chunk_experts],
                 moe_w2_local[chunk_index * chunk_experts : (chunk_index + 1) * chunk_experts],
-                physical_group_sizes,
-                active_group_sizes,
+                plan.physical_group_sizes,
+                plan.active_group_sizes,
                 activation_fn,
             )
+            if next_x_dispatch is not None:
+                out_dispatch, next_x_dispatch = jax.lax.optimization_barrier((out_dispatch, next_x_dispatch))
             # The mirror of dispatch: valid prefixes land back at unclipped sorted positions.
             # Chaining every chunk through one output buffer composes the disjoint writes;
             # dropped rows keep the buffer's zeros, so the final gather-sum reads dropped
             # slots as zero contributions with no expansion step.
-            returned = _ragged_a2a(chunk_capacity, out_dispatch, returned, return_params)
-            accepted_local = accepted_local + jnp.sum(clipped_group_sizes[shard_id], dtype=jnp.int32)
+            returned = _ragged_a2a(chunk_capacity, out_dispatch, returned, plan.return_params)
+            x_dispatch = next_x_dispatch
 
     with jax.named_scope("combine"):
         out_local = _unpermute_from_global_expert(
