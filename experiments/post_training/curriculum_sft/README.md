@@ -46,14 +46,15 @@ uv run iris --cluster=marin job run --no-wait --target-cluster cw-us-east-08a \
   -e MARIN_PREFIX s3://marin-us-east-02a/tmp/ttl=30d/curriculum-math-20260924 \
   -e GLM_BULK_TOKEN "$GLM_BULK_TOKEN" \
   -- uv run python experiments/post_training/curriculum_sft/math_trial.py \
-  --stage generate --run
+  --stage generate --version <SOLUTIONS_VERSION> --run
 ```
 
-Training and evaluation run on `cw-rno2a` with `MARIN_PREFIX` set to the `ttl=7d` trial prefix.
-Problem generation and solving use the fixed `PROBLEMS_VERSION` and `SOLUTIONS_VERSION`. A
-completed step with a changed recipe serves its cached output, so bump `SOLUTIONS_VERSION` after
-changing only the solve settings, and both versions after changing problem generation.
+Problem generation and solving use the fixed `PROBLEMS_VERSION` and `SOLUTIONS_VERSION`; the
+experiment CLI still requires `--version`, which the generation graph does not use. A completed
+step with a changed recipe serves its cached output, so bump `SOLUTIONS_VERSION` after changing
+only the solve settings, and both versions after changing problem generation.
 
+Training and evaluation run on `cw-rno2a` with `MARIN_PREFIX` set to the `ttl=7d` trial prefix.
 `math_trial.py` adopts the solved chat artifacts from the source prefix at `SOLUTIONS_VERSION`:
 
 ```bash
