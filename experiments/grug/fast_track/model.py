@@ -372,6 +372,9 @@ class GrugModelConfig:
     attn_res_additive: bool = False
     """Delta AttnRes (arXiv 2605.18855) additive routing: each gate's input is the plain sum of its
     sources (the standard residual stream) plus its softmax mix, instead of the mix alone."""
+    attn_res_stream_source: bool = False
+    """Every AttnRes gate also scores the plain sum of its visible sources (the standard residual
+    stream) as one extra source, so "take the plain residual" is a selectable option (logged as ``_p``)."""
     attn_res_temperature: bool = False
     """A learnable logit multiplier per gate (and per head with ``attn_res_heads``), init 1."""
     attn_res_head_norm: bool = False
@@ -1623,6 +1626,7 @@ def _attn_res_mix(
     *,
     head_norm: bool = False,
     additive: bool = False,
+    stream_source: bool = False,
 ) -> tuple[Float[Array, "B S D"], jax.Array]:
     """One AttnRes gate: softmax over the completed blocks (+ the running partial) and their weighted sum.
 
@@ -1644,6 +1648,10 @@ def _attn_res_mix(
         sources.append(partial)
         logits.append(_attn_res_source_logits(partial, queries[gate_index][None], eps, head_norm)[0])
     logits = _bias_gate_logits(logits, extras, gate_index, sources, eps, has_partial=partial is not None)
+    if stream_source:
+        stream = _stream_sum(tuple(sources))
+        sources.append(stream)
+        logits.append(_attn_res_source_logits(stream, queries[gate_index][None], eps, head_norm)[0])
     weights, mixed = _softmax_mix(logits, sources)
     mixed = _gate_variants(mixed, sources, extras, gate_index, eps, has_partial=partial is not None)
     if additive:
@@ -1741,7 +1749,11 @@ def _attn_res_layer(
     """
     layer, blocks, block_logits, partial, queries, logit_bias = diff_args
     cfg = layer.attn.cfg
-    opts = {"head_norm": cfg.attn_res_head_norm, "additive": cfg.attn_res_additive}
+    opts = {
+        "head_norm": cfg.attn_res_head_norm,
+        "additive": cfg.attn_res_additive,
+        "stream_source": cfg.attn_res_stream_source,
+    }
     h, z_attn, w_attn = _attn_res_mix(blocks, block_logits, partial, queries, 2 * layer_index, eps, logit_bias, **opts)
     attn_branch = type(layer).attn_branch
     if cfg.attn_res_remat_attention:
@@ -1786,7 +1798,11 @@ def _attn_res_layer_full(diff_args, mask, token_ids, use_long, layer_index, eps,
     layer, blocks, block_logits, partial, queries, logit_bias = diff_args
     assert partial is None, "full AttnRes rolls every sublayer output into its own source"
     cfg = layer.attn.cfg
-    opts = {"head_norm": cfg.attn_res_head_norm, "additive": cfg.attn_res_additive}
+    opts = {
+        "head_norm": cfg.attn_res_head_norm,
+        "additive": cfg.attn_res_additive,
+        "stream_source": cfg.attn_res_stream_source,
+    }
     sum_components = cfg.attn_res_sum_inputs
     h, z_attn, w_attn = _attn_res_mix(blocks, block_logits, None, queries, 2 * layer_index, eps, logit_bias, **opts)
     attn_side_stream = _stream_sum(blocks)
@@ -2275,6 +2291,10 @@ class Transformer(eqx.Module):
             cfg.attn_res_v_gate or cfg.attn_res_heads > 1 or cfg.attn_res_pull or cfg.attn_res_pull_embed
         ):
             raise ValueError("attn_res_dual_query / attn_res_blend need single-head push AttnRes without V gates")
+        if cfg.attn_res_stream_source and not cfg.attn_res_full:
+            raise ValueError("attn_res_stream_source needs attn_res_full (the last column is logged as the stream)")
+        if cfg.attn_res_stream_source and logit_bias is not None:
+            raise ValueError("attn_res_stream_source does not combine with per-source logit extras")
         if cfg.attn_res_sum_inputs and not cfg.attn_res_full:
             raise ValueError("attn_res_sum_inputs needs attn_res_full")
         allowed = {"q", "k", "v", "mlp", "mlp_shared", "mlp_routed", "mlp_router"}
@@ -2335,8 +2355,9 @@ class Transformer(eqx.Module):
                     partial, blocks, block_logits, stats = _attn_res_layer_passthrough(*layer_args, kv_share)
                 z_out.append(stats.pop(_ATTN_RES_Z))
                 has_partial_attn = partial_before is not None
-                weight_logs[2 * eff] = (stats.pop(_ATTN_RES_W_ATTN), has_partial_attn)
-                weight_logs[2 * eff + 1] = (stats.pop(_ATTN_RES_W_MLP), not cfg.attn_res_full)
+                stream_col = cfg.attn_res_stream_source
+                weight_logs[2 * eff] = (stats.pop(_ATTN_RES_W_ATTN), has_partial_attn or stream_col)
+                weight_logs[2 * eff + 1] = (stats.pop(_ATTN_RES_W_MLP), not cfg.attn_res_full or stream_col)
                 if _ATTN_RES_W_V in stats:
                     # V-gate query rows follow the per-layer gates (loop_passes == 1).
                     weight_logs[2 * num_layers + i] = (stats.pop(_ATTN_RES_W_V), has_partial_attn)
