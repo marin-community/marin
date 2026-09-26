@@ -255,6 +255,30 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra
 Batch 1024 keeps the production local batch of 16 sequences per GPU. The trace does not include
 the 11-rack `replica_dcn` collectives or their global histogram reduction.
 
+### Profile-guided scheduling
+
+With collective overlap limited to 1, where XLA's latency-hiding scheduler places each collective
+decides how much communication hides under compute. Its default estimator gives every collective
+the same small latency, so it hides a multi-millisecond ragged transport under a single GEMM. A
+PGLE profile gives it measured costs instead. On one rack restored from `step-144000`, it raised
+kernel-classified communication/compute overlap from 60% to 81% of collective time and shortened
+the step from 13.94 to 13.72 s ([#8317](https://github.com/marin-community/marin/issues/8317)).
+
+Trace the program once, build its profile, then rerun with it:
+
+```bash
+python -m experiments.grug.moe_hero_ep.pgle_profile \
+  s3://hero-checkpoints/tmp/ttl=30d/xprof/<run-id>/plugins/profile/<steps>/<host>.xplane.pb \
+  experiments/grug/moe_hero_ep/pgle/<run-id>.pbtxt
+# then submit with
+#   -e XLA_FLAGS "--xla_gpu_memory_limit_slop_factor=85 \
+#     --xla_gpu_pgle_profile_file_or_directory_path=experiments/grug/moe_hero_ep/pgle/<run-id>.pbtxt"
+```
+
+The profile matches instructions by name, so it applies only to the program it was traced from:
+rebuild it after any change to the model, mesh, or XLA flags. The job bundle carries the file, and
+the path is relative to the task's working directory.
+
 ### Long-context diagnostics
 
 For 262,144-token sequences on one rack, use `--seq-len 262144 --batch-size 16
