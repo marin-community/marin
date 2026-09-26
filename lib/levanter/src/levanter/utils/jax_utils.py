@@ -402,7 +402,7 @@ def best_effort_sharding(shape, *, devices=None, mesh=None):
         remaining_shape = list(shape)
         axis_sharding: list[list[str]] = [[] for _ in shape]
         for axis_name, axis_size in mesh.shape.items():
-            if axis_name in {"replica", "replica_dcn"} or axis_size == 1:
+            if axis_name in {ResourceAxis.REPLICA, ResourceAxis.REPLICA_DCN} or axis_size == 1:
                 continue
             for i in range(len(shape) - 1, -1, -1):
                 if remaining_shape[i] % axis_size == 0:

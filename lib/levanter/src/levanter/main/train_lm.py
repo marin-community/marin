@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+import functools
 import gc
 import logging
 import os
@@ -264,6 +265,16 @@ def main(config: TrainLmConfig):
         tagged_eval_datasets = config.data.tagged_eval_sets(Pos)
 
         adapter_key = jrandom.fold_in(model_key, ord("a"))
+        load_source_model = functools.partial(
+            _load_lm_model_from_configured_source,
+            config=config,
+            converter=converter,
+            Vocab=Vocab,
+            model_key=model_key,
+            adapter_key=adapter_key,
+            parameter_axis_mapping=parameter_axis_mapping,
+            trainer=trainer,
+        )
         fresh_weight_init = (
             config.initialize_from_hf or config.initialize_model_from_checkpoint_path is not None
         ) and (
@@ -275,15 +286,7 @@ def main(config: TrainLmConfig):
         )
         if fresh_weight_init:
             logger.info("Initializing trainer state directly from pretrained weights")
-            initial_model = _load_lm_model_from_configured_source(
-                config=config,
-                converter=converter,
-                Vocab=Vocab,
-                model_key=model_key,
-                adapter_key=adapter_key,
-                parameter_axis_mapping=parameter_axis_mapping,
-                trainer=trainer,
-            )
+            initial_model = load_source_model()
             state = trainer.initial_state(
                 training_key,
                 model=initial_model,
@@ -334,15 +337,7 @@ def main(config: TrainLmConfig):
                 # this is a bit gross, but we want to free up the memory from the model we just built
                 state = dataclasses.replace(state, model=None)
                 gc.collect()
-                model = _load_lm_model_from_configured_source(
-                    config=config,
-                    converter=converter,
-                    Vocab=Vocab,
-                    model_key=model_key,
-                    adapter_key=adapter_key,
-                    parameter_axis_mapping=parameter_axis_mapping,
-                    trainer=trainer,
-                )
+                model = load_source_model()
                 state = dataclasses.replace(state, model=model)
             else:
                 logger.info("No checkpoint found. Starting from scratch.")
@@ -351,15 +346,7 @@ def main(config: TrainLmConfig):
                 "Adapter checkpoints only store trainable weights. Reconstructing the base LM model from the "
                 "configured source before overlaying resumed adapter parameters."
             )
-            source_model = _load_lm_model_from_configured_source(
-                config=config,
-                converter=converter,
-                Vocab=Vocab,
-                model_key=model_key,
-                adapter_key=adapter_key,
-                parameter_axis_mapping=parameter_axis_mapping,
-                trainer=trainer,
-            )
+            source_model = load_source_model()
             state = dataclasses.replace(
                 state,
                 model=_restore_lm_model_from_partial_checkpoint(
