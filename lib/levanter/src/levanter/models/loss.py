@@ -5,6 +5,8 @@ from typing import Literal, Optional, cast, overload
 
 import jax
 import jax.numpy as jnp
+from jax.sharding import PartitionSpec as P
+from jax.sharding import reshard
 
 import haliax as hax
 from haliax import NamedArray
@@ -15,6 +17,7 @@ from levanter.kernels.pallas.fused_cross_entropy_loss import (
     Implementation,
     fused_cross_entropy_loss_and_logsumexp_penalty as fused_cross_entropy_loss_and_logsumexp_penalty_kernel,
 )
+from levanter.sharding import partition_spec_of
 
 DEFAULT_REDUCTION = cast(hax.ReductionFunction, hax.mean)
 
@@ -73,7 +76,16 @@ def maybe_fused_next_token_loss(
     Vocab = pred_lm_head.resolve_axis(Vocab)
 
     # Shift target tokens to predict the next token
-    target_y = hax.roll(true_ids, -1, Pos)
+    token_spec = partition_spec_of(true_ids.array)
+    position_index = true_ids.axes.index(Pos)
+    if token_spec is not None and position_index < len(token_spec) and token_spec[position_index] is not None:
+        # JAX cannot roll across a sharded sequence axis. Gather only the token IDs,
+        # shift them, then restore their layout for the sharded loss kernel.
+        unsharded_position = P(*(None if i == position_index else axis for i, axis in enumerate(token_spec)))
+        ids = reshard(true_ids.array, unsharded_position)
+        target_y = hax.named(reshard(jnp.roll(ids, -1, axis=position_index), token_spec), true_ids.axes)
+    else:
+        target_y = hax.roll(true_ids, -1, Pos)
 
     # When a loss_weight is supplied, the fused kernel runs the loss in its dtype.
     if loss_weight is not None:

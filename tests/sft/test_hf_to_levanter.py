@@ -88,6 +88,7 @@ def test_conversion_handle_is_a_dependency_and_wires_native_weights_only_init():
     assert train_config.initialize_from_hf is False
     assert train_config.initialize_from_checkpoint_path is None
     assert train_config.use_hf_model_config is False
+    assert train_config.pad_tokenizer_to_match_model is False
     # The carried architecture builds the pytree; the padded tokenizer is the conversion output root.
     assert train_config.model == conv.model
     assert train_config.data.tokenizer == conv_out

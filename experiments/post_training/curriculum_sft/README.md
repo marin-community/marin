@@ -33,7 +33,9 @@ answers.
 `pipeline.py` creates one generation and chat-preparation step per capability. The prepared
 Parquet artifacts carry canonical OpenAI `messages` and feed `sft_step` through
 `ArtifactDatasetSpec`. The shared launcher tokenizes the chat, masks user turns from the loss,
-and trains `SnowballLMHeadModel` directly from the pinned Hugging Face checkpoint. Conversations
+and trains `SnowballLMHeadModel` from a cached, weights-only Levanter conversion of the pinned
+Hugging Face checkpoint. The conversion is a separate artifact dependency with a fixed version,
+so SFT retries and task variants can reuse it without loading the 39 HF shards again. Conversations
 stay separate (`pack=False`) because Snowball does not consume packed-document attention masks.
 The launcher saves a sharded bfloat16 Hugging Face checkpoint at the final training step under
 the training artifact's `hf/` directory.
@@ -42,13 +44,15 @@ the training artifact's `hf/` directory.
 pinned September 20 HF model, three algebra capabilities, four Snowball updates, and
 the same evaluations after training. The deterministic OlympiadBench variant uses Minerva/SymPy
 equivalence without an LLM judge. Its scores are not comparable to historical judge-backed
-OlympiadBench runs. The trial prefix is resolved through
-`marin_temp_bucket(ttl_days=30)` to the east-region lifecycle-managed bucket. Run `--stage generate` on
-`cw-us-east-08a`, where the GLM relay is registered, with `MARIN_PREFIX` set to the
-`S3_TRIAL_PREFIX` in `math_trial.py`. Then run `train` and `after` on RNO2A with the
-same prefix. Both clusters read the pinned catalog and generated Parquet from east-region S3.
-Generation uses `SOURCE_VERSION`; the SFT and its re-evaluation use the CLI `--version`, so a failed
-SFT can be retried under a new version without regenerating data. `--stage full` binds both
+OlympiadBench runs. The existing GLM conversations are read from the east-region `ttl=30d`
+source prefix. New preparation, training, and evaluation artifacts go under the
+`marin_temp_bucket(ttl_days=7)` trial prefix, including the converted checkpoint. Run `train` and `after` on RNO2A with
+`MARIN_PREFIX` set to `S3_TRIAL_PREFIX` in `math_trial.py`. Both stages read the pinned
+catalog and generated Parquet from east-region S3.
+Generation, prepared chat, and HF conversion use fixed versions; the SFT and its re-evaluation use
+the CLI `--version`, so a failed SFT can be retried without regenerating or retokenizing data or
+reconverting the model.
+`--stage full` binds both
 evaluations and training in one graph after generation has completed.
 
 This trial has not established an improvement. Its GLM answers are structurally checked but not
