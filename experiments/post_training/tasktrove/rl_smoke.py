@@ -56,7 +56,7 @@ SEED = 17
 MAX_STEPS = 1
 REQUEST_WINDOW_TOKENS = 4096
 MAX_NEW_TOKENS_PER_TURN = 256
-MAX_TURNS = 1
+MAX_TURNS = 4
 
 # One H100 node with colocated policy and inference actors. Qwen3-0.6B is the smallest mirrored
 # policy that exercises the real vLLM, Harbor, weight-sync, optimizer, checkpoint, and export path.
