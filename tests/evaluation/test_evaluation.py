@@ -234,7 +234,13 @@ def _remote_session(endpoint: str = "https://inference.example/v1") -> RemoteInf
 def _patch_inference_runtime(monkeypatch: pytest.MonkeyPatch, remote) -> None:
     """Point the batch runner at a fake inference runtime with ``remote`` as its session factory."""
     monkeypatch.setattr("marin.evaluation.runner.configure_coreweave_s3", lambda: None)
-    monkeypatch.setattr("marin.evaluation.runner.iris_ctx", lambda: SimpleNamespace(job_id="/orchestrator"))
+    monkeypatch.setattr(
+        "marin.evaluation.runner.iris_ctx",
+        lambda: SimpleNamespace(
+            job_id="/orchestrator",
+            client=SimpleNamespace(resolve_endpoint=lambda name: "http://10.0.0.1:8000"),
+        ),
+    )
     monkeypatch.setattr("marin.evaluation.runner.remote_inference", remote)
     monkeypatch.setattr(
         "marin.evaluation.runner.inference_config_for_model",
@@ -269,6 +275,7 @@ def _hosted_judge_batch(tmp_path, evaluations: tuple[Evaluation, ...]) -> Evalua
 
 def test_run_evaluation_batch_shares_one_hosted_judge_across_evaluations(tmp_path, monkeypatch):
     opened_models: list[str] = []
+    observed_candidates: list[RemoteInferenceSession] = []
     observed_judges: list[RemoteInferenceSession | None] = []
 
     class InferenceContext:
@@ -287,12 +294,13 @@ def test_run_evaluation_batch_shares_one_hosted_judge_across_evaluations(tmp_pat
         return InferenceContext(_remote_session(f"https://{model}.example/v1"))
 
     def executor(
-        _session: RemoteInferenceSession,
+        session: RemoteInferenceSession,
         _output_dir: str,
         _env_vars: Mapping[str, str],
         *,
         judge: RemoteInferenceSession | None = None,
     ) -> EvaluationOutcome:
+        observed_candidates.append(session)
         observed_judges.append(judge)
         return EvaluationOutcome(metrics={"task": {"accuracy": 1.0}})
 
@@ -305,10 +313,11 @@ def test_run_evaluation_batch_shares_one_hosted_judge_across_evaluations(tmp_pat
     run_evaluation_batch(batch)
 
     assert opened_models == ["candidate", "judge"]
+    assert all(candidate.model.endpoint.base_url == "http://10.0.0.1:8000/v1" for candidate in observed_candidates)
     assert len(observed_judges) == 2
     assert observed_judges[0] is observed_judges[1]
     assert observed_judges[0] is not None
-    assert observed_judges[0].model.endpoint.base_url == "https://judge.example/v1"
+    assert observed_judges[0].model.endpoint.base_url == "http://10.0.0.1:8000/v1"
     record = read_record(str(tmp_path / "records" / "run-one" / "record.json"))
     assert record.judge is not None
     assert record.judge.model.name == "judge"

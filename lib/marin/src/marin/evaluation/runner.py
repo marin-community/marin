@@ -5,7 +5,7 @@
 
 import logging
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from typing import Protocol
 
 from fray.client import JobHandle
@@ -37,6 +37,7 @@ from marin.evaluation.records import (
     write_record,
 )
 from marin.evaluation.serving_config import inference_config_for_model
+from marin.inference.backend import OPENAI_API_SUFFIX
 from marin.inference.iris import RemoteInferenceSession, RemoteInferenceStartupError, remote_inference
 from marin.rollouts.catalog import RolloutRunKind, record_rollout_run, rollout_run_record
 
@@ -519,7 +520,7 @@ def _evaluate_with_hosted_judge(
                 session,
                 orchestrator_job_id=orchestrator_job_id,
                 env_vars=evaluation_env,
-                judge=judge,
+                judge=_local_endpoint_session(judge),
             )
     except RemoteInferenceStartupError as exc:
         _record_startup_failure(
@@ -555,7 +556,7 @@ def run_evaluation_batch(batch: EvaluationBatch) -> list[str]:
         with remote_inference(inference) as session:
             return _evaluate_with_hosted_judge(
                 batch,
-                session,
+                _local_endpoint_session(session),
                 orchestrator_job_id,
                 runtime_env,
                 evaluation_env,
@@ -563,6 +564,17 @@ def run_evaluation_batch(batch: EvaluationBatch) -> list[str]:
     except RemoteInferenceStartupError as exc:
         _record_startup_failure(batch, orchestrator_job_id, exc, _INFERENCE_ROLE)
         raise RuntimeError(f"evaluation batch inference failed: {exc}") from exc
+
+
+def _local_endpoint_session(session: RemoteInferenceSession) -> RemoteInferenceSession:
+    """Use the Iris endpoint registry for eval jobs on the serving cluster."""
+    address = iris_ctx().client.resolve_endpoint(session.endpoint_name).rstrip("/")
+    endpoint = replace(session.model.endpoint, base_url=f"{address}{OPENAI_API_SUFFIX}")
+    return replace(
+        session,
+        model=replace(session.model, endpoint=endpoint),
+        metrics_url=f"{address}/metrics" if session.metrics_url is not None else None,
+    )
 
 
 def submit_evaluation_batch(batch: EvaluationBatch, client: IrisClient) -> SubmittedEvaluationBatch:
