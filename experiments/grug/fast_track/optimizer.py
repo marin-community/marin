@@ -13,6 +13,7 @@ from levanter.utils.jax_utils import leaf_key_paths
 
 from experiments.grug.fast_track.adamh import scale_by_adamh
 from experiments.grug.fast_track.grugmuon_stacked import _grug_scale_with_muon, _target_named_sharding
+from experiments.grug.fast_track.okls import OKLS_MATMUL_DTYPES, scale_with_grug_okls
 
 
 def _match_named_update_sharding() -> optax.GradientTransformation:
@@ -96,6 +97,16 @@ _KDA_ADAM_LEAVES = frozenset({"w_a_down", "w_a_up", "a_log", "dt_bias"})
 _KDA_BETA_LEAF = "w_beta"
 # Low-rank write-strength MLP (``kda_beta_rank``): LR group chosen by ``kda_beta_mlp_group``.
 _KDA_BETA_MLP_LEAVES = frozenset({"w_beta_down", "w_beta_up"})
+
+
+# Matrix families that ``okls_targets`` can move from MuonH to the OKLS direction.
+_OKLS_FAMILIES: dict[str, re.Pattern] = {
+    "attn": re.compile(r"(stacked_blocks|kda_blocks)\.stacked\.attn\.w_(q|k|v|o|g|dkv|uk|uv)$"),
+    "routed": re.compile(r"\.mlp\.expert_mlp\.w_(gate|up|down)$"),
+    "shared": re.compile(r"\.shared\.\d+\.w_(gate|up|down)$"),
+    "latent": re.compile(r"\.mlp\.w_latent_(down|up)$"),
+    "gated_norm": re.compile(r"gated_norm\.w_(down|up)$"),
+}
 
 
 def _kda_leaf(path_lower: str) -> str | None:
@@ -255,6 +266,14 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     """Adam beta1 for the KDA decay parameters (None: ``beta1``)."""
     kda_decay_beta2: float | None = None
     """Adam beta2 for the KDA decay parameters (None: ``beta2``)."""
+    okls_targets: tuple[str, ...] = ()
+    """Matrix families (``_OKLS_FAMILIES``) whose direction comes from Online KL-Shampoo whitening instead
+    of Newton-Schulz, still taking MuonH's hyperball step at the MuonH LR."""
+    okls_beta1: float = 0.9684
+    okls_beta2: float = 0.9482
+    okls_epsilon: float = 1e-9
+    okls_cans_steps: int = 10
+    okls_matmul_dtype: str = "float32"
     lm_head_group: str = "adamh"
     """LR group of ``output_proj``: ``adamh`` or ``muonh``."""
     embed_group: str = "adam"
@@ -330,6 +349,20 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 "adam": adam_transform_at(adam_lr),
                 "attn_res_query": plain_adam_at(adam_lr * self.attn_res_query_lr_scale),
                 "kda_beta": muonh_transform_at(learning_rate * self.kda_beta_lr_mult),
+                "okls": optax.chain(
+                    scale_with_grug_okls(
+                        beta1=self.okls_beta1,
+                        beta2=self.okls_beta2,
+                        eps=self.okls_epsilon,
+                        weight_decay=0.0,
+                        cans_steps=self.okls_cans_steps,
+                        matmul_dtype=OKLS_MATMUL_DTYPES[self.okls_matmul_dtype],
+                        learning_rate=learning_rate,
+                        lr_peak=self.learning_rate,
+                        hyperball=True,
+                    ),
+                    _match_named_update_sharding(),
+                ),
                 "kda_decay": plain_adam_at(adam_lr * self.kda_decay_lr_mult, self.kda_decay_beta1, self.kda_decay_beta2),
             }
             return optax.multi_transform(transforms, self.create_mask)
@@ -349,8 +382,19 @@ class GrugMoeMuonHConfig(OptimizerConfig):
 
     def create_mask(self, params):
         paths = leaf_key_paths(params)
+        unknown = set(self.okls_targets) - set(_OKLS_FAMILIES)
+        if unknown:
+            raise ValueError(f"unknown okls_targets {sorted(unknown)}; choose from {sorted(_OKLS_FAMILIES)}")
 
         def mask_fn(param, path):
+            group = _base_group(param, path)
+            if group == "muonh":
+                path_lower = (".".join(path) if isinstance(path, (list, tuple)) else str(path)).lower()
+                if any(_OKLS_FAMILIES[f].search(path_lower) for f in self.okls_targets):
+                    return "okls"
+            return group
+
+        def _base_group(param, path):
             path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
             path_lower = path_str.lower()
             kda_leaf = _kda_leaf(path_lower)
