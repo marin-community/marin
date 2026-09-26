@@ -567,7 +567,7 @@ def run_evaluation_batch(batch: EvaluationBatch) -> list[str]:
 
 
 def _local_endpoint_session(session: RemoteInferenceSession) -> RemoteInferenceSession:
-    """Use the Iris endpoint registry for eval jobs on the serving cluster."""
+    """Return an eval session that reaches the serving endpoint directly."""
     address = iris_ctx().client.resolve_endpoint(session.endpoint_name).rstrip("/")
     endpoint = replace(session.model.endpoint, base_url=f"{address}{OPENAI_API_SUFFIX}")
     return replace(

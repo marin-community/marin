@@ -238,7 +238,7 @@ def _patch_inference_runtime(monkeypatch: pytest.MonkeyPatch, remote) -> None:
         "marin.evaluation.runner.iris_ctx",
         lambda: SimpleNamespace(
             job_id="/orchestrator",
-            client=SimpleNamespace(resolve_endpoint=lambda name: "http://10.0.0.1:8000"),
+            client=SimpleNamespace(resolve_endpoint=lambda _name: "http://10.0.0.1:8000"),
         ),
     )
     monkeypatch.setattr("marin.evaluation.runner.remote_inference", remote)
