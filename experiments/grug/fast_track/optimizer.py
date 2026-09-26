@@ -233,6 +233,60 @@ def scale_with_grug_muonh(
     return optax.GradientTransformation(init_fn, update_fn)
 
 
+def scale_with_grug_muon_free(
+    *,
+    momentum: float,
+    nesterov: bool,
+    steps: int,
+    muon_eps: float,
+    learning_rate,
+    coefficient_type: CoefficientType,
+    head_dim: int | None,
+    weight_decay: float,
+) -> optax.GradientTransformation:
+    """Muon without the hyperball: the MuonH step size, but the norm is free.
+
+    The update is ``-lr * |W_0| * d / |d| - lr * weight_decay * W``, where ``d`` is the Newton-Schulz
+    direction and ``|W_0|`` the matrix's initial Frobenius norm (per layer for stacked leaves), so the
+    step matches MuonH's first step. With orthogonal steps, the norm settles near
+    ``|W|^2 / |W_0|^2 = lr / (2 * weight_decay)``.
+    """
+    muon_transform = _grug_scale_with_muon(
+        momentum=momentum,
+        nesterov=nesterov,
+        steps=steps,
+        muon_eps=muon_eps,
+        coefficient_type=coefficient_type,
+        head_dim=head_dim,
+    )
+
+    def _norm(x):
+        axes = None if x.ndim == 2 else tuple(range(1, x.ndim))
+        return jnp.sqrt(jnp.sum(jnp.square(x.astype(jnp.float32)), axis=axes, keepdims=x.ndim != 2))
+
+    def init_fn(params):
+        norms = jax.tree.map(lambda x: _norm(x) if hasattr(x, "ndim") and x.ndim >= 2 else None, params)
+        return muon_transform.init(params), norms
+
+    def update_fn(updates, state, params=None):
+        if params is None:
+            raise ValueError("scale_with_grug_muon_free requires params for weight decay")
+        muon_state, init_norms = state
+        directions, muon_state = muon_transform.update(updates, muon_state, params)
+        directions = _match_named_sharding_to_params(directions, params)
+
+        def step(param, direction, init_norm):
+            if direction is None or init_norm is None:
+                return direction
+            scaled = direction.astype(jnp.float32) * init_norm / jnp.maximum(_norm(direction), 1e-10)
+            return (-learning_rate * (scaled + weight_decay * param.astype(jnp.float32))).astype(param.dtype)
+
+        new_updates = jax.tree.map(step, params, directions, init_norms, is_leaf=lambda x: x is None)
+        return new_updates, (muon_state, init_norms)
+
+    return optax.GradientTransformation(init_fn, update_fn)
+
+
 @OptimizerConfig.register_subclass("grug_fast_track_muonh_v1")
 @dataclass(frozen=True)
 class GrugMoeMuonHConfig(OptimizerConfig):
@@ -300,6 +354,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     """LR group of ``output_proj``: ``adamh`` or ``muonh``."""
     embed_group: str = "adam"
     """LR group of ``token_embed``: ``adam`` or ``adamh``."""
+    muon_free_families: tuple[str, ...] = ()
+    """Matrix families (keys of ``_OKLS_FAMILIES``, e.g. ``attn_q``, ``attn_k``) that drop the hyperball:
+    MuonH's step size with a free norm and ``muon_free_weight_decay`` (``scale_with_grug_muon_free``)."""
+    muon_free_weight_decay: float = 0.0
     hyperball_per_expert: bool = False
     """One MuonH hyperball (Frobenius sphere) per routed expert instead of per layer's expert stack."""
     neuron_norm_beta2: float | None = None
@@ -390,6 +448,19 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 ),
                 "muonh_attn": muonh_transform_at(learning_rate * self.muonh_attn_lr_mult),
                 "muonh_routed": muonh_transform_at(learning_rate * self.muonh_routed_lr_mult),
+                "muon_free": optax.chain(
+                    scale_with_grug_muon_free(
+                        momentum=self.momentum,
+                        nesterov=self.nesterov,
+                        steps=self.backend_steps,
+                        muon_eps=self.muon_epsilon,
+                        learning_rate=learning_rate,
+                        coefficient_type=self.coefficient_type,
+                        head_dim=self.muon_head_dim,
+                        weight_decay=self.muon_free_weight_decay,
+                    ),
+                    _match_named_update_sharding(),
+                ),
                 "kda_decay": plain_adam_at(adam_lr * self.kda_decay_lr_mult, self.kda_decay_beta1, self.kda_decay_beta2),
             }
             return optax.multi_transform(transforms, self.create_mask)
@@ -409,9 +480,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
 
     def create_mask(self, params):
         paths = leaf_key_paths(params)
-        unknown = set(self.okls_targets) - set(_OKLS_FAMILIES)
+        unknown = (set(self.okls_targets) | set(self.muon_free_families)) - set(_OKLS_FAMILIES)
         if unknown:
-            raise ValueError(f"unknown okls_targets {sorted(unknown)}; choose from {sorted(_OKLS_FAMILIES)}")
+            raise ValueError(f"unknown matrix families {sorted(unknown)}; choose from {sorted(_OKLS_FAMILIES)}")
 
         def mask_fn(param, path):
             group = _base_group(param, path)
@@ -419,6 +490,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 path_lower = (".".join(path) if isinstance(path, (list, tuple)) else str(path)).lower()
                 if any(_OKLS_FAMILIES[f].search(path_lower) for f in self.okls_targets):
                     return "okls"
+                if any(_OKLS_FAMILIES[f].search(path_lower) for f in self.muon_free_families):
+                    return "muon_free"
                 if self.muonh_attn_lr_mult != 1.0 and _OKLS_FAMILIES["attn"].search(path_lower):
                     return "muonh_attn"
                 if self.muonh_routed_lr_mult != 1.0 and _OKLS_FAMILIES["routed"].search(path_lower):

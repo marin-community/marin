@@ -78,6 +78,7 @@ _ATTN_RES_Z = "attn_res_z_term"
 # Per-gate token-mean AttnRes source weights (variable length per gate), popped into logging scalars.
 _ATTN_RES_W_ATTN = "attn_res_weights_attn"
 _ATTN_RES_W_MLP = "attn_res_weights_mlp"
+_ATTN_RES_W_V = "attn_res_weights_v"
 
 # Kimi K3's KDA layer: low-rank forget-gate width, and the per-token log-decay floor
 # ``g = -KDA_MIN_LOG_DECAY * sigmoid(...)``.
@@ -366,7 +367,16 @@ class GrugModelConfig:
     """Multi-head AttnRes (RMT-style retrieval heads): each gate's pseudo-query is split into this many
     D/H chunks, and chunk h scores and mixes the sources on its own channel slice with its own softmax."""
     attn_res_v_gate: bool = False
-    """A separate AttnRes pseudo-query per layer for the value projections (V reads its own mix)."""
+    """A separate AttnRes pseudo-query per layer for the value projections (V reads its own mix). With
+    ``attn_res_full`` it applies to the KDA layers only (an MLA layer's K and V share one latent)."""
+    attn_res_additive: bool = False
+    """Delta AttnRes (arXiv 2605.18855) additive routing: each gate's input is the plain sum of its
+    sources (the standard residual stream) plus its softmax mix, instead of the mix alone."""
+    attn_res_temperature: bool = False
+    """A learnable logit multiplier per gate (and per head with ``attn_res_heads``), init 1."""
+    attn_res_head_norm: bool = False
+    """Multi-head AttnRes: RMS-normalize each head's channel slice of a source for its logits, instead
+    of one RMS over all channels."""
     attn_res_dual_query: bool = False
     """Two pseudo-queries per AttnRes gate: each mixes the sources with its own softmax, and the two mixes
     are merged per token by ``s = sigmoid(rms_norm(stream) . w + b)`` (``w``, ``b`` zero-init, so s = 1/2),
@@ -1554,7 +1564,7 @@ def _spread_mlp_input(x: Float[Array, "B S D"], cfg: GrugModelConfig) -> Float[A
 
 @named_call
 def _attn_res_source_logits(
-    source: Float[Array, "B S D"], queries: Float[Array, "G D"], eps: float
+    source: Float[Array, "B S D"], queries: Float[Array, "G D"], eps: float, head_norm: bool = False
 ) -> Float[Array, "G B S"]:
     """Float32 AttnRes logits of one source against ``G`` queries: ``q_g . rms_norm(source)``.
 
@@ -1568,6 +1578,9 @@ def _attn_res_source_logits(
         heads = queries.shape[1]
         chunks = rearrange(source, "b s (h d) -> b s h d", h=heads)
         dots = jnp.einsum("bshd,ghd->gbsh", chunks, queries.astype(source.dtype), preferred_element_type=jnp.float32)
+        if head_norm:
+            head_inv_rms = jax.lax.rsqrt(jnp.mean(jnp.square(chunks.astype(jnp.float32)), axis=-1) + eps)
+            return dots * head_inv_rms[None]
         return dots * inv_rms[None, ..., None]
     dots = jnp.einsum("bsd,gd->gbs", source, queries.astype(source.dtype), preferred_element_type=jnp.float32)
     return dots * inv_rms[None]
@@ -1607,8 +1620,14 @@ def _attn_res_mix(
     gate_index: int,
     eps: float,
     extras: dict[str, jax.Array | None] | None = None,
+    *,
+    head_norm: bool = False,
+    additive: bool = False,
 ) -> tuple[Float[Array, "B S D"], jax.Array]:
     """One AttnRes gate: softmax over the completed blocks (+ the running partial) and their weighted sum.
+
+    ``additive`` (Delta AttnRes) adds the plain sum of the sources to the mix; ``head_norm`` scores
+    each head's channel slice with its own RMS (``attn_res_head_norm``).
 
     ``extras`` (``_gate_extras``) optionally adds per-(gate, source) biases and masks, pull keys and a
     pull embedding logit; column ``n`` is block ``n`` and the last column is the partial.
@@ -1623,10 +1642,12 @@ def _attn_res_mix(
     logits = [_block_logit(bl, queries, gate_index) for bl in block_logits]
     if partial is not None:
         sources.append(partial)
-        logits.append(_attn_res_source_logits(partial, queries[gate_index][None], eps)[0])
+        logits.append(_attn_res_source_logits(partial, queries[gate_index][None], eps, head_norm)[0])
     logits = _bias_gate_logits(logits, extras, gate_index, sources, eps, has_partial=partial is not None)
     weights, mixed = _softmax_mix(logits, sources)
     mixed = _gate_variants(mixed, sources, extras, gate_index, eps, has_partial=partial is not None)
+    if additive:
+        mixed = mixed + _stream_sum(tuple(sources)).astype(jnp.float32)
     mean_weights = jax.lax.stop_gradient(jnp.mean(weights, axis=tuple(range(1, weights.ndim))))
     return reshard(mixed.astype(sources[0].dtype), _batch_spec()), _gate_z(logits), mean_weights
 
@@ -1655,6 +1676,9 @@ def _bias_gate_logits(
             logits = [jnp.einsum("bsd,d->bs", stream, pull_keys[c]) for c in columns]
         if embed_query is not None:
             logits = [jnp.einsum("bsd,d->bs", stream, embed_query[gate_index]), *logits[1:]]
+    temperature = extras.get("temperature")
+    if temperature is not None:
+        logits = [logit * temperature[gate_index] for logit in logits]
     for name in ("bias", "mask"):
         table = extras.get(name)
         if table is not None:
@@ -1716,17 +1740,20 @@ def _attn_res_layer(
     case this layer starts a fresh partial sum.
     """
     layer, blocks, block_logits, partial, queries, logit_bias = diff_args
-    h, z_attn, w_attn = _attn_res_mix(blocks, block_logits, partial, queries, 2 * layer_index, eps, logit_bias)
-    attn_branch = type(layer).attn_branch
-    if layer.attn.cfg.attn_res_remat_attention:
-        attn_branch = eqx.filter_checkpoint(attn_branch, policy=None)
     cfg = layer.attn.cfg
+    opts = {"head_norm": cfg.attn_res_head_norm, "additive": cfg.attn_res_additive}
+    h, z_attn, w_attn = _attn_res_mix(blocks, block_logits, partial, queries, 2 * layer_index, eps, logit_bias, **opts)
+    attn_branch = type(layer).attn_branch
+    if cfg.attn_res_remat_attention:
+        attn_branch = eqx.filter_checkpoint(attn_branch, policy=None)
     physical = layer_index % cfg.num_layers
     kda_ablation = (physical in cfg.kda_no_decay_layers, physical in cfg.kda_no_beta_layers)
     v_stream = None
+    v_stats: dict[str, jax.Array] = {}
     if cfg.attn_res_v_gate:
         v_gate = 2 * cfg.num_layers + layer_index
-        v_stream, _, _ = _attn_res_mix(blocks, block_logits, partial, queries, v_gate, eps, logit_bias)
+        v_stream, _, w_v = _attn_res_mix(blocks, block_logits, partial, queries, v_gate, eps, logit_bias, **opts)
+        v_stats[_ATTN_RES_W_V] = w_v
     attn_out = attn_branch(
         layer,
         h,
@@ -1741,10 +1768,11 @@ def _attn_res_layer(
     )
     partial = attn_out if partial is None else partial + attn_out
     # The MLP re-attends over the history including this layer's attention write.
-    h, z_mlp, w_mlp = _attn_res_mix(blocks, block_logits, partial, queries, 2 * layer_index + 1, eps, logit_bias)
+    h, z_mlp, w_mlp = _attn_res_mix(blocks, block_logits, partial, queries, 2 * layer_index + 1, eps, logit_bias, **opts)
     mlp_out, router_stats = layer.mlp_branch(h, mask)
     return partial + mlp_out, {
         **router_stats,
+        **v_stats,
         _ATTN_RES_Z: z_attn + z_mlp,
         _ATTN_RES_W_ATTN: w_attn,
         _ATTN_RES_W_MLP: w_mlp,
@@ -1757,14 +1785,31 @@ def _attn_res_layer_full(diff_args, mask, token_ids, use_long, layer_index, eps,
     ``(partial, blocks, block_logits, router_stats)`` like ``_attn_res_layer_passthrough``."""
     layer, blocks, block_logits, partial, queries, logit_bias = diff_args
     assert partial is None, "full AttnRes rolls every sublayer output into its own source"
-    sum_components = layer.attn.cfg.attn_res_sum_inputs
-    h, z_attn, w_attn = _attn_res_mix(blocks, block_logits, None, queries, 2 * layer_index, eps, logit_bias)
+    cfg = layer.attn.cfg
+    opts = {"head_norm": cfg.attn_res_head_norm, "additive": cfg.attn_res_additive}
+    sum_components = cfg.attn_res_sum_inputs
+    h, z_attn, w_attn = _attn_res_mix(blocks, block_logits, None, queries, 2 * layer_index, eps, logit_bias, **opts)
+    attn_side_stream = _stream_sum(blocks)
+    v_stats: dict[str, jax.Array] = {}
+    # V gate on KDA layers only: an MLA layer's K and V share one KV latent.
+    if cfg.attn_res_v_gate and isinstance(layer.attn, KimiDeltaAttention):
+        if sum_components:
+            raise ValueError("attn_res_v_gate with attn_res_full does not combine with attn_res_sum_inputs")
+        v_gate = 2 * cfg.num_layers + layer_index
+        attn_side_stream, _, v_stats[_ATTN_RES_W_V] = _attn_res_mix(
+            blocks, block_logits, None, queries, v_gate, eps, logit_bias, **opts
+        )
+        sum_components = ("v",)
     attn_out = type(layer).attn_branch(
-        layer, h, mask, use_long, use_long, token_ids, kv_share, _stream_sum(blocks), sum_components
+        layer, h, mask, use_long, use_long, token_ids, kv_share, attn_side_stream, sum_components
     )
+    sum_components = cfg.attn_res_sum_inputs
     blocks = (*blocks, attn_out)
-    block_logits = (*block_logits, _attn_res_source_logits(attn_out, queries[2 * layer_index + 1 :], eps))
-    h, z_mlp, w_mlp = _attn_res_mix(blocks, block_logits, None, queries, 2 * layer_index + 1, eps, logit_bias)
+    block_logits = (
+        *block_logits,
+        _attn_res_source_logits(attn_out, queries[2 * layer_index + 1 :], eps, cfg.attn_res_head_norm),
+    )
+    h, z_mlp, w_mlp = _attn_res_mix(blocks, block_logits, None, queries, 2 * layer_index + 1, eps, logit_bias, **opts)
     if "mlp" in sum_components:
         h = _stream_sum(blocks)
     sum_parts: tuple[str, ...] = ()
@@ -1776,7 +1821,13 @@ def _attn_res_layer_full(diff_args, mask, token_ids, use_long, layer_index, eps,
         sum_parts += ("router",)
     sum_parts = tuple(dict.fromkeys(sum_parts))
     mlp_out, router_stats = layer.mlp_branch(h, mask, _stream_sum(blocks) if sum_parts else None, sum_parts)
-    stats = {**router_stats, _ATTN_RES_Z: z_attn + z_mlp, _ATTN_RES_W_ATTN: w_attn, _ATTN_RES_W_MLP: w_mlp}
+    stats = {
+        **router_stats,
+        **v_stats,
+        _ATTN_RES_Z: z_attn + z_mlp,
+        _ATTN_RES_W_ATTN: w_attn,
+        _ATTN_RES_W_MLP: w_mlp,
+    }
     return mlp_out, blocks, block_logits, stats
 
 
@@ -1902,6 +1953,8 @@ class Transformer(eqx.Module):
     """Pull-AttnRes source keys (``attn_res_pull``); the last row is the partial's."""
     attn_res_query_embed: Float[Array, "G D"] | None
     """Per-gate pull projection for the embedding logit (``attn_res_pull_embed``)."""
+    attn_res_query_temp: Float[Array, "G H"] | None
+    """Per-gate (and per-head) logit multiplier (``attn_res_temperature``), init 1."""
     attn_res_query_dual: Float[Array, "G D"] | None
     """Second pseudo-query per gate (``attn_res_dual_query``)."""
     attn_res_query_dual_sel: Float[Array, "G D"] | None
@@ -1986,6 +2039,11 @@ class Transformer(eqx.Module):
             attn_res_query_embed=(
                 jnp.zeros((2 * cfg.num_layers * cfg.loop_passes + 1, cfg.hidden_dim), jnp.float32)
                 if cfg.attn_res_pull_embed
+                else None
+            ),
+            attn_res_query_temp=(
+                jnp.ones((_attn_res_num_gates(cfg) + cfg.num_layers * int(cfg.attn_res_v_gate), cfg.attn_res_heads))
+                if cfg.attn_res_temperature
                 else None
             ),
             attn_res_query_dual=(
@@ -2248,7 +2306,10 @@ class Transformer(eqx.Module):
                     assert partial is not None
                     blocks = (*blocks, partial)
                     # Score the new block only against the gates that can read it (this layer's onwards).
-                    block_logits = (*block_logits, _attn_res_source_logits(partial, queries[2 * eff :], eps))
+                    block_logits = (
+                        *block_logits,
+                        _attn_res_source_logits(partial, queries[2 * eff :], eps, cfg.attn_res_head_norm),
+                    )
                     partial = None
                 if pass_index > 0 and i == 0:
                     assert self.loop_inject_scale is not None
@@ -2276,6 +2337,9 @@ class Transformer(eqx.Module):
                 has_partial_attn = partial_before is not None
                 weight_logs[2 * eff] = (stats.pop(_ATTN_RES_W_ATTN), has_partial_attn)
                 weight_logs[2 * eff + 1] = (stats.pop(_ATTN_RES_W_MLP), not cfg.attn_res_full)
+                if _ATTN_RES_W_V in stats:
+                    # V-gate query rows follow the per-layer gates (loop_passes == 1).
+                    weight_logs[2 * num_layers + i] = (stats.pop(_ATTN_RES_W_V), has_partial_attn)
                 stats_out.append(stats)
             return (blocks, block_logits, partial), stats_out, z_out
 
@@ -2283,7 +2347,7 @@ class Transformer(eqx.Module):
             blocks, block_logits, partial = state
             final_index = queries.shape[0] - 1
             logits = [_block_logit(bl, queries, final_index) for bl in block_logits]
-            logits.append(_attn_res_source_logits(partial, queries[final_index][None], eps)[0])
+            logits.append(_attn_res_source_logits(partial, queries[final_index][None], eps, cfg.attn_res_head_norm)[0])
             logits = _bias_gate_logits(logits, logit_bias, final_index, [*blocks, partial], eps, has_partial=True)
             if cfg.attn_res_final_mode == "uniform":
                 logits = [jnp.zeros_like(logit) for logit in logits]
@@ -2292,6 +2356,8 @@ class Transformer(eqx.Module):
                 mixed = _gate_variants(mixed, [*blocks, partial], logit_bias, final_index, eps, has_partial=True)
             if cfg.attn_res_final_mode == "sum":
                 mixed = _stream_sum((*blocks, partial)).astype(jnp.float32)
+            elif cfg.attn_res_additive:
+                mixed = mixed + _stream_sum((*blocks, partial)).astype(jnp.float32)
             weight_logs[final_index] = (
                 jax.lax.stop_gradient(jnp.mean(weights, axis=tuple(range(1, weights.ndim)))),
                 True,
@@ -2314,7 +2380,11 @@ class Transformer(eqx.Module):
             z_total = (sum(z_terms) + z_final) / (len(z_terms) + 1)
             return mixed, merge_passes(per_pass_stats), z_total, max_weight, entropy
 
-        state = (extra_sources, tuple(_attn_res_source_logits(src, queries, eps) for src in extra_sources), hidden)
+        state = (
+            extra_sources,
+            tuple(_attn_res_source_logits(src, queries, eps, cfg.attn_res_head_norm) for src in extra_sources),
+            hidden,
+        )
         state, pass0_stats, pass0_z = run_pass(state, 0)
         aux_hidden = None
         if cfg.aux_lm_layer is not None:
@@ -2511,8 +2581,21 @@ def _gate_extras(model: "Transformer", num_gates: int) -> dict[str, jax.Array | 
         "dual_sel_bias": model.attn_res_query_dual_sel_bias,
         "blend": model.attn_res_query_blend,
         "blend_proj": model.attn_res_query_blend_proj,
+        "temperature": _temperature_rows(model),
     }
     return extras if any(v is not None for v in extras.values()) else None
+
+
+def _temperature_rows(model: "Transformer") -> jax.Array | None:
+    """``attn_res_query_temp`` in the query stack's row order: per-layer gates, V gates, then the final
+    gate (the parameter stores the final gate's row before the V gates). Single-head rows are [G, 1]."""
+    temp = model.attn_res_query_temp
+    if temp is None:
+        return None
+    cfg = model.config
+    gates = _attn_res_num_gates(cfg)
+    rows = jnp.concatenate([temp[: gates - 1], temp[gates:], temp[gates - 1 : gates]])
+    return rows if cfg.attn_res_heads > 1 else rows[:, 0:1]
 
 
 def _attn_res_num_gates(cfg: GrugModelConfig) -> int:
