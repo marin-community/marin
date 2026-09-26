@@ -73,7 +73,11 @@ def _scale_invariant_hyperball_updates(params, direction_updates, learning_rate:
             new_param_norm = jnp.sqrt(jnp.sum(jnp.square(new_param.astype(jnp.float32))))
             return new_param / jnp.maximum(new_param_norm, 1e-10) * param_norm - param
 
-        axes = tuple(range(1, param.ndim))
+        # Compute the Frobenius norm over the last two dims (the matrix axes).
+        # range(1, ndim) included the expert dimension for 4D
+        # [n_layers, n_experts, d_in, d_out] tensors, collapsing distinct
+        # expert matrices into a shared norm constraint (issue #8621).
+        axes = (param.ndim - 2, param.ndim - 1)
         param_norm = jnp.sqrt(jnp.sum(jnp.square(param), axis=axes, keepdims=True))
         update_norm = jnp.sqrt(jnp.sum(jnp.square(update), axis=axes, keepdims=True))
         new_param = param - learning_rate * update * param_norm / jnp.maximum(update_norm, 1e-10)
