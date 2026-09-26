@@ -132,13 +132,6 @@ _POSITION_METRICS = (
     "policy/log_ratio_pos_last256/log_ratio_abs_mean",
     "policy/log_ratio_pos_middle/log_ratio_abs_mean",
 )
-_GRADIENT_METRICS = (
-    "policy/grad_cosine",
-    "policy/grad_cosine_min",
-    "policy/grad_cosine_max",
-    "policy/grad_norm_reduced",
-    "policy/raw_grad_norm",
-)
 _CORRECTION_METRICS = (
     "policy/offpolicy_mask/masked_fraction",
     "policy/offpolicy_mask/vetoed_sequence_fraction",
@@ -168,7 +161,6 @@ _METRIC_NAMES = tuple(
             *_MISMATCH_BY_STALENESS_METRICS,
             *_LEARNER_DRIFT_METRICS,
             *_POSITION_METRICS,
-            *_GRADIENT_METRICS,
             *_CORRECTION_METRICS,
         }
     )
@@ -881,7 +873,6 @@ FROM windows ORDER BY start, execution
         "mismatch_by_staleness": _train_metric_points(_MISMATCH_BY_STALENESS_METRICS),
         "learner_drift": _train_metric_points(_LEARNER_DRIFT_METRICS),
         "position_dependence": _train_metric_points(_POSITION_METRICS),
-        "gradient_direction": _train_metric_points(_GRADIENT_METRICS),
         "corrections": (
             f"""
 WITH m AS (
