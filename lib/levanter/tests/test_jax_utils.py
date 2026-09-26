@@ -23,6 +23,7 @@ from levanter.utils.jax_utils import (
     tree_broadcast_to,
 )
 from levanter.utils.mesh import create_mesh_from_axis_specs
+from levanter.testing.cpu_devices import run_on_cpu_devices
 
 
 def _assert_can_put_with_sharding(array, sharding):
@@ -150,6 +151,33 @@ def test_best_effort_sharding_with_mesh(fsdp_size):
     array = array.reshape(2, 2, 2)
     sharding = best_effort_sharding(array.shape, mesh=mesh)
     _assert_can_put_with_sharding(array, sharding)
+
+
+def test_best_effort_sharding_uses_context_and_expert_for_checkpoint_staging():
+    run_on_cpu_devices(
+        """
+        import jax
+        import numpy as np
+        from jax.sharding import AxisType
+        from levanter.utils.jax_utils import best_effort_sharding
+        from levanter.utils.mesh import create_mesh_from_axis_specs
+
+        mesh = create_mesh_from_axis_specs(
+            ici_axes={"data": 1, "context": 2, "expert": 4, "model": 1},
+            dcn_axes={},
+            axis_types=(AxisType.Explicit,) * 4,
+        )
+        shape = (8, 16, 32)
+        sharding = best_effort_sharding(shape, mesh=mesh)
+        staged = jax.device_put(np.arange(np.prod(shape)).reshape(shape), sharding)
+        assert len(staged.addressable_shards) == 8
+        assert all(shard.data.size == np.prod(shape) // 8 for shard in staged.addressable_shards)
+        assert {"context", "expert"} == set().union(
+            *(entry if isinstance(entry, tuple) else (entry,) for entry in sharding.spec if entry is not None)
+        )
+        """,
+        device_count=8,
+    )
 
 
 def test_tree_broadcast_to_simple():

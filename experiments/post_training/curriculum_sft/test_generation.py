@@ -3,38 +3,34 @@
 
 import json
 
-import pyarrow.parquet as pq
-from marin.datakit.chat_normalize import CHAT_SCHEMA
-from marin.datakit.chat_render import render_chat_record
-from zephyr.writers import write_parquet_file
+from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
+from transformers.utils.chat_template_utils import render_jinja_template
 
-from experiments.post_training.curriculum_sft.chat_preparation import (
-    PrepareConfig,
-    prepare_chat_record,
-    prepare_generated_chat,
+from experiments.post_training.curriculum_sft.generation import (
+    GenerateProblemsConfig,
+    SolveProblemsConfig,
+    parse_problem_batch,
+    parse_solution_batch,
 )
-from experiments.post_training.curriculum_sft.generation import GenerateCurriculumSFTConfig, parse_batch
+
+PACKET = {
+    "capability_id": "d00.example",
+    "sampling_facets": [{"id": "f1", "description": "first"}],
+    "includes": ["Linear equations"],
+}
 
 
-def _response(index: int, *, task: str, continuation: list[dict[str, str]]) -> dict:
+def _problem_response(index: int, *, problem: str, answer: str, finish_reason: str = "tool_calls") -> dict:
+    arguments = json.dumps({"problem": problem, "answer": answer})
     return {
-        "custom_id": f"conversation-{index:05d}",
+        "custom_id": f"problem-{index:05d}",
         "response": {
             "status_code": 200,
             "body": {
                 "choices": [
                     {
-                        "finish_reason": "tool_calls",
-                        "message": {
-                            "tool_calls": [
-                                {
-                                    "function": {
-                                        "name": "submit_conversation",
-                                        "arguments": json.dumps({"task": task, "continuation": continuation}),
-                                    }
-                                }
-                            ]
-                        },
+                        "finish_reason": finish_reason,
+                        "message": {"tool_calls": [{"function": {"name": "submit_problem", "arguments": arguments}}]},
                     }
                 ]
             },
@@ -42,48 +38,102 @@ def _response(index: int, *, task: str, continuation: list[dict[str, str]]) -> d
     }
 
 
-def test_parse_batch_keeps_distinct_complete_conversations(tmp_path):
-    task = "A fictional shop sold three apples. How many did it sell?"
-    answer = [{"role": "assistant", "content": "It sold three apples."}]
-    responses = [
-        _response(0, task=task, continuation=answer),
-        _response(1, task=task, continuation=answer),
-        _response(2, task="Ask a different question.", continuation=[{"role": "user", "content": "More detail?"}]),
-    ]
-    config = GenerateCurriculumSFTConfig(
+def _solution_response(request_id: str, *, content: str, reasoning: str) -> dict:
+    return {
+        "custom_id": request_id,
+        "response": {
+            "status_code": 200,
+            "body": {"choices": [{"finish_reason": "stop", "message": {"content": content, "reasoning": reasoning}}]},
+        },
+    }
+
+
+def _character_count(row: dict) -> int:
+    return sum(len(message["content"]) + len(message["reasoning_content"] or "") for message in row["messages"])
+
+
+def _jsonl(responses: list[dict]) -> str:
+    return "\n".join(json.dumps(response) for response in responses)
+
+
+def test_parse_problem_batch_accounts_for_rejections_and_cycles_targets():
+    config = GenerateProblemsConfig(
         catalog_path="unused",
         output_path="unused",
         capability_id="d00.example",
-        requested_examples=3,
-        accepted_examples=1,
+        requested_problems=4,
         seed=17,
-        max_completion_tokens=4096,
-        task_specification="Use fictional shop questions.",
+        max_completion_tokens=1024,
+        task_specification="unused",
         relay_job="unused",
     )
-
-    task_records, chat_documents = parse_batch("\n".join(json.dumps(response) for response in responses), config)
-
-    assert [record["rejection_reason"] for record in task_records] == [None, "duplicate_task", "invalid_conversation"]
-    assert [record["accepted"] for record in task_records] == [True, False, False]
-    assert len(chat_documents) == 1
-    assert chat_documents[0]["source_id"] == "conversation-00000"
-
-    rendered = render_chat_record(chat_documents[0])["text"]
-    assert task in rendered
-    assert "It sold three apples." in rendered
-    assert rendered.index(task) < rendered.index("It sold three apples.")
-    prepared = prepare_chat_record(chat_documents[0])
-    assert prepared["messages"] == [
-        {"role": "user", "content": task},
-        {"role": "assistant", "content": "It sold three apples."},
+    responses = [
+        _problem_response(0, problem="Find x if 2x = 14.", answer="7"),
+        _problem_response(1, problem="find X if 2x  = 14.", answer="7"),
+        _problem_response(2, problem="Find the answer.", answer="???"),
+        _problem_response(3, problem="Find y.", answer="3", finish_reason="length"),
     ]
 
-    input_path = tmp_path / "generated"
-    (input_path / "chat").mkdir(parents=True)
-    write_parquet_file(chat_documents, str(input_path / "chat" / "part.parquet"), schema=CHAT_SCHEMA)
-    output_path = tmp_path / "prepared"
-    prepare_generated_chat(PrepareConfig(str(input_path), str(output_path)))
-    shards = list(output_path.glob("*.parquet"))
-    assert len(shards) == 1
-    assert pq.read_table(shards[0]).to_pylist() == [prepared]
+    records = parse_problem_batch(_jsonl(responses), config, PACKET)
+
+    assert [record["rejection_reason"] for record in records] == [
+        None,
+        "duplicate_problem",
+        "unparsable_answer",
+        "truncated",
+    ]
+    assert [record["facet_id"] for record in records] == ["f1", "includes-0", "f1", "includes-0"]
+    assert records[0]["difficulty"] != records[2]["difficulty"]
+
+
+def test_parse_solution_batch_keeps_first_verified_solution_with_reasoning():
+    config = SolveProblemsConfig(
+        problems_path="unused",
+        output_path="unused",
+        capability_id="d00.example",
+        samples_per_problem=5,
+        solutions_per_problem=1,
+        tokenizer="unused",
+        tokenizer_revision="unused",
+        max_sequence_tokens=200,
+        seed=17,
+        max_completion_tokens=1024,
+        relay_job="unused",
+    )
+    problem = {"request_id": "problem-00000", "problem": "Compute 1/2.", "answer": "\\frac{1}{2}"}
+    responses = [
+        _solution_response("problem-00000-s00", content="So \\boxed{2}.", reasoning="Guess."),
+        _solution_response("problem-00000-s01", content="The value is \\boxed{0.5}.", reasoning=""),
+        _solution_response("problem-00000-s02", content="So \\boxed{1/2}.", reasoning="x" * 300),
+        _solution_response("problem-00000-s03", content="Halve 1: \\boxed{0.5}.", reasoning="One half."),
+        _solution_response("problem-00000-s04", content="So \\boxed{\\tfrac12}.", reasoning="Half."),
+    ]
+
+    solutions, chat_rows = parse_solution_batch(_jsonl(responses), config, [problem], _character_count)
+
+    assert [record["rejection_reason"] for record in solutions] == [
+        "wrong_answer",
+        "no_reasoning",
+        "too_long",
+        None,
+        None,
+    ]
+    assert [record["selected"] for record in solutions] == [False, False, False, True, False]
+    assert chat_rows == [
+        {
+            "id": "problem-00000-s03",
+            "messages": [
+                {"role": "user", "content": "Compute 1/2.", "reasoning_content": None},
+                {"role": "assistant", "content": "Halve 1: \\boxed{0.5}.", "reasoning_content": "One half."},
+            ],
+            "chat_template_kwargs": {"enable_thinking": True},
+        }
+    ]
+
+    rendered = render_jinja_template(
+        [chat_rows[0]["messages"]],
+        chat_template=MARIN_CHAT_TEMPLATE,
+        bos_token="<|begin_of_text|>",
+        **chat_rows[0]["chat_template_kwargs"],
+    )[0][0]
+    assert rendered.index("Reasoning: /think") < rendered.index("<|start_think|>One half.<|end_think|>Halve 1")

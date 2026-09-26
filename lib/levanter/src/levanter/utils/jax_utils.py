@@ -63,6 +63,7 @@ def local_cpu_mesh():
         },
         dcn_axes={},
         devices=[cpu],
+        axis_types=(AxisType.Explicit,) * 4,
     )
     with use_cpu_device(), haliax.partitioning.set_mesh(mesh):
         yield mesh
@@ -359,6 +360,7 @@ def is_inexact_arrayish(x):
 
 
 def best_effort_sharding(shape, *, devices=None, mesh=None):
+    """Place an incoming tensor across available non-replica mesh axes when its shape permits."""
     if hasattr(shape, "shape"):
         shape = shape.shape
 
@@ -390,22 +392,22 @@ def best_effort_sharding(shape, *, devices=None, mesh=None):
         sharding = NamedSharding(mesh, PartitionSpec(*axis_names))
         return sharding
     else:
-        # get the existing mesh and find the FSDP axis
-        num_devices = mesh.shape[hax.partitioning.ResourceAxis.DATA]
+        # This is a staging layout, not the model's final layout. Limiting staging to
+        # `data` replicates an entire checkpoint when data=1 and context/expert carry
+        # the model shards, exhausting HBM before the converter can reshard it.
+        remaining_shape = list(shape)
+        axis_sharding: list[list[str]] = [[] for _ in shape]
+        for axis_name, axis_size in mesh.shape.items():
+            if axis_name in {"replica", "replica_dcn"} or axis_size == 1:
+                continue
+            for i in range(len(shape) - 1, -1, -1):
+                if remaining_shape[i] % axis_size == 0:
+                    axis_sharding[i].append(axis_name)
+                    remaining_shape[i] //= axis_size
+                    break
 
-        for i in range(len(shape) - 1, -1, -1):
-            shape_i = shape[i]
-            if shape_i % num_devices == 0:
-                sharded_axis = i
-                break
-        else:
-            return NamedSharding(mesh, PartitionSpec(None))
-
-        axis_sharding: list[str | None] = [None] * len(shape)
-        axis_sharding[sharded_axis] = hax.partitioning.ResourceAxis.DATA
-        sharding = NamedSharding(mesh, PartitionSpec(*axis_sharding))
-
-        return sharding
+        spec = PartitionSpec(*(tuple(axes) if len(axes) > 1 else axes[0] if axes else None for axes in axis_sharding))
+        return NamedSharding(mesh, spec)
 
 
 def estimated_free_device_memory(device=None) -> Optional[float]:
