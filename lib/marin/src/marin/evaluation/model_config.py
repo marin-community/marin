@@ -133,6 +133,7 @@ class GenerationConfig:
 
     max_gen_toks: int | None = None
     extra_gen_kwargs: Mapping[str, str] = field(default_factory=dict)
+    chat_template_kwargs: Mapping[str, bool | None] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

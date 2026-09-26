@@ -14,7 +14,7 @@ import { apiPost, useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
 import { formatCoverage, formatDelta, formatInterval, formatScore, formatTimestamp } from '@/utils/formatting'
 import { scoreTint } from '@/utils/score'
-import { cellsByModel, compareCells, fleetBest, isPartialCoverage, withVariant } from '@/utils/panel'
+import { cellsByModel, cohortWarning, compareCells, fleetBest, isPartialCoverage, withVariant } from '@/utils/panel'
 import { MAX_COMPARE, isSmokeEval } from '@/constants'
 import {
   FLAG_NOTES,
@@ -27,6 +27,7 @@ import {
   type PanelRow,
 } from '@/types/api'
 import EmptyState from '@/components/shared/EmptyState.vue'
+import PolicyRejections from '@/components/shared/PolicyRejections.vue'
 import EvalRail from '@/components/charts/EvalRail.vue'
 import HistoryModal from '@/components/charts/HistoryModal.vue'
 
@@ -74,6 +75,9 @@ const query = computed(() => {
 
 const { data, loading, error, refresh } = useApi<Panel>(() => query.value)
 const { data: meta, refresh: refreshMeta } = useApi<Meta>(() => 'api/meta')
+const comparabilityWarning = computed(() =>
+  meta.value ? cohortWarning(cohort.value || meta.value.default_cohort, meta.value) : null,
+)
 
 onMounted(() => {
   refresh()
@@ -421,19 +425,23 @@ function goToRun(runId: string) {
   router.push(`/runs/${runId}`)
 }
 function goToModel(model: string) {
-  router.push(`/models/${encodeURIComponent(model)}`)
+  router.push({
+    path: `/models/${encodeURIComponent(model)}`,
+    query: { cohort: cohort.value || data.value?.request.cohort_version },
+  })
 }
 </script>
 
 <template>
   <section>
     <div class="mb-4">
-      <h2 class="text-lg font-semibold">Panel</h2>
+      <h2 class="text-lg font-semibold">Panel{{ comparabilityWarning ? '*' : '' }}</h2>
       <p class="text-xs text-text-muted mt-0.5">
         One row per model, one column per benchmark, each cell the newest valid result. A score is the rate over the
         items a run graded; its 95% interval covers sampling error and widens by whatever share of the attempted items
         the run never graded. A benchmark column sorts on the score; Compare ranks on the interval.
       </p>
+      <p v-if="comparabilityWarning" class="text-xs text-status-warning mt-2">* {{ comparabilityWarning }}</p>
     </div>
 
     <!-- Fleet readout -->
@@ -482,8 +490,11 @@ function goToModel(model: string) {
       <label class="flex flex-col text-xs text-text-secondary gap-1">
         Cohort
         <select v-model="cohort" class="rounded border border-surface-border bg-surface px-2 py-1 text-sm min-w-[9rem]">
-          <option value="">Newest per benchmark</option>
-          <option v-for="version in meta?.versions ?? []" :key="version" :value="version">{{ version }}</option>
+          <option value="">Default: {{ meta?.default_cohort ?? 'verified cohort' }}</option>
+          <option value="all">Newest per benchmark (all cohorts)*</option>
+          <option v-for="version in meta?.versions ?? []" :key="version" :value="version">
+            {{ version }}{{ meta?.verified_cohorts.includes(version) ? '' : '*' }}
+          </option>
         </select>
       </label>
       <label class="flex flex-col text-xs text-text-secondary gap-1">
@@ -568,6 +579,8 @@ function goToModel(model: string) {
     >
       {{ error }}
     </div>
+
+    <PolicyRejections v-if="data" :rejections="data.policy_rejections" scope="this cohort" class="mb-4" />
 
     <div v-if="loading && !data" class="text-sm text-text-muted py-12 text-center">Loading…</div>
 

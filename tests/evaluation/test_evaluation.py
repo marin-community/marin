@@ -25,6 +25,7 @@ from finestore.eval import (
 from finestore.reader import ReadView
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.rpc import job_pb2
+from marin.evaluation.eval_policy import source_config_digest
 from marin.evaluation.evalchemy.runner import EvalchemyExecutor, EvalchemyRunConfig
 from marin.evaluation.evalchemy.runtime import EVALCHEMY_REQUIRED_EXTRAS
 from marin.evaluation.evaluation_config import EvalTaskConfig
@@ -746,6 +747,53 @@ def test_evalchemy_executor_uses_aggregate_count_when_custom_task_omits_sample_s
     assert sample_from_archive_row(archived).metrics == {}
 
 
+@pytest.mark.parametrize(
+    ("counts", "n_scored"),
+    [
+        ({"scored_count": 3}, 3),
+        ({"scored_count": 2}, 0),
+        ({"total_examples": 3, "scored_count": 2}, 0),
+        ({"sample_len": 3, "scored_count": 2}, 0),
+    ],
+)
+def test_evalchemy_executor_uses_code_task_scored_count_when_samples_omit_scores(
+    tmp_path, monkeypatch, counts, n_scored
+):
+    output_dir = f"file://{tmp_path / 'code-with-aggregate-grades'}"
+    rows = []
+    for doc_id in range(3):
+        row = _lm_eval_generation(doc_id, "python_pass@1", float(doc_id > 0), "def answer(): pass")
+        row.pop("metrics")
+        row.pop("python_pass@1")
+        rows.append(row)
+    _write_evalchemy_output(
+        output_dir,
+        "humanevalplus",
+        {"HumanEvalPlus": {"python_pass@1": 2 / 3, **counts}},
+        {"HumanEvalPlus": rows},
+    )
+    monkeypatch.setattr(
+        "marin.evaluation.evalchemy.runner._run_evalchemy_child",
+        lambda _model, _config, _output_dir, _env_vars: "/eval/completed",
+    )
+    executor = EvalchemyExecutor(
+        EvalchemyRunConfig(name="humanevalplus", tasks=(EvalTaskConfig(name="HumanEvalPlus", num_fewshot=0),))
+    )
+
+    outcome = executor(_remote_session(), output_dir, {})
+
+    assert outcome.coverage == {
+        "humanevalplus": TaskCoverage(
+            n_benchmark=3,
+            n_attempted=3,
+            n_scored=n_scored,
+            n_correct=None,
+            n_unanswered=0,
+            errors={} if n_scored == 3 else {"ungraded": 3},
+        )
+    }
+
+
 def test_evalchemy_executor_rebuilds_native_prompts_before_normalizing_rollouts(tmp_path, monkeypatch):
     output_dir = f"file://{tmp_path / 'native-prompt'}"
     prompt = json.dumps([{"role": "user", "content": "Question: 2+2?"}])
@@ -1338,6 +1386,7 @@ def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(t
     assert ifeval.model_dump(mode="json", exclude_none=True) == {
         "name": "ifeval",
         "mechanism": "evalchemy",
+        "source_digest": source_config_digest(evalchemy_config_path),
         "tasks": [
             {
                 "name": "ifeval",
@@ -1363,6 +1412,7 @@ def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(t
     assert evaluation.identity.eval_ref.model_dump(mode="json", exclude_none=True) == {
         "name": "aime-policy",
         "mechanism": "harbor",
+        "source_digest": source_config_digest(config_path),
         "tasks": [
             {
                 "name": "aime",

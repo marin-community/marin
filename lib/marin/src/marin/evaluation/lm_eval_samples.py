@@ -900,10 +900,16 @@ def _add_lm_eval_rows(
         raw = json.loads(line)
         extraction_filter = raw.get("filter")
         extraction_filter = extraction_filter if isinstance(extraction_filter, str) else None
+        repeat = raw.get("sample_repeat")
+        trial_id = "" if repeat is None else str(repeat)
         for sample in samples_from_lm_eval(task, raw, primary_metric_name):
             # An explicit filter only carries information a grading does not already name; a
             # filtered response without a per-sample grade would otherwise lose its filter.
-            store.add_sample(sample, extraction_filter=extraction_filter if sample.grading is None else None)
+            store.add_sample(
+                sample,
+                trial_id=trial_id,
+                extraction_filter=extraction_filter if sample.grading is None else None,
+            )
             if coverage is not None:
                 coverage.add(sample)
             count += 1

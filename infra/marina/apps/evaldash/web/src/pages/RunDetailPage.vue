@@ -145,7 +145,7 @@ async function copyPath() {
         </div>
         <div class="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-sm text-text-secondary">
           <RouterLink
-            :to="`/models/${encodeURIComponent(data.model.name)}`"
+            :to="{ path: `/models/${encodeURIComponent(data.comparison_model)}`, query: { cohort: data.version ?? 'unversioned' } }"
             class="font-mono text-accent hover:underline"
           >{{ data.model.name }}</RouterLink>
           <span class="text-text-muted">·</span>
@@ -160,6 +160,10 @@ async function copyPath() {
 
       <div v-if="data.error" class="rounded border border-status-danger-border bg-status-danger-bg text-status-danger text-sm px-3 py-2">
         <span class="font-semibold">Error:</span> {{ data.error }}
+      </div>
+
+      <div v-if="data.policy_violations.length" class="rounded border border-status-warning-border bg-status-warning-bg text-status-warning text-sm px-3 py-2">
+        Excluded from cohort comparisons: {{ data.policy_violations.join('; ') }}
       </div>
 
       <!-- Result: the grade is the hero; duration and finish time sit beside it in one strip -->

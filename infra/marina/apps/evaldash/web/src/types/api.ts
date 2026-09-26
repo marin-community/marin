@@ -141,12 +141,20 @@ export interface PanelFamily {
   default: string
 }
 
+export interface PolicyRejection {
+  run_id: string
+  model: string
+  benchmark: string
+  reasons: string[]
+}
+
 export interface Panel {
   benchmarks: string[]
   protocols: Record<string, { metric: string; kind: string }>
   panel: string[]
   families: PanelFamily[]
   rows: PanelRow[]
+  policy_rejections: PolicyRejection[]
   request: PanelRequest
 }
 
@@ -173,6 +181,7 @@ export interface Comparison {
   benchmarks: string[]
   shared: string[]
   rows: ComparisonRow[]
+  policy_rejections: PolicyRejection[]
   aggregates: Record<string, PanelAggregate | null>
 }
 
@@ -189,6 +198,8 @@ export interface EvalFamily {
 
 export interface Meta {
   models: string[]
+  default_cohort: string
+  verified_cohorts: string[]
   evals: string[]
   suites: EvalSuite[]
   families: EvalFamily[]
@@ -270,6 +281,7 @@ export interface EvalRecord {
   created_at: string
   user: string
   model: { name: string; location: string; backend: string }
+  comparison_model: string
   eval: { name: string; mechanism: string; tasks: EvalTask[] }
   hardware: { platform: string; accelerator: string; region_or_cluster: string }
   status: string
@@ -289,6 +301,7 @@ export interface EvalRecord {
     extra: Record<string, string>
   } | null
   headline: PanelCell | null
+  policy_violations: string[]
 }
 
 // --- Live Iris/finelog protobuf JSON (cluster.py) ---
@@ -548,6 +561,7 @@ export interface ModelRun {
   created_at: string | null
   version: string | null
   headline: PanelCell | null
+  policy_violations: string[]
   /** Why the run produced no headline; null when it did. */
   gap_reason: string | null
 }

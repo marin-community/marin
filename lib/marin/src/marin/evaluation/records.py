@@ -68,7 +68,7 @@ class MetricKind(StrEnum):
 class BenchmarkMetricRef(BaseModel):
     """One evaluator metric in its canonical and source vocabularies."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="allow")
 
     name: str
     source_name: str
@@ -107,7 +107,7 @@ class BenchmarkMetadataRef(BaseModel):
 class ModelResourceConfig(BaseModel):
     """Normalized placement and inference-worker resources for an evaluated model."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     hbm_gb: int | None
     gpu: dict[str, int]
@@ -119,7 +119,7 @@ class ModelResourceConfig(BaseModel):
 class ModelLocatorRef(BaseModel):
     """The immutable URI and producer identity of a resolved model artifact."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="allow")
 
     uri: str
     identity: str
@@ -128,7 +128,7 @@ class ModelLocatorRef(BaseModel):
 class SpeculativeServingRef(BaseModel):
     """The draft model and speculative-decoding policy used by vLLM."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="allow")
 
     method: str
     model: ModelLocatorRef
@@ -138,7 +138,7 @@ class SpeculativeServingRef(BaseModel):
 class ModelServeConfig(BaseModel):
     """Normalized model-server configuration preserved in an evaluation record."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="allow")
 
     backend: str
     tensor_parallel_size: int | None
@@ -163,16 +163,17 @@ class ModelServeConfig(BaseModel):
 class ModelGenerationConfig(BaseModel):
     """Normalized generation overrides preserved in an evaluation record."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="allow")
 
     max_gen_toks: int | None
     extra_gen_kwargs: dict[str, str]
+    chat_template_kwargs: dict[str, bool | None] = Field(default_factory=dict)
 
 
 class ModelAgentConfig(BaseModel):
     """Normalized agent request arguments preserved in an evaluation record."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="allow")
 
     agent_kwargs: dict[str, str]
 
@@ -180,11 +181,11 @@ class ModelAgentConfig(BaseModel):
 class ModelConfigRef(BaseModel):
     """The complete normalized model catalog schema used by one launch.
 
-    These blocks mirror the launcher's ``ModelConfig`` dataclasses. A key none of them names is
-    dropped, so a record a newer launcher wrote still reads.
+    These blocks mirror the launcher's ``ModelConfig`` dataclasses. Most blocks retain unknown
+    keys, while resource hints use the launcher's strict schema.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="allow")
 
     name: str
     location: str
@@ -212,6 +213,8 @@ class ModelRef(BaseModel):
     location: str
     backend: str
     config: ModelConfigRef | None = None
+    source_config: ModelConfigRef | None = Field(default=None, exclude_if=lambda value: value is None)
+    config_digest: str | None = None
 
 
 class EvalTaskRef(BaseModel):
@@ -254,6 +257,7 @@ class EvalchemyRef(BaseModel):
     batch_size: str | None
     seed: int | None
     extra_gen_kwargs: dict[str, str] = Field(default_factory=dict)
+    chat_template_kwargs: dict[str, bool | None] = Field(default_factory=dict, exclude_if=lambda value: not value)
     extra_model_args: dict[str, str | int | float | bool] = Field(default_factory=dict)
     max_length: int | None = None
     judge: EvalchemyJudgeRef | None = Field(default=None, exclude_if=lambda value: value is None)
@@ -306,6 +310,9 @@ class EvalRef(BaseModel):
 
     name: str
     mechanism: str
+    source_digest: str | None = Field(
+        default=None, pattern=r"^sha256:[0-9a-f]{64}$", exclude_if=lambda value: value is None
+    )
     family: str | None = Field(
         default=None,
         description="Benchmark this eval is a setting of, for the leaderboard column it shares",
