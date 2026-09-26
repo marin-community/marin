@@ -331,10 +331,9 @@ its records. Each view's run picker offers only its own loop. MarinSkyRL documen
 
 RL Post-training (sync) and its drill-downs read datasets built in `src/rl_observability.py`:
 `/v1/rl/overview` (`core`, `engine`, `gpu`, `spans`), `/v1/rl/generation` (`driver`) and
-`/v1/rl/train-step` (`steps`, `gpu`). Finelog reduces the overview's worker spans to each step's
-slowest rank, so no source grows with the rank count, and the overview's `spans` source keeps one
-row per bucket. The generation board's vLLM row mounts Inference diagnostics panels with their
-`identity` variable set to the run.
+`/v1/rl/train-step` (`steps`, `gpu`). The overview's `spans` source keeps one row per bucket,
+however many steps the bucket holds. The generation board's vLLM row mounts Inference diagnostics
+panels with their `identity` variable set to the run.
 
 The two inference dashboards keep the selected identity and time range when
 linked. The existing `marin-inference` UID now opens diagnostics, preserving old

@@ -498,8 +498,8 @@
     {
       "id": 20,
       "type": "table",
-      "title": "Span coverage: clock domain, ranks, failed steps",
-      "description": "Rows per role and `clock_domain`, the ranks that reported, and steps with `outcome=failure`. `_launch` rows measure launch time and are not comparable with `_wall` rows. A failed step looks fast.",
+      "title": "Span coverage: clock domain and failed steps",
+      "description": "Rows per role and `clock_domain`, the steps they cover, and steps with `outcome=failure`. A failed step looks fast.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -515,18 +515,6 @@
           "noValue": "No spans. The run reported a policy_step, so the trainer's timing sink is not reaching Finelog."
         },
         "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "ranks"
-            },
-            "properties": [
-              {
-                "id": "noValue",
-                "value": "—"
-              }
-            ]
-          },
           {
             "matcher": {
               "id": "byName",
@@ -559,11 +547,6 @@
               "selector": "clock",
               "text": "clock domain",
               "type": "string"
-            },
-            {
-              "selector": "ranks",
-              "text": "ranks",
-              "type": "number"
             },
             {
               "selector": "steps",
@@ -939,8 +922,8 @@
     {
       "id": 23,
       "type": "timeseries",
-      "title": "Signed span residuals: generate and policy_ppo_train",
-      "description": "`generate_span_residual` from the driver and `policy_span_residual` on the slowest rank, unclamped. Negative means child spans overlap.",
+      "title": "Signed span residual: generate",
+      "description": "`generate_span_residual` from the driver, unclamped. Negative means child spans overlap.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -962,7 +945,7 @@
             "axisLabel": "seconds the children do not account for"
           },
           "unit": "s",
-          "noValue": "No residual rows. Builds without span trees publish neither residual, and policy_span_residual also needs trainer.policy_train_spans=true."
+          "noValue": "No residual rows. Builds without the generate span tree do not publish one."
         },
         "overrides": []
       },
@@ -994,25 +977,6 @@
             {
               "selector": "generate_span_residual",
               "text": "generate_span_residual",
-              "type": "number"
-            }
-          ]
-        },
-        {
-          "refId": "B",
-          "targetRef": "rl_run",
-          "url": "/v1/rl/overview",
-          "view": "policy_residual",
-          "format": "timeseries",
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "policy_span_residual",
-              "text": "policy_span_residual",
               "type": "number"
             }
           ]

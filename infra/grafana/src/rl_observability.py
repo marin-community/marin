@@ -39,8 +39,6 @@ _CORE_NAMES = (
     "ray_spill_manager_objects_bytes",
     "work_completed",
 )
-_INCLUSIVE_CLOCKS = "('inclusive_wall', 'inclusive_launch')"
-_EXCLUSIVE_CLOCKS = "('exclusive_wall', 'exclusive_launch')"
 _ROLLOUT_COUNTER_NAMES = ("rollout_wait_seconds", "rollout_count")
 _DCGM_SERIES = (
     "gpu_sm_active_ratio",
@@ -112,7 +110,6 @@ def _phase_rows_cte(bucket: str, scope: str) -> str:
            execution_uid,
            json_get(attributes_json, 'role') AS role,
            json_get(attributes_json, 'step') AS step,
-           json_get(attributes_json, 'rank') AS worker_rank,
            json_get(attributes_json, 'phase') AS phase,
            json_get(attributes_json, 'parent') AS parent,
            json_get(attributes_json, 'root') AS root,
@@ -122,30 +119,6 @@ def _phase_rows_cte(bucket: str, scope: str) -> str:
     FROM "telemetry_v1.marinskyrl"
     WHERE {scope}
       AND name = 'phase_duration_seconds'
-)"""
-
-
-# Tags each worker span with its step's slowest rank: the longest policy_ppo_train, with ties going
-# to the rank id that sorts first as a string. NULLS LAST because DataFusion sorts NULLs first under
-# DESC.
-def _critical_rank_cte(phases: tuple[str, ...] = ()) -> str:
-    only = f" AND phase IN ({sql_values(phases)})" if phases else ""
-    return f"""tagged AS (
-    SELECT t, execution_uid, step, worker_rank, phase, parent, clock_domain, value,
-           FIRST_VALUE(worker_rank) OVER (
-               PARTITION BY execution_uid, step
-               ORDER BY CASE WHEN phase = 'policy_ppo_train' AND clock_domain IN {_INCLUSIVE_CLOCKS}
-                             THEN value ELSE -1 END DESC NULLS LAST,
-                        worker_rank
-               ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-           ) AS critical_rank,
-           MAX(CASE WHEN phase = 'policy_ppo_train' AND clock_domain IN {_INCLUSIVE_CLOCKS} THEN value END)
-               OVER (PARTITION BY execution_uid, step) AS parent_seconds,
-           SUM(CASE WHEN parent = 'policy_ppo_train' AND clock_domain IN {_EXCLUSIVE_CLOCKS}
-                         AND phase <> 'policy_span_residual' THEN value END)
-               OVER (PARTITION BY execution_uid, step, worker_rank) AS covered_seconds
-    FROM phase_rows
-    WHERE role = 'worker'{only}
 )"""
 
 
@@ -271,7 +244,7 @@ LIMIT {RL_MAX_GPU_ROWS + 1}
 """.strip()
     scope = _run_scope(clusters, run, start_ms, end_ms)
     spans_sql = f"""
-WITH {_phase_rows_cte(bucket, scope)}, {_critical_rank_cte(("policy_ppo_train", "policy_span_residual"))}, terminal AS (
+WITH {_phase_rows_cte(bucket, scope)}, terminal AS (
     SELECT execution_uid, role, status, reason,
            CASE WHEN COUNT(lost) = COUNT(*) THEN SUM(lost) END AS lost_records,
            CASE WHEN COUNT(queued) = COUNT(*) THEN SUM(queued) END AS queued_records
@@ -288,20 +261,14 @@ WITH {_phase_rows_cte(bucket, scope)}, {_critical_rank_cte(("policy_ppo_train", 
     )
     GROUP BY 1, 2, 3, 4
 )
-SELECT statistic, t, phase, parent, clock_domain,
+SELECT 'driver' AS statistic, t, phase, parent, clock_domain,
        SUM(value) AS sum_value, COUNT(value) AS sample_count, MAX(value) AS max_value
-FROM (
-    SELECT 'driver' AS statistic, t, phase, parent, clock_domain, value FROM phase_rows
-    WHERE role = 'trainer'
-      AND ((clock_domain = 'inclusive_wall' AND root = 'step') OR phase = 'generate_span_residual')
-    UNION ALL
-    SELECT 'critical_rank', t, phase, parent, clock_domain, value FROM tagged
-    WHERE worker_rank = critical_rank AND phase = 'policy_span_residual'
-)
-GROUP BY statistic, t, phase, parent, clock_domain
+FROM phase_rows
+WHERE role = 'trainer'
+  AND ((clock_domain = 'inclusive_wall' AND root = 'step') OR phase = 'generate_span_residual')
+GROUP BY t, phase, parent, clock_domain
 UNION ALL BY NAME
 SELECT 'coverage' AS statistic, role, clock_domain,
-       NULLIF(COUNT(DISTINCT worker_rank), 0) AS ranks,
        COUNT(DISTINCT execution_uid || ' ' || step) AS steps,
        CASE WHEN COUNT(outcome) = 0 THEN NULL
             ELSE COUNT(DISTINCT CASE WHEN outcome = 'failure' THEN execution_uid || ' ' || step END) END
@@ -419,7 +386,7 @@ GROUP BY 1, 2 ORDER BY 1
 """.strip()
         ),
         "span_coverage": (
-            "SELECT role, clock_domain AS clock, ranks, steps, failed_steps "
+            "SELECT role, clock_domain AS clock, steps, failed_steps "
             "FROM spans WHERE statistic = 'coverage' ORDER BY 1, 2"
         ),
         "run_outcome": (
@@ -447,10 +414,6 @@ GROUP BY 1, 2 ORDER BY 1
         "generate_residual": (
             "SELECT t, SUM(sum_value) / SUM(sample_count) AS generate_span_residual FROM spans "
             "WHERE statistic = 'driver' AND phase = 'generate_span_residual' GROUP BY 1 ORDER BY 1"
-        ),
-        "policy_residual": (
-            "SELECT t, SUM(sum_value) / SUM(sample_count) AS policy_span_residual FROM spans "
-            "WHERE statistic = 'critical_rank' AND phase = 'policy_span_residual' GROUP BY 1 ORDER BY 1"
         ),
     }
     return DashboardDataset(

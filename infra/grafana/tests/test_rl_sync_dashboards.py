@@ -1,13 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The sync RL boards' panels, driven through the bridge over the rows MarinSkyRL publishes.
-
-Driver spans carry ``clock_domain='inclusive_wall'`` and no rank. Worker spans carry a rank and a
-clock domain ending in ``_wall`` with ``trainer.policy_train_spans_synchronize`` and ``_launch``
-without it; both are fixtured. The two ranks are built so that a per-phase maximum across them
-exceeds the parent it decomposes.
-"""
+"""The sync RL boards' panels, driven through the bridge over the rows MarinSkyRL publishes."""
 
 import json
 import re
@@ -69,41 +63,11 @@ UNATTRIBUTED = (
 )
 DISPATCH_SECONDS = CONTAINER_SECONDS - DRIVER_PHASES["policy_train"]
 
-# Two ranks whose barrier and compute times are anti-correlated. Rank 1 is the slowest: it arrives
-# last, waits ~0 at the entry barrier, and does the full compute. A per-phase maximum over the pair
-# would report 2705 s inside a 2000 s parent. Rank 1's spans overlap, so they sum past its
-# policy_ppo_train and the residual it publishes is negative.
-WORKER_SPANS = {
-    "0": {
-        "policy_entry_barrier": 700.0,
-        "policy_forward": 300.0,
-        "policy_backward": 700.0,
-        "policy_optimizer_step": 60.0,
-        "policy_entropy_allreduce": 10.0,
-        "policy_metric_allreduce": 40.0,
-        "policy_final_barrier": 10.0,
-    },
-    "1": {
-        "policy_entry_barrier": 5.0,
-        "policy_forward": 500.0,
-        "policy_backward": 1290.0,
-        "policy_optimizer_step": 90.0,
-        "policy_entropy_allreduce": 15.0,
-        "policy_metric_allreduce": 50.0,
-        "policy_final_barrier": 60.0,
-    },
-}
-PPO_TRAIN = {"0": 1900.0, "1": 2000.0}
-CRITICAL_RANK = "1"
-
 EXECUTION = "iris:/atqamar/snowball-e6-rl-7786-attempt-0/0:attempt:0"
-# The run restarts from a checkpoint and repeats RETRIED_STEP in the same bucket, with the ranks'
-# roles swapped and every worker span RETRY_SCALE times longer. A step keyed by number alone would
-# give both attempts one slowest rank and one parent.
+# The run restarts from a checkpoint and repeats RETRIED_STEP in the same bucket.
 RETRY_EXECUTION = "iris:/atqamar/snowball-e6-rl-7786-attempt-0/0:attempt:1"
 RETRIED_STEP = 2
-RETRY_SCALE = 1.1
-# One terminal event per process: the trainer, and a worker per rank. Both attempts' workers fail
+# One terminal event per process: the trainer, and a worker per node. Both attempts' workers fail
 # the same way.
 TERMINAL_EVENTS = (
     (EXECUTION, "trainer", "failed", "ActorDiedError", (0,)),
@@ -112,15 +76,6 @@ TERMINAL_EVENTS = (
     (RETRY_EXECUTION, "worker", "failed", "ActorDiedError", (30, 0)),
 )
 QUEUED_AT_EXIT = 3
-
-# policy_training_step wraps these four. It ships under an inclusive clock domain, which keeps it
-# out of the bands.
-CONTAINED_SPANS = ("policy_forward", "policy_backward", "policy_optimizer_step", "policy_entropy_allreduce")
-PUBLISHED_RESIDUAL = PPO_TRAIN[CRITICAL_RANK] - sum(WORKER_SPANS[CRITICAL_RANK].values())
-
-# policy_span_publish ships the previous step's rows. Its parent is train_critic_and_policy, so it
-# stays out of the decomposition although its clock domain is exclusive.
-SPAN_PUBLISH_SECONDS = 3.0
 
 # The driver also publishes train_step and rollout_or_inference_wait on the critical_path clock, with
 # an outcome. One step fails, because a failed step renders like a fast one.
@@ -255,7 +210,7 @@ def _row(
 
 
 def _driver_rows(moment: datetime, seq: int, execution_uid: str = EXECUTION) -> list[tuple]:
-    """What FinelogTimingSink publishes: one row per phase, no rank, parented to the nearest recorded ancestor."""
+    """What FinelogTimingSink publishes: one row per phase, parented to the nearest recorded ancestor."""
 
     def row(name: str, value: float, **attributes: str) -> tuple:
         attributes = {**attributes, "role": "trainer", "step": str(seq)}
@@ -314,51 +269,21 @@ def _driver_rows(moment: datetime, seq: int, execution_uid: str = EXECUTION) -> 
     ]
 
 
-def _worker_rows(moment: datetime, seq: int, clock: str, execution_uid: str = EXECUTION) -> list[tuple]:
-    """What WorkerTimingSink publishes: exclusive spans per rank and the inclusive parents.
-
-    Ranks sit on different nodes, so the DCGM join credits both nodes to the run.
-    """
-
-    def row(worker_rank: str, name: str, value: float, **attributes: str) -> tuple:
-        return _row(
-            name=name,
-            value=value,
+def _worker_rows(moment: datetime, seq: int) -> list[tuple]:
+    """Each node's worker forwards Ray metric snapshots. No panel reads this one, but it puts the run
+    on the node, so the DCGM join credits both nodes to it."""
+    return [
+        _row(
+            name="ray_object_store_num_local_objects",
+            value=100.0,
             moment=moment,
             seq=seq,
-            execution_uid=execution_uid,
-            node_name=NODES[int(worker_rank) % len(NODES)],
+            node_name=node,
             role="worker",
-            attributes={**attributes, "role": "worker", "rank": worker_rank, "step": str(seq)},
+            attributes={"metric_source": "ray", "source_temporality": "current_snapshot"},
         )
-
-    def span(worker_rank: str, phase: str, seconds: float, parent: str, domain: str) -> tuple:
-        return row(
-            worker_rank,
-            "phase_duration_seconds",
-            seconds,
-            phase=phase,
-            root="step",
-            parent=parent,
-            clock_domain=f"{domain}_{clock}",
-        )
-
-    rows = []
-    retried = execution_uid == RETRY_EXECUTION
-    scale = RETRY_SCALE if retried else 1.0
-    for rank, spans in WORKER_SPANS.items():
-        worker_rank = str(len(WORKER_SPANS) - 1 - int(rank)) if retried else rank
-        spans = {phase: seconds * scale for phase, seconds in spans.items()}
-        contained = sum(spans[phase] for phase in CONTAINED_SPANS)
-        residual = PPO_TRAIN[rank] * scale - sum(spans.values())
-        rows += [span(worker_rank, phase, seconds, "policy_ppo_train", "exclusive") for phase, seconds in spans.items()]
-        rows += [
-            span(worker_rank, "policy_span_residual", residual, "policy_ppo_train", "exclusive"),
-            span(worker_rank, "policy_span_publish", SPAN_PUBLISH_SECONDS, "train_critic_and_policy", "exclusive"),
-            span(worker_rank, "policy_training_step", contained, "policy_ppo_train", "inclusive"),
-            span(worker_rank, "policy_ppo_train", PPO_TRAIN[rank] * scale, "train_critic_and_policy", "inclusive"),
-        ]
-    return rows
+        for node in NODES
+    ]
 
 
 def _node_agent_rows(moment: datetime, seq: int) -> list[tuple]:
@@ -441,12 +366,12 @@ def _vllm_rows(moment: datetime, seq: int) -> list[tuple]:
     return rows
 
 
-def _run_rows(clock: str) -> list[tuple]:
+def _run_rows() -> list[tuple]:
     rows = []
     for bucket in range(BUCKETS):
         moment = WINDOW_START + timedelta(minutes=5 * bucket)
         rows += _driver_rows(moment, bucket)
-        rows += _worker_rows(moment, bucket, clock)
+        rows += _worker_rows(moment, bucket)
         rows += _node_agent_rows(moment, bucket)
         rows += _vllm_rows(moment, bucket)
         # The run variable reads policy_step, so the run has to report one.
@@ -462,7 +387,6 @@ def _run_rows(clock: str) -> list[tuple]:
         )
     retry = WINDOW_START + timedelta(minutes=5 * RETRIED_STEP + 2)
     rows += _driver_rows(retry, RETRIED_STEP, RETRY_EXECUTION)
-    rows += _worker_rows(retry, RETRIED_STEP, clock, RETRY_EXECUTION)
     for execution_uid, role, status, reason, lost in TERMINAL_EVENTS:
         for process, records in enumerate(lost):
             rows.append(
@@ -499,11 +423,11 @@ def _empty_store() -> duckdb.DuckDBPyConnection:
     return database
 
 
-def _store(clock: str) -> duckdb.DuckDBPyConnection:
+def _store() -> duckdb.DuckDBPyConnection:
     database = _empty_store()
     service_index = _COLUMNS.index("service")
     routed: dict[str, list] = {}
-    for row in _run_rows(clock):
+    for row in _run_rows():
         stream = _SEMANTIC_STREAM[row[service_index]]
         routed.setdefault(stream, []).append(row)
     for stream, stream_rows in routed.items():
@@ -516,10 +440,8 @@ def _store(clock: str) -> duckdb.DuckDBPyConnection:
 
 
 @pytest.fixture
-def store(request) -> duckdb.DuckDBPyConnection:
-    """A synchronised run, whose worker spans ship as ``*_wall``. A test parametrized with "launch"
-    gets an unsynchronised run, whose worker spans ship as ``*_launch``."""
-    return _store(getattr(request, "param", "wall"))
+def store() -> duckdb.DuckDBPyConnection:
+    return _store()
 
 
 def _stitched() -> dict:
@@ -551,8 +473,6 @@ def _resolve(sql: str) -> str:
 
 BUCKET_MS = 5 * 60 * 1000
 BUCKET_TIMES = [_millis(WINDOW_START) + bucket * BUCKET_MS for bucket in range(BUCKETS)]
-# What a worker panel's mean over one bucket's steps reads, relative to a single attempt's step.
-BUCKET_SCALE = {t: (1.0 + RETRY_SCALE) / 2 if bucket == RETRIED_STEP else 1.0 for bucket, t in enumerate(BUCKET_TIMES)}
 _DATASETS = {
     "/v1/rl/overview": rl_overview_dataset,
     "/v1/rl/generation": rl_sync_generation_dataset,
@@ -761,16 +681,14 @@ def test_the_tail_is_reported_against_the_per_trajectory_mean(store) -> None:
     assert {round(value, 6) for _, value in rows} == {round(expected, 6)}
 
 
-def test_the_vitals_table_names_the_clock_domain_the_ranks_and_the_failed_steps(store) -> None:
-    """Which clock each sink stamped, whether any worker reported, and whether a step failed are all
-    invisible in a duration. Each clock domain is its own row, so a run that mixed two shows both."""
+def test_the_vitals_table_names_the_clock_domain_and_the_failed_steps(store) -> None:
+    """Which clock each sink stamped and whether a step failed are both invisible in a duration. Each
+    clock domain is its own row, so a run that mixed two shows both."""
     steps = BUCKETS + 1  # the retried attempt's repeat of a step is a step of its own
-    assert _panel_rows(store, "Span coverage: clock domain, ranks, failed steps") == [
-        ("trainer", "critical_path", None, steps, 1),
-        ("trainer", "exclusive_wall", None, steps, None),
-        ("trainer", "inclusive_wall", None, steps, None),
-        ("worker", "exclusive_wall", len(WORKER_SPANS), steps, None),
-        ("worker", "inclusive_wall", len(WORKER_SPANS), steps, None),
+    assert _panel_rows(store, "Span coverage: clock domain and failed steps") == [
+        ("trainer", "critical_path", steps, 1),
+        ("trainer", "exclusive_wall", steps, None),
+        ("trainer", "inclusive_wall", steps, None),
     ]
 
 
@@ -800,15 +718,10 @@ def test_the_outcome_table_reports_each_attempts_terminal_events_by_role(store) 
     assert _panel_rows(store, title) == []
 
 
-def test_the_residual_panel_reports_both_trees_signed(store) -> None:
-    (panel,) = _all_panels("Signed span residuals: generate and policy_ppo_train")
-    driver, worker = (_target_rows(store, target) for target in panel["targets"])
+def test_the_residual_panel_reports_the_published_generate_residual(store) -> None:
+    rows = _panel_rows(store, "Signed span residual: generate")
 
-    assert {round(value, 6) for _, value in driver} == {round(GENERATE_RESIDUAL, 6)}
-
-    assert PUBLISHED_RESIDUAL < 0, "the fixture no longer has overlapping spans"
-    # Signed, from the slowest rank. A negative residual is the only sign of overlapping spans.
-    assert worker == [(t, pytest.approx(PUBLISHED_RESIDUAL * BUCKET_SCALE[t])) for t in BUCKET_TIMES]
+    assert rows == [(t, pytest.approx(GENERATE_RESIDUAL)) for t in BUCKET_TIMES]
 
 
 def test_the_generate_shares_partition_the_phase(store) -> None:
@@ -855,22 +768,20 @@ def test_the_environment_split_is_a_partition_with_an_audit_band(store) -> None:
 
 
 LONG_RUN_STEPS = 500
-LONG_RUN_RANKS = 64
-RANKS_PER_NODE = 8
+LONG_RUN_NODES = 8
 GPUS_PER_NODE = 8
 LONG_RUN_STEP_MS = 60_000
 
 
-def _long_run_store(ranks: int, steps: int = LONG_RUN_STEPS) -> duckdb.DuckDBPyConnection:
-    """`steps` steps spread over the window of LONG_RUN_STEPS one-minute steps, across `ranks` worker
-    ranks eight to a node.
+def _long_run_store(nodes: int, steps: int = LONG_RUN_STEPS) -> duckdb.DuckDBPyConnection:
+    """`steps` steps spread over the window of LONG_RUN_STEPS one-minute steps, on `nodes` nodes.
 
-    The first step of this suite's run is the template: its worker rows are copied onto every rank
-    of the same parity, its node agent rows onto every GPU, and everything onto every step. Copied
-    in SQL, because a million rows built in Python would dominate the suite.
+    The first step of this suite's run is the template: one node's worker rows are copied onto every
+    node, its node agent rows onto every GPU, and everything onto every step. Copied in SQL, because a
+    million rows built in Python would dominate the suite.
     """
     database = _empty_store()
-    template = [row for row in _run_rows("wall") if row[_COLUMNS.index("seq")] == 0]
+    template = [row for row in _run_rows() if row[_COLUMNS.index("seq")] == 0]
     database.register(
         "template_rows", pa.table([list(column) for column in zip(*template, strict=True)], schema=_ARROW_SCHEMA)
     )
@@ -879,7 +790,7 @@ def _long_run_store(ranks: int, steps: int = LONG_RUN_STEPS) -> duckdb.DuckDBPyC
         # The driver, the engines and the run's other rows: one copy per step.
         (
             "telemetry_v1.marinskyrl",
-            "service = 'marinskyrl' AND json_get(attributes_json, 'rank') IS NULL",
+            "service = 'marinskyrl' AND COALESCE(json_get(resource_attributes_json, 'role'), '') <> 'worker'",
             "range(0)",
             "node_name",
             """CASE WHEN json_get(attributes_json, 'step') IS NULL THEN attributes_json
@@ -892,20 +803,19 @@ def _long_run_store(ranks: int, steps: int = LONG_RUN_STEPS) -> duckdb.DuckDBPyC
             "node_name",
             "attributes_json",
         ),
-        # A worker's spans: one copy per rank of the template rank's parity.
+        # A worker on every node.
         (
             "telemetry_v1.marinskyrl",
-            f"json_get(attributes_json, 'rank') = CAST(copy % 2 AS VARCHAR) AND copy < {ranks}",
-            f"range({ranks})",
-            f"'long-node-' || CAST(copy // {RANKS_PER_NODE} AS VARCHAR)",
-            """json_merge_patch(attributes_json, json_object(
-                   'step', CAST(step AS VARCHAR), 'rank', CAST(copy AS VARCHAR)))""",
+            f"json_get(resource_attributes_json, 'role') = 'worker' AND node_name = '{NODES[0]}'",
+            f"range({nodes})",
+            "'long-node-' || CAST(copy AS VARCHAR)",
+            "attributes_json",
         ),
-        # DCGM on every GPU of every node the ranks occupy.
+        # DCGM on every GPU of every node.
         (
             "telemetry_v1.node_agent",
             f"node_name = '{NODES[0]}' AND json_get(attributes_json, 'gpu_index') = '0'",
-            f"range({ranks // RANKS_PER_NODE * GPUS_PER_NODE})",
+            f"range({nodes * GPUS_PER_NODE})",
             f"'long-node-' || CAST(copy // {GPUS_PER_NODE} AS VARCHAR)",
             f"""json_merge_patch(attributes_json, json_object(
                    'gpu_uuid', 'GPU-' || CAST(copy AS VARCHAR),
@@ -926,16 +836,15 @@ def _long_run_store(ranks: int, steps: int = LONG_RUN_STEPS) -> duckdb.DuckDBPyC
     return database
 
 
-def test_no_source_grows_with_the_rank_count_on_a_long_run() -> None:
-    """Span data is steps x ranks x phases x clock domains, so every source reduces the ranks in
-    Finelog. At 500 steps across 64 ranks, each source holds under its cap, and a span or counter
-    source returns exactly as many rows as it does across eight.
+def test_no_source_grows_with_the_node_count_on_a_long_run() -> None:
+    """At 500 steps on eight nodes, each source holds under its cap, and every source but the DCGM
+    ones returns exactly as many rows as it does on one node.
 
     The overview also reduces the steps: ten times as many steps in the same window return the same
     rows. A per-step overview source would pass its cap on a long window of a fast run, and the cap
     fails the whole overview, including panels that do not read spans."""
-    wide, narrow = _long_run_store(LONG_RUN_RANKS), _long_run_store(RANKS_PER_NODE)
-    dense = _long_run_store(RANKS_PER_NODE, steps=10 * LONG_RUN_STEPS)
+    wide, narrow = _long_run_store(LONG_RUN_NODES), _long_run_store(1)
+    dense = _long_run_store(1, steps=10 * LONG_RUN_STEPS)
     start_ms = _millis(WINDOW_START)
     end_ms = start_ms + (LONG_RUN_STEPS + 1) * LONG_RUN_STEP_MS
 
