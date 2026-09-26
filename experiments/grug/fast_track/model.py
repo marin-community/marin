@@ -367,6 +367,21 @@ class GrugModelConfig:
     D/H chunks, and chunk h scores and mixes the sources on its own channel slice with its own softmax."""
     attn_res_v_gate: bool = False
     """A separate AttnRes pseudo-query per layer for the value projections (V reads its own mix)."""
+    attn_res_dual_query: bool = False
+    """Two pseudo-queries per AttnRes gate: each mixes the sources with its own softmax, and the two mixes
+    are merged per token by ``s = sigmoid(rms_norm(stream) . w + b)`` (``w``, ``b`` zero-init, so s = 1/2),
+    where the stream is the plain sum of the gate's sources. The second query is ``N(0, dual_init_std)``."""
+    attn_res_dual_init_std: float = 0.005
+    attn_res_blend: str = "none"
+    """Blend each AttnRes gate's mix with the uniform average of its sources (the standard residual
+    direction): ``input = l1 * mix + l2 * mean(sources)``. ``static``: learned scalars per gate, init 1;
+    ``dynamic``: plus ``rms_norm(stream) . w_k`` per token (``w`` zero-init)."""
+    mlp_in_center: bool = False
+    """Subtract the batch mean (over all tokens, stop-gradient) from every MoE input."""
+    mlp_in_whiten_power: float = 0.0
+    """Whiten every MoE input by ``C^(-p/2)``, ``C`` its batch covariance (after centering, stop-gradient,
+    eigenvalues trace-normalized and shrunk by ``mlp_in_whiten_eps``); 0 is off, 1 is full ZCA whitening."""
+    mlp_in_whiten_eps: float = 1e-3
     router_rank: int | None = None
     """Low-rank router: logits = f(x W_r_down) W_r_up with this inner width (None: the linear x W_r)."""
     router_rank_act: str = "none"
@@ -1468,7 +1483,7 @@ class Block(eqx.Module):
         sum_parts: tuple[str, ...] = (),
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         """``sum_stream`` feeds ``sum_parts`` (``router`` / ``latent`` / ``shared``) instead of ``h``."""
-        mlp_in = self.mlp_gated_norm(self.rms_mlp(h))
+        mlp_in = _spread_mlp_input(self.mlp_gated_norm(self.rms_mlp(h)), self.attn.cfg)
         part_inputs = None
         if sum_parts:
             assert sum_stream is not None
@@ -1500,6 +1515,24 @@ class Block(eqx.Module):
         x = x + self.attn_branch(x, mask, disable_rope, is_global)
         mlp_out, router_stats = self.mlp_branch(x, mask)
         return x + mlp_out, router_stats
+
+
+def _spread_mlp_input(x: Float[Array, "B S D"], cfg: GrugModelConfig) -> Float[Array, "B S D"]:
+    """Center and/or whiten an MoE input with its batch statistics (``mlp_in_center``,
+    ``mlp_in_whiten_power``). The statistics are stop-gradient, so the transform acts as a fixed
+    per-step reparameterization of the input projections."""
+    if not cfg.mlp_in_center and cfg.mlp_in_whiten_power == 0:
+        return x
+    flat = rearrange(x.astype(jnp.float32), "b s d -> (b s) d")
+    mean = jax.lax.stop_gradient(jnp.mean(flat, axis=0))
+    flat = flat - mean
+    if cfg.mlp_in_whiten_power > 0:
+        cov = jnp.einsum("td,te->de", flat, flat, out_sharding=P(None, None)) / flat.shape[0]
+        evals, evecs = jnp.linalg.eigh(jax.lax.stop_gradient(cov))
+        evals = jnp.maximum(evals, 0) / jnp.mean(evals) + cfg.mlp_in_whiten_eps
+        whiten = (evecs * evals ** (-cfg.mlp_in_whiten_power / 2)) @ evecs.T
+        flat = jnp.einsum("td,de->te", flat, jax.lax.stop_gradient(whiten), out_sharding=_batch_spec())
+    return reshard(rearrange(flat, "(b s) d -> b s d", b=x.shape[0]).astype(x.dtype), _batch_spec())
 
 
 @named_call
@@ -1576,6 +1609,7 @@ def _attn_res_mix(
         logits.append(_attn_res_source_logits(partial, queries[gate_index][None], eps)[0])
     logits = _bias_gate_logits(logits, extras, gate_index, sources, eps, has_partial=partial is not None)
     weights, mixed = _softmax_mix(logits, sources)
+    mixed = _gate_variants(mixed, sources, extras, gate_index, eps, has_partial=partial is not None)
     mean_weights = jax.lax.stop_gradient(jnp.mean(weights, axis=tuple(range(1, weights.ndim))))
     return reshard(mixed.astype(sources[0].dtype), _batch_spec()), _gate_z(logits), mean_weights
 
@@ -1610,6 +1644,39 @@ def _bias_gate_logits(
             row = table[gate_index]
             logits = [logit + row[c] for logit, c in zip(logits, columns, strict=True)]
     return logits
+
+
+def _gate_variants(
+    mixed: jax.Array,
+    sources: list[jax.Array],
+    extras: dict[str, jax.Array | None] | None,
+    gate_index: int,
+    eps: float,
+    *,
+    has_partial: bool,
+) -> jax.Array:
+    """Apply ``attn_res_dual_query`` and ``attn_res_blend`` to one gate's float32 mix of ``sources``."""
+    if extras is None or (extras.get("dual") is None and extras.get("blend") is None):
+        return mixed
+    total = sources[0].astype(jnp.float32)
+    for src in sources[1:]:
+        total = total + src.astype(jnp.float32)
+    stream = rms_norm(total, eps)
+    dual = extras.get("dual")
+    if dual is not None:
+        logits = [_attn_res_source_logits(src, dual[gate_index][None], eps)[0] for src in sources]
+        logits = _bias_gate_logits(logits, extras, gate_index, sources, eps, has_partial=has_partial)
+        _, mixed2 = _softmax_mix(logits, sources)
+        sel_logit = jnp.einsum("bsd,d->bs", stream, extras["dual_sel"][gate_index]) + extras["dual_sel_bias"][gate_index]
+        sel = jax.nn.sigmoid(sel_logit)[..., None]
+        mixed = sel * mixed + (1 - sel) * mixed2
+    blend = extras.get("blend")
+    if blend is not None:
+        lam = jnp.broadcast_to(blend[gate_index], (*mixed.shape[:-1], 2))
+        if extras.get("blend_proj") is not None:
+            lam = lam + jnp.einsum("bsd,kd->bsk", stream, extras["blend_proj"][gate_index])
+        mixed = lam[..., :1] * mixed + lam[..., 1:] * (total / len(sources))
+    return mixed
 
 
 def _gate_z(logits: list[jax.Array]) -> jax.Array:
@@ -1818,6 +1885,13 @@ class Transformer(eqx.Module):
     """Pull-AttnRes source keys (``attn_res_pull``); the last row is the partial's."""
     attn_res_query_embed: Float[Array, "G D"] | None
     """Per-gate pull projection for the embedding logit (``attn_res_pull_embed``)."""
+    attn_res_query_dual: Float[Array, "G D"] | None
+    """Second pseudo-query per gate (``attn_res_dual_query``)."""
+    attn_res_query_dual_sel: Float[Array, "G D"] | None
+    attn_res_query_dual_sel_bias: Float[Array, " G"] | None
+    attn_res_query_blend: Float[Array, "G 2"] | None
+    """Per-gate ``(l1, l2)`` of ``attn_res_blend``."""
+    attn_res_query_blend_proj: Float[Array, "G 2 D"] | None
     w_mtp: Float[Array, "D D"] | None
     """Next-token-embedding projection of the MTP head (``mtp_weight``)."""
     attn_res_query_loop: Float[Array, "P G D"] | None
@@ -1895,6 +1969,26 @@ class Transformer(eqx.Module):
             attn_res_query_embed=(
                 jnp.zeros((2 * cfg.num_layers * cfg.loop_passes + 1, cfg.hidden_dim), jnp.float32)
                 if cfg.attn_res_pull_embed
+                else None
+            ),
+            attn_res_query_dual=(
+                cfg.attn_res_dual_init_std
+                * random.normal(random.fold_in(key, 11), (_attn_res_num_gates(cfg), cfg.hidden_dim), jnp.float32)
+                if cfg.attn_res_dual_query
+                else None
+            ),
+            attn_res_query_dual_sel=(
+                jnp.zeros((_attn_res_num_gates(cfg), cfg.hidden_dim), jnp.float32) if cfg.attn_res_dual_query else None
+            ),
+            attn_res_query_dual_sel_bias=(
+                jnp.zeros((_attn_res_num_gates(cfg),), jnp.float32) if cfg.attn_res_dual_query else None
+            ),
+            attn_res_query_blend=(
+                jnp.ones((_attn_res_num_gates(cfg), 2), jnp.float32) if cfg.attn_res_blend != "none" else None
+            ),
+            attn_res_query_blend_proj=(
+                jnp.zeros((_attn_res_num_gates(cfg), 2, cfg.hidden_dim), jnp.float32)
+                if cfg.attn_res_blend == "dynamic"
                 else None
             ),
             w_mtp=(
@@ -2100,6 +2194,12 @@ class Transformer(eqx.Module):
         logit_bias = _gate_extras(self, queries.shape[0])
         if cfg.attn_res_final_mode not in ("attn", "uniform", "sum"):
             raise ValueError(f"attn_res_final_mode must be attn, uniform or sum, got {cfg.attn_res_final_mode!r}")
+        if cfg.attn_res_blend not in ("none", "static", "dynamic"):
+            raise ValueError(f"attn_res_blend must be none, static or dynamic, got {cfg.attn_res_blend!r}")
+        if (cfg.attn_res_dual_query or cfg.attn_res_blend != "none") and (
+            cfg.attn_res_v_gate or cfg.attn_res_heads > 1 or cfg.attn_res_pull or cfg.attn_res_pull_embed
+        ):
+            raise ValueError("attn_res_dual_query / attn_res_blend need single-head push AttnRes without V gates")
         if cfg.attn_res_sum_inputs and not cfg.attn_res_full:
             raise ValueError("attn_res_sum_inputs needs attn_res_full")
         allowed = {"q", "k", "v", "mlp", "mlp_shared", "mlp_routed", "mlp_router"}
@@ -2171,6 +2271,8 @@ class Transformer(eqx.Module):
             if cfg.attn_res_final_mode == "uniform":
                 logits = [jnp.zeros_like(logit) for logit in logits]
             weights, mixed = _softmax_mix(logits, [*blocks, partial])
+            if cfg.attn_res_final_mode == "attn":
+                mixed = _gate_variants(mixed, [*blocks, partial], logit_bias, final_index, eps, has_partial=True)
             if cfg.attn_res_final_mode == "sum":
                 mixed = _stream_sum((*blocks, partial)).astype(jnp.float32)
             weight_logs[final_index] = (
@@ -2387,8 +2489,18 @@ def _gate_extras(model: "Transformer", num_gates: int) -> dict[str, jax.Array | 
         "pull_keys": model.attn_res_query_pull,
         "embed_query": model.attn_res_query_embed,
         "mask": mask,
+        "dual": model.attn_res_query_dual,
+        "dual_sel": model.attn_res_query_dual_sel,
+        "dual_sel_bias": model.attn_res_query_dual_sel_bias,
+        "blend": model.attn_res_query_blend,
+        "blend_proj": model.attn_res_query_blend_proj,
     }
     return extras if any(v is not None for v in extras.values()) else None
+
+
+def _attn_res_num_gates(cfg: GrugModelConfig) -> int:
+    """AttnRes gates without V gates: two per layer per pass, plus the final gate."""
+    return 2 * cfg.num_layers * cfg.loop_passes + 1
 
 
 def _attn_res_num_sources(cfg: GrugModelConfig) -> int:
