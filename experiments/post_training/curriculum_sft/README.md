@@ -4,8 +4,10 @@
 `TASK_CURRICULUM` artifact in two GLM 5.3 steps:
 
 1. `generate_curriculum_problems` sends one request per problem. Each request names one content
-   target and one difficulty target (MATH levels 3–5, AMC 12 or early AIME); requests cycle
-   through every content target and then every difficulty. Content targets are the capability's
+   target, one difficulty target (MATH levels 3–5, AMC 12 or early AIME), and one answer form
+   (a specific value, every solution, a count, an extremal value, or a sum or product); requests
+   cycle through every combination. Without a required answer form, GLM phrases most equation
+   problems as "find the sum of all real solutions". Content targets are the capability's
    sampling facets followed by its `includes` entries, because many catalog capabilities declare
    few or no facets. GLM returns a problem and a short LaTeX reference answer.
    The step rejects truncated or malformed responses, duplicate problem text, and answers that
@@ -39,6 +41,7 @@ credentials. Write it under the trial's `ttl=30d` source prefix:
 
 ```bash
 uv run iris --cluster=marin job run --no-wait --target-cluster cw-us-east-08a \
+  --enable-extra-resources --cpu 2 --memory 16GB --disk 32GB \
   --job-name curriculum-math-generate-<date> \
   -e MARIN_PREFIX s3://marin-us-east-02a/tmp/ttl=30d/curriculum-math-20260924 \
   -e GLM_BULK_TOKEN "$GLM_BULK_TOKEN" \
