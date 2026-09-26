@@ -272,17 +272,18 @@ FULL = ScalePreset(
     evals="math500,gsm8k-0shot",
 )
 
-# The 67B-A2B smoke: four Megatron policy nodes hold the sharded model and
-# optimizer state; one node-sized expert-parallel engine generates.
+# The 67B-A2B smoke: four policy nodes, two reference nodes, and one
+# node-sized expert-parallel engine.
 # NCCL rank-drop failures on this stack appeared only at 32k contexts; this
 # preset stays at the 2k window.
 SNOWBALL_SMOKE = ScalePreset(
     label="snowball-smoke",
-    num_nodes=5,
+    num_nodes=7,
     role_plan=SkyRLRolePlan(
         colocate_all=False,
         policy_num_nodes=4,
         policy_num_gpus_per_node=GPUS_PER_NODE,
+        reference_num_nodes=2,
         num_inference_engines=1,
         inference_engine_tensor_parallel_size=1,
         inference_engine_pipeline_parallel_size=1,
@@ -301,18 +302,20 @@ SNOWBALL_SMOKE = ScalePreset(
     evals="gsm8k-smoke",
 )
 
-# The 67B-A2B measurement point: 4 Megatron policy nodes + 4 expert-parallel
-# engine nodes. The smoke averaged 884 generated tokens against a 1024 cap,
+# The 67B-A2B measurement point: four policy nodes, two reference nodes,
+# and four expert-parallel engine nodes. The smoke averaged 884 generated tokens
+# against a 1024 cap,
 # so the full runs widen the window to 3072 with a 2048 response budget
 # (the 1024-token prompt budget still admits every pool row). 60 steps at
 # 128x8 responses bounds an arm near the round-2 per-arm token budget.
 SNOWBALL_FULL = ScalePreset(
     label="snowball-full",
-    num_nodes=8,
+    num_nodes=10,
     role_plan=SkyRLRolePlan(
         colocate_all=False,
         policy_num_nodes=4,
         policy_num_gpus_per_node=GPUS_PER_NODE,
+        reference_num_nodes=2,
         num_inference_engines=4,
         inference_engine_tensor_parallel_size=1,
         inference_engine_pipeline_parallel_size=1,
@@ -346,15 +349,16 @@ SNOWBALL_MUONH_TUNING = TrainerTuning(
     sampling_reversion_mass=2.0,
 )
 
-# Memory probe for the round-4 recipe: the same four policy nodes as the full
-# preset, with micro_train raised to eight.
+# Memory probe for the round-4 recipe: four policy nodes and two reference
+# nodes, with micro_train raised to eight.
 SNOWBALL_SMOKE_R4 = ScalePreset(
     label="snowball-smoke-r4",
-    num_nodes=5,
+    num_nodes=7,
     role_plan=SkyRLRolePlan(
         colocate_all=False,
         policy_num_nodes=4,
         policy_num_gpus_per_node=GPUS_PER_NODE,
+        reference_num_nodes=2,
         num_inference_engines=1,
         inference_engine_tensor_parallel_size=1,
         inference_engine_pipeline_parallel_size=1,
@@ -376,11 +380,12 @@ SNOWBALL_SMOKE_R4 = ScalePreset(
 
 SNOWBALL_FULL_R4 = ScalePreset(
     label="snowball-full-r4",
-    num_nodes=8,
+    num_nodes=10,
     role_plan=SkyRLRolePlan(
         colocate_all=False,
         policy_num_nodes=4,
         policy_num_gpus_per_node=GPUS_PER_NODE,
+        reference_num_nodes=2,
         num_inference_engines=4,
         inference_engine_tensor_parallel_size=1,
         inference_engine_pipeline_parallel_size=1,
@@ -409,11 +414,12 @@ SNOWBALL_FULL_R4 = ScalePreset(
 # nodes; micro_train=2 keeps 2x9216 safely below that.
 SNOWBALL_SMOKE_R5 = ScalePreset(
     label="snowball-smoke-r5",
-    num_nodes=5,
+    num_nodes=7,
     role_plan=SkyRLRolePlan(
         colocate_all=False,
         policy_num_nodes=4,
         policy_num_gpus_per_node=GPUS_PER_NODE,
+        reference_num_nodes=2,
         num_inference_engines=1,
         inference_engine_tensor_parallel_size=1,
         inference_engine_pipeline_parallel_size=1,
@@ -435,11 +441,12 @@ SNOWBALL_SMOKE_R5 = ScalePreset(
 
 SNOWBALL_FULL_R5 = ScalePreset(
     label="snowball-full-r5",
-    num_nodes=8,
+    num_nodes=10,
     role_plan=SkyRLRolePlan(
         colocate_all=False,
         policy_num_nodes=4,
         policy_num_gpus_per_node=GPUS_PER_NODE,
+        reference_num_nodes=2,
         num_inference_engines=4,
         inference_engine_tensor_parallel_size=1,
         inference_engine_pipeline_parallel_size=1,

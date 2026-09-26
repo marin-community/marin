@@ -209,6 +209,11 @@ def test_skyrl_topology_accepts_node_local_dp8_engines() -> None:
 
     SkyRLTopology(num_nodes=8, gpus_per_node=8, gpu_variant="H100", role_plan=plan)
 
+    separate_reference = dataclasses.replace(plan, reference_num_nodes=2)
+    SkyRLTopology(num_nodes=10, gpus_per_node=8, gpu_variant="H100", role_plan=separate_reference)
+    with pytest.raises(ValueError, match="exceeds the allocated topology"):
+        SkyRLTopology(num_nodes=9, gpus_per_node=8, gpu_variant="H100", role_plan=separate_reference)
+
 
 def test_skyrl_topology_rejects_a_colocated_slice_that_does_not_tile_the_node() -> None:
     plan = dataclasses.replace(

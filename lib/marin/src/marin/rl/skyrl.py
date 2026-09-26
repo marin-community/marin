@@ -71,6 +71,7 @@ class SkyRLRolePlan:
     policy_mini_batch_size: int
     micro_train_batch_size_per_gpu: int
     n_samples_per_prompt: int
+    reference_num_nodes: int | None = None
 
 
 @dataclass(frozen=True)
@@ -104,6 +105,10 @@ class SkyRLTopology:
         for field_name in positive_fields:
             if getattr(plan, field_name) <= 0:
                 raise ValueError(f"SkyRL role plan {field_name} must be positive")
+        if plan.reference_num_nodes is not None and plan.reference_num_nodes <= 0:
+            raise ValueError("SkyRL reference_num_nodes must be positive")
+        if plan.colocate_all and plan.reference_num_nodes is not None:
+            raise ValueError("SkyRL separate reference nodes require colocate_all=false")
 
         if plan.policy_num_nodes > self.num_nodes:
             raise ValueError("SkyRL policy_num_nodes exceeds the allocated topology")
@@ -139,6 +144,8 @@ class SkyRLTopology:
                 f"x PP{plan.inference_engine_pipeline_parallel_size} x DP{plan.inference_engine_data_parallel_size})"
             )
         planned_gpus = policy_gpus if plan.colocate_all else policy_gpus + rollout_gpus
+        if plan.reference_num_nodes is not None:
+            planned_gpus += plan.reference_num_nodes * plan.policy_num_gpus_per_node
         allocated_gpus = self.num_nodes * self.gpus_per_node
         # MarinSkyRL derives optional critic, teacher, and draft-trainer claims from the recipe
         # and validates that the complete role plan exactly consumes this allocation.
@@ -436,10 +443,10 @@ def _role_plan_config_values(role_plan: SkyRLRolePlan) -> dict[str, object]:
     """Map Marin's typed role plan to the canonical SkyRL Hydra paths."""
     return {
         "trainer.placement.colocate_all": role_plan.colocate_all,
-        "trainer.placement.colocate_policy_ref": True,
+        "trainer.placement.colocate_policy_ref": role_plan.reference_num_nodes is None,
         "trainer.placement.policy_num_nodes": role_plan.policy_num_nodes,
         "trainer.placement.policy_num_gpus_per_node": role_plan.policy_num_gpus_per_node,
-        "trainer.placement.ref_num_nodes": role_plan.policy_num_nodes,
+        "trainer.placement.ref_num_nodes": role_plan.reference_num_nodes or role_plan.policy_num_nodes,
         "trainer.placement.ref_num_gpus_per_node": role_plan.policy_num_gpus_per_node,
         "trainer.train_batch_size": role_plan.train_batch_size,
         "trainer.policy_mini_batch_size": role_plan.policy_mini_batch_size,
@@ -538,16 +545,8 @@ def _validate_skyrl_backend_constraints(
     if critic_path is not _MISSING_CONFIG_VALUE and critic_path:
         raise ValueError("Marin SkyRL artifact topology does not yet describe a separate critic role")
 
-    if use_reference:
-        colocate_policy_ref = _declared_config_value(config, "trainer.placement.colocate_policy_ref")
-        if colocate_policy_ref is not _MISSING_CONFIG_VALUE and colocate_policy_ref is not True:
-            raise ValueError("Marin SkyRL artifact topology requires policy and reference roles to be colocated")
-        ref_num_nodes = _declared_config_value(config, "trainer.placement.ref_num_nodes")
-        ref_num_gpus = _declared_config_value(config, "trainer.placement.ref_num_gpus_per_node")
-        ref_num_nodes = plan.policy_num_nodes if ref_num_nodes in (_MISSING_CONFIG_VALUE, None) else ref_num_nodes
-        ref_num_gpus = plan.policy_num_gpus_per_node if ref_num_gpus in (_MISSING_CONFIG_VALUE, None) else ref_num_gpus
-        if (ref_num_nodes, ref_num_gpus) != (plan.policy_num_nodes, plan.policy_num_gpus_per_node):
-            raise ValueError("Marin SkyRL artifact topology requires policy and reference roles to share one footprint")
+    if not use_reference and plan.reference_num_nodes is not None:
+        raise ValueError("SkyRL separate reference nodes require a reference model")
 
 
 def _validate_skyrl_recipe(
