@@ -101,6 +101,7 @@ nav:
       - Default Steps: references/default-steps.md
       - Launching RL experiments: references/rl-launching.md
       - Training Configuration: references/train-config.md
+      - GRPO offline learning: references/grpo-replay.md
       - HBM Optimization: references/hbm-optimization.md
       - Perplexity Gap Analysis: references/perplexity-gap-analysis.md
       - Browsing Buckets with fsutil: references/fsutil.md
