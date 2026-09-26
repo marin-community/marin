@@ -16,15 +16,31 @@ import numpy as np
 from finestore.mismatch import MANIFEST_TABLE, PROBE_TABLE, SCORES_TABLE, ManifestRow, ProbeRow, ScoreRow
 from finestore.reader import ReadView
 
-from experiments.post_training.mismatch_probe.metrics import comparison_metrics, prompt_cluster_bootstrap
+from experiments.post_training.mismatch_probe.metrics import (
+    DEFAULT_EPS_CLIP,
+    comparison_metrics,
+    prompt_cluster_bootstrap,
+)
 
 ANALYSIS_VERSION = 1
 HEADLINE_METRICS = ("abs_p99", "k3", "share_beyond_2x", "token_ess_fraction_raw")
 PROBABILITY_BINS = ((0.0, 0.001), (0.001, 0.01), (0.01, 0.1), (0.1, 1.0))
 REPLAY_MODES = ("router_replay", "router_replay_filtered")
+ROUTE_LAYER_METRICS = ("set_agreement", "exact_slot_agreement", "replacement_fraction")
 BOOTSTRAP_DRAWS = 1000
 GENERATION_SCORING = "vllm.generate@0"
-NATIVE_SCORING = "trainer@0:native"
+TRAINER_SCORING_PREFIX = "trainer@"
+
+
+def _trainer_scoring(update: int, mode: str) -> str:
+    return f"{TRAINER_SCORING_PREFIX}{update}:{mode}"
+
+
+def _rescore_scoring(update: int, cache_mode: str = "off") -> str:
+    return f"vllm.rescore@{update}" if cache_mode == "off" else f"vllm.rescore@{update}:{cache_mode}"
+
+
+NATIVE_SCORING = _trainer_scoring(0, "native")
 
 
 @dataclass(frozen=True)
@@ -36,8 +52,8 @@ class ArchiveData:
 
 def _clip_thresholds(manifest: ManifestRow) -> tuple[float, float]:
     algorithm = json.loads(manifest.config_json).get("trainer", {}).get("algorithm", {})
-    low = float(algorithm.get("eps_clip_low", 0.2))
-    high = float(algorithm.get("eps_clip_high", 0.2))
+    low = float(algorithm.get("eps_clip_low", DEFAULT_EPS_CLIP))
+    high = float(algorithm.get("eps_clip_high", DEFAULT_EPS_CLIP))
     if not (0 <= low < 1 and high >= 0 and math.isfinite(low) and math.isfinite(high)):
         raise ValueError("mismatch archive has invalid PPO clipping thresholds")
     return low, high
@@ -48,12 +64,6 @@ def _probability_bucket(logprob: float) -> str:
     return next(
         (f"{lower:g}-{upper:g}" for lower, upper in PROBABILITY_BINS if lower <= probability < upper),
         "1",
-    )
-
-
-def _layer_numbers(metrics: dict) -> list[int]:
-    return sorted(
-        int(key.split("/")[0][6:]) for key in metrics if key.startswith("layer_") and key.endswith("/set_agreement")
     )
 
 
@@ -117,26 +127,26 @@ def _comparison_definitions(scores: dict[str, dict[str, ScoreRow]]) -> dict[str,
             comparisons[label] = target, reference
 
     def reread(update: int) -> str:
-        uncached = f"vllm.rescore@{update}"
-        return uncached if uncached in names else f"{uncached}:on"
+        uncached = _rescore_scoring(update)
+        return uncached if uncached in names else _rescore_scoring(update, "on")
 
     add("implementation_mismatch", NATIVE_SCORING, GENERATION_SCORING)
-    add("trainer_floor", "trainer@0:repeat", NATIVE_SCORING)
+    add("trainer_floor", _trainer_scoring(0, "repeat"), NATIVE_SCORING)
     add("generate_vs_reread", reread(0), GENERATION_SCORING)
     add("reread_mismatch", NATIVE_SCORING, reread(0))
-    add("prefix_cache_effect_at_0", "vllm.rescore@0:on", "vllm.rescore@0")
+    add("prefix_cache_effect_at_0", _rescore_scoring(0, "on"), _rescore_scoring(0))
     for mode in REPLAY_MODES:
-        add(f"{mode}_vs_generation", f"trainer@0:{mode}", GENERATION_SCORING)
-        add(f"{mode}_vs_reread", f"trainer@0:{mode}", reread(0))
+        add(f"{mode}_vs_generation", _trainer_scoring(0, mode), GENERATION_SCORING)
+        add(f"{mode}_vs_reread", _trainer_scoring(0, mode), reread(0))
     updates = sorted({row.update for rows in scores.values() for row in rows.values() if row.update > 0})
     for update in updates:
-        add(f"trainer_drift_after_{update}", f"trainer@{update}:native", NATIVE_SCORING)
-        add(f"observed_gap_after_{update}", f"trainer@{update}:native", GENERATION_SCORING)
+        add(f"trainer_drift_after_{update}", _trainer_scoring(update, "native"), NATIVE_SCORING)
+        add(f"observed_gap_after_{update}", _trainer_scoring(update, "native"), GENERATION_SCORING)
         add(f"vllm_drift_after_{update}", reread(update), reread(0))
-        add(f"mismatch_after_{update}", f"trainer@{update}:native", reread(update))
-        add(f"prefix_cache_effect_at_{update}", f"vllm.rescore@{update}:on", f"vllm.rescore@{update}")
+        add(f"mismatch_after_{update}", _trainer_scoring(update, "native"), reread(update))
+        add(f"prefix_cache_effect_at_{update}", _rescore_scoring(update, "on"), _rescore_scoring(update))
         for mode in REPLAY_MODES:
-            add(f"{mode}_vs_reread_after_{update}", f"trainer@{update}:{mode}", reread(update))
+            add(f"{mode}_vs_reread_after_{update}", _trainer_scoring(update, mode), reread(update))
     return comparisons
 
 
@@ -161,7 +171,9 @@ def _route_diagnostics(probes: list[ProbeRow], scores: dict[str, dict[str, Score
         for row in probes
     ]
     for name, sample_scores in scores.items():
-        if not name.startswith("trainer@") or any(sample_scores[row.sample_id].expert_choices is None for row in probes):
+        if not name.startswith(TRAINER_SCORING_PREFIX) or any(
+            sample_scores[row.sample_id].expert_choices is None for row in probes
+        ):
             continue
         selected = []
         replaced = []
@@ -225,7 +237,18 @@ def _route_diagnostics(probes: list[ProbeRow], scores: dict[str, dict[str, Score
             return metrics
 
         bootstrap = prompt_cluster_bootstrap(prompt_ids, calculate, seed=seed, draws=draws)
-        result[name] = {"metrics": bootstrap.point, "ci95": bootstrap.intervals}
+        layers = {}
+        for layer in range(captured[0].shape[1]):
+            keys = {metric: f"layer_{layer}/{metric}" for metric in ROUTE_LAYER_METRICS}
+            layers[str(layer)] = {
+                "metrics": {metric: bootstrap.point[key] for metric, key in keys.items()},
+                "ci95": {metric: bootstrap.intervals[key] for metric, key in keys.items() if key in bootstrap.intervals},
+            }
+        result[name] = {
+            "metrics": {key: value for key, value in bootstrap.point.items() if not key.startswith("layer_")},
+            "ci95": {key: value for key, value in bootstrap.intervals.items() if not key.startswith("layer_")},
+            "layers": layers,
+        }
     return result
 
 
@@ -271,7 +294,7 @@ def _drift_scale(probes: list[ProbeRow], scores: dict[str, dict[str, ScoreRow]],
     drift_mean_squares = []
     baseline_squared = []
     for update in updates:
-        drift_name = f"trainer@{update}:native"
+        drift_name = _trainer_scoring(update, "native")
         if drift_name not in scores:
             continue
         per_bucket: dict[str, dict[str, list[float]]] = {}
@@ -413,7 +436,7 @@ def analyze_archive(uri: str, *, bootstrap_draws: int = BOOTSTRAP_DRAWS, tis_cap
 
     positive_updates = sorted({score.update for rows in scores.values() for score in rows.values() if score.update > 0})
     for update in positive_updates:
-        names = (f"trainer@{update}:native", NATIVE_SCORING, GENERATION_SCORING)
+        names = (_trainer_scoring(update, "native"), NATIVE_SCORING, GENERATION_SCORING)
         if not all(name in scores for name in names):
             continue
         maximal_error = 0.0
@@ -562,7 +585,8 @@ def write_plots(report: dict, output_dir: Path) -> None:
         fig, ax = plt.subplots(figsize=(8, 4))
         for name, item in routes.items():
             layer_values = [
-                (layer, item["metrics"][f"layer_{layer}/set_agreement"]) for layer in _layer_numbers(item["metrics"])
+                (int(layer), details["metrics"]["set_agreement"])
+                for layer, details in sorted(item["layers"].items(), key=lambda entry: int(entry[0]))
             ]
             if layer_values:
                 ax.plot(
@@ -662,12 +686,12 @@ def render_markdown(report: dict) -> str:
             ]
         )
         for name, item in report["route_diagnostics"].items():
-            metrics = item["metrics"]
-            for layer in _layer_numbers(metrics):
+            for layer, details in sorted(item["layers"].items(), key=lambda entry: int(entry[0])):
+                metrics = details["metrics"]
                 lines.append(
-                    f"| {name} | {layer} | {metrics[f'layer_{layer}/set_agreement']:.1%} | "
-                    f"{metrics[f'layer_{layer}/exact_slot_agreement']:.1%} | "
-                    f"{metrics[f'layer_{layer}/replacement_fraction']:.1%} |"
+                    f"| {name} | {layer} | {metrics['set_agreement']:.1%} | "
+                    f"{metrics['exact_slot_agreement']:.1%} | "
+                    f"{metrics['replacement_fraction']:.1%} |"
                 )
         lines.append("")
     if report["timing"]:

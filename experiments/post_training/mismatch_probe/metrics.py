@@ -14,6 +14,7 @@ import numpy as np
 LOG_TWO = math.log(2.0)
 LOG_FLOAT64_MAX = math.log(np.finfo(np.float64).max)
 PERCENTILES = (0, 50, 75, 90, 99, 99.9, 100)
+DEFAULT_EPS_CLIP = 0.2
 
 
 @dataclass(frozen=True)
@@ -47,8 +48,8 @@ def comparison_metrics(
     *,
     advantages: Sequence[float | None] | None = None,
     tis_cap: float | None = None,
-    eps_clip_low: float = 0.2,
-    eps_clip_high: float = 0.2,
+    eps_clip_low: float = DEFAULT_EPS_CLIP,
+    eps_clip_high: float = DEFAULT_EPS_CLIP,
 ) -> dict[str, float | int]:
     """Compute metrics on precisely aligned valid response tokens.
 
@@ -138,7 +139,7 @@ def prompt_cluster_bootstrap(
     draws: int = 1000,
 ) -> BootstrapResult:
     """Return named point estimates, 95% intervals and seeded prompt-cluster draws,
-    omitting counts and nonfinite draws from intervals.
+    omitting token and sequence totals and nonfinite draws from intervals.
     """
     if not prompt_ids or draws < 1:
         raise ValueError("bootstrap requires prompts and at least one draw")

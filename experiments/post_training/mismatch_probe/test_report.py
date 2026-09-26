@@ -160,7 +160,13 @@ def test_report_recovers_same_weight_modes_paired_intervals_and_drift(tmp_path):
     assert report["paired_improvements"]["router_replay_filtered"]["abs_p99"]["ci95"][0] > 0
     assert report["checks"]["drift_identity_after_2"]["pass"]
     assert report["checks"]["generation_ratio_sanity"]["pass"]
-    assert "| router_replay_filtered_vs_generation | 0.01 |" in render_markdown(report)
+    rendered = render_markdown(report)
+    comparison_line = next(
+        line for line in rendered.splitlines() if line.startswith("| router_replay_filtered_vs_generation |")
+    )
+    assert float(comparison_line.split("|")[2].strip()) == pytest.approx(
+        report["comparisons"]["router_replay_filtered_vs_generation"]["metrics"]["abs_p99"], abs=0.005
+    )
     assert report["input_commit_token"] != "None"
     output = tmp_path / "figures"
     output.mkdir()
@@ -198,7 +204,7 @@ def test_report_route_agreement_excludes_missing_routes_and_tracks_replacements(
     assert replay["set_agreement"] == 1.0
     assert filtered["set_agreement"] == 0.75
     assert filtered["replacement_fraction"] == 0.25
-    assert "layer_0/set_agreement" in report["route_diagnostics"]["trainer@0:native"]["ci95"]
+    assert "set_agreement" in report["route_diagnostics"]["trainer@0:native"]["layers"]["0"]["ci95"]
 
     masked_root = tmp_path / "partially-masked"
     _archive(masked_root, with_routes=True, partial_route_mask=True)

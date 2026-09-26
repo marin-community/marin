@@ -43,6 +43,18 @@ class ArmSpec:
     use_sample_packing: bool
 
 
+@dataclass(frozen=True)
+class ProbeSettings:
+    seed: int
+    prompt_count: int
+    samples_per_prompt: int
+    updates: tuple[int, ...]
+    keep_fraction: float
+    cache_mode: str
+    reuse_probe: str | None
+    resume_path: str | None
+
+
 ARMS = {
     arm.name: arm
     for arm in (
@@ -54,15 +66,8 @@ ARMS = {
 
 def probe_recipe(
     arm: ArmSpec,
+    settings: ProbeSettings,
     *,
-    seed: int,
-    prompt_count: int,
-    samples_per_prompt: int,
-    updates: tuple[int, ...],
-    keep_fraction: float,
-    cache_mode: str,
-    reuse_probe: str | None,
-    resume_path: str | None,
     warmup: bool,
     marin_commit: str,
     skyrl_commit: str,
@@ -77,15 +82,15 @@ def probe_recipe(
             "flash_attn": False,
             "use_sample_packing": arm.use_sample_packing,
             "epochs": 8,
-            "max_steps": 1 if warmup else max(updates),
+            "max_steps": 1 if warmup else max(settings.updates),
             "update_epochs_per_batch": 1,
             "micro_forward_batch_size_per_gpu": 1,
             "ckpt_interval": 1,
             "eval_before_train": False,
             "eval_interval": -1,
-            "resume_mode": "from_path" if resume_path else "latest",
-            "resume_path": resume_path,
-            "reset_global_step_on_resume": bool(resume_path),
+            "resume_mode": "from_path" if settings.resume_path else "latest",
+            "resume_path": settings.resume_path,
+            "reset_global_step_on_resume": bool(settings.resume_path),
             "logger": "console",
             "project_name": "marin-mismatch-probe",
             "algorithm": {"advantage_estimator": "grpo", "use_kl_loss": False, "use_kl_in_reward": False},
@@ -101,14 +106,14 @@ def probe_recipe(
             },
             "mismatch_probe": {
                 "enabled": not warmup,
-                "prompts": {"count": prompt_count, "samples_per_prompt": samples_per_prompt},
-                "seed": seed,
+                "prompts": {"count": settings.prompt_count, "samples_per_prompt": settings.samples_per_prompt},
+                "seed": settings.seed,
                 "archive_uri": None,
-                "reuse_probe": reuse_probe,
-                "score_after_updates": list(updates),
+                "reuse_probe": settings.reuse_probe,
+                "score_after_updates": list(settings.updates),
                 "extra_trainer_modes": ["router_replay", "router_replay_filtered"],
-                "filtered_replay": {"keep_fraction": keep_fraction},
-                "rescore_prefix_cache": cache_mode,
+                "filtered_replay": {"keep_fraction": settings.keep_fraction},
+                "rescore_prefix_cache": settings.cache_mode,
                 "layer_tokens": 0,
                 "marin_commit": marin_commit,
                 "skyrl_commit": skyrl_commit,
@@ -122,7 +127,7 @@ def probe_recipe(
             "async_engine": True,
             "batched": False,
             "gpu_memory_utilization": 0.35,
-            "enable_prefix_caching": cache_mode != "off",
+            "enable_prefix_caching": settings.cache_mode != "off",
             "require_exact_chat_transport": True,
             "engine_init_kwargs": {
                 "enable_return_routed_experts": True,
@@ -146,19 +151,12 @@ def probe_recipe(
 def build_arms(
     *,
     arms: tuple[ArmSpec, ...],
+    settings: ProbeSettings,
     model_uri: str,
     data_uri: str,
     fixture_version: str,
     runtime_commit: str,
-    resume_path: str | None,
-    reuse_probe: str | None,
     warmup: bool,
-    seed: int,
-    prompt_count: int,
-    samples_per_prompt: int,
-    updates: tuple[int, ...],
-    keep_fraction: float,
-    cache_mode: str,
 ) -> dict[str, ArtifactStep[SkyRLRun]]:
     """Build separate training artifacts for arms sharing model and data inputs."""
     model = ArtifactStep.adopt(
@@ -210,14 +208,7 @@ def build_arms(
                 version=resolve_version(name, None),
                 config_yaml=probe_recipe(
                     arm,
-                    seed=seed,
-                    prompt_count=prompt_count,
-                    samples_per_prompt=samples_per_prompt,
-                    updates=updates,
-                    keep_fraction=keep_fraction,
-                    cache_mode=cache_mode,
-                    reuse_probe=reuse_probe,
-                    resume_path=resume_path,
+                    settings,
                     warmup=warmup,
                     marin_commit=marin_commit,
                     skyrl_commit=runtime_commit,
@@ -230,7 +221,7 @@ def build_arms(
                 validation_data=(ArtifactDataSource(data, relative_path="validation.parquet"),),
                 topology=topology,
                 retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
-                seed=seed,
+                seed=settings.seed,
             ),
             execution,
             export_hf=False,
@@ -270,21 +261,24 @@ def main(
     keep_fraction: float,
     cache_mode: str,
 ) -> dict[str, ArtifactStep[SkyRLRun]]:
-    return build_arms(
-        arms=tuple(ARMS[name] for name in arm_names),
-        model_uri=model_uri,
-        data_uri=data_uri,
-        fixture_version=fixture_version,
-        runtime_commit=runtime_commit,
-        resume_path=resume_path,
-        reuse_probe=reuse_probe,
-        warmup=warmup,
+    settings = ProbeSettings(
         seed=seed,
         prompt_count=prompt_count,
         samples_per_prompt=samples_per_prompt,
         updates=updates,
         keep_fraction=keep_fraction,
         cache_mode=cache_mode,
+        reuse_probe=reuse_probe,
+        resume_path=resume_path,
+    )
+    return build_arms(
+        arms=tuple(ARMS[name] for name in arm_names),
+        settings=settings,
+        model_uri=model_uri,
+        data_uri=data_uri,
+        fixture_version=fixture_version,
+        runtime_commit=runtime_commit,
+        warmup=warmup,
     )
 
 

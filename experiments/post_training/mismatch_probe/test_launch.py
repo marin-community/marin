@@ -1,24 +1,30 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import replace
+
 import yaml
 
-from experiments.post_training.mismatch_probe.launch import ARMS, probe_recipe
+from experiments.post_training.mismatch_probe.launch import ARMS, ProbeSettings, probe_recipe
 
 
 def test_probe_recipe_loads_warm_checkpoint_and_resets_relative_updates():
+    settings = ProbeSettings(
+        seed=17,
+        prompt_count=2,
+        samples_per_prompt=2,
+        updates=(0, 1, 2),
+        keep_fraction=0.5,
+        cache_mode="off",
+        reuse_probe=None,
+        resume_path=None,
+    )
+
     def recipe(resume_path):
         return yaml.safe_load(
             probe_recipe(
                 ARMS["native-layout"],
-                seed=17,
-                prompt_count=2,
-                samples_per_prompt=2,
-                updates=(0, 1, 2),
-                keep_fraction=0.5,
-                cache_mode="off",
-                reuse_probe=None,
-                resume_path=resume_path,
+                replace(settings, resume_path=resume_path),
                 warmup=False,
                 marin_commit="a" * 40,
                 skyrl_commit="b" * 40,
