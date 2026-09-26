@@ -292,6 +292,13 @@ _STANDARD_EVALCHEMY_EVALS: tuple[str, ...] = (
     "mbppplus",
     "mmlu-smoke",
     "gsm8k-smoke",
+    "mmlu-pro",
+    "gpqa-diamond",
+    "cruxeval",
+    "financebench",
+    "ifeval",
+    "ifbench",
+    "mrcr",
 )
 
 EVALS: dict[str, EvaluationDefinition] = {

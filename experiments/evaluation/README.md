@@ -199,10 +199,10 @@ uv run python -m experiments.evaluation.cli launch \
   --dry-run
 ```
 
-The checked-in `mmlu-pro`, `gpqa-diamond`, `cruxeval`, `financebench`, `ifbench`, and
-`mrcr` files preserve Marin's publication-policy defaults. Select them individually with repeatable
-`--evalchemy-config` options on a compatible backend; the `chat` suite remains the shorter
-general-purpose selection. The policies were validated on H100. GPQA Diamond's seeded requests are
+The checked-in `mmlu-pro`, `gpqa-diamond`, `cruxeval`, `financebench`, `ifeval`, `ifbench`, and
+`mrcr` files preserve Marin's publication-policy defaults. They are registered by name, so select
+them with `--evals` or `eval_step`; they belong to no suite, and the `chat` suite remains the
+shorter general-purpose selection. The policies were validated on H100. GPQA Diamond's seeded requests are
 not compatible with the TPU vLLM backend.
 
 Marin decodes the `evalchemy_config.EvaluationConfig`-compatible fields without importing Evalchemy.
