@@ -332,8 +332,6 @@ class GrugModelConfig:
             # QB routing takes top-(k+1) and keeps the last entry as the threshold alpha, so a
             # full-bank top-k asks `jax.lax.top_k` for more entries than the router has experts.
             raise ValueError("num_experts_per_token must be < num_experts, because QB routing selects top-(k+1)")
-        if self.mla and not self.inkling_relpos:
-            raise ValueError("mla has no decoupled RoPE, so it requires inkling_relpos for position information")
         if self.local_mixer == LocalMixer.KDA and not self.attn_res:
             raise ValueError("local_mixer=kda requires attn_res (KDA layers run in the unrolled AttnRes loop)")
 
@@ -474,7 +472,8 @@ class CausalSelfAttention(eqx.Module):
                 w_o=reshard(_init_weight(k_o, (n * h, d), std), P("model", _FSDP_AXES)),
                 attn_gate=attn_gate,
                 sconv_k=(ShortConv.init(n * h, cfg.sconv_kernel) if cfg.sconv and "k" in cfg.sconv_sites else None),
-                rel_pos=InklingRelPos.init(cfg, key=k_rel),
+                # Without Inkling the MLA layers are NoPE (they are global, so RoPE is disabled there).
+                rel_pos=InklingRelPos.init(cfg, key=k_rel) if cfg.inkling_relpos else None,
                 w_dkv=reshard(_init_weight(k_dkv, (d, kvl), std), P(_FSDP_AXES, None)),
                 kv_latent_norm=RMSNorm.init(kvl, cfg.layer_norm_eps),
                 w_uk=reshard(_init_weight(k_uk, (kvl, n * h), std), P(None, "model")),
