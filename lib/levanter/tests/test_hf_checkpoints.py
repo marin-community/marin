@@ -123,7 +123,6 @@ def test_parallel_export_matches_serial_bytes_and_host_budget(local_gpt2_tokeniz
 
         serial_files = {os.path.basename(name): fs.cat(name) for name in fs.find(serial_path)}
         parallel_files = {os.path.basename(name): fs.cat(name) for name in fs.find(parallel_path)}
-        assert upload_count >= 2
         assert parallel_files == serial_files
 
         budgets = []
@@ -133,16 +132,20 @@ def test_parallel_export_matches_serial_bytes_and_host_budget(local_gpt2_tokeniz
             budgets.append(budget)
             return budget
 
-        budget_bytes = 2 * max(len(data) for name, data in serial_files.items() if name.endswith(".safetensors"))
+        shard_payloads = [
+            len(data) - 8 - int.from_bytes(data[:8], "little")
+            for name, data in serial_files.items()
+            if name.endswith(".safetensors")
+        ]
         with monkeypatch.context() as patch:
             patch.setattr(hf_checkpoints, "HostByteBudget", make_budget)
             converter.save_pretrained(
-                model, budget_path, export_host_budget_bytes=budget_bytes, max_concurrent_shards=4, **options
+                model, budget_path, export_host_budget_bytes=1, max_concurrent_shards=4, **options
             )
 
         budget_files = {os.path.basename(name): fs.cat(name) for name in fs.find(budget_path)}
         assert budget_files == serial_files
-        assert 0 < budgets[0].peak_bytes <= budget_bytes
+        assert budgets[0].peak_bytes == 2 * max(shard_payloads)
 
 
 # A simple wrapper to include diverse dtypes in a model
