@@ -87,6 +87,9 @@ _CONTENT_TYPES = {
 # :func:`is_scratch_artifact`.
 _SCRATCH_SEGMENT = re.compile(r"(?:^|/)tmp[a-z0-9_]{6,}/")
 _INFRASTRUCTURE_ERROR_PREFIX = f"[{EVALCHEMY_INFRASTRUCTURE_ERROR}]"
+# The pinned Evalchemy normalizer marks these failures in its native sample table. Preserve that
+# decision when Marin rebuilds the same rows from Evalchemy's raw source artifacts.
+_INFRASTRUCTURE_FAILURE_CATEGORIES = frozenset({"agent_timeout", "model_transport", "grader_infrastructure"})
 EVALCHEMY_SOURCE_ROOT = PurePosixPath(prefix_join(SOURCES_PREFIX, "evalchemy"))
 EVALCHEMY_NATIVE_SOURCE_DIR = "native"
 
@@ -124,6 +127,7 @@ _LM_EVAL_STRUCTURAL_KEYS = frozenset(
         "sample_shard",
         "source_id",
         "task_name",
+        "failure_category",
         "doc_hash",
         "prompt_hash",
         "target_hash",
@@ -291,6 +295,10 @@ def sample_from_lm_eval(task: str, raw: dict, primary_metric_name: str | None = 
     filtered = raw.get("filtered_resps")
     if isinstance(filtered, list) and filtered:
         filtered = filtered[0]
+    failure_category = raw.get("failure_category")
+    if isinstance(failure_category, str) and failure_category in _INFRASTRUCTURE_FAILURE_CATEGORIES:
+        output = f"{_INFRASTRUCTURE_ERROR_PREFIX} {failure_category}"
+        filtered = output
     messages = _parse_chat_messages(prompt)
     return EvalSample(
         kind=SampleKind.GENERATION,

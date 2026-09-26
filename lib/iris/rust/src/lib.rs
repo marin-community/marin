@@ -28,7 +28,7 @@ use axum::Router;
 use hyper_rustls::HttpsConnector;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
-use hyper_util::rt::TokioExecutor;
+use hyper_util::rt::{TokioExecutor, TokioTimer};
 use percent_encoding::{percent_decode_str, utf8_percent_encode, NON_ALPHANUMERIC};
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
@@ -58,6 +58,7 @@ const DEFAULT_PROXY_TIMEOUT: Duration = Duration::from_secs(DEFAULT_PROXY_TIMEOU
 // Eval traffic can hold thousands of upstream requests in flight. Reuse the
 // connections that complete instead of reconnecting for every next request.
 const UPSTREAM_IDLE_CONNECTIONS_PER_HOST: usize = 256;
+const IDLE_CONNECTION_TIMEOUT: Duration = Duration::from_secs(90);
 const X_FORWARDED_FOR: HeaderName = HeaderName::from_static("x-forwarded-for");
 const X_FORWARDED_HOST: HeaderName = HeaderName::from_static("x-forwarded-host");
 const X_FORWARDED_PREFIX: HeaderName = HeaderName::from_static("x-forwarded-prefix");
@@ -447,6 +448,8 @@ fn https_connector() -> HttpsConnector<HttpConnector> {
 fn client(max_idle_per_host: usize) -> HttpsClient {
     Client::builder(TokioExecutor::new())
         .pool_max_idle_per_host(max_idle_per_host)
+        .pool_idle_timeout(IDLE_CONNECTION_TIMEOUT)
+        .pool_timer(TokioTimer::new())
         .build(https_connector())
 }
 
