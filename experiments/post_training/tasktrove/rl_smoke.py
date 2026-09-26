@@ -31,7 +31,6 @@ from marin.rl.skyrl import (
     SkyRLRolePlan,
     SkyRLRun,
     SkyRLRuntime,
-    SkyRLRuntimeProfile,
     SkyRLSpec,
     SkyRLTopology,
     TaskTroveDataSource,
@@ -211,7 +210,7 @@ def smoke_step(release: ArtifactStep) -> ArtifactStep[SkyRLRun]:
             name=name,
             version=resolve_version(name, None),
             config_yaml=rl_config_yaml(ROLE_PLAN),
-            runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
+            runtime=SkyRLRuntime(),
             model=ArtifactHfModel(
                 step=model_step(MODEL_VERSION),
                 tokenizer_uri=QWEN3_MODEL,

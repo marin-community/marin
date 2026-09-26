@@ -47,7 +47,6 @@ from marin.rl.skyrl import (
     SkyRLRolePlan,
     SkyRLRun,
     SkyRLRuntime,
-    SkyRLRuntimeProfile,
     SkyRLSpec,
     SkyRLTopology,
     _role_plan_config_values,
@@ -117,10 +116,8 @@ class MegatronGeometry:
 
 @dataclass(frozen=True)
 class TrainingRecipe:
-    """How one policy trains: runtime, topology, parallel geometry and optimizer."""
+    """How one policy trains: topology, parallel geometry, and optimizer."""
 
-    # MarinSkyRL runtime profile: the frozen dependency set the run installs.
-    profile: SkyRLRuntimeProfile
     # Nodes the job holds: the policy nodes plus one per engine.
     num_nodes: int
     # Placement and batch shape; Marin writes these into the SkyRL config from the role plan.
@@ -143,7 +140,6 @@ class TrainingRecipe:
 # pipeline depth 2 with 16-way data parallelism and experts sharded eight ways, and one engine node
 # sharding experts across its eight ranks (DP8/EP8).
 SNOWBALL_RECIPE = TrainingRecipe(
-    profile=SkyRLRuntimeProfile.MEGATRON,
     num_nodes=5,
     role_plan=SkyRLRolePlan(
         colocate_all=False,
@@ -392,7 +388,6 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
         "train_batch_size": plan.train_batch_size,
         "policy_mini_batch_size": plan.policy_mini_batch_size,
         "micro_train_batch_size_per_gpu": plan.micro_train_batch_size_per_gpu,
-        "micro_forward_batch_size_per_gpu": 1,
         # Validation prompts scored per in-run evaluation.
         "eval_batch_size": 256,
         "eval_interval": preset.eval_interval,
@@ -541,7 +536,7 @@ def build_run(policy: PolicySpec, preset: AsyncPreset, version: str | None, sett
             name=user_owned_name(base_name),
             version=version or resolve_version(base_name, None),
             config_yaml=yaml.safe_dump(config, sort_keys=False),
-            runtime=SkyRLRuntime(profile=recipe.profile),
+            runtime=SkyRLRuntime(),
             model=ArtifactHfModel(
                 step=model,
                 tokenizer_uri=policy.tokenizer_uri,

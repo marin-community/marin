@@ -24,7 +24,6 @@ from marin.rl.skyrl import (
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
     SkyRLRuntime,
-    SkyRLRuntimeProfile,
     SkyRLSpec,
     SkyRLTopology,
     TaskTroveDataSource,
@@ -112,7 +111,7 @@ def _spec() -> SkyRLSpec:
         name="users/tester/tests/iceball-rl",
         version="2026.08.01",
         config_yaml=_config_yaml(),
-        runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
+        runtime=SkyRLRuntime(),
         model=ArtifactHfModel(
             step=_model_step(),
             tokenizer_uri="Qwen/Qwen3-0.6B-Base",
@@ -178,7 +177,7 @@ def test_skyrl_launch_reserves_capacity_for_config_derived_draft_trainer() -> No
     spec = dataclasses.replace(
         _spec(),
         config_yaml=yaml.safe_dump(recipe),
-        runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
+        runtime=SkyRLRuntime(),
         topology=SkyRLTopology(
             num_nodes=6,
             gpus_per_node=8,
@@ -585,7 +584,7 @@ def test_launcher_survives_undecodable_bytes_on_stderr() -> None:
     assert completed.returncode == 4
 
 
-def test_a_runtime_profile_that_contradicts_the_config_strategy_is_refused() -> None:
+def test_a_config_that_selects_an_unsupported_strategy_is_refused() -> None:
     """The mismatch is otherwise silent until the pod has its GPUs: the launcher installs one
     backend's closure, the trainer asks for the other, and the run dies on an import error naming
     neither the profile nor the strategy."""
@@ -605,11 +604,10 @@ def test_a_runtime_profile_that_contradicts_the_config_strategy_is_refused() -> 
         pytest.param(_config_yaml(), id="names no strategy"),
     ],
 )
-def test_a_config_that_does_not_contradict_the_profile_is_accepted(config_yaml: str) -> None:
+def test_a_config_that_selects_megatron_is_accepted(config_yaml: str) -> None:
     spec = _spec()
 
     dataclasses.replace(
         spec,
         config_yaml=config_yaml,
-        runtime=dataclasses.replace(spec.runtime, profile=SkyRLRuntimeProfile.MEGATRON),
     )

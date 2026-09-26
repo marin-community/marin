@@ -48,17 +48,10 @@ def skyrl_temporary_run_path(output_path: str, *, ttl_days: int) -> str:
     return str(StoragePath(temporary_root) / _TEMPORARY_OUTPUT_PREFIX / StoragePath(output_path).key)
 
 
-class SkyRLRuntimeProfile(StrEnum):
-    """Frozen upstream dependency set for a SkyRL training strategy."""
-
-    MEGATRON = "megatron"
-
-
 @dataclass(frozen=True)
 class SkyRLRuntime:
-    """Identity-bearing SkyRL revision and locked dependency profile."""
+    """Identity-bearing SkyRL revision."""
 
-    profile: SkyRLRuntimeProfile
     commit: str = field(init=False, default=MARIN_SKYRL.commit)
 
 
@@ -363,7 +356,7 @@ class SkyRLSpec:
     seed: int
 
     def __post_init__(self) -> None:
-        _validate_skyrl_recipe(self.config_yaml, self.runtime, self.topology)
+        _validate_skyrl_recipe(self.config_yaml, self.topology)
 
 
 @dataclass(frozen=True)
@@ -507,11 +500,11 @@ def _effective_strategy(config: dict[str, object]) -> str | None:
     return trainer.get("strategy") if isinstance(trainer, dict) else None
 
 
-def _validate_runtime_strategy(config: dict[str, object], runtime: SkyRLRuntime) -> None:
+def _validate_runtime_strategy(config: dict[str, object]) -> None:
     strategy = _effective_strategy(config)
     if strategy is not None and strategy != _MEGATRON_STRATEGY:
         raise ValueError(
-            f"runtime profile {runtime.profile.value!r} installs the {_MEGATRON_STRATEGY!r} backend, "
+            f"SkyRL installs the {_MEGATRON_STRATEGY!r} backend, "
             f"but config_yaml asks for trainer.strategy={strategy!r}"
         )
 
@@ -559,12 +552,11 @@ def _validate_skyrl_backend_constraints(
 
 def _validate_skyrl_recipe(
     config_yaml: str,
-    runtime: SkyRLRuntime,
     topology: SkyRLTopology,
 ) -> None:
     """Validate one effective recipe before building an artifact."""
     config = _parsed_config(config_yaml)
-    _validate_runtime_strategy(config, runtime)
+    _validate_runtime_strategy(config)
     _validate_role_plan_config(config, topology.role_plan)
     _validate_entrypoint_config(config, topology.role_plan)
     _validate_skyrl_backend_constraints(config, topology)
@@ -756,7 +748,7 @@ def _launch_config_yaml(
         },
         "runtime": {
             "launcher_commit": spec.runtime.commit,
-            "profile": spec.runtime.profile.value,
+            "profile": _MEGATRON_STRATEGY,
             "entrypoint": "",
             "experiments_dir": "/app/experiments",
             "task_env": task_env,
