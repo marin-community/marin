@@ -329,6 +329,14 @@ class GrugModelConfig:
     """A learnable zero-init bias per (gate, source) on the AttnRes logits (Adam at the query LR)."""
     attn_res_z_loss: float = 0.0
     """Weight of a z-loss (mean squared logsumexp) on every AttnRes gate's logits; needs layer backward SAVE."""
+    attn_res_pull: bool = False
+    """'Pull' AttnRes: each source has a static learned key (zero-init; the partial has its own), and the
+    query is the gate's current residual stream (the RMS-normed plain sum of its visible sources)."""
+    attn_res_pull_embed: bool = False
+    """Hybrid: standard (push) AttnRes, but the embedding source's logit is a learned linear projection of
+    the gate's current residual stream (one zero-init vector per gate)."""
+    attn_res_mask_attn_for: tuple[int, ...] = ()
+    """Full AttnRes only: layers whose attention gate cannot read any earlier attention output."""
     attn_res_full: bool = False
     """Full (not Block) AttnRes: every attention and MoE sublayer output is its own source. Needs
     attn_res_layer_backward=SAVE."""
@@ -1347,11 +1355,12 @@ def _attn_res_mix(
     queries: Float[Array, "G D"],
     gate_index: int,
     eps: float,
-    logit_bias: Float[Array, "G N"] | None = None,
+    extras: dict[str, jax.Array | None] | None = None,
 ) -> tuple[Float[Array, "B S D"], jax.Array]:
     """One AttnRes gate: softmax over the completed blocks (+ the running partial) and their weighted sum.
 
-    ``logit_bias[g, n]`` is added to block ``n``'s logit and ``logit_bias[g, -1]`` to the partial's.
+    ``extras`` (``_gate_extras``) optionally adds per-(gate, source) biases and masks, pull keys and a
+    pull embedding logit; column ``n`` is block ``n`` and the last column is the partial.
     Also returns the gate's mean squared logsumexp (the z-loss term) and its token-mean source weights
     (blocks in order, then the partial), for logging.
 
@@ -1364,23 +1373,42 @@ def _attn_res_mix(
     if partial is not None:
         sources.append(partial)
         logits.append(_attn_res_source_logits(partial, queries[gate_index][None], eps)[0])
-    logits = _bias_gate_logits(logits, logit_bias, gate_index, has_partial=partial is not None)
+    logits = _bias_gate_logits(logits, extras, gate_index, sources, eps, has_partial=partial is not None)
     weights, mixed = _softmax_mix(logits, sources)
     mean_weights = jax.lax.stop_gradient(jnp.mean(weights, axis=(1, 2)))
     return reshard(mixed.astype(sources[0].dtype), _batch_spec()), _gate_z(logits), mean_weights
 
 
 def _bias_gate_logits(
-    logits: list[jax.Array], logit_bias: jax.Array | None, gate_index: int, *, has_partial: bool
+    logits: list[jax.Array],
+    extras: dict[str, jax.Array | None] | None,
+    gate_index: int,
+    sources: list[jax.Array],
+    eps: float,
+    *,
+    has_partial: bool,
 ) -> list[jax.Array]:
-    if logit_bias is None:
+    """Apply ``extras`` to one gate's source logits (column n = block n, last column = the partial)."""
+    if extras is None:
         return logits
-    row = logit_bias[gate_index]
     num_blocks = len(logits) - int(has_partial)
-    biased = [logit + row[n] for n, logit in enumerate(logits[:num_blocks])]
-    if has_partial:
-        biased.append(logits[-1] + row[-1])
-    return biased
+    columns = list(range(num_blocks)) + ([-1] if has_partial else [])
+    pull_keys, embed_query = extras.get("pull_keys"), extras.get("embed_query")
+    if pull_keys is not None or embed_query is not None:
+        stream = sources[0].astype(jnp.float32)
+        for src in sources[1:]:
+            stream = stream + src.astype(jnp.float32)
+        stream = rms_norm(stream, eps)
+        if pull_keys is not None:
+            logits = [jnp.einsum("bsd,d->bs", stream, pull_keys[c]) for c in columns]
+        if embed_query is not None:
+            logits = [jnp.einsum("bsd,d->bs", stream, embed_query[gate_index]), *logits[1:]]
+    for name in ("bias", "mask"):
+        table = extras.get(name)
+        if table is not None:
+            row = table[gate_index]
+            logits = [logit + row[c] for logit, c in zip(logits, columns, strict=True)]
+    return logits
 
 
 def _gate_z(logits: list[jax.Array]) -> jax.Array:
@@ -1546,6 +1574,10 @@ class Transformer(eqx.Module):
     embed2_norm: RMSNorm | None
     attn_res_query_bias: Float[Array, "G N"] | None
     """AttnRes logit bias per (gate, source); the last column is the running partial."""
+    attn_res_query_pull: Float[Array, "N D"] | None
+    """Pull-AttnRes source keys (``attn_res_pull``); the last row is the partial's."""
+    attn_res_query_embed: Float[Array, "G D"] | None
+    """Per-gate pull projection for the embedding logit (``attn_res_pull_embed``)."""
     w_mtp: Float[Array, "D D"] | None
     """Next-token-embedding projection of the MTP head (``mtp_weight``)."""
     attn_res_query_loop: Float[Array, "P G D"] | None
@@ -1615,6 +1647,14 @@ class Transformer(eqx.Module):
             attn_res_query_bias=(
                 jnp.zeros((2 * cfg.num_layers * cfg.loop_passes + 1, _attn_res_num_sources(cfg)), jnp.float32)
                 if cfg.attn_res_logit_bias
+                else None
+            ),
+            attn_res_query_pull=(
+                jnp.zeros((_attn_res_num_sources(cfg), cfg.hidden_dim), jnp.float32) if cfg.attn_res_pull else None
+            ),
+            attn_res_query_embed=(
+                jnp.zeros((2 * cfg.num_layers * cfg.loop_passes + 1, cfg.hidden_dim), jnp.float32)
+                if cfg.attn_res_pull_embed
                 else None
             ),
             w_mtp=(
@@ -1801,7 +1841,7 @@ class Transformer(eqx.Module):
             gate_queries += [layer.attn_res_query_attn, layer.attn_res_query_mlp]
         loop_queries = [] if self.attn_res_query_loop is None else list(self.attn_res_query_loop)
         queries = jnp.concatenate([jnp.stack(gate_queries), *loop_queries, self.attn_res_query_final[None]])
-        logit_bias = self.attn_res_query_bias
+        logit_bias = _gate_extras(self, queries.shape[0])
         if cfg.attn_res_full and cfg.attn_res_layer_backward != AttnResLayerBackward.SAVE:
             raise ValueError("attn_res_full needs attn_res_layer_backward=SAVE")
         if cfg.mla_share_kv_latent and cfg.attn_res_layer_backward != AttnResLayerBackward.SAVE:
@@ -1864,7 +1904,7 @@ class Transformer(eqx.Module):
             final_index = queries.shape[0] - 1
             logits = [_block_logit(bl, queries, final_index) for bl in block_logits]
             logits.append(_attn_res_source_logits(partial, queries[final_index][None], eps)[0])
-            logits = _bias_gate_logits(logits, logit_bias, final_index, has_partial=True)
+            logits = _bias_gate_logits(logits, logit_bias, final_index, [*blocks, partial], eps, has_partial=True)
             weights, mixed = _softmax_mix(logits, [*blocks, partial])
             weight_logs[final_index] = (jax.lax.stop_gradient(jnp.mean(weights, axis=(1, 2))), True)
             max_weight = jax.lax.stop_gradient(jnp.mean(jnp.max(weights, axis=0)))
@@ -2050,6 +2090,31 @@ def _stack_layer_indices(cfg: GrugModelConfig) -> tuple[tuple[int, ...], tuple[i
     """``(softmax_layers, kda_layers)``: the layer indices of ``Transformer.stacked_blocks`` and ``kda_blocks``."""
     kda_layers = _kda_layer_indices(cfg)
     return tuple(i for i in range(cfg.num_layers) if i not in kda_layers), kda_layers
+
+
+def _gate_extras(model: "Transformer", num_gates: int) -> dict[str, jax.Array | None] | None:
+    """The per-gate logit extras of ``_bias_gate_logits``, or None when the model uses none of them."""
+    cfg = model.config
+    if cfg.attn_res_pull_embed and cfg.second_embed:
+        raise ValueError("attn_res_pull_embed assumes the embedding is source 0 (no second_embed)")
+    mask = None
+    if cfg.attn_res_mask_attn_for:
+        if not cfg.attn_res_full:
+            raise ValueError("attn_res_mask_attn_for needs attn_res_full")
+        mask = np.zeros((num_gates, _attn_res_num_sources(cfg)), np.float32)
+        offset = int(cfg.second_embed)
+        for layer in cfg.attn_res_mask_attn_for:
+            # Full AttnRes sources: embedding(s), then layer j's attention output at 1 + 2j, MoE at 2 + 2j.
+            for j in range(layer):
+                mask[2 * layer, offset + 1 + 2 * j] = -1e9
+        mask = jnp.asarray(mask)
+    extras = {
+        "bias": model.attn_res_query_bias,
+        "pull_keys": model.attn_res_query_pull,
+        "embed_query": model.attn_res_query_embed,
+        "mask": mask,
+    }
+    return extras if any(v is not None for v in extras.values()) else None
 
 
 def _attn_res_num_sources(cfg: GrugModelConfig) -> int:
