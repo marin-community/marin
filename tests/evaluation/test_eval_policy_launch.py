@@ -3,8 +3,12 @@
 
 """Published launch recipes materialize the benchmark settings they claim."""
 
+from contextlib import nullcontext
+from types import SimpleNamespace
+
 import pytest
 import yaml
+from click.testing import CliRunner
 from iris.rpc import job_pb2
 from marin.evaluation.eval_policy import SEPTEMBER_16_VERSION, SEPTEMBER_24_VERSION
 from marin.evaluation.hardware import Platform
@@ -88,21 +92,43 @@ def test_verified_launch_rejects_changed_source_before_contacting_iris(tmp_path,
         build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="test"), "test")
 
 
-def test_subset_requests_separate_nonblocking_h100_launches(tmp_path, monkeypatch):
+@pytest.mark.parametrize("h100_count", [2, 4, 8])
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_subset_requests_separate_nonblocking_h100_launches(tmp_path, monkeypatch, h100_count, dry_run):
     model_path = tmp_path / "model.yaml"
-    model_path.write_text("name: model\nlocation: org/model\n")
+    model_path.write_text(
+        f"name: model\nlocation: org/model\nresource_hint:\n  gpu:\n    H100: {h100_count}\n"
+        f"serve:\n  tensor_parallel_size: {h100_count}\n  data_parallel_size: 1\n  auto_overrides: false\n"
+    )
     submissions = []
+    launched = []
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+    monkeypatch.setattr("experiments.evaluation.cli.open_iris_client", lambda **_kwargs: nullcontext(None))
+
+    def capture_launch(batch, _client):
+        launched.append(batch)
+        return SimpleNamespace(group_id=batch.group_id, model_name=batch.model.name, evaluations=())
+
+    monkeypatch.setattr("experiments.evaluation.cli.launch_group", capture_launch)
 
     def capture(command, **_kwargs):
         context = cli.commands["launch"].make_context("launch", command[6:])
         submissions.append(context.params)
+        result = CliRunner().invoke(cli.commands["launch"], command[6:])
+        assert result.exit_code == 0, result.output
 
-    monkeypatch.setattr("eval_policy.launch.subprocess.run", capture)
+    monkeypatch.setattr("eval_policy.launch.run", capture)
 
-    launch_policy(SEPTEMBER_24_VERSION, model_path, None, None, "cw-rno2a", ("math500", "gsm8k-0shot"))
+    launch_policy(SEPTEMBER_24_VERSION, model_path, None, None, "cw-rno2a", ("math500", "gsm8k-0shot"), dry_run)
 
     assert len(submissions) == 2
     assert {submission["evalchemy_config"][0].stem for submission in submissions} == {"math500", "gsm8k-0shot"}
-    assert all(submission["no_wait"] for submission in submissions)
-    assert all(submission["accelerator"] == "H100x8" for submission in submissions)
+    assert all(submission["no_wait"] is not dry_run for submission in submissions)
+    assert all(submission["dry_run"] is dry_run for submission in submissions)
+    assert all(submission["accelerator"] == f"H100x{h100_count}" for submission in submissions)
     assert all(submission["version"] == SEPTEMBER_24_VERSION for submission in submissions)
+    assert len(launched) == (0 if dry_run else 2)
+    assert {batch.evaluations[0].identity.eval_ref.name for batch in launched} == (
+        set() if dry_run else {"math500", "gsm8k-0shot"}
+    )
+    assert all(batch.accelerator.label == f"H100x{h100_count}" for batch in launched)

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -462,6 +463,27 @@ def test_harbor_driver_terminates_when_dependency_becomes_unavailable(tmp_path, 
 
     assert len(terminated_return_codes) == 1
     assert terminated_return_codes[0] is not None
+
+
+def test_harbor_driver_can_use_iris_uv_wrapper(tmp_path, monkeypatch):
+    uv = tmp_path / "uv"
+    uv.write_text(
+        """#!/bin/bash
+set -u
+recovery_cache="$IRIS_WORKDIR/.uv-recovery-cache"
+exec "$IRIS_UV_EXECUTABLE" "$@"
+"""
+    )
+    uv.chmod(0o755)
+    executable = tmp_path / "real-uv"
+    executable.write_text('#!/bin/bash\nprintf "%s" "$IRIS_WORKDIR"\n')
+    executable.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
+    monkeypatch.setenv("IRIS_WORKDIR", str(tmp_path))
+    monkeypatch.setenv("IRIS_UV_EXECUTABLE", str(executable))
+
+    completed = driver_config._capture_driver(["uv", "run"])
+    assert completed.stdout == str(tmp_path)
 
 
 def test_harbor_driver_classifies_fast_failure_from_unavailable_dependency(tmp_path, monkeypatch):

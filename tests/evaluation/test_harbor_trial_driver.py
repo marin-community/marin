@@ -219,6 +219,23 @@ def test_preflight_resolves_hugging_face_datasets_in_harbor(tmp_path):
     assert result["benchmark_metadata"]["n_benchmark"] == 100
 
 
+def test_preflight_accepts_pinned_harbor_acp_registry_agent(tmp_path):
+    policy_path = tmp_path / "acp.yaml"
+    policy_path.write_text(
+        """
+environment:
+  type: daytona
+agents:
+  - name: acp:pi-acp@0.0.33
+datasets:
+  - name: aime
+"""
+    )
+
+    (result,) = json.loads(_preflight(tmp_path, [(policy_path, {})]).stdout)
+    assert json.loads(result["stable_policy_json"])["agents"][0]["name"] == "acp:pi-acp@0.0.33"
+
+
 def test_preflight_reports_only_verifier_host_environment_dependencies(tmp_path):
     policy_path = tmp_path / "external-judge.yaml"
     policy_path.write_text(

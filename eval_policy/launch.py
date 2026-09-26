@@ -4,8 +4,8 @@
 """Launch isolated serve/eval jobs for a published policy and its repeats."""
 
 import argparse
-import subprocess
 from pathlib import Path
+from subprocess import run
 from tempfile import TemporaryDirectory
 
 import yaml
@@ -20,6 +20,7 @@ from marin.evaluation.eval_policy import (
     SEPTEMBER_24_VERSION,
     ThinkingMode,
 )
+from marin.evaluation.model_config import load_model_config
 
 ROOT = Path(__file__).resolve().parents[1]
 EVALCHEMY_CONFIGS = ROOT / "experiments/evaluation/configs/evalchemy"
@@ -98,8 +99,9 @@ def launch_policy(
     sotopia_dataset_dir: Path | None,
     cluster: str,
     selected_evals: tuple[str, ...] | None = None,
+    dry_run: bool = False,
 ) -> None:
-    """Submit the policy with a separate H100x8 serve for every benchmark launch."""
+    """Submit the policy with a separate H100 serve for every benchmark launch."""
     unknown = set(selected_evals or ()) - POLICIES[version].keys()
     if unknown:
         raise ValueError(f"evaluations not in {version}: {sorted(unknown)}")
@@ -117,6 +119,9 @@ def launch_policy(
         raise ValueError("SOTOPIA-hard requires its pinned dataset directory")
     if not model_config.is_file():
         raise ValueError(f"model config does not exist: {model_config}")
+    h100_count = load_model_config(model_config).resource_hint.gpu.get("H100")
+    if h100_count is None:
+        raise ValueError(f"model config must declare an H100 resource hint: {model_config}")
     if sotopia_dataset_dir is not None and not sotopia_dataset_dir.is_dir():
         raise ValueError(f"SOTOPIA-hard dataset does not exist: {sotopia_dataset_dir}")
     if sotopia_dataset_dir is not None and not sotopia_dataset_dir.resolve().is_relative_to(ROOT):
@@ -156,18 +161,18 @@ def launch_policy(
                     str(model_config),
                     *selector,
                     "--accelerator",
-                    "H100x8",
+                    f"H100x{h100_count}",
                     "--federated_cluster",
                     cluster,
                     "--priority",
                     "interactive",
                     "--version",
                     version,
-                    "--no-wait",
+                    "--dry-run" if dry_run else "--no-wait",
                 ]
                 if seed is not None:
                     command.extend(("--seed", str(seed)))
-                subprocess.run(command, check=True, cwd=ROOT)
+                run(command, check=True, cwd=ROOT)
 
 
 def main() -> None:
@@ -178,6 +183,7 @@ def main() -> None:
     parser.add_argument("--sotopia-dataset-dir", type=Path)
     parser.add_argument("--federated-cluster", default="cw-rno2a")
     parser.add_argument("--evals", help="Comma-separated subset of benchmarks; defaults to the full policy")
+    parser.add_argument("--dry-run", action="store_true", help="Validate and print every launch without submitting")
     args = parser.parse_args()
     launch_policy(
         args.version,
@@ -186,6 +192,7 @@ def main() -> None:
         args.sotopia_dataset_dir.resolve() if args.sotopia_dataset_dir else None,
         args.federated_cluster,
         tuple(name.strip() for name in args.evals.split(",") if name.strip()) if args.evals else None,
+        args.dry_run,
     )
 
 
