@@ -477,8 +477,8 @@ def test_validate_levanter_dtype_rejects_vllm_aliases():
 @pytest.mark.parametrize(
     ("num_chips", "tensor_parallel_size", "expected"),
     [
-        (8, 8, {"replica": 1, "data": 1, "model": 8}),  # the slice divides the head count: shard across it
-        (8, 2, {"replica": 1, "data": 4, "model": 2}),  # it does not: the leftover chips replicate
+        (8, 8, {"replica": 1, "data": 1, "model": 8, "expert": 1, "context": 1}),
+        (8, 2, {"replica": 1, "data": 4, "model": 2, "expert": 1, "context": 1}),
     ],
 )
 def test_inference_mesh_covers_every_chip(num_chips, tensor_parallel_size, expected):
