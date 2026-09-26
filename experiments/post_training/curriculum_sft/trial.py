@@ -160,22 +160,27 @@ def build_trial(
         wandb_project="marin_moe_sft",
     )
     trained = sft_step(spec, _gpu_resources(TRAIN_NODES))
-    baseline_model = snowball_model(f"{eval_name}-base", HF_MODEL, HF_REVISION)
-    trained_model = snowball_model(f"{eval_name}-trained", "<trained-hf>", None)
+    baseline: ArtifactStep[EvaluationResult] = eval_step(
+        snowball_model(f"{eval_name}-base", HF_MODEL, HF_REVISION),
+        evals,
+        version=version,
+        submission_cluster=CLUSTER,
+        federated_cluster=CLUSTER,
+    )
+    after = trained_eval(trained, eval_name=f"{eval_name}-trained", evals=evals, version=version)
+    return {"baseline": baseline, "train": trained, "after": after}
+
+
+def trained_eval(trained: ArtifactStep, *, eval_name: str, evals: str, version: str) -> ArtifactStep[EvaluationResult]:
+    """Evaluate the final HF export of a curriculum SFT step under the launch identity ``eval_name``."""
+    trained_model = snowball_model(eval_name, "<trained-hf>", None)
 
     def resolve_trained_model(ctx: StepContext) -> ModelConfig:
         # The trainer exports HF weights once, at the final (zero-indexed) step.
         final_export = prefix_join(ctx.artifact_path(trained), f"hf/step-{STEPS - 1}")
         return dataclasses.replace(trained_model, location=final_export)
 
-    baseline: ArtifactStep[EvaluationResult] = eval_step(
-        baseline_model,
-        evals,
-        version=version,
-        submission_cluster=CLUSTER,
-        federated_cluster=CLUSTER,
-    )
-    after: ArtifactStep[EvaluationResult] = eval_step(
+    return eval_step(
         trained_model,
         evals,
         version=version,
@@ -184,4 +189,3 @@ def build_trial(
         submission_cluster=CLUSTER,
         federated_cluster=CLUSTER,
     )
-    return {"baseline": baseline, "train": trained, "after": after}
