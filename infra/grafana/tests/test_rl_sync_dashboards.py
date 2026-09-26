@@ -553,31 +553,51 @@ def test_the_run_variable_offers_the_run_the_trainer_reported(store) -> None:
 
 
 def test_the_step_bands_are_exclusive_and_they_close_on_the_step(store) -> None:
+    # One attempt of the retried step also saves a checkpoint, so that bucket holds two steps and one
+    # save_checkpoints.
+    checkpoint_seconds = 90.0
+    store.execute(
+        """INSERT INTO "telemetry_v1.marinskyrl"
+           SELECT * REPLACE (
+               ? AS value, replace(attributes_json, '"sync_weights"', '"save_checkpoints"') AS attributes_json
+           )
+           FROM "telemetry_v1.marinskyrl"
+           WHERE execution_uid = ? AND json_get(attributes_json, 'phase') = 'sync_weights'""",
+        [checkpoint_seconds, RETRY_EXECUTION],
+    )
     rows = _panel_rows(store, "Step composition: exclusive seconds per span")
 
-    bands = {series: seconds for _, series, seconds in rows}
-    # A phase's band is its wall minus its children's. Banded at its own wall, train_critic_and_policy
-    # would put 3806 s beside the 3805.6 s of policy_train it contains.
-    assert bands["train_critic_and_policy"] == pytest.approx(DISPATCH_SECONDS)
-    assert bands["policy_train"] == pytest.approx(DRIVER_PHASES["policy_train"])
-    assert bands["step"] == pytest.approx(UNATTRIBUTED)
-    assert sum(bands.values()) == pytest.approx(STEP_SECONDS)
+    bands = {(t, series): seconds for t, series, seconds in rows}
+    retried = BUCKET_TIMES[RETRIED_STEP]
+    phases = {"step", "train_critic_and_policy", *DRIVER_PHASES, *GENERATE_CHILDREN, *GENERATE_GRANDCHILDREN}
+    assert set(bands) == {(t, phase) for t in BUCKET_TIMES for phase in phases} | {(retried, "save_checkpoints")}
+    for t in BUCKET_TIMES:
+        # A phase's band is its wall minus its children's. Banded at its own wall,
+        # train_critic_and_policy would put 3806 s beside the 3805.6 s of policy_train it contains. A
+        # phase on one of the bucket's two steps counts half, and the step's own band shrinks by that.
+        checkpoint = checkpoint_seconds / 2 if t == retried else 0.0
+        assert bands[(t, "train_critic_and_policy")] == pytest.approx(DISPATCH_SECONDS)
+        assert bands[(t, "policy_train")] == pytest.approx(DRIVER_PHASES["policy_train"])
+        assert bands[(t, "step")] == pytest.approx(UNATTRIBUTED - checkpoint)
+        assert bands.get((t, "save_checkpoints"), 0.0) == pytest.approx(checkpoint)
+        assert sum(seconds for (bucket, _), seconds in bands.items() if bucket == t) == pytest.approx(STEP_SECONDS)
 
 
 def test_the_generate_subtree_is_subtracted_from_generate(store) -> None:
     bands = {
-        series: seconds for _, series, seconds in _panel_rows(store, "Step composition: exclusive seconds per span")
+        (t, series): seconds for t, series, seconds in _panel_rows(store, "Step composition: exclusive seconds per span")
     }
 
-    # generate's own band equals the residual the driver publishes.
-    assert bands["generate"] == pytest.approx(GENERATE_RESIDUAL)
-    assert bands["rollout_collect"] == pytest.approx(
-        GENERATE_CHILDREN["rollout_collect"] - GENERATE_GRANDCHILDREN["rollout_tokenize"][1]
-    )
-    assert bands["rollout_tokenize"] == pytest.approx(GENERATE_GRANDCHILDREN["rollout_tokenize"][1])
-    # The whole subtree still sums to generate, two levels deep.
-    subtree = ["generate", *GENERATE_CHILDREN, *GENERATE_GRANDCHILDREN]
-    assert sum(bands[phase] for phase in subtree) == pytest.approx(DRIVER_PHASES["generate"])
+    for t in BUCKET_TIMES:
+        # generate's own band equals the residual the driver publishes.
+        assert bands[(t, "generate")] == pytest.approx(GENERATE_RESIDUAL)
+        assert bands[(t, "rollout_collect")] == pytest.approx(
+            GENERATE_CHILDREN["rollout_collect"] - GENERATE_GRANDCHILDREN["rollout_tokenize"][1]
+        )
+        assert bands[(t, "rollout_tokenize")] == pytest.approx(GENERATE_GRANDCHILDREN["rollout_tokenize"][1])
+        # The whole subtree still sums to generate, two levels deep.
+        subtree = ["generate", *GENERATE_CHILDREN, *GENERATE_GRANDCHILDREN]
+        assert sum(bands[(t, phase)] for phase in subtree) == pytest.approx(DRIVER_PHASES["generate"])
 
 
 def test_the_train_step_panel_is_the_mean_step_split_by_outcome(store) -> None:

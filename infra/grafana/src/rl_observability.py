@@ -393,8 +393,9 @@ GROUP BY 1, 2 ORDER BY 1
             "SELECT execution_uid, role, status, reason, lost_records, queued_records "
             "FROM spans WHERE statistic = 'terminal' ORDER BY 1, 2, 3"
         ),
-        # Each band is a phase's wall minus its children's walls, so the bands sum to the step. The
-        # step's own band is the time no phase covers.
+        # Each band is a phase's wall minus its children's walls, over the bucket's step count, so the
+        # bands sum to the mean step even when a phase such as save_checkpoints ran on only some of
+        # the bucket's steps. The step's own band is the time no phase covers.
         "step_composition": (
             """
 WITH driver AS (
@@ -402,11 +403,14 @@ WITH driver AS (
 ), contained AS (
     SELECT t, parent AS phase, SUM(sum_value) AS child_seconds
     FROM driver WHERE parent IS NOT NULL AND parent <> '' GROUP BY 1, 2
+), steps AS (
+    SELECT t, SUM(sample_count) AS step_count FROM driver WHERE phase = 'step' GROUP BY 1
 )
 SELECT driver.t,
        driver.phase AS series,
-       SUM(driver.sum_value - COALESCE(contained.child_seconds, 0)) / SUM(driver.sample_count) AS value
+       SUM(driver.sum_value - COALESCE(contained.child_seconds, 0)) / MAX(steps.step_count) AS value
 FROM driver
+JOIN steps ON steps.t = driver.t
 LEFT JOIN contained ON contained.t = driver.t AND contained.phase = driver.phase
 GROUP BY 1, 2 ORDER BY 1
 """.strip()
