@@ -425,7 +425,10 @@ function goToRun(runId: string) {
   router.push(`/runs/${runId}`)
 }
 function goToModel(model: string) {
-  router.push(`/models/${encodeURIComponent(model)}`)
+  router.push({
+    path: `/models/${encodeURIComponent(model)}`,
+    query: { cohort: cohort.value || data.value?.request.cohort_version },
+  })
 }
 </script>
 

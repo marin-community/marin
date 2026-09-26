@@ -145,7 +145,7 @@ async function copyPath() {
         </div>
         <div class="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-sm text-text-secondary">
           <RouterLink
-            :to="`/models/${encodeURIComponent(data.comparison_model)}`"
+            :to="{ path: `/models/${encodeURIComponent(data.comparison_model)}`, query: { cohort: data.version ?? 'unversioned' } }"
             class="font-mono text-accent hover:underline"
           >{{ data.model.name }}</RouterLink>
           <span class="text-text-muted">·</span>
