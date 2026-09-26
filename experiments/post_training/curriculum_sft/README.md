@@ -88,7 +88,17 @@ failed SFT can be retried without regenerating data or reconverting the model. `
 both evaluations and training in one graph after generation has completed.
 
 Adam without warmup at a learning rate of 5e-5 damaged the model within two updates: Levanter's
-training loss rose from 0.79 to 1.75 and Math500 fell to 14/500. Use a smaller learning rate with
-warmup. The standard Levanter Adam optimizer does not reproduce Will's special-token learning-rate
+training loss rose from 0.79 to 1.75 and Math500 fell to 14/500. With one warmup step, four updates
+on the 912 verified `/think` rows gave these Math500 scores:
+
+| Learning rate | Math500 | Think blocks opened / closed |
+|---|---|---|
+| 0 (control) | 332/500 | 284 / 255 |
+| 1e-6 | 315/500 | 268 / 238 |
+| 1e-5 | 182/500 | 387 / 53 |
+
+At 1e-5 the model imitates GLM's terse reasoning and usually ends its reply inside the think block,
+without `<|end_think|>` or a final solution, although the training rows close every think block
+and train on `<|end_think|>`. At 1e-6 behavior matches the control within sampling variation. The standard Levanter Adam optimizer does not reproduce Will's special-token learning-rate
 or frozen-router-bias changes; it starts a fresh optimizer from the published September 20
 weights.
