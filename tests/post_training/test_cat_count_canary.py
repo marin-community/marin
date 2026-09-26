@@ -98,7 +98,7 @@ def test_preset_and_override_contract():
     assert filtered["trainer"]["algorithm"]["dynamic_sampling"]["type"] == "filter"
     assert modified["trainer"]["policy"]["optimizer_config"]["lr"] == 5e-6
     with pytest.raises(click.BadParameter):
-        training_config(settings=("trainer.policy.megatron_config={tensor_model_parallel_size: 2}",))
+        training_config(settings=("trainer.policy={megatron_config: {tensor_model_parallel_size: 2}}",))
 
 
 def test_model_pins_and_distinct_artifact_identities():
