@@ -30,6 +30,7 @@ import jax.numpy as jnp
 import mergedeep
 import numpy as np
 import requests
+import safetensors.numpy
 import transformers.utils.hub
 from fsspec import AbstractFileSystem
 from fsspec.asyn import get_loop
@@ -38,7 +39,7 @@ from haliax import Axis
 from haliax._src.state_dict import flatten_modules_for_export, to_state_dict
 from haliax.jax_utils import is_jax_array_like, sync_global_devices
 from haliax.partitioning import ResourceMapping
-from haliax.state_dict import StateDict, from_torch_compatible_state_dict, save_state_dict
+from haliax.state_dict import StateDict, from_torch_compatible_state_dict
 from huggingface_hub import HfApi, ModelInfo, hf_hub_download, repo_exists, snapshot_download
 from huggingface_hub.errors import HfHubHTTPError
 from huggingface_hub.file_download import repo_folder_name
@@ -1235,7 +1236,10 @@ class HFCheckpointConverter(Generic[LevConfig]):
             try:
                 with temp_dir_before_upload(path, process_should_upload=True, sync_on_exit=False) as local_path:
                     os.makedirs(local_path, exist_ok=True)
-                    save_state_dict(shard_numpy, os.path.join(local_path, shard_name))
+                    # Writer threads run only on process 0, so they must not enter a multi-host collective.
+                    safetensors.numpy.save_file(
+                        shard_numpy, os.path.join(local_path, shard_name), metadata={"format": "pt"}
+                    )
                     _maybe_upload(
                         local_path,
                         files=[shard_name],
