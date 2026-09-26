@@ -4,7 +4,7 @@
 """Generate curriculum math problems with GLM, then keep blind GLM solutions that reach the reference answer.
 
 The problem step asks GLM for one problem and its short final answer per request, with an explicit
-sampling facet and difficulty target. The solve step samples several independent GLM solutions per
+content target and difficulty target. The solve step samples several independent GLM solutions per
 problem without showing the reference answer and keeps solutions whose boxed answer is
 math-verify-equivalent to it. Kept rows carry GLM's reasoning as ``reasoning_content`` and set
 ``enable_thinking``, so the Marin chat template renders the ``Reasoning: /think`` header and think
@@ -168,14 +168,22 @@ def capability_packet(catalog: CurriculumCatalog, capability_id: str) -> dict[st
     raise ValueError(f"unknown curriculum capability: {capability_id}")
 
 
+def problem_targets(packet: dict[str, Any]) -> list[dict[str, str]]:
+    """The capability's sampling facets followed by each of its ``includes`` entries.
+
+    Many catalog capabilities declare few or no sampling facets; their ``includes`` entries name the
+    content the capability covers, so they also serve as generation targets.
+    """
+    includes = [{"id": f"includes-{index}", "description": text} for index, text in enumerate(packet["includes"])]
+    return [*packet["sampling_facets"], *includes]
+
+
 def problem_assignment(packet: dict[str, Any], index: int) -> ProblemAssignment:
-    """Cycle requests through every facet, then every difficulty, so coverage does not depend on sampling luck."""
-    facets = packet["sampling_facets"]
-    if not facets:
-        raise ValueError(f"capability {packet['capability_id']} has no sampling facets")
-    facet = facets[index % len(facets)]
-    difficulty = DIFFICULTY_TARGETS[(index // len(facets)) % len(DIFFICULTY_TARGETS)]
-    return ProblemAssignment(facet_id=facet["id"], facet_description=facet["description"], difficulty=difficulty)
+    """Cycle requests through every target, then every difficulty, so coverage does not depend on sampling luck."""
+    targets = problem_targets(packet)
+    target = targets[index % len(targets)]
+    difficulty = DIFFICULTY_TARGETS[(index // len(targets)) % len(DIFFICULTY_TARGETS)]
+    return ProblemAssignment(facet_id=target["id"], facet_description=target["description"], difficulty=difficulty)
 
 
 def problem_prompt(packet: dict[str, Any], assignment: ProblemAssignment, task_specification: str) -> str:
@@ -190,7 +198,7 @@ def problem_prompt(packet: dict[str, Any], assignment: ProblemAssignment, task_s
         "- Do not copy published contest or benchmark problems, rely on external facts, or ask for a proof.\n"
         "- Solve the problem yourself before submitting, and change it if the answer is not unique.\n"
         f"Capability: {json.dumps(capability, ensure_ascii=False, sort_keys=True)}\n"
-        f"Facet to exercise: {assignment.facet_id}: {assignment.facet_description}\n"
+        f"Focus for this problem: {assignment.facet_description}\n"
         f"Difficulty target: {assignment.difficulty}\n"
         f"Task specification: {task_specification}"
     )

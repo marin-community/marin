@@ -3,9 +3,11 @@
 `generation.py` builds verified single-turn reasoning data for one capability of the pinned
 `TASK_CURRICULUM` artifact in two GLM 5.3 steps:
 
-1. `generate_curriculum_problems` sends one request per problem. Each request names a sampling
-   facet and a difficulty target (MATH levels 3–5, AMC 12 or early AIME); requests cycle through
-   every facet and then every difficulty. GLM returns a problem and a short LaTeX reference answer.
+1. `generate_curriculum_problems` sends one request per problem. Each request names one content
+   target and one difficulty target (MATH levels 3–5, AMC 12 or early AIME); requests cycle
+   through every content target and then every difficulty. Content targets are the capability's
+   sampling facets followed by its `includes` entries, because many catalog capabilities declare
+   few or no facets. GLM returns a problem and a short LaTeX reference answer.
    The step rejects truncated or malformed responses, duplicate problem text, and answers that
    math-verify cannot parse. It writes `problems/` audit Parquet, exact `raw-responses.jsonl`, and
    a manifest.
@@ -29,12 +31,15 @@ rows without the header or a think block teach the model to answer without think
 
 ## Where each stage runs
 
-The GLM relay (`DEFAULT_GLM_RELAY_JOB` in `experiments/post_training/glm.py`) is registered on the
-marin Iris hub and is not reachable from `cw-*` clusters. Submit generation to the hub with
-`GLM_BULK_TOKEN` set, and write it under the trial's `ttl=30d` source prefix:
+The GLM relay (`DEFAULT_GLM_RELAY_JOB` in `experiments/post_training/glm.py`) is an Iris job on the
+marin hub whose task runs on `cw-us-east-08a`, and its registered endpoint is reachable only from
+that cluster: generation jobs on hub (GCP) workers time out connecting to it. Submit generation
+through the hub and federate it to `cw-us-east-08a`, which also injects CoreWeave object-storage
+credentials. Write it under the trial's `ttl=30d` source prefix:
 
 ```bash
-uv run iris --cluster=marin job run --no-wait --job-name curriculum-math-generate-<date> \
+uv run iris --cluster=marin job run --no-wait --target-cluster cw-us-east-08a \
+  --job-name curriculum-math-generate-<date> \
   -e MARIN_PREFIX s3://marin-us-east-02a/tmp/ttl=30d/curriculum-math-20260924 \
   -e GLM_BULK_TOKEN "$GLM_BULK_TOKEN" \
   -- uv run python experiments/post_training/curriculum_sft/math_trial.py \

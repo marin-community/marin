@@ -129,7 +129,7 @@ def _eval_model(name: str, location: str, revision: str | None) -> ModelConfig:
 
 
 def build_generation(version: str) -> dict[str, ArtifactStep[Artifact]]:
-    """Build GLM problem and blind-solve steps; submit on the Iris hub, which reaches the GLM relay."""
+    """Build GLM problem and blind-solve steps; run them on `cw-us-east-08a`, where the GLM relay is reachable."""
     steps: dict[str, ArtifactStep[Artifact]] = {}
     for capability_id in CURRICULUM_IDS:
         problems = generate_curriculum_problems(

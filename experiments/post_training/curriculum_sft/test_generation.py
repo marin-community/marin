@@ -15,7 +15,8 @@ from experiments.post_training.curriculum_sft.generation import (
 
 PACKET = {
     "capability_id": "d00.example",
-    "sampling_facets": [{"id": "f1", "description": "first"}, {"id": "f2", "description": "second"}],
+    "sampling_facets": [{"id": "f1", "description": "first"}],
+    "includes": ["Linear equations"],
 }
 
 
@@ -51,7 +52,7 @@ def _jsonl(responses: list[dict]) -> str:
     return "\n".join(json.dumps(response) for response in responses)
 
 
-def test_parse_problem_batch_accounts_for_rejections_and_cycles_facets():
+def test_parse_problem_batch_accounts_for_rejections_and_cycles_targets():
     config = GenerateProblemsConfig(
         catalog_path="unused",
         output_path="unused",
@@ -77,7 +78,7 @@ def test_parse_problem_batch_accounts_for_rejections_and_cycles_facets():
         "unparsable_answer",
         "truncated",
     ]
-    assert [record["facet_id"] for record in records] == ["f1", "f2", "f1", "f2"]
+    assert [record["facet_id"] for record in records] == ["f1", "includes-0", "f1", "includes-0"]
     assert records[0]["difficulty"] != records[2]["difficulty"]
 
 
