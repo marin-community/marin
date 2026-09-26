@@ -126,7 +126,7 @@ def _is_gate_or_router_weight(path_lower: str) -> bool:
     Matches the leaf attribute name at the end of the path, so it selects ``...attn.attn_gate`` and
     ``...mlp.router`` but not the separate ``...mlp.router_bias`` leaf.
     """
-    return path_lower.endswith(".attn_gate") or path_lower.endswith(".router")
+    return path_lower.endswith((".attn_gate", ".router", ".router_down", ".router_up"))
 
 
 def _gate_router_decay_mask(params):

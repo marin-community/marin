@@ -360,7 +360,12 @@ class GrugModelConfig:
     sources) or ``sum`` (a straight sum of all sources, like a standard residual stream)."""
     attn_res_sum_inputs: tuple[str, ...] = ()
     """Full AttnRes only: components that read the straight sum of the visible sources instead of their
-    AttnRes mix: any of ``q``, ``k``, ``v`` (those attention projections) and ``mlp`` (the MoE input)."""
+    AttnRes mix: any of ``q``, ``k``, ``v`` (those attention projections), ``mlp`` (the whole MoE input),
+    ``mlp_shared`` (the shared experts only), ``mlp_routed`` (router + latent-down) or ``mlp_router``."""
+    router_rank: int | None = None
+    """Low-rank router: logits = f(x W_r_down) W_r_up with this inner width (None: the linear x W_r)."""
+    router_rank_act: str = "none"
+    """Activation on the low-rank router features: ``none``, ``norm`` (learnable RMSNorm) or ``silu``."""
     attn_res_full: bool = False
     """Full (not Block) AttnRes: every attention and MoE sublayer output is its own source. Needs
     attn_res_layer_backward=SAVE."""
@@ -1102,7 +1107,10 @@ def _qb_beta_hist(
 class MoEMLP(eqx.Module):
     """QB-routed MoE with sigmoid combine weights."""
 
-    router: jax.Array
+    router: jax.Array | None
+    router_down: jax.Array | None
+    router_up: jax.Array | None
+    router_norm: "RMSNorm | None"
     router_bias: jax.Array
     expert_mlp: MoEExpertMlp
     w_latent_down: jax.Array | None
@@ -1126,7 +1134,27 @@ class MoEMLP(eqx.Module):
         expert_width = cfg.latent_dim if cfg.latent_dim is not None else d
         latent = cfg.latent_dim
         return MoEMLP(
-            router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
+            router=(
+                None if cfg.router_rank else reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None))
+            ),
+            router_down=(
+                reshard(_init_weight(k_router, (d, cfg.router_rank), cfg.initializer_std), P(None, None))
+                if cfg.router_rank
+                else None
+            ),
+            router_up=(
+                reshard(
+                    _init_weight(random.fold_in(k_router, 1), (cfg.router_rank, e), 1.0 / math.sqrt(cfg.router_rank)),
+                    P(None, None),
+                )
+                if cfg.router_rank
+                else None
+            ),
+            router_norm=(
+                RMSNorm.init(cfg.router_rank, cfg.layer_norm_eps)
+                if cfg.router_rank and cfg.router_rank_act == "norm"
+                else None
+            ),
             router_bias=jnp.zeros((e,)),
             w_latent_down=(
                 None
@@ -1160,7 +1188,9 @@ class MoEMLP(eqx.Module):
 
     def input_projection_weights(self, dtype: jnp.dtype) -> list[jax.Array]:
         """The ``[D, *]`` projections this MLP applies to its input: the router, then the latent down."""
-        weights = [reshard(self.router, P(None, None))]
+        router_in = self.router if self.router is not None else self.router_down
+        assert router_in is not None
+        weights = [reshard(router_in, P(None, None))]
         if self.w_latent_down is not None:
             weights.append(reshard(self.w_latent_down.astype(dtype), P(None, None)))
         return weights
@@ -1178,7 +1208,15 @@ class MoEMLP(eqx.Module):
         if projected is None:
             projected = [jnp.einsum("td,de->te", x_flat, w) for w in self.input_projection_weights(x_flat.dtype)]
         # Keep the router path in fp32 before top-k, softmax, and QB statistics.
-        router_logits = projected[0].astype(jnp.float32)
+        if self.router_up is not None:
+            z = projected[0]
+            if self.router_norm is not None:
+                z = self.router_norm(z)
+            elif self.cfg.router_rank_act == "silu":
+                z = jax.nn.silu(z)
+            router_logits = jnp.einsum("tr,re->te", z.astype(jnp.float32), self.router_up.astype(jnp.float32))
+        else:
+            router_logits = projected[0].astype(jnp.float32)
         biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
         router_probs = jax.nn.softmax(router_logits, axis=-1)
         # Select top-(K+1) on biased logits; the (K+1)-th is the QB threshold alpha.
@@ -1259,7 +1297,10 @@ class MoEMLP(eqx.Module):
 
 
 def moe_and_shared_fused(
-    mlp: MoEMLP, shared: tuple[DenseMLP, ...], x: Float[Array, "B S D"]
+    mlp: MoEMLP,
+    shared: tuple[DenseMLP, ...],
+    x: Float[Array, "B S D"],
+    part_inputs: dict[str, jax.Array] | None = None,
 ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
     """Routed MoE plus the shared SwiGLU experts with every projection of ``x`` in one GEMM.
 
@@ -1275,9 +1316,18 @@ def moe_and_shared_fused(
     moe_weights = mlp.input_projection_weights(x_flat.dtype)
     shared_weights = [reshard(e.w_gate, replicated) for e in shared] + [reshard(e.w_up, replicated) for e in shared]
     weights = moe_weights + shared_weights
-    fused = jnp.einsum("td,de->te", x_flat, jnp.concatenate(weights, axis=1), out_sharding=_batch_spec())
-    parts = jnp.split(fused, list(itertools.accumulate(w.shape[1] for w in weights[:-1])), axis=1)
-    routed, stats = mlp(x, projected=parts[: len(moe_weights)])
+    if not part_inputs:
+        fused = jnp.einsum("td,de->te", x_flat, jnp.concatenate(weights, axis=1), out_sharding=_batch_spec())
+        parts = jnp.split(fused, list(itertools.accumulate(w.shape[1] for w in weights[:-1])), axis=1)
+    else:
+        # Some projections read another stream (attn_res_sum_inputs): one GEMM per projection.
+        names = ["router", "latent"][: len(moe_weights)] + ["shared"] * len(shared_weights)
+        flats = {k: rearrange(v, "b s d -> (b s) d") for k, v in part_inputs.items()}
+        parts = [
+            jnp.einsum("td,de->te", flats.get(n, x_flat), w, out_sharding=_batch_spec())
+            for n, w in zip(names, weights, strict=True)
+        ]
+    routed, stats = mlp(part_inputs.get("latent", x) if part_inputs else x, projected=parts[: len(moe_weights)])
     gates, ups = parts[len(moe_weights) : len(moe_weights) + len(shared)], parts[len(moe_weights) + len(shared) :]
     hidden = jnp.concatenate([jax.nn.silu(g) * u for g, u in zip(gates, ups, strict=True)], axis=1)
     w_down = jnp.concatenate([reshard(e.w_down, replicated) for e in shared], axis=0)
@@ -1404,14 +1454,24 @@ class Block(eqx.Module):
         return out
 
     def mlp_branch(
-        self, h: Float[Array, "B S D"], mask: AttentionMask | jax.Array
+        self,
+        h: Float[Array, "B S D"],
+        mask: AttentionMask | jax.Array,
+        sum_stream: Float[Array, "B S D"] | None = None,
+        sum_parts: tuple[str, ...] = (),
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+        """``sum_stream`` feeds ``sum_parts`` (``router`` / ``latent`` / ``shared``) instead of ``h``."""
         mlp_in = self.mlp_gated_norm(self.rms_mlp(h))
+        part_inputs = None
+        if sum_parts:
+            assert sum_stream is not None
+            sum_in = self.mlp_gated_norm(self.rms_mlp(sum_stream))
+            part_inputs = {p: sum_in for p in sum_parts}
         stats: dict[str, jax.Array] = {}
         if isinstance(self.mlp, DenseMLP):
             out = self.mlp(mlp_in, moe_output_reshard=False)
         elif self.shared is not None:
-            out, stats = moe_and_shared_fused(self.mlp, self.shared, mlp_in)
+            out, stats = moe_and_shared_fused(self.mlp, self.shared, mlp_in, part_inputs)
         else:
             out, stats = self.mlp(mlp_in)
         if self.bias_mlp_out is not None:
@@ -1583,7 +1643,15 @@ def _attn_res_layer_full(diff_args, mask, token_ids, use_long, layer_index, eps,
     h, z_mlp, w_mlp = _attn_res_mix(blocks, block_logits, None, queries, 2 * layer_index + 1, eps, logit_bias)
     if "mlp" in sum_components:
         h = _stream_sum(blocks)
-    mlp_out, router_stats = layer.mlp_branch(h, mask)
+    sum_parts: tuple[str, ...] = ()
+    if "mlp_shared" in sum_components:
+        sum_parts += ("shared",)
+    if "mlp_routed" in sum_components:
+        sum_parts += ("router", "latent")
+    if "mlp_router" in sum_components:
+        sum_parts += ("router",)
+    sum_parts = tuple(dict.fromkeys(sum_parts))
+    mlp_out, router_stats = layer.mlp_branch(h, mask, _stream_sum(blocks) if sum_parts else None, sum_parts)
     stats = {**router_stats, _ATTN_RES_Z: z_attn + z_mlp, _ATTN_RES_W_ATTN: w_attn, _ATTN_RES_W_MLP: w_mlp}
     return mlp_out, blocks, block_logits, stats
 
@@ -1978,8 +2046,9 @@ class Transformer(eqx.Module):
             raise ValueError(f"attn_res_final_mode must be attn, uniform or sum, got {cfg.attn_res_final_mode!r}")
         if cfg.attn_res_sum_inputs and not cfg.attn_res_full:
             raise ValueError("attn_res_sum_inputs needs attn_res_full")
-        if set(cfg.attn_res_sum_inputs) - {"q", "k", "v", "mlp"}:
-            raise ValueError(f"attn_res_sum_inputs must be a subset of q, k, v, mlp, got {cfg.attn_res_sum_inputs}")
+        allowed = {"q", "k", "v", "mlp", "mlp_shared", "mlp_routed", "mlp_router"}
+        if set(cfg.attn_res_sum_inputs) - allowed:
+            raise ValueError(f"attn_res_sum_inputs must be a subset of {sorted(allowed)}, got {cfg.attn_res_sum_inputs}")
         if cfg.attn_res_full and cfg.attn_res_layer_backward != AttnResLayerBackward.SAVE:
             raise ValueError("attn_res_full needs attn_res_layer_backward=SAVE")
         if cfg.mla_share_kv_latent and cfg.attn_res_layer_backward != AttnResLayerBackward.SAVE:
