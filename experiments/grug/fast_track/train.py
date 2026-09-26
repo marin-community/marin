@@ -574,10 +574,16 @@ def _aux_loss_weight(model_config, step: jax.Array) -> jax.Array | None:
     return model_config.aux_lm_weight * frac
 
 
-def _loss_and_grads(params, batch, mp: jmp.Policy, z_loss: float | None, step: jax.Array | None = None):
+def _loss_and_grads(
+    params,
+    batch,
+    mp: jmp.Policy,
+    z_loss: float | None,
+    step: jax.Array | None = None,
+    loop_active: bool | None = None,
+):
+    """``loop_active`` is a static pass selector for looped growth (see ``GrugModelConfig.loop_grow_step``)."""
     aux_weight = None if step is None else _aux_loss_weight(params.config, step)
-    grow_step = params.config.loop_grow_step
-    loop_active = None if step is None or grow_step is None else step >= grow_step
 
     def loss_fn(model):
         compute_params = mp.cast_to_compute(model)
@@ -647,13 +653,13 @@ def _make_train_step(
     else:
         watch_targets = ()
 
-    @functools.partial(jax.jit, donate_argnums=(0,))
-    def train_step(state: GrugTrainState, batch):
+    @functools.partial(jax.jit, donate_argnums=(0,), static_argnames=("loop_active",))
+    def train_step(state: GrugTrainState, batch, loop_active: bool | None = None):
         # Apply pending QB betas to router biases inside JIT (avoids eager
         # host-side kernel launches that can cause SPMD sync issues).
         qb_params = _apply_qb_betas(state.params, state.pending_qb_betas)
 
-        (loss, summarized_metrics), grads = _loss_and_grads(qb_params, batch, mp, z_loss, state.step)
+        (loss, summarized_metrics), grads = _loss_and_grads(qb_params, batch, mp, z_loss, state.step, loop_active)
         metrics = {"train/loss": loss, **summarized_metrics}
         opt_state_in = state.opt_state
         if os.environ.get("GRUG_SKIP_OPTIMIZER"):
@@ -956,7 +962,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     watch_stats = None
                 step_start = time.perf_counter()
                 state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_STARTED)
-                state, metrics, inline_watch_stats = train_step(state, batch)
+                grow_step = config.model.loop_grow_step
+                # Looped growth compiles one program per pass count (a traced switch would keep both alive).
+                loop_active = None if grow_step is None else int(state.step) >= grow_step
+                state, metrics, inline_watch_stats = train_step(state, batch, loop_active=loop_active)
                 if inline_watch_stats is not None and watch_due:
                     watch_stats = inline_watch_stats
                 step = int(state.step) - 1

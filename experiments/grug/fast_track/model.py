@@ -1548,9 +1548,9 @@ class Transformer(eqx.Module):
         self,
         token_ids: Int[Array, "B S"],
         mask: AttentionMask | jax.Array | None = None,
-        loop_active: jax.Array | None = None,
+        loop_active: bool | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        """``loop_active`` (with ``loop_grow_step``) selects one pass (False) or all ``loop_passes``
+        """``loop_active`` (static, with ``loop_grow_step``) selects one pass (False) or all ``loop_passes``
         (True); None runs all passes."""
         if mask is None:
             mask = AttentionMask.causal()
@@ -1659,7 +1659,7 @@ class Transformer(eqx.Module):
         hidden: Float[Array, "B S D"],
         token_ids: Int[Array, "B S"],
         extra_sources: tuple[jax.Array, ...],
-        loop_active: jax.Array | None,
+        loop_active: bool | None,
         long_layer_mask: AttentionMask,
         short_layer_mask: AttentionMask,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array], dict[str, jax.Array]]:
@@ -1775,10 +1775,8 @@ class Transformer(eqx.Module):
             # Same structure as all_passes: the pass-0 stats stand in for every pass.
             return finish(state, [pass0_stats] * passes, list(pass0_z))
 
-        if passes == 1 or cfg.loop_grow_step is None or loop_active is None:
-            mixed, layer_stats, z_total, max_weight, entropy = all_passes(state)
-        else:
-            mixed, layer_stats, z_total, max_weight, entropy = jax.lax.cond(loop_active, all_passes, one_pass, state)
+        run_all = passes == 1 or cfg.loop_grow_step is None or loop_active is None or loop_active
+        mixed, layer_stats, z_total, max_weight, entropy = all_passes(state) if run_all else one_pass(state)
         final_stats = {"attn_res_final_max_weight": max_weight, "attn_res_final_entropy": entropy}
         for i, layer in enumerate(layers):
             if isinstance(layer.attn, CausalSelfAttention) and layer.attn.qk_mult is not None:
@@ -1825,7 +1823,7 @@ class Transformer(eqx.Module):
         loss_dtype: jnp.dtype = jnp.float32,
         return_router_metrics: bool = False,
         aux_loss_weight: jax.Array | None = None,
-        loop_active: jax.Array | None = None,
+        loop_active: bool | None = None,
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
         """``aux_loss_weight`` scales the early auxiliary LM loss (``aux_lm_layer``); it is skipped at 0."""
         hidden, router_metrics = self(token_ids, mask=mask, loop_active=loop_active)
