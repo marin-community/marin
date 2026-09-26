@@ -8,6 +8,9 @@ StepSpec graph and runs it as a single iris job, in one of two modes:
 - `--mode sample`: a pre-built testbed sample registered as already-normalized
   sources (`--sample-prefix`), K=64 — a true end-to-end run on real data.
 
+[`mixprior/`](mixprior/) fits a shared-content transfer GP over registered
+data-mixture swarms and selects a feasible curriculum from a finite pool.
+
 All worker CPU/RAM is one `PoolConfig` (`n_workers` x `worker`, overridable with
 `--pool-workers/--pool-cpu/--pool-ram`) shared across the stages. Each stage runs
 its pipeline on its own dedicated Zephyr coordinator + worker fleet (vanilla
