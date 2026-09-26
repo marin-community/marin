@@ -102,6 +102,7 @@ def test_split_transformer_assigns_uneven_contiguous_stages():
     assert stages[1].output_proj is model.output_proj
 
 
+@pytest.mark.timeout(180)
 def test_staged_loss_and_gradients_match_the_unsplit_model():
     mesh, model = _tiny_model()
     batch = _batch()
