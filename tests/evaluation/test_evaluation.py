@@ -25,6 +25,8 @@ from finestore.eval import (
 from finestore.reader import ReadView
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.rpc import job_pb2
+from marin.evaluation.evalchemy.client import build_command
+from marin.evaluation.evalchemy.config import load_evalchemy_config
 from marin.evaluation.evalchemy.runner import EvalchemyExecutor, EvalchemyRunConfig
 from marin.evaluation.evalchemy.runtime import EVALCHEMY_REQUIRED_EXTRAS
 from marin.evaluation.evaluation_config import EvalTaskConfig
@@ -77,6 +79,7 @@ from experiments.evaluation.evals import (
     EVALS,
     EvalchemyDefinition,
     HarborDefinition,
+    evalchemy_run_config,
     resolve_eval_keys,
 )
 from experiments.evaluation.launch import (
@@ -1066,6 +1069,42 @@ def test_resolve_eval_keys_validates_programmatic_selections() -> None:
         resolve_eval_keys("gsm8k-smoke,missing")
 
 
+def test_aime24_smoke_passes_debug_and_limit_to_evalchemy() -> None:
+    definition = EVALS["aime24-smoke"]
+    assert isinstance(definition, EvalchemyDefinition)
+    config = evalchemy_run_config(definition.name, load_evalchemy_config(definition.config_path))
+    assert config.debug and config.max_eval_instances == 2
+    assert definition.record_ref_for(config).evalchemy.debug
+
+    command = build_command(
+        {
+            "apply_chat_template": True,
+            "base_url": "http://localhost/v1",
+            "model_id": "iceball",
+            "num_concurrent": 1,
+            "max_gen_toks": 256,
+            "max_eval_instances": config.max_eval_instances,
+            "out_path": "memory://eval",
+            "extra_model_args": {},
+            "extra_gen_kwargs": {},
+            "debug": config.debug,
+        },
+        {
+            "name": "AIME24",
+            "generation": True,
+            "completion_only": False,
+            "num_fewshot": 0,
+            "dir": "aime24",
+            "unsafe_code": False,
+        },
+        "/tmp/out",
+        "/tmp/bin/python",
+        4032,
+    )
+    assert "--debug" in command
+    assert command[command.index("--limit") + 1] == "2"
+
+
 def test_build_evaluation_batch_records_evalchemy_benchmark_extras(monkeypatch):
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
     spec = LaunchSpec(
@@ -1350,6 +1389,7 @@ def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(t
         ],
         "evalchemy": {
             "apply_chat_template": True,
+            "debug": False,
             "max_eval_instances": 2,
             "num_concurrent": 16,
             "batch_size": "1",

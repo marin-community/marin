@@ -248,6 +248,7 @@ class EvalchemyRef(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     apply_chat_template: bool
+    debug: bool = False
     max_gen_toks: int | None
     max_eval_instances: int | None
     num_concurrent: int

@@ -1,0 +1,9 @@
+tasks: [AIME24]
+task_options:
+  AIME24:
+    num_fewshot: 0
+    task_alias: aime24
+    generation: true
+runtime_extras: [aime24]
+debug: true
+limit: 2

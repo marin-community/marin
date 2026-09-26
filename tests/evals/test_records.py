@@ -345,6 +345,7 @@ def test_record_json_includes_normalized_evalchemy_configuration(tmp_path):
         "extra_gen_kwargs": {"temperature": "0"},
         "extra_model_args": {"timeout": 900},
         "max_length": 32768,
+        "debug": False,
     }
 
 

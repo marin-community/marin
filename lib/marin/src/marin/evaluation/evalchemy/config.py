@@ -72,6 +72,7 @@ class EvalchemyConfig(BaseModel):
     tasks: tuple[str, ...] = Field(min_length=1)
     task_options: Mapping[str, EvalchemyTaskOptions] = Field(default_factory=dict)
     apply_chat_template: bool | None = None
+    debug: bool = False
     limit: int | None = None
     num_fewshot: int | None = None
     batch_size: str | None = None

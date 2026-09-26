@@ -214,6 +214,8 @@ def build_command(config: dict, task: dict, output_path: str, python: str, max_l
         cmd += ["--limit", str(config["max_eval_instances"])]
     if use_chat:
         cmd.append("--apply_chat_template")
+    if config.get("debug", False):
+        cmd.append("--debug")
     return cmd
 
 

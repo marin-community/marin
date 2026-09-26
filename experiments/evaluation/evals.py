@@ -85,6 +85,7 @@ class EvalchemyDefinition:
             ),
             evalchemy=EvalchemyRef(
                 apply_chat_template=config.apply_chat_template,
+                debug=config.debug,
                 max_gen_toks=config.max_gen_toks,
                 max_eval_instances=config.max_eval_instances,
                 num_concurrent=config.num_concurrent,
@@ -249,6 +250,7 @@ def evalchemy_run_config(name: str, config: EvalchemyConfig) -> EvalchemyRunConf
         name=name,
         tasks=tuple(tasks),
         apply_chat_template=config.apply_chat_template or False,
+        debug=config.debug,
         max_gen_toks=config.max_tokens,
         max_eval_instances=config.limit,
         num_concurrent=num_concurrent,
@@ -292,6 +294,7 @@ _STANDARD_EVALCHEMY_EVALS: tuple[str, ...] = (
     "mbppplus",
     "mmlu-smoke",
     "gsm8k-smoke",
+    "aime24-smoke",
 )
 
 EVALS: dict[str, EvaluationDefinition] = {
