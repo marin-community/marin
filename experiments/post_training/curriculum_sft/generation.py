@@ -18,10 +18,12 @@ import logging
 import os
 import threading
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 import pyarrow as pa
+from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.namespacing import user_owned_name
@@ -31,6 +33,7 @@ from math_verify import parse, verify
 from pydantic import Field, ValidationError
 from rigging.filesystem.storage_path import StoragePath
 from tasktrove_verify.modes.extract import extract_boxed, strip_math_delimiters
+from transformers import AutoTokenizer
 from zephyr.readers import load_parquet
 from zephyr.writers import write_parquet_file
 
@@ -156,7 +159,9 @@ class SolveProblemsConfig:
     capability_id: str
     samples_per_problem: int
     solutions_per_problem: int
-    max_solution_chars: int
+    tokenizer: str
+    tokenizer_revision: str
+    max_sequence_tokens: int
     seed: int
     max_completion_tokens: int
     relay_job: str
@@ -358,9 +363,16 @@ def solve_requests(config: SolveProblemsConfig, problems: list[dict[str, Any]]) 
 
 
 def parse_solution_batch(
-    raw_output: str, config: SolveProblemsConfig, problems: list[dict[str, Any]]
+    raw_output: str,
+    config: SolveProblemsConfig,
+    problems: list[dict[str, Any]],
+    sequence_tokens: Callable[[dict[str, Any]], int],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Grade every blind solution and keep the first correct ones per problem as thinking-mode chat rows."""
+    """Grade every blind solution and keep the first correct ones per problem as thinking-mode chat rows.
+
+    ``sequence_tokens`` returns the rendered training length of a chat row; correct solutions longer
+    than ``config.max_sequence_tokens`` are rejected as ``too_long``.
+    """
     expected_ids = {request["custom_id"] for request in solve_requests(config, problems)}
     responses = _responses_by_id(raw_output, expected_ids)
     solution_records: list[dict[str, Any]] = []
@@ -373,7 +385,7 @@ def parse_solution_batch(
             reason = _failure_reason(response)
             extracted: str | None = None
             correct = False
-            message: dict[str, Any] = {}
+            chat_row: dict[str, Any] | None = None
             if reason is None:
                 message = response["response"]["body"]["choices"][0]["message"]
                 content = message.get("content") or ""
@@ -386,25 +398,14 @@ def parse_solution_batch(
                     correct = answers_match(problem["answer"], extracted)
                     if not correct:
                         reason = "wrong_answer"
-                    elif len(message["reasoning"]) + len(content) > config.max_solution_chars:
-                        reason = "too_long"
+                    else:
+                        chat_row = _reasoning_chat_row(request_id, problem["problem"], content, message["reasoning"])
+                        if sequence_tokens(chat_row) > config.max_sequence_tokens:
+                            reason = "too_long"
             selected = reason is None and selected_per_problem[problem["request_id"]] < config.solutions_per_problem
             if selected:
                 selected_per_problem[problem["request_id"]] += 1
-                chat_rows.append(
-                    {
-                        "id": request_id,
-                        "messages": [
-                            {"role": "user", "content": problem["problem"], "reasoning_content": None},
-                            {
-                                "role": "assistant",
-                                "content": message["content"].strip(),
-                                "reasoning_content": message["reasoning"].strip(),
-                            },
-                        ],
-                        "chat_template_kwargs": {"enable_thinking": True},
-                    }
-                )
+                chat_rows.append(chat_row)
             solution_records.append(
                 {
                     "request_id": request_id,
@@ -417,6 +418,17 @@ def parse_solution_batch(
                 }
             )
     return solution_records, chat_rows
+
+
+def _reasoning_chat_row(request_id: str, problem: str, content: str, reasoning: str) -> dict[str, Any]:
+    return {
+        "id": request_id,
+        "messages": [
+            {"role": "user", "content": problem, "reasoning_content": None},
+            {"role": "assistant", "content": content.strip(), "reasoning_content": reasoning.strip()},
+        ],
+        "chat_template_kwargs": {"enable_thinking": True},
+    }
 
 
 def _glm_client(relay_job: str) -> OpenAIBatchClient:
@@ -473,7 +485,19 @@ def solve_problems(config: SolveProblemsConfig) -> Artifact:
     raw_output = _run_batch(
         _glm_client(config.relay_job), requests, f"curriculum-solutions-{config.capability_id}.jsonl"
     )
-    solution_records, chat_rows = parse_solution_batch(raw_output, config, problems)
+    tokenizer = AutoTokenizer.from_pretrained(config.tokenizer, revision=config.tokenizer_revision)
+
+    def sequence_tokens(row: dict[str, Any]) -> int:
+        tokens = tokenizer.apply_chat_template(
+            row["messages"],
+            chat_template=MARIN_CHAT_TEMPLATE,
+            tokenize=True,
+            return_dict=False,
+            **row["chat_template_kwargs"],
+        )
+        return len(tokens)
+
+    solution_records, chat_rows = parse_solution_batch(raw_output, config, problems, sequence_tokens)
     if not chat_rows:
         raise ValueError(f"no GLM solution matched a reference answer for {config.capability_id}")
 
@@ -544,14 +568,16 @@ def solve_curriculum_problems(
     version: str,
     samples_per_problem: int,
     solutions_per_problem: int,
-    max_solution_chars: int,
+    tokenizer: str,
+    tokenizer_revision: str,
+    max_sequence_tokens: int,
     seed: int,
     max_completion_tokens: int,
 ) -> ArtifactStep[Artifact]:
     """Build one blind GLM solve-and-verify step over a problem artifact.
 
-    ``max_solution_chars`` drops correct solutions whose reasoning and answer would not fit the SFT
-    sequence length, so training never sees a think block cut off before its answer.
+    ``max_sequence_tokens`` drops correct solutions whose rows, rendered with the Marin chat template
+    and ``tokenizer``, would not fit the SFT sequence length; unpacked SFT rejects longer rows.
     """
 
     def build_config(ctx: StepContext) -> SolveProblemsConfig:
@@ -561,7 +587,9 @@ def solve_curriculum_problems(
             capability_id=capability_id,
             samples_per_problem=samples_per_problem,
             solutions_per_problem=solutions_per_problem,
-            max_solution_chars=max_solution_chars,
+            tokenizer=tokenizer,
+            tokenizer_revision=tokenizer_revision,
+            max_sequence_tokens=max_sequence_tokens,
             seed=seed,
             max_completion_tokens=max_completion_tokens,
             relay_job=DEFAULT_GLM_RELAY_JOB,
