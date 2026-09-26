@@ -46,11 +46,14 @@ promotes each pin:
 - Verify remote `main` resolves to the validated tip. Delete `main-next` or
   leave it for the next cycle; the next refresh force-updates it.
 
-Descriptor and release pins need no edit after this swap because they already record
-the exact validated SHA or wheel. For an `isolated_project`, restore the uv source
-from `main-next` to `main`, rerun `uv run config/update-external.py <fork>`, and verify
-the lock still records the validated SHA. Commit and push that follow-up to the draft
-Marin PR before marking it ready or merging it.
+Descriptor and final release pins need no edit after this swap because they already
+record the exact validated SHA or wheel. A `vllm-gpu` draft is the exception: after
+the swap, publish the final release from the staged wheel bytes and run
+`config/update-external.py --promote-gpu-release <manifest>` to replace the temporary
+candidate pin. For an `isolated_project`, restore the uv source from `main-next` to
+`main`, rerun `uv run config/update-external.py <fork>`, and verify the lock still
+records the validated SHA. Commit and push either follow-up to the draft Marin PR
+before marking it ready or merging it.
 
 ## The shared vLLM source branch
 

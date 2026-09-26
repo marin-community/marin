@@ -59,6 +59,16 @@ def _promoted_manifest() -> dict:
     }
 
 
+def _staged_candidate_manifest() -> dict:
+    manifest = _promoted_manifest()
+    manifest["release"] |= {
+        "status": "candidate",
+        "tag": "marin-vllm-gpu-staged-candidate-aaaaaaaaaaaa",
+    }
+    manifest["validation"] = {"status": "pending", "targets": []}
+    return manifest
+
+
 def test_tpu_vllm_requirements_match_fork_descriptor():
     assert VLLM_FORK_REQUIREMENT == _descriptor_requirement("vllm")
     assert TPU_INFERENCE_FORK_REQUIREMENT == _descriptor_requirement("tpu-inference")
@@ -97,6 +107,19 @@ def test_render_gpu_release_toml_reencodes_the_wheel_url_and_round_trips(tmp_pat
     assert [wheel.architecture for wheel in release.wheels] == ["x86_64"]
 
 
+def test_render_gpu_release_toml_explicitly_pins_a_staged_candidate(tmp_path):
+    update_external = _update_external()
+    rendered = update_external.render_gpu_release_toml(_staged_candidate_manifest(), staged_candidate=True)
+
+    path = tmp_path / "gpu.toml"
+    path.write_text(rendered)
+    release = update_external.load_vllm_gpu_release(path)
+
+    assert release.release_tag == "marin-vllm-gpu-staged-candidate-aaaaaaaaaaaa"
+    assert release.source_commit == "a" * 40
+    assert release.wheels[0].sha256 == "b" * 64
+
+
 @pytest.mark.parametrize(
     "mutation",
     [
@@ -114,22 +137,61 @@ def test_render_gpu_release_toml_refuses_an_unpromoted_manifest(mutation):
         update_external.render_gpu_release_toml(manifest)
 
 
-def test_promote_gpu_release_keeps_the_pin_when_the_rendered_wheel_fails_validation(tmp_path, monkeypatch):
-    # A manifest can clear the render-time status/repository gate yet still carry a wheel
-    # invariant (here a malformed SHA-256) that only the loader rejects. The existing pin
-    # must survive that failure rather than be overwritten with an invalid descriptor.
+def test_stage_gpu_candidate_rejects_a_promoted_release(tmp_path, monkeypatch):
     update_external = _update_external()
     pin = tmp_path / "gpu.toml"
-    original = 'release_tag = "keep-me"\n'
+    pin.write_text('release_tag = "keep-me"\n')
+    monkeypatch.setattr(update_external, "VLLM_GPU_RELEASE_CONFIG", pin)
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(_promoted_manifest()))
+
+    with pytest.raises(ValueError, match="expected a staged 'candidate' manifest"):
+        update_external.stage_gpu_candidate(manifest_path)
+    assert pin.read_text() == 'release_tag = "keep-me"\n'
+
+
+def test_stage_gpu_candidate_rejects_a_source_that_is_not_main_next(tmp_path, monkeypatch):
+    update_external = _update_external()
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(_staged_candidate_manifest()))
+    monkeypatch.setattr(
+        update_external.subprocess,
+        "run",
+        lambda args, **kwargs: update_external.subprocess.CompletedProcess(args, 0, stdout=f"{'c' * 40}\n", stderr=""),
+    )
+
+    with pytest.raises(ValueError, match="is not the current main-next tip"):
+        update_external.stage_gpu_candidate(manifest_path)
+
+
+def test_promote_gpu_release_replaces_the_matching_staged_candidate(tmp_path, monkeypatch):
+    update_external = _update_external()
+    pin = tmp_path / "gpu.toml"
+    pin.write_text(update_external.render_gpu_release_toml(_staged_candidate_manifest(), staged_candidate=True))
+    monkeypatch.setattr(update_external, "VLLM_GPU_RELEASE_CONFIG", pin)
+    monkeypatch.setattr(update_external, "EXTERNAL_PROJECTS", ())
+    monkeypatch.setattr(update_external, "regenerate_generated_pins", lambda dependencies, *, check: None)
+
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(_promoted_manifest()))
+    update_external.promote_gpu_release(manifest_path)
+
+    assert update_external.load_vllm_gpu_release(pin).release_tag == "marin-vllm-gpu-20260101-abcdef012345"
+
+
+def test_promote_gpu_release_keeps_the_candidate_when_the_wheel_bytes_differ(tmp_path, monkeypatch):
+    update_external = _update_external()
+    pin = tmp_path / "gpu.toml"
+    original = update_external.render_gpu_release_toml(_staged_candidate_manifest(), staged_candidate=True)
     pin.write_text(original)
     monkeypatch.setattr(update_external, "VLLM_GPU_RELEASE_CONFIG", pin)
 
     manifest = _promoted_manifest()
-    manifest["platforms"][0]["wheel"]["sha256"] = "not-a-sha"
+    manifest["platforms"][0]["wheel"]["sha256"] = "c" * 64
     manifest_path = tmp_path / "manifest.json"
     manifest_path.write_text(json.dumps(manifest))
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="does not match the staged candidate"):
         update_external.promote_gpu_release(manifest_path)
     assert pin.read_text() == original
     assert not list(tmp_path.glob("gpu.*.toml.tmp"))

@@ -9,10 +9,15 @@ training and serving dependencies. Each `pyproject.toml` follows the external
 repository's `main` branch, and its adjacent `uv.lock` records the exact commit
 Marin uses.
 
-`vllm/gpu.toml` records the promoted CUDA release, Torch backend, and
-architecture-specific wheel URLs and SHA-256 digests. It is updated from the
-release manifest only after the H100 and GB200 publication gates pass. It is
-not a uv project and the nightly update does not advance it.
+`vllm/gpu.toml` normally records the promoted CUDA release, Torch backend, and
+architecture-specific wheel URLs and SHA-256 digests. The final release pin is
+updated only after the H100 and GB200 publication gates pass. It is not a uv
+project and the nightly update does not advance it.
+
+During a source refresh, a draft Marin PR may temporarily point `gpu.toml` at
+an immutable staged candidate. This lets Snowball parity test the exact
+`main-next` wheel before source promotion. The final release manifest replaces
+that temporary pin after promotion.
 
 `vllm/tpu.toml` records an exact vLLM source from the fork's maintained `main`
 lineage and the matching `tpu-inference` SHA. The TPU stack runs from an
@@ -32,12 +37,21 @@ uv run config/update-external.py evalchemy
 ```
 
 Omit the project name to advance all three Git projects. The command updates
-the selected lockfiles and regenerates the packaged requirements. Regenerate
-only the promoted vLLM release after editing `vllm/gpu.toml` with:
+the selected lockfiles and regenerates the packaged requirements. Import the
+exact staged vLLM candidate for pre-promotion parity with:
 
 ```bash
-uv run config/update-external.py vllm
+uv run config/update-external.py --stage-gpu-candidate marin-vllm-gpu-manifest.json
 ```
+
+Replace it with the final promoted release using:
+
+```bash
+uv run config/update-external.py --promote-gpu-release marin-vllm-gpu-manifest.json
+```
+
+Both commands update `vllm/gpu.toml` from a verified manifest and regenerate
+the packaged pins. Do not edit the wheel fields by hand.
 
 The generated module also carries the isolated TPU-vLLM requirements from
 `vllm/tpu.toml`; those forks are not part of the nightly upgrade set.
