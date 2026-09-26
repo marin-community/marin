@@ -14,7 +14,8 @@ import tempfile
 import time
 import urllib.parse
 import warnings
-from concurrent.futures import ThreadPoolExecutor
+from collections import deque
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import cached_property
 from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Self, Tuple, Type, TypeVar, Union, cast
@@ -81,6 +82,7 @@ if TYPE_CHECKING:
 
 DEFAULT_MAX_SHARD_SIZE = int(5e9)
 MAX_CONCURRENT_HF_SHARDS = 16
+DEFAULT_EXPORT_HOST_BUDGET_BYTES = DEFAULT_STAGING_BUDGET_BYTES
 _PORTABLE_FAST_TOKENIZER_CLASS = "PreTrainedTokenizerFast"
 _TRANSFORMERS_V5_FAST_TOKENIZER_CLASS = "TokenizersBackend"
 
@@ -1103,6 +1105,8 @@ class HFCheckpointConverter(Generic[LevConfig]):
         save_reference_code: Optional[bool] = None,
         save_tokenizer: bool = True,
         max_shard_size: int = DEFAULT_MAX_SHARD_SIZE,
+        export_host_budget_bytes: int = DEFAULT_EXPORT_HOST_BUDGET_BYTES,
+        max_concurrent_shards: int = MAX_CONCURRENT_HF_SHARDS,
         save_feature_extractor: bool = False,
         dtype: Optional[jnp.dtype] = None,
         generation_config: Optional[GenerationConfigDict] = None,
@@ -1128,6 +1132,9 @@ class HFCheckpointConverter(Generic[LevConfig]):
         If None, will save code for models that aren't in the HF repo.
         :param chat_template: if given, overrides the tokenizer's chat template in the exported checkpoint
         (written to both tokenizer_config.json and chat_template.jinja)
+        :param export_host_budget_bytes: target for in-flight host arrays and safetensors serialization buffers.
+            Each shard reserves twice its payload size; a shard larger than the target runs alone.
+        :param max_concurrent_shards: maximum number of shard writers and uploads on process 0.
         """
         logger.info(f"Saving HF-compatible checkpoint to {path}")
 
@@ -1224,38 +1231,64 @@ class HFCheckpointConverter(Generic[LevConfig]):
                     rel_files.add(os.path.relpath(full_path, directory))
             return rel_files
 
-        for shard_name, subset_keys in shard_specs:
-            with temp_dir_before_upload(path) as local_path:
-                if path != local_path:
-                    logger.info(f"Saving shard {shard_name} to {path} via temp path {local_path}")
+        def _write_shard(shard_name: str, shard_numpy: dict[str, np.ndarray], reserved_bytes: int) -> None:
+            try:
+                with temp_dir_before_upload(path, process_should_upload=True, sync_on_exit=False) as local_path:
+                    os.makedirs(local_path, exist_ok=True)
+                    save_state_dict(shard_numpy, os.path.join(local_path, shard_name))
+                    _maybe_upload(
+                        local_path,
+                        files=[shard_name],
+                        commit_message=f"Upload shard {shard_name} from Levanter",
+                        source_is_temp=path != local_path,
+                    )
+            finally:
+                budget.release(reserved_bytes)
 
-                os.makedirs(local_path, exist_ok=True)
-                subset_arg: Optional[tuple[str, ...]]
-                if len(subset_keys) == 0:
-                    subset_arg = None
-                else:
-                    subset_arg = subset_keys
+        budget = HostByteBudget(export_host_budget_bytes)
+        is_writer = jax.process_index() == 0
+        pending: deque[tuple[Future[None], int]] = deque()
 
-                shard_weights = _to_state_dict_with_dtype(model, dtype, subset_arg)
-                # Gather each parameter across processes: on multi-host, shards span
-                # non-addressable devices, so a bare np.asarray would raise.
-                shard_numpy = {k: _gather_to_host_numpy(v) for k, v in shard_weights.items()}
-                bytes_this_time = sum(v.nbytes for v in shard_numpy.values())
-                logger.info(
-                    "Saving shard %s (%s, %.2f%% of model)",
-                    shard_name,
-                    humanfriendly.format_size(bytes_this_time),
-                    100 * bytes_this_time / model_size,
-                )
-                save_state_dict(shard_numpy, os.path.join(local_path, shard_name))
+        with ThreadPoolExecutor(max_workers=max_concurrent_shards, thread_name_prefix="hf_export") as pool:
+            for shard_name, subset_keys in shard_specs:
+                if is_writer:
+                    while len(pending) >= max_concurrent_shards:
+                        future, completed_bytes = pending.popleft()
+                        future.result()
+                        pbar.update(completed_bytes)
 
-                _maybe_upload(
-                    local_path,
-                    files=[shard_name],
-                    commit_message=f"Upload shard {shard_name} from Levanter",
-                    source_is_temp=path != local_path,
-                )
-                pbar.update(bytes_this_time)
+                bytes_this_time = sum(v.size * v.dtype.itemsize for v in shards[shard_name].values())
+                reserved_bytes = 2 * bytes_this_time
+                if is_writer:
+                    fsspec_sync(get_loop(), budget.acquire, reserved_bytes)
+
+                try:
+                    subset_arg = subset_keys if subset_keys else None
+                    shard_weights = _to_state_dict_with_dtype(model, dtype, subset_arg)
+                    # All processes gather parameters in the same order; only process 0 writes.
+                    shard_numpy = {k: _gather_to_host_numpy(v) for k, v in shard_weights.items()}
+                    if is_writer:
+                        logger.info(
+                            "Saving shard %s (%s, %.2f%% of model)",
+                            shard_name,
+                            humanfriendly.format_size(bytes_this_time),
+                            100 * bytes_this_time / model_size,
+                        )
+                        pending.append(
+                            (pool.submit(_write_shard, shard_name, shard_numpy, reserved_bytes), bytes_this_time)
+                        )
+                        del shard_numpy
+                    else:
+                        del shard_numpy
+                        pbar.update(bytes_this_time)
+                except BaseException:
+                    if is_writer:
+                        budget.release(reserved_bytes)
+                    raise
+
+            for future, completed_bytes in pending:
+                future.result()
+                pbar.update(completed_bytes)
 
         if index is not None:
             logger.info(
