@@ -66,8 +66,9 @@ TRAIN_NODES = 4
 REQUESTED_PROBLEMS_PER_CAPABILITY = 320
 SAMPLES_PER_PROBLEM = 4
 SOLUTIONS_PER_PROBLEM = 1
-# About 3 characters per token for LaTeX-heavy math, leaving room in CONTEXT_LENGTH for the prompt and template.
-MAX_SOLUTION_CHARS = 10_000
+# Unpacked SFT rejects rows longer than CONTEXT_LENGTH. Solutions average about 2.3 characters per
+# Snowball token in the worst case observed, so 8,000 characters leaves room for the prompt and template.
+MAX_SOLUTION_CHARS = 8_000
 SEED = 17
 PROBLEM_MAX_COMPLETION_TOKENS = 16384
 SOLUTION_MAX_COMPLETION_TOKENS = 32768
