@@ -130,8 +130,8 @@ def _load_lm_model_from_configured_source(
     elif (
         config.initialize_from_checkpoint_path is not None or config.initialize_model_from_checkpoint_path is not None
     ):
-        # Both build a fresh base model and load only the checkpoint's `model` subtree into it (weights
-        # only, strict). They differ only in how main() drives them, not in how the base is loaded here.
+        # Both load the checkpoint's `model` subtree into an abstract template. They differ
+        # only in how main() uses the loaded weights.
         source = config.initialize_from_checkpoint_path or config.initialize_model_from_checkpoint_path
         checkpoint_path = latest_checkpoint_path(source)
         model = eqx.filter_eval_shape(config.model.build, Vocab, key=model_key)

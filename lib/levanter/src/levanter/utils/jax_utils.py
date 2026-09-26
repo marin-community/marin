@@ -364,7 +364,7 @@ def is_inexact_arrayish(x):
 
 
 def best_effort_sharding(shape, *, devices=None, mesh=None):
-    """Place an incoming tensor across available non-replica mesh axes when its shape permits."""
+    """Choose a staging sharding across non-replica mesh axes when the shape permits."""
     if hasattr(shape, "shape"):
         shape = shape.shape
 
