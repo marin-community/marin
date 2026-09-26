@@ -134,7 +134,7 @@ _EP_CAPACITY_FACTOR = 1.15  # receiver and sender EP capacity, kept paired.
 
 # Fault tolerance / watchdog.
 WATCH_INTERVAL = 10
-RESUME_SAVE_INTERVAL = timedelta(hours=1)
+RESUME_SAVE_INTERVAL = timedelta(minutes=20)
 STEP_TIMEOUT = timedelta(minutes=15)
 PROCESS_STALL_TIMEOUT = timedelta(hours=1)
 STARTUP_TIMEOUT = timedelta(seconds=2 * RESTORE_BARRIER_TIMEOUT)
