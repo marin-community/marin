@@ -324,6 +324,7 @@ def build_h100_ladder_run(
     attn_res_remat_attention: bool = False,
     seed: int = 0,
     profile: bool = False,
+    dump_hlo: bool = False,
     max_retries_failure: int = MAX_RETRIES_FAILURE,
     model_settings: Mapping[str, str] | None = None,
     optimizer_settings: Mapping[str, str] | None = None,
@@ -477,7 +478,11 @@ def build_h100_ladder_run(
             resources=ctx.runtime_arg("train_resources"),
             tensorstore_cache_bytes=TENSORSTORE_CACHE_BYTES,
             optimizer=optimizer,
-            trainer=dataclasses.replace(grug_trainer, trainer=trainer),
+            trainer=dataclasses.replace(
+                grug_trainer,
+                trainer=trainer,
+                hlo_dump_path=prefix_join(ctx.output_path, "train_step.hlo.txt") if dump_hlo else None,
+            ),
             eval=(
                 None
                 if no_eval
@@ -602,6 +607,7 @@ def _submit_to_cluster(run_id: str, target_cluster: str | None, priority: str) -
     help="Trainer seed (model init and data key); vary it to measure run-to-run noise.",
 )
 @click.option("--profile", is_flag=True, help="Capture a JAX profile of a few steps (uploaded as a W&B artifact).")
+@click.option("--dump-hlo", is_flag=True, help="Write the compiled train-step HLO to <output>/train_step.hlo.txt.")
 @click.option(
     "--max-retries",
     type=click.IntRange(min=0),
@@ -658,6 +664,7 @@ def main(
     attn_res_remat_attention: bool,
     seed: int,
     profile: bool,
+    dump_hlo: bool,
     max_retries: int,
     z_loss_weight: float,
     model_set: tuple[str, ...],
@@ -681,6 +688,7 @@ def main(
         attn_res_remat_attention=attn_res_remat_attention,
         seed=seed,
         profile=profile,
+        dump_hlo=dump_hlo,
         max_retries_failure=max_retries,
         model_settings=_parse_settings(model_set),
         optimizer_settings=_parse_settings(opt_set),

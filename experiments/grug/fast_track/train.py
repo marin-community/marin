@@ -13,6 +13,7 @@ from dataclasses import dataclass, field, replace
 from enum import StrEnum
 
 import equinox as eqx
+import fsspec
 import jax
 import jax.numpy as jnp
 import jmp
@@ -140,6 +141,8 @@ class GrugTrainerConfig:
     # restores from the latest committed checkpoint, so without a writer an interrupted run
     # restarts at step 0.
     save_checkpoints: bool = False
+    # Write the compiled (optimized) train-step HLO text here after the first step, for profile attribution.
+    hlo_dump_path: str | None = None
 
     # Grug builds its own compact (replica_dcn, data, expert, model) mesh instead of using
     # the Trainer's logical axis mapping; `data` absorbs whatever these two leave free.
@@ -946,6 +949,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         last_loss: float | jax.Array = 0.0
         last_step_duration = 0.0
+        hlo_written = False
 
         # Main optimization loop.
         try:
@@ -972,6 +976,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 step = int(state.step) - 1
 
                 jax.block_until_ready(metrics["train/loss"])
+                if config.trainer.hlo_dump_path is not None and not hlo_written and jax.process_index() == 0:
+                    _write_train_step_hlo(train_step, state, batch, loop_active, config.trainer.hlo_dump_path)
+                hlo_written = True
                 state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_FINISHED)
 
                 if not jnp.isfinite(metrics["train/loss"]):
@@ -1040,6 +1047,14 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             state_callbacks.emit_event(callbacks.ProgressEvent.TRAINING_FINISHED)
 
     levanter.tracker.current_tracker().finish()
+
+
+def _write_train_step_hlo(train_step, state, batch, loop_active: bool | None, path: str) -> None:
+    """Write the optimized HLO of ``train_step`` (with op metadata) to ``path``; recompiles once."""
+    text = train_step.lower(state, batch, loop_active=loop_active).compile().as_text()
+    with fsspec.open(path, "w") as f:
+        f.write(text)
+    logger.info("Wrote train-step HLO (%d chars) to %s", len(text), path)
 
 
 def run_grug(config: GrugRunConfig) -> None:
