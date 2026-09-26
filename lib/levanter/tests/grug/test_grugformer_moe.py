@@ -1338,6 +1338,42 @@ def test_expert_granular_a2a_params_roundtrip_with_drops():
         np.testing.assert_array_equal(returned[s], expected)
 
 
+def test_expert_granular_a2a_params_are_each_others_transpose():
+    """The return parameters equal what JAX's ragged_all_to_all transpose rule derives from the
+    dispatch parameters with its two offset all-to-alls, and vice versa, so the backend's backward
+    can use them directly. Checked under forced capacity clipping."""
+    shards, local_experts, tokens, topk = 4, 3, 10, 2
+    num_experts = shards * local_experts
+    rng = np.random.default_rng(1)
+    selected = rng.integers(0, num_experts, size=(shards, tokens * topk))
+    group_sizes = np.stack([np.bincount(selected[s], minlength=num_experts) for s in range(shards)]).astype(np.int32)
+    clipped = _clip_receiver_group_sizes(
+        jnp.asarray(group_sizes), local_expert_size=local_experts, receiver_capacity=int(0.7 * tokens * topk)
+    )
+    assert int(jnp.sum(clipped)) < group_sizes.sum()  # drops actually happen
+    params = [
+        _expert_granular_a2a_params(jnp.asarray(group_sizes), clipped, jnp.asarray(s), local_expert_size=local_experts)
+        for s in range(shards)
+    ]
+
+    def exchanged(field, direction, shard):
+        # A tiled all_to_all over the expert axis: chunk ``shard`` of every peer's vector.
+        return np.concatenate(
+            [
+                np.asarray(getattr(params[peer][direction], field)).reshape(shards, local_experts)[shard]
+                for peer in range(shards)
+            ]
+        )
+
+    for direction, mirror in ((0, 1), (1, 0)):
+        for s in range(shards):
+            forward, transpose = params[s][direction], params[s][mirror]
+            np.testing.assert_array_equal(exchanged("output_offsets", direction, s), transpose.input_offsets)
+            np.testing.assert_array_equal(exchanged("input_offsets", direction, s), transpose.output_offsets)
+            np.testing.assert_array_equal(forward.recv_sizes, transpose.send_sizes)
+            np.testing.assert_array_equal(forward.send_sizes, transpose.recv_sizes)
+
+
 def test_expert_granular_a2a_params_chunked_masking_composes():
     """Masking the clip to one expert chunk at a time (full sender starts, chained returns)
     reproduces the whole layer: each chunk's receiver packs only its experts from offset zero,

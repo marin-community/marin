@@ -251,12 +251,17 @@ def _ragged_a2a(
     operand: Float[Array, "R H"],
     output_init: Float[Array, "O H"],
     params: ExpertA2aParams,
+    transpose_params: ExpertA2aParams,
 ) -> Float[Array, "O H"]:
     """``ragged_all_to_all`` over the expert axis whose transpose builds its zero inits in the loop.
 
     ``operand_rows`` is ``operand.shape[0]``. The backward needs it and does not see the operand.
+    ``transpose_params`` describe the reverse transfer: input offsets where each peer's rows landed
+    here, output offsets where they came from on that peer. The dispatch and return parameters of
+    `_expert_granular_a2a_params` are each other's transpose, so passing them in replaces the two
+    offset all-to-alls in JAX's transpose rule.
     """
-    del operand_rows
+    del operand_rows, transpose_params
     return jax.lax.ragged_all_to_all(operand, output_init, *params, axis_name="expert")
 
 
@@ -265,38 +270,29 @@ def _ragged_a2a_fwd(
     operand: Float[Array, "R H"],
     output_init: Float[Array, "O H"],
     params: ExpertA2aParams,
-) -> tuple[Float[Array, "O H"], ExpertA2aParams]:
-    return _ragged_a2a(operand_rows, operand, output_init, params), params
+    transpose_params: ExpertA2aParams,
+) -> tuple[Float[Array, "O H"], tuple[ExpertA2aParams, ExpertA2aParams]]:
+    return _ragged_a2a(operand_rows, operand, output_init, params, transpose_params), (params, transpose_params)
 
 
 def _ragged_a2a_bwd(
     operand_rows: int,
-    params: ExpertA2aParams,
+    residuals: tuple[ExpertA2aParams, ExpertA2aParams],
     cotangent: Float[Array, "O H"],
-) -> tuple[Float[Array, "R H"], Float[Array, "O H"], None]:
+) -> tuple[Float[Array, "R H"], Float[Array, "O H"], None, None]:
+    params, transpose_params = residuals
     hidden_dim = cotangent.shape[1]
-    # Reverse the collective with exchanged offsets, matching JAX's transpose rule.
-    exchanged_output_offsets = jax.lax.all_to_all(params.output_offsets, "expert", 0, 0, tiled=True)
-    exchanged_input_offsets = jax.lax.all_to_all(params.input_offsets, "expert", 0, 0, tiled=True)
     init = _loop_local_zeros(
         operand_rows, hidden_dim, cotangent.dtype, params.recv_sizes, site=_LoopLocalZeroSite.OPERAND_COTANGENT
     )
-    operand_ct = jax.lax.ragged_all_to_all(
-        cotangent,
-        init,
-        exchanged_output_offsets,
-        params.recv_sizes,
-        exchanged_input_offsets,
-        params.send_sizes,
-        axis_name="expert",
-    )
+    operand_ct = jax.lax.ragged_all_to_all(cotangent, init, *transpose_params, axis_name="expert")
     # Match JAX's transpose rule when masking rows overwritten in the primal. When ``output_init``
     # carries no gradient, JAX drops this branch at lowering.
     interval_marks = (
         jnp.zeros(cotangent.shape[0], jnp.int32)
-        .at[exchanged_output_offsets]
+        .at[transpose_params.input_offsets]
         .set(1)
-        .at[exchanged_output_offsets + params.recv_sizes]
+        .at[transpose_params.input_offsets + transpose_params.send_sizes]
         .add(-1)
     )
     written = jnp.broadcast_to(jnp.cumsum(interval_marks)[:, None], cotangent.shape)
@@ -304,7 +300,7 @@ def _ragged_a2a_bwd(
         cotangent.shape[0], hidden_dim, cotangent.dtype, params.send_sizes, site=_LoopLocalZeroSite.OUTPUT_PASSTHROUGH
     )
     output_ct = jax.lax.select_n(written, cotangent, passthrough_zero)
-    return operand_ct, output_ct, None
+    return operand_ct, output_ct, None, None
 
 
 _ragged_a2a.defvjp(_ragged_a2a_fwd, _ragged_a2a_bwd)
@@ -406,7 +402,7 @@ def _moe_mlp_ep_ragged_a2a_local(
         init = _loop_local_zeros(
             chunk_capacity, hidden_dim, x_local.dtype, params.send_sizes, site=_LoopLocalZeroSite.DISPATCH_OUTPUT
         )
-        return _ragged_a2a(assignments_per_shard, source, init, params)
+        return _ragged_a2a(assignments_per_shard, source, init, params, chunk_plans[chunk_index].return_params)
 
     # The chunks run as a two-stage pipeline: chunk c+1's dispatch is in flight during chunk c's
     # expert MLP, and chunk c's return during chunk c+1's MLP. Two barriers bound it. The next
@@ -439,7 +435,7 @@ def _moe_mlp_ep_ragged_a2a_local(
             # Chaining every chunk through one output buffer composes the disjoint writes;
             # dropped rows keep the buffer's zeros, so the final gather-sum reads dropped
             # slots as zero contributions with no expansion step.
-            returned = _ragged_a2a(chunk_capacity, out_dispatch, returned, plan.return_params)
+            returned = _ragged_a2a(chunk_capacity, out_dispatch, returned, plan.return_params, plan.dispatch_params)
             x_dispatch = next_x_dispatch
 
     with jax.named_scope("combine"):
