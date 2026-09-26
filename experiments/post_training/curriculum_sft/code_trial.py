@@ -3,8 +3,8 @@
 
 """Execution-verified code curriculum SFT trial on the September Snowball HF checkpoint.
 
-Training rows are the base model's own solutions that pass the task's check (self-distillation), so
-each task kind trains only once ``self_distill.AnswerCheck`` can grade it; see ``SELF_DISTILL_CHECKS``.
+Training rows are the base model's own solutions that pass the task's check (self-distillation):
+implement solutions must pass every hidden test and trace answers must equal the executed value.
 """
 
 import hashlib
@@ -42,10 +42,7 @@ CODE_CAPABILITIES = {
     IMPLEMENTATION_CAPABILITY: TaskKind.IMPLEMENT,
     DYNAMIC_SEMANTICS_CAPABILITY: TaskKind.TRACE,
 }
-# Task kinds that self-distillation can grade. Trace tasks need a literal-equality check
-# (``code_tasks.literals_equal``) and implement tasks a test-running check (``code_tasks.run_tests``);
-# add a kind here once ``AnswerCheck`` supports it.
-SELF_DISTILL_CHECKS: dict[TaskKind, AnswerCheck] = {}
+SELF_DISTILL_CHECKS = {TaskKind.IMPLEMENT: AnswerCheck.PYTHON_TESTS, TaskKind.TRACE: AnswerCheck.PYTHON_LITERAL}
 EVALS = "humanevalplus,mbppplus,cruxeval"
 EVAL_NAME = "curriculum-code-sep20"
 REQUESTED_TASKS_PER_CAPABILITY = 320
@@ -84,12 +81,9 @@ def _adopted_tasks(capability_id: str, kind: TaskKind) -> ArtifactStep[Artifact]
 
 
 def build_self_distill() -> dict[str, ArtifactStep[Artifact]]:
-    """Self-distill every capability whose task kind has an answer check, keyed by capability ID."""
-    steps: dict[str, ArtifactStep[Artifact]] = {}
-    for capability_id, kind in CODE_CAPABILITIES.items():
-        if kind not in SELF_DISTILL_CHECKS:
-            continue
-        steps[capability_id] = self_distill_step(
+    """Self-distill each capability's tasks, keyed by capability ID."""
+    return {
+        capability_id: self_distill_step(
             {capability_id: _adopted_tasks(capability_id, kind)},
             name=f"documents/curriculum-sft/code-self-distill-{kind}",
             version=SELF_DISTILL_VERSION,
@@ -103,16 +97,13 @@ def build_self_distill() -> dict[str, ArtifactStep[Artifact]]:
             max_sequence_tokens=CONTEXT_LENGTH,
             seed=SEED,
         )
-    if not steps:
-        raise click.UsageError(
-            "no code task kind has a self-distillation answer check yet; add AnswerCheck support for trace or "
-            "implement tasks in self_distill.py and register it in code_trial.SELF_DISTILL_CHECKS"
-        )
-    return steps
+        for capability_id, kind in CODE_CAPABILITIES.items()
+    }
 
 
-def _datasets() -> list[ArtifactDatasetSpec]:
-    return [
+def build_code_trial(version: str, learning_rate: float, warmup: int) -> dict[str, ArtifactStep]:
+    """Build baseline and trained code evaluations around one SFT run on self-distilled rows."""
+    datasets = [
         ArtifactDatasetSpec(
             slug=capability_id,
             artifact=distilled,
@@ -121,11 +112,6 @@ def _datasets() -> list[ArtifactDatasetSpec]:
         )
         for capability_id, distilled in build_self_distill().items()
     ]
-
-
-def build_code_trial(
-    version: str, learning_rate: float, warmup: int, datasets: list[ArtifactDatasetSpec]
-) -> dict[str, ArtifactStep]:
     curriculum_key = hashlib.sha256(json.dumps(sorted(CODE_CAPABILITIES)).encode()).hexdigest()[:12]
     return build_trial(
         name=f"{curriculum_key}/snowball-self",
@@ -153,9 +139,7 @@ def main(stage: str, learning_rate: float | None, warmup: int | None) -> dict[st
     version = resolve_version(EVAL_NAME, None)
     if learning_rate is None or warmup is None:
         raise click.UsageError(f"--stage {stage} requires --learning-rate and --warmup")
-    # The baseline evaluation does not depend on training data, so it runs before self-distillation exists.
-    datasets = [] if stage == "baseline" else _datasets()
-    trial = build_code_trial(version, learning_rate, warmup, datasets)
+    trial = build_code_trial(version, learning_rate, warmup)
     if stage == "full":
         return {"baseline": trial["baseline"], "after": trial["after"]}
     return {stage: trial[stage]}

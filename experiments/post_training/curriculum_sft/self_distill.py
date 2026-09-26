@@ -6,9 +6,12 @@
 Self-distilled rows keep the student's reasoning style, so an SFT run on them isolates the effect
 of the selected problems from the effect of imitating a teacher's traces. The step serves the model
 with vLLM through Marin's remote inference, samples each accepted problem several times in thinking
-mode, and keeps the first samples whose think block closes, whose last ``\\boxed{}`` answer is
-math-verify-equivalent to the problem's reference answer, and whose rendered row fits the SFT
-sequence length.
+mode, and keeps the first samples whose think block closes, whose answer passes the problem's
+``AnswerCheck``, and whose rendered row fits the SFT sequence length.
+
+A problems row may carry a ``constraints`` column: JSON-encoded output constraints from
+``instruction_following``. A sample of such a problem is correct only when its answer passes the check
+and its final response, excluding the reasoning, satisfies every constraint.
 """
 
 from __future__ import annotations
@@ -41,6 +44,7 @@ from rigging.filesystem.storage_path import StoragePath
 from tasktrove_verify.modes.extract import extract_boxed
 from zephyr.readers import load_parquet
 
+from experiments.post_training.curriculum_sft.code_tasks import EXECUTION_TIMEOUT, literals_equal, run_tests
 from experiments.post_training.curriculum_sft.generation import (
     MANIFEST_FILENAME,
     PROBLEMS_FILENAME,
@@ -50,6 +54,7 @@ from experiments.post_training.curriculum_sft.generation import (
     sequence_token_counter,
     write_table,
 )
+from experiments.post_training.curriculum_sft.instruction_following import follows_constraints
 
 logger = logging.getLogger(__name__)
 
@@ -61,10 +66,14 @@ SAMPLES_FILENAME = "samples/{capability_id}.parquet"
 SELF_CHAT_FILENAME = "chat/{capability_id}.parquet"
 
 NUMBER_PATTERN = re.compile(r"-?\d+(?:\.\d+)?")
+PYTHON_BLOCK_PATTERN = re.compile(r"```python\n(.*?)```", re.DOTALL)
 
 
 class AnswerCheck(StrEnum):
-    """How a sample's last boxed answer is compared to a problem's reference answer."""
+    """How a sample's answer is compared to a problem's reference answer.
+
+    Every check except ``PYTHON_TESTS`` grades the last ``\\boxed{}`` answer in the final response.
+    """
 
     MATH = "math"
     """math-verify equivalence of LaTeX expressions."""
@@ -72,6 +81,10 @@ class AnswerCheck(StrEnum):
     """First number in each answer, equal within ``NUMERIC_RELATIVE_TOLERANCE``; commas, units, and % are ignored."""
     CHOICE = "choice"
     """A single option letter, case-insensitive."""
+    PYTHON_LITERAL = "python_literal"
+    """Python literals of the same value and types (``code_tasks.literals_equal``)."""
+    PYTHON_TESTS = "python_tests"
+    """The last python code block passes every JSON-encoded assert test in the reference."""
 
 
 NUMERIC_RELATIVE_TOLERANCE = 0.01
@@ -82,8 +95,17 @@ def _first_number(text: str) -> float | None:
     return float(match.group()) if match else None
 
 
+def last_python_block(content: str) -> str | None:
+    blocks = PYTHON_BLOCK_PATTERN.findall(content)
+    return blocks[-1] if blocks else None
+
+
 def answer_matches(check: AnswerCheck, reference: str, candidate: str) -> bool:
     """Compare a candidate answer to the reference under ``check``."""
+    if check is AnswerCheck.PYTHON_LITERAL:
+        return literals_equal(reference, candidate)
+    if check is AnswerCheck.PYTHON_TESTS:
+        return all(run_tests(candidate, json.loads(reference), EXECUTION_TIMEOUT))
     if check is AnswerCheck.MATH:
         return answers_match(reference, candidate)
     if check is AnswerCheck.NUMERIC:
@@ -154,13 +176,19 @@ def grade_samples(
             reason = "unclosed_think"
         else:
             reasoning, content = split
-            extracted = extract_boxed(content)
+            if config.answer_check is AnswerCheck.PYTHON_TESTS:
+                extracted, missing = last_python_block(content), "no_code_block"
+            else:
+                extracted, missing = extract_boxed(content), "no_boxed_answer"
             if not reasoning:
                 reason = "no_reasoning"
             elif extracted is None:
-                reason = "no_boxed_answer"
-            elif not (correct := answer_matches(config.answer_check, problem["answer"], extracted)):
+                reason = missing
+            elif not answer_matches(config.answer_check, problem["answer"], extracted):
                 reason = "wrong_answer"
+            # Only instruction-following problems have a constraints column.
+            elif not (correct := follows_constraints(json.loads(problem.get("constraints") or "[]"), content)):
+                reason = "violated_constraint"
             else:
                 row = reasoning_chat_row(request_id, problem["problem"], content, reasoning)
                 if sequence_tokens(row) > config.max_sequence_tokens:
