@@ -53,7 +53,7 @@ S3_TRIAL_PREFIX = marin_temp_bucket(
 )
 # Problems and solutions carry separate versions so a solve-recipe change reuses the accepted problems.
 PROBLEMS_VERSION = "2026.09.26.1"
-SOLUTIONS_VERSION = "2026.09.26.2"
+SOLUTIONS_VERSION = "2026.09.26.3"
 CONVERSION_VERSION = "2026.09.25.2"
 CURRICULUM_IDS = (
     "d01.algebra.exact-symbolic-evaluation",
@@ -68,9 +68,6 @@ TRAIN_NODES = 4
 REQUESTED_PROBLEMS_PER_CAPABILITY = 320
 SAMPLES_PER_PROBLEM = 4
 SOLUTIONS_PER_PROBLEM = 1
-# Unpacked SFT rejects rows longer than CONTEXT_LENGTH. Solutions average about 2.3 characters per
-# Snowball token in the worst case observed, so 8,000 characters leaves room for the prompt and template.
-MAX_SOLUTION_CHARS = 8_000
 SEED = 17
 PROBLEM_MAX_COMPLETION_TOKENS = 16384
 SOLUTION_MAX_COMPLETION_TOKENS = 32768
@@ -149,7 +146,9 @@ def build_generation() -> dict[str, ArtifactStep[Artifact]]:
             version=SOLUTIONS_VERSION,
             samples_per_problem=SAMPLES_PER_PROBLEM,
             solutions_per_problem=SOLUTIONS_PER_PROBLEM,
-            max_solution_chars=MAX_SOLUTION_CHARS,
+            tokenizer=HF_MODEL,
+            tokenizer_revision=HF_REVISION,
+            max_sequence_tokens=CONTEXT_LENGTH,
             seed=SEED,
             max_completion_tokens=SOLUTION_MAX_COMPLETION_TOKENS,
         )

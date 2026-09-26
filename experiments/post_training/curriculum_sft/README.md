@@ -16,9 +16,11 @@
 2. `solve_curriculum_problems` samples several independent GLM solutions per accepted problem
    without the reference answer. A solution counts as correct when its last `\boxed{}` answer is
    math-verify-equivalent to the reference. The step keeps the first correct solutions, up to
-   `solutions_per_problem`, that have non-empty reasoning and fit `max_solution_chars`. It writes
-   `solutions/` audit Parquet with every sample's grade, `chat/` training Parquet, exact responses,
-   and a manifest.
+   `solutions_per_problem`, that have non-empty reasoning and whose rows, rendered with the Marin
+   chat template and the model's tokenizer, fit `max_sequence_tokens`. Unpacked SFT rejects longer
+   rows, and a character cap is not a safe proxy: Unicode-heavy reasoning tokenizes at under two
+   characters per token. It writes `solutions/` audit Parquet with every sample's grade, `chat/`
+   training Parquet, exact responses, and a manifest.
 
 Agreement between the problem author and a blind solver is the only verification. It filters
 ambiguous and mis-keyed problems, but a shared mistake still passes.

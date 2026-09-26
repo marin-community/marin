@@ -48,6 +48,10 @@ def _solution_response(request_id: str, *, content: str, reasoning: str) -> dict
     }
 
 
+def _character_count(row: dict) -> int:
+    return sum(len(message["content"]) + len(message["reasoning_content"] or "") for message in row["messages"])
+
+
 def _jsonl(responses: list[dict]) -> str:
     return "\n".join(json.dumps(response) for response in responses)
 
@@ -89,7 +93,9 @@ def test_parse_solution_batch_keeps_first_verified_solution_with_reasoning():
         capability_id="d00.example",
         samples_per_problem=5,
         solutions_per_problem=1,
-        max_solution_chars=200,
+        tokenizer="unused",
+        tokenizer_revision="unused",
+        max_sequence_tokens=200,
         seed=17,
         max_completion_tokens=1024,
         relay_job="unused",
@@ -103,7 +109,7 @@ def test_parse_solution_batch_keeps_first_verified_solution_with_reasoning():
         _solution_response("problem-00000-s04", content="So \\boxed{\\tfrac12}.", reasoning="Half."),
     ]
 
-    solutions, chat_rows = parse_solution_batch(_jsonl(responses), config, [problem])
+    solutions, chat_rows = parse_solution_batch(_jsonl(responses), config, [problem], _character_count)
 
     assert [record["rejection_reason"] for record in solutions] == [
         "wrong_answer",
