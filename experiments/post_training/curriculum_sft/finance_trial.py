@@ -14,6 +14,10 @@ generation is a small CPU step, so the distill stage builds it in the same graph
       -e MARIN_PREFIX s3://marin-us-east-02a/tmp/ttl=7d/curriculum-math-20260924 \\
       -- uv run python experiments/post_training/curriculum_sft/finance_trial.py \\
       --stage distill --version <version> --run
+
+FinanceBench grades answers with an external judge. CoreWeave workers have no GCP credentials to
+read its secret, so pass ``-e TOGETHER_API_KEY "$TOGETHER_API_KEY"`` to the baseline, after, and full
+stages.
 """
 
 import hashlib
