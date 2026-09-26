@@ -38,6 +38,8 @@ def _archive(
     tokenizer_fingerprint="toy-tokenizer",
     probe_hash="frozen",
     response_shift=0,
+    clip_low=0.2,
+    clip_high=0.2,
 ):
     rows = []
     scores = []
@@ -130,7 +132,7 @@ def _archive(
         seed=7,
         bootstrap_seed=8,
         created_at_utc="2026-09-26T00:00:00Z",
-        config_json="{}",
+        config_json=json.dumps({"trainer": {"algorithm": {"eps_clip_low": clip_low, "eps_clip_high": clip_high}}}),
         software_json=json.dumps({"tokenizer_fingerprint": tokenizer_fingerprint}),
         hardware_json="{}",
         batch_layout_json="{}",
@@ -158,7 +160,7 @@ def test_report_recovers_same_weight_modes_paired_intervals_and_drift(tmp_path):
     assert report["paired_improvements"]["router_replay_filtered"]["abs_p99"]["ci95"][0] > 0
     assert report["checks"]["drift_identity_after_2"]["pass"]
     assert report["checks"]["generation_ratio_sanity"]["pass"]
-    assert "router_replay_filtered" in render_markdown(report)
+    assert "| router_replay_filtered_vs_generation | 0.01 |" in render_markdown(report)
     assert report["input_commit_token"] != "None"
     output = tmp_path / "figures"
     output.mkdir()
@@ -210,6 +212,15 @@ def test_report_refuses_invalid_generation_distribution(tmp_path):
     _archive(root, invalid_generation=True)
     with pytest.raises(ValueError, match="sampling-distribution check failed"):
         analyze_archive(str(root), bootstrap_draws=20)
+
+
+def test_report_clip_occupancy_uses_archived_training_thresholds(tmp_path):
+    root = tmp_path / "clip-thresholds"
+    _archive(root, clip_low=0.05, clip_high=0.05)
+    report = analyze_archive(str(root), bootstrap_draws=20)
+    occupancy = report["comparisons"]["implementation_mismatch"]["metrics"]
+    assert occupancy["negative_advantage_clip_occupancy"] == 1.0
+    assert occupancy["positive_advantage_clip_occupancy"] == 0.0
 
 
 def test_report_refuses_same_update_comparison_with_different_weights(tmp_path):

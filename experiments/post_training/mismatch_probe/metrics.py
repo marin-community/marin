@@ -7,12 +7,20 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 
 import numpy as np
 
 LOG_TWO = math.log(2.0)
 LOG_FLOAT64_MAX = math.log(np.finfo(np.float64).max)
 PERCENTILES = (0, 50, 75, 90, 99, 99.9, 100)
+
+
+@dataclass(frozen=True)
+class BootstrapResult:
+    point: dict[str, float | int]
+    intervals: dict[str, tuple[float, float]]
+    draws: list[dict[str, float | int]]
 
 
 def _logsumexp(values: np.ndarray) -> float:
@@ -128,8 +136,10 @@ def prompt_cluster_bootstrap(
     *,
     seed: int,
     draws: int = 1000,
-) -> tuple[dict[str, float | int], dict[str, tuple[float, float]], list[dict[str, float | int]]]:
-    """Resample whole prompts, carrying all their answers and tokens together."""
+) -> BootstrapResult:
+    """Return named point estimates, 95% intervals and seeded prompt-cluster draws,
+    omitting counts and nonfinite draws from intervals.
+    """
     if not prompt_ids or draws < 1:
         raise ValueError("bootstrap requires prompts and at least one draw")
     groups: dict[str, list[int]] = {}
@@ -152,4 +162,4 @@ def prompt_cluster_bootstrap(
         if values.size:
             lo, hi = np.percentile(values, [2.5, 97.5])
             intervals[name] = (float(lo), float(hi))
-    return point, intervals, sampled
+    return BootstrapResult(point=point, intervals=intervals, draws=sampled)

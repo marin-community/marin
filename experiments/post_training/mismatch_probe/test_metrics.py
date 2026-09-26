@@ -39,7 +39,7 @@ def test_bootstrap_carries_all_samples_of_each_prompt():
     def calculate(indices):
         return {"answer_count": len(indices), "a_count": sum(prompt_ids[index] == "a" for index in indices)}
 
-    point, intervals, samples = prompt_cluster_bootstrap(prompt_ids, calculate, seed=7, draws=60)
-    assert point["answer_count"] == 3
-    assert all(draw["a_count"] in {0, 2, 4} for draw in samples)
-    assert "a_count" in intervals
+    result = prompt_cluster_bootstrap(prompt_ids, calculate, seed=7, draws=60)
+    assert result.point["answer_count"] == 3
+    assert all(draw["a_count"] in {0, 2, 4} for draw in result.draws)
+    assert "a_count" in result.intervals

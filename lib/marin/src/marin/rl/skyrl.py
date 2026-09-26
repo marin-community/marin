@@ -11,7 +11,7 @@ import sys
 import tempfile
 import uuid
 from collections import deque
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 from pathlib import PurePosixPath
 from typing import Literal, cast
@@ -891,11 +891,7 @@ def skyrl_step(
             output=output,
             export_hf=export_hf,
             draft_checkpoint_root=draft_checkpoint_root,
-            launcher_requirement=(
-                MARIN_SKYRL.requirement()
-                if spec.runtime.commit == MARIN_SKYRL.commit
-                else f"{MARIN_SKYRL.distribution} @ git+{MARIN_SKYRL.repository}@{spec.runtime.commit}"
-            ),
+            launcher_requirement=replace(MARIN_SKYRL, commit=spec.runtime.commit).requirement(),
         )
 
     return ArtifactStep(

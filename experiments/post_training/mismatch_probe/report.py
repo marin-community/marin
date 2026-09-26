@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+from dataclasses import dataclass
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -20,9 +21,43 @@ from experiments.post_training.mismatch_probe.metrics import comparison_metrics,
 ANALYSIS_VERSION = 1
 HEADLINE_METRICS = ("abs_p99", "k3", "share_beyond_2x", "token_ess_fraction_raw")
 PROBABILITY_BINS = ((0.0, 0.001), (0.001, 0.01), (0.01, 0.1), (0.1, 1.0))
+REPLAY_MODES = ("router_replay", "router_replay_filtered")
+BOOTSTRAP_DRAWS = 1000
+GENERATION_SCORING = "vllm.generate@0"
+NATIVE_SCORING = "trainer@0:native"
 
 
-def load_archive(uri: str) -> tuple[ManifestRow, list[ProbeRow], dict[str, dict[str, ScoreRow]]]:
+@dataclass(frozen=True)
+class ArchiveData:
+    manifest: ManifestRow
+    probes: list[ProbeRow]
+    scores: dict[str, dict[str, ScoreRow]]
+
+
+def _clip_thresholds(manifest: ManifestRow) -> tuple[float, float]:
+    algorithm = json.loads(manifest.config_json).get("trainer", {}).get("algorithm", {})
+    low = float(algorithm.get("eps_clip_low", 0.2))
+    high = float(algorithm.get("eps_clip_high", 0.2))
+    if not (0 <= low < 1 and high >= 0 and math.isfinite(low) and math.isfinite(high)):
+        raise ValueError("mismatch archive has invalid PPO clipping thresholds")
+    return low, high
+
+
+def _probability_bucket(logprob: float) -> str:
+    probability = math.exp(logprob)
+    return next(
+        (f"{lower:g}-{upper:g}" for lower, upper in PROBABILITY_BINS if lower <= probability < upper),
+        "1",
+    )
+
+
+def _layer_numbers(metrics: dict) -> list[int]:
+    return sorted(
+        int(key.split("/")[0][6:]) for key in metrics if key.startswith("layer_") and key.endswith("/set_agreement")
+    )
+
+
+def load_archive(uri: str) -> ArchiveData:
     view = ReadView(uri)
     manifests = [ManifestRow.model_validate(row) for row in view.scan(MANIFEST_TABLE).to_pylist()]
     if len(manifests) != 1 or manifests[0].status != "complete":
@@ -60,7 +95,7 @@ def load_archive(uri: str) -> tuple[ManifestRow, list[ProbeRow], dict[str, dict[
                 raise ValueError(f"scoring {name} has nonfinite tokens for {probe.sample_id}")
             if score.update == 0 and score.weights_hash != manifest.starting_weights_hash:
                 raise ValueError(f"scoring {name} differs from the starting weight hash")
-    return manifest, probes, scores
+    return ArchiveData(manifest=manifest, probes=probes, scores=scores)
 
 
 def _require_same_weights_if_same_update(
@@ -85,22 +120,22 @@ def _comparison_definitions(scores: dict[str, dict[str, ScoreRow]]) -> dict[str,
         uncached = f"vllm.rescore@{update}"
         return uncached if uncached in names else f"{uncached}:on"
 
-    add("implementation_mismatch", "trainer@0:native", "vllm.generate@0")
-    add("trainer_floor", "trainer@0:repeat", "trainer@0:native")
-    add("generate_vs_reread", reread(0), "vllm.generate@0")
-    add("reread_mismatch", "trainer@0:native", reread(0))
+    add("implementation_mismatch", NATIVE_SCORING, GENERATION_SCORING)
+    add("trainer_floor", "trainer@0:repeat", NATIVE_SCORING)
+    add("generate_vs_reread", reread(0), GENERATION_SCORING)
+    add("reread_mismatch", NATIVE_SCORING, reread(0))
     add("prefix_cache_effect_at_0", "vllm.rescore@0:on", "vllm.rescore@0")
-    for mode in ("router_replay", "router_replay_filtered"):
-        add(f"{mode}_vs_generation", f"trainer@0:{mode}", "vllm.generate@0")
+    for mode in REPLAY_MODES:
+        add(f"{mode}_vs_generation", f"trainer@0:{mode}", GENERATION_SCORING)
         add(f"{mode}_vs_reread", f"trainer@0:{mode}", reread(0))
     updates = sorted({row.update for rows in scores.values() for row in rows.values() if row.update > 0})
     for update in updates:
-        add(f"trainer_drift_after_{update}", f"trainer@{update}:native", "trainer@0:native")
-        add(f"observed_gap_after_{update}", f"trainer@{update}:native", "vllm.generate@0")
+        add(f"trainer_drift_after_{update}", f"trainer@{update}:native", NATIVE_SCORING)
+        add(f"observed_gap_after_{update}", f"trainer@{update}:native", GENERATION_SCORING)
         add(f"vllm_drift_after_{update}", reread(update), reread(0))
         add(f"mismatch_after_{update}", f"trainer@{update}:native", reread(update))
         add(f"prefix_cache_effect_at_{update}", f"vllm.rescore@{update}:on", f"vllm.rescore@{update}")
-        for mode in ("router_replay", "router_replay_filtered"):
+        for mode in REPLAY_MODES:
             add(f"{mode}_vs_reread_after_{update}", f"trainer@{update}:{mode}", reread(update))
     return comparisons
 
@@ -189,8 +224,8 @@ def _route_diagnostics(probes: list[ProbeRow], scores: dict[str, dict[str, Score
                 )
             return metrics
 
-        point, intervals, _ = prompt_cluster_bootstrap(prompt_ids, calculate, seed=seed, draws=draws)
-        result[name] = {"metrics": point, "ci95": intervals}
+        bootstrap = prompt_cluster_bootstrap(prompt_ids, calculate, seed=seed, draws=draws)
+        result[name] = {"metrics": bootstrap.point, "ci95": bootstrap.intervals}
     return result
 
 
@@ -204,11 +239,7 @@ def _breakdowns(probes: list[ProbeRow], target: dict[str, ScoreRow], reference: 
         baseline = np.asarray(reference[row.sample_id].logprobs, dtype=np.float64)
         for position in np.flatnonzero(mask):
             difference = float(chosen[position] - baseline[position])
-            probability = math.exp(float(baseline[position]))
-            probability_key = next(
-                (f"{lower:g}-{upper:g}" for lower, upper in PROBABILITY_BINS if lower <= probability < upper),
-                "1",
-            )
+            probability_key = _probability_bucket(float(baseline[position]))
             position_key = "1-4" if position < 4 else "5-16" if position < 16 else "17-64" if position < 64 else "65+"
             length = int(mask.sum())
             length_key = "1-16" if length <= 16 else "17-64" if length <= 64 else "65+"
@@ -233,7 +264,7 @@ def _breakdowns(probes: list[ProbeRow], target: dict[str, ScoreRow], reference: 
 
 
 def _drift_scale(probes: list[ProbeRow], scores: dict[str, dict[str, ScoreRow]], updates: list[int]) -> dict:
-    names = ("vllm.generate@0", "trainer@0:native")
+    names = (GENERATION_SCORING, NATIVE_SCORING)
     if not all(name in scores for name in names):
         return {}
     result = {"probability_buckets": {}, "equivalent_updates": {"status": "unavailable"}}
@@ -248,14 +279,10 @@ def _drift_scale(probes: list[ProbeRow], scores: dict[str, dict[str, ScoreRow]],
         for row in probes:
             sample = row.sample_id
             for position in np.flatnonzero(row.loss_mask):
-                generation = scores["vllm.generate@0"][sample].logprobs[position]
-                initial = scores["trainer@0:native"][sample].logprobs[position]
+                generation = scores[GENERATION_SCORING][sample].logprobs[position]
+                initial = scores[NATIVE_SCORING][sample].logprobs[position]
                 current = scores[drift_name][sample].logprobs[position]
-                probability = math.exp(generation)
-                key = next(
-                    (f"{lower:g}-{upper:g}" for lower, upper in PROBABILITY_BINS if lower <= probability < upper),
-                    "1",
-                )
+                key = _probability_bucket(generation)
                 bucket = per_bucket.setdefault(key, {"mismatch": [], "drift": []})
                 mismatch_sq = (initial - generation) ** 2
                 drift_sq = (current - initial) ** 2
@@ -293,8 +320,9 @@ def _drift_scale(probes: list[ProbeRow], scores: dict[str, dict[str, ScoreRow]],
     return result
 
 
-def analyze_archive(uri: str, *, bootstrap_draws: int = 1000, tis_cap: float | None = None) -> dict:
-    manifest, probes, scores = load_archive(uri)
+def analyze_archive(uri: str, *, bootstrap_draws: int = BOOTSTRAP_DRAWS, tis_cap: float | None = None) -> dict:
+    archive = load_archive(uri)
+    manifest, probes, scores = archive.manifest, archive.probes, archive.scores
     identity = {
         "samples": len(probes),
         "matching_responses": sum(row.vllm_output_ids == row.trainer_input_ids for row in probes),
@@ -321,6 +349,7 @@ def analyze_archive(uri: str, *, bootstrap_draws: int = 1000, tis_cap: float | N
         report["checks"]["token_identity"] = "failed"
         return _finite_json(report)
 
+    eps_clip_low, eps_clip_high = _clip_thresholds(manifest)
     report["route_diagnostics"] = _route_diagnostics(probes, scores, manifest.bootstrap_seed, bootstrap_draws)
 
     prompt_ids = [row.prompt_id for row in probes]
@@ -340,18 +369,18 @@ def analyze_archive(uri: str, *, bootstrap_draws: int = 1000, tis_cap: float | N
                 [masks[index] for index in indices],
                 advantages=[advantages[index] for index in indices],
                 tis_cap=tis_cap,
+                eps_clip_low=eps_clip_low,
+                eps_clip_high=eps_clip_high,
             )
 
-        point, intervals, sampled = prompt_cluster_bootstrap(
-            prompt_ids, calculate, seed=manifest.bootstrap_seed, draws=bootstrap_draws
-        )
+        bootstrap = prompt_cluster_bootstrap(prompt_ids, calculate, seed=manifest.bootstrap_seed, draws=bootstrap_draws)
         report["comparisons"][label] = {
             "target": target_name,
             "reference": reference_name,
-            "metrics": point,
-            "ci95": intervals,
+            "metrics": bootstrap.point,
+            "ci95": bootstrap.intervals,
             "reference_distribution": (
-                "generation" if reference_name == "vllm.generate@0" else "diagnostic_re_read_or_trainer"
+                "generation" if reference_name == GENERATION_SCORING else "diagnostic_re_read_or_trainer"
             ),
         }
         if target_name in report["route_diagnostics"]:
@@ -361,10 +390,10 @@ def analyze_archive(uri: str, *, bootstrap_draws: int = 1000, tis_cap: float | N
                 "ci95": route["ci95"].get("set_agreement"),
             }
         report["breakdowns"][label] = _breakdowns(probes, scores[target_name], scores[reference_name])
-        sampled_metrics[label] = sampled
+        sampled_metrics[label] = bootstrap.draws
 
     baseline = "implementation_mismatch" if "implementation_mismatch" in sampled_metrics else "reread_mismatch"
-    for mode in ("router_replay", "router_replay_filtered"):
+    for mode in REPLAY_MODES:
         variant = f"{mode}_vs_generation" if baseline == "implementation_mismatch" else f"{mode}_vs_reread"
         if baseline not in sampled_metrics or variant not in sampled_metrics:
             continue
@@ -382,8 +411,9 @@ def analyze_archive(uri: str, *, bootstrap_draws: int = 1000, tis_cap: float | N
             paired[metric] = {"native_minus_mode": float(point), "ci95": np.percentile(draws, [2.5, 97.5]).tolist()}
         report["paired_improvements"][mode] = paired
 
-    for update in sorted({score.update for rows in scores.values() for score in rows.values() if score.update > 0}):
-        names = (f"trainer@{update}:native", "trainer@0:native", "vllm.generate@0")
+    positive_updates = sorted({score.update for rows in scores.values() for score in rows.values() if score.update > 0})
+    for update in positive_updates:
+        names = (f"trainer@{update}:native", NATIVE_SCORING, GENERATION_SCORING)
         if not all(name in scores for name in names):
             continue
         maximal_error = 0.0
@@ -398,7 +428,6 @@ def analyze_archive(uri: str, *, bootstrap_draws: int = 1000, tis_cap: float | N
             "pass": maximal_error <= 1e-12,
         }
 
-    positive_updates = sorted({score.update for rows in scores.values() for score in rows.values() if score.update > 0})
     report["drift_scale"] = _drift_scale(probes, scores, positive_updates)
 
     if "implementation_mismatch" in sampled_metrics:
@@ -424,42 +453,44 @@ def compare_archives(
     left_uri: str,
     right_uri: str,
     *,
-    bootstrap_draws: int = 1000,
+    bootstrap_draws: int = BOOTSTRAP_DRAWS,
     tis_cap: float | None = None,
 ) -> dict:
     """Compare matched prompt groups from two runs with the same starting policy."""
-    left_manifest, left_probes, left_scores = load_archive(left_uri)
-    right_manifest, right_probes, right_scores = load_archive(right_uri)
-    if left_manifest.starting_weights_hash != right_manifest.starting_weights_hash:
+    left = load_archive(left_uri)
+    right = load_archive(right_uri)
+    left_clip_low, left_clip_high = _clip_thresholds(left.manifest)
+    right_clip_low, right_clip_high = _clip_thresholds(right.manifest)
+    if left.manifest.starting_weights_hash != right.manifest.starting_weights_hash:
         raise ValueError("configuration A/B requires the same starting weight hash")
-    if left_manifest.vllm_enforce_eager != right_manifest.vllm_enforce_eager:
+    if left.manifest.vllm_enforce_eager != right.manifest.vllm_enforce_eager:
         raise ValueError("configuration A/B requires the same vLLM execution mode")
-    left_tokenizer = json.loads(left_manifest.software_json).get("tokenizer_fingerprint")
-    right_tokenizer = json.loads(right_manifest.software_json).get("tokenizer_fingerprint")
+    left_tokenizer = json.loads(left.manifest.software_json).get("tokenizer_fingerprint")
+    right_tokenizer = json.loads(right.manifest.software_json).get("tokenizer_fingerprint")
     if not left_tokenizer or left_tokenizer != right_tokenizer:
         raise ValueError("configuration A/B requires the same tokenizer fingerprint")
-    left_by_id = {row.sample_id: row for row in left_probes}
-    right_by_id = {row.sample_id: row for row in right_probes}
+    left_by_id = {row.sample_id: row for row in left.probes}
+    right_by_id = {row.sample_id: row for row in right.probes}
     if set(left_by_id) != set(right_by_id):
         raise ValueError("configuration A/B requires the same prompt and repetition IDs")
-    right_probes = [right_by_id[row.sample_id] for row in left_probes]
-    for left, right in zip(left_probes, right_probes, strict=True):
-        if left.prompt_id != right.prompt_id or left.prompt_token_ids != right.prompt_token_ids:
+    aligned_right_probes = [right_by_id[row.sample_id] for row in left.probes]
+    for left_row, right_row in zip(left.probes, aligned_right_probes, strict=True):
+        if left_row.prompt_id != right_row.prompt_id or left_row.prompt_token_ids != right_row.prompt_token_ids:
             raise ValueError("configuration A/B requires identical prompt token IDs")
-        if left.request_seed != right.request_seed:
+        if left_row.request_seed != right_row.request_seed:
             raise ValueError("configuration A/B requires paired request seeds")
-    left_sampling = json.loads(left_manifest.config_json).get("generator", {}).get("sampling_params")
-    right_sampling = json.loads(right_manifest.config_json).get("generator", {}).get("sampling_params")
+    left_sampling = json.loads(left.manifest.config_json).get("generator", {}).get("sampling_params")
+    right_sampling = json.loads(right.manifest.config_json).get("generator", {}).get("sampling_params")
     if left_sampling != right_sampling:
         raise ValueError("configuration A/B requires identical sampling parameters")
-    shared_tokens = left_manifest.probe_hash == right_manifest.probe_hash
+    shared_tokens = left.manifest.probe_hash == right.manifest.probe_hash
     if shared_tokens and any(
-        left.vllm_output_ids != right.vllm_output_ids or left.loss_mask != right.loss_mask
-        for left, right in zip(left_probes, right_probes, strict=True)
+        left_row.vllm_output_ids != right_row.vllm_output_ids or left_row.loss_mask != right_row.loss_mask
+        for left_row, right_row in zip(left.probes, aligned_right_probes, strict=True)
     ):
         raise ValueError("shared-token archives disagree with their probe hash")
-    left_definitions = _comparison_definitions(left_scores)
-    right_definitions = _comparison_definitions(right_scores)
+    left_definitions = _comparison_definitions(left.scores)
+    right_definitions = _comparison_definitions(right.scores)
     common = sorted(set(left_definitions) & set(right_definitions))
     if not common:
         raise ValueError("configuration A/B has no common scoring comparison")
@@ -467,17 +498,17 @@ def compare_archives(
         "left": left_uri,
         "right": right_uri,
         "kind": "shared_tokens" if shared_tokens else "independent_generation",
-        "starting_weights_hash": left_manifest.starting_weights_hash,
-        "probe_hashes": [left_manifest.probe_hash, right_manifest.probe_hash],
-        "bootstrap": {"seed": left_manifest.bootstrap_seed, "draws": bootstrap_draws, "cluster": "prompt_id"},
+        "starting_weights_hash": left.manifest.starting_weights_hash,
+        "probe_hashes": [left.manifest.probe_hash, right.manifest.probe_hash],
+        "bootstrap": {"seed": left.manifest.bootstrap_seed, "draws": bootstrap_draws, "cluster": "prompt_id"},
         "comparisons": {},
     }
-    prompt_ids = [row.prompt_id for row in left_probes]
+    prompt_ids = [row.prompt_id for row in left.probes]
     for label in common:
         left_target, left_reference = left_definitions[label]
         right_target, right_reference = right_definitions[label]
-        _require_same_weights_if_same_update(label, left_scores[left_target], left_scores[left_reference])
-        _require_same_weights_if_same_update(label, right_scores[right_target], right_scores[right_reference])
+        _require_same_weights_if_same_update(label, left.scores[left_target], left.scores[left_reference])
+        _require_same_weights_if_same_update(label, right.scores[right_target], right.scores[right_reference])
 
         def calculate(
             indices,
@@ -487,23 +518,27 @@ def compare_archives(
             right_target=right_target,
             right_reference=right_reference,
         ):
-            def metrics(probes, scores, target_name, reference_name):
+            def metrics(probes, scores, target_name, reference_name, clip_low, clip_high):
                 return comparison_metrics(
                     [scores[target_name][probes[index].sample_id].logprobs for index in indices],
                     [scores[reference_name][probes[index].sample_id].logprobs for index in indices],
                     [probes[index].loss_mask for index in indices],
                     advantages=[probes[index].advantage for index in indices],
                     tis_cap=tis_cap,
+                    eps_clip_low=clip_low,
+                    eps_clip_high=clip_high,
                 )
 
-            left_values = metrics(left_probes, left_scores, left_target, left_reference)
-            right_values = metrics(right_probes, right_scores, right_target, right_reference)
+            left_values = metrics(left.probes, left.scores, left_target, left_reference, left_clip_low, left_clip_high)
+            right_values = metrics(
+                aligned_right_probes, right.scores, right_target, right_reference, right_clip_low, right_clip_high
+            )
             return {f"{name}_left_minus_right": left_values[name] - right_values[name] for name in HEADLINE_METRICS}
 
-        point, intervals, _ = prompt_cluster_bootstrap(
-            prompt_ids, calculate, seed=left_manifest.bootstrap_seed, draws=bootstrap_draws
+        bootstrap = prompt_cluster_bootstrap(
+            prompt_ids, calculate, seed=left.manifest.bootstrap_seed, draws=bootstrap_draws
         )
-        result["comparisons"][label] = {"metrics": point, "ci95": intervals}
+        result["comparisons"][label] = {"metrics": bootstrap.point, "ci95": bootstrap.intervals}
     return _finite_json(result)
 
 
@@ -526,11 +561,9 @@ def write_plots(report: dict, output_dir: Path) -> None:
     if routes:
         fig, ax = plt.subplots(figsize=(8, 4))
         for name, item in routes.items():
-            layer_values = sorted(
-                (int(key.split("/")[0][6:]), value)
-                for key, value in item["metrics"].items()
-                if key.startswith("layer_") and key.endswith("/set_agreement")
-            )
+            layer_values = [
+                (layer, item["metrics"][f"layer_{layer}/set_agreement"]) for layer in _layer_numbers(item["metrics"])
+            ]
             if layer_values:
                 ax.plot(
                     [index for index, _ in layer_values], [value for _, value in layer_values], marker="o", label=name
@@ -630,12 +663,7 @@ def render_markdown(report: dict) -> str:
         )
         for name, item in report["route_diagnostics"].items():
             metrics = item["metrics"]
-            layers = sorted(
-                int(key.split("/")[0][6:])
-                for key in metrics
-                if key.startswith("layer_") and key.endswith("/set_agreement")
-            )
-            for layer in layers:
+            for layer in _layer_numbers(metrics):
                 lines.append(
                     f"| {name} | {layer} | {metrics[f'layer_{layer}/set_agreement']:.1%} | "
                     f"{metrics[f'layer_{layer}/exact_slot_agreement']:.1%} | "
@@ -680,22 +708,24 @@ def render_archive_comparison(comparison: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _write_single_report(report: dict, output_dir: Path) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "report.json").write_text(json.dumps(report, indent=2, sort_keys=True, allow_nan=False) + "\n")
+    (output_dir / "report.md").write_text(render_markdown(report))
+    write_plots(report, output_dir)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("archives", nargs="+", help="FineStore URIs of completed mismatch probes")
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--bootstrap-draws", type=int, default=1000)
+    parser.add_argument("--bootstrap-draws", type=int, default=BOOTSTRAP_DRAWS)
     parser.add_argument("--tis-cap", type=float)
     args = parser.parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
     reports = [analyze_archive(uri, bootstrap_draws=args.bootstrap_draws, tis_cap=args.tis_cap) for uri in args.archives]
     if len(reports) == 1:
-        report = reports[0]
-        (args.output_dir / "report.json").write_text(
-            json.dumps(report, indent=2, sort_keys=True, allow_nan=False) + "\n"
-        )
-        (args.output_dir / "report.md").write_text(render_markdown(report))
-        write_plots(report, args.output_dir)
+        _write_single_report(reports[0], args.output_dir)
         return
     comparisons = [
         compare_archives(args.archives[0], uri, bootstrap_draws=args.bootstrap_draws, tis_cap=args.tis_cap)
@@ -703,10 +733,7 @@ def main() -> None:
     ]
     for index, report in enumerate(reports):
         run_dir = args.output_dir / f"run-{index}"
-        run_dir.mkdir()
-        (run_dir / "report.json").write_text(json.dumps(report, indent=2, sort_keys=True, allow_nan=False) + "\n")
-        (run_dir / "report.md").write_text(render_markdown(report))
-        write_plots(report, run_dir)
+        _write_single_report(report, run_dir)
     combined = {
         "analysis_version": ANALYSIS_VERSION,
         "archives": args.archives,
