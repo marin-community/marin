@@ -309,6 +309,10 @@ class GrugModelConfig:
     mtp_weight: float = 0.0
     """Weight of a depth-1 multi-token-prediction loss (0 disables it): predict token t+2 from
     ``h_t + W_mtp rms_norm(embed(token_{t+1}))`` through a parameter-free RMS norm and the shared lm_head."""
+    kda_no_decay_layers: tuple[int, ...] = ()
+    """KDA layers (0-indexed model layers) run without decay (g = 0: the state never forgets)."""
+    kda_no_beta_layers: tuple[int, ...] = ()
+    """KDA layers run without a learned write strength (beta = 1)."""
     kda_decay_conv: bool = False
     """A causal ShortConv over KDA's rank-128 decay input (``x W_a↓``), so each position's decay sees a few
     preceding tokens instead of only its own (still computed before the recurrence, so chunking holds)."""
@@ -840,8 +844,11 @@ class KimiDeltaAttention(eqx.Module):
         x: Float[Array, "B S D"],
         segment_ids: Int[Array, "B S"] | None = None,
         proj_inputs: dict[str, jax.Array] | None = None,
+        no_decay: bool = False,
+        no_beta: bool = False,
     ) -> Float[Array, "B S D"]:
-        """``proj_inputs`` optionally replaces the input of the ``q`` / ``k`` / ``v`` projections."""
+        """``proj_inputs`` optionally replaces the input of the ``q`` / ``k`` / ``v`` projections;
+        ``no_decay`` / ``no_beta`` (static, per layer) replace g with 0 / beta with 1."""
         cfg = self.cfg
         head_dim = cfg.inferred_head_dim
         b, s, _ = x.shape
@@ -874,6 +881,10 @@ class KimiDeltaAttention(eqx.Module):
             assert self.w_beta is not None
             beta_logits = jnp.einsum("bsd,dn->bsn", x, self.w_beta)
         beta = jax.nn.sigmoid(beta_logits.astype(jnp.float32))
+        if no_decay:
+            g = jnp.zeros_like(g)
+        if no_beta:
+            beta = jnp.ones_like(beta)
 
         spec4 = P(_BATCH_AXES, None, "model", None)
         spec3 = P(_BATCH_AXES, None, "model")
@@ -1309,6 +1320,7 @@ class Block(eqx.Module):
         kv_share: dict[str, jax.Array] | None = None,
         sum_stream: Float[Array, "B S D"] | None = None,
         sum_components: tuple[str, ...] = (),
+        kda_ablation: tuple[bool, bool] = (False, False),
     ) -> Float[Array, "B S D"]:
         """``sum_stream`` (with ``sum_components``) feeds those q/k/v projections from the straight-sum
         stream, through the same RMSNorm and GatedNorm, instead of the AttnRes mix ``h``."""
@@ -1321,7 +1333,13 @@ class Block(eqx.Module):
             proj_inputs = {c: sum_in for c in attn_components}
         if isinstance(self.attn, KimiDeltaAttention):
             # KDA has no positional encoding or window; it only needs the document boundaries.
-            out = self.attn(attn_in, _sconv_segment_ids(mask), proj_inputs=proj_inputs)
+            out = self.attn(
+                attn_in,
+                _sconv_segment_ids(mask),
+                proj_inputs=proj_inputs,
+                no_decay=kda_ablation[0],
+                no_beta=kda_ablation[1],
+            )
         else:
             out = self.attn(
                 attn_in,
@@ -1489,7 +1507,9 @@ def _attn_res_layer(
     attn_branch = type(layer).attn_branch
     if layer.attn.cfg.attn_res_remat_attention:
         attn_branch = eqx.filter_checkpoint(attn_branch, policy=None)
-    attn_out = attn_branch(layer, h, mask, use_long, use_long, token_ids, kv_share)
+    physical = layer_index % layer.attn.cfg.num_layers
+    kda_ablation = (physical in layer.attn.cfg.kda_no_decay_layers, physical in layer.attn.cfg.kda_no_beta_layers)
+    attn_out = attn_branch(layer, h, mask, use_long, use_long, token_ids, kv_share, None, (), kda_ablation)
     partial = attn_out if partial is None else partial + attn_out
     # The MLP re-attends over the history including this layer's attention write.
     h, z_mlp, w_mlp = _attn_res_mix(blocks, block_logits, partial, queries, 2 * layer_index + 1, eps, logit_bias)
