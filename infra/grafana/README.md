@@ -936,7 +936,8 @@ body:
 ```
 
 A stitch marker can also carry `"vars"`, which replaces each `${name}` in its copy of
-the fragment. The sync RL generation board mounts Inference diagnostics fragments with
+the fragment, including the query parameters a `targetRef` (below) expands to. The sync RL
+generation board mounts Inference diagnostics fragments with
 `"vars": {"identity_kind": "run_id", "identity": "${run}", "identity_override": ""}`.
 
 A bridge target can name a shared set of query parameters, which the stitch step

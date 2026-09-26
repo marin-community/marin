@@ -263,7 +263,7 @@
       "id": 222,
       "type": "timeseries",
       "title": "GPU memory in use on this run's nodes",
-      "description": "DCGM framebuffer bytes, mean and peak across the run's GPUs. Per device, so it counts everything else on the card. The allocator peaks panel decides whether a larger micro-batch fits.",
+      "description": "DCGM framebuffer bytes, mean and peak across the run's GPUs. Per device, so it counts everything else on the card.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
