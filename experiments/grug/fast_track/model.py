@@ -362,6 +362,11 @@ class GrugModelConfig:
     """Full AttnRes only: components that read the straight sum of the visible sources instead of their
     AttnRes mix: any of ``q``, ``k``, ``v`` (those attention projections), ``mlp`` (the whole MoE input),
     ``mlp_shared`` (the shared experts only), ``mlp_routed`` (router + latent-down) or ``mlp_router``."""
+    attn_res_heads: int = 1
+    """Multi-head AttnRes (RMT-style retrieval heads): each gate's pseudo-query is split into this many
+    D/H chunks, and chunk h scores and mixes the sources on its own channel slice with its own softmax."""
+    attn_res_v_gate: bool = False
+    """A separate AttnRes pseudo-query per layer for the value projections (V reads its own mix)."""
     router_rank: int | None = None
     """Low-rank router: logits = f(x W_r_down) W_r_up with this inner width (None: the linear x W_r)."""
     router_rank_act: str = "none"
@@ -1354,6 +1359,7 @@ class Block(eqx.Module):
     # Block AttnRes pseudo-queries of the attention and MLP sublayers (None without cfg.attn_res).
     attn_res_query_attn: Float[Array, " D"] | None
     attn_res_query_mlp: Float[Array, " D"] | None
+    attn_res_query_v: Float[Array, " D"] | None  # value-projection gate (cfg.attn_res_v_gate)
     # Learnable sublayer output scalars (None without cfg.sublayer_scales).
     attn_out_scale: Float[Array, ""] | None
     mlp_out_scale: Float[Array, ""] | None
@@ -1399,6 +1405,7 @@ class Block(eqx.Module):
             ),
             attn_res_query_attn=attn_res_query,
             attn_res_query_mlp=attn_res_query,
+            attn_res_query_v=attn_res_query if cfg.attn_res_v_gate else None,
             attn_out_scale=jnp.ones((), dtype=jnp.float32) if cfg.sublayer_scales else None,
             mlp_out_scale=jnp.ones((), dtype=jnp.float32) if cfg.sublayer_scales else None,
             bias_attn_out=jnp.zeros((cfg.hidden_dim,)) if "attn_out" in cfg.proj_biases else None,
@@ -1506,6 +1513,12 @@ def _attn_res_source_logits(
     The key norm is parameter-free: a learnable gain would be redundant with the query.
     """
     inv_rms = jax.lax.rsqrt(jnp.mean(jnp.square(source.astype(jnp.float32)), axis=-1) + eps)
+    if queries.ndim == 3:
+        # Multi-head AttnRes: queries are [G, H, D/H]; one logit per (gate, head) on that channel slice.
+        heads = queries.shape[1]
+        chunks = rearrange(source, "b s (h d) -> b s h d", h=heads)
+        dots = jnp.einsum("bshd,ghd->gbsh", chunks, queries.astype(source.dtype), preferred_element_type=jnp.float32)
+        return dots * inv_rms[None, ..., None]
     dots = jnp.einsum("bsd,gd->gbs", source, queries.astype(source.dtype), preferred_element_type=jnp.float32)
     return dots * inv_rms[None]
 
@@ -1518,6 +1531,17 @@ def _block_logit(block_logits: jax.Array, queries: jax.Array, gate_index: int) -
 def _softmax_mix(logits: list[jax.Array], sources: list[jax.Array]) -> tuple[jax.Array, jax.Array]:
     """Per-token softmax weights ``[N, B, S]`` over ``sources`` and the weighted sum (in float32)."""
     weights = jax.nn.softmax(jnp.stack(logits), axis=0)
+    if weights.ndim == 4:
+        # Multi-head: weights [N, B, S, H] mix each D/H channel slice separately.
+        heads = weights.shape[-1]
+
+        def chunked(x):
+            return rearrange(x.astype(jnp.float32), "b s (h d) -> b s h d", h=heads)
+
+        mixed = weights[0][..., None] * chunked(sources[0])
+        for weight, source in zip(weights[1:], sources[1:], strict=True):
+            mixed = mixed + weight[..., None] * chunked(source)
+        return weights, rearrange(mixed, "b s h d -> b s (h d)")
     mixed = weights[0][..., None] * sources[0].astype(jnp.float32)
     for weight, source in zip(weights[1:], sources[1:], strict=True):
         mixed = mixed + weight[..., None] * source.astype(jnp.float32)
@@ -1552,7 +1576,7 @@ def _attn_res_mix(
         logits.append(_attn_res_source_logits(partial, queries[gate_index][None], eps)[0])
     logits = _bias_gate_logits(logits, extras, gate_index, sources, eps, has_partial=partial is not None)
     weights, mixed = _softmax_mix(logits, sources)
-    mean_weights = jax.lax.stop_gradient(jnp.mean(weights, axis=(1, 2)))
+    mean_weights = jax.lax.stop_gradient(jnp.mean(weights, axis=tuple(range(1, weights.ndim))))
     return reshard(mixed.astype(sources[0].dtype), _batch_spec()), _gate_z(logits), mean_weights
 
 
@@ -1612,9 +1636,25 @@ def _attn_res_layer(
     attn_branch = type(layer).attn_branch
     if layer.attn.cfg.attn_res_remat_attention:
         attn_branch = eqx.filter_checkpoint(attn_branch, policy=None)
-    physical = layer_index % layer.attn.cfg.num_layers
-    kda_ablation = (physical in layer.attn.cfg.kda_no_decay_layers, physical in layer.attn.cfg.kda_no_beta_layers)
-    attn_out = attn_branch(layer, h, mask, use_long, use_long, token_ids, kv_share, None, (), kda_ablation)
+    cfg = layer.attn.cfg
+    physical = layer_index % cfg.num_layers
+    kda_ablation = (physical in cfg.kda_no_decay_layers, physical in cfg.kda_no_beta_layers)
+    v_stream = None
+    if cfg.attn_res_v_gate:
+        v_gate = 2 * cfg.num_layers + layer_index
+        v_stream, _, _ = _attn_res_mix(blocks, block_logits, partial, queries, v_gate, eps, logit_bias)
+    attn_out = attn_branch(
+        layer,
+        h,
+        mask,
+        use_long,
+        use_long,
+        token_ids,
+        kv_share,
+        v_stream,
+        ("v",) if v_stream is not None else (),
+        kda_ablation,
+    )
     partial = attn_out if partial is None else partial + attn_out
     # The MLP re-attends over the history including this layer's attention write.
     h, z_mlp, w_mlp = _attn_res_mix(blocks, block_logits, partial, queries, 2 * layer_index + 1, eps, logit_bias)
@@ -2040,7 +2080,23 @@ class Transformer(eqx.Module):
             assert layer.attn_res_query_attn is not None and layer.attn_res_query_mlp is not None
             gate_queries += [layer.attn_res_query_attn, layer.attn_res_query_mlp]
         loop_queries = [] if self.attn_res_query_loop is None else list(self.attn_res_query_loop)
-        queries = jnp.concatenate([jnp.stack(gate_queries), *loop_queries, self.attn_res_query_final[None]])
+        # V-gate queries sit between the per-layer gates and the final gate, so every block's precomputed
+        # logits (scored against queries[2i:]) cover them; V gate of layer i is row 2 * L * passes + i.
+        v_queries = []
+        if cfg.attn_res_v_gate:
+            if passes != 1:
+                raise ValueError("attn_res_v_gate supports loop_passes=1 only")
+            v_queries = [jnp.stack([layer.attn_res_query_v for layer in layers])]
+        queries_flat = jnp.concatenate(
+            [jnp.stack(gate_queries), *loop_queries, *v_queries, self.attn_res_query_final[None]]
+        )
+        queries = queries_flat
+        if cfg.attn_res_heads > 1:
+            if cfg.hidden_dim % cfg.attn_res_heads:
+                raise ValueError("attn_res_heads must divide hidden_dim")
+            if cfg.attn_res_pull or cfg.attn_res_pull_embed:
+                raise ValueError("attn_res_heads > 1 is not implemented for pull AttnRes")
+            queries = queries_flat.reshape(queries_flat.shape[0], cfg.attn_res_heads, -1)
         logit_bias = _gate_extras(self, queries.shape[0])
         if cfg.attn_res_final_mode not in ("attn", "uniform", "sum"):
             raise ValueError(f"attn_res_final_mode must be attn, uniform or sum, got {cfg.attn_res_final_mode!r}")
@@ -2117,7 +2173,10 @@ class Transformer(eqx.Module):
             weights, mixed = _softmax_mix(logits, [*blocks, partial])
             if cfg.attn_res_final_mode == "sum":
                 mixed = _stream_sum((*blocks, partial)).astype(jnp.float32)
-            weight_logs[final_index] = (jax.lax.stop_gradient(jnp.mean(weights, axis=(1, 2))), True)
+            weight_logs[final_index] = (
+                jax.lax.stop_gradient(jnp.mean(weights, axis=tuple(range(1, weights.ndim)))),
+                True,
+            )
             max_weight = jax.lax.stop_gradient(jnp.mean(jnp.max(weights, axis=0)))
             entropy = jax.lax.stop_gradient(jnp.mean(-jnp.sum(weights * jnp.log(jnp.maximum(weights, 1e-30)), axis=0)))
             return mixed, _gate_z(logits), max_weight, entropy
@@ -2176,7 +2235,7 @@ class Transformer(eqx.Module):
         final_stats["attn_res_z"] = jax.lax.stop_gradient(z_total)
         if cfg.attn_res_z_loss > 0:
             final_stats[_ATTN_RES_Z] = z_total
-        query_norms = jax.lax.stop_gradient(jnp.sqrt(jnp.sum(jnp.square(queries.astype(jnp.float32)), axis=-1)))
+        query_norms = jax.lax.stop_gradient(jnp.sqrt(jnp.sum(jnp.square(queries_flat.astype(jnp.float32)), axis=-1)))
         final_stats["attn_res_query_norm_mean"] = jnp.mean(query_norms)
         final_stats["attn_res_query_norm_max"] = jnp.max(query_norms)
         for g in range(queries.shape[0]):
