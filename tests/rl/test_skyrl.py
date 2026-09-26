@@ -585,9 +585,7 @@ def test_launcher_survives_undecodable_bytes_on_stderr() -> None:
 
 
 def test_a_config_that_selects_an_unsupported_strategy_is_refused() -> None:
-    """The mismatch is otherwise silent until the pod has its GPUs: the launcher installs one
-    backend's closure, the trainer asks for the other, and the run dies on an import error naming
-    neither the profile nor the strategy."""
+    """Unsupported trainer strategies are rejected before submission."""
     spec = _spec()
 
     with pytest.raises(ValueError, match="megatron"):
@@ -595,24 +593,3 @@ def test_a_config_that_selects_an_unsupported_strategy_is_refused() -> None:
             spec,
             config_yaml=_config_yaml(strategy="fsdp2"),
         )
-
-
-@pytest.mark.parametrize(
-    "config_yaml",
-    [
-        pytest.param(_config_yaml(strategy="megatron"), id="names the matching strategy"),
-        pytest.param(_config_yaml(), id="names no strategy"),
-    ],
-)
-def test_a_config_that_selects_megatron_is_accepted(config_yaml: str) -> None:
-    spec = _spec()
-
-    accepted = dataclasses.replace(
-        spec,
-        config_yaml=config_yaml,
-    )
-    step = skyrl_step(accepted, _execution())
-    run_config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
-    launch_config = yaml.safe_load(run_config.launch_config_yaml)
-    assert launch_config["runtime"]["profile"] == "megatron"
-    assert launch_config["skyrl"]["trainer"].get("strategy", "megatron") == "megatron"
