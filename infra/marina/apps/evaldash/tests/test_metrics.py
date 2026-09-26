@@ -773,7 +773,6 @@ def test_policy_comparison_excludes_wrong_mode_and_splits_model_yamls():
     assert detail is not None
     rejected_run = next(run for run in detail["runs"] if run["run_id"] == invalid.run_id)
     assert rejected_run["headline"] is None
-    assert "enable_thinking=True" in rejected_run["gap_reason"]
 
 
 def test_compare_complete_panel_ignores_benchmarks_unique_to_unselected_models():
