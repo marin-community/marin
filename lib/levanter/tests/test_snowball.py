@@ -114,6 +114,21 @@ def test_snowball_config_hf_roundtrip():
     validate_single_name_config(hf.to_dict(), cfg)
 
 
+def test_snowball_hf_config_does_not_initialize_jax_backend():
+    script = textwrap.dedent(
+        """
+        from jax._src import xla_bridge
+        from levanter.models.snowball import SnowballConfig
+
+        cfg = SnowballConfig()
+        SnowballConfig.from_hf_config(cfg.to_hf_config(cfg.vocab_size))
+        assert not xla_bridge.backends_are_initialized()
+        """
+    )
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+
+
 def test_snowball_hf_converter_matches_config_class():
     # This is exactly the match HFCheckpointConverter.from_hf performs (by HfConfigClass name).
     converter = SnowballConfig().hf_checkpoint_converter()
@@ -428,4 +443,132 @@ def test_snowball_context_parallel_values_and_gradients_match_data_parallel():
             np.testing.assert_allclose(actual, expected, rtol=2e-4, atol=2e-4)
         """,
         device_count=4,
+    )
+
+
+@pytest.mark.timeout(120)
+def test_snowball_hf_init_trains_with_context_and_expert_parallelism():
+    run_on_cpu_devices(
+        """
+        import json
+        import math
+        import tempfile
+        from dataclasses import replace
+        from pathlib import Path
+
+        import jax.numpy as jnp
+        import jax.random as random
+        import jax
+        from jax import P
+        import equinox as eqx
+        from haliax import Axis, named_jit
+        from haliax.partitioning import set_mesh
+        from tokenizers import Tokenizer, models, pre_tokenizers
+        from transformers import PreTrainedTokenizerFast
+
+        from levanter.checkpoint import CheckpointerConfig, load_checkpoint
+        from levanter.data.dataset import ListAsyncDataset
+        from levanter.data.text.datasets import DirectDatasetComponent, LmDataConfig
+        from levanter.data.text.examples import GrugLmExample
+        from levanter.distributed import DistributedConfig
+        from levanter.main.train_lm import TrainLmConfig, main
+        from levanter.main.export_hf_to_lm import ImportHfConfig, main as import_hf
+        from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
+        from levanter.optim.config import AdamConfig
+        from levanter.tracker.json_file import JsonFileTrackerConfig
+        from levanter.trainer import TrainerConfig
+        from levanter.trainer_state import TrainerState
+        from levanter.utils.mesh import MeshConfig
+
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            hf_path = root / "hf"
+            hf_path.mkdir()
+            tokenizer = Tokenizer(models.WordLevel(
+                vocab={"<pad>": 0, "<eos>": 1, **{f"t{i}": i for i in range(2, 64)}},
+                unk_token="<pad>",
+            ))
+            tokenizer.pre_tokenizer = pre_tokenizers.Whitespace()
+            fast = PreTrainedTokenizerFast(tokenizer_object=tokenizer, pad_token="<pad>", eos_token="<eos>")
+            fast.save_pretrained(hf_path)
+            model_cfg = SnowballConfig(
+                vocab_size=64, hidden_dim=32, intermediate_dim=32, shared_expert_intermediate_dim=32,
+                num_experts=8, num_experts_per_token=2, num_layers=1, num_heads=4, num_kv_heads=2,
+                head_dim=8, max_seq_len=8, sliding_window=4, attention_implementation="reference",
+                tokenizer=str(hf_path),
+            )
+            mesh = MeshConfig(
+                axes={"data": 1, "replica": 1, "model": 1, "context": 2, "expert": -1},
+                compute_mapping={
+                    "batch": ["replica_dcn", "data", "expert"],
+                    "position": "context",
+                    "vocab": "model",
+                },
+            )
+            trainer_cfg = TrainerConfig(
+                id="local-snowball-sft", mesh=mesh, use_explicit_mesh_axes=True,
+                train_batch_size=8, num_train_steps=1, max_eval_batches=0,
+                tracker=JsonFileTrackerConfig(output_path=str(root)),
+                checkpointer=CheckpointerConfig(base_path=str(root / "ckpts")),
+                require_accelerator=False,
+                distributed=DistributedConfig(initialize_jax_distributed=False),
+                log_jaxprs=False, log_xla_hlo=False,
+            )
+            with set_mesh(trainer_cfg.device_mesh):
+                model = SnowballLMHeadModel.init(Axis("vocab", 64), model_cfg, key=random.key(0))
+                model_cfg.hf_checkpoint_converter().replaced(tokenizer=fast).save_pretrained(
+                    model, str(hf_path), save_tokenizer=False, save_reference_code=False,
+                )
+            import_hf(ImportHfConfig(
+                hf_checkpoint=str(hf_path), output_path=str(root / "native-checkpoint"),
+                model=model_cfg, use_hf_model_config=False, tokenizer=str(hf_path),
+                dtype="bfloat16", subpath="model", emit_padded_tokenizer=True,
+            ))
+            with set_mesh(trainer_cfg.device_mesh):
+                template = eqx.filter_eval_shape(SnowballLMHeadModel.init, Axis("vocab", 64), model_cfg, key=random.key(0))
+                restored = load_checkpoint(
+                    template, str(root / "native-checkpoint"), subpath="model", mesh=trainer_cfg.device_mesh,
+                )
+                expert_spec = restored.transformer.blocks[0].mlp.expert_mlp.w_gate.sharding.spec
+                assert expert_spec == P("expert", ("data", "context"), "model"), expert_spec
+                optimizer = AdamConfig(learning_rate=5e-5).build(1)
+                state = named_jit(
+                    lambda model: TrainerState.init(optimizer, model, key=random.key(1)),
+                    axis_resources=trainer_cfg.parameter_axis_mapping,
+                    out_axis_resources=trainer_cfg.parameter_axis_mapping,
+                )(restored)
+                expert_shape = restored.transformer.blocks[0].mlp.expert_mlp.w_gate.shape
+                moment_specs = [
+                    leaf.sharding.spec for leaf in jax.tree.leaves(state.opt_state)
+                    if isinstance(leaf, jax.Array) and leaf.shape == expert_shape
+                ]
+                assert moment_specs and all(
+                    "expert" in spec and ("data", "context") in spec for spec in moment_specs
+                ), moment_specs
+            examples = [GrugLmExample.causal(jnp.arange(8, dtype=jnp.int32) + 2) for _ in range(16)]
+            data = LmDataConfig(
+                components={"direct": DirectDatasetComponent(datasets={"train": ListAsyncDataset(examples)})},
+                tokenizer=str(hf_path),
+            )
+            main(TrainLmConfig(
+                data=data, model=model_cfg, initialize_from_hf=str(hf_path),
+                optimizer=AdamConfig(learning_rate=5e-5), trainer=trainer_cfg,
+            ))
+            with (root / "eval_results.json").open() as handle:
+                metrics = json.load(handle)
+            assert math.isfinite(metrics["train/loss"])
+            native_trainer = replace(
+                trainer_cfg, id="local-snowball-native-sft",
+                tracker=JsonFileTrackerConfig(output_path=str(root / "native")),
+                checkpointer=CheckpointerConfig(base_path=str(root / "native-ckpts")),
+            )
+            main(TrainLmConfig(
+                data=data, model=model_cfg, initialize_model_from_checkpoint_path=str(root / "native-checkpoint"),
+                optimizer=AdamConfig(learning_rate=5e-5), trainer=native_trainer,
+            ))
+            with (root / "native" / "eval_results.json").open() as handle:
+                native_metrics = json.load(handle)
+            assert math.isfinite(native_metrics["train/loss"])
+        """,
+        device_count=8,
     )

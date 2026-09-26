@@ -47,7 +47,14 @@ SPEC = SFTSpec(
         lr_schedule="cosine",
         warmup=0.0,
     ),
-    mesh=MeshConfig(axes={"data": 1, "replica": 1, "model": 1, "context": 4, "expert": -1}),
+    mesh=MeshConfig(
+        axes={"data": 1, "replica": 1, "model": 1, "context": 4, "expert": -1},
+        compute_mapping={
+            "batch": ["replica_dcn", "data", "expert"],
+            "position": "context",
+            "vocab": "model",
+        },
+    ),
     seq_len=32768,
     pack=False,
     batch_size=8,

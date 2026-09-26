@@ -463,8 +463,6 @@ class Trainer:
             TrainerState: the initial state,
         """
         model_init = _unify_model_and_model_init(model, model_init)
-
-        del model
         assert model_init is not None
 
         # first try to load a full trainer state checkpoint
@@ -485,6 +483,19 @@ class Trainer:
             checkpoint_search_paths = [checkpoint_path]
             if not is_checkpoint_path(checkpoint_path):
                 raise ValueError(f"initialize_from must be a checkpoint path, got {checkpoint_path}")
+
+        if model is not None and load_checkpoint is False:
+            # Pretrained weights are already on their target mesh. Initializing Adam leafwise avoids
+            # compiling a whole-model init/merge computation with another full parameter copy live.
+            return TrainerState.init(
+                self.optimizer,
+                model,
+                key=training_key,
+                is_trainable=is_trainable,
+                mp=self.mp,
+                quantization=self.config.quantization,
+                model_averaging=self.config.model_averaging,
+            )
 
         def init_state_and_model(model_init, training_key):
             model = model_init()

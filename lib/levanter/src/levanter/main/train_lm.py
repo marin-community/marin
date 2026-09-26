@@ -27,7 +27,7 @@ from levanter.callbacks._iris_status import iris_status_reporter
 from levanter.callbacks.labeled_eval import LabeledLmEvalConfig, add_labeled_lm_eval_callbacks
 from levanter.adaptor import AdaptorConfig, AdaptorExportConfig, NoAdaptorConfig
 from levanter.callbacks.tensorstore_callbacks import install_tensorstore_metrics_hook_if_enabled
-from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
+from levanter.checkpoint import is_checkpoint_path, latest_checkpoint_path, load_checkpoint
 from levanter.compat.hf_checkpoints import HFCompatConfig, build_generation_config
 from levanter.data.mixture import MixtureDataset
 from levanter.data.text.datasets import LmDataConfig
@@ -134,8 +134,8 @@ def _load_lm_model_from_configured_source(
         # only, strict). They differ only in how main() drives them, not in how the base is loaded here.
         source = config.initialize_from_checkpoint_path or config.initialize_model_from_checkpoint_path
         checkpoint_path = latest_checkpoint_path(source)
-        model = config.model.build(Vocab, key=model_key)
-        model = load_checkpoint(model, checkpoint_path, subpath="model")
+        model = eqx.filter_eval_shape(config.model.build, Vocab, key=model_key)
+        model = load_checkpoint(model, checkpoint_path, subpath="model", axis_mapping=parameter_axis_mapping)
         model = hax.shard(model, parameter_axis_mapping)
         model = named_jit(trainer.mp.cast_to_param, parameter_axis_mapping)(model)
     else:
@@ -264,7 +264,32 @@ def main(config: TrainLmConfig):
         tagged_eval_datasets = config.data.tagged_eval_sets(Pos)
 
         adapter_key = jrandom.fold_in(model_key, ord("a"))
-        if isinstance(config.adapter, NoAdaptorConfig):
+        fresh_weight_init = (
+            config.initialize_from_hf or config.initialize_model_from_checkpoint_path is not None
+        ) and (
+            config.trainer.load_checkpoint is False
+            or (
+                config.trainer.load_checkpoint is None
+                and not any(is_checkpoint_path(path) for path in trainer.checkpoint_search_paths)
+            )
+        )
+        if fresh_weight_init:
+            logger.info("Initializing trainer state directly from pretrained weights")
+            initial_model = _load_lm_model_from_configured_source(
+                config=config,
+                converter=converter,
+                Vocab=Vocab,
+                model_key=model_key,
+                adapter_key=adapter_key,
+                parameter_axis_mapping=parameter_axis_mapping,
+                trainer=trainer,
+            )
+            state = trainer.initial_state(
+                training_key,
+                model=initial_model,
+                is_trainable=config.adapter.trainable_filter(initial_model),
+            )
+        elif isinstance(config.adapter, NoAdaptorConfig):
             state = trainer.initial_state(training_key, model_init=lambda: config.model.build(Vocab, key=model_key))
         else:
             initial_model = config.adapter.apply(
@@ -284,8 +309,7 @@ def main(config: TrainLmConfig):
             # reset to step 0, we're just initializing weights here
             state = dataclasses.replace(state, step=jnp.array(0))
 
-        if int(state.step) == 0:
-            # TODO: I don't love that we init the model twice, but it's not a big deal i think?
+        if int(state.step) == 0 and not fresh_weight_init:
             if config.initialize_from_hf:
                 # initialize from an hf pretrained model
                 assert converter is not None
@@ -322,7 +346,7 @@ def main(config: TrainLmConfig):
                 state = dataclasses.replace(state, model=model)
             else:
                 logger.info("No checkpoint found. Starting from scratch.")
-        elif not isinstance(config.adapter, NoAdaptorConfig):
+        elif not fresh_weight_init and not isinstance(config.adapter, NoAdaptorConfig):
             logger.info(
                 "Adapter checkpoints only store trainable weights. Reconstructing the base LM model from the "
                 "configured source before overlaying resumed adapter parameters."
