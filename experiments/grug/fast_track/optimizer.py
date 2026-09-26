@@ -266,6 +266,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     """Adam beta1 for the KDA decay parameters (None: ``beta1``)."""
     kda_decay_beta2: float | None = None
     """Adam beta2 for the KDA decay parameters (None: ``beta2``)."""
+    muonh_attn_lr_mult: float = 1.0
+    """MuonH LR multiplier for the attention-projection family (``_OKLS_FAMILIES['attn']``)."""
+    muonh_routed_lr_mult: float = 1.0
+    """MuonH LR multiplier for the routed-expert family (``_OKLS_FAMILIES['routed']``)."""
     okls_targets: tuple[str, ...] = ()
     """Matrix families (``_OKLS_FAMILIES``) whose direction comes from Online KL-Shampoo whitening instead
     of Newton-Schulz, still taking MuonH's hyperball step at the MuonH LR."""
@@ -366,6 +370,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                     ),
                     _match_named_update_sharding(),
                 ),
+                "muonh_attn": muonh_transform_at(learning_rate * self.muonh_attn_lr_mult),
+                "muonh_routed": muonh_transform_at(learning_rate * self.muonh_routed_lr_mult),
                 "kda_decay": plain_adam_at(adam_lr * self.kda_decay_lr_mult, self.kda_decay_beta1, self.kda_decay_beta2),
             }
             return optax.multi_transform(transforms, self.create_mask)
@@ -395,6 +401,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 path_lower = (".".join(path) if isinstance(path, (list, tuple)) else str(path)).lower()
                 if any(_OKLS_FAMILIES[f].search(path_lower) for f in self.okls_targets):
                     return "okls"
+                if self.muonh_attn_lr_mult != 1.0 and _OKLS_FAMILIES["attn"].search(path_lower):
+                    return "muonh_attn"
+                if self.muonh_routed_lr_mult != 1.0 and _OKLS_FAMILIES["routed"].search(path_lower):
+                    return "muonh_routed"
             return group
 
         def _base_group(param, path):
