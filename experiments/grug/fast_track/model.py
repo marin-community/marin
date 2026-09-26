@@ -245,6 +245,8 @@ class GrugModelConfig:
     max_seq_len: int = 4096
     sliding_window: int = 2048
     global_every: int = 4
+    global_layers: tuple[int, ...] | None = None
+    """Explicit 0-indexed global (softmax / MLA) layers, overriding ``global_every``."""
     capacity_factor: float = 1.15
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
@@ -1482,21 +1484,29 @@ def _is_none(x) -> bool:
     return x is None
 
 
-def _is_long_layer(layer_index: int, num_layers: int, global_every: int) -> bool:
+def _is_long_layer(
+    layer_index: int, num_layers: int, global_every: int, global_layers: tuple[int, ...] | None = None
+) -> bool:
+    if global_layers is not None:
+        return layer_index in global_layers
     # Every global_every-th layer is full-causal, and the last layer always is, so a depth that is
     # not a multiple of global_every still ends on a global-context layer.
     return (layer_index + 1) % global_every == 0 or layer_index == num_layers - 1
 
 
-def _long_layer_schedule(num_layers: int, global_every: int) -> jax.Array:
-    return jnp.asarray([_is_long_layer(i, num_layers, global_every) for i in range(num_layers)], dtype=jnp.bool_)
+def _long_layer_schedule(num_layers: int, global_every: int, global_layers: tuple[int, ...] | None = None) -> jax.Array:
+    return jnp.asarray(
+        [_is_long_layer(i, num_layers, global_every, global_layers) for i in range(num_layers)], dtype=jnp.bool_
+    )
 
 
 def _kda_layer_indices(cfg: GrugModelConfig) -> tuple[int, ...]:
     """Layers whose mixer is KDA: the local layers when ``local_mixer`` is KDA, else none."""
     if cfg.local_mixer != LocalMixer.KDA:
         return ()
-    return tuple(i for i in range(cfg.num_layers) if not _is_long_layer(i, cfg.num_layers, cfg.global_every))
+    return tuple(
+        i for i in range(cfg.num_layers) if not _is_long_layer(i, cfg.num_layers, cfg.global_every, cfg.global_layers)
+    )
 
 
 def _unstack_layers(stacked: ArrayStacked[Block]) -> list[Block]:
@@ -1685,7 +1695,7 @@ class Transformer(eqx.Module):
         else:
             # One compiled Block body scanned over the stacked layers; per-layer short/long is a
             # Bool[num_layers] scan input, and the FA4 metadata is selected per layer with jnp.where.
-            mask_schedule = _long_layer_schedule(cfg.num_layers, cfg.global_every)
+            mask_schedule = _long_layer_schedule(cfg.num_layers, cfg.global_every, cfg.global_layers)
 
             def _scan_layers(
                 carry_hidden: Float[Array, "B S D"],
@@ -1805,7 +1815,7 @@ class Transformer(eqx.Module):
                     scale = self.loop_inject_scale[pass_index - 1]
                     inject = (scale * embedding.astype(jnp.float32)).astype(embedding.dtype)
                     partial = inject if partial is None else partial + inject
-                use_long = _is_long_layer(i, num_layers, cfg.global_every)
+                use_long = _is_long_layer(i, num_layers, cfg.global_every, cfg.global_layers)
                 partial_before = partial
                 layer_args = (
                     (layer, blocks, block_logits, partial, queries, logit_bias),
