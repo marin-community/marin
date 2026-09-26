@@ -16,6 +16,7 @@ from marin.evaluation.model_config import GenerationConfig, ModelConfig, Resourc
 from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
+from marin.experiment.checkpoints import hf_to_levanter
 from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_owned_name
 from rigging.filesystem.cluster_config import marin_temp_bucket
@@ -28,18 +29,31 @@ from experiments.post_training.curriculum_sft.pipeline import (
     curriculum_generation_steps,
     prepare_curriculum_chat_step,
 )
-from experiments.sft.launcher import LLAMA3_CHAT_EOS_TOKEN_IDS, ArtifactDatasetSpec, HFModel, SFTSpec, sft_step
+from experiments.sft.launcher import (
+    LLAMA3_CHAT_EOS_TOKEN_IDS,
+    ArtifactDatasetSpec,
+    ConvertedCheckpointModel,
+    SFTSpec,
+    sft_step,
+)
 
 HF_MODEL = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.20"
 HF_REVISION = "9f2ee50f3d4a12c79b0808bb2414ddba2cdf0098"
 CLUSTER = "cw-rno2a"
-S3_TRIAL_PREFIX = marin_temp_bucket(
+SOURCE_PREFIX = marin_temp_bucket(
     ttl_days=30,
     prefix="curriculum-math-20260924",
     source_prefix="s3://marin-us-east-02a/marin",
     use_env_override=False,
 )
+S3_TRIAL_PREFIX = marin_temp_bucket(
+    ttl_days=7,
+    prefix="curriculum-math-20260924",
+    source_prefix="s3://marin-us-east-02a/marin",
+)
 SOURCE_VERSION = "2026.09.24"
+PREPARATION_VERSION = "2026.09.25.12"
+CONVERSION_VERSION = "2026.09.25.2"
 CURRICULUM_IDS = (
     "d01.algebra.exact-symbolic-evaluation",
     "d01.algebra.scalar-equations",
@@ -49,6 +63,7 @@ EVALS = "olympiadbench-deterministic,math500"
 CONTEXT_LENGTH = 4096
 BATCH_SIZE = 64
 STEPS = 4
+TRAIN_NODES = 4
 ACCEPTED_PER_CAPABILITY = 256
 REQUESTED_PER_CAPABILITY = 320
 SEED = 17
@@ -129,7 +144,7 @@ def _staged_generation(version: str) -> dict[str, ArtifactStep[Artifact]]:
     for capability_id in CURRICULUM_IDS:
         name = user_owned_name(f"documents/curriculum-sft/{capability_id}/staged-chat")
         generated_name = user_owned_name(f"documents/curriculum-sft/{capability_id}/generated-chat")
-        generated_path = prefix_join(prefix_join(S3_TRIAL_PREFIX, generated_name), version)
+        generated_path = prefix_join(prefix_join(SOURCE_PREFIX, generated_name), version)
         sources[capability_id] = ArtifactStep.adopt(
             name=name,
             version=version,
@@ -143,11 +158,19 @@ def build_trial(version: str) -> dict[str, ArtifactStep]:
     """Bind baseline and trained evaluations to Levanter's Snowball SFT run."""
     curriculum_key = hashlib.sha256(json.dumps(sorted(CURRICULUM_IDS)).encode()).hexdigest()[:12]
     generated = _staged_generation(SOURCE_VERSION)
+    conversion = hf_to_levanter(
+        HF_MODEL,
+        model_type="snowball",
+        hf_revision=HF_REVISION,
+        tokenizer=f"hf://{HF_MODEL}@{HF_REVISION}",
+        version=CONVERSION_VERSION,
+        resources=ResourceConfig.with_cpu(cpu=64, ram="512g", disk="256g"),
+    )
     datasets = [
         ArtifactDatasetSpec(
             slug=capability_id,
             artifact=prepare_curriculum_chat_step(
-                generated[capability_id], capability_id=capability_id, version=version
+                generated[capability_id], capability_id=capability_id, version=PREPARATION_VERSION
             ),
             train_glob="*.parquet",
             weight=1.0,
@@ -157,16 +180,21 @@ def build_trial(version: str) -> dict[str, ArtifactStep]:
     spec = SFTSpec(
         name=user_owned_name(f"checkpoints/curriculum-sft/{curriculum_key}/snowball"),
         version=version,
-        model=HFModel(
-            model_ref=f"{HF_MODEL}@{HF_REVISION}",
-            tokenizer_path=HF_MODEL,
-            model_type="snowball",
-            eos_token_ids=LLAMA3_CHAT_EOS_TOKEN_IDS,
-        ),
+        model=ConvertedCheckpointModel(conversion=conversion, eos_token_ids=LLAMA3_CHAT_EOS_TOKEN_IDS),
         chat_template=MARIN_CHAT_TEMPLATE,
         datasets=datasets,
         optimizer=_optimizer(),
-        mesh=MeshConfig(axes={"data": 1, "replica": 1, "model": 1, "context": 4, "expert": -1}),
+        # Snowball shards parameters over expert x (data, context). Placing context across nodes shards
+        # fp32 weights and Adam moments over all 32 GPUs instead of replicating them on each node.
+        mesh=MeshConfig(
+            axes={"data": 1, "replica": 1, "model": 1, "expert": -1},
+            dcn_axes={"context": TRAIN_NODES},
+            compute_mapping={
+                "batch": ["replica_dcn", "data", "expert"],
+                "position": "context",
+                "vocab": "model",
+            },
+        ),
         seq_len=CONTEXT_LENGTH,
         pack=False,
         batch_size=BATCH_SIZE,
@@ -174,12 +202,14 @@ def build_trial(version: str) -> dict[str, ArtifactStep]:
         hf_save_dtype="bfloat16",
         wandb_project="marin_moe_sft",
     )
-    trained = sft_step(spec, _gpu_resources(4))
+    trained = sft_step(spec, _gpu_resources(TRAIN_NODES))
     baseline_model = _eval_model("curriculum-math-sep20-base", HF_MODEL, HF_REVISION)
     trained_model = _eval_model("curriculum-math-sep20-trained", "<trained-hf>", None)
 
     def resolve_trained_model(ctx: StepContext) -> ModelConfig:
-        return dataclasses.replace(trained_model, location=prefix_join(ctx.artifact_path(trained), "hf"))
+        # The trainer exports HF weights once, at the final (zero-indexed) step.
+        final_export = prefix_join(ctx.artifact_path(trained), f"hf/step-{STEPS - 1}")
+        return dataclasses.replace(trained_model, location=final_export)
 
     baseline: ArtifactStep[EvaluationResult] = eval_step(
         baseline_model,
