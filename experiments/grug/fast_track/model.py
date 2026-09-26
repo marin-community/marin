@@ -321,6 +321,12 @@ class GrugModelConfig:
     """A learnable zero-init bias per (gate, source) on the AttnRes logits (Adam at the query LR)."""
     attn_res_z_loss: float = 0.0
     """Weight of a z-loss (mean squared logsumexp) on every AttnRes gate's logits; needs layer backward SAVE."""
+    attn_res_full: bool = False
+    """Full (not Block) AttnRes: every attention and MoE sublayer output is its own source. Needs
+    attn_res_layer_backward=SAVE."""
+    mla_share_kv_latent: bool = False
+    """Every MLA layer after the first reuses the first MLA layer's normed KV latent (own W_uk / W_uv, so
+    absorption still works), halving the MLA KV cache at d512. Needs attn_res_layer_backward=SAVE."""
     learnable_qk_mult: bool = False
     """A learnable scalar per softmax-attention layer (init ``qk_mult``) in place of the fixed ``qk_mult``."""
     aux_lm_layer: int | None = None
@@ -528,6 +534,7 @@ class CausalSelfAttention(eqx.Module):
         x: Float[Array, "B S D"],
         sconv_segment_ids: Int[Array, "B S"] | None,
         token_ids: Int[Array, "B S"] | None,
+        kv_share: dict[str, jax.Array] | None = None,
     ) -> tuple[jax.Array, jax.Array, jax.Array]:
         """MLA with a compressed KV latent: full-rank q; k and v up-projected from one normed latent."""
         assert self.w_dkv is not None and self.kv_latent_norm is not None
@@ -540,7 +547,12 @@ class CausalSelfAttention(eqx.Module):
         if self.sconv_q is not None:
             q_flat = self.sconv_q(q_flat, sconv_segment_ids)
         q = rearrange(q_flat, "... (n d) -> ... n d", d=head_dim)
-        kv_latent = self.kv_latent_norm(latent)
+        if kv_share is not None and "latent" in kv_share:
+            kv_latent = kv_share["latent"]
+        else:
+            kv_latent = self.kv_latent_norm(latent)
+            if kv_share is not None:
+                kv_share["latent"] = kv_latent
         k_flat = jnp.einsum("bsl,ld->bsd", kv_latent, self.w_uk)
         if self.sconv_k is not None:
             k_flat = self.sconv_k(k_flat, sconv_segment_ids)
@@ -612,7 +624,9 @@ class CausalSelfAttention(eqx.Module):
         disable_rope: bool | jax.Array = False,
         is_global: bool | jax.Array = False,
         token_ids: Int[Array, "B S"] | None = None,
+        kv_share: dict[str, jax.Array] | None = None,
     ) -> Float[Array, "B S D"]:
+        """``kv_share`` (MLA only) is a per-forward mailbox for ``mla_share_kv_latent``."""
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
         batch_spec = _batch_spec()
@@ -620,7 +634,7 @@ class CausalSelfAttention(eqx.Module):
         # document boundary.
         sconv_segment_ids = _sconv_segment_ids(mask)
         if self.cfg.mla:
-            q, k, v = self._mla_qkv(x, sconv_segment_ids, token_ids)
+            q, k, v = self._mla_qkv(x, sconv_segment_ids, token_ids, kv_share)
         else:
             q, k, v = self._gqa_qkv(x, sconv_segment_ids, is_global)
 
@@ -1233,13 +1247,16 @@ class Block(eqx.Module):
         disable_rope: bool | jax.Array,
         is_global: bool | jax.Array,
         token_ids: Int[Array, "B S"] | None = None,
+        kv_share: dict[str, jax.Array] | None = None,
     ) -> Float[Array, "B S D"]:
         attn_in = self.attn_gated_norm(self.rms_attn(h))
         if isinstance(self.attn, KimiDeltaAttention):
             # KDA has no positional encoding or window; it only needs the document boundaries.
             out = self.attn(attn_in, _sconv_segment_ids(mask))
         else:
-            out = self.attn(attn_in, mask, disable_rope=disable_rope, is_global=is_global, token_ids=token_ids)
+            out = self.attn(
+                attn_in, mask, disable_rope=disable_rope, is_global=is_global, token_ids=token_ids, kv_share=kv_share
+            )
         if self.bias_attn_out is not None:
             out = out + unshard(self.bias_attn_out).astype(out.dtype)
         if self.sconv_attn is not None:
@@ -1365,6 +1382,7 @@ def _attn_res_layer(
     use_long: bool,
     layer_index: int,
     eps: float,
+    kv_share: dict[str, jax.Array] | None = None,
 ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
     """One Block AttnRes layer on ``diff_args = (layer, blocks, block_logits, partial, queries)``.
 
@@ -1376,7 +1394,7 @@ def _attn_res_layer(
     attn_branch = type(layer).attn_branch
     if layer.attn.cfg.attn_res_remat_attention:
         attn_branch = eqx.filter_checkpoint(attn_branch, policy=None)
-    attn_out = attn_branch(layer, h, mask, use_long, use_long, token_ids)
+    attn_out = attn_branch(layer, h, mask, use_long, use_long, token_ids, kv_share)
     partial = attn_out if partial is None else partial + attn_out
     # The MLP re-attends over the history including this layer's attention write.
     h, z_mlp, w_mlp = _attn_res_mix(blocks, block_logits, partial, queries, 2 * layer_index + 1, eps, logit_bias)
@@ -1389,11 +1407,27 @@ def _attn_res_layer(
     }
 
 
-def _attn_res_layer_passthrough(diff_args, mask, token_ids, use_long, layer_index, eps):
+def _attn_res_layer_full(diff_args, mask, token_ids, use_long, layer_index, eps, kv_share=None):
+    """One full-AttnRes layer: the attention output becomes its own source before the MoE gate, and the
+    MoE output is returned as the partial, which the next layer rolls into its own source. Returns
+    ``(partial, blocks, block_logits, router_stats)`` like ``_attn_res_layer_passthrough``."""
+    layer, blocks, block_logits, partial, queries, logit_bias = diff_args
+    assert partial is None, "full AttnRes rolls every sublayer output into its own source"
+    h, z_attn, w_attn = _attn_res_mix(blocks, block_logits, None, queries, 2 * layer_index, eps, logit_bias)
+    attn_out = type(layer).attn_branch(layer, h, mask, use_long, use_long, token_ids, kv_share)
+    blocks = (*blocks, attn_out)
+    block_logits = (*block_logits, _attn_res_source_logits(attn_out, queries[2 * layer_index + 1 :], eps))
+    h, z_mlp, w_mlp = _attn_res_mix(blocks, block_logits, None, queries, 2 * layer_index + 1, eps, logit_bias)
+    mlp_out, router_stats = layer.mlp_branch(h, mask)
+    stats = {**router_stats, _ATTN_RES_Z: z_attn + z_mlp, _ATTN_RES_W_ATTN: w_attn, _ATTN_RES_W_MLP: w_mlp}
+    return mlp_out, blocks, block_logits, stats
+
+
+def _attn_res_layer_passthrough(diff_args, mask, token_ids, use_long, layer_index, eps, kv_share=None):
     """``_attn_res_layer`` returning ``(partial, blocks, block_logits, router_stats)``: the history is
     passed through so ``_attn_res_layer_remat`` can thread each block's cotangent layer to layer."""
     _, blocks, block_logits, _, _, _ = diff_args
-    partial, router_stats = _attn_res_layer(diff_args, mask, token_ids, use_long, layer_index, eps)
+    partial, router_stats = _attn_res_layer(diff_args, mask, token_ids, use_long, layer_index, eps, kv_share)
     return partial, blocks, block_logits, router_stats
 
 
@@ -1737,6 +1771,10 @@ class Transformer(eqx.Module):
         loop_queries = [] if self.attn_res_query_loop is None else list(self.attn_res_query_loop)
         queries = jnp.concatenate([jnp.stack(gate_queries), *loop_queries, self.attn_res_query_final[None]])
         logit_bias = self.attn_res_query_bias
+        if cfg.attn_res_full and cfg.attn_res_layer_backward != AttnResLayerBackward.SAVE:
+            raise ValueError("attn_res_full needs attn_res_layer_backward=SAVE")
+        if cfg.mla_share_kv_latent and cfg.attn_res_layer_backward != AttnResLayerBackward.SAVE:
+            raise ValueError("mla_share_kv_latent needs attn_res_layer_backward=SAVE (the latent crosses layers)")
         if cfg.attn_res_z_loss > 0 and cfg.attn_res_layer_backward != AttnResLayerBackward.SAVE:
             raise ValueError("attn_res_z_loss needs attn_res_layer_backward=SAVE (the remat VJP drops stat cotangents)")
         layer_fn = (
@@ -1752,9 +1790,10 @@ class Transformer(eqx.Module):
             per-layer router stats and the pass's gate z terms."""
             blocks, block_logits, partial = state
             stats_out, z_out = [], []
+            kv_share: dict[str, jax.Array] | None = {} if cfg.mla_share_kv_latent else None
             for i, layer in enumerate(layers):
                 eff = pass_index * num_layers + i
-                if eff % seg_size == 0 and eff // seg_size < block_cap:
+                if cfg.attn_res_full or (eff % seg_size == 0 and eff // seg_size < block_cap):
                     assert partial is not None
                     blocks = (*blocks, partial)
                     # Score the new block only against the gates that can read it (this layer's onwards).
@@ -1768,7 +1807,7 @@ class Transformer(eqx.Module):
                     partial = inject if partial is None else partial + inject
                 use_long = _is_long_layer(i, num_layers, cfg.global_every)
                 partial_before = partial
-                partial, blocks, block_logits, stats = layer_fn(
+                layer_args = (
                     (layer, blocks, block_logits, partial, queries, logit_bias),
                     long_layer_mask if use_long else short_layer_mask,
                     token_ids,
@@ -1776,10 +1815,16 @@ class Transformer(eqx.Module):
                     eff,
                     eps,
                 )
+                if cfg.attn_res_full:
+                    partial, blocks, block_logits, stats = _attn_res_layer_full(*layer_args, kv_share)
+                elif kv_share is None:
+                    partial, blocks, block_logits, stats = layer_fn(*layer_args)
+                else:
+                    partial, blocks, block_logits, stats = _attn_res_layer_passthrough(*layer_args, kv_share)
                 z_out.append(stats.pop(_ATTN_RES_Z))
                 has_partial_attn = partial_before is not None
                 weight_logs[2 * eff] = (stats.pop(_ATTN_RES_W_ATTN), has_partial_attn)
-                weight_logs[2 * eff + 1] = (stats.pop(_ATTN_RES_W_MLP), True)
+                weight_logs[2 * eff + 1] = (stats.pop(_ATTN_RES_W_MLP), not cfg.attn_res_full)
                 stats_out.append(stats)
             return (blocks, block_logits, partial), stats_out, z_out
 
@@ -1957,6 +2002,8 @@ def _attn_res_num_sources(cfg: GrugModelConfig) -> int:
     """Most sources any AttnRes gate reads: every completed block (extra embeddings included) + the partial."""
     seg_size = max(1, cfg.num_layers // cfg.attn_res_num_blocks)
     cap = cfg.attn_res_num_blocks * cfg.loop_passes
+    if cfg.attn_res_full:
+        return 2 * cfg.num_layers * cfg.loop_passes + int(cfg.second_embed) + 1
     rolled = sum(1 for i in range(cfg.num_layers * cfg.loop_passes) if i % seg_size == 0 and i // seg_size < cap)
     return rolled + int(cfg.second_embed) + 1
 

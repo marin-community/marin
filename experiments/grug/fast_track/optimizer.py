@@ -54,9 +54,10 @@ def _pin_sharding(x, ref):
     return jax.sharding.reshard(x, sharding) if sharding is not None else x
 
 
-def _scale_invariant_hyperball_updates(params, direction_updates, learning_rate: float):
+def _scale_invariant_hyperball_updates(params, direction_updates, learning_rate: float, per_expert: bool = False):
     """MuonH hyperball step: move along the orthogonalized direction, then project back to the
-    parameter's Frobenius sphere (scale-invariant update)."""
+    parameter's Frobenius sphere (scale-invariant update). Stacked leaves take one sphere per layer, and
+    with ``per_expert`` the 4-D expert stacks ``[L, E, in, out]`` take one sphere per (layer, expert)."""
     direction_updates = _match_named_sharding_to_params(direction_updates, params)
 
     def scale_invariant_update(param, update):
@@ -74,7 +75,7 @@ def _scale_invariant_hyperball_updates(params, direction_updates, learning_rate:
             new_param_norm = jnp.sqrt(jnp.sum(jnp.square(new_param.astype(jnp.float32))))
             return new_param / jnp.maximum(new_param_norm, 1e-10) * param_norm - param
 
-        axes = tuple(range(1, param.ndim))
+        axes = (2, 3) if per_expert and param.ndim == 4 else tuple(range(1, param.ndim))
         param_norm = jnp.sqrt(jnp.sum(jnp.square(param), axis=axes, keepdims=True))
         update_norm = jnp.sqrt(jnp.sum(jnp.square(update), axis=axes, keepdims=True))
         new_param = param - learning_rate * update * param_norm / jnp.maximum(update_norm, 1e-10)
@@ -157,6 +158,7 @@ def scale_with_grug_muonh(
     coefficient_type: CoefficientType = "quintic",
     head_dim: int | None = None,
     neuron_norm_beta2: float | None = None,
+    hyperball_per_expert: bool = False,
 ) -> optax.GradientTransformation:
     """MuonH transform for the stacked model: Newton-Schulz direction + Frobenius hyperball step.
 
@@ -208,7 +210,7 @@ def scale_with_grug_muonh(
             second_moment = jax.tree.map(second_moment_update, muon_updates, second_moment, is_leaf=none_leaf)
             muon_updates = jax.tree.map(normalize, muon_updates, second_moment, is_leaf=none_leaf)
             next_state = (muon_state, second_moment)
-        muonh_updates = _scale_invariant_hyperball_updates(params, muon_updates, learning_rate)
+        muonh_updates = _scale_invariant_hyperball_updates(params, muon_updates, learning_rate, hyperball_per_expert)
         return muonh_updates, next_state
 
     return optax.GradientTransformation(init_fn, update_fn)
@@ -257,6 +259,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     """LR group of ``output_proj``: ``adamh`` or ``muonh``."""
     embed_group: str = "adam"
     """LR group of ``token_embed``: ``adam`` or ``adamh``."""
+    hyperball_per_expert: bool = False
+    """One MuonH hyperball (Frobenius sphere) per routed expert instead of per layer's expert stack."""
     neuron_norm_beta2: float | None = None
     """NorMuon neuron-wise normalization of the MuonH direction with this second-moment decay (None: off)."""
     """Orthogonalize the attention projections per head of this width (None: whole matrices)."""
@@ -280,6 +284,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                         coefficient_type=self.coefficient_type,
                         head_dim=self.muon_head_dim,
                         neuron_norm_beta2=self.neuron_norm_beta2,
+                        hyperball_per_expert=self.hyperball_per_expert,
                     )
                 )
                 components.append(_match_named_update_sharding())
