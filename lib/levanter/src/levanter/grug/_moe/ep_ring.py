@@ -19,6 +19,7 @@ from levanter.grug._moe.common import (
     _assignment_validity,
     _scaled_capacity,
     CapacityDrops,
+    split_moe_w13_output,
 )
 from levanter.grug._moe.ep_common import _prefix_cap_counts
 
@@ -115,7 +116,7 @@ def _moe_mlp_ep_ring_local(
     with jax.named_scope("moe_up_down"):
         w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13_local, group_sizes), _CHECKPOINT_EXPERT_HIDDEN)
         moe_dim = moe_w2_local.shape[1]
-        gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
+        gate, up = split_moe_w13_output(w13_out, intermediate_dim=moe_dim, interleaved=False)
         out_dispatch = tree_checkpoint_name(
             ragged_dot(activation_fn(gate) * up, moe_w2_local, group_sizes),
             _CHECKPOINT_DISPATCH_OUTPUT,

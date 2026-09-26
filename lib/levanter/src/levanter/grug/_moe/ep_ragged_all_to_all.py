@@ -31,7 +31,13 @@ import jax.numpy as jnp
 from jaxtyping import Array, Bool, Float, Int
 
 from haliax.nn.ragged_dot import ragged_dot
-from levanter.grug._moe.common import _assignment_validity, _interleave_gate_up, _scaled_capacity, CapacityDrops
+from levanter.grug._moe.common import (
+    _assignment_validity,
+    _interleave_gate_up,
+    _scaled_capacity,
+    CapacityDrops,
+    split_moe_w13_output,
+)
 from levanter.grug._moe.sonic import sonic_gather_sum, sonic_gather_sum_available
 from levanter.grug._moe.ep_common import (
     ExpertA2aParams,
@@ -89,7 +95,7 @@ def _ragged_dot_expert_mlp(
     del active_group_sizes
     w13_out = ragged_dot(x_dispatch, moe_w13_local, physical_group_sizes)
     moe_dim = moe_w2_local.shape[1]
-    gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
+    gate, up = split_moe_w13_output(w13_out, intermediate_dim=moe_dim, interleaved=False)
     return ragged_dot(activation_fn(gate) * up, moe_w2_local, physical_group_sizes)
 
 

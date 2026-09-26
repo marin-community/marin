@@ -189,8 +189,11 @@ def split_moe_w13_output(
         raise ValueError(f"w13 output last dimension must be {expected}, got shape={w13_out.shape}")
     if interleaved:
         return w13_out[..., 0::2], w13_out[..., 1::2]
-    gate, up = jnp.split(w13_out, [intermediate_dim], axis=-1)
-    return gate, up
+    # Index a [..., 2, I] view rather than jnp.split: the backward of the split is a separate
+    # concatenate of the two gradient halves, while this one writes them in the elementwise fusion
+    # (pooled-wave expert MLP fwd+bwd on H100: 2.95 -> 2.31 ms, bitwise identical).
+    halves = w13_out.reshape(*w13_out.shape[:-1], 2, intermediate_dim)
+    return halves[..., 0, :], halves[..., 1, :]
 
 
 def _init_weight(key: Key[Array, ""], shape: tuple[int, ...], std: float) -> Float[Array, "..."]:

@@ -17,6 +17,7 @@ from levanter.grug._moe.common import (
     _assignment_validity,
     _scaled_capacity,
     CapacityDrops,
+    split_moe_w13_output,
 )
 from levanter.grug._moe.ep_common import _ranks_within_groups
 
@@ -162,7 +163,7 @@ def _moe_mlp_ep_fixed_a2a_local(
         with jax.named_scope("moe_up_down"):
             expert_input = received.reshape(bucket_size, hidden_dim)
             hidden = expert_input @ moe_w13_local[local_expert_index]
-            gate, up = jnp.split(hidden, [moe_dim], axis=-1)
+            gate, up = split_moe_w13_output(hidden, intermediate_dim=moe_dim, interleaved=False)
             expert_output = (activation_fn(gate) * up) @ moe_w2_local[local_expert_index]
         with jax.named_scope("combine"):
             returned = jax.lax.all_to_all(

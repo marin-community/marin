@@ -12,7 +12,7 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Bool, Float, Int
 
-from levanter.grug._moe.common import _assignment_validity, _scaled_capacity, CapacityDrops
+from levanter.grug._moe.common import _assignment_validity, _scaled_capacity, CapacityDrops, split_moe_w13_output
 from levanter.grug._moe.ep_common import (
     _assignment_sources,
     _ranks_within_groups,
@@ -461,7 +461,7 @@ def _compute_pooled(
     with jax.named_scope("moe_up_down"):
         moe_dim = moe_w2_local.shape[1]
         hidden = jnp.einsum("erh,ehi->eri", dispatch.compacted_x, moe_w13_local)
-        gate, up = jnp.split(hidden, [moe_dim], axis=-1)
+        gate, up = split_moe_w13_output(hidden, intermediate_dim=moe_dim, interleaved=False)
         compacted_output = jnp.einsum("eri,eih->erh", activation_fn(gate) * up, moe_w2_local)
 
     return _PooledOutput(
