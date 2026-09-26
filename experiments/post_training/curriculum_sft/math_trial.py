@@ -24,10 +24,10 @@ from rigging.filesystem.storage_path import prefix_join
 
 from experiments.evaluation.models import SNOWBALL_VLLM_ARGS
 from experiments.evaluation.pipeline import EvaluationResult, eval_step
-from experiments.post_training.curriculum_sft.pipeline import (
-    CurriculumGenerationSpec,
-    curriculum_generation_steps,
-    prepare_curriculum_chat_step,
+from experiments.post_training.curriculum_sft.generation import (
+    CHAT_FILENAME,
+    generate_curriculum_problems,
+    solve_curriculum_problems,
 )
 from experiments.sft.launcher import (
     LLAMA3_CHAT_EOS_TOKEN_IDS,
@@ -51,8 +51,7 @@ S3_TRIAL_PREFIX = marin_temp_bucket(
     prefix="curriculum-math-20260924",
     source_prefix="s3://marin-us-east-02a/marin",
 )
-SOURCE_VERSION = "2026.09.24"
-PREPARATION_VERSION = "2026.09.25.12"
+SOURCE_VERSION = "2026.09.26"
 CONVERSION_VERSION = "2026.09.25.2"
 CURRICULUM_IDS = (
     "d01.algebra.exact-symbolic-evaluation",
@@ -64,22 +63,17 @@ CONTEXT_LENGTH = 4096
 BATCH_SIZE = 64
 STEPS = 4
 TRAIN_NODES = 4
-ACCEPTED_PER_CAPABILITY = 256
-REQUESTED_PER_CAPABILITY = 320
+REQUESTED_PROBLEMS_PER_CAPABILITY = 320
+SAMPLES_PER_PROBLEM = 4
+SOLUTIONS_PER_PROBLEM = 1
+# About 3 characters per token for LaTeX-heavy math, leaving room in CONTEXT_LENGTH for the prompt and template.
+MAX_SOLUTION_CHARS = 10_000
 SEED = 17
-MAX_COMPLETION_TOKENS = 4096
+PROBLEM_MAX_COMPLETION_TOKENS = 16384
+SOLUTION_MAX_COMPLETION_TOKENS = 32768
 TASK_SPECIFICATION = (
-    "Create an original, self-contained, exact mathematics problem in this capability. "
-    "Make the answer unique and require several reasoning steps. Avoid published contest questions, "
-    "external facts, and proof-only prompts. End the assistant solution with one final answer in "
-    "\\boxed{...} notation. Check the answer by substitution or an independent calculation."
-)
-GENERATION = CurriculumGenerationSpec(
-    requested_examples=REQUESTED_PER_CAPABILITY,
-    accepted_examples=ACCEPTED_PER_CAPABILITY,
-    seed=SEED,
-    max_completion_tokens=MAX_COMPLETION_TOKENS,
-    task_specification=TASK_SPECIFICATION,
+    "Target the difficulty of MATH levels 3-5 and AMC 12. Vary the setting, the quantities, and the "
+    "structure across problems; do not default to solving one radical or logarithmic equation."
 )
 
 
@@ -135,20 +129,39 @@ def _eval_model(name: str, location: str, revision: str | None) -> ModelConfig:
 
 
 def build_generation(version: str) -> dict[str, ArtifactStep[Artifact]]:
-    """Build generation steps for submission on the relay's east-region cluster."""
-    return curriculum_generation_steps(CURRICULUM_IDS, version=version, generation=GENERATION)
+    """Build GLM problem and blind-solve steps; submit on the Iris hub, which reaches the GLM relay."""
+    steps: dict[str, ArtifactStep[Artifact]] = {}
+    for capability_id in CURRICULUM_IDS:
+        problems = generate_curriculum_problems(
+            capability_id,
+            version=version,
+            requested_problems=REQUESTED_PROBLEMS_PER_CAPABILITY,
+            seed=SEED,
+            max_completion_tokens=PROBLEM_MAX_COMPLETION_TOKENS,
+            task_specification=TASK_SPECIFICATION,
+        )
+        steps[capability_id] = solve_curriculum_problems(
+            problems,
+            capability_id=capability_id,
+            version=version,
+            samples_per_problem=SAMPLES_PER_PROBLEM,
+            solutions_per_problem=SOLUTIONS_PER_PROBLEM,
+            max_solution_chars=MAX_SOLUTION_CHARS,
+            seed=SEED,
+            max_completion_tokens=SOLUTION_MAX_COMPLETION_TOKENS,
+        )
+    return steps
 
 
 def _staged_generation(version: str) -> dict[str, ArtifactStep[Artifact]]:
     sources: dict[str, ArtifactStep[Artifact]] = {}
     for capability_id in CURRICULUM_IDS:
-        name = user_owned_name(f"documents/curriculum-sft/{capability_id}/staged-chat")
-        generated_name = user_owned_name(f"documents/curriculum-sft/{capability_id}/generated-chat")
-        generated_path = prefix_join(prefix_join(SOURCE_PREFIX, generated_name), version)
+        name = user_owned_name(f"documents/curriculum-sft/{capability_id}/staged-solved-chat")
+        solved_name = user_owned_name(f"documents/curriculum-sft/{capability_id}/solved-chat")
         sources[capability_id] = ArtifactStep.adopt(
             name=name,
             version=version,
-            source=generated_path,
+            source=prefix_join(prefix_join(SOURCE_PREFIX, solved_name), version),
             kind=Artifact,
         )
     return sources
@@ -175,10 +188,8 @@ def build_trial(version: str, learning_rate: float, warmup: int) -> dict[str, Ar
     datasets = [
         ArtifactDatasetSpec(
             slug=capability_id,
-            artifact=prepare_curriculum_chat_step(
-                generated[capability_id], capability_id=capability_id, version=PREPARATION_VERSION
-            ),
-            train_glob="*.parquet",
+            artifact=generated[capability_id],
+            train_glob=CHAT_FILENAME,
             weight=1.0,
         )
         for capability_id in CURRICULUM_IDS
@@ -238,13 +249,15 @@ def build_trial(version: str, learning_rate: float, warmup: int) -> dict[str, Ar
 
 @click.command()
 @click.option("--stage", type=click.Choice(["generate", "baseline", "train", "after", "full"]), default="baseline")
-@click.option("--learning-rate", type=float, required=True, help="Peak Adam learning rate.")
-@click.option("--warmup", type=int, required=True, help="Linear warmup steps.")
+@click.option("--learning-rate", type=float, help="Peak Adam learning rate; required except for generation.")
+@click.option("--warmup", type=int, help="Linear warmup steps; required except for generation.")
 @build_options
-def main(stage: str, learning_rate: float, warmup: int) -> dict[str, ArtifactStep]:
+def main(stage: str, learning_rate: float | None, warmup: int | None) -> dict[str, ArtifactStep]:
     version = resolve_version("curriculum-math-sep20", None)
     if stage == "generate":
         return build_generation(version)
+    if learning_rate is None or warmup is None:
+        raise click.UsageError(f"--stage {stage} requires --learning-rate and --warmup")
     trial = build_trial(version, learning_rate, warmup)
     if stage == "full":
         return {"baseline": trial["baseline"], "after": trial["after"]}
