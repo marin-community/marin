@@ -576,6 +576,13 @@ class GrugModelConfig:
     mla_share_kv_latent: bool = False
     """Every MLA layer after the first reuses the first MLA layer's normed KV latent (own W_uk / W_uv, so
     absorption still works), halving the MLA KV cache at d512. Needs attn_res_layer_backward=SAVE."""
+    value_residual_layers: tuple[int, ...] = ()
+    """ResFormer value residual learning (arXiv 2410.17897): these 0-indexed layers mix the first layer's
+    attention values into their own, ``v <- l1 * v + l2 * v_first``, with learnable per-layer ``(l1, l2)``
+    (KDA: after the v ShortConv + SiLU; MLA: after the up-projection). Layer 0 is the source and cannot
+    be listed. Empty: off. Needs attn_res_layer_backward=SAVE (the values cross layers)."""
+    value_residual_init: tuple[float, float] = (0.5, 0.5)
+    """Initial ``(l1, l2)`` of ``value_residual_layers`` (modded-nanogpt's learnable 0.5 / 0.5)."""
     learnable_qk_mult: bool = False
     """A learnable scalar per softmax-attention layer (init ``qk_mult``) in place of the fixed ``qk_mult``."""
     aux_lm_layer: int | None = None
@@ -786,6 +793,7 @@ class CausalSelfAttention(eqx.Module):
     w_uk2: Float[Array, "L NH"] | None  # second key up-projection from the KV latent (cfg.mla_diff_attn)
     diff_lambda: Float[Array, "4 H"] | None  # [lq1, lk1, lq2, lk2] of the DIFF lambda reparameterization
     diff_lambda_init: Float[Array, ""] | None  # constant lambda_init of this layer (never trained)
+    vres_lambda: Float[Array, " 2"] | None  # (l1 on v, l2 on the first layer's v): cfg.value_residual_layers
     bias_q: Float[Array, " NH"] | None
     bias_dkv: Float[Array, " L"] | None
     cfg: GrugModelConfig = eqx.field(static=True)
@@ -835,6 +843,7 @@ class CausalSelfAttention(eqx.Module):
                 w_uk2=reshard(_init_weight(k_uk2, (kvl, n * h), std), P(None, "model")) if diff else None,
                 diff_lambda=0.1 * random.normal(k_lam, (4, h), jnp.float32) if diff else None,
                 diff_lambda_init=((0.8 - 0.6 * jnp.exp(-0.3 * jnp.asarray(layer_index, jnp.float32))) if diff else None),
+                vres_lambda=_vres_lambda_init(cfg),
                 bias_q=jnp.zeros((n * h,)) if "qkv" in cfg.proj_biases else None,
                 bias_dkv=jnp.zeros((kvl,)) if "qkv" in cfg.proj_biases else None,
                 cfg=cfg,
@@ -843,6 +852,8 @@ class CausalSelfAttention(eqx.Module):
             raise ValueError("proj_biases 'qkv' is implemented for MLA and KDA only")
         if cfg.mla_diff_attn:
             raise ValueError("mla_diff_attn needs mla")
+        if cfg.value_residual_layers:
+            raise ValueError("value_residual_layers is implemented for MLA and KDA only")
         k_q, k_k, k_v, k_o, k_rel = random.split(key, 5)
         return CausalSelfAttention(
             w_q=reshard(_init_weight(k_q, (d, n * h), std), P(_FSDP_AXES, "model")),
@@ -873,6 +884,7 @@ class CausalSelfAttention(eqx.Module):
             w_uk2=None,
             diff_lambda=None,
             diff_lambda_init=None,
+            vres_lambda=None,
             bias_q=None,
             bias_dkv=None,
             cfg=cfg,
@@ -905,11 +917,12 @@ class CausalSelfAttention(eqx.Module):
             return rearrange(q_flat, "... (n d) -> ... n d", d=head_dim)
 
         q = project_q(self.w_q)
-        if kv_share is not None and "latent" in kv_share:
+        share_latent = kv_share is not None and self.cfg.mla_share_kv_latent
+        if share_latent and "latent" in kv_share:
             kv_latent = kv_share["latent"]
         else:
             kv_latent = self.kv_latent_norm(latent)
-            if kv_share is not None:
+            if share_latent:
                 kv_share["latent"] = kv_latent
         # k / v may read a different stream than the shared latent (attn_res_sum_inputs); each then gets its
         # own latent from that stream (same W_dkv and latent norm).
@@ -1003,9 +1016,11 @@ class CausalSelfAttention(eqx.Module):
         token_ids: Int[Array, "B S"] | None = None,
         kv_share: dict[str, jax.Array] | None = None,
         proj_inputs: dict[str, jax.Array] | None = None,
+        value_residual: bool = False,
     ) -> Float[Array, "B S D"]:
-        """``kv_share`` (MLA only) is a per-forward mailbox for ``mla_share_kv_latent``; ``proj_inputs``
-        optionally replaces the input of the ``q`` / ``k`` / ``v`` projections."""
+        """``kv_share`` (MLA only) is a per-forward mailbox for ``mla_share_kv_latent`` and
+        ``value_residual_layers``; ``proj_inputs`` optionally replaces the input of the ``q`` / ``k`` / ``v``
+        projections; ``value_residual`` (static) mixes the first layer's values into this layer's."""
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
         batch_spec = _batch_spec()
@@ -1015,6 +1030,9 @@ class CausalSelfAttention(eqx.Module):
         second_qk = None
         if self.cfg.mla:
             q, k, v, second_qk = self._mla_qkv(x, sconv_segment_ids, token_ids, kv_share, proj_inputs)
+            if self.vres_lambda is not None:
+                assert kv_share is not None
+                v = _value_residual(v, self.vres_lambda, kv_share, value_residual)
         else:
             q, k, v = self._gqa_qkv(x, sconv_segment_ids, is_global)
 
@@ -1121,6 +1139,23 @@ class CausalSelfAttention(eqx.Module):
         return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec)
 
 
+def _vres_lambda_init(cfg: GrugModelConfig) -> jax.Array | None:
+    return jnp.asarray(cfg.value_residual_init, jnp.float32) if cfg.value_residual_layers else None
+
+
+def _value_residual(v: jax.Array, lam: jax.Array, kv_share: dict[str, jax.Array], mix: bool) -> jax.Array:
+    """ResFormer value residual: the first layer to run stores its ``v`` in ``kv_share``; a ``mix`` layer
+    returns ``l1 * v + l2 * v_first``."""
+    if "v_first" not in kv_share:
+        kv_share["v_first"] = v
+        return v
+    if not mix:
+        return v
+    lam = lam.astype(v.dtype)
+    v_first = reshard(kv_share["v_first"], _partition_spec_of(v) or P(_BATCH_AXES, None, None, None))
+    return lam[0] * v + lam[1] * v_first
+
+
 def _kda_dt_bias_init(cfg: GrugModelConfig, key: PRNGKeyArray, shape: tuple[int, int]) -> jax.Array:
     """``dt_bias`` such that ``|g| = KDA_MIN_LOG_DECAY * sigmoid(dt_bias)`` (zero gate input, ``A_log = 0``)
     is log-uniform in ``kda_dt_range``."""
@@ -1182,6 +1217,7 @@ class KimiDeltaAttention(eqx.Module):
     sconv_k: ShortConv
     sconv_v: ShortConv
     sconv_a: ShortConv | None
+    vres_lambda: Float[Array, " 2"] | None  # (l1 on v, l2 on the first layer's v): cfg.value_residual_layers
     push_decay: Float[Array, "M N H"] | None
     """Per-bucket, per-channel log-decay logits of the push buckets (``kda_push_buckets``)."""
     w_push: Float[Array, "D NM"] | None
@@ -1237,6 +1273,7 @@ class KimiDeltaAttention(eqx.Module):
             sconv_k=ShortConv.init(n * h, cfg.sconv_kernel),
             sconv_v=ShortConv.init(n * h, cfg.sconv_kernel),
             sconv_a=ShortConv.init(r, cfg.sconv_kernel) if cfg.kda_decay_conv else None,
+            vres_lambda=_vres_lambda_init(cfg),
             push_decay=_kda_push_decay_init(cfg, n, h) if cfg.kda_push_buckets else None,
             w_push=(reshard(jnp.zeros((d, n * cfg.kda_push_buckets)), P(None, None)) if cfg.kda_push_buckets else None),
             cfg=cfg,
@@ -1250,9 +1287,12 @@ class KimiDeltaAttention(eqx.Module):
         proj_inputs: dict[str, jax.Array] | None = None,
         no_decay: bool = False,
         no_beta: bool = False,
+        kv_share: dict[str, jax.Array] | None = None,
+        value_residual: bool = False,
     ) -> Float[Array, "B S D"]:
         """``proj_inputs`` optionally replaces the input of the ``q`` / ``k`` / ``v`` projections;
-        ``no_decay`` / ``no_beta`` (static, per layer) replace g with 0 / beta with 1."""
+        ``no_decay`` / ``no_beta`` (static, per layer) replace g with 0 / beta with 1; ``kv_share`` /
+        ``value_residual`` as in ``CausalSelfAttention``."""
         cfg = self.cfg
         head_dim = cfg.inferred_head_dim
         b, s, _ = x.shape
@@ -1269,6 +1309,9 @@ class KimiDeltaAttention(eqx.Module):
         q = project(self.w_q, self.sconv_q, 0, "q")
         k = project(self.w_k, self.sconv_k, 1, "k")
         v = project(self.w_v, self.sconv_v, 2, "v")
+        if self.vres_lambda is not None:
+            assert kv_share is not None
+            v = _value_residual(v, self.vres_lambda, kv_share, value_residual)
         if self.w_write is not None:
             write = jnp.einsum("bsh,hd->bsd", proj_inputs.get("v", x), self.w_write)
             v = v * rearrange(
@@ -1999,6 +2042,7 @@ class Block(eqx.Module):
         sum_stream: Float[Array, "B S D"] | None = None,
         sum_components: tuple[str, ...] = (),
         kda_ablation: tuple[bool, bool] = (False, False),
+        value_residual: bool = False,
     ) -> Float[Array, "B S D"]:
         """``sum_stream`` (with ``sum_components``) feeds those q/k/v projections from the straight-sum
         stream, through the same RMSNorm and GatedNorm, instead of the AttnRes mix ``h``."""
@@ -2017,6 +2061,8 @@ class Block(eqx.Module):
                 proj_inputs=proj_inputs,
                 no_decay=kda_ablation[0],
                 no_beta=kda_ablation[1],
+                kv_share=kv_share,
+                value_residual=value_residual,
             )
         else:
             out = self.attn(
@@ -2027,6 +2073,7 @@ class Block(eqx.Module):
                 token_ids=token_ids,
                 kv_share=kv_share,
                 proj_inputs=proj_inputs,
+                value_residual=value_residual,
             )
         if self.bias_attn_out is not None:
             out = out + unshard(self.bias_attn_out).astype(out.dtype)
@@ -2527,6 +2574,7 @@ def _attn_res_layer(
         v_stream,
         ("v",) if v_stream is not None else (),
         kda_ablation,
+        physical in cfg.value_residual_layers,
     )
     partial = attn_out if partial is None else partial + attn_out
     # The MLP re-attends over the history including this layer's attention write.
@@ -2569,7 +2617,16 @@ def _attn_res_layer_full(diff_args, mask, token_ids, use_long, layer_index, eps,
         )
         sum_components = ("v",)
     attn_out = type(layer).attn_branch(
-        layer, h, mask, use_long, use_long, token_ids, kv_share, attn_side_stream, sum_components
+        layer,
+        h,
+        mask,
+        use_long,
+        use_long,
+        token_ids,
+        kv_share,
+        attn_side_stream,
+        sum_components,
+        value_residual=layer_index % cfg.num_layers in cfg.value_residual_layers,
     )
     sum_components = cfg.attn_res_sum_inputs
     blocks = (*blocks, attn_out)
@@ -3131,6 +3188,8 @@ class Transformer(eqx.Module):
         bigram_gate_stats: dict[str, jax.Array] = {}
         if (cfg.second_embed or cfg.ple_dim) and not cfg.attn_res:
             raise ValueError("second_embed and ple_dim require attn_res")
+        if cfg.value_residual_layers and not cfg.attn_res:
+            raise ValueError("value_residual_layers requires attn_res")
         if cfg.attn_res:
             extra_sources = ()
             input_embed2 = None
@@ -3388,6 +3447,10 @@ class Transformer(eqx.Module):
             raise ValueError("attn_res_full needs attn_res_layer_backward=SAVE")
         if cfg.mla_share_kv_latent and cfg.attn_res_layer_backward != AttnResLayerBackward.SAVE:
             raise ValueError("mla_share_kv_latent needs attn_res_layer_backward=SAVE (the latent crosses layers)")
+        if cfg.value_residual_layers and cfg.attn_res_layer_backward != AttnResLayerBackward.SAVE:
+            raise ValueError("value_residual_layers needs attn_res_layer_backward=SAVE (the values cross layers)")
+        if not set(cfg.value_residual_layers) <= set(range(1, num_layers)):
+            raise ValueError(f"value_residual_layers must be in 1..{num_layers - 1}, got {cfg.value_residual_layers}")
         if cfg.attn_res_z_loss > 0 and cfg.attn_res_layer_backward != AttnResLayerBackward.SAVE:
             raise ValueError("attn_res_z_loss needs attn_res_layer_backward=SAVE (the remat VJP drops stat cotangents)")
         layer_fn = (
@@ -3403,7 +3466,7 @@ class Transformer(eqx.Module):
             per-layer router stats and the pass's gate z terms."""
             blocks, block_logits, partial = state
             stats_out, z_out = [], []
-            kv_share: dict[str, jax.Array] | None = {} if cfg.mla_share_kv_latent else None
+            kv_share: dict[str, jax.Array] | None = {} if cfg.mla_share_kv_latent or cfg.value_residual_layers else None
             for i, layer in enumerate(layers):
                 eff = pass_index * num_layers + i
                 if cfg.attn_res_full or (eff % seg_size == 0 and eff // seg_size < block_cap):
