@@ -431,6 +431,14 @@ class GrugModelConfig:
     sublayer_out_norm: bool = False
     """Peri-LN (arXiv 2502.02732): RMSNorm with a gain (init 1) on each attention and MLP sublayer output
     before it becomes an AttnRes source, so the source mix combines unit-RMS values."""
+    dyt_norm: bool = False
+    """Dynamic Tanh (arXiv 2503.10622): the attention and MLP pre-norms become ``gamma * tanh(alpha * x) + beta``
+    (learnable scalar ``alpha``, per-channel ``gamma``/``beta`` init 1/0). The embedding, final and internal
+    q/k/latent norms stay RMSNorm."""
+    dyt_alpha_attn: float = 0.8
+    """``alpha`` init of the attention-input DyT (the paper's LLaMA-7B value: attention inputs get a larger one)."""
+    dyt_alpha_mlp: float = 0.2
+    """``alpha`` init of the MLP-input DyT (the paper's LLaMA-7B non-attention value)."""
     laurel_rank: int = 0
     """LAuReL-LR (arXiv 2411.07501): each sublayer input becomes ``h + (h A) B`` with a rank-r ``A``
     (random init) and ``B`` (zero init), both trained with Adam (0: off)."""
@@ -1290,6 +1298,28 @@ class RMSNorm(eqx.Module):
         return (normed * weight).astype(dtype)
 
 
+class DyT(eqx.Module):
+    """Dynamic Tanh (arXiv 2503.10622): ``weight * tanh(dyt_alpha * x) + dyt_beta``, a norm-free drop-in for RMSNorm."""
+
+    dyt_alpha: jax.Array
+    weight: jax.Array
+    dyt_beta: jax.Array
+
+    @staticmethod
+    def init(dim: int, alpha: float) -> "DyT":
+        return DyT(
+            dyt_alpha=jnp.full((), alpha, dtype=jnp.float32),
+            weight=jnp.ones((dim,), dtype=jnp.float32),
+            dyt_beta=jnp.zeros((dim,), dtype=jnp.float32),
+        )
+
+    @named_call
+    def __call__(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
+        dtype = x.dtype
+        y = jnp.tanh(self.dyt_alpha * x.astype(jnp.float32))
+        return (y * unshard(self.weight) + unshard(self.dyt_beta)).astype(dtype)
+
+
 class GatedNorm(eqx.Module):
     """Learnable per-dimension gating. Compensates for AdamH's bounded activation norms.
     See https://arxiv.org/abs/2601.22966v1"""
@@ -1773,10 +1803,10 @@ def _laurel(h: Float[Array, "B S D"], a: jax.Array | None, b: jax.Array | None) 
 
 
 class Block(eqx.Module):
-    rms_attn: RMSNorm
+    rms_attn: RMSNorm | DyT
     attn_gated_norm: GatedNorm
     attn: CausalSelfAttention | KimiDeltaAttention
-    rms_mlp: RMSNorm
+    rms_mlp: RMSNorm | DyT
     mlp_gated_norm: GatedNorm
     mlp: "MoEMLP | DenseMLP"
     shared: tuple[DenseMLP, ...] | None
@@ -1830,10 +1860,18 @@ class Block(eqx.Module):
                 if cfg.shared_ungated_relu2:
                     shared = tuple(eqx.tree_at(lambda m: m.w_gate, e, None, is_leaf=lambda x: x is None) for e in shared)
         return Block(
-            rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            rms_attn=(
+                DyT.init(cfg.hidden_dim, cfg.dyt_alpha_attn)
+                if cfg.dyt_norm
+                else RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps)
+            ),
             attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
             attn=attn,
-            rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            rms_mlp=(
+                DyT.init(cfg.hidden_dim, cfg.dyt_alpha_mlp)
+                if cfg.dyt_norm
+                else RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps)
+            ),
             mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
             mlp=mlp,
             shared=shared,
