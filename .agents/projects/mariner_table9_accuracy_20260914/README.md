@@ -176,3 +176,206 @@ r5 compiled and ran the kernel path (no fallback warnings, the r5 choices canary
 ## r6 result and plan r7 (2026-09-16 03:40 to 04:10 UTC)
 
 r6 (cache-level padding) decoded at exactly r5's rate: 98.5 s per 64-token iteration (0.65 tokens/s) on 2-document Minerva, 98 to 103 s per 32-token iteration on the 8 x 8192 memory probe. The per-round cost (about 3.1 s on the kernel path, about 1.1 s on the reference path in r2) therefore depends neither on the cache copy nor on the number of live sequences or their length. The engine pads every decode round to `max_tokens_per_round` query tokens, which defaults to `max_seqs` (224 in r5/r6, 256 before), and the kernel's grid scales with that. r7 caps harness generation at `GENERATION_MAX_SEQS = 32` sequences and 32 tokens per round (`lib/levanter/src/levanter/eval_harness.py`); if the hypothesis holds the round cost should fall several-fold. r6 generation canary cancelled; `plan_v6e4_r7.json` (canonical SHA256 9f227ccf15365eb566bc658fdca5e3f9f0719575da47977b0f1619fc50b90c2a) differs from r6 only in the harness pin; r7 canaries submitted at batch priority (`launch_v6e4_r7_commands.txt`). If r7 does not move the round cost, the next step is a TPU profile of the engine or moving generation to vLLM.
+
+## r7 result: the round size was the bottleneck (2026-09-16 05:31 UTC)
+
+With `max_seqs = max_tokens_per_round = 32`, the r7 generation canary decodes 64 tokens in 3.44 s (18.6 tokens/s with two live sequences) against 98.5 s in r5/r6 and 36 s on the reference path: about 107 ms per decode round for 32 padded tokens, so the per-round cost scales with the padded round size and is roughly 3.3 ms per padded token. At full occupancy (32 live sequences) that is about 300 tokens/s per v6e-4, which puts the full generation backfill (roughly 1.5 million generated tokens per checkpoint) at a few hours per checkpoint. Kernel path active, no fallback warnings. Full r7 commands for both modes are in `launch_v6e4_r7_full_commands.txt`, to be released when the r7 generation canary passes.
+
+## r7 full release failed preflight; plan r8 on the merged tree (2026-09-16 06:42 to 06:50 UTC)
+
+The r7 generation canary succeeded at 06:42 UTC and both full r7 parents were released, but each failed its preflight within a minute with "Frozen evaluation code/runtime differs": the branch had merged origin/main (d7307fcca8) after r7 was frozen, changing five pinned sources (levanter data/loader.py, eval_harness.py, inference/engine.py, trainer.py, uv.lock). `plan_v6e4_r8.json` (canonical SHA256 627479e1b43da705383cf2a7f7170062aaeb442751949582ebd9611ed9f9253e) was frozen on the merged tree; it differs from r7 only in those pins (runtime versions and the lm-eval revision are unchanged). r8 canaries submitted for both modes at batch priority (`launch_v6e4_r8_commands.txt`); the full runs (`launch_v6e4_r8_full_commands.txt`, east5-validated) are released automatically when both canaries succeed.
+
+## r8 generation invalid: the engine admits one prefill batch per call; r9 batches requests (2026-09-16 10:44 to 11:35 UTC)
+
+The full r8 runs completed (choices valid for both checkpoints, `coverage_r8/`), but the generation outputs are empty beyond the first 10 to 16 requests of every task (12 Minerva algebra, 10 geometry, 14 HumanEval, 16 MBPP, identical for both checkpoints). `InferenceEngine.generate` admits requests to prefill once per call, until `max_seqs_in_prefill` (16) sequences or `max_prefill_size` (8192) prompt tokens are queued, and never admits the remainder during decoding, so they return with no tokens; the two-document canaries could not see this. The r8 grading and `accuracy_vs_bpb_r8/` therefore report near-zero math and code accuracy for both models and must not be used. Fix: `eval_harness.generate_until` splits requests into batches the engine admits whole (`_admissible_request_batches`, tested) and calls `generate` per batch. `plan_v6e4_r9.json` (canonical SHA256 a246408c52621975aaebbb465019398e1011a2cefb37cfa08449e8c91b0c90fb) differs from r8 only in the harness pin. r9 canaries submitted (`launch_v6e4_r9_commands.txt`); the full runs (`launch_v6e4_r9_full_commands.txt`) release on their success and are graded automatically.
+
+## r9 starved by preemption; r10 resumes tasks at 64-request chunks (2026-09-16 15:20 UTC)
+
+The full r9 choices run completed for both checkpoints, but both r9 generation children were preempted about 75 minutes into Minerva algebra (1,187 documents at 106 tokens/s with 12 live sequences) and restarted it from scratch: with task-level durability a long task cannot outlast the v6e-4 pool's preemption cadence. r10 makes `evaluate_row` resumable: `evaluate_task_resumably` evaluates each task in 64-request chunks and saves a doc_id-prefix `partial.json.gz` under the task's result root after every chunk, resuming there on the next attempt and discarding it once `SUCCESS.json` is written (crash-and-resume test in `tests/test_table9_accuracy.py`). `plan_v6e4_r10.json` (canonical SHA256 9612aaa7b2a4cd3f538136f4190a0285da2638926382b1df61936cc2133acd78) differs from r9 only in the runner pin. r9 generation cancelled to free the slots; r10 canaries submitted at batch priority; full r10 releases and grades automatically.
+
+## r10 too slow under spot reclaims; r11 shards generation by task and admits 32 sequences (2026-09-16 19:40 UTC)
+
+r10's resumable runs progressed but the v6e-4 spot VMs were reclaimed about every 30 minutes, so each checkpoint completed one 64-request chunk per roughly 50 minutes: 2 to 3 days for the generation set. r11 changes three things: full generation runs launch one child per (checkpoint, task) so every task holds its own slice and resumes independently (`child_task_groups`; canaries and choice runs keep one child per checkpoint, and the memory-probe marker write tolerates concurrent children); the harness engine admits a full 32-sequence round per generate call (`max_seqs_in_prefill = 32`, `max_prefill_size = 16384`, `hbm_utilization = 0.6`); and the resume chunk is 32 requests. `plan_v6e4_r11.json` (canonical SHA256 71f6758d35445f88fe8fd551b4eac89d4bed9c7bce60300fee3ea622f575f169) differs from r10 in the runner and harness pins. r11 canaries submitted at batch priority; full r11 releases on their success (18 generation children plus 2 choices children), after which the r10 generation run is cancelled, and grading runs automatically.
+
+## r11 canaries starved by a us-east5-b v6e-4 stockout; r10 generation cancelled; detached release chain (2026-09-16 20:40 to 21:00 UTC)
+
+The interactive session that held the r11 auto-release and grading jobs restarted, which killed both. At 20:40 UTC the four r11 canary children had zero attempts after 90 minutes: the `tpu_v6e-preemptible_4-us-east5-b` scaling group reports "no more capacity in the zone" with 34 consecutive create failures (two slices were booting at 20:40), and the batch band queue for v6e-4 held, ahead of the canaries by root submission time, the two r10 generation children (15:35 UTC) and 26 workers of another user's cross-region eval pools (18:14 UTC). r10's placements today lasted 9 to 59 minutes each. The r10 generation parent was cancelled at 20:50 UTC (superseded by r11, whose runner and harness pins differ, so r10's partial outputs cannot be reused; Fieldbook job_01m2ndpvdte8y2ttnqw0e8j9pb marked killed). The release chain now runs detached from any session as `auto_release_r11.sh` (log `auto_release_r11.log`): it polls both canary parents every 5 minutes, validates and submits `launch_v6e4_r11_full_commands.txt` from a secrets subshell with redacted logs, registers the parents in Fieldbook, waits for both full parents (child counts logged every 10 minutes), then grades in Docker, writes `coverage_r11/` and `accuracy_vs_bpb_r11/`. It stops and logs instead of retrying if a canary or full parent fails. Open question for Calvin: the accuracy parents run at `--priority batch` (chosen so they cannot evict ladder parents), which puts their v6e-4 children behind every earlier batch submission; resubmitting the canaries at the default interactive band would place them ahead of the other user's batch pools and is his call.
+
+## Canaries moved to the interactive band as r11i (2026-09-16 21:30 UTC)
+
+At 21:20 UTC the first us-east5-b v6e-4 slice of the afternoon went to an interactive-band ops job while the batch-band r11 canaries stayed unplaced, so Calvin approved moving the accuracy runs to the default interactive band. The r11 canary parents were cancelled and resubmitted unchanged except for `--priority interactive` and the job names `table9-accuracy-{choices,generation}-v6e4-canary-20260915-r11i` (commands `launch_v6e4_r11i_commands.txt`, both validated region-local; Fieldbook job_01m2p24bg85rmdzfa7xk57pkan and job_01m2p24h9fbhywwhww5katj2kp). The full runs will use `launch_v6e4_r11i_full_commands.txt` with names `...-full-20260915-r11i`; the plan is still `plan_v6e4_r11.json`, so the canary artifacts satisfy the full-release guard. `auto_release_r11.sh` was restarted against the r11i names. Interactive parents cannot evict the interactive ladder parents in the CPU pool by the documented band rules; if a ladder parent is preempted anyway, the r4 incident's explanation was wrong and the accuracy parents go back to batch.
+
+## r11i generation canary failed the memory probe; plan r12 reverts the two memory settings (2026-09-16 22:17 to 22:40 UTC)
+
+The r11i choices canary succeeded at 22:17 UTC, but both r11i generation children failed the full-window memory probe within a minute of starting: `RESOURCE_EXHAUSTED` allocating 685 MB with 226 MB free inside `engine.reset`. r11 had raised `max_prefill_size` from 8192 to 16384 tokens and `hbm_utilization` from 0.5 to 0.6 (KV budget 18.68 GB against 15.57 GB under r10, whose probe passed); the probe is the worst case by design, so the release guard did its job. Plan r12 (`plan_v6e4_r12.json`, canonical SHA256 e04bbd3d476c9d0d32df37ca5fdd5314d055114507aab2e22e75c27f488c9c16, prepared with the same checkpoint rows and request set) differs from r11 only in the harness pin: `GENERATION_PREFILL_TOKENS = 8192` and `GENERATION_HBM_UTILIZATION = 0.5` again, keeping r11's task-sharded children, 32-sequence admission and 32-request resume chunks. Canaries `table9-accuracy-{choices,generation}-v6e4-canary-20260915-r12` submitted at the interactive band (`launch_v6e4_r12_commands.txt`); full commands in `launch_v6e4_r12_full_commands.txt`; `auto_release_r11.sh` restarted against the r12 names.
+
+## Full r12 backfill complete; Proportional vs UniMax-8 accuracy reported (2026-09-17 05:55 UTC)
+
+Both r12 full parents succeeded (choices 00:45 UTC; the 18 task-sharded generation children between 01:40 and 05:45 UTC, none failed after the interactive-band move), grading ran in Docker at 05:45 UTC, and `report_table9_accuracy` plus `analyze_table9_accuracy_vs_bpb.py` wrote `coverage_r11/` and `accuracy_vs_bpb_r11/` (directory names kept from the chain script; the plan is r12). Coverage 34 of 51 components per checkpoint (14 overlap, 11 choices, 9 generation); 17 MT-MBPP components BPB-only by design. Unweighted mean accuracy over the 34 scored components: Proportional 42.76%, UniMax-8 44.15% (+1.39 pp); native macro BPB over the 51 components 0.6731 vs 0.6253; BPB over the 34 scored 0.7518 vs 0.7114. Groups (Proportional -> UniMax-8): basic skills 68.2 -> 74.4, math 3.7 -> 8.6, code (HumanEval, MBPP) 3.4 -> 2.4, MMLU 34.9 -> 33.9, QA 58.2 -> 56.9. Sign agreement between BPB and accuracy changes 23 of 33 decided components (Spearman 0.56 across the 34). Per-component table in `accuracy_vs_bpb_r11/components.md`.
+
+## MARINER OlmoBaseEval Easy 1e21 checkpoint: family-resumable overlap suite and backfill submitted (2026-09-21 13:23 PDT)
+
+Calvin asked for the accuracy evaluation of the landed MARINER suite 1e21 checkpoint
+(`lwspu_t9_snc_cap08_1e21_seed662005-e8e9d7`, permanent step 22,056, audited by the ladder-watch session) and, before
+submitting, for a check that the evaluation is idempotent and resumes after preemption.
+
+Findings: the backfill runner already was (task-level `SUCCESS.json` markers with hash and provenance checks, 32-request
+`partial.json.gz` chunks, one child per generation task, Fray's default 100 preemption retries per child, the durable
+memory-probe marker). The overlap suite was idempotent per row only: one `run_eval_harness_main` call evaluated all 67
+leaves and persisted at the end, so a preempted v5p-8 child (the east5 v5p pool is preemptible) restarted from scratch;
+the baselines' outputs show it (UniMax-8 done 36 minutes after staging, Proportional 3 h 18 min).
+
+Fix in `evaluate_mariner_ladder_accuracy.py`: the model is loaded once and the eleven families are evaluated one at a
+time with `run_lm_eval_harness`; each family's validated output is written to `<row root>/partial/<family>.json.gz`
+(readback-verified), a new attempt loads and re-validates saved families and evaluates only the rest, and the family
+outputs are merged (disjoint union of the task-keyed sections, `averages` recomputed with Levanter's own helper) into
+the same results dictionary the whole-suite call returned, then persisted and the partials removed. Tests in
+`tests/test_mariner_ladder_accuracy.py` (families partition the 67 leaves; merge reproduces sections and averages;
+partials round-trip, reject coverage drift and tampering). Because the evaluator is a source pin, MARINER's overlap plan
+carries the new hash; the baselines' results stay under their own plan.
+
+Plans (`prepare_table9_checkpoint`, templates `plan_v5p_cpu_staging.json` and `plan_v6e4_r12.json`, training experiment
+`exp_01m1zy8yths4dqp5bgc0ffzztp`): `mariner_t9_1e21/overlap_plan.json` (canonical SHA256
+435347315824e90f72efd54f3b11fb738d959402df8e8e9f003ff5b57ab4f1ee) and `mariner_t9_1e21/backfill_plan.json`
+(c3cd371bc417c550cc18654c6b0f89b396f0d269c2467fd5b1e999f3d8162cfa); row name `lwspu_t9_snc_cap08_1e21-e8e9d7`.
+All five launch commands passed the east5 guard (`mariner_t9_1e21/launch_*.txt`). Submitted at the interactive band
+from a secrets subshell with redacted logs (`mariner_t9_1e21/submit_*.log`), Fieldbook experiment
+`exp_01kvvvv6zxrf0j7tkp4f7k6y66`:
+
+- `/calvinxu/mariner-ladder-accuracy-mariner-t9-1e21-v5p-20260921` (overlap suite, one v5p-8 child in us-east5-a; job_01m32t75n0myarjybeb940c8qb)
+- `/calvinxu/table9-accuracy-choices-v6e4-canary-mariner-t9-1e21-20260921` (job_01m32t76149jhnfyjphfjm6f3e)
+- `/calvinxu/table9-accuracy-generation-v6e4-canary-mariner-t9-1e21-20260921` (job_01m32t76ctm1kdaepxsygpr3mf)
+
+`mariner_t9_1e21/auto_release.sh` runs detached (log `auto_release.log`): it releases `launch_full_commands.txt` when
+both canaries succeed (`full.released` marker), waits for both full parents and the overlap parent, then grades in
+Docker and writes `mariner_t9_1e21/coverage/`. It stops and logs on any failed parent; resubmitting the same command
+resumes from the durable partials. The accuracy-vs-BPB analysis against Proportional is a manual step afterwards.
+
+## MARINER OlmoBaseEval Easy 1e21: evaluation complete, graded and compared (2026-09-22 00:27 PDT)
+
+All Iris jobs succeeded without a failed attempt: the overlap suite (v5p-8, family-resumable evaluator), the choices
+parent and the nine task-sharded generation children (the last finished 2026-09-21 19:57 PDT). The chain's grading step
+failed at 19:59 PDT because Docker (OrbStack) was not running on the Mac (`docker create` could not reach the socket);
+Calvin approved starting OrbStack, and `mariner_t9_1e21/stage4_rerun.sh` reran grading and the report
+(`auto_release.log`: `DONE: coverage/ written` at 00:27 PDT). Coverage is 34 of 51, the same target as the baselines'
+r12 report (17 multilingual MBPP components deferred). `mariner_t9_1e21/coverage/{coverage.json,components.csv}`.
+
+Accuracy-vs-BPB analysis (`mariner_t9_1e21/accuracy_vs_bpb/`): the native summary entry for MARINER was built from the
+audited Table-9 result (`frozen_scaling_update_20260913/mariner/lwspu_t9_snc_cap08_1e21_seed662005-e8e9d7_table9.json`,
+51 components, macro 0.5894, checkpoint URI equal to the coverage row's) instead of a W&B eval run, and merged with the
+baselines' coverage rows (`coverage_merged.json`, `native_summaries_with_mariner.json`). Equal-weight means over the
+34 scored components:
+
+| | Proportional | UniMax-8 | MARINER |
+|---|---:|---:|---:|
+| accuracy (pp) | 42.76 | 44.15 | 46.36 |
+| BPB, scored components | 0.7518 | 0.7114 | 0.6912 |
+
+MARINER is best on 22 of the 34 components, below both baselines on 3 (winogrande, hellaswag, coqa; naturalqs is below
+Proportional only). Against Proportional: BPB improved on 21 components, accuracy also improved on 19 of those; sign
+agreement 25/33; Spearman(-dBPB, dAcc) 0.76; gains concentrate in basic skills (+10.4 pp), code (+7.4 pp; HumanEval
+6.1 -> 17.1, MBPP 0.8 -> 4.6) and Minerva math (+6.2 pp), while the 15 QA components are flat (-0.4 pp) with slightly
+worse BPB (+1.1%). Against UniMax-8: +2.2 pp overall, better on every group; sign agreement 24/31, Spearman 0.45. The
+README's rule stands: no partial Table-9 accuracy macro is published as the suite's accuracy; the paper's Table 2
+accuracy column is Calvin's decision.
+
+Paper (2026-09-22 02:45 PDT): Table 2's accuracy column carries the 34-component mean (42.8 / 44.2 / 46.4); the
+group breakdown with scored/unscored BPB is the last display of Section 5.1; Appendix A.4 gives the protocol and a
+51-row per-component BPB and accuracy table built by
+`experiments/domain_phase_mix/exploratory/two_phase_many/build_accuracy_component_table_20260922.py` from this
+directory's `accuracy_vs_bpb/{coverage_merged.json,native_summaries_with_mariner.json}`.
+
+## Olmix OlmoBaseEval Easy 1e21: staged, gated on OLM-U (2026-09-25 21:30 PDT)
+
+Calvin: wait for Olmix's Uncheatable 1e21 run (OLM-U) to land before submitting this evaluation, so the v6e-4 jobs
+cannot hold back its v6e-64 slices; he considered running it in another region and chose to keep waiting. Plans
+(`prepare_table9_checkpoint`, same templates as MARINER's, row `olmixq_t9_kl0p005_cap04_1e21-3f95f2`, HF export
+`.../delphi_matched_olmix_scaling_v6e_20260910/olmixq_t9_kl0p005_cap04_1e21_seed662005-3f95f2/hf/step-22056`, training
+experiment `exp_01m21dyb8mxjg2aqhtbjncejpc`): `olmix_t9_1e21/overlap_plan.json` (70a397d8...) and
+`olmix_t9_1e21/backfill_plan.json` (1d964319...). They differ from MARINER's plans only in the pin of
+`lib/marin/src/marin/evaluation/eval_dataset_cache.py` (the 24 Sep return-type fix of the cache step; no effect on
+scoring). The five launch commands (`olmix_t9_1e21/launch_*.txt`, job names ending `olmix-t9-1e21-20260926`) pass the
+east5 guard. `olmix_t9_1e21/auto_release.sh` runs detached (log `auto_release.log`): stage 0 waits until the
+matched-Olmix scaling parent succeeds (or the audit marks OLM-U measured), then submits the overlap suite and both
+canaries, releases the full runs on canary success, waits, grades and reports as MARINER's chain did. Grading needs
+Docker (OrbStack) running on the Mac. Stop the chain with `pkill -f olmix_t9_1e21/auto_release.sh`.
+
+## Olmix OlmoBaseEval Easy 1e21: choices and generation moved to us-east1-d (2026-09-26 05:49 PDT)
+
+OLM-U was still pending: all 16 of its v6e-64 tasks were waiting for capacity after six preemptions, and no v6e-64 slice
+existed in the cluster. Calvin asked to run the accuracy evaluation elsewhere, approving a one-time copy of the checkpoint
+and nothing else: evaluation inputs must come from their sources, not from another region. The backfill therefore runs
+on v6e-4 in us-east1-d (five idle slices at launch, a separate regional pool from OLM-U's us-east5-b requests), the same
+hardware and kernel path as the MARINER, Proportional and UniMax-8 rows. v4 in us-central2-b was not used: generation
+depends on the TPU paged-attention path that took rounds r4 to r12 to make work on v6e.
+
+- **Checkpoint:** copied server-side to the same path in `gs://marin-us-east1` (13.55 GB, eight objects, every one equal
+  to its source in size and CRC32C; `olmix_t9_1e21_east1/copy_checkpoint.{py,log}`).
+- **Requests:** uploaded from the local frozen copy in `requests/` (manifest SHA256 f97331...; each file checked against
+  it). The native OLMo-Eval request set exists only in us-east5, so the us-east1 parent does not read it; this manifest's
+  exact prompt/gold parity already passed in us-east5 for the r12 and MARINER 1e21 parents, recorded in
+  `NATIVE_PARITY_VERIFIED` in `evaluate_table9_accuracy.py`.
+- **Code:** `evaluate_table9_accuracy.py` now takes the region from the plan (`REGION_BUCKETS`, per-region `TPU_ZONES`) and
+  gains `--relocate-from` to re-home a frozen plan after its checkpoints are copied; `report_table9_accuracy.py` matches
+  backfill and overlap rows by checkpoint content (`same_checkpoint`: name, step, provenance and every object's size and
+  CRC32C) and reads overlap results with the overlap plan's own row. Tests in `tests/test_table9_artifacts.py`.
+- **Plan:** `olmix_t9_1e21_east1/backfill_plan.json` (digest 83549a5b...), relocated from `olmix_t9_1e21/backfill_plan.json`.
+  It differs only in region, zone, bucket paths, the checkpoint row (copy URI, object generations, `copied_from`) and the
+  evaluator's own source pin; TPU type, batch 8, length 8192, request manifest, runtimes and all other pins are unchanged.
+- **Overlap suite:** unchanged plan (`olmix_t9_1e21/overlap_plan.json`) on v5p-8 in us-east5-a beside the original
+  checkpoint; it does not use v6e.
+- **Launch:** `olmix_t9_1e21_east1/launch_*.txt` (us-east1 guard for the backfill, east5 guard for the overlap suite; four
+  extra bundle excludes from the 2026-09-14 list bring the bundle to 20.8 MB). `olmix_t9_1e21_east1/auto_release.sh` runs
+  detached: it submitted the overlap suite and both canaries at 05:48 PDT, releases the full runs when both canaries
+  succeed, waits, then grades (Docker required) and writes `olmix_t9_1e21_east1/coverage/`. The gated east5 chain in
+  `olmix_t9_1e21/` was stopped before it submitted anything.
+
+## Olmix OlmoBaseEval Easy 1e21: evaluation complete and graded (2026-09-26 10:51 PDT)
+
+Every Iris job succeeded without a failed attempt. The full runs were released at about 06:25 PDT. The choices child and
+the overlap suite finished early, and the last generation child (`minerva_math_algebra`, preempted once and resumed from
+its 32-request chunks) finished at 10:47. OrbStack's Docker engine had hung while the last child ran; it was stopped and
+started at about 10:25 with Calvin's approval, before grading began. The chain then graded in three minutes and wrote
+`olmix_t9_1e21_east1/coverage/`, with 34 of 51 components, the same scope as the other rows.
+
+Equal-weight mean accuracy over the 34 scored components: Proportional 42.76, UniMax-8 44.15, Olmix 46.06, MARINER 46.36.
+Olmix minus MARINER is -0.29 pp (unpaired binomial SE over documents 0.28 pp, 95% interval -0.84 to +0.25; trainer-seed
+variance not included). Olmix is higher on 18 components and lower on 16. MARINER leads on basic skills (coding -6.5,
+arithmetic -5.0, pattern -4.5 for Olmix) and Minerva math (algebra -5.2, prealgebra -4.6). Olmix leads on csqa (+5.3),
+hellaswag (+3.6), lambada (+3.3), winogrande (+3.2) and common knowledge (+2.8).
+
+## Name-agnostic MBPP regrade (2026-09-26; adopted 12:45 PDT)
+
+The native MBPP prompt describes each task in words and never names the function the MBPP asserts call, so the
+frozen grading fails any generation that chooses another name: only 37–55 of 500 generations per 1e21 checkpoint
+define the tested name. `mbpp_regrade/regrade_mbpp_name_agnostic.py` binds the tested name to the generation's
+function (`tested = chosen`, inserted between the generation and the asserts; among top-level functions that accept
+every call shape in the asserts, the entry points, last defined) and re-executes those programs in the grader's
+sandbox. Generations that already define the tested name keep their frozen result.
+
+Controls (`mbpp_regrade/results/summary.json`): 40/40 re-executed named programs reproduce their frozen result;
+MBPP's reference solutions pass 498/498 as released and 498/498 after renaming the tested function (the two tasks
+whose asserts call two names are left unbound); 0/198 references of a different problem pass when bound; the
+tie-break never applies.
+
+| Mixture | frozen pass@1 | regraded pass@1 (95% CI) | call-incompatible | pass among callable |
+|---|---|---|---|---|
+| Proportional | 0.8% | 6.4% (4.4–8.6) | 136 | 9.4% of 342 |
+| UniMax-8 | 1.8% | 14.2% (11.2–17.4) | 104 | 18.9% of 375 |
+| Olmix | 3.0% | 15.2% (12.2–18.4) | 109 | 19.9% of 381 |
+| MARINER | 4.6% | 18.2% (14.8–21.6) | 100 | 23.6% of 386 |
+
+The ordering is unchanged and now matches the MBPP BPB ordering; MARINER − Olmix is +3.0 points (paired bootstrap
+95% CI +0.2 to +5.8). Call-incompatible generations define functions whose parameters cannot take the asserts'
+arguments, usually because MBPP passes an extra argument (an array length, a count) that the task text never
+mentions; binding cannot rescue them. Effect on the paper if adopted: MBPP 0.8/1.8/3.0/4.6% becomes
+6.4/14.2/15.2/18.2%; Code group 3.4/2.4/7.9/10.8% becomes 6.2/8.6/14.0/17.6%; the 34-component mean
+42.8/44.2/46.1/46.4% becomes 42.9/44.5/46.4/46.8% (MARINER − Olmix 0.30 → 0.34 points). Rebuilt tables are in the
+session scratchpad, not in `reference_outputs/`.
+
+Adopted at Calvin's request: `grade_table9_accuracy.py` carries the binding (`mbpp_binding`; new grader identity, so the
+frozen gradings stay on GCS beside the new ones). `mbpp_regrade/adopt_chain.sh` regraded all four checkpoints
+(HumanEval, Minerva and every other component reproduce exactly; MBPP matches the exploratory regrade sample by sample),
+rewrote `coverage_r11/`, `mariner_t9_1e21/coverage/`, `olmix_t9_1e21_east1/coverage/`, both merged coverage files,
+`mariner_t9_1e21/accuracy_vs_bpb/vs_{proportional,unimax8}` (19 of 21 still; Spearman 0.77 and 0.47) and the paper
+tables in `reference_outputs/accuracy_component_table_20260922/`. Paper pushed in Overleaf 55b0d13.

@@ -457,19 +457,21 @@ class CacheEvalDatasetsConfig:
     cache_layout_version: int = HF_CACHE_LAYOUT_VERSION
 
 
-def _cache_eval_datasets(config: CacheEvalDatasetsConfig) -> str:
+def _cache_eval_datasets(config: CacheEvalDatasetsConfig) -> dict[str, str]:
     """ExecutorStep function to cache eval datasets to GCS.
 
-    This is idempotent - if datasets are already cached, it returns immediately.
+    This is idempotent - if datasets are already cached, it returns immediately. The step record's payload must
+    be a mapping, so the cache location is returned under ``gcs_path``.
     """
     # HF_ALLOW_CODE_EVAL is required for code evaluation tasks like HumanEval
     os.environ["HF_ALLOW_CODE_EVAL"] = "1"
 
-    return save_eval_datasets_to_gcs(
+    gcs_path = save_eval_datasets_to_gcs(
         eval_tasks=config.eval_tasks,
         gcs_path=config.gcs_path,
         log=logger,
     )
+    return {"gcs_path": gcs_path}
 
 
 def create_cache_eval_datasets_step(

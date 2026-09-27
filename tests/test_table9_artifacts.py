@@ -71,12 +71,63 @@ def test_memory_probe_fills_context_without_evaluation_documents(encode, mode):
 
 @pytest.mark.parametrize(
     "override",
-    [{"zone": "us-east5-a"}, {"tpu_type": "v6e-16"}, {"batch_size": 4}, {"max_length": 4096}],
+    [
+        {"zone": "us-east5-a"},
+        {"tpu_type": "v6e-16"},
+        {"batch_size": 4},
+        {"max_length": 4096},
+        {"region": "us-east1"},
+        {"region": "us-east1", "zone": "us-east1-d", "tpu_type": "v5p-8"},
+        {"region": "us-west4", "zone": "us-west4-a"},
+    ],
 )
 def test_evaluation_rejects_wrong_zone_multihost_or_changed_protocol(override):
     plan = {"tpu_type": "v6e-4", "zone": "us-east5-b", "region": "us-east5", "batch_size": 8, "max_length": 8192}
     with pytest.raises(ValueError):
         inference.evaluation_resources(plan | override)
+
+
+def test_relocated_plan_places_children_in_its_own_region():
+    plan = {"tpu_type": "v6e-4", "zone": "us-east1-d", "region": "us-east1", "batch_size": 8, "max_length": 8192}
+    resources = inference.evaluation_resources(plan)
+    assert (resources.regions, resources.zone, resources.device.variant) == (("us-east1",), "us-east1-d", "v6e-4")
+
+
+def test_native_parity_outside_its_region_requires_a_recorded_check(monkeypatch):
+    """A parent in another region never reads the native request set and refuses manifests never checked at home."""
+    monkeypatch.setenv("IRIS_TASK_ID", "task")
+    monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-east1")
+    manifest = {"native_request_set": "gs://marin-us-east5/raw/eval-datasets/native", "tasks": {}}
+    plan = {"region": "us-east1", "request_manifest": manifest}
+    monkeypatch.setattr(inference, "NATIVE_PARITY_VERIFIED", {})
+    with pytest.raises(ValueError, match="no recorded parity"):
+        inference.verify_native_prompts(plan)
+    monkeypatch.setattr(inference, "NATIVE_PARITY_VERIFIED", {inference.digest(manifest): "us-east5"})
+    inference.verify_native_prompts(plan)
+    monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-east5")
+    with pytest.raises(ValueError, match="plan region"):
+        inference.verify_native_prompts(plan)
+
+
+def test_a_copied_checkpoint_is_the_same_checkpoint_only_if_every_object_matches():
+    row = {
+        "name": "olmix",
+        "method": "Olmix",
+        "checkpoint_uri": "gs://marin-us-east5/run/hf/step-10",
+        "checkpoint_step": 10,
+        "checkpoint_files": {"model.safetensors": {"size": 5, "generation": "1", "crc32c": "abc=="}},
+        "source_training_experiment": "exp",
+        "training_metadata": {"sha256": "m"},
+    }
+    copy = row | {
+        "checkpoint_uri": "gs://marin-us-east1/run/hf/step-10",
+        "checkpoint_files": {"model.safetensors": {"size": 5, "generation": "9", "crc32c": "abc=="}},
+        "copied_from": row["checkpoint_uri"],
+    }
+    assert inference.same_checkpoint(row, copy)
+    corrupted = copy | {"checkpoint_files": {"model.safetensors": {"size": 5, "generation": "9", "crc32c": "xyz=="}}}
+    assert not inference.same_checkpoint(row, corrupted)
+    assert not inference.same_checkpoint(row, copy | {"checkpoint_step": 20})
 
 
 def test_memory_success_cannot_transfer_to_another_checkpoint_or_slice(tmp_path):

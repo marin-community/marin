@@ -1,0 +1,1927 @@
+[
+  {
+    "checkpoint": {
+      "name": "olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+      "method": "Olmix",
+      "checkpoint_uri": "gs://marin-us-east1/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_scaling_v6e_20260910/olmixq_t9_kl0p005_cap04_1e21_seed662005-3f95f2/hf/step-22056",
+      "checkpoint_step": 22056,
+      "checkpoint_files": {
+        "chat_template.jinja": {
+          "size": 5112,
+          "generation": "1790426548593418",
+          "crc32c": "jSXcIQ=="
+        },
+        "config.json": {
+          "size": 1821,
+          "generation": "1790426550096056",
+          "crc32c": "Ed+/cg=="
+        },
+        "model-00001-of-00003.safetensors": {
+          "size": 4933674712,
+          "generation": "1790426644522946",
+          "crc32c": "2SJntw=="
+        },
+        "model-00002-of-00003.safetensors": {
+          "size": 4928580272,
+          "generation": "1790426732954493",
+          "crc32c": "88SH+Q=="
+        },
+        "model-00003-of-00003.safetensors": {
+          "size": 3670220688,
+          "generation": "1790426792543406",
+          "crc32c": "PoLqMw=="
+        },
+        "model.safetensors.index.json": {
+          "size": 22613,
+          "generation": "1790426793680750",
+          "crc32c": "kQyzZw=="
+        },
+        "tokenizer.json": {
+          "size": 17209892,
+          "generation": "1790426795220157",
+          "crc32c": "cv2h3Q=="
+        },
+        "tokenizer_config.json": {
+          "size": 5614,
+          "generation": "1790426796641842",
+          "crc32c": "IMLwKQ=="
+        }
+      },
+      "source_training_experiment": "exp_01m21dyb8mxjg2aqhtbjncejpc",
+      "training_metadata": {
+        "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_scaling_v6e_20260910/olmixq_t9_kl0p005_cap04_1e21_seed662005-3f95f2/checkpoints/step-22056/metadata.json",
+        "sha256": "4e4ff89698cd490e35f5611b6db1523d1c74a2c39bf63c01af75632b07e2b6c2",
+        "data": {
+          "step": 22056,
+          "timestamp": "2026-09-25T22:14:57.885429",
+          "is_temporary": false
+        }
+      },
+      "copied_from": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_scaling_v6e_20260910/olmixq_t9_kl0p005_cap04_1e21_seed662005-3f95f2/hf/step-22056"
+    },
+    "coverage": {
+      "total_components": 51,
+      "covered_components": 34,
+      "components": {
+        "minerva_math_algebra": 0.10446503791069923,
+        "minerva_math_counting_and_probability": 0.07805907172995781,
+        "minerva_math_geometry": 0.07515657620041753,
+        "minerva_math_intermediate_algebra": 0.04318936877076412,
+        "minerva_math_number_theory": 0.06851851851851852,
+        "minerva_math_prealgebra": 0.15729047072330654,
+        "minerva_math_precalculus": 0.04945054945054945,
+        "codex_humaneval": 0.12804878048780488,
+        "mbpp": 0.152,
+        "arc_easy": 0.7247474747474747,
+        "arc_challenge": 0.40273037542662116,
+        "mmlu_stem": 0.32935719019218024,
+        "mmlu_humanities": 0.32582359192348564,
+        "mmlu_social_sciences": 0.4013649658758531,
+        "mmlu_other": 0.4355336212214682,
+        "csqa": 0.3407043407043407,
+        "hellaswag": 0.6243776140211114,
+        "winogrande": 0.6203630623520127,
+        "socialiqa": 0.4534288638689867,
+        "piqa": 0.7464635473340587,
+        "coqa": 0.7998188405797102,
+        "drop": 0.4080604534005038,
+        "jeopardy": 0.6547448736289938,
+        "naturalqs": 0.34967483741870936,
+        "squad": 0.8824644549763033,
+        "sciq": 0.954,
+        "basic_skills_arithmetic": 0.6819484240687679,
+        "basic_skills_coding": 0.766798418972332,
+        "basic_skills_common_knowledge": 0.9257473481195757,
+        "basic_skills_logical_reasoning": 0.907871198568873,
+        "basic_skills_pattern": 0.7471910112359551,
+        "basic_skills_string_operations": 0.48810500410172275,
+        "lambada": 0.6192509217931302,
+        "medmcqa": 0.3358833373177146
+      },
+      "missing": [],
+      "deferred": [
+        "mt_mbpp_bash",
+        "mt_mbpp_c",
+        "mt_mbpp_cpp",
+        "mt_mbpp_csharp",
+        "mt_mbpp_go",
+        "mt_mbpp_haskell",
+        "mt_mbpp_java",
+        "mt_mbpp_javascript",
+        "mt_mbpp_matlab",
+        "mt_mbpp_php",
+        "mt_mbpp_python",
+        "mt_mbpp_r",
+        "mt_mbpp_ruby",
+        "mt_mbpp_rust",
+        "mt_mbpp_scala",
+        "mt_mbpp_swift",
+        "mt_mbpp_typescript"
+      ],
+      "complete": false,
+      "requested_scope_complete": true
+    },
+    "tasks": {
+      "arc_challenge": {
+        "primary_metric": "acc_norm,none",
+        "metrics": {
+          "alias": "arc_challenge_5shot",
+          "acc,none": 0.3848122866894198,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.40273037542662116,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 0.8589766103372707,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -14.827549352987635,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -3.4164114432945074,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.2778798079931737,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.3228723876912234,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 1172,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "arc_easy": {
+        "primary_metric": "acc_norm,none",
+        "metrics": {
+          "alias": "arc_easy_5shot",
+          "acc,none": 0.718013468013468,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.7247474747474747,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 0.6460671076493263,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -9.339644550875782,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.1465522794876821,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.3521143954417785,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.0889000648360156,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 2376,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "csqa": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "csqa_5shot",
+          "acc,none": 0.3407043407043407,
+          "acc_stderr,none": "N/A",
+          "bpb,none": 2.543429134883894,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.76297073379879,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.758783330718369,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.288750391684716,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -2.0099441273422074,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 1221,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "hellaswag": {
+        "primary_metric": "acc_norm,none",
+        "metrics": {
+          "alias": "hellaswag_5shot",
+          "acc,none": 0.4654451304521012,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.6243776140211114,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 0.7617752603143101,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -69.76955747718333,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -12.955557494696102,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.2902240347832674,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.247922684126882,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 10042,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "lambada": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "lambada_0shot",
+          "perplexity,none": 5.806940653762835,
+          "perplexity_stderr,none": "N/A",
+          "acc,none": 0.6192509217931302,
+          "acc_stderr,none": "N/A"
+        },
+        "count": 5153,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "medmcqa": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "medmcqa_5shot",
+          "acc,none": 0.3358833373177146,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.3358833373177146,
+          "acc_norm_stderr,none": "N/A"
+        },
+        "count": 4183,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_abstract_algebra": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.37,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.37,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 2.264785347797999,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.5698295783996583,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.569355158664239,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.28713566593554585,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.755243155233644,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 100,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_anatomy": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.4,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.4,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 1.8531032078038943,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.284473263775861,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.2836014145933365,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.37009533357217833,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.376648748726106,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 135,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_astronomy": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.3355263157894737,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.3355263157894737,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 1.931056016796838,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.3385060335460461,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.3343900186445712,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.2802474385548164,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.3297268085413065,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 152,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_business_ethics": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.47,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.47,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 1.7195114088944812,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.1918744850158691,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.1896592431496158,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.40114526124059585,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.2486633068075428,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 100,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_clinical_knowledge": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.4226415094339623,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.4226415094339623,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 1.7906236432152538,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.2411657297386314,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.2404750915119647,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.38636606751637703,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.323670181932705,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 265,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_college_biology": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.2986111111111111,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.2986111111111111,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 2.0967929115155317,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.4533860948350694,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.45244044999997,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.28467830904393004,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.5914698879311384,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 144,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_college_chemistry": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.19,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.19,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 2.0771226671735015,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.4397517204284669,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.4372704359993338,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.2526216969090159,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.4862491881146451,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 100,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_college_computer_science": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.31,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.31,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 1.9693249047155377,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.3650320053100586,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.3621952104574677,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.2725347723409896,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.3697608568428603,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 100,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_college_mathematics": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.37,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.37,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 1.953924202296075,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.3543570518493653,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.3516460127122398,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.2675704105907096,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.3468505327192366,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 100,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_college_medicine": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.32947976878612717,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.32947976878612717,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 1.940394302100891,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.344978839675815,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.3432384465600393,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.3049881101518301,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.3888696335979458,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 173,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_college_physics": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.20588235294117646,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.20588235294117646,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 2.3366130556413207,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.6196167515773399,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.6185463577836834,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.22448221676220678,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.7844172006915153,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 102,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_computer_security": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.46,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.46,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 1.6415047013567676,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.137804355621338,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.1354617702650946,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.4136798350561811,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.1426003800695965,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 100,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_conceptual_physics": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.39148936170212767,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.39148936170212767,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 2.0193369619345165,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.3996977217653965,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.397565450236819,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.3358379774776057,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.5524602194705575,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 235,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_econometrics": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.2982456140350877,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.2982456140350877,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 2.0008656394360558,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.386894376654374,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.3854880593182763,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.2632656650821167,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.4065654146833289,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 114,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_electrical_engineering": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.4206896551724138,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.4206896551724138,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 1.7761039763393867,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.2311014635809536,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.2271775117254737,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.3513987818814663,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.2229007829885532,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 145,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_elementary_mathematics": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.2857142857142857,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.2857142857142857,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 2.0743954853190325,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.4378613820151678,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.437044582189978,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.25706555024866656,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.4950645607444217,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 378,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_formal_logic": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.19047619047619047,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.19047619047619047,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 2.095717097247067,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.4526403972080775,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.44901283515886,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.23983529775711226,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.4932988740756774,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 126,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_global_facts": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.33,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.33,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 2.0441637193415847,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.4169063186645507,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.4148713180709456,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.27647278285116034,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.4837168826503842,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 100,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_high_school_biology": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.42258064516129035,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.42258064516129035,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 1.8566036850643408,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.2868996097195533,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.2852717769389093,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.337509076872055,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.3234578145943359,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 310,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_high_school_chemistry": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.33497536945812806,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.33497536945812806,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 1.9848852348233317,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.3758176042528576,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.3740927336651432,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.2894353650467893,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.4262564295694182,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 203,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_high_school_computer_science": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.41,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.41,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 1.8958124753273946,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.3140770721435546,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.31240486571388,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.2906068663233393,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.2978612782681094,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 100,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_high_school_european_history": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.296969696969697,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.296969696969697,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 1.9815832860631093,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.373528867779356,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.3720734361753977,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.2610271373539286,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.3756676688361227,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 165,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_high_school_geography": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.41919191919191917,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.41919191919191917,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 1.7397376384722685,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.20589423902107,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.2051397427226875,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.4166206645852687,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.3173192960476352,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 198,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_high_school_government_and_politics": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.44559585492227977,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.44559585492227977,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 1.876465854721729,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.3006670166173748,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.2998508241138738,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.3791691270373666,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.425577343900819,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 193,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_high_school_macroeconomics": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.34615384615384615,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.34615384615384615,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 2.0499281953796453,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.4209019489777395,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.4198355918008634,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.3358382792533838,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.5977252861035471,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 390,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_high_school_mathematics": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.24444444444444444,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.24444444444444444,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 2.04340606213048,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.416381150704843,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.413868861071951,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.2512565595552037,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.442575275011874,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 270,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_high_school_microeconomics": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.4117647058823529,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.4117647058823529,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 1.8981901956550473,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.315725182284828,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.3150237163283762,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.3553358414023081,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.4190835080917972,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 238,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_high_school_physics": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.2251655629139073,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.2251655629139073,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 2.08666115665491,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.4463632975193048,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.444512231414111,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.2472390019911988,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.497899337822127,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 151,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_high_school_psychology": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.3908256880733945,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.3908256880733945,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 1.827103962032114,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.2664519598724646,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.265655489747803,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.35202243740067335,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.3066728347139747,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 545,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_high_school_statistics": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.3055555555555556,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.3055555555555556,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 1.9929801195683967,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.3814285507908575,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.3790329849666554,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.2604180212424451,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.3883133357809816,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 216,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_high_school_us_history": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.3235294117647059,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.3235294117647059,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 1.9691720141622477,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.3649260296541101,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.3637376024031311,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.2654301531412083,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.3654823545390904,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 204,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_high_school_world_history": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.31645569620253167,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.31645569620253167,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 1.9549671567582694,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.3550799727942873,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.3540612125423377,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.2698700969886668,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.3545158821791845,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 237,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_human_aging": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.484304932735426,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.484304932735426,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 1.9836682059713346,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.3749740241354356,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.374143485632232,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.4151867416309825,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.6111687207480125,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 223,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_human_sexuality": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.4961832061068702,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.4961832061068702,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 1.7780151659834165,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.2324261992942287,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.2317018099373234,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.426722326026964,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.3523836394026103,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 131,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_international_law": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.5454545454545454,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.5454545454545454,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 1.6906620716150227,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.1718776482195894,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.1707966590992385,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.3740256958546911,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.1428842595637962,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 121,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_jurisprudence": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.5277777777777778,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.5277777777777778,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 1.5607083129232835,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.0818005667792425,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.081182335794978,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.4433242527770522,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.088246066033055,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 108,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_logical_fallacies": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.3803680981595092,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.3803680981595092,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 1.9031774195141513,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.319182062441586,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.318385214847656,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.3097730569998341,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.3531509619191997,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 163,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_machine_learning": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.375,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.375,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 1.9543480953063432,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.3546508720942907,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.3508568936322136,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.2771358078753921,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.3592300092657457,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 112,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_management": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.5728155339805825,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.5728155339805825,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 1.4473642863731648,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.0032364743427165,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.0020281865708447,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.530200674292648,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.0855362412557288,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 103,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_marketing": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.6196581196581197,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.6196581196581197,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 1.457786027543154,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.0104602748512204,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.009258911509598,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.4758363177180791,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -0.9839796981915414,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 234,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_medical_genetics": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.42,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.42,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 1.8642595200628116,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.2922062301635742,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.2914774970413923,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.39043679415528837,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.4146467953445494,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 100,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_miscellaneous": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.47126436781609193,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.47126436781609193,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 1.7986589944968605,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.246735410824285,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.2455909347577119,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.43298249583534526,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.3994664245859683,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 783,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_moral_disputes": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.4508670520231214,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.4508670520231214,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 1.7989611780406851,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.2469448684956985,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.2459340520288817,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.3760328513269657,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.3087701254602508,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 346,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_moral_scenarios": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.2424581005586592,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.2424581005586592,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 2.056155101179805,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.4252181111767306,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.422936281647988,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.24694568119150911,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.456526729622219,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 895,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_nutrition": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.4673202614379085,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.4673202614379085,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 1.796146761755263,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.244994063782536,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.2422176146868082,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.34946056228272326,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.2470961501809374,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 306,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_philosophy": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.4983922829581994,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.4983922829581994,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 1.7265561864383547,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.196757552708077,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.1959502782098819,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.44520843517332426,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.3343684328874283,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 311,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_prehistory": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.4104938271604938,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.4104938271604938,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 1.8876612861638715,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.3084270983566473,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.3071398620311485,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.33721768252599077,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.3704168604294742,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 324,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_professional_accounting": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.26595744680851063,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.26595744680851063,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 2.0010451623609917,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.3870188124636387,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.3845109171219183,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.26528305560211185,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.4105117143819845,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 282,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_professional_law": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.2561929595827901,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.2561929595827901,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 2.017574630508887,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.398476166706508,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.3959006751061769,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.2525746684367755,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.410794993049823,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 1534,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_professional_medicine": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.35294117647058826,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.35294117647058826,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 1.9643473140412055,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.361581802368164,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.3591632980387556,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.26377040901619725,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.354487741310717,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 272,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_professional_psychology": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.3333333333333333,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.3333333333333333,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 1.9531117796340476,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.3537939233717575,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.35182517975875,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.2761593720972895,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.3589396464545067,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 612,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_public_relations": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.45454545454545453,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.45454545454545453,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 1.7794708924483735,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.2334352319890802,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.2317077773419123,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.3922688135917021,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.3207363226669866,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 110,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_security_studies": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.3795918367346939,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.3795918367346939,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 1.8932771416252978,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.3123197127361688,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.309508141388535,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.3015535755773857,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.3090939002028583,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 245,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_sociology": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.5572139303482587,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.5572139303482587,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 1.550804765843177,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.0749359510431242,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.0739587398852857,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.47249766898541323,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.1268968070275645,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 201,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_us_foreign_policy": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.62,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.62,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 1.3855327682219418,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -0.960378131866455,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -0.959411365018692,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.5309324513710999,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -0.9788898265892757,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 100,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_virology": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.43373493975903615,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.43373493975903615,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 2.2162697554482307,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.536201132349221,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.535480233335329,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.38519325893499473,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.8670352347695505,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 166,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "mmlu_world_religions": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "  - mmlu_5shot",
+          "acc,none": 0.4678362573099415,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.4678362573099415,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 1.9615077778893202,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -1.359613585890385,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -1.3596279422278015,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.4143139284076886,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -1.5814415679629126,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 171,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "piqa": {
+        "primary_metric": "acc_norm,none",
+        "metrics": {
+          "alias": "piqa_5shot",
+          "acc,none": 0.7513601741022851,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.7464635473340587,
+          "acc_norm_stderr,none": "N/A",
+          "bpb,none": 0.9927942921648298,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -57.46842808458828,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -2.228875504602482,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.5218253507509396,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -0.6573835121816006,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 1838,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "sciq": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "sciq_5shot",
+          "acc,none": 0.954,
+          "acc_stderr,none": "N/A",
+          "acc_norm,none": 0.959,
+          "acc_norm_stderr,none": "N/A"
+        },
+        "count": 1000,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "socialiqa": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "socialiqa_5shot",
+          "acc,none": 0.4534288638689867,
+          "acc_stderr,none": "N/A",
+          "choice_logprob,none": -3.7356914114120294,
+          "choice_logprob_stderr,none": "N/A"
+        },
+        "count": 1954,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "winogrande": {
+        "primary_metric": "acc,none",
+        "metrics": {
+          "alias": "winogrande_5shot",
+          "acc,none": 0.6203630623520127,
+          "acc_stderr,none": "N/A",
+          "bpb,none": 0.41089027945614937,
+          "bpb_stderr,none": "N/A",
+          "logprob,none": -18.535791251823106,
+          "logprob_stderr,none": "N/A",
+          "choice_logprob,none": -0.7091444616579876,
+          "choice_logprob_stderr,none": "N/A",
+          "choice_prob_norm,none": 0.5029234535539897,
+          "choice_prob_norm_stderr,none": "N/A",
+          "choice_logprob_norm,none": -0.6893685055956013,
+          "choice_logprob_norm_stderr,none": "N/A"
+        },
+        "count": 1267,
+        "source": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914/70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39/olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+        "protocol": "lm-eval overlap; not native Table-9 prompt parity"
+      },
+      "basic_skills_arithmetic": {
+        "primary_metric": "acc_per_token",
+        "metrics": {
+          "acc": 0.6819484240687679,
+          "acc_per_char": 0.6934097421203438,
+          "acc_per_token": 0.6819484240687679
+        },
+        "count": 1047,
+        "source": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/basic_skills_arithmetic/bab427c3e7ca0697a63b3635eab39f80520508e4603f53efaca5236c815ddf01"
+      },
+      "basic_skills_coding": {
+        "primary_metric": "acc_per_token",
+        "metrics": {
+          "acc": 0.6709486166007905,
+          "acc_per_char": 0.7865612648221344,
+          "acc_per_token": 0.766798418972332
+        },
+        "count": 1012,
+        "source": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/basic_skills_coding/167a2c30f16aea172e2dba502f0cd15222a4cc09b911379e327bd3de9a4cee6f"
+      },
+      "basic_skills_common_knowledge": {
+        "primary_metric": "acc_per_token",
+        "metrics": {
+          "acc": 0.9373191899710704,
+          "acc_per_char": 0.914175506268081,
+          "acc_per_token": 0.9257473481195757
+        },
+        "count": 1037,
+        "source": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/basic_skills_common_knowledge/9c6680ed84f0713e8e1f715473bad173dd1173a730494241b1297244d8996720"
+      },
+      "basic_skills_logical_reasoning": {
+        "primary_metric": "acc_per_token",
+        "metrics": {
+          "acc": 0.9087656529516994,
+          "acc_per_char": 0.9114490161001789,
+          "acc_per_token": 0.907871198568873
+        },
+        "count": 1118,
+        "source": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/basic_skills_logical_reasoning/cd45f545e65fe1b41fbff77870b271fdaa4d3084476bf76f57ce53963caf6fc1"
+      },
+      "basic_skills_pattern": {
+        "primary_metric": "acc_per_token",
+        "metrics": {
+          "acc": 0.7434456928838952,
+          "acc_per_char": 0.7471910112359551,
+          "acc_per_token": 0.7471910112359551
+        },
+        "count": 534,
+        "source": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/basic_skills_pattern/cd0f12f7b8bb3fb5a4033777b0270451186dad5d956b27a85171504b97b1b225"
+      },
+      "basic_skills_string_operations": {
+        "primary_metric": "acc_per_token",
+        "metrics": {
+          "acc": 0.3863822805578343,
+          "acc_per_char": 0.48236259228876127,
+          "acc_per_token": 0.48810500410172275
+        },
+        "count": 1219,
+        "source": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/basic_skills_string_operations/059aca773d0eac45134644a6c7f42841c22e48b80b4c0d62d053d87b89fa3129"
+      },
+      "coqa": {
+        "primary_metric": "acc_per_char",
+        "metrics": {
+          "acc": 0.8549430641821946,
+          "acc_per_char": 0.7998188405797102,
+          "acc_per_token": 0.8166407867494824
+        },
+        "count": 7728,
+        "source": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/coqa/667ed7a144b474971dff75730d3b77e89b2c8340bb018dbdb5a495502332c026"
+      },
+      "drop": {
+        "primary_metric": "acc_per_char",
+        "metrics": {
+          "acc": 0.4282115869017632,
+          "acc_per_char": 0.4080604534005038,
+          "acc_per_token": 0.41309823677581864
+        },
+        "count": 1588,
+        "source": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/drop/bf1ad51ae8b55a55abcbde81112f9a0ede9becd6ec070a2cc1c003d88cd0205f"
+      },
+      "jeopardy": {
+        "primary_metric": "acc_per_char",
+        "metrics": {
+          "acc": 0.6862184072484502,
+          "acc_per_char": 0.6547448736289938,
+          "acc_per_token": 0.6599904625655698
+        },
+        "count": 2097,
+        "source": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/jeopardy/687ffd76757501e51b73ed2442b68aeaddb1379a8903ec437345631399c1276b"
+      },
+      "naturalqs": {
+        "primary_metric": "acc_per_char",
+        "metrics": {
+          "acc": 0.34517258629314657,
+          "acc_per_char": 0.34967483741870936,
+          "acc_per_token": 0.3691845922961481
+        },
+        "count": 1999,
+        "source": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/naturalqs/f45b53131ba679d39b5e2542df310e3d26b1dc13c12e8055511410cbe4446391"
+      },
+      "squad": {
+        "primary_metric": "acc_per_char",
+        "metrics": {
+          "acc": 0.9042654028436019,
+          "acc_per_char": 0.8824644549763033,
+          "acc_per_token": 0.8682464454976303
+        },
+        "count": 2110,
+        "source": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/squad/31fac57ecccfa5609337f41e79351936fb6e495b83d7af235d6ebc8710b0e831"
+      },
+      "minerva_math_algebra": {
+        "task": "minerva_math_algebra",
+        "metrics": {
+          "exact_match": 0.09351305812973884,
+          "math_verify": 0.10446503791069923
+        },
+        "count": 1187,
+        "grading_root": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/minerva_math_algebra/259fb777e84fcca723c07fc653e614674e4cef91fee3895dbd158dd5568e5658/grading/ae5646407573743cbe5dc8fb065676cc86f882554a99f311a1b5a2624fca5921",
+        "grader": {
+          "source_sha256": "fb5557c2464805b4e6b978bcd363945ef90311fa1bb501b5cd092a4ed9302ce8",
+          "math_verify": "0.8.0",
+          "antlr4": "4.11.1",
+          "lm_eval_revision": "f7d0b116146bd616b59d0b991549120f197369a4",
+          "math_scorer_sha256": "cf84cc3d8c089512fb40483a501481c1de54405db1e39d6ada45d5a36ab4cf15",
+          "python_image": "python@sha256:782412e85d0f0984994c290652577d4018aff08145c85b262bb63dc0c7522254"
+        },
+        "primary_metric": "math_verify",
+        "source": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/minerva_math_algebra/259fb777e84fcca723c07fc653e614674e4cef91fee3895dbd158dd5568e5658/grading/ae5646407573743cbe5dc8fb065676cc86f882554a99f311a1b5a2624fca5921"
+      },
+      "minerva_math_counting_and_probability": {
+        "task": "minerva_math_counting_and_probability",
+        "metrics": {
+          "exact_match": 0.07383966244725738,
+          "math_verify": 0.07805907172995781
+        },
+        "count": 474,
+        "grading_root": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/minerva_math_counting_and_probability/44ec02932cae55e24ba8988afcf0b1a7c8b9181bd2c6fb9cbb2a19c4b7c54b28/grading/ae5646407573743cbe5dc8fb065676cc86f882554a99f311a1b5a2624fca5921",
+        "grader": {
+          "source_sha256": "fb5557c2464805b4e6b978bcd363945ef90311fa1bb501b5cd092a4ed9302ce8",
+          "math_verify": "0.8.0",
+          "antlr4": "4.11.1",
+          "lm_eval_revision": "f7d0b116146bd616b59d0b991549120f197369a4",
+          "math_scorer_sha256": "cf84cc3d8c089512fb40483a501481c1de54405db1e39d6ada45d5a36ab4cf15",
+          "python_image": "python@sha256:782412e85d0f0984994c290652577d4018aff08145c85b262bb63dc0c7522254"
+        },
+        "primary_metric": "math_verify",
+        "source": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/minerva_math_counting_and_probability/44ec02932cae55e24ba8988afcf0b1a7c8b9181bd2c6fb9cbb2a19c4b7c54b28/grading/ae5646407573743cbe5dc8fb065676cc86f882554a99f311a1b5a2624fca5921"
+      },
+      "minerva_math_geometry": {
+        "task": "minerva_math_geometry",
+        "metrics": {
+          "exact_match": 0.0709812108559499,
+          "math_verify": 0.07515657620041753
+        },
+        "count": 479,
+        "grading_root": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/minerva_math_geometry/6d529e5c7be03354b46f85fc6de0541aa23a9cbf309e9079c142fc597dd08987/grading/ae5646407573743cbe5dc8fb065676cc86f882554a99f311a1b5a2624fca5921",
+        "grader": {
+          "source_sha256": "fb5557c2464805b4e6b978bcd363945ef90311fa1bb501b5cd092a4ed9302ce8",
+          "math_verify": "0.8.0",
+          "antlr4": "4.11.1",
+          "lm_eval_revision": "f7d0b116146bd616b59d0b991549120f197369a4",
+          "math_scorer_sha256": "cf84cc3d8c089512fb40483a501481c1de54405db1e39d6ada45d5a36ab4cf15",
+          "python_image": "python@sha256:782412e85d0f0984994c290652577d4018aff08145c85b262bb63dc0c7522254"
+        },
+        "primary_metric": "math_verify",
+        "source": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/minerva_math_geometry/6d529e5c7be03354b46f85fc6de0541aa23a9cbf309e9079c142fc597dd08987/grading/ae5646407573743cbe5dc8fb065676cc86f882554a99f311a1b5a2624fca5921"
+      },
+      "minerva_math_intermediate_algebra": {
+        "task": "minerva_math_intermediate_algebra",
+        "metrics": {
+          "exact_match": 0.03765227021040975,
+          "math_verify": 0.04318936877076412
+        },
+        "count": 903,
+        "grading_root": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/minerva_math_intermediate_algebra/4f7c0edcf746ffcf03b2e07ff9391f148850f8cb9d0dceb65e120d2629377620/grading/ae5646407573743cbe5dc8fb065676cc86f882554a99f311a1b5a2624fca5921",
+        "grader": {
+          "source_sha256": "fb5557c2464805b4e6b978bcd363945ef90311fa1bb501b5cd092a4ed9302ce8",
+          "math_verify": "0.8.0",
+          "antlr4": "4.11.1",
+          "lm_eval_revision": "f7d0b116146bd616b59d0b991549120f197369a4",
+          "math_scorer_sha256": "cf84cc3d8c089512fb40483a501481c1de54405db1e39d6ada45d5a36ab4cf15",
+          "python_image": "python@sha256:782412e85d0f0984994c290652577d4018aff08145c85b262bb63dc0c7522254"
+        },
+        "primary_metric": "math_verify",
+        "source": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/minerva_math_intermediate_algebra/4f7c0edcf746ffcf03b2e07ff9391f148850f8cb9d0dceb65e120d2629377620/grading/ae5646407573743cbe5dc8fb065676cc86f882554a99f311a1b5a2624fca5921"
+      },
+      "minerva_math_number_theory": {
+        "task": "minerva_math_number_theory",
+        "metrics": {
+          "exact_match": 0.053703703703703705,
+          "math_verify": 0.06851851851851852
+        },
+        "count": 540,
+        "grading_root": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/minerva_math_number_theory/ac1f462825da2f0f1cc23463fa1fb4555ae6c3819bb3fa90f4854802ce6c4c3f/grading/ae5646407573743cbe5dc8fb065676cc86f882554a99f311a1b5a2624fca5921",
+        "grader": {
+          "source_sha256": "fb5557c2464805b4e6b978bcd363945ef90311fa1bb501b5cd092a4ed9302ce8",
+          "math_verify": "0.8.0",
+          "antlr4": "4.11.1",
+          "lm_eval_revision": "f7d0b116146bd616b59d0b991549120f197369a4",
+          "math_scorer_sha256": "cf84cc3d8c089512fb40483a501481c1de54405db1e39d6ada45d5a36ab4cf15",
+          "python_image": "python@sha256:782412e85d0f0984994c290652577d4018aff08145c85b262bb63dc0c7522254"
+        },
+        "primary_metric": "math_verify",
+        "source": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/minerva_math_number_theory/ac1f462825da2f0f1cc23463fa1fb4555ae6c3819bb3fa90f4854802ce6c4c3f/grading/ae5646407573743cbe5dc8fb065676cc86f882554a99f311a1b5a2624fca5921"
+      },
+      "minerva_math_prealgebra": {
+        "task": "minerva_math_prealgebra",
+        "metrics": {
+          "exact_match": 0.14351320321469574,
+          "math_verify": 0.15729047072330654
+        },
+        "count": 871,
+        "grading_root": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/minerva_math_prealgebra/4ee3a58a7d5334c83dba67309b94fafd91b7c6c714e9af56f2214816209eed58/grading/ae5646407573743cbe5dc8fb065676cc86f882554a99f311a1b5a2624fca5921",
+        "grader": {
+          "source_sha256": "fb5557c2464805b4e6b978bcd363945ef90311fa1bb501b5cd092a4ed9302ce8",
+          "math_verify": "0.8.0",
+          "antlr4": "4.11.1",
+          "lm_eval_revision": "f7d0b116146bd616b59d0b991549120f197369a4",
+          "math_scorer_sha256": "cf84cc3d8c089512fb40483a501481c1de54405db1e39d6ada45d5a36ab4cf15",
+          "python_image": "python@sha256:782412e85d0f0984994c290652577d4018aff08145c85b262bb63dc0c7522254"
+        },
+        "primary_metric": "math_verify",
+        "source": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/minerva_math_prealgebra/4ee3a58a7d5334c83dba67309b94fafd91b7c6c714e9af56f2214816209eed58/grading/ae5646407573743cbe5dc8fb065676cc86f882554a99f311a1b5a2624fca5921"
+      },
+      "minerva_math_precalculus": {
+        "task": "minerva_math_precalculus",
+        "metrics": {
+          "exact_match": 0.040293040293040296,
+          "math_verify": 0.04945054945054945
+        },
+        "count": 546,
+        "grading_root": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/minerva_math_precalculus/4a8f6e2824e0efebaa351f980f6ed805a9225cfafaadce6103fcb61c87628f2e/grading/ae5646407573743cbe5dc8fb065676cc86f882554a99f311a1b5a2624fca5921",
+        "grader": {
+          "source_sha256": "fb5557c2464805b4e6b978bcd363945ef90311fa1bb501b5cd092a4ed9302ce8",
+          "math_verify": "0.8.0",
+          "antlr4": "4.11.1",
+          "lm_eval_revision": "f7d0b116146bd616b59d0b991549120f197369a4",
+          "math_scorer_sha256": "cf84cc3d8c089512fb40483a501481c1de54405db1e39d6ada45d5a36ab4cf15",
+          "python_image": "python@sha256:782412e85d0f0984994c290652577d4018aff08145c85b262bb63dc0c7522254"
+        },
+        "primary_metric": "math_verify",
+        "source": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/minerva_math_precalculus/4a8f6e2824e0efebaa351f980f6ed805a9225cfafaadce6103fcb61c87628f2e/grading/ae5646407573743cbe5dc8fb065676cc86f882554a99f311a1b5a2624fca5921"
+      },
+      "codex_humaneval": {
+        "task": "codex_humaneval",
+        "metrics": {
+          "pass@1": 0.12804878048780488
+        },
+        "count": 164,
+        "grading_root": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/codex_humaneval/ae9766c4d04f574298512764ec92e9b3101ebc438ff6237766b9ae107b55a205/grading/ae5646407573743cbe5dc8fb065676cc86f882554a99f311a1b5a2624fca5921",
+        "grader": {
+          "source_sha256": "fb5557c2464805b4e6b978bcd363945ef90311fa1bb501b5cd092a4ed9302ce8",
+          "math_verify": "0.8.0",
+          "antlr4": "4.11.1",
+          "lm_eval_revision": "f7d0b116146bd616b59d0b991549120f197369a4",
+          "math_scorer_sha256": "cf84cc3d8c089512fb40483a501481c1de54405db1e39d6ada45d5a36ab4cf15",
+          "python_image": "python@sha256:782412e85d0f0984994c290652577d4018aff08145c85b262bb63dc0c7522254"
+        },
+        "primary_metric": "pass@1",
+        "source": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/codex_humaneval/ae9766c4d04f574298512764ec92e9b3101ebc438ff6237766b9ae107b55a205/grading/ae5646407573743cbe5dc8fb065676cc86f882554a99f311a1b5a2624fca5921"
+      },
+      "mbpp": {
+        "task": "mbpp",
+        "metrics": {
+          "pass@1": 0.152
+        },
+        "count": 500,
+        "grading_root": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/mbpp/667afe3d4af82ee0b55967c09989d3c007af6015df063f6034a7d8aa9071c33b/grading/ae5646407573743cbe5dc8fb065676cc86f882554a99f311a1b5a2624fca5921",
+        "grader": {
+          "source_sha256": "fb5557c2464805b4e6b978bcd363945ef90311fa1bb501b5cd092a4ed9302ce8",
+          "math_verify": "0.8.0",
+          "antlr4": "4.11.1",
+          "lm_eval_revision": "f7d0b116146bd616b59d0b991549120f197369a4",
+          "math_scorer_sha256": "cf84cc3d8c089512fb40483a501481c1de54405db1e39d6ada45d5a36ab4cf15",
+          "python_image": "python@sha256:782412e85d0f0984994c290652577d4018aff08145c85b262bb63dc0c7522254"
+        },
+        "primary_metric": "pass@1",
+        "source": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/mbpp/667afe3d4af82ee0b55967c09989d3c007af6015df063f6034a7d8aa9071c33b/grading/ae5646407573743cbe5dc8fb065676cc86f882554a99f311a1b5a2624fca5921"
+      }
+    },
+    "backfill_stages": {
+      "basic_skills_arithmetic": "scored",
+      "basic_skills_coding": "scored",
+      "basic_skills_common_knowledge": "scored",
+      "basic_skills_logical_reasoning": "scored",
+      "basic_skills_pattern": "scored",
+      "basic_skills_string_operations": "scored",
+      "coqa": "scored",
+      "drop": "scored",
+      "jeopardy": "scored",
+      "naturalqs": "scored",
+      "squad": "scored",
+      "minerva_math_algebra": "scored",
+      "minerva_math_counting_and_probability": "scored",
+      "minerva_math_geometry": "scored",
+      "minerva_math_intermediate_algebra": "scored",
+      "minerva_math_number_theory": "scored",
+      "minerva_math_prealgebra": "scored",
+      "minerva_math_precalculus": "scored",
+      "codex_humaneval": "scored",
+      "mbpp": "scored"
+    },
+    "backfill_protocol_sha256": "87147c986b2185bae4920cfc6c7a7968d996dd060b1a529799b463d5572a26b0",
+    "overlap_plan_sha256": "70a397d8b633cf3149e4b84ed333fc5a06ee9b1068674eba040c2214a3d40f39"
+  }
+]

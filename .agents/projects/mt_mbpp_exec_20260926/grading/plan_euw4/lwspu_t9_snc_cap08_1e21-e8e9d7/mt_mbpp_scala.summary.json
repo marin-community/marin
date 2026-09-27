@@ -1,0 +1,16 @@
+{
+ "checkpoint": "lwspu_t9_snc_cap08_1e21-e8e9d7",
+ "plan": "plan_euw4",
+ "region": "europe-west4",
+ "task": "mt_mbpp_scala",
+ "valid_documents": 479,
+ "documents": 500,
+ "passed": 25,
+ "pass@1": 0.05219206680584551,
+ "tests_sha256": "7309a8f95d5dfe129da98abbc188d9f6fcb3e75c75b75a2f2425cfb325688165",
+ "generation_artifact": {
+  "sha256": "a4043ddf791f5920415e423da6c0fffc8251a852c95a50c0a9f8c36eda27394d",
+  "size": 88811
+ },
+ "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/lwspu_t9_snc_cap08_1e21-e8e9d7/mt_mbpp_scala/c03201e2d8b14e307d531ab7cb06071fbfa44411e65afad7616d05b1f0127749"
+}

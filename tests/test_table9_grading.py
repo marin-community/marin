@@ -23,10 +23,33 @@ def test_math_equivalent_answer_and_wrong_answer():
 
 
 def test_code_completion_preserves_function_indentation_and_excludes_fence():
-    sample = {"metadata": {"answer_prefix": "def f(x):\n", "test": "assert f(2) == 3"}}
-    assert python_program(sample, "    return x + 1\n```\nignore this") == (
-        "def f(x):\n    return x + 1\n\nassert f(2) == 3\n"
+    sample = {"task": "codex_humaneval", "metadata": {"answer_prefix": "def f(x):\n", "test": "assert f(2) == 3"}}
+    program, _ = python_program(sample, "    return x + 1\n```\nignore this")
+    assert program == "def f(x):\n    return x + 1\n\nassert f(2) == 3\n"
+
+
+MBPP_TEST = 'assert remove_dirty_chars("probasscurve", "pros") == "bacuve"\nassert remove_dirty_chars("exoticmiles", "toxic") == "emles"'
+
+
+def mbpp_program(generation: str) -> str:
+    program, _ = python_program({"task": "mbpp", "metadata": {"test": MBPP_TEST}}, generation + "```")
+    return program
+
+
+def test_mbpp_tests_call_the_completions_entry_point_under_its_own_name():
+    # The helper is defined last, so only the entry-point rule binds the tested name to remove_chars.
+    generation = (
+        "def remove_chars(s, banned):\n    return ''.join(c for c in s if keep(c, banned))\n\n"
+        "def keep(c, banned):\n    return c not in banned\n"
     )
+    exec(mbpp_program(generation), {})
+
+
+def test_mbpp_binding_does_not_pass_wrong_or_call_incompatible_completions():
+    with pytest.raises(AssertionError):
+        exec(mbpp_program("def remove_chars(s, banned):\n    return s\n"), {})
+    with pytest.raises(NameError):
+        exec(mbpp_program("def remove_chars(s):\n    return s\n"), {})
 
 
 def test_generation_is_not_accuracy_until_separate_grading_completes(tmp_path):

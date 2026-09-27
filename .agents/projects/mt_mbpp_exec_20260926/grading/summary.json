@@ -1,0 +1,1218 @@
+[
+ {
+  "checkpoint": "olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+  "plan": "plan_east1",
+  "region": "us-east1",
+  "task": "mt_mbpp_bash",
+  "valid_documents": 465,
+  "documents": 500,
+  "passed": 9,
+  "pass@1": 0.01935483870967742,
+  "tests_sha256": "ae0efb49ee65b454295dc3147153d671fe1b2780dc1633ff242047321bc2f5ca",
+  "generation_artifact": {
+   "sha256": "4b1cce11eb458c2b84dbadcb9c39ab458059030631b587c0673f23e5bf98edcc",
+   "size": 106864
+  },
+  "generation_root": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/mt_mbpp_bash/8c66c234ac99a28b0f25beebbbc62fb9368fbf24d43d632efde7ea4799d7b50e"
+ },
+ {
+  "checkpoint": "olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+  "plan": "plan_east1",
+  "region": "us-east1",
+  "task": "mt_mbpp_c",
+  "valid_documents": 481,
+  "documents": 500,
+  "passed": 83,
+  "pass@1": 0.17255717255717257,
+  "tests_sha256": "3165aad2e0e01cd2553feb867e35d9ada5e3c6cb0536ddab8794417e075b0cec",
+  "generation_artifact": {
+   "sha256": "c6e88648717341663e42e5727b1fd75e2c12e523c1edc1aa11e0c1f78e215870",
+   "size": 120500
+  },
+  "generation_root": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/mt_mbpp_c/dad03c84ce3ddaf5b86e31bfd586cfa72079d9220d7684cd5acba4d942a3960c"
+ },
+ {
+  "checkpoint": "olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+  "plan": "plan_east1",
+  "region": "us-east1",
+  "task": "mt_mbpp_cpp",
+  "valid_documents": 484,
+  "documents": 500,
+  "passed": 77,
+  "pass@1": 0.1590909090909091,
+  "tests_sha256": "3a890da06fed8da577652dec3db757dc907736ba0451bfd529c76b88053033df",
+  "generation_artifact": {
+   "sha256": "587620166d10bd6f141929e6952c0aba7559eac434f69cbccc761b83bbfec40f",
+   "size": 104269
+  },
+  "generation_root": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/mt_mbpp_cpp/5f62988886f00c85145b6995e3fe9413e2fffdb5838ec9e1f5e51865812ac055"
+ },
+ {
+  "checkpoint": "olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+  "plan": "plan_east1",
+  "region": "us-east1",
+  "task": "mt_mbpp_csharp",
+  "valid_documents": 490,
+  "documents": 500,
+  "passed": 102,
+  "pass@1": 0.20816326530612245,
+  "tests_sha256": "a816806bf82cd6ead411714d55ce3cabc8dd3fffb539e42dc62ef80ce209eb32",
+  "generation_artifact": {
+   "sha256": "1e7149907d8aaca7ef98fe0e9fbfd940169e13421e4275ba0404a6703bcb2f6a",
+   "size": 105642
+  },
+  "generation_root": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/mt_mbpp_csharp/db13486977bf38abd9cb9d137da34c7c7456e5cd960172f9a6709618e73d9a20"
+ },
+ {
+  "checkpoint": "olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+  "plan": "plan_east1",
+  "region": "us-east1",
+  "task": "mt_mbpp_go",
+  "valid_documents": 481,
+  "documents": 500,
+  "passed": 23,
+  "pass@1": 0.04781704781704782,
+  "tests_sha256": "c5bce99f887bf4c4cbc4fb8fdf279e69db768a16ef3d99ec08b6bad66b7701f4",
+  "generation_artifact": {
+   "sha256": "95af9a1a898affe1a823fb67dc73b7332f5e7bea881a84c20ead2a5671ef336e",
+   "size": 101379
+  },
+  "generation_root": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/mt_mbpp_go/de19ec3de4403dd70120f4d69ff7a97efbcb80550e4b1ebbec37b0b3f8ef99b6"
+ },
+ {
+  "checkpoint": "olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+  "plan": "plan_east1",
+  "region": "us-east1",
+  "task": "mt_mbpp_haskell",
+  "valid_documents": 453,
+  "documents": 500,
+  "passed": 21,
+  "pass@1": 0.046357615894039736,
+  "tests_sha256": "604ce2ceb0b48b0a3204710f805e3605c88acc4902fc554b64087638b1223e8c",
+  "generation_artifact": {
+   "sha256": "1a073a681d35c5d0adee7798def5b034475ba1de42a3d51c43bd6c0d26d11de5",
+   "size": 82586
+  },
+  "generation_root": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/mt_mbpp_haskell/eda7bd41fc81113f53eee950aa78f29607e7432fba7ba17ed382e9553e3ec071"
+ },
+ {
+  "checkpoint": "olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+  "plan": "plan_east1",
+  "region": "us-east1",
+  "task": "mt_mbpp_java",
+  "valid_documents": 483,
+  "documents": 500,
+  "passed": 85,
+  "pass@1": 0.17598343685300208,
+  "tests_sha256": "84d636ff6cdeac6701ea912d80546d90cb1f5b481e23d0a6c2cb5b4e298bc4e8",
+  "generation_artifact": {
+   "sha256": "db6adf0055c944f073aa041b744103db15f738470456d28d71e5a1baed0803a1",
+   "size": 105269
+  },
+  "generation_root": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/mt_mbpp_java/b7df189abaf731456c15009eb34458cda1a75da170208124a3434b6d8c5ea257"
+ },
+ {
+  "checkpoint": "olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+  "plan": "plan_east1",
+  "region": "us-east1",
+  "task": "mt_mbpp_javascript",
+  "valid_documents": 485,
+  "documents": 500,
+  "passed": 80,
+  "pass@1": 0.16494845360824742,
+  "tests_sha256": "30064533aa06d0439f67be8ffbe8a5650a3d699cb443853de9d7133c64d88e95",
+  "generation_artifact": {
+   "sha256": "0005e12125374b87cd3077c9b2482ecc6b813869f0909c3932ff15bcc0d799f1",
+   "size": 95167
+  },
+  "generation_root": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/mt_mbpp_javascript/64aaec979f5a2549de188d8f497e7d7222e2addd0256def6b6a0cdc6c47268e9"
+ },
+ {
+  "checkpoint": "olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+  "plan": "plan_east1",
+  "region": "us-east1",
+  "task": "mt_mbpp_matlab",
+  "valid_documents": 460,
+  "documents": 500,
+  "passed": 41,
+  "pass@1": 0.0891304347826087,
+  "tests_sha256": "2dec5bca355cce27df6896d5064ee81f997fbd5b1ff7de6eb497281b26bfb205",
+  "generation_artifact": {
+   "sha256": "83f159972e651e2d947051b6b95a9884cf6249892787967322fc2853cc667768",
+   "size": 76286
+  },
+  "generation_root": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/mt_mbpp_matlab/b19d10ea9de06b04f14d6b5b9ac0c8d6dbae2914b9678ad216c0114707862164"
+ },
+ {
+  "checkpoint": "olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+  "plan": "plan_east1",
+  "region": "us-east1",
+  "task": "mt_mbpp_php",
+  "valid_documents": 485,
+  "documents": 500,
+  "passed": 70,
+  "pass@1": 0.14432989690721648,
+  "tests_sha256": "c2c34d016e16d587d370eb402d7d986c01a5567c06af2618fd4894b49589e503",
+  "generation_artifact": {
+   "sha256": "01378011d5f8650b8bef8041cb1029ca8b965fdaaa05f1da9bcafc6fbca67a6a",
+   "size": 84977
+  },
+  "generation_root": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/mt_mbpp_php/a99d7c4d4510691d17ce613e3c695e8c5ae847aa6fa126c4d2f7cb059dcbbb57"
+ },
+ {
+  "checkpoint": "olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+  "plan": "plan_east1",
+  "region": "us-east1",
+  "task": "mt_mbpp_python",
+  "valid_documents": 500,
+  "documents": 500,
+  "passed": 94,
+  "pass@1": 0.188,
+  "tests_sha256": "0991fb7321e32820c6a7521f6ed5a1207b1f7081d6f92da04c2dffa2b79d12ce",
+  "generation_artifact": {
+   "sha256": "008416cbdda72af875ed84801e202c7bd71c15a2b577e40751ae8771232fc4e7",
+   "size": 77821
+  },
+  "generation_root": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/mt_mbpp_python/110a479e8cc94df71d3719f0d121dc792e6ca80477709d6e4a7e2bb1729517f5"
+ },
+ {
+  "checkpoint": "olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+  "plan": "plan_east1",
+  "region": "us-east1",
+  "task": "mt_mbpp_r",
+  "valid_documents": 474,
+  "documents": 500,
+  "passed": 38,
+  "pass@1": 0.08016877637130802,
+  "tests_sha256": "75cf09a4387c479b2a11d8c892c1c2c56c40d189c472d6d1e18199581e54fff7",
+  "generation_artifact": {
+   "sha256": "971d9c063e38ca736c4a9fdd5c8d70833b81749637a3493d44667baa314e464f",
+   "size": 85471
+  },
+  "generation_root": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/mt_mbpp_r/8f15cb2b3cf4e5823f4b6f2531674051e5272400514b145287049815d9814d9d"
+ },
+ {
+  "checkpoint": "olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+  "plan": "plan_east1",
+  "region": "us-east1",
+  "task": "mt_mbpp_ruby",
+  "valid_documents": 493,
+  "documents": 500,
+  "passed": 79,
+  "pass@1": 0.16024340770791076,
+  "tests_sha256": "7423b3d995195f3d1929db50be3c2194014c9d47481d97e7a4d57c5b1ab4ccff",
+  "generation_artifact": {
+   "sha256": "dd1f8984b567c6af0f511541961afe833cafa0d7df176cc9adc0ed59baf2d624",
+   "size": 66105
+  },
+  "generation_root": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/mt_mbpp_ruby/45382bf3212e809ca939d5708314bfb90672095ee840ea3bb4de84d711b664ae"
+ },
+ {
+  "checkpoint": "olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+  "plan": "plan_east1",
+  "region": "us-east1",
+  "task": "mt_mbpp_rust",
+  "valid_documents": 481,
+  "documents": 500,
+  "passed": 49,
+  "pass@1": 0.10187110187110188,
+  "tests_sha256": "4aabfad06ad3b2a6cf79578f0a581e40053b3210305f5a39d9a75808f869ab9a",
+  "generation_artifact": {
+   "sha256": "bf6dd8cab0149f433705f8fff167f53404ccb56e4ad06ca52465dd83b263dd71",
+   "size": 93962
+  },
+  "generation_root": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/mt_mbpp_rust/19040b4a5e04c5b8fa2f75b75690f27f2b2453a34c8ba3539b51eeadfed43960"
+ },
+ {
+  "checkpoint": "olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+  "plan": "plan_east1",
+  "region": "us-east1",
+  "task": "mt_mbpp_scala",
+  "valid_documents": 479,
+  "documents": 500,
+  "passed": 16,
+  "pass@1": 0.033402922755741124,
+  "tests_sha256": "7309a8f95d5dfe129da98abbc188d9f6fcb3e75c75b75a2f2425cfb325688165",
+  "generation_artifact": {
+   "sha256": "f2e0e76d00ba84cb0ab2a75a367f362ba8e665d235ce61e26bc0897198310b85",
+   "size": 88934
+  },
+  "generation_root": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/mt_mbpp_scala/7b1741a50cd80d2ca8861e1ebfa99c92d664cd914c4c430e5bf869d65ff8efd2"
+ },
+ {
+  "checkpoint": "olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+  "plan": "plan_east1",
+  "region": "us-east1",
+  "task": "mt_mbpp_swift",
+  "valid_documents": 483,
+  "documents": 500,
+  "passed": 80,
+  "pass@1": 0.16563146997929606,
+  "tests_sha256": "d79a7de409a7d4c4289dc250ea4c58cbed895ec4245f79ae781426262a192005",
+  "generation_artifact": {
+   "sha256": "a2e9e61bc90367b1977f88f11ccc21a6374a9b1d0a0231064e6082714dfff280",
+   "size": 109025
+  },
+  "generation_root": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/mt_mbpp_swift/5f82d27765752fe329e719eeaf908511fb6fccdc142913858dc592a404d4e4b1"
+ },
+ {
+  "checkpoint": "olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+  "plan": "plan_east1",
+  "region": "us-east1",
+  "task": "mt_mbpp_typescript",
+  "valid_documents": 489,
+  "documents": 500,
+  "passed": 81,
+  "pass@1": 0.1656441717791411,
+  "tests_sha256": "25392e921eb08709bbd5bba62870382c903ab0791cc9ccdc2ba90e2be53c1371",
+  "generation_artifact": {
+   "sha256": "03fad3a9f4cba75e78b8e6f27e9aced3331a5e46135c103b1b10822aacc26088",
+   "size": 101821
+  },
+  "generation_root": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/mt_mbpp_typescript/b240757aeaeb2d4b7c3b23d92a9eb8d1ba1c6987a5f5956d96bb2c0e0b3c872a"
+ },
+ {
+  "checkpoint": "proportional_1e21-2f1a48",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_bash",
+  "valid_documents": 465,
+  "documents": 500,
+  "passed": 3,
+  "pass@1": 0.0064516129032258064,
+  "tests_sha256": "ae0efb49ee65b454295dc3147153d671fe1b2780dc1633ff242047321bc2f5ca",
+  "generation_artifact": {
+   "sha256": "62848fb07d54b409d49acc24e36325bc42c5bfeec2f05ff265811337a34914f3",
+   "size": 128996
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/proportional_1e21-2f1a48/mt_mbpp_bash/f4aa1f642878e2345ccf54c188785bd482b5c3aea3f245ac1dd8491521f7dcde"
+ },
+ {
+  "checkpoint": "proportional_1e21-2f1a48",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_c",
+  "valid_documents": 481,
+  "documents": 500,
+  "passed": 29,
+  "pass@1": 0.060291060291060294,
+  "tests_sha256": "3165aad2e0e01cd2553feb867e35d9ada5e3c6cb0536ddab8794417e075b0cec",
+  "generation_artifact": {
+   "sha256": "edb75f550387234a4ded75c26ce4af4e841bab9cb4bb2826eead06b9d7936412",
+   "size": 123857
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/proportional_1e21-2f1a48/mt_mbpp_c/487131ffdf2a40a28415bf852e15780a18c2342edb826f9a04c700aedf41807e"
+ },
+ {
+  "checkpoint": "proportional_1e21-2f1a48",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_cpp",
+  "valid_documents": 484,
+  "documents": 500,
+  "passed": 35,
+  "pass@1": 0.07231404958677685,
+  "tests_sha256": "3a890da06fed8da577652dec3db757dc907736ba0451bfd529c76b88053033df",
+  "generation_artifact": {
+   "sha256": "a1f66c91e74cad7ca481a97b18de3920ee7876ace2ba945a78475c5c58c5c6d8",
+   "size": 100952
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/proportional_1e21-2f1a48/mt_mbpp_cpp/3555584b320a8edb9e0ccea00a6ebcd42838aeac6d0b9d2359708071c2ac7e9c"
+ },
+ {
+  "checkpoint": "proportional_1e21-2f1a48",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_csharp",
+  "valid_documents": 490,
+  "documents": 500,
+  "passed": 33,
+  "pass@1": 0.0673469387755102,
+  "tests_sha256": "a816806bf82cd6ead411714d55ce3cabc8dd3fffb539e42dc62ef80ce209eb32",
+  "generation_artifact": {
+   "sha256": "cdc582dfe7606e1db0a66bd85501c7b6e0c47546c1b9139c9c090c189bf74d09",
+   "size": 106659
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/proportional_1e21-2f1a48/mt_mbpp_csharp/8385bec7c4f2f0ea619e83b9ad0d64e2fac0d072a78f09b9342d5f34f918c2a2"
+ },
+ {
+  "checkpoint": "proportional_1e21-2f1a48",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_go",
+  "valid_documents": 481,
+  "documents": 500,
+  "passed": 1,
+  "pass@1": 0.002079002079002079,
+  "tests_sha256": "c5bce99f887bf4c4cbc4fb8fdf279e69db768a16ef3d99ec08b6bad66b7701f4",
+  "generation_artifact": {
+   "sha256": "3f5fb827415cf3a9f0c86cb51725a968ee700d7588c133ec151d31363c242077",
+   "size": 117729
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/proportional_1e21-2f1a48/mt_mbpp_go/195929ba3d5496f06d9890d0caa18b1b409a24e9c20f8fd7e70ca3e1baf8af81"
+ },
+ {
+  "checkpoint": "proportional_1e21-2f1a48",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_haskell",
+  "valid_documents": 453,
+  "documents": 500,
+  "passed": 3,
+  "pass@1": 0.006622516556291391,
+  "tests_sha256": "604ce2ceb0b48b0a3204710f805e3605c88acc4902fc554b64087638b1223e8c",
+  "generation_artifact": {
+   "sha256": "4958a8267215ddf6cc91faced1397bac4f8b7428a56d2441630a9f861e368ffd",
+   "size": 73915
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/proportional_1e21-2f1a48/mt_mbpp_haskell/5937bb1c3469379fc767ffdffdf7e89fb6b79a0980f143074edc287e1ca5b040"
+ },
+ {
+  "checkpoint": "proportional_1e21-2f1a48",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_java",
+  "valid_documents": 483,
+  "documents": 500,
+  "passed": 33,
+  "pass@1": 0.06832298136645963,
+  "tests_sha256": "84d636ff6cdeac6701ea912d80546d90cb1f5b481e23d0a6c2cb5b4e298bc4e8",
+  "generation_artifact": {
+   "sha256": "0bcb2ed1770af917f39b112b008a07675957036ae0947813583d5b2389880ef1",
+   "size": 108288
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/proportional_1e21-2f1a48/mt_mbpp_java/5b3325cd8878ac784cc82869f3777d5ee2ae935e498d8b58c925f931e8de1bb2"
+ },
+ {
+  "checkpoint": "proportional_1e21-2f1a48",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_javascript",
+  "valid_documents": 485,
+  "documents": 500,
+  "passed": 31,
+  "pass@1": 0.06391752577319587,
+  "tests_sha256": "30064533aa06d0439f67be8ffbe8a5650a3d699cb443853de9d7133c64d88e95",
+  "generation_artifact": {
+   "sha256": "d78d16f1468ce22021a20391b5fd69d71fe79a062a5ee97ad3682be11c433f1f",
+   "size": 101343
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/proportional_1e21-2f1a48/mt_mbpp_javascript/fba9d8962306c480bcbf2e6cc8da888bb2526eafbb4e6d60ff4543d8858c943a"
+ },
+ {
+  "checkpoint": "proportional_1e21-2f1a48",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_matlab",
+  "valid_documents": 460,
+  "documents": 500,
+  "passed": 11,
+  "pass@1": 0.02391304347826087,
+  "tests_sha256": "2dec5bca355cce27df6896d5064ee81f997fbd5b1ff7de6eb497281b26bfb205",
+  "generation_artifact": {
+   "sha256": "64ea8177d8c21c7c0ce5ffc1401966478cc88659ca099450f585f1b0bc93341d",
+   "size": 80097
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/proportional_1e21-2f1a48/mt_mbpp_matlab/a0b99a925f61e940479212e898aed86e9a3b7c911589744497cf4c2b8df4f52b"
+ },
+ {
+  "checkpoint": "proportional_1e21-2f1a48",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_php",
+  "valid_documents": 485,
+  "documents": 500,
+  "passed": 34,
+  "pass@1": 0.07010309278350516,
+  "tests_sha256": "c2c34d016e16d587d370eb402d7d986c01a5567c06af2618fd4894b49589e503",
+  "generation_artifact": {
+   "sha256": "c90ac65ba8f7fc4e1f6878e9682fb7cee313faa6494d18435055f095c3b69c35",
+   "size": 82204
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/proportional_1e21-2f1a48/mt_mbpp_php/43cf5d098d85d51a849c41144c06e87faccbfb45496df29cadd0fa7f34461297"
+ },
+ {
+  "checkpoint": "proportional_1e21-2f1a48",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_python",
+  "valid_documents": 500,
+  "documents": 500,
+  "passed": 39,
+  "pass@1": 0.078,
+  "tests_sha256": "0991fb7321e32820c6a7521f6ed5a1207b1f7081d6f92da04c2dffa2b79d12ce",
+  "generation_artifact": {
+   "sha256": "baa11d063fe303ca6954d0f79c21546853ec6344faed65957a4d307583723bd8",
+   "size": 84692
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/proportional_1e21-2f1a48/mt_mbpp_python/07777b0817a8427fa9bcedfd81057dca83de8d558a699d0fbe5b6b32c1c997d3"
+ },
+ {
+  "checkpoint": "proportional_1e21-2f1a48",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_r",
+  "valid_documents": 474,
+  "documents": 500,
+  "passed": 9,
+  "pass@1": 0.0189873417721519,
+  "tests_sha256": "75cf09a4387c479b2a11d8c892c1c2c56c40d189c472d6d1e18199581e54fff7",
+  "generation_artifact": {
+   "sha256": "7e9b1743d6b01f28aa3cbe801bf42d6b1d8c5149765d04b6f4a6dc64e089244a",
+   "size": 89185
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/proportional_1e21-2f1a48/mt_mbpp_r/beccb3590d33555b3fc29ef25137c48ae3813d8ab42396b085537f9b595e48c9"
+ },
+ {
+  "checkpoint": "proportional_1e21-2f1a48",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_ruby",
+  "valid_documents": 493,
+  "documents": 500,
+  "passed": 26,
+  "pass@1": 0.05273833671399594,
+  "tests_sha256": "7423b3d995195f3d1929db50be3c2194014c9d47481d97e7a4d57c5b1ab4ccff",
+  "generation_artifact": {
+   "sha256": "5cfa5431bdb57b8c5e5b7f175ae97bf4e5532b6d52949b8d6f644b897a77c040",
+   "size": 67320
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/proportional_1e21-2f1a48/mt_mbpp_ruby/f3a98a6a594518783c953a12509ef0668dbc953ed3b999157434385391236ccf"
+ },
+ {
+  "checkpoint": "proportional_1e21-2f1a48",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_rust",
+  "valid_documents": 481,
+  "documents": 500,
+  "passed": 14,
+  "pass@1": 0.029106029106029108,
+  "tests_sha256": "4aabfad06ad3b2a6cf79578f0a581e40053b3210305f5a39d9a75808f869ab9a",
+  "generation_artifact": {
+   "sha256": "c22ff593985ecd99979985ad50f20e52f99ac5fdde9667c7919f5e171ee80ff7",
+   "size": 92477
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/proportional_1e21-2f1a48/mt_mbpp_rust/3c5c821e24477e3676250f497853f40fa69cc9bbc8cda825e802f843068fc9d9"
+ },
+ {
+  "checkpoint": "proportional_1e21-2f1a48",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_scala",
+  "valid_documents": 479,
+  "documents": 500,
+  "passed": 3,
+  "pass@1": 0.006263048016701462,
+  "tests_sha256": "7309a8f95d5dfe129da98abbc188d9f6fcb3e75c75b75a2f2425cfb325688165",
+  "generation_artifact": {
+   "sha256": "74907b969fda01a372ce66de9f1b39ac817df5f81136f47853ae9ae4fb24069f",
+   "size": 104313
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/proportional_1e21-2f1a48/mt_mbpp_scala/1f7c0fcf2122526d63e33f0ded8a7d03019aed0a40484a5def8fe823d0bc3ce5"
+ },
+ {
+  "checkpoint": "proportional_1e21-2f1a48",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_swift",
+  "valid_documents": 483,
+  "documents": 500,
+  "passed": 28,
+  "pass@1": 0.057971014492753624,
+  "tests_sha256": "d79a7de409a7d4c4289dc250ea4c58cbed895ec4245f79ae781426262a192005",
+  "generation_artifact": {
+   "sha256": "40f67e6f8f71062f0d2cd9c05822cb043f4f23a1cc9f127164efa526b2820df0",
+   "size": 104870
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/proportional_1e21-2f1a48/mt_mbpp_swift/4c05353b665441d2acacefd4cb59670f98de0f74596c93381b7179bd88392477"
+ },
+ {
+  "checkpoint": "proportional_1e21-2f1a48",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_typescript",
+  "valid_documents": 489,
+  "documents": 500,
+  "passed": 32,
+  "pass@1": 0.065439672801636,
+  "tests_sha256": "25392e921eb08709bbd5bba62870382c903ab0791cc9ccdc2ba90e2be53c1371",
+  "generation_artifact": {
+   "sha256": "640555e526d572e7d74aab1ff7996c90176f047ec637b814a2edf525ac1125d3",
+   "size": 111729
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/proportional_1e21-2f1a48/mt_mbpp_typescript/71ed6836ff96ce8c30f96a9d61009b0a952d200ffd04eda56e732a7ad53274b9"
+ },
+ {
+  "checkpoint": "unimax8_1e21-d685cd",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_bash",
+  "valid_documents": 465,
+  "documents": 500,
+  "passed": 5,
+  "pass@1": 0.010752688172043012,
+  "tests_sha256": "ae0efb49ee65b454295dc3147153d671fe1b2780dc1633ff242047321bc2f5ca",
+  "generation_artifact": {
+   "sha256": "50de9731115d83e2a7851e43471cea1dad41addf8152882d65fc329a1b2afe92",
+   "size": 140386
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/unimax8_1e21-d685cd/mt_mbpp_bash/ef364293b9997a9ef9a3b718b7ee1476b9e2a5b23abf1abe757c6f0a71c5e3c7"
+ },
+ {
+  "checkpoint": "unimax8_1e21-d685cd",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_c",
+  "valid_documents": 481,
+  "documents": 500,
+  "passed": 59,
+  "pass@1": 0.12266112266112267,
+  "tests_sha256": "3165aad2e0e01cd2553feb867e35d9ada5e3c6cb0536ddab8794417e075b0cec",
+  "generation_artifact": {
+   "sha256": "c9f65f4df8048891df7daaf3eae65e54c3a66ecbc3c6c44dc6977df1e8befac8",
+   "size": 119376
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/unimax8_1e21-d685cd/mt_mbpp_c/623395cea8d932bea7c360b3635d3393dea291aca2b2274660907da87e319f53"
+ },
+ {
+  "checkpoint": "unimax8_1e21-d685cd",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_cpp",
+  "valid_documents": 484,
+  "documents": 500,
+  "passed": 67,
+  "pass@1": 0.1384297520661157,
+  "tests_sha256": "3a890da06fed8da577652dec3db757dc907736ba0451bfd529c76b88053033df",
+  "generation_artifact": {
+   "sha256": "5834dc814186a94fedea7ea54f5ac82e031890a63886eba9662c6f53864c32ab",
+   "size": 108330
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/unimax8_1e21-d685cd/mt_mbpp_cpp/ffe14d2d382f74f1128406d8f9189a9ee0593715431dd45da85a481f0ce27892"
+ },
+ {
+  "checkpoint": "unimax8_1e21-d685cd",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_csharp",
+  "valid_documents": 490,
+  "documents": 500,
+  "passed": 51,
+  "pass@1": 0.10408163265306122,
+  "tests_sha256": "a816806bf82cd6ead411714d55ce3cabc8dd3fffb539e42dc62ef80ce209eb32",
+  "generation_artifact": {
+   "sha256": "a9454ce9a5649756bdf1d7110dae803ba2a9e4d5b51fae0309f67b36d1384470",
+   "size": 106044
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/unimax8_1e21-d685cd/mt_mbpp_csharp/2e1d867b3c26cde83b3466cf24f4ae07f9c9cb861213e8c4249f8a920dd2488d"
+ },
+ {
+  "checkpoint": "unimax8_1e21-d685cd",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_go",
+  "valid_documents": 481,
+  "documents": 500,
+  "passed": 9,
+  "pass@1": 0.018711018711018712,
+  "tests_sha256": "c5bce99f887bf4c4cbc4fb8fdf279e69db768a16ef3d99ec08b6bad66b7701f4",
+  "generation_artifact": {
+   "sha256": "1ec0a1cd8c193cd766ac806d6988f298a50ee3a76e58ac98e9e0bdd91b800e8a",
+   "size": 103162
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/unimax8_1e21-d685cd/mt_mbpp_go/f29632f211717bfa1ffb7957d377fa1c4c4fa1cbe0be62cdd4e437b88602e329"
+ },
+ {
+  "checkpoint": "unimax8_1e21-d685cd",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_haskell",
+  "valid_documents": 453,
+  "documents": 500,
+  "passed": 18,
+  "pass@1": 0.039735099337748346,
+  "tests_sha256": "604ce2ceb0b48b0a3204710f805e3605c88acc4902fc554b64087638b1223e8c",
+  "generation_artifact": {
+   "sha256": "96aec52b8dcab1e0070ba93ae4f26bcf5e31e836548f1db30954ab298e38a526",
+   "size": 78846
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/unimax8_1e21-d685cd/mt_mbpp_haskell/0e853f2ed2c2e9300f66492ab7c1a22362c5b71bd5b8cf6294faebd38711d957"
+ },
+ {
+  "checkpoint": "unimax8_1e21-d685cd",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_java",
+  "valid_documents": 483,
+  "documents": 500,
+  "passed": 64,
+  "pass@1": 0.13250517598343686,
+  "tests_sha256": "84d636ff6cdeac6701ea912d80546d90cb1f5b481e23d0a6c2cb5b4e298bc4e8",
+  "generation_artifact": {
+   "sha256": "b2ff91b8a3daa721d25c9305035a45b6a124a9d8c62d7b5f5daed287770603b3",
+   "size": 106527
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/unimax8_1e21-d685cd/mt_mbpp_java/c1784f100be55e842997d89a7bf9c54fa5aeace17d17828292f8324d631a056a"
+ },
+ {
+  "checkpoint": "unimax8_1e21-d685cd",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_javascript",
+  "valid_documents": 485,
+  "documents": 500,
+  "passed": 44,
+  "pass@1": 0.09072164948453608,
+  "tests_sha256": "30064533aa06d0439f67be8ffbe8a5650a3d699cb443853de9d7133c64d88e95",
+  "generation_artifact": {
+   "sha256": "5d25da3b8d3f5e97b49a68e701ffff0bce8ab9e74f3056863de24b74ae1e0525",
+   "size": 101044
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/unimax8_1e21-d685cd/mt_mbpp_javascript/1284cd800b138e144fd2a12e7753a681514ca4e50f89236b420c89ae66743fd1"
+ },
+ {
+  "checkpoint": "unimax8_1e21-d685cd",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_matlab",
+  "valid_documents": 460,
+  "documents": 500,
+  "passed": 35,
+  "pass@1": 0.07608695652173914,
+  "tests_sha256": "2dec5bca355cce27df6896d5064ee81f997fbd5b1ff7de6eb497281b26bfb205",
+  "generation_artifact": {
+   "sha256": "e4b92a9d1015b2762a08c7c0c2cb91f3f21536f51fa3ae9774084eb492f41e10",
+   "size": 76876
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/unimax8_1e21-d685cd/mt_mbpp_matlab/8018f97b67902e6a448cf09cf9b66e2b8c1443a73a42edef0718d8fec8648265"
+ },
+ {
+  "checkpoint": "unimax8_1e21-d685cd",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_php",
+  "valid_documents": 485,
+  "documents": 500,
+  "passed": 57,
+  "pass@1": 0.11752577319587629,
+  "tests_sha256": "c2c34d016e16d587d370eb402d7d986c01a5567c06af2618fd4894b49589e503",
+  "generation_artifact": {
+   "sha256": "8ede84f97dd18bb6e4949a4a659e55dfa0ece0dd2bd93e57e65e2671d1876e15",
+   "size": 84054
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/unimax8_1e21-d685cd/mt_mbpp_php/d5c4b210e90b5babdbfc83af3286a3612f8023a020c7c0b7ae68f18f16f54d9f"
+ },
+ {
+  "checkpoint": "unimax8_1e21-d685cd",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_python",
+  "valid_documents": 500,
+  "documents": 500,
+  "passed": 81,
+  "pass@1": 0.162,
+  "tests_sha256": "0991fb7321e32820c6a7521f6ed5a1207b1f7081d6f92da04c2dffa2b79d12ce",
+  "generation_artifact": {
+   "sha256": "567ebb5ba854b9267e7471bf064c007789d64a66801bcd18dfb27fb29d615275",
+   "size": 86379
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/unimax8_1e21-d685cd/mt_mbpp_python/e77b663d2f4bae67af0bfb2af34ca1776d9e3c865b59cf3950acc39f91f5ea4b"
+ },
+ {
+  "checkpoint": "unimax8_1e21-d685cd",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_r",
+  "valid_documents": 474,
+  "documents": 500,
+  "passed": 35,
+  "pass@1": 0.07383966244725738,
+  "tests_sha256": "75cf09a4387c479b2a11d8c892c1c2c56c40d189c472d6d1e18199581e54fff7",
+  "generation_artifact": {
+   "sha256": "1dbbc8ae8ea5ca9252f8756fbea8b859c34161be870aac284239937715f46584",
+   "size": 82912
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/unimax8_1e21-d685cd/mt_mbpp_r/90dd2089bb76aa22315c777dd57b86f6c59c24bebd2275d3c8c2e298d6d2c94f"
+ },
+ {
+  "checkpoint": "unimax8_1e21-d685cd",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_ruby",
+  "valid_documents": 493,
+  "documents": 500,
+  "passed": 56,
+  "pass@1": 0.11359026369168357,
+  "tests_sha256": "7423b3d995195f3d1929db50be3c2194014c9d47481d97e7a4d57c5b1ab4ccff",
+  "generation_artifact": {
+   "sha256": "995eed111671764f08912243e54ba4bf8288c570beeb2bfee87ba60bc33480cb",
+   "size": 69228
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/unimax8_1e21-d685cd/mt_mbpp_ruby/b76489c787363c35775e18d0ca40158d5d6b73ba0c840ac0c3ff0c2dd78b35fe"
+ },
+ {
+  "checkpoint": "unimax8_1e21-d685cd",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_rust",
+  "valid_documents": 481,
+  "documents": 500,
+  "passed": 26,
+  "pass@1": 0.05405405405405406,
+  "tests_sha256": "4aabfad06ad3b2a6cf79578f0a581e40053b3210305f5a39d9a75808f869ab9a",
+  "generation_artifact": {
+   "sha256": "7e526665e5a6a82406be8a273bf3bf5654c4eb16879115b90bed662d5621c663",
+   "size": 94770
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/unimax8_1e21-d685cd/mt_mbpp_rust/d7c041ee2b2000f6ea4af7212404dd84d2f34406937f42f837f5b152961a64d9"
+ },
+ {
+  "checkpoint": "unimax8_1e21-d685cd",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_scala",
+  "valid_documents": 479,
+  "documents": 500,
+  "passed": 14,
+  "pass@1": 0.029227557411273485,
+  "tests_sha256": "7309a8f95d5dfe129da98abbc188d9f6fcb3e75c75b75a2f2425cfb325688165",
+  "generation_artifact": {
+   "sha256": "57dfbd56314c5087006f0180f2426d80c3cb21aaaa6b9c4fe1a19712fa2169a6",
+   "size": 94416
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/unimax8_1e21-d685cd/mt_mbpp_scala/058ce4656e9785ff917d03e647caa3faa66986ca9d306c96c08ac28a3455c2d5"
+ },
+ {
+  "checkpoint": "unimax8_1e21-d685cd",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_swift",
+  "valid_documents": 483,
+  "documents": 500,
+  "passed": 54,
+  "pass@1": 0.11180124223602485,
+  "tests_sha256": "d79a7de409a7d4c4289dc250ea4c58cbed895ec4245f79ae781426262a192005",
+  "generation_artifact": {
+   "sha256": "f6ff107406d82a90554d89746e5d05ee2f9ab6ef3bada56ece6d161f232a2a9b",
+   "size": 103077
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/unimax8_1e21-d685cd/mt_mbpp_swift/863bcde98d40f2f3df24f4e9f6e6924923f2a32910327bf8a54c78dcc84ab09c"
+ },
+ {
+  "checkpoint": "unimax8_1e21-d685cd",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_typescript",
+  "valid_documents": 489,
+  "documents": 500,
+  "passed": 61,
+  "pass@1": 0.12474437627811862,
+  "tests_sha256": "25392e921eb08709bbd5bba62870382c903ab0791cc9ccdc2ba90e2be53c1371",
+  "generation_artifact": {
+   "sha256": "7c2febb3422ac69f49bee641b68c425cf43fb3b6b927f9e4bac04da875024f8a",
+   "size": 107155
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/unimax8_1e21-d685cd/mt_mbpp_typescript/341f3f5a17c540967c8a5d46790b7f770d21dd870f627da59123023093bac650"
+ },
+ {
+  "checkpoint": "lwspu_t9_snc_cap08_1e21-e8e9d7",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_bash",
+  "valid_documents": 465,
+  "documents": 500,
+  "passed": 19,
+  "pass@1": 0.04086021505376344,
+  "tests_sha256": "ae0efb49ee65b454295dc3147153d671fe1b2780dc1633ff242047321bc2f5ca",
+  "generation_artifact": {
+   "sha256": "9979a12251189c9e18d6c87bbeb65760739e637063b146ad0bb9476cb15a3de2",
+   "size": 104791
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/lwspu_t9_snc_cap08_1e21-e8e9d7/mt_mbpp_bash/837f1cbdb35e597cd9e2497ae10a5648be550fdddc2fe9ccaf7eda7418b43d46"
+ },
+ {
+  "checkpoint": "lwspu_t9_snc_cap08_1e21-e8e9d7",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_c",
+  "valid_documents": 481,
+  "documents": 500,
+  "passed": 85,
+  "pass@1": 0.17671517671517672,
+  "tests_sha256": "3165aad2e0e01cd2553feb867e35d9ada5e3c6cb0536ddab8794417e075b0cec",
+  "generation_artifact": {
+   "sha256": "8bf462f842044c2d0934859c0486ce770419005b3059cacfaa5b63fc570b0b2e",
+   "size": 125450
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/lwspu_t9_snc_cap08_1e21-e8e9d7/mt_mbpp_c/5870903a562859988f354a3ce9c795c7fca1c805972fb6f7ce62686dc0478e78"
+ },
+ {
+  "checkpoint": "lwspu_t9_snc_cap08_1e21-e8e9d7",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_cpp",
+  "valid_documents": 484,
+  "documents": 500,
+  "passed": 108,
+  "pass@1": 0.2231404958677686,
+  "tests_sha256": "3a890da06fed8da577652dec3db757dc907736ba0451bfd529c76b88053033df",
+  "generation_artifact": {
+   "sha256": "959e6fbd088465ce91750a5b80d0502906e15c0953e27f96aa87901ac6260e98",
+   "size": 99316
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/lwspu_t9_snc_cap08_1e21-e8e9d7/mt_mbpp_cpp/a47a9320130861c45bfb964fe2241576ac44c1e3799a62c893737fc46b0fbc70"
+ },
+ {
+  "checkpoint": "lwspu_t9_snc_cap08_1e21-e8e9d7",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_csharp",
+  "valid_documents": 490,
+  "documents": 500,
+  "passed": 123,
+  "pass@1": 0.2510204081632653,
+  "tests_sha256": "a816806bf82cd6ead411714d55ce3cabc8dd3fffb539e42dc62ef80ce209eb32",
+  "generation_artifact": {
+   "sha256": "a1d317b6c7a5748bd100300d1786af02e5db53c1a5219297cb0aeee284890d7a",
+   "size": 105939
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/lwspu_t9_snc_cap08_1e21-e8e9d7/mt_mbpp_csharp/91ee2c0f8580e48ae8bab59dfb5bc7b5b7ced4b4f5046f5ce3d89a8ee0c47514"
+ },
+ {
+  "checkpoint": "lwspu_t9_snc_cap08_1e21-e8e9d7",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_go",
+  "valid_documents": 481,
+  "documents": 500,
+  "passed": 22,
+  "pass@1": 0.04573804573804574,
+  "tests_sha256": "c5bce99f887bf4c4cbc4fb8fdf279e69db768a16ef3d99ec08b6bad66b7701f4",
+  "generation_artifact": {
+   "sha256": "aced52356f9f8b3050445033f20ae711ee7315175ecc04f971a3aecf23de2a11",
+   "size": 107007
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/lwspu_t9_snc_cap08_1e21-e8e9d7/mt_mbpp_go/bcdb9ed45403d8be1c97725a0daddf5501d6560d0e14e66bc2bbda28f8ff5888"
+ },
+ {
+  "checkpoint": "lwspu_t9_snc_cap08_1e21-e8e9d7",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_haskell",
+  "valid_documents": 453,
+  "documents": 500,
+  "passed": 30,
+  "pass@1": 0.06622516556291391,
+  "tests_sha256": "604ce2ceb0b48b0a3204710f805e3605c88acc4902fc554b64087638b1223e8c",
+  "generation_artifact": {
+   "sha256": "85f03f8560f6fca93222d4527d95374988a58b010b41c8ecacb03d9a622a85ae",
+   "size": 78517
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/lwspu_t9_snc_cap08_1e21-e8e9d7/mt_mbpp_haskell/74e8aacc3c5c55e034bf3828bbf18710a342c83e8f75098c2842ea2c3091de29"
+ },
+ {
+  "checkpoint": "lwspu_t9_snc_cap08_1e21-e8e9d7",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_java",
+  "valid_documents": 483,
+  "documents": 500,
+  "passed": 124,
+  "pass@1": 0.2567287784679089,
+  "tests_sha256": "84d636ff6cdeac6701ea912d80546d90cb1f5b481e23d0a6c2cb5b4e298bc4e8",
+  "generation_artifact": {
+   "sha256": "fab0b32dcea408e2e80b60fbf0c0c02bd2f507137d7e52665f43875001ce0d50",
+   "size": 104798
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/lwspu_t9_snc_cap08_1e21-e8e9d7/mt_mbpp_java/15da19c7f5bb62411ad92cf3b98e5adf8a1728237c41986ca54c3a69924fcd78"
+ },
+ {
+  "checkpoint": "lwspu_t9_snc_cap08_1e21-e8e9d7",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_javascript",
+  "valid_documents": 485,
+  "documents": 500,
+  "passed": 87,
+  "pass@1": 0.17938144329896907,
+  "tests_sha256": "30064533aa06d0439f67be8ffbe8a5650a3d699cb443853de9d7133c64d88e95",
+  "generation_artifact": {
+   "sha256": "af0dab211c86a8e63fda8f17aa018780f2ae37bcb739543047693b61ba0303a0",
+   "size": 94471
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/lwspu_t9_snc_cap08_1e21-e8e9d7/mt_mbpp_javascript/a221d8969f21e8429f33900dc3ff779db0450fcbac0d380cd63bd1936dc86eef"
+ },
+ {
+  "checkpoint": "lwspu_t9_snc_cap08_1e21-e8e9d7",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_matlab",
+  "valid_documents": 460,
+  "documents": 500,
+  "passed": 65,
+  "pass@1": 0.14130434782608695,
+  "tests_sha256": "2dec5bca355cce27df6896d5064ee81f997fbd5b1ff7de6eb497281b26bfb205",
+  "generation_artifact": {
+   "sha256": "504b4e1f2e4e9f536fd189d46e882a0cf9bb6579ad9a17ef9d3a1ee2e4c130ab",
+   "size": 75421
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/lwspu_t9_snc_cap08_1e21-e8e9d7/mt_mbpp_matlab/c3063feaddfdfe5171123483ad8ed10243f42b4b75ab82df11f3157f407b6829"
+ },
+ {
+  "checkpoint": "lwspu_t9_snc_cap08_1e21-e8e9d7",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_php",
+  "valid_documents": 485,
+  "documents": 500,
+  "passed": 107,
+  "pass@1": 0.22061855670103092,
+  "tests_sha256": "c2c34d016e16d587d370eb402d7d986c01a5567c06af2618fd4894b49589e503",
+  "generation_artifact": {
+   "sha256": "afae2cb0261e24e0982ae8824ee3a0a5664f7b10af144a567a41ffd6687754dd",
+   "size": 83020
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/lwspu_t9_snc_cap08_1e21-e8e9d7/mt_mbpp_php/85971dc97b49a5def39df13e21c552a1f3e01bbc09086e823d9c86aa5101d8b5"
+ },
+ {
+  "checkpoint": "lwspu_t9_snc_cap08_1e21-e8e9d7",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_python",
+  "valid_documents": 500,
+  "documents": 500,
+  "passed": 103,
+  "pass@1": 0.206,
+  "tests_sha256": "0991fb7321e32820c6a7521f6ed5a1207b1f7081d6f92da04c2dffa2b79d12ce",
+  "generation_artifact": {
+   "sha256": "7bacd3dc119d304bd5cfa736965338789dcf45f86fa4dcd681db0630482e3da3",
+   "size": 80639
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/lwspu_t9_snc_cap08_1e21-e8e9d7/mt_mbpp_python/93108d2f4212034d6967e7fa9792db01ecd439985de46cf4da3a6a0d2eccab68"
+ },
+ {
+  "checkpoint": "lwspu_t9_snc_cap08_1e21-e8e9d7",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_r",
+  "valid_documents": 474,
+  "documents": 500,
+  "passed": 46,
+  "pass@1": 0.0970464135021097,
+  "tests_sha256": "75cf09a4387c479b2a11d8c892c1c2c56c40d189c472d6d1e18199581e54fff7",
+  "generation_artifact": {
+   "sha256": "5ce14d13278233a238a241b37137bb4c103ed9aca0db9851d8facc920d260d4f",
+   "size": 87996
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/lwspu_t9_snc_cap08_1e21-e8e9d7/mt_mbpp_r/7d2bf6103c863c230b418c099faef3086c949e90d48268ad33cedc67f5a9f84d"
+ },
+ {
+  "checkpoint": "lwspu_t9_snc_cap08_1e21-e8e9d7",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_ruby",
+  "valid_documents": 493,
+  "documents": 500,
+  "passed": 101,
+  "pass@1": 0.20486815415821502,
+  "tests_sha256": "7423b3d995195f3d1929db50be3c2194014c9d47481d97e7a4d57c5b1ab4ccff",
+  "generation_artifact": {
+   "sha256": "b0ff48d7986bf72a3bd9661de75f122f368d1d3a8c66bd82d5f4b0bed44bd0a3",
+   "size": 69097
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/lwspu_t9_snc_cap08_1e21-e8e9d7/mt_mbpp_ruby/fd37641f5201fca63f4b1889cfacecd153f39e3f85e83e30672a6ccf5ad7ed8d"
+ },
+ {
+  "checkpoint": "lwspu_t9_snc_cap08_1e21-e8e9d7",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_rust",
+  "valid_documents": 481,
+  "documents": 500,
+  "passed": 59,
+  "pass@1": 0.12266112266112267,
+  "tests_sha256": "4aabfad06ad3b2a6cf79578f0a581e40053b3210305f5a39d9a75808f869ab9a",
+  "generation_artifact": {
+   "sha256": "cfb0385792a02db4436d81c2cd01c4305c2d30d5e96387655a2ecca524d402b4",
+   "size": 93250
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/lwspu_t9_snc_cap08_1e21-e8e9d7/mt_mbpp_rust/873a8f080bb19f5007a60ec2d4fb47f3903d1a018033831aa2004734d0ee1eb3"
+ },
+ {
+  "checkpoint": "lwspu_t9_snc_cap08_1e21-e8e9d7",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_scala",
+  "valid_documents": 479,
+  "documents": 500,
+  "passed": 25,
+  "pass@1": 0.05219206680584551,
+  "tests_sha256": "7309a8f95d5dfe129da98abbc188d9f6fcb3e75c75b75a2f2425cfb325688165",
+  "generation_artifact": {
+   "sha256": "a4043ddf791f5920415e423da6c0fffc8251a852c95a50c0a9f8c36eda27394d",
+   "size": 88811
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/lwspu_t9_snc_cap08_1e21-e8e9d7/mt_mbpp_scala/c03201e2d8b14e307d531ab7cb06071fbfa44411e65afad7616d05b1f0127749"
+ },
+ {
+  "checkpoint": "lwspu_t9_snc_cap08_1e21-e8e9d7",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_swift",
+  "valid_documents": 483,
+  "documents": 500,
+  "passed": 97,
+  "pass@1": 0.20082815734989648,
+  "tests_sha256": "d79a7de409a7d4c4289dc250ea4c58cbed895ec4245f79ae781426262a192005",
+  "generation_artifact": {
+   "sha256": "2f4b115f09c73217078da7f70e8b18040aae9c554c3a0ea7d1ebf9432c5ab2ac",
+   "size": 105869
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/lwspu_t9_snc_cap08_1e21-e8e9d7/mt_mbpp_swift/682cd49346ec321fe2cf61948eac62b4ecf7f8b2f929758a106387131bbc18d9"
+ },
+ {
+  "checkpoint": "lwspu_t9_snc_cap08_1e21-e8e9d7",
+  "plan": "plan_euw4",
+  "region": "europe-west4",
+  "task": "mt_mbpp_typescript",
+  "valid_documents": 489,
+  "documents": 500,
+  "passed": 91,
+  "pass@1": 0.18609406952965235,
+  "tests_sha256": "25392e921eb08709bbd5bba62870382c903ab0791cc9ccdc2ba90e2be53c1371",
+  "generation_artifact": {
+   "sha256": "1bae60a8fa66a649f6d1c83dff581f17f0fb44df3dab0e77b38384f8d6749571",
+   "size": 104748
+  },
+  "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/lwspu_t9_snc_cap08_1e21-e8e9d7/mt_mbpp_typescript/0233db741e2c303bbff015d416b44fa4731c3714526ab80a66b0e53281b8a1ba"
+ },
+ {
+  "checkpoint": "proportional_1e21-2f1a48",
+  "plan": "plan_east5b",
+  "region": "us-east5",
+  "task": "mt_mbpp_bash",
+  "valid_documents": 465,
+  "documents": 500,
+  "passed": 3,
+  "pass@1": 0.0064516129032258064,
+  "tests_sha256": "ae0efb49ee65b454295dc3147153d671fe1b2780dc1633ff242047321bc2f5ca",
+  "generation_artifact": {
+   "sha256": "62848fb07d54b409d49acc24e36325bc42c5bfeec2f05ff265811337a34914f3",
+   "size": 128996
+  },
+  "generation_root": "gs://marin-us-east5/experiments/table9_accuracy_20260914/proportional_1e21-2f1a48/mt_mbpp_bash/c71b0d0aac8041a78666f23a31be57cfa58b9ad9f2499610c979d6028854cbef"
+ },
+ {
+  "checkpoint": "proportional_1e21-2f1a48",
+  "plan": "plan_east5b",
+  "region": "us-east5",
+  "task": "mt_mbpp_c",
+  "valid_documents": 481,
+  "documents": 500,
+  "passed": 29,
+  "pass@1": 0.060291060291060294,
+  "tests_sha256": "3165aad2e0e01cd2553feb867e35d9ada5e3c6cb0536ddab8794417e075b0cec",
+  "generation_artifact": {
+   "sha256": "edb75f550387234a4ded75c26ce4af4e841bab9cb4bb2826eead06b9d7936412",
+   "size": 123857
+  },
+  "generation_root": "gs://marin-us-east5/experiments/table9_accuracy_20260914/proportional_1e21-2f1a48/mt_mbpp_c/25ca473f87bede5b7fa6384ebb37e7e11c1b95902df876f08eafeb00231adf4a"
+ },
+ {
+  "checkpoint": "proportional_1e21-2f1a48",
+  "plan": "plan_east5b",
+  "region": "us-east5",
+  "task": "mt_mbpp_java",
+  "valid_documents": 483,
+  "documents": 500,
+  "passed": 33,
+  "pass@1": 0.06832298136645963,
+  "tests_sha256": "84d636ff6cdeac6701ea912d80546d90cb1f5b481e23d0a6c2cb5b4e298bc4e8",
+  "generation_artifact": {
+   "sha256": "0bcb2ed1770af917f39b112b008a07675957036ae0947813583d5b2389880ef1",
+   "size": 108288
+  },
+  "generation_root": "gs://marin-us-east5/experiments/table9_accuracy_20260914/proportional_1e21-2f1a48/mt_mbpp_java/6f7993b1e8d19826aa96b558851675806216994fcdbf3ffc11053c8efff1f03c"
+ },
+ {
+  "checkpoint": "proportional_1e21-2f1a48",
+  "plan": "plan_east5b",
+  "region": "us-east5",
+  "task": "mt_mbpp_javascript",
+  "valid_documents": 485,
+  "documents": 500,
+  "passed": 31,
+  "pass@1": 0.06391752577319587,
+  "tests_sha256": "30064533aa06d0439f67be8ffbe8a5650a3d699cb443853de9d7133c64d88e95",
+  "generation_artifact": {
+   "sha256": "d78d16f1468ce22021a20391b5fd69d71fe79a062a5ee97ad3682be11c433f1f",
+   "size": 101343
+  },
+  "generation_root": "gs://marin-us-east5/experiments/table9_accuracy_20260914/proportional_1e21-2f1a48/mt_mbpp_javascript/41387444bd414fc19cc143dd7575962811106f9fee0b401ca017815d0a057f46"
+ },
+ {
+  "checkpoint": "proportional_1e21-2f1a48",
+  "plan": "plan_east5b",
+  "region": "us-east5",
+  "task": "mt_mbpp_matlab",
+  "valid_documents": 460,
+  "documents": 500,
+  "passed": 11,
+  "pass@1": 0.02391304347826087,
+  "tests_sha256": "2dec5bca355cce27df6896d5064ee81f997fbd5b1ff7de6eb497281b26bfb205",
+  "generation_artifact": {
+   "sha256": "64ea8177d8c21c7c0ce5ffc1401966478cc88659ca099450f585f1b0bc93341d",
+   "size": 80097
+  },
+  "generation_root": "gs://marin-us-east5/experiments/table9_accuracy_20260914/proportional_1e21-2f1a48/mt_mbpp_matlab/6e5eeafabe1378c970f4c1e268688d2da1a93bab8b3cfce52b22dc71736b2b62"
+ },
+ {
+  "checkpoint": "proportional_1e21-2f1a48",
+  "plan": "plan_east5b",
+  "region": "us-east5",
+  "task": "mt_mbpp_php",
+  "valid_documents": 485,
+  "documents": 500,
+  "passed": 34,
+  "pass@1": 0.07010309278350516,
+  "tests_sha256": "c2c34d016e16d587d370eb402d7d986c01a5567c06af2618fd4894b49589e503",
+  "generation_artifact": {
+   "sha256": "c90ac65ba8f7fc4e1f6878e9682fb7cee313faa6494d18435055f095c3b69c35",
+   "size": 82204
+  },
+  "generation_root": "gs://marin-us-east5/experiments/table9_accuracy_20260914/proportional_1e21-2f1a48/mt_mbpp_php/83deb8ed205372159d0fb2ba10550f6abf452c0a8425df1ea9bf682b01ab7fa2"
+ },
+ {
+  "checkpoint": "proportional_1e21-2f1a48",
+  "plan": "plan_east5",
+  "region": "us-east5",
+  "task": "mt_mbpp_matlab",
+  "valid_documents": 460,
+  "documents": 500,
+  "passed": 11,
+  "pass@1": 0.02391304347826087,
+  "tests_sha256": "2dec5bca355cce27df6896d5064ee81f997fbd5b1ff7de6eb497281b26bfb205",
+  "generation_artifact": {
+   "sha256": "64ea8177d8c21c7c0ce5ffc1401966478cc88659ca099450f585f1b0bc93341d",
+   "size": 80097
+  },
+  "generation_root": "gs://marin-us-east5/experiments/table9_accuracy_20260914/proportional_1e21-2f1a48/mt_mbpp_matlab/dfb0d1a1f6f88cd60ffd641693912797aa8e0c3b35b0c98c8ec24be3cfc58d0a"
+ },
+ {
+  "checkpoint": "proportional_1e21-2f1a48",
+  "plan": "plan_east5",
+  "region": "us-east5",
+  "task": "mt_mbpp_php",
+  "valid_documents": 485,
+  "documents": 500,
+  "passed": 34,
+  "pass@1": 0.07010309278350516,
+  "tests_sha256": "c2c34d016e16d587d370eb402d7d986c01a5567c06af2618fd4894b49589e503",
+  "generation_artifact": {
+   "sha256": "c90ac65ba8f7fc4e1f6878e9682fb7cee313faa6494d18435055f095c3b69c35",
+   "size": 82204
+  },
+  "generation_root": "gs://marin-us-east5/experiments/table9_accuracy_20260914/proportional_1e21-2f1a48/mt_mbpp_php/a343b4f1edbfc2ed152f4f2c87310d4123234c701ab7043980e0fc9376dd7d56"
+ }
+]

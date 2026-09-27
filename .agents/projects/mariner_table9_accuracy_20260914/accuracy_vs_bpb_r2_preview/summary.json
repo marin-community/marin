@@ -1,0 +1,127 @@
+{
+  "baseline": "proportional",
+  "candidate": "unimax8",
+  "overall": {
+    "scored": 25,
+    "decided": 24,
+    "agree": 15,
+    "bpb_improved": 8,
+    "bpb_improved_and_accuracy_improved": 4,
+    "spearman": 0.3238461538461538,
+    "pearson": 0.8012754239611105
+  },
+  "by_group": {
+    "basic skills": {
+      "scored": 6,
+      "decided": 6,
+      "agree": 4,
+      "bpb_improved": 3,
+      "bpb_improved_and_accuracy_improved": 3,
+      "spearman": 0.5428571428571429,
+      "pearson": 0.8037674942882953
+    },
+    "mmlu": {
+      "scored": 4,
+      "decided": 3,
+      "agree": 2,
+      "bpb_improved": 1,
+      "bpb_improved_and_accuracy_improved": 0,
+      "spearman": 0.6000000000000001,
+      "pearson": 0.5586933785014361
+    },
+    "qa": {
+      "scored": 15,
+      "decided": 15,
+      "agree": 9,
+      "bpb_improved": 4,
+      "bpb_improved_and_accuracy_improved": 1,
+      "spearman": -0.0857142857142857,
+      "pearson": -0.0329282777423482
+    }
+  },
+  "native_macro_bpb": {
+    "proportional": 0.6730906490967455,
+    "unimax8": 0.6252614556976779
+  },
+  "aggregate": {
+    "scored_components": 25,
+    "all_scored": {
+      "components": 25,
+      "accuracy_pct": {
+        "proportional": 56.82172532492246,
+        "unimax8": 57.45500839646531
+      },
+      "bpb": {
+        "proportional": 0.7996392707645549,
+        "unimax8": 0.7817501829349313
+      }
+    },
+    "basic skills": {
+      "components": 6,
+      "accuracy_pct": {
+        "proportional": 68.10007746601909,
+        "unimax8": 74.4835154949529
+      },
+      "bpb": {
+        "proportional": 0.743475236778575,
+        "unimax8": 0.6294603552329318
+      }
+    },
+    "mmlu": {
+      "components": 4,
+      "accuracy_pct": {
+        "proportional": 34.855925216797935,
+        "unimax8": 33.90502173368128
+      },
+      "bpb": {
+        "proportional": 0.8986866654103621,
+        "unimax8": 0.9014230815805614
+      }
+    },
+    "qa": {
+      "components": 15,
+      "accuracy_pct": {
+        "proportional": 58.16793116398369,
+        "unimax8": 56.92360200047935
+      },
+      "bpb": {
+        "proportional": 0.7956922457867317,
+        "unimax8": 0.810753341043563
+      }
+    },
+    "unscored_bpb_only": {
+      "components": [
+        "codex_humaneval",
+        "mbpp",
+        "minerva_math_algebra",
+        "minerva_math_counting_and_probability",
+        "minerva_math_geometry",
+        "minerva_math_intermediate_algebra",
+        "minerva_math_number_theory",
+        "minerva_math_prealgebra",
+        "minerva_math_precalculus",
+        "mt_mbpp_bash",
+        "mt_mbpp_c",
+        "mt_mbpp_cpp",
+        "mt_mbpp_csharp",
+        "mt_mbpp_go",
+        "mt_mbpp_haskell",
+        "mt_mbpp_java",
+        "mt_mbpp_javascript",
+        "mt_mbpp_matlab",
+        "mt_mbpp_php",
+        "mt_mbpp_python",
+        "mt_mbpp_r",
+        "mt_mbpp_ruby",
+        "mt_mbpp_rust",
+        "mt_mbpp_scala",
+        "mt_mbpp_swift",
+        "mt_mbpp_typescript"
+      ],
+      "bpb": {
+        "proportional": 0.5514092821084675,
+        "unimax8": 0.47479152566185745
+      }
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+ "checkpoint": "proportional_1e21-2f1a48",
+ "plan": "plan_east5",
+ "region": "us-east5",
+ "task": "mt_mbpp_matlab",
+ "valid_documents": 460,
+ "documents": 500,
+ "passed": 11,
+ "pass@1": 0.02391304347826087,
+ "tests_sha256": "2dec5bca355cce27df6896d5064ee81f997fbd5b1ff7de6eb497281b26bfb205",
+ "generation_artifact": {
+  "sha256": "64ea8177d8c21c7c0ce5ffc1401966478cc88659ca099450f585f1b0bc93341d",
+  "size": 80097
+ },
+ "generation_root": "gs://marin-us-east5/experiments/table9_accuracy_20260914/proportional_1e21-2f1a48/mt_mbpp_matlab/dfb0d1a1f6f88cd60ffd641693912797aa8e0c3b35b0c98c8ec24be3cfc58d0a"
+}

@@ -70,9 +70,9 @@ def overlap_scores(plan: dict, row: dict) -> dict:
 
 def checkpoint_report(plan: dict, overlap_plan: dict, row: dict) -> dict:
     matching = [r for r in overlap_plan["rows"] if r["name"] == row["name"]]
-    if len(matching) != 1 or matching[0] != row:
-        raise ValueError("Backfill and overlap must refer to the identical checkpoint inventory row")
-    tasks = overlap_scores(overlap_plan, row)
+    if len(matching) != 1 or not inference.same_checkpoint(matching[0], row):
+        raise ValueError("Backfill and overlap must refer to the same checkpoint bytes")
+    tasks = overlap_scores(overlap_plan, matching[0])
     stages = {}
     for name in (*CHOICE_BACKFILL_TASKS, *GENERATION_BACKFILL_TASKS):
         marker = inference.completed_task(plan, row, name, 0)

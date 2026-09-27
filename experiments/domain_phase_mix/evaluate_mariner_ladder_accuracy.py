@@ -6,7 +6,10 @@ Run with ``uv run --all-packages --extra lm_eval python -m experiments.domain_ph
 --plan PLAN.json`` to validate, adding ``--submit`` only on an east5 Iris parent. The parent must have an
 explicit 48-hour timeout; the current Fray remote API has no child timeout parameter. Every selected row is
 released concurrently as one v5p-8 child in us-east5-a. Completed outputs are reused only after identity, coverage and
-artifact hashes pass verification.
+artifact hashes pass verification. Within a row, the eleven task families are evaluated one at a time on the loaded
+model and each family's harness output is saved under ``partial/`` as soon as it is validated, so a preempted child
+resumes at the next family instead of restarting the 67-leaf suite; the family outputs are merged into the single
+results dictionary the whole-suite call would return.
 
 The JSON plan contains schema_version=1, region, zone, cache_uri, cache_manifest_sha256, output_root,
 tpu_type, max_length, batch_size, seed=0, runtime_versions, lm_eval_revision, source_hashes, uv_lock_sha256,
@@ -28,6 +31,7 @@ import math
 import os
 import re
 import tempfile
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -38,18 +42,21 @@ import fsspec
 import jax
 import jmp
 from fray.types import ResourceConfig
+from levanter.compat.hf_checkpoints import load_tokenizer
 from levanter.distributed import DistributedConfig
 from levanter.eval_harness import (
-    EvalHarnessMainConfig,
     LmEvalHarnessConfig,
     SampleLoggingConfig,
+    _compute_averages,
     ensure_lm_eval_available,
-    run_eval_harness_main,
+    run_lm_eval_harness,
 )
+from levanter.model_loading import load_hf_checkpoint
 from levanter.models.qwen import Qwen3Config
 from levanter.tracker import NoopConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.py_utils import FailSafeJSONEncoder
+from levanter.utils.tree_utils import inference_mode
 from marin.evaluation.eval_dataset_cache import (
     MANIFEST_FILE,
     CacheManifest,
@@ -73,6 +80,8 @@ EXPECTED_TASKS = frozenset(
 )
 RUNTIME_PACKAGES = ("lm-eval", "datasets", "transformers", "jax", "jaxlib")
 ARTIFACTS = ("results.json.gz", "summary_metrics.json", "provenance.json")
+PARTIAL_DIR = "partial"
+MMLU_FAMILY = "mmlu_5shot"
 
 
 def canonical_json(value: dict) -> bytes:
@@ -195,12 +204,12 @@ def output_uri(plan: dict, row: dict) -> str:
     return f"{plan['output_root']}/{plan_sha256(plan)}/{row['name']}"
 
 
-def harness_config(plan: dict) -> LmEvalHarnessConfig:
+def harness_config(plan: dict, families=OLMO_BASE_EASY_OVERLAP_TASKS) -> LmEvalHarnessConfig:
     # Match the immutable regional cache rather than upstream's renamed dataset repositories.
     dataset_paths = {"sciq": "sciq", "winogrande": "winogrande", "social_iqa": "social_i_qa"}
     tasks = [
         replace(task, dataset_path=dataset_paths[task.task]) if task.task in dataset_paths else task
-        for task in convert_to_levanter_task_config(OLMO_BASE_EASY_OVERLAP_TASKS)
+        for task in convert_to_levanter_task_config(families)
     ]
     return LmEvalHarnessConfig(
         task_spec=tasks,
@@ -234,10 +243,16 @@ def task_document_counts(tasks: dict) -> dict[str, int]:
     return counts
 
 
-def validate_results(results: dict, expected_counts: dict[str, int]) -> None:
-    """Require every leaf, accuracy metric, configuration and full per-document payload."""
-    if set(expected_counts) != EXPECTED_TASKS or any(count <= 0 for count in expected_counts.values()):
-        raise ValueError("Expected positive document counts for all 67 task leaves")
+def validate_results(results: dict, expected_counts: dict[str, int], complete: bool = True) -> None:
+    """Require every leaf, accuracy metric, configuration and full per-document payload.
+
+    ``complete`` demands all 67 leaves; a single family's partial output is checked against its own leaves only.
+    """
+    leaves = set(expected_counts)
+    if (leaves != EXPECTED_TASKS if complete else not leaves <= EXPECTED_TASKS) or any(
+        count <= 0 for count in expected_counts.values()
+    ):
+        raise ValueError("Expected positive document counts for the evaluated task leaves")
     for name, count in expected_counts.items():
         metrics = results["results"][name]
         accuracy = [value for key, value in metrics.items() if key.split(",")[0] in ("acc", "acc_norm")]
@@ -254,6 +269,90 @@ def validate_results(results: dict, expected_counts: dict[str, int]) -> None:
         expected_shots = 0 if name == "lambada_0shot" else 5
         if results["configs"][name]["num_fewshot"] != expected_shots:
             raise ValueError(f"Unexpected few-shot configuration for {name}")
+
+
+def family_leaves(alias: str, leaves: Sequence[str]) -> list[str]:
+    """Leaf names of one overlap family: MMLU expands to its subjects, every other family is its own leaf."""
+    if alias == MMLU_FAMILY:
+        return sorted(name for name in leaves if name.startswith("mmlu_"))
+    return [alias]
+
+
+def family_plan(plan: dict, counts: dict[str, int]) -> list[tuple[str, LmEvalHarnessConfig, dict[str, int]]]:
+    """The eleven families in suite order, each with its own harness configuration and leaf document counts."""
+    families = []
+    for task in OLMO_BASE_EASY_OVERLAP_TASKS:
+        alias = cast(str, task.task_alias)
+        families.append(
+            (alias, harness_config(plan, (task,)), {name: counts[name] for name in family_leaves(alias, list(counts))})
+        )
+    if sorted(name for _, _, leaf_counts in families for name in leaf_counts) != sorted(counts):
+        raise ValueError("The task families do not partition the evaluated leaves")
+    return families
+
+
+def partial_uri(plan: dict, row: dict, alias: str) -> str:
+    return f"{output_uri(plan, row)}/{PARTIAL_DIR}/{alias}.json.gz"
+
+
+def write_durable(uri: str, payload: bytes) -> dict:
+    """Write an object and read it back, returning its verified size and hash."""
+    with fsspec.open(uri, "wb") as handle:
+        handle.write(payload)
+    expected = {"size": len(payload), "sha256": hashlib.sha256(payload).hexdigest()}
+    actual = read_bytes(uri)
+    if len(actual) != expected["size"] or hashlib.sha256(actual).hexdigest() != expected["sha256"]:
+        raise ValueError(f"Durable output verification failed: {uri}")
+    return expected
+
+
+def load_partial(plan: dict, row: dict, alias: str, counts: dict[str, int]) -> dict | None:
+    """A family's harness output saved by an earlier attempt of the same plan and row, validated on its leaves."""
+    uri = partial_uri(plan, row, alias)
+    fs, _ = fsspec.core.url_to_fs(uri)
+    if not fs.exists(uri):
+        return None
+    outputs = json.loads(gzip.decompress(read_bytes(uri)))
+    validate_results(outputs, counts, complete=False)
+    return outputs
+
+
+def save_partial(plan: dict, row: dict, alias: str, outputs: dict) -> None:
+    write_durable(
+        partial_uri(plan, row, alias), gzip.compress(json.dumps(outputs, cls=FailSafeJSONEncoder).encode(), mtime=0)
+    )
+
+
+def discard_partials(plan: dict, row: dict) -> None:
+    root = f"{output_uri(plan, row)}/{PARTIAL_DIR}"
+    fs, _ = fsspec.core.url_to_fs(root)
+    if fs.exists(root):
+        fs.rm(root, recursive=True)
+
+
+def merge_family_outputs(outputs: Sequence[dict]) -> dict:
+    """Combine per-family harness outputs into the dictionary one call over every family returns.
+
+    Every section keyed by task name is the disjoint union of the families' sections; scalar sections must agree;
+    the cross-task averages are recomputed over the merged tasks.
+    """
+    merged: dict = {}
+    for family in outputs:
+        for key, value in family.items():
+            if key == "averages":
+                continue
+            if isinstance(value, dict):
+                section = merged.setdefault(key, {})
+                overlap = set(section) & set(value)
+                if overlap:
+                    raise ValueError(f"Families overlap in {key}: {sorted(overlap)}")
+                section.update(value)
+            elif key in merged and merged[key] != value:
+                raise ValueError(f"Families disagree on {key}")
+            else:
+                merged[key] = value
+    merged["averages"] = _compute_averages(merged)
+    return merged
 
 
 def verified_result(plan: dict, row: dict) -> dict | None:
@@ -306,16 +405,7 @@ def persist_results(plan: dict, row: dict, results: dict, counts: dict[str, int]
         "summary_metrics.json": json.dumps(summary, cls=FailSafeJSONEncoder).encode(),
         "provenance.json": canonical_json(provenance),
     }
-    identities = {}
-    for filename, payload in payloads.items():
-        uri = root + "/" + filename
-        with fsspec.open(uri, "wb") as handle:
-            handle.write(payload)
-        expected = {"size": len(payload), "sha256": hashlib.sha256(payload).hexdigest()}
-        actual = read_bytes(uri)
-        if len(actual) != expected["size"] or hashlib.sha256(actual).hexdigest() != expected["sha256"]:
-            raise ValueError(f"Durable output verification failed: {uri}")
-        identities[filename] = expected
+    identities = {filename: write_durable(root + "/" + filename, payload) for filename, payload in payloads.items()}
     marker = {"plan_sha256": plan_sha256(plan), "row": row, "artifacts": identities}
     with fsspec.open(root + "/SUCCESS.json", "wb") as handle:
         handle.write(canonical_json(marker))
@@ -326,7 +416,7 @@ def persist_results(plan: dict, row: dict, results: dict, counts: dict[str, int]
 
 
 def evaluate_row(plan: dict, row: dict) -> None:
-    """Validate, stage the offline dataset cache, and evaluate one HF checkpoint."""
+    """Validate, stage the offline dataset cache, and evaluate one HF checkpoint family by family."""
     validate_plan(plan)
     validate_inputs(plan)
     if verified_result(plan, row) is not None:
@@ -337,17 +427,24 @@ def evaluate_row(plan: dict, row: dict) -> None:
     manifest = load_eval_datasets_from_gcs(plan["cache_uri"])
     if manifest is None or not manifest.supports_full_offline_task_loading():
         raise ValueError("Failed to stage the complete regional cache; repair it before resubmitting")
-    config = harness_config(plan)
-    counts = task_document_counts(config.to_task_dict())
+    counts = task_document_counts(harness_config(plan).to_task_dict())
     if set(counts) != EXPECTED_TASKS:
         raise ValueError(f"Offline cache task coverage differs: {sorted(set(counts) ^ EXPECTED_TASKS)}")
+    families = family_plan(plan, counts)
+    finished = {}
+    for alias, _config, leaf_counts in families:
+        outputs = load_partial(plan, row, alias, leaf_counts)
+        if outputs is not None:
+            finished[alias] = outputs
+            logger.info("Resuming %s: %s already evaluated", row["name"], alias)
+    pending = [family for family in families if family[0] not in finished]
 
     # HF conversion can touch JAX; initialize distributed execution before opening the model.
     DistributedConfig().initialize()
     device_count = jax.device_count()
     if plan["batch_size"] < device_count or plan["batch_size"] % device_count:
         raise ValueError(f"Evaluation batch size {plan['batch_size']} is not divisible by {device_count} JAX devices")
-    model = checkpoint_model_config(row["checkpoint_uri"])
+    model_config = checkpoint_model_config(row["checkpoint_uri"])
     trainer = TrainerConfig(
         tracker=NoopConfig(),
         mp=jmp.get_policy("p=bfloat16,c=bfloat16"),
@@ -357,22 +454,45 @@ def evaluate_row(plan: dict, row: dict) -> None:
         log_xla_hlo=False,
         shutdown_at_exit=False,
     )
-    eval_config = EvalHarnessMainConfig(
-        eval_harness=config,
-        tokenizer=row["checkpoint_uri"],
-        checkpoint_path=row["checkpoint_uri"],
-        checkpoint_is_hf=True,
-        trainer=trainer,
-        model=model,
-    )
-    # The harness prints the complete sample payload. Keep it off the Iris log stream.
-    with tempfile.TemporaryFile(mode="w+") as transcript, contextlib.redirect_stdout(transcript):
-        results = run_eval_harness_main(eval_config)
+    trainer.initialize()
+    tokenizer = load_tokenizer(row["checkpoint_uri"])
+    topology = {"devices": jax.device_count(), "processes": jax.process_count(), "backend": jax.default_backend()}
+    with trainer.use_device_mesh():
+        model = None
+        if pending:
+            model = load_hf_checkpoint(
+                model_config,
+                row["checkpoint_uri"],
+                axis_mapping=trainer.parameter_axis_mapping,
+                tokenizer=tokenizer,
+                compute_dtype=trainer.mp.compute_dtype,
+            )
+            model = inference_mode(model, True)
+        for alias, family_config, leaf_counts in pending:
+            logger.info("Evaluating %s/%s: %d leaves", row["name"], alias, len(leaf_counts))
+            # The harness prints the complete sample payload. Keep it off the Iris log stream.
+            with tempfile.TemporaryFile(mode="w+") as transcript, contextlib.redirect_stdout(transcript):
+                outputs = run_lm_eval_harness(
+                    family_config,
+                    model,
+                    tokenizer,
+                    trainer.EvalBatch,
+                    axis_resources=trainer.compute_axis_mapping,
+                    mp=trainer.mp,
+                )
+            if jax.process_index() != 0:
+                continue
+            if outputs is None:
+                raise ValueError("The leader returned no evaluation results")
+            normalized = json.loads(json.dumps(outputs, cls=FailSafeJSONEncoder))
+            validate_results(normalized, leaf_counts, complete=False)
+            save_partial(plan, row, alias, normalized)
+            finished[alias] = normalized
+            logger.info("Durable family output: %s", partial_uri(plan, row, alias))
     if jax.process_index() == 0:
-        if results is None:
-            raise ValueError("The leader returned no evaluation results")
-        topology = {"devices": jax.device_count(), "processes": jax.process_count(), "backend": jax.default_backend()}
+        results = merge_family_outputs([finished[alias] for alias, _config, _counts in families])
         persist_results(plan, row, results, counts, topology)
+        discard_partials(plan, row)
 
 
 def submit(plan: dict) -> None:

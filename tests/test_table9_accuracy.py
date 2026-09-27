@@ -5,7 +5,15 @@ import pytest
 from marin.evaluation.olmo_base_eval.accuracy import choice_metrics, coverage_report, validate_task_samples
 from marin.evaluation.olmo_base_eval.components import MT_MBPP_SUBTASKS, scored_tasks
 
-from experiments.domain_phase_mix.evaluate_table9_accuracy import digest, evaluate_task, protocol
+from experiments.domain_phase_mix.evaluate_table9_accuracy import (
+    RESUME_CHUNK,
+    child_task_groups,
+    digest,
+    evaluate_task,
+    evaluate_task_resumably,
+    partial_samples,
+    protocol,
+)
 
 
 def test_choice_normalizations_can_disagree():
@@ -54,3 +62,35 @@ def test_generation_requests_never_alias_the_frozen_plan_spec():
     assert [s["generation"] for s in samples] == ["42", "42"]
     assert spec["generation"]["until"] == ["Problem:"]
     assert digest(protocol(plan)) == before
+
+
+def test_resumable_evaluation_saves_prefixes_and_resumes_after_a_crash(tmp_path):
+    class Harness:
+        def __init__(self, fail_after):
+            self.calls = 0
+            self.fail_after = fail_after
+
+        def generate_until(self, instances):
+            self.calls += 1
+            if self.calls > self.fail_after:
+                raise RuntimeError("preempted")
+            return [f"gen{i.doc['doc_id']}" for i in instances]
+
+    root = "file://" + str(tmp_path / "task")
+    spec = {"generation": {"max_gen_toks": 8, "temperature": 0, "seed": 0, "n": 1, "until": ["\n\n"]}}
+    requests = [{"task": "minerva_math_algebra", "doc_id": i, "context": f"q{i}"} for i in range(RESUME_CHUNK * 2 + 5)]
+    with pytest.raises(RuntimeError):
+        evaluate_task_resumably(Harness(fail_after=2), requests, spec, root)
+    assert [s["doc_id"] for s in partial_samples(root)] == list(range(RESUME_CHUNK * 2))
+    resumed = Harness(fail_after=10)
+    samples = evaluate_task_resumably(resumed, requests, spec, root)
+    assert resumed.calls == 1
+    assert [s["generation"] for s in samples] == [f"gen{i}" for i in range(len(requests))]
+
+
+def test_full_generation_runs_shard_one_child_per_task():
+    pending = ["minerva_math_algebra", "codex_humaneval", "mbpp"]
+    assert child_task_groups("generation", 0, pending) == [("minerva_math_algebra",), ("codex_humaneval",), ("mbpp",)]
+    assert child_task_groups("generation", 2, pending) == [None]
+    assert child_task_groups("choices", 0, ["coqa", "drop"]) == [None]
+    assert child_task_groups("generation", 0, []) == []

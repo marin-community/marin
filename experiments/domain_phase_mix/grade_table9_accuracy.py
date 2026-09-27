@@ -6,9 +6,14 @@
 Run with uv run --no-sync --with math-verify==0.8.0 --with antlr4-python3-runtime==4.11.1
 python -m experiments.domain_phase_mix.grade_table9_accuracy --plan PLAN.json.
 Python code runs in disposable, credential-free Docker containers, never on the host.
+
+MBPP's native prompts describe each task in words and never name the function its asserts call, so the grader
+binds that name to the function the completion defines before the asserts run (``mbpp_binding``).
 """
 
 import argparse
+import ast
+import builtins
 import gzip
 import hashlib
 import importlib.metadata
@@ -33,6 +38,7 @@ PYTHON_IMAGE = "python@sha256:782412e85d0f0984994c290652577d4018aff08145c85b262b
 PRIMARY_METRICS = {
     task: "math_verify" if task.startswith("minerva_math_") else "pass@1" for task in GENERATION_BACKFILL_TASKS
 }
+BUILTIN_NAMES = frozenset(dir(builtins))
 
 
 def grade_math(sample: dict) -> dict[str, float]:
@@ -42,11 +48,96 @@ def grade_math(sample: dict) -> dict[str, float]:
     return {key: float(value) for key, value in metrics.items()}
 
 
-def python_program(sample: dict, text: str) -> str:
+def tested_names(test: str) -> list[str]:
+    """Functions the asserts call that are neither builtins nor defined or imported by the test itself."""
+    tree = ast.parse(test)
+    local = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
+    local |= {
+        (a.asname or a.name).split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.Import | ast.ImportFrom) for a in n.names
+    }
+    names = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            name = node.func.id
+            if name not in BUILTIN_NAMES and name not in local and name not in names:
+                names.append(name)
+    return names
+
+
+def call_shapes(test: str, name: str) -> set[tuple[int, frozenset[str]]]:
+    return {
+        (len(n.args), frozenset(k.arg for k in n.keywords if k.arg))
+        for n in ast.walk(ast.parse(test))
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == name
+    }
+
+
+def accepts(fn: ast.FunctionDef | ast.AsyncFunctionDef, positional: int, keywords: frozenset[str]) -> bool:
+    a = fn.args
+    params = [p.arg for p in (*a.posonlyargs, *a.args)]
+    if positional > len(params) and a.vararg is None:
+        return False
+    if not keywords <= set(params[positional:]) | {p.arg for p in a.kwonlyargs} and a.kwarg is None:
+        return False
+    required = params[: len(params) - len(a.defaults)]
+    if any(p not in keywords for p in required[positional:]):
+        return False
+    return all(d is not None or p.arg in keywords for p, d in zip(a.kwonlyargs, a.kw_defaults, strict=True))
+
+
+def module_names(tree: ast.Module) -> set[str]:
+    names = set()
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            names.add(node.name)
+        elif isinstance(node, ast.Import | ast.ImportFrom):
+            names |= {(a.asname or a.name).split(".")[0] for a in node.names}
+        else:
+            names |= {n.id for n in ast.walk(node) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
+    return names
+
+
+def mbpp_binding(code: str, test: str) -> dict:
+    """Choose the completion's function for the name MBPP's asserts call.
+
+    Among top-level functions that accept every call in the asserts, prefer those no other top-level function calls
+    (the entry points) and take the last defined. A completion that already defines the tested name, does not parse,
+    or has no function that accepts the calls is left unbound, as is a test that calls more than one such name.
+    """
+    names = tested_names(test)
+    if len(names) != 1:
+        return {"category": "multi_name_test", "tested": names}
+    (name,) = names
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError, RecursionError):
+        return {"category": "syntax_error", "tested": name}
+    if name in module_names(tree):
+        return {"category": "named", "tested": name}
+    functions = [n for n in tree.body if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)]
+    shapes = call_shapes(test, name)
+    compatible = [f for f in functions if all(accepts(f, p, k) for p, k in shapes)]
+    if not compatible:
+        return {"category": "no_compatible_function", "tested": name}
+    called = {
+        n.func.id
+        for f in functions
+        for n in ast.walk(f)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id != f.name
+    }
+    entry = [f for f in compatible if f.name not in called] or compatible
+    return {"category": "bound", "tested": name, "chosen": entry[-1].name}
+
+
+def python_program(sample: dict, text: str) -> tuple[str, dict | None]:
     # Completion prompts already open the code fence (MBPP) or function body (HumanEval).
-    code = text.split("```")[0]
-    prefix = sample["metadata"].get("answer_prefix", "")
-    return prefix + code + "\n" + sample["metadata"]["test"] + "\n"
+    code = sample["metadata"].get("answer_prefix", "") + text.split("```")[0]
+    test = sample["metadata"]["test"]
+    if sample["task"] != "mbpp":
+        return code + "\n" + test + "\n", None
+    binding = mbpp_binding(code, test)
+    alias = f"{binding['tested']} = {binding['chosen']}\n" if binding["category"] == "bound" else ""
+    return code + "\n" + alias + test + "\n", binding
 
 
 def sandbox_python(program: str, *, timeout: int = 10) -> dict:
@@ -116,8 +207,9 @@ def sandbox_python(program: str, *, timeout: int = 10) -> dict:
 def grade_sample(sample: dict) -> dict:
     if sample["task"].startswith("minerva_math_"):
         return sample | {"metrics": grade_math(sample)}
-    execution = sandbox_python(python_program(sample, sample["generation"]))
-    return sample | {"metrics": {"pass@1": float(execution["passed"])}, "execution": execution}
+    program, binding = python_program(sample, sample["generation"])
+    execution = sandbox_python(program)
+    return sample | {"metrics": {"pass@1": float(execution["passed"])}, "execution": execution, "binding": binding}
 
 
 def grader_identity() -> dict:

@@ -1,0 +1,63 @@
+{
+  "rows": [
+    {
+      "name": "olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+      "method": "Olmix",
+      "checkpoint_uri": "gs://marin-us-east1/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_scaling_v6e_20260910/olmixq_t9_kl0p005_cap04_1e21_seed662005-3f95f2/hf/step-22056",
+      "checkpoint_step": 22056,
+      "checkpoint_files": {
+        "chat_template.jinja": {
+          "size": 5112,
+          "generation": "1790426548593418",
+          "crc32c": "jSXcIQ=="
+        },
+        "config.json": {
+          "size": 1821,
+          "generation": "1790426550096056",
+          "crc32c": "Ed+/cg=="
+        },
+        "model-00001-of-00003.safetensors": {
+          "size": 4933674712,
+          "generation": "1790426644522946",
+          "crc32c": "2SJntw=="
+        },
+        "model-00002-of-00003.safetensors": {
+          "size": 4928580272,
+          "generation": "1790426732954493",
+          "crc32c": "88SH+Q=="
+        },
+        "model-00003-of-00003.safetensors": {
+          "size": 3670220688,
+          "generation": "1790426792543406",
+          "crc32c": "PoLqMw=="
+        },
+        "model.safetensors.index.json": {
+          "size": 22613,
+          "generation": "1790426793680750",
+          "crc32c": "kQyzZw=="
+        },
+        "tokenizer.json": {
+          "size": 17209892,
+          "generation": "1790426795220157",
+          "crc32c": "cv2h3Q=="
+        },
+        "tokenizer_config.json": {
+          "size": 5614,
+          "generation": "1790426796641842",
+          "crc32c": "IMLwKQ=="
+        }
+      },
+      "source_training_experiment": "exp_01m21dyb8mxjg2aqhtbjncejpc",
+      "training_metadata": {
+        "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_scaling_v6e_20260910/olmixq_t9_kl0p005_cap04_1e21_seed662005-3f95f2/checkpoints/step-22056/metadata.json",
+        "sha256": "4e4ff89698cd490e35f5611b6db1523d1c74a2c39bf63c01af75632b07e2b6c2",
+        "data": {
+          "step": 22056,
+          "timestamp": "2026-09-25T22:14:57.885429",
+          "is_temporary": false
+        }
+      },
+      "copied_from": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_scaling_v6e_20260910/olmixq_t9_kl0p005_cap04_1e21_seed662005-3f95f2/hf/step-22056"
+    }
+  ]
+}

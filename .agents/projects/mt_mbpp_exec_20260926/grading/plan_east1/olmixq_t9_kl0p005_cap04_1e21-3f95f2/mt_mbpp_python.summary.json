@@ -1,0 +1,16 @@
+{
+ "checkpoint": "olmixq_t9_kl0p005_cap04_1e21-3f95f2",
+ "plan": "plan_east1",
+ "region": "us-east1",
+ "task": "mt_mbpp_python",
+ "valid_documents": 500,
+ "documents": 500,
+ "passed": 94,
+ "pass@1": 0.188,
+ "tests_sha256": "0991fb7321e32820c6a7521f6ed5a1207b1f7081d6f92da04c2dffa2b79d12ce",
+ "generation_artifact": {
+  "sha256": "008416cbdda72af875ed84801e202c7bd71c15a2b577e40751ae8771232fc4e7",
+  "size": 77821
+ },
+ "generation_root": "gs://marin-us-east1/experiments/table9_accuracy_20260914/olmixq_t9_kl0p005_cap04_1e21-3f95f2/mt_mbpp_python/110a479e8cc94df71d3719f0d121dc792e6ca80477709d6e4a7e2bb1729517f5"
+}

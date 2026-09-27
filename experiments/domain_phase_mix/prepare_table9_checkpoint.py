@@ -22,8 +22,9 @@ from experiments.domain_phase_mix import evaluate_table9_accuracy as backfill
 def checkpoint_row(name: str, method: str, uri: str, step: int, metadata_uri: str, experiment: str) -> dict:
     if step <= 0 or not uri.endswith(f"/hf/step-{step}"):
         raise ValueError("Expected an explicitly selected HF export step")
-    if not all(path.startswith(backfill.PREFIX + "/") for path in (uri, metadata_uri)):
-        raise ValueError("Checkpoint and training metadata must be in east5")
+    prefixes = [p for p in backfill.REGION_BUCKETS.values() if uri.startswith(p + "/")]
+    if len(prefixes) != 1 or not metadata_uri.startswith(prefixes[0] + "/"):
+        raise ValueError("Checkpoint and training metadata must be in one regional Marin bucket")
     payload = overlap.read_bytes(metadata_uri)
     metadata = json.loads(payload)
     if metadata["step"] != step or metadata["is_temporary"]:

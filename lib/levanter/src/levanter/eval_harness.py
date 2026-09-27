@@ -240,6 +240,14 @@ GENERATION_MAX_SEQS = 32
 Every decode round runs the model and the paged-attention kernel on ``max_tokens_per_round`` padded tokens, which
 defaults to ``max_seqs``; at 256 the round cost dominated generation on v6e regardless of how many sequences were live.
 """
+GENERATION_PREFILL_TOKENS = 8192
+"""Prompt tokens the engine prefills per generate call; sets how many prompts one call admits.
+
+Doubling this to 16384 together with a 0.6 HBM fraction exhausted a v6e-4 on a 3.4B model at the full-window
+memory probe (a 685 MB prefill buffer with 226 MB free), so both stay at the values the probe passes.
+"""
+GENERATION_HBM_UTILIZATION = 0.5
+"""Fraction of device HBM reserved for the KV page cache during harness generation."""
 RPA_SMEM_BUDGET_BYTES = 896 * 1024
 """Scalar-memory budget for the TPU ragged paged attention page table (1 MiB of SMEM, minus headroom)."""
 
@@ -252,6 +260,31 @@ def _paged_attention_max_seqs(max_seq_len: int, page_size: int, max_seqs: int = 
     """
     pages_per_seq = -(-max_seq_len // page_size)
     return max(1, min(max_seqs, RPA_SMEM_BUDGET_BYTES // (4 * pages_per_seq)))
+
+
+def _admissible_request_batches(requests, max_seqs_in_prefill: int, max_prefill_size: int | None) -> list[list]:
+    """Split generation requests into batches the inference engine prefills whole.
+
+    ``InferenceEngine.generate`` admits requests only once, from the head of the batch, until it holds
+    ``max_seqs_in_prefill`` sequences or ``max_prefill_size`` prompt tokens; requests past that point are returned
+    with no tokens. Batching by the same rule, in order, keeps every request's output aligned with its request.
+    """
+    limit = max_prefill_size if max_prefill_size is not None else float("inf")
+    batches: list[list] = []
+    current: list = []
+    tokens = 0
+    for request in requests:
+        length = len(request.prompt_tokens)
+        if length > limit:
+            raise ValueError(f"Prompt of {length} tokens exceeds the engine's max_prefill_size {limit}")
+        if current and (len(current) >= max_seqs_in_prefill or tokens + length > limit):
+            batches.append(current)
+            current, tokens = [], 0
+        current.append(request)
+        tokens += length
+    if current:
+        batches.append(current)
+    return batches
 
 
 class _LmEvalHarnessWorker:
@@ -927,9 +960,13 @@ class LevanterHarnessLM(TemplateLM):
             max_seq_len=max_length,
             max_seqs=max_seqs,
             max_tokens_per_round=max_seqs,
+            # Admit a full round of sequences per generate call (the engine prefills once per call) and give
+            # their prompts room; the page budget grows to hold that many live sequences.
+            max_seqs_in_prefill=max_seqs,
+            max_prefill_size=GENERATION_PREFILL_TOKENS,
             page_size=page_size,
             compute_dtype=jnp.bfloat16,
-            hbm_utilization=0.5,
+            hbm_utilization=GENERATION_HBM_UTILIZATION,
         )
         engine = InferenceEngine.from_model_with_config(
             model=self.leader.model,
@@ -980,18 +1017,22 @@ class LevanterHarnessLM(TemplateLM):
 
         # Pass the callback to the engine if profiling is enabled
         step_callback = decode_step_callback if self.profiler_config.enabled else None
-        result = engine.generate(
-            gen_requests,
-            step_callback=step_callback,
-        )
+        # The engine admits prompts to prefill once per call, capped by max_seqs_in_prefill and max_prefill_size,
+        # and returns every later request empty; submit batches it admits whole.
+        generated_tokens: list[list[int]] = []
+        for batch in _admissible_request_batches(
+            gen_requests, engine.config.max_seqs_in_prefill, engine.config.max_prefill_size
+        ):
+            result = engine.generate(batch, step_callback=step_callback)
+            generated_tokens.extend(result.tokens)
 
         # Decode first generation per request (LM Harness expects one string per request)
         outputs: list[str] = []
         output_idx = 0
         for i, (toks, gen_kwargs) in enumerate(zip(prompt_token_lists, processed_kwargs_list)):
             # Consume one sequence output per request
-            if output_idx < len(result.tokens):
-                full_tokens = result.tokens[output_idx]
+            if output_idx < len(generated_tokens):
+                full_tokens = generated_tokens[output_idx]
                 # Engine tokens are generated tokens only (prompt not included)
                 text = self.tok_decode(full_tokens, skip_special_tokens=True)
 
