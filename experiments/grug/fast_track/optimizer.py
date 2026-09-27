@@ -404,6 +404,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     lm_head_group: str = "adamh"
     """LR group of ``output_proj``: ``adamh``, ``muonh`` or ``sinkhornh`` (Sinkhorn-balanced momentum + hyperball)."""
     embed_group: str = "adam"
+    embed2_lr_mult: float = 1.0
+    """Adam LR multiplier of the second (e.g. bigram) embedding table alone."""
     sinkhorn_momentum: float = 0.95
     sinkhorn_iters: int = 5
     sinkhorn_nesterov: bool = True
@@ -530,6 +532,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                     self.sinkhorn_nesterov,
                     learning_rate * self.sinkhorn_lr_mult,
                 ),
+                "embed2": plain_adam_at(adam_lr * self.embed2_lr_mult),
                 "kda_decay": plain_adam_at(adam_lr * self.kda_decay_lr_mult, self.kda_decay_beta1, self.kda_decay_beta2),
             }
             return optax.multi_transform(transforms, self.create_mask)
@@ -585,6 +588,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 r"\.(value_embed|ve_lambda|ve_gate|xsa_scale|xsa_gate|head_mix|bias_\w+)$", path_lower
             ):
                 return "adam"
+            if "token_embed2" in path_lower and self.embed2_lr_mult != 1.0:
+                return "embed2"
             if "token_embed" in path_lower:
                 return self.embed_group
             if "router_bias" in path_lower or _is_gate_or_router_weight(path_lower):
