@@ -62,6 +62,16 @@ uv run iris --cluster=cw-rno2a job run --priority interactive --enable-extra-res
   -- python -m experiments.datakit.science_sft_conversion.conversion
 ```
 
-The conversion is complete only when every expected source row and chunk has
-a validated output record. Count source and output rows before registering
-the converted chat source in Datakit or using it for SFT.
+The conversion is complete only when every expected source batch has a
+validated output file. Audit batch coverage, Parquet schema, and the minimum
+record count before registering the converted chat source in Datakit or using
+it for SFT. Run the audit from a merged checkout with CoreWeave S3 access:
+
+```bash
+uv run python -m experiments.datakit.science_sft_conversion.audit
+```
+
+The audit prints aggregate counts and exits nonzero if a batch is missing,
+short, has the wrong schema, or if an unrecognized Parquet file appears in the
+output directory. Inspect generated conversations from each source as well;
+the audit checks structural completeness, not answer quality.

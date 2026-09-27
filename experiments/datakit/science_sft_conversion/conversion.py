@@ -59,6 +59,7 @@ class WorkItem:
     source: Source
     url: str
     row_group: int
+    rows: int
 
 
 @dataclass(frozen=True)
@@ -140,17 +141,20 @@ def _work_items() -> list[WorkItem]:
             with fs.open(path, "rb") as stream:
                 metadata = pq.ParquetFile(stream).metadata
             source_rows += metadata.num_rows
-            work.extend(WorkItem(source, url, index) for index in range(metadata.num_row_groups))
+            work.extend(
+                WorkItem(source, url, index, metadata.row_group(index).num_rows)
+                for index in range(metadata.num_row_groups)
+            )
         if source_rows != source.rows:
             raise ValueError(f"{source.name}: expected {source.rows} rows, found {source_rows}")
     return work
 
 
-def _output_path(source: Source, url: str, row_group: int, batch_index: int) -> str:
+def _output_path(source: Source, url: str, row_group: int, batch_index: int, output_root: str) -> str:
     shard = url.rsplit("/", 1)[-1].removesuffix(".parquet")
     source_name = source.name.replace("/", "__")
     filename = f"{source_name}__{shard}__rg-{row_group:05d}__batch-{batch_index:06d}.parquet"
-    return prefix_join(OUTPUT_ROOT, f"outputs/main/{filename}")
+    return prefix_join(output_root, f"outputs/main/{filename}")
 
 
 def _row_request(source: Source, source_id: str, chunk: str, chunk_index: int, chunk_count: int) -> dict:
@@ -299,7 +303,7 @@ async def convert_work_item(source: Source, url: str, row_group: int, endpoint: 
             ):
                 if max_batches is not None and batch_index >= max_batches:
                     break
-                output_url = _output_path(source, url, row_group, batch_index)
+                output_url = _output_path(source, url, row_group, batch_index, OUTPUT_ROOT)
                 output_fs, output_path = filesystem_for(output_url)
                 if output_fs.exists(output_path):
                     continue
