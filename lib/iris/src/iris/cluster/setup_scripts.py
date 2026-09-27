@@ -24,10 +24,13 @@ from collections.abc import Sequence
 
 # cloudpickle for callable entrypoints, py-spy/memray for the profiler attach paths.
 _IRIS_RUNTIME_DEPS = ("cloudpickle", "py-spy", "memray")
+UV_LINK_MODE_ENV = "UV_LINK_MODE"
+UV_LINK_MODE_COPY = "copy"
+UV_LINK_MODE_SYMLINK = "symlink"
 # Kubernetes copies survive the node agent's `uv cache clean`; TPU worker
 # tasks symlink wheels to avoid copying an environment for every task.
 # Direct callers outside Iris keep the copy default.
-_UV_LINK_MODE_FLAG = '--link-mode "${UV_LINK_MODE:-copy}"'
+_UV_LINK_MODE_FLAG = f'--link-mode "${{{UV_LINK_MODE_ENV}:-{UV_LINK_MODE_COPY}}}"'
 
 
 def _uv_sync_target(packages: Sequence[str] | None) -> str:

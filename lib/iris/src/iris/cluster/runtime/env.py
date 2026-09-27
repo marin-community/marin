@@ -17,6 +17,7 @@ from google.protobuf import json_format
 
 from iris.cluster.constraints import INHERITED_CONSTRAINT_KEYS
 from iris.cluster.runtime.types import MountKind, MountSpec
+from iris.cluster.setup_scripts import UV_LINK_MODE_COPY, UV_LINK_MODE_ENV
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.rpc import job_pb2
 
@@ -43,7 +44,6 @@ VENV_PATH = f"{WORKDIR_PATH}/.venv"
 # bring its own image: build_common_iris_env points each tool here explicitly, so
 # nothing depends on that image's HOME.
 UV_CACHE_PATH = "/uv/cache"
-UV_LINK_MODE_ENV = "UV_LINK_MODE"
 UV_CACHE_RECOVERY_SIGNAL_PREFIX = ".iris-recovery-"
 HF_HUB_CACHE_PATH = "/hf/cache"
 CARGO_HOME_PATH = "/cargo"
@@ -270,7 +270,7 @@ def build_common_iris_env(
     # covers the part worth sharing -- the content-addressed model/dataset blobs.
     env["UV_CACHE_DIR"] = UV_CACHE_PATH
     # Kubernetes may clean this cache while tasks run, so its venvs own copies.
-    env[UV_LINK_MODE_ENV] = "copy"
+    env[UV_LINK_MODE_ENV] = UV_LINK_MODE_COPY
     env["UV_PYTHON_INSTALL_DIR"] = f"{UV_CACHE_PATH}/python"
     env["HF_HUB_CACHE"] = HF_HUB_CACHE_PATH
     # CARGO_HOME moves the crate registry onto the mount; a rustup toolchain
