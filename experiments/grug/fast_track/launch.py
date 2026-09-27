@@ -757,6 +757,8 @@ def _typed_setting(config: Any, name: str, text: str) -> Any:
 def _parse_as(annotation: Any, text: str, name: str) -> Any:
     args = [a for a in typing.get_args(annotation) if a is not type(None)]
     if typing.get_origin(annotation) in (types.UnionType, typing.Union):
+        if type(None) in typing.get_args(annotation) and text == "None":
+            return None
         # Members in declaration order; the first that parses wins.
         errors = []
         for member in args:
