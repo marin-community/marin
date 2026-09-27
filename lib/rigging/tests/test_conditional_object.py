@@ -82,6 +82,24 @@ def test_s3_conditional_object_uses_virtual_host_addressing_without_endpoint(mon
     S3ConditionalObject._client.cache_clear()
 
 
+def test_s3_conditional_object_passes_ambient_credentials_to_botocore(monkeypatch):
+    session = MagicMock()
+    monkeypatch.setattr("rigging.filesystem.conditional_object.botocore.session.get_session", lambda: session)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "access-key")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "secret-key")
+    monkeypatch.setenv("AWS_SESSION_TOKEN", "session-token")
+    S3ConditionalObject._client.cache_clear()
+
+    S3ConditionalObject._client("https://s3.example.com")
+
+    kwargs = session.create_client.call_args.kwargs
+    assert kwargs["endpoint_url"] == "https://s3.example.com"
+    assert kwargs["aws_access_key_id"] == "access-key"
+    assert kwargs["aws_secret_access_key"] == "secret-key"
+    assert kwargs["aws_session_token"] == "session-token"
+    S3ConditionalObject._client.cache_clear()
+
+
 def test_s3_conditional_object_requires_absence_for_creation(monkeypatch):
     client = MagicMock()
     client.put_object.return_value = {"ETag": '"v1"'}

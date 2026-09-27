@@ -187,9 +187,19 @@ class S3ConditionalObject:
     def _client(endpoint_url: str | None):
         session = botocore.session.get_session()
         config = botocore.config.Config(s3={"addressing_style": "virtual"})
+        credentials = {}
+        access_key = os.environ.get("AWS_ACCESS_KEY_ID")
+        secret_key = os.environ.get("AWS_SECRET_ACCESS_KEY")
+        if access_key and secret_key:
+            credentials = {
+                "aws_access_key_id": access_key,
+                "aws_secret_access_key": secret_key,
+            }
+            if session_token := os.environ.get("AWS_SESSION_TOKEN"):
+                credentials["aws_session_token"] = session_token
         if endpoint_url:
-            return session.create_client("s3", endpoint_url=endpoint_url, config=config)
-        return session.create_client("s3", config=config)
+            return session.create_client("s3", endpoint_url=endpoint_url, config=config, **credentials)
+        return session.create_client("s3", config=config, **credentials)
 
     def _parts(self) -> tuple[str, str]:
         parsed = StoragePath(self.path)
