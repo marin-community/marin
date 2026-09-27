@@ -215,15 +215,19 @@ _MURMUR_C2 = 0xC2B2AE35
 
 
 def _bigram_hash_ids(
-    token_ids: Int[Array, "B S"], segment_ids: Int[Array, "B S"] | None, num_buckets: int
+    token_ids: Int[Array, "B S"], segment_ids: Int[Array, "B S"] | None, num_buckets: int, ngram: int = 2
 ) -> Int[Array, "B S"]:
-    """Hash each (previous token, token) pair into ``num_buckets`` rows. At position 0 and at every
-    document start the previous token is replaced by the sentinel ``num_buckets`` (never a real id)."""
-    prev = jnp.pad(token_ids[:, :-1], ((0, 0), (1, 0)), constant_values=num_buckets)
-    if segment_ids is not None:
-        starts = jnp.pad(segment_ids[:, 1:] != segment_ids[:, :-1], ((0, 0), (1, 0)), constant_values=True)
-        prev = jnp.where(starts, num_buckets, prev)
-    x = prev.astype(jnp.uint32) * jnp.uint32(_BIGRAM_HASH_PAIR) + token_ids.astype(jnp.uint32)
+    """Hash each n-gram ending at a token (the ``ngram - 1`` previous tokens, then the token) into
+    ``num_buckets`` rows. A previous token before position 0 or in an earlier document is replaced by the
+    sentinel ``num_buckets`` (never a real id)."""
+    x = jnp.zeros(token_ids.shape, jnp.uint32)
+    for lag in range(ngram - 1, 0, -1):
+        prev = jnp.pad(token_ids[:, :-lag], ((0, 0), (lag, 0)), constant_values=num_buckets)
+        if segment_ids is not None:
+            other_doc = jnp.pad(segment_ids[:, lag:] != segment_ids[:, :-lag], ((0, 0), (lag, 0)), constant_values=True)
+            prev = jnp.where(other_doc, num_buckets, prev)
+        x = (x + prev.astype(jnp.uint32)) * jnp.uint32(_BIGRAM_HASH_PAIR)
+    x = x + token_ids.astype(jnp.uint32)
     x = (x ^ (x >> 16)) * jnp.uint32(_MURMUR_C1)
     x = (x ^ (x >> 13)) * jnp.uint32(_MURMUR_C2)
     x = x ^ (x >> 16)
@@ -510,6 +514,8 @@ class GrugModelConfig:
     aux_lm_steps: int = 500
     second_embed: bool = False
     embed2_rows: int = 0
+    embed2_ngram: int = 2
+    """With ``second_embed_bigram``, the n-gram length hashed into the table (2: bigram, 3: trigram)."""
     embed2_dim: int | None = None
     """Low-rank second table: ``embed2_rows x embed2_dim`` rows up-projected to ``hidden_dim`` by a shared
     ``embed2_up`` matrix (None: full-width rows). Shrinks the table's per-step gradient all-reduce and
@@ -2639,7 +2645,7 @@ class Transformer(eqx.Module):
                 ids2 = token_ids
                 if cfg.second_embed_bigram:
                     doc_start = None if segment_ids is None else segment_ids[0]
-                    ids2 = _bigram_hash_ids(token_ids, doc_start, cfg.embed2_rows or cfg.vocab_size)
+                    ids2 = _bigram_hash_ids(token_ids, doc_start, cfg.embed2_rows or cfg.vocab_size, cfg.embed2_ngram)
                 rows2 = _embedding_gather(self.token_embed2, ids2)
                 if self.embed2_up is not None:
                     rows2 = jnp.einsum(
