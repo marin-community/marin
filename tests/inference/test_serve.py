@@ -12,7 +12,7 @@ import socket
 import subprocess
 import sys
 import time
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -30,6 +30,7 @@ from iris.rpc import controller_pb2
 from iris.time_proto import timestamp_to_proto
 from marin.external_dependencies import CUDA_TOOLCHAIN_VERSION_BY_BACKEND, VLLM_GPU_RELEASE
 from marin.inference import iris_vllm
+from marin.inference.broker import InferenceBroker
 from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
     IrisConfig,
@@ -64,6 +65,7 @@ from marin.inference.levanter_backend import (
     validate_levanter_dtype,
 )
 from marin.inference.model_preparation import resolve_model_path, select_tensor_parallel_size
+from marin.inference.proxy import serve_inference_proxy
 from marin.inference.serve import local_inference
 from marin.inference.serve_cli import main as serve_main
 from marin.inference.types import OpenAIEndpoint, RunningModel
@@ -78,6 +80,7 @@ from marin.inference.vllm_server import (
     PreinstalledVllm,
     VllmType,
 )
+from marin.inference.worker import InferenceWorker, run_inference_worker
 from rigging.timing import Timestamp
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse, PlainTextResponse, StreamingResponse
@@ -1076,19 +1079,61 @@ def test_dashboard_serves_ui_and_reverse_proxies_streaming():
             )
             assert _collect_sse_text(completion, "text") == "123456"
 
-            tokenization_payload = {
-                "model": "fake-model",
-                "messages": [{"role": "user", "content": "hi"}],
-                "add_generation_prompt": True,
-                "chat_template_kwargs": {"enable_thinking": False},
-            }
-            tokenized = requests.post(f"{base}/tokenize", json=tokenization_payload, timeout=10)
-            assert tokenized.status_code == 200
-            assert tokenized.json() == {"tokens": [4, 9, 12], "count": 3, "received_request": tokenization_payload}
 
-            rejected = requests.post(f"{base}/tokenize", json={"model": "missing-model"}, timeout=10)
-            assert rejected.status_code == 404
-            assert rejected.json() == {"error": {"type": "NotFoundError"}}
+@pytest.mark.parametrize("topology", ["direct", "brokered"])
+def test_dashboard_tokenization_preserves_backend_payload_and_errors(topology):
+    upstream_sock = bind_serving_socket("127.0.0.1", 0)
+    upstream_port = upstream_sock.getsockname()[1]
+    dashboard_sock = bind_serving_socket("127.0.0.1", 0)
+    dashboard_port = dashboard_sock.getsockname()[1]
+    info = ServingInfo(
+        model="fake-model",
+        backend="vllm",
+        tensor_parallel_size=1,
+        max_model_len=4096,
+        dtype="bfloat16",
+        has_chat_template=True,
+        endpoint="/serve/fake",
+    )
+    with ExitStack() as stack:
+        stack.enter_context(serve_app_background(_fake_vllm_app(), upstream_sock))
+        upstream_base_url = f"http://127.0.0.1:{upstream_port}"
+        if topology == "brokered":
+            broker = InferenceBroker(request_lease_timeout_seconds=30)
+            worker = InferenceWorker(
+                broker=broker,
+                upstream=RunningModel(endpoint=OpenAIEndpoint(base_url=f"{upstream_base_url}/v1", model="fake-model")),
+                request_timeout_seconds=5,
+            )
+            stack.enter_context(run_inference_worker(worker, max_in_flight=2))
+            proxy = stack.enter_context(
+                serve_inference_proxy(
+                    broker=broker,
+                    model="fake-model",
+                    request_timeout_seconds=10,
+                    readiness_timeout_seconds=10,
+                    max_pending_requests=4,
+                    response_fetch_batch_size=4,
+                    server_start_timeout_seconds=10,
+                )
+            )
+            upstream_base_url = proxy.endpoint.base_url.removesuffix("/v1")
+        app = build_dashboard_app(upstream_base_url=upstream_base_url, model_id="fake-model", info=info)
+        stack.enter_context(serve_app_background(app, dashboard_sock))
+        base = f"http://127.0.0.1:{dashboard_port}"
+        tokenization_payload = {
+            "model": "fake-model",
+            "messages": [{"role": "user", "content": "hi"}],
+            "add_generation_prompt": True,
+            "chat_template_kwargs": {"enable_thinking": False},
+        }
+        tokenized = requests.post(f"{base}/tokenize", json=tokenization_payload, timeout=10)
+        assert tokenized.status_code == 200
+        assert tokenized.json() == {"tokens": [4, 9, 12], "count": 3, "received_request": tokenization_payload}
+
+        rejected = requests.post(f"{base}/tokenize", json={"model": "missing-model"}, timeout=10)
+        assert rejected.status_code == 404
+        assert rejected.json() == {"error": {"type": "NotFoundError"}}
 
 
 def test_dashboard_health_reports_loading_when_upstream_down():
