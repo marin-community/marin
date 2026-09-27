@@ -138,6 +138,13 @@ creates eight-GPU H100 worker jobs at the same priority. Use a separate endpoint
 while the old pool is serving, then restart the resumable clients against the
 new endpoint once its model API answers:
 
+The serving entrypoint pins MiniMax revision
+`c5454eb03678d8710e54a4e0fc681b9f3b4a3dba`. It defaults to eight-way tensor
+parallelism and one data-parallel group. To test two data-parallel groups sharing
+eight-way expert parallelism, pass `--tensor-parallel-size 4 --data-parallel-size 2`.
+The product of these two degrees must equal eight GPUs per worker. Compare the
+same sampled workload before using a different topology for the production pool.
+
 ```bash
 uv run iris --cluster=cw-rno2a job run --priority interactive --enable-extra-resources \
   --job-name minimax-m3-science-sft-scaled-20260927 --cpu 2 --memory 8GB \

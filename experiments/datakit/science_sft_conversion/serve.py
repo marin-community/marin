@@ -20,6 +20,8 @@ from marin.inference.iris import IrisServiceConfig, run_iris_service
 
 from experiments.datakit.science_sft_conversion.conversion import MODEL
 
+MODEL_REVISION = "c5454eb03678d8710e54a4e0fc681b9f3b4a3dba"
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -28,10 +30,16 @@ def main() -> None:
     parser.add_argument("--max-sequences", type=int, required=True)
     parser.add_argument("--timeout-hours", type=float, required=True)
     parser.add_argument("--cache-ttl-days", type=int, default=14)
+    parser.add_argument("--tensor-parallel-size", type=int, default=8)
+    parser.add_argument("--data-parallel-size", type=int, default=1)
     args = parser.parse_args()
+    if args.tensor_parallel_size * args.data_parallel_size != 8:
+        parser.error("tensor-parallel-size * data-parallel-size must equal the eight GPUs per worker")
     logging.basicConfig(level=logging.INFO)
     service = IrisServiceConfig(
-        model=ServedModelConfig(weights=MODEL, max_model_len=65536),
+        model=ServedModelConfig(
+            weights=MODEL, revision=MODEL_REVISION, max_model_len=65536, tensor_parallel_size=args.tensor_parallel_size
+        ),
         engine=VllmEngineConfig(
             launcher=VllmLauncherType.CUDA,
             version="0.30.0",
@@ -43,6 +51,7 @@ def main() -> None:
                 "--reasoning-parser=minimax_m3",
                 "--kv-cache-dtype=fp8",
                 "--enable-expert-parallel",
+                f"--data-parallel-size={args.data_parallel_size}",
             ),
         ),
         iris=IrisConfig(
