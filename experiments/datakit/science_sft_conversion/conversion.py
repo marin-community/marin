@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 MODEL = "MiniMaxAI/MiniMax-M3-MXFP8"
 ENDPOINT = "/benfeuer/minimax-m3-science-sft"
 OUTPUT_ROOT = "s3://marin-us-east-02a/marin/users/benfeuer/science-sft-converted/2026.09.27-v1"
+OUTPUT_MAIN_DIR = "outputs/main"
 SOURCES_PATH = Path(__file__).with_name("sources.json")
 MAX_SOURCE_CHARS = 8_000
 INPUT_BATCH_SIZE = 1_024
@@ -154,7 +155,7 @@ def _output_path(source: Source, url: str, row_group: int, batch_index: int, out
     shard = url.rsplit("/", 1)[-1].removesuffix(".parquet")
     source_name = source.name.replace("/", "__")
     filename = f"{source_name}__{shard}__rg-{row_group:05d}__batch-{batch_index:06d}.parquet"
-    return prefix_join(output_root, f"outputs/main/{filename}")
+    return prefix_join(output_root, f"{OUTPUT_MAIN_DIR}/{filename}")
 
 
 def _row_request(source: Source, source_id: str, chunk: str, chunk_index: int, chunk_count: int) -> dict:

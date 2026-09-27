@@ -42,10 +42,10 @@ def test_audit_detects_short_batch(tmp_path) -> None:
 
     pq.write_table(pa.Table.from_pylist([record], schema=CHAT_SCHEMA), output)
     result = audit([work], str(tmp_path), workers=1)
-    assert result["short_batches"] == 1
-    assert result["missing_batches"] == 0
+    assert result.short_batches == 1
+    assert result.missing_batches == 0
 
     pq.write_table(pa.Table.from_pylist([record, {**record, "id": "two"}], schema=CHAT_SCHEMA), output)
     result = audit([work], str(tmp_path), workers=1)
-    assert result["short_batches"] == 0
-    assert result["source_rows"] == result["output_rows"] == 2
+    assert result.complete
+    assert result.source_rows == result.output_rows == 2
