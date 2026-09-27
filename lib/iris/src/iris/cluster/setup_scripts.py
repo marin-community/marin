@@ -24,9 +24,11 @@ from collections.abc import Sequence
 
 # cloudpickle for callable entrypoints, py-spy/memray for the profiler attach paths.
 _IRIS_RUNTIME_DEPS = ("cloudpickle", "py-spy", "memray")
+UV_LINK_MODE_ENV = "UV_LINK_MODE"
+DEFAULT_UV_LINK_MODE = "copy"
 # The worker selects symlink mode on TPU hosts. Copy is the default for direct
 # callers and for Kubernetes, where the node agent can clean the shared cache.
-_UV_LINK_MODE_FLAG = '--link-mode "${UV_LINK_MODE:-copy}"'
+_UV_LINK_MODE_FLAG = f'--link-mode "${{{UV_LINK_MODE_ENV}:-{DEFAULT_UV_LINK_MODE}}}"'
 
 
 def _uv_sync_target(packages: Sequence[str] | None) -> str:
