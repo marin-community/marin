@@ -2841,6 +2841,7 @@ class Transformer(eqx.Module):
         loop_active: bool | None = None,
         train_terms: bool = False,
         route_key: jax.Array | None = None,
+        head_replay: "HeadReplay | None" = None,
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
         """``aux_loss_weight`` scales the early auxiliary LM loss (``aux_lm_layer``); it is skipped at 0.
         ``train_terms`` adds the training-only objectives (MTP, AttnRes z-loss); evals leave it off so they
@@ -2866,6 +2867,22 @@ class Transformer(eqx.Module):
             )
 
         cross_entropy_loss = lm_loss(hidden)
+        replay_loss = None
+        if head_replay is not None:
+            # Replay a stored (final hidden, label) batch through the lm_head only: the head's gradient is
+            # exact at the current W_head; the stored hidden is a stale view of that data (stop-gradient).
+            replay_loss = fused_linear_softmax_cross_entropy_loss(
+                jax.lax.stop_gradient(head_replay.hidden).astype(hidden.dtype),
+                self.output_proj,
+                head_replay.labels,
+                weight=head_replay.weight.astype(loss_dtype),
+                reduction=reduction,
+                logsumexp_weight=logsumexp_weight,
+                dtype=loss_dtype,
+                implementation="xla_fast_bwd",
+                block_sizes=_CE_BLOCK_SIZES,
+                logit_soft_cap=_logit_cap(self.config),
+            )
         # Router z-loss is logged for monitoring only; it is not added to the training loss.
         loss = cross_entropy_loss
         aux_loss = None
@@ -2902,6 +2919,8 @@ class Transformer(eqx.Module):
                 block_sizes=_CE_BLOCK_SIZES,
             )
             loss = loss + self.config.mtp_weight * mtp_loss
+        if replay_loss is not None and head_replay is not None:
+            loss = loss + head_replay.scale.astype(loss_dtype) * replay_loss
         if return_router_metrics:
             final_gate_metrics = {
                 f"train/attn_res/{name.removeprefix('attn_res_')}": router_metrics.pop(name)
@@ -2914,6 +2933,10 @@ class Transformer(eqx.Module):
             summarized_metrics = summarize_router_metrics(router_metrics)
             summarized_metrics.update(final_gate_metrics)
             summarized_metrics["train/cross_entropy_loss"] = cross_entropy_loss
+            if replay_loss is not None:
+                summarized_metrics["train/head_replay_loss"] = replay_loss
+            if head_replay is not None:
+                summarized_metrics[FINAL_HIDDEN_KEY] = jax.lax.stop_gradient(hidden)
             if aux_loss is not None:
                 summarized_metrics["train/attn_res/aux_lm_loss"] = aux_loss
             if mtp_loss is not None:
@@ -2930,6 +2953,22 @@ class Transformer(eqx.Module):
             ]
             return loss, summarized_metrics
         return loss
+
+
+FINAL_HIDDEN_KEY = "_final_hidden"
+
+
+@dataclass(frozen=True)
+class HeadReplay:
+    """A stored batch of final hidden states and labels to replay through the lm_head (``scale`` x CE)."""
+
+    hidden: jax.Array
+    labels: jax.Array
+    weight: jax.Array
+    scale: jax.Array
+
+
+jax.tree_util.register_dataclass(HeadReplay, data_fields=["hidden", "labels", "weight", "scale"], meta_fields=[])
 
 
 def _stack_layer_indices(cfg: GrugModelConfig) -> tuple[tuple[int, ...], tuple[int, ...]]:

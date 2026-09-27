@@ -55,8 +55,10 @@ from experiments.grug.checkpointing import (
 )
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.fast_track.model import (
+    FINAL_HIDDEN_KEY,
     DenseMLP,
     GrugModelConfig,
+    HeadReplay,
     Transformer,
 )
 
@@ -155,6 +157,13 @@ class GrugTrainerConfig:
     ema_blend_sweep: tuple[float, ...] = ()
     # Per-group blend probe: with every group at ``ema_group_base_blend``, also evaluate each group of
     # ``EMA_BLEND_GROUPS`` at 0 (raw final weights) and at 1 (pure EMA), logged as ``eval_blend_<group><a>/``.
+    # Head replay: every ``head_replay_period`` steps, store the batch's final hidden states and labels in one
+    # of ``head_replay_slots`` slots; each step also trains the lm_head on the oldest slot at
+    # ``head_replay_scale`` x its CE (exact head gradient at the current weights; the stored hidden is a
+    # stale view of that data). 0 slots: off.
+    head_replay_slots: int = 0
+    head_replay_period: int = 100
+    head_replay_scale: float = 0.1
     ema_group_sweep: bool = False
     ema_group_base_blend: float = 0.5
 
@@ -505,6 +514,9 @@ class GrugTrainState:
     ema_params: Transformer | None  # EMA of params for eval/checkpoint; None unless ema_beta is set.
     opt_state: optax.OptState
     pending_qb_betas: jax.Array
+    replay_hidden: jax.Array | None = None  # [slots, B, S, D] stored final hidden states (head replay)
+    replay_labels: jax.Array | None = None  # [slots, B, S]
+    replay_weight: jax.Array | None = None  # [slots, B, S]
 
 
 def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
@@ -534,6 +546,7 @@ def initial_state(
     mp: jmp.Policy,
     key: PRNGKeyArray,
     ema_beta: float | None = None,
+    head_replay_shape: tuple[int, int, int, int] | None = None,
 ) -> GrugTrainState:
     initialized_params = Transformer.init(model_config, key=key)
     num_moe_layers = model_config.num_layers
@@ -547,7 +560,21 @@ def initial_state(
         ema_params=params if ema_beta is not None else None,
         opt_state=opt_state,
         pending_qb_betas=jnp.zeros((num_moe_layers, model_config.num_experts)),
+        **_empty_head_replay(head_replay_shape, mp),
     )
+
+
+def _empty_head_replay(shape: tuple[int, int, int, int] | None, mp: jmp.Policy) -> dict[str, jax.Array | None]:
+    """Zeroed ``[slots, B, S, D]`` head-replay buffers, batch-sharded (or Nones when off)."""
+    if shape is None:
+        return {"replay_hidden": None, "replay_labels": None, "replay_weight": None}
+    slots, b, s, d = shape
+    spec3, spec4 = P(None, _BATCH_AXES, None), P(None, _BATCH_AXES, None, None)
+    return {
+        "replay_hidden": jax.sharding.reshard(jnp.zeros((slots, b, s, d), mp.compute_dtype), spec4),
+        "replay_labels": jax.sharding.reshard(jnp.zeros((slots, b, s), jnp.int32), spec3),
+        "replay_weight": jax.sharding.reshard(jnp.zeros((slots, b, s), jnp.float32), spec3),
+    }
 
 
 def _drop_metrics(
@@ -583,6 +610,27 @@ def _drop_metrics(
     }
 
 
+def _store_head_replay(state: GrugTrainState, final_hidden: jax.Array | None, batch, period: int) -> dict:
+    """Every ``period`` steps, write this batch's final hidden states and labels into the next slot."""
+    if state.replay_hidden is None or final_hidden is None:
+        return {}
+    assert state.replay_labels is not None and state.replay_weight is not None
+    slots = state.replay_hidden.shape[0]
+    slot = (state.step // period) % slots
+    write = state.step % period == 0
+    labels = jnp.pad(batch.tokens[:, 1:], ((0, 0), (0, 1))).astype(jnp.int32)
+
+    def put(buf, new):
+        updated = jax.lax.dynamic_update_index_in_dim(buf, new.astype(buf.dtype), slot, axis=0)
+        return jnp.where(write, updated, buf)
+
+    return {
+        "replay_hidden": put(state.replay_hidden, final_hidden),
+        "replay_labels": put(state.replay_labels, labels),
+        "replay_weight": put(state.replay_weight, batch.loss_weight.astype(jnp.float32)),
+    }
+
+
 def _aux_loss_weight(model_config, step: jax.Array) -> jax.Array | None:
     """The early auxiliary LM loss weight at ``step``: linear from ``aux_lm_weight`` to 0 at ``aux_lm_steps``."""
     if model_config.aux_lm_layer is None:
@@ -598,6 +646,7 @@ def _loss_and_grads(
     z_loss: float | None,
     step: jax.Array | None = None,
     loop_active: bool | None = None,
+    head_replay: HeadReplay | None = None,
 ):
     """``loop_active`` is a static pass selector for looped growth (see ``GrugModelConfig.loop_grow_step``)."""
     aux_weight = None if step is None else _aux_loss_weight(params.config, step)
@@ -618,6 +667,7 @@ def _loss_and_grads(
             loop_active=loop_active,
             train_terms=True,
             route_key=route_key,
+            head_replay=head_replay,
         )
 
     return jax.value_and_grad(loss_fn, has_aux=True)(params)
@@ -664,6 +714,8 @@ def _make_train_step(
     z_loss_weight: float,
     ema_beta: float | None = None,
     ema_start_step: int = 0,
+    head_replay_period: int = 100,
+    head_replay_scale: float = 0.1,
     watch_config: WatchConfig | None = None,
 ):
     one = jnp.array(1, dtype=jnp.int32)
@@ -682,7 +734,22 @@ def _make_train_step(
         # host-side kernel launches that can cause SPMD sync issues).
         qb_params = _apply_qb_betas(state.params, state.pending_qb_betas)
 
-        (loss, summarized_metrics), grads = _loss_and_grads(qb_params, batch, mp, z_loss, state.step, loop_active)
+        head_replay = None
+        if state.replay_hidden is not None:
+            slots = state.replay_hidden.shape[0]
+            wave = state.step // head_replay_period
+            oldest = (wave + 1) % slots
+            filled = state.step >= slots * head_replay_period
+            head_replay = HeadReplay(
+                hidden=state.replay_hidden[oldest],
+                labels=state.replay_labels[oldest],
+                weight=state.replay_weight[oldest],
+                scale=jnp.where(filled, head_replay_scale, 0.0).astype(jnp.float32),
+            )
+        (loss, summarized_metrics), grads = _loss_and_grads(
+            qb_params, batch, mp, z_loss, state.step, loop_active, head_replay
+        )
+        final_hidden = summarized_metrics.pop(FINAL_HIDDEN_KEY, None)
         metrics = {"train/loss": loss, **summarized_metrics}
         opt_state_in = state.opt_state
         if os.environ.get("GRUG_SKIP_OPTIMIZER"):
@@ -732,6 +799,7 @@ def _make_train_step(
             master_params=master_params,
             ema_params=ema_params,
             opt_state=opt_state,
+            **_store_head_replay(state, final_hidden, batch, head_replay_period),
             # Dense blocks have no router, so the forward emits no qb_beta_per_layer; keep the
             # (zeros) pending betas -- _apply_qb_betas is already a no-op for dense.
             pending_qb_betas=_next_qb_betas(state, metrics.get("qb_beta_per_layer", state.pending_qb_betas)),
@@ -775,6 +843,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         z_loss_weight=config.trainer.z_loss_weight,
         ema_beta=config.trainer.ema_beta,
         ema_start_step=ema_start_step,
+        head_replay_period=config.trainer.head_replay_period,
+        head_replay_scale=config.trainer.head_replay_scale,
         watch_config=inline_watch_config,
     )
 
@@ -810,6 +880,16 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 mp=trainer.mp,
                 key=model_rng,
                 ema_beta=config.trainer.ema_beta,
+                head_replay_shape=(
+                    (
+                        config.trainer.head_replay_slots,
+                        trainer.train_batch_size,
+                        config.model.max_seq_len,
+                        config.model.hidden_dim,
+                    )
+                    if config.trainer.head_replay_slots > 0
+                    else None
+                ),
             )
 
         state = _init_state(model_key)

@@ -329,6 +329,7 @@ def build_h100_ladder_run(
     ema_last_steps: int | None = None,
     ema_blend_sweep: tuple[float, ...] = (),
     ema_group_sweep: bool = False,
+    head_replay: tuple[int, int, float] = (0, 100, 0.1),
     max_retries_failure: int = MAX_RETRIES_FAILURE,
     model_settings: Mapping[str, str] | None = None,
     optimizer_settings: Mapping[str, str] | None = None,
@@ -416,6 +417,9 @@ def build_h100_ladder_run(
         ema_last_steps=ema_last_steps,
         ema_blend_sweep=ema_blend_sweep,
         ema_group_sweep=ema_group_sweep,
+        head_replay_slots=head_replay[0],
+        head_replay_period=head_replay[1],
+        head_replay_scale=head_replay[2],
     )
     train_resources = ResourceConfig.with_gpu(
         "H100",
@@ -626,6 +630,13 @@ def _submit_to_cluster(run_id: str, target_cluster: str | None, priority: str) -
 )
 @click.option("--ema-group-sweep", is_flag=True, help="After training, probe each parameter group's EMA blend.")
 @click.option(
+    "--head-replay",
+    type=(int, int, float),
+    default=(0, 100, 0.1),
+    show_default=True,
+    help="lm_head replay of stored final hidden states: SLOTS PERIOD SCALE (0 slots: off).",
+)
+@click.option(
     "--max-retries",
     type=click.IntRange(min=0),
     default=MAX_RETRIES_FAILURE,
@@ -686,6 +697,7 @@ def main(
     ema_last_steps: int | None,
     ema_blend: tuple[float, ...],
     ema_group_sweep: bool,
+    head_replay: tuple[int, int, float],
     max_retries: int,
     z_loss_weight: float,
     model_set: tuple[str, ...],
@@ -714,6 +726,7 @@ def main(
         ema_last_steps=ema_last_steps,
         ema_blend_sweep=tuple(ema_blend),
         ema_group_sweep=ema_group_sweep,
+        head_replay=head_replay,
         max_retries_failure=max_retries,
         model_settings=_parse_settings(model_set),
         optimizer_settings=_parse_settings(opt_set),
