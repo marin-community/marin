@@ -624,6 +624,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     """Decay shape of the MuonH LR after warmup: ``floor + (peak - floor) * (1 - p**power)`` over training
     progress ``p`` (modded-nanogpt MuonH records #345/#351). None keeps the shared schedule (linear = 1)."""
     muon_bimaxwell: bool = False
+    bimaxwell_start_frac: float = 1 / 3
+    """Fraction of training after which Bi-Maxwell's two-timescale momentum replaces Nesterov momentum."""
     """Bi-Maxwell two-timescale momentum on the MuonH groups from 1/3 of training (modded-nanogpt #339)."""
     adam_cautious: bool = False
     """Cautious masking (arXiv 2411.16085) on the plain-Adam groups."""
@@ -658,7 +660,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 if self.muon_mars_gamma:
                     components.append(scale_by_mars_correction(self.muon_mars_gamma, self.momentum))
                 if self.muon_bimaxwell:
-                    components.append(scale_by_bimaxwell_momentum(self.momentum, num_train_steps // 3))
+                    components.append(
+                        scale_by_bimaxwell_momentum(self.momentum, int(self.bimaxwell_start_frac * num_train_steps))
+                    )
                 components.append(
                     scale_with_grug_muonh(
                         momentum=0.0 if self.muon_bimaxwell else self.momentum,
