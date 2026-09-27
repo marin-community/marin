@@ -454,6 +454,14 @@ class GrugModelConfig:
     """Weight of the auxiliary loss at step 0; annealed linearly to 0 at ``aux_lm_steps``."""
     aux_lm_steps: int = 500
     second_embed: bool = False
+    embed2_rows: int = 0
+    """Rows of the second embedding table (0: ``vocab_size``). With ``second_embed_bigram`` the (previous,
+    current) hash spreads over these rows, so a table much larger than the vocab keeps bigrams apart."""
+    second_embed_mode: str = "source"
+    """``source``: the second embedding is one more AttnRes source. ``input`` (modded-nanogpt style): it
+    is RMS-normalized and added to every sublayer's AttnRes input as ``h + lambda_g * rms(h) * e2``, with
+    a learned ``lambda_g`` per gate initialized to ``embed2_lambda_init``."""
+    embed2_lambda_init: float = 0.1
     second_embed_bigram: bool = False
     """Index the second table by a hash of (previous token, token) instead of the token: a bigram
     embedding with ``vocab_size`` hashed rows (the previous token is a sentinel at document starts)."""
@@ -1764,6 +1772,10 @@ def _attn_res_mix(
         logits.append(_attn_res_source_logits(stream, queries[gate_index][None], eps, head_norm)[0])
     weights, mixed = _softmax_mix(logits, sources)
     mixed = _gate_variants(mixed, sources, extras, gate_index, eps, has_partial=partial is not None)
+    if extras is not None and extras.get("embed2") is not None:
+        # nanogpt-style per-layer embedding input, scaled to the mix's RMS so lambda is a relative weight.
+        scale = jnp.sqrt(jnp.mean(jnp.square(mixed), axis=-1, keepdims=True))
+        mixed = mixed + extras["embed2_lambda"][gate_index] * scale * extras["embed2"].astype(jnp.float32)
     if additive:
         mixed = mixed + _stream_sum(tuple(sources)).astype(jnp.float32)
     mean_weights = jax.lax.stop_gradient(jnp.mean(weights, axis=tuple(range(1, weights.ndim))))
@@ -2094,6 +2106,8 @@ class Transformer(eqx.Module):
     """Pseudo-query of the final AttnRes gate, whose mix feeds the final norms and the lm_head."""
     token_embed2: jax.Array | None
     embed2_norm: RMSNorm | None
+    embed2_lambda: Float[Array, " G"] | None
+    """Per-gate weight of the second embedding on each sublayer input (``second_embed_mode="input"``)."""
     attn_res_query_bias: Float[Array, "G N"] | None
     """AttnRes logit bias per (gate, source); the last column is the running partial."""
     attn_res_query_pull: Float[Array, "N D"] | None
@@ -2172,8 +2186,20 @@ class Transformer(eqx.Module):
                 reshard(jnp.zeros((cfg.hidden_dim,), dtype=jnp.float32), P(None)) if cfg.attn_res else None
             ),
             token_embed2=(
-                reshard(_init_weight(embed2_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), P(None, None))
+                reshard(
+                    _init_weight(embed2_key, (cfg.embed2_rows or cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std),
+                    P(None, None),
+                )
                 if cfg.second_embed
+                else None
+            ),
+            embed2_lambda=(
+                jnp.full(
+                    (_attn_res_num_gates(cfg) + cfg.num_layers * int(cfg.attn_res_v_gate),),
+                    cfg.embed2_lambda_init,
+                    jnp.float32,
+                )
+                if cfg.second_embed and cfg.second_embed_mode == "input"
                 else None
             ),
             embed2_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps) if cfg.second_embed else None,
@@ -2310,13 +2336,20 @@ class Transformer(eqx.Module):
             raise ValueError("second_embed requires attn_res")
         if cfg.attn_res:
             extra_sources = ()
+            input_embed2 = None
+            if cfg.second_embed_mode not in ("source", "input"):
+                raise ValueError(f"second_embed_mode must be source or input, got {cfg.second_embed_mode!r}")
             if self.token_embed2 is not None:
                 assert self.embed2_norm is not None
                 ids2 = token_ids
                 if cfg.second_embed_bigram:
                     doc_start = None if segment_ids is None else segment_ids[0]
-                    ids2 = _bigram_hash_ids(token_ids, doc_start, cfg.vocab_size)
-                extra_sources = (self.embed2_norm(_embedding_gather(self.token_embed2, ids2)),)
+                    ids2 = _bigram_hash_ids(token_ids, doc_start, cfg.embed2_rows or cfg.vocab_size)
+                embed2 = self.embed2_norm(_embedding_gather(self.token_embed2, ids2))
+                if cfg.second_embed_mode == "input":
+                    input_embed2 = embed2
+                else:
+                    extra_sources = (embed2,)
             hidden, stacked_router_stats, final_gate_stats = self._attn_res_layers(
                 hidden,
                 token_ids,
@@ -2325,6 +2358,7 @@ class Transformer(eqx.Module):
                 long_mask.with_fa4_bounds(long_lower_bounds, valid),
                 long_mask.with_fa4_bounds(short_lower_bounds, valid),
                 route_key,
+                input_embed2,
             )
         else:
             if cfg.moe_hash_layers or cfg.moe_gumbel_tau > 0:
@@ -2390,6 +2424,7 @@ class Transformer(eqx.Module):
         long_layer_mask: AttentionMask,
         short_layer_mask: AttentionMask,
         route_key: jax.Array | None = None,
+        input_embed2: jax.Array | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array], dict[str, jax.Array]]:
         """Block AttnRes over the layers, unrolled so each gate reads only its valid sources.
 
@@ -2440,6 +2475,9 @@ class Transformer(eqx.Module):
                 assert self.attn_res_query_sub is not None
                 queries = queries_flat[:, None, :] + _full_width_sub_queries(self.attn_res_query_sub, cfg)
         logit_bias = _gate_extras(self, queries.shape[0])
+        if input_embed2 is not None:
+            assert self.embed2_lambda is not None
+            logit_bias = {**(logit_bias or {}), "embed2": input_embed2, "embed2_lambda": self.embed2_lambda}
         if cfg.attn_res_head_sub not in ("none", "slice", "full"):
             raise ValueError(f"attn_res_head_sub must be none, slice or full, got {cfg.attn_res_head_sub!r}")
         if cfg.attn_res_head_sub != "none" and (cfg.attn_res_heads < 2 or cfg.attn_res_head_norm):
