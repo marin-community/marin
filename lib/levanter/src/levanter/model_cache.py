@@ -31,7 +31,8 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass
 
 import fsspec
-from huggingface_hub import hf_hub_download, list_repo_files, model_info
+from huggingface_hub import HfApi, hf_hub_download, model_info
+from huggingface_hub.hf_api import RepoFile
 from rigging.filesystem.distributed_lock import create_lock, lease_refresh
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.factory import url_to_fs
@@ -234,14 +235,44 @@ def _stream_hf_snapshot(fs: fsspec.AbstractFileSystem, dest: str, model_id: str,
     before the next download, so peak local disk is one file rather than the full
     repo.
     """
-    filenames = list_repo_files(model_id, revision=revision)
-    logger.info("streaming %d files from HF repo %s into %s", len(filenames), model_id, dest)
+    files = _list_hf_files(model_id, revision)
+    logger.info("streaming %d files from HF repo %s into %s", len(files), model_id, dest)
     with tempfile.TemporaryDirectory(prefix="hf_stream_") as scratch:
-        for filename in filenames:
-            local_path = hf_hub_download(model_id, filename, revision=revision, local_dir=scratch)
+        for source_file in files:
+            filename = source_file.path
             remote_path = f"{dest}/{filename}"
+            if _remote_file_matches(fs, remote_path, source_file):
+                continue
+            local_path = hf_hub_download(model_id, filename, revision=revision, local_dir=scratch)
             # Local/posix-backed fsspec filesystems don't auto-create parents; object
             # stores treat this as a no-op since they have no real directories.
             fs.makedirs(remote_path.rsplit("/", 1)[0], exist_ok=True)
             fs.put_file(local_path, remote_path)
             os.remove(local_path)
+
+
+def _list_hf_files(model_id: str, revision: str | None) -> list[RepoFile]:
+    """Return file metadata for the pinned Hugging Face snapshot."""
+    return [
+        entry
+        for entry in HfApi().list_repo_tree(model_id, recursive=True, revision=revision)
+        if isinstance(entry, RepoFile)
+    ]
+
+
+def _remote_file_matches(fs: fsspec.AbstractFileSystem, path: str, source_file: RepoFile) -> bool:
+    """Check whether a partially uploaded object matches its Hub source file."""
+    if not fs.exists(path):
+        return False
+
+    if fs.info(path).get("size") != source_file.size:
+        return False
+
+    digest = hashlib.sha256() if source_file.lfs is not None else hashlib.sha1(usedforsecurity=False)
+    if source_file.lfs is None:
+        digest.update(f"blob {source_file.size}\0".encode())
+    with fs.open(path, "rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    expected_digest = source_file.lfs.sha256 if source_file.lfs is not None else source_file.blob_id
+    return digest.hexdigest() == expected_digest

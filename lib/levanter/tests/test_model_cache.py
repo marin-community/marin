@@ -3,6 +3,7 @@
 
 """Tests for the distributed-locked model snapshot cache."""
 
+import hashlib
 import json
 import threading
 import time
@@ -11,6 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import fsspec
+from huggingface_hub.hf_api import BlobLfsInfo
 
 import pytest
 
@@ -35,6 +37,16 @@ def _make_populate(call_count: list[int], lock: threading.Lock, *, delay: float 
             handle.write("payload")
 
     return populate
+
+
+def _repo_file(path: str, contents: str) -> SimpleNamespace:
+    payload = contents.encode()
+    return SimpleNamespace(
+        path=path,
+        size=len(payload),
+        blob_id="",
+        lfs=BlobLfsInfo(size=len(payload), sha256=hashlib.sha256(payload).hexdigest(), pointer_size=0),
+    )
 
 
 def test_concurrent_callers_populate_once(tmp_path):
@@ -91,12 +103,11 @@ def test_custom_complete_marker(tmp_path):
 
 def test_cache_hf_model_streams_one_file_at_a_time(tmp_path, monkeypatch):
     """cache_hf_model mirrors every repo file and keeps only one on local disk at a time."""
-    repo_files = ["config.json", "model.safetensors", "tokenizer.json"]
+    repo_files = [
+        _repo_file(filename, f"contents of {filename}")
+        for filename in ["config.json", "model.safetensors", "tokenizer.json"]
+    ]
     max_local_files = 0
-
-    def fake_list_repo_files(model_id, revision=None):
-        assert model_id == "org/model"
-        return repo_files
 
     def fake_hf_hub_download(model_id, filename, revision=None, local_dir=None):
         nonlocal max_local_files
@@ -109,7 +120,7 @@ def test_cache_hf_model_streams_one_file_at_a_time(tmp_path, monkeypatch):
         max_local_files = max(max_local_files, len(present))
         return str(local_path)
 
-    monkeypatch.setattr(model_cache, "list_repo_files", fake_list_repo_files)
+    monkeypatch.setattr(model_cache, "_list_hf_files", lambda model_id, revision: repo_files)
     monkeypatch.setattr(model_cache, "hf_hub_download", fake_hf_hub_download)
 
     cache_path = str(tmp_path / "cache" / "model")
@@ -117,9 +128,54 @@ def test_cache_hf_model_streams_one_file_at_a_time(tmp_path, monkeypatch):
 
     assert result == cache_path
     assert max_local_files == 1, f"expected at most one staged file, saw {max_local_files}"
-    for filename in repo_files:
-        assert Path(cache_path, filename).read_text() == f"contents of {filename}"
+    for source_file in repo_files:
+        assert Path(cache_path, source_file.path).read_text() == f"contents of {source_file.path}"
     assert json.loads(Path(cache_path, DEFAULT_COMPLETE_MARKER).read_text()) == {"source_revision": None}
+
+
+def test_cache_hf_model_reuses_matching_partial_file(tmp_path, monkeypatch):
+    repo_files = [_repo_file("config.json", "existing config"), _repo_file("model.safetensors", "model")]
+    downloaded: list[str] = []
+
+    monkeypatch.setattr(model_cache, "_list_hf_files", lambda model_id, revision: repo_files)
+
+    def fake_hf_hub_download(model_id, filename, revision=None, local_dir=None):
+        downloaded.append(filename)
+        local_path = Path(local_dir, filename)
+        local_path.write_text("existing config" if filename == "config.json" else "model")
+        return str(local_path)
+
+    monkeypatch.setattr(model_cache, "hf_hub_download", fake_hf_hub_download)
+
+    cache_path = tmp_path / "cache" / "model"
+    cache_path.mkdir(parents=True)
+    (cache_path / "config.json").write_text("existing config")
+
+    cache_hf_model(str(cache_path), "org/model")
+
+    assert downloaded == ["model.safetensors"]
+    assert (cache_path / "config.json").read_text() == "existing config"
+
+
+def test_cache_hf_model_replaces_same_size_mismatched_partial_file(tmp_path, monkeypatch):
+    repo_files = [_repo_file("config.json", "fresh config")]
+
+    monkeypatch.setattr(model_cache, "_list_hf_files", lambda model_id, revision: repo_files)
+
+    def fake_hf_hub_download(model_id, filename, revision=None, local_dir=None):
+        local_path = Path(local_dir, filename)
+        local_path.write_text("fresh config")
+        return str(local_path)
+
+    monkeypatch.setattr(model_cache, "hf_hub_download", fake_hf_hub_download)
+
+    cache_path = tmp_path / "cache" / "model"
+    cache_path.mkdir(parents=True)
+    (cache_path / "config.json").write_text("stale config")
+
+    cache_hf_model(str(cache_path), "org/model")
+
+    assert (cache_path / "config.json").read_text() == "fresh config"
 
 
 @pytest.mark.parametrize(
@@ -150,11 +206,6 @@ def test_resolve_pinned_commit_skips_hf_lookup(tmp_path, monkeypatch):
     """An immutable ref can use an existing cache while Hugging Face is unavailable."""
     commit = "a" * 40
 
-    def fake_list_repo_files(model_id, revision=None):
-        assert model_id == "org/model"
-        assert revision == commit
-        return ["config.json"]
-
     def fake_hf_hub_download(model_id, filename, revision=None, local_dir=None):
         assert model_id == "org/model"
         local_path = Path(local_dir, filename)
@@ -162,12 +213,14 @@ def test_resolve_pinned_commit_skips_hf_lookup(tmp_path, monkeypatch):
         return str(local_path)
 
     monkeypatch.setattr(model_cache, "model_info", lambda *args, **kwargs: pytest.fail("must not query HF"))
-    monkeypatch.setattr(model_cache, "list_repo_files", fake_list_repo_files)
+    monkeypatch.setattr(
+        model_cache, "_list_hf_files", lambda model_id, revision: [_repo_file("config.json", revision)]
+    )
     monkeypatch.setattr(model_cache, "hf_hub_download", fake_hf_hub_download)
     monkeypatch.setattr(model_cache, "marin_temp_bucket", lambda _ttl_days, prefix: str(tmp_path / prefix))
 
     first = resolve_cached_model_path(f"org/model@{commit}", cache_ttl_days=7, cache_prefix="models")
-    monkeypatch.setattr(model_cache, "list_repo_files", lambda *_args, **_kwargs: pytest.fail("cache miss"))
+    monkeypatch.setattr(model_cache, "_list_hf_files", lambda *_args, **_kwargs: pytest.fail("cache miss"))
     monkeypatch.setattr(model_cache, "hf_hub_download", lambda *_args, **_kwargs: pytest.fail("cache miss"))
     second = resolve_cached_model_path(f"org/model@{commit}", cache_ttl_days=7, cache_prefix="models")
 
@@ -218,11 +271,6 @@ def test_resolve_tracks_mutable_hf_revision(tmp_path, monkeypatch):
         assert revision is None
         return SimpleNamespace(sha=current_commit)
 
-    def fake_list_repo_files(model_id, revision=None):
-        assert model_id == "org/model"
-        assert revision == current_commit
-        return repo_files
-
     def fake_hf_hub_download(model_id, filename, revision=None, local_dir=None):
         assert model_id == "org/model"
         local_path = Path(local_dir, filename)
@@ -230,7 +278,11 @@ def test_resolve_tracks_mutable_hf_revision(tmp_path, monkeypatch):
         return str(local_path)
 
     monkeypatch.setattr(model_cache, "model_info", fake_model_info)
-    monkeypatch.setattr(model_cache, "list_repo_files", fake_list_repo_files)
+    monkeypatch.setattr(
+        model_cache,
+        "_list_hf_files",
+        lambda model_id, revision: [_repo_file(filename, revision) for filename in repo_files],
+    )
     monkeypatch.setattr(model_cache, "hf_hub_download", fake_hf_hub_download)
     monkeypatch.setattr(model_cache, "marin_temp_bucket", lambda _ttl_days, prefix: str(tmp_path / prefix))
 
