@@ -3,6 +3,7 @@
 
 import re
 from dataclasses import dataclass
+from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -338,6 +339,76 @@ def _sinkhorn_hyperball(momentum: float, iters: int, nesterov: bool, learning_ra
     return optax.GradientTransformation(sinkhorn.init, update_fn)
 
 
+_HYPERBALL_GROUPS = frozenset({"muonh", "adamh", "kda_beta", "muonh_attn", "muonh_routed", "sinkhornh"})
+
+
+class SnooState(NamedTuple):
+    count: jax.Array
+    slow: optax.Params
+    momentum: optax.Updates
+    inner: optax.OptState
+
+
+def _sphere_norm(x: jax.Array) -> jax.Array:
+    """Frobenius norm per layer (axis 0 of a stacked leaf) or of the whole 2-D matrix, in float32."""
+    axes = tuple(range(x.ndim)) if x.ndim == 2 else tuple(range(1, x.ndim))
+    return jnp.sqrt(jnp.sum(jnp.square(x.astype(jnp.float32)), axis=axes, keepdims=True))
+
+
+def snoo(
+    inner: optax.GradientTransformation,
+    labels_fn,
+    *,
+    period: int,
+    outer_lr: float,
+    outer_momentum: float,
+) -> optax.GradientTransformation:
+    """SNOO (arXiv 2510.15830): every ``period`` steps, a Nesterov step on the pseudo-gradient
+    ``slow - fast`` moves the slow weights, and the fast weights jump to them. The inner optimizer
+    state is never reset.
+
+    Hyperball leaves (``_HYPERBALL_GROUPS`` in ``labels_fn(params)``) are projected back to their fast
+    weights' per-layer Frobenius norm, which is the sphere MuonH/AdamH keep them on. ``router_bias`` is
+    QB controller state set outside the optimizer, so it passes through untouched."""
+
+    def init(params):
+        return SnooState(
+            count=jnp.zeros([], jnp.int32),
+            slow=jax.tree.map(lambda p: p.astype(jnp.float32), params),
+            momentum=jax.tree.map(lambda p: jnp.zeros_like(p, dtype=jnp.float32), params),
+            inner=inner.init(params),
+        )
+
+    def update(updates, state, params):
+        inner_updates, inner_state = inner.update(updates, state.inner, params)
+        count = state.count + 1
+        outer = count % period == 0
+        labels = labels_fn(params)
+        paths = leaf_key_paths(params)
+
+        def leaf(u, p, slow, b, label, path):
+            if "router_bias" in str(path).lower():
+                return u, slow, b
+            fast = p.astype(jnp.float32) + u.astype(jnp.float32)
+            pseudo_grad = slow - fast
+            b_new = outer_momentum * b + pseudo_grad
+            slow_new = slow - outer_lr * (outer_momentum * b_new + pseudo_grad)
+            if label in _HYPERBALL_GROUPS:
+                slow_new = slow_new * _sphere_norm(fast) / jnp.maximum(_sphere_norm(slow_new), 1e-10)
+            slow_new = _pin_sharding(slow_new, p)
+            new_u = jnp.where(outer, slow_new - p.astype(jnp.float32), u.astype(jnp.float32)).astype(u.dtype)
+            return new_u, jnp.where(outer, slow_new, slow), jnp.where(outer, b_new, b)
+
+        out = jax.tree.map(leaf, inner_updates, params, state.slow, state.momentum, labels, paths)
+
+        def pick(i):
+            return jax.tree.map(lambda _, o: o[i], params, out)
+
+        return pick(0), SnooState(count=count, slow=pick(1), momentum=pick(2), inner=inner_state)
+
+    return optax.GradientTransformation(init, update)
+
+
 @OptimizerConfig.register_subclass("grug_fast_track_muonh_v1")
 @dataclass(frozen=True)
 class GrugMoeMuonHConfig(OptimizerConfig):
@@ -422,6 +493,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     neuron_norm_beta2: float | None = None
     """NorMuon neuron-wise normalization of the MuonH direction with this second-moment decay (None: off)."""
     """Orthogonalize the attention projections per head of this width (None: whole matrices)."""
+    snoo_period: int = 0
+    """SNOO outer step every this many inner steps (0: off)."""
+    snoo_lr: float = 0.5
+    snoo_momentum: float = 0.5
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
@@ -535,7 +610,16 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 "embed2": plain_adam_at(adam_lr * self.embed2_lr_mult),
                 "kda_decay": plain_adam_at(adam_lr * self.kda_decay_lr_mult, self.kda_decay_beta1, self.kda_decay_beta2),
             }
-            return optax.multi_transform(transforms, self.create_mask)
+            inner = optax.multi_transform(transforms, self.create_mask)
+            if self.snoo_period <= 0:
+                return inner
+            return snoo(
+                inner,
+                self.create_mask,
+                period=self.snoo_period,
+                outer_lr=self.snoo_lr,
+                outer_momentum=self.snoo_momentum,
+            )
 
         return optax.inject_hyperparams(optimizer)(
             learning_rate=learning_rate_schedule,
