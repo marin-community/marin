@@ -105,3 +105,21 @@ The audit prints aggregate counts and exits nonzero if a batch is missing,
 short, has the wrong schema, or if an unrecognized Parquet file appears in the
 output directory. Inspect generated conversations from each source as well;
 the audit checks structural completeness, not answer quality.
+
+To compare server batching configurations, use the identical probe JSON file
+and an endpoint with no other traffic. The benchmark issues one completion per sampled chunk,
+records token usage and request timings, and reports first-attempt validation
+failures without repair requests. Rejected completions count toward throughput
+and do not stop the benchmark. HTTP failures fail the benchmark. Compare server
+throughput logs as well: the reported completion tokens per second includes
+initial filling and final draining of the request queue.
+
+```bash
+uv run iris --cluster=cw-rno2a job run --priority interactive --enable-extra-resources \
+  --job-name science-sft-throughput-c16-20260927 --cpu 4 --memory 16GB \
+  --disk 10GB --extra cpu --no-wait \
+  -- python -m experiments.datakit.science_sft_conversion.benchmark \
+    --endpoint /benfeuer/minimax-m3-science-sft-c16 --concurrency 16 \
+    --input-path s3://marin-us-east-02a/marin/users/benfeuer/science-sft-converted/2026.09.27-v3/audit/probe-stratified-85-r3.json \
+    --output-path s3://marin-us-east-02a/marin/users/benfeuer/science-sft-converted/2026.09.27-v3/audit/throughput-c16.json
+```
