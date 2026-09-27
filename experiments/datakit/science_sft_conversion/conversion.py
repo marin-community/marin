@@ -3,7 +3,7 @@
 
 """Resume-safe MiniMax conversion of the science-forward mix's text sources.
 
-Each Iris task owns a stable subset of input Parquet row groups. Output files
+Each Iris task owns a stable subset of stratified input Parquet batches. Output files
 are committed one small input batch at a time, so a preempted task skips work
 that already finished. Source rows are split without dropping characters.
 """
@@ -18,6 +18,7 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 from enum import StrEnum
+from itertools import zip_longest
 from pathlib import Path
 
 import httpx
@@ -43,6 +44,7 @@ MAX_SOURCE_CHARS = 8_000
 INPUT_BATCH_SIZE = 1_024
 MAX_GENERATION_TOKENS = 8_192
 MAX_CONCURRENT_REQUESTS = 4
+SAMPLING_SEED = 20260927
 MAX_ATTEMPTS = 4
 REQUEST_TIMEOUT = 1_800.0
 NEMOTRON_MATH_TEXTBOOKS = "nemotron_specialized/math_textbooks"
@@ -79,6 +81,12 @@ class WorkItem:
     url: str
     row_group: int
     rows: int
+
+
+@dataclass(frozen=True)
+class WorkBatch:
+    item: WorkItem
+    batch_index: int
 
 
 @dataclass(frozen=True)
@@ -189,6 +197,19 @@ def _output_path(source: Source, url: str, row_group: int, batch_index: int, out
     source_name = source.name.replace("/", "__")
     filename = f"{source_name}__{shard}__rg-{row_group:05d}__batch-{batch_index:06d}.parquet"
     return prefix_join(output_root, f"{OUTPUT_MAIN_DIR}/{filename}")
+
+
+def stratified_batches(items: list[WorkItem], seed: int, max_batches: int | None) -> list[WorkBatch]:
+    """Shuffle batches within each source and alternate sources until all are exhausted."""
+    by_source: dict[str, list[WorkBatch]] = {}
+    for item in items:
+        count = (item.rows + INPUT_BATCH_SIZE - 1) // INPUT_BATCH_SIZE
+        if max_batches is not None:
+            count = min(count, max_batches)
+        by_source.setdefault(item.source.name, []).extend(WorkBatch(item, index) for index in range(count))
+    for name, batches in by_source.items():
+        random.Random(f"{seed}:{name}").shuffle(batches)
+    return [batch for turn in zip_longest(*by_source.values()) for batch in turn if batch is not None]
 
 
 def _row_request(
@@ -407,62 +428,67 @@ async def _convert_batch(
     return [result.record for result in results], Counter(result.answer_format.name for result in results)
 
 
-async def convert_work_item(source: Source, url: str, row_group: int, endpoint: str, max_batches: int | None) -> None:
-    fs, path = filesystem_for(url)
-    semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
+async def convert_work_batch(work: WorkBatch, endpoint: str, concurrency: int) -> None:
+    item = work.item
+    source = item.source
+    output_url = _output_path(source, item.url, item.row_group, work.batch_index, OUTPUT_ROOT)
+    output_fs, output_path = filesystem_for(output_url)
+    if output_fs.exists(output_path):
+        return
+    fs, path = filesystem_for(item.url)
+    with fs.open(path, "rb") as stream:
+        table = pq.ParquetFile(stream).read_row_group(item.row_group, columns=["id", "text"])
+    rows = table.slice(work.batch_index * INPUT_BATCH_SIZE, INPUT_BATCH_SIZE).to_pylist()
+    if not rows:
+        raise ValueError(f"Empty scheduled batch: {work}")
+    semaphore = asyncio.Semaphore(concurrency)
     timeout = httpx.Timeout(REQUEST_TIMEOUT)
     async with httpx.AsyncClient(timeout=timeout) as client:
-        with fs.open(path, "rb") as stream:
-            parquet = pq.ParquetFile(stream)
-            for batch_index, batch in enumerate(
-                parquet.iter_batches(batch_size=INPUT_BATCH_SIZE, row_groups=[row_group], columns=["id", "text"])
-            ):
-                if max_batches is not None and batch_index >= max_batches:
-                    break
-                output_url = _output_path(source, url, row_group, batch_index, OUTPUT_ROOT)
-                output_fs, output_path = filesystem_for(output_url)
-                if output_fs.exists(output_path):
-                    continue
-                rows = batch.to_pylist()
-                documents, format_counts = await _convert_batch(client, semaphore, endpoint, source, rows)
-                table = pa.Table.from_pylist(documents, schema=CHAT_SCHEMA)
-                with atomic_rename(output_path, filesystem=output_fs) as temporary_path:
-                    with output_fs.open(temporary_path, "wb") as destination:
-                        pq.write_table(table, destination, compression="zstd")
-                logger.info(
-                    "Converted %s row group %d batch %d: %d rows, %d chat records, formats=%s",
-                    source.name,
-                    row_group,
-                    batch_index,
-                    len(rows),
-                    len(documents),
-                    dict(format_counts),
-                )
+        documents, format_counts = await _convert_batch(client, semaphore, endpoint, source, rows)
+    output_table = pa.Table.from_pylist(documents, schema=CHAT_SCHEMA)
+    with atomic_rename(output_path, filesystem=output_fs) as temporary_path:
+        with output_fs.open(temporary_path, "wb") as destination:
+            pq.write_table(output_table, destination, compression="zstd")
+    logger.info(
+        "Converted %s row group %d batch %d: %d rows, %d chat records, formats=%s",
+        source.name,
+        item.row_group,
+        work.batch_index,
+        len(rows),
+        len(documents),
+        dict(format_counts),
+    )
 
 
-async def run_worker(max_items: int | None, max_batches: int | None) -> None:
+async def run_worker(max_items: int | None, max_batches: int | None, endpoint_name: str, concurrency: int) -> None:
     info = get_job_info()
     if info is None:
         raise RuntimeError("Run the conversion worker as an Iris task")
     client = iris_ctx().client
     if client is None:
         raise RuntimeError("Iris task has no controller client")
-    endpoint = client.resolve_endpoint(ENDPOINT).rstrip("/")
-    logger.info("Worker %d/%d using endpoint %s", info.task_index, info.num_tasks, ENDPOINT)
-    work = _work_items()[info.task_index :: info.num_tasks]
+    endpoint = client.resolve_endpoint(endpoint_name).rstrip("/")
+    logger.info(
+        "Worker %d/%d using endpoint %s with %d requests", info.task_index, info.num_tasks, endpoint_name, concurrency
+    )
+    work = stratified_batches(_work_items(), SAMPLING_SEED, max_batches)[info.task_index :: info.num_tasks]
     if max_items is not None:
         work = work[:max_items]
     for item in work:
-        await convert_work_item(item.source, item.url, item.row_group, endpoint, max_batches)
+        await convert_work_batch(item, endpoint, concurrency)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--max-items", type=int, help="Limit each task to this many row groups for a smoke run")
+    parser.add_argument("--max-items", type=int, help="Limit each task to this many stratified batches for a smoke run")
     parser.add_argument("--max-batches", type=int, help="Limit each row group to this many batches for a smoke run")
+    parser.add_argument("--endpoint", default=ENDPOINT)
+    parser.add_argument("--concurrency", type=int, default=MAX_CONCURRENT_REQUESTS)
     args = parser.parse_args()
+    if args.concurrency < 1:
+        parser.error("--concurrency must be positive")
     logging.basicConfig(level=logging.INFO)
-    asyncio.run(run_worker(args.max_items, args.max_batches))
+    asyncio.run(run_worker(args.max_items, args.max_batches, args.endpoint, args.concurrency))
 
 
 if __name__ == "__main__":

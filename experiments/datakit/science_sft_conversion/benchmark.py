@@ -45,11 +45,7 @@ async def benchmark(input_url: str, output_url: str, endpoint_name: str, concurr
         async def request(sample: dict) -> dict:
             source = source_by_name[sample["source"]]
             selected = format_for(source.name, sample["source_id"], sample["chunk_index"])
-            mode = (
-                ConversionMode.STANDALONE
-                if source.name in QUESTION_SOLUTION_SOURCES
-                else ConversionMode.GROUNDED
-            )
+            mode = ConversionMode.STANDALONE if source.name in QUESTION_SOLUTION_SOURCES else ConversionMode.GROUNDED
             payload = _row_request(
                 source, sample["source_chunk"], sample["chunk_index"], sample["chunk_count"], selected, mode
             )

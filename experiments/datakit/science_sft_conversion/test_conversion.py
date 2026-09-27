@@ -18,6 +18,7 @@ from experiments.datakit.science_sft_conversion.conversion import (
     _document,
     _output_path,
     format_for,
+    stratified_batches,
 )
 
 
@@ -150,3 +151,18 @@ def test_audit_detects_short_batch(tmp_path) -> None:
     result = audit([work], str(tmp_path), workers=1)
     assert result.complete
     assert result.source_rows == result.output_rows == 2
+
+
+def test_early_conversion_covers_every_source_without_losing_batches() -> None:
+    sources = [Source(f"source-{index}", "", 1, rows) for index, rows in enumerate([100000, 1024] + [3079] * 15)]
+    items = [WorkItem(source, f"{source.name}.parquet", 0, source.rows) for source in sources]
+
+    scheduled = stratified_batches(items, seed=20260927, max_batches=None)
+
+    assert {batch.item.source.name for batch in scheduled[:17]} == {source.name for source in sources}
+    assert len(scheduled) == 159
+    identities = {(batch.item.url, batch.item.row_group, batch.batch_index) for batch in scheduled}
+    assert len(identities) == 159
+    assert {batch.batch_index for batch in scheduled if batch.item.source.name == "source-0"} == set(range(98))
+    assert len([batch for batch in scheduled if batch.item.source.name == "source-1"]) == 1
+    assert scheduled == stratified_batches(items, seed=20260927, max_batches=None)

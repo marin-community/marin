@@ -33,6 +33,13 @@ chosen by the source ID hash, then tries the remaining formats in a fixed order
 if validation keeps failing. Its logged format counts reflect the format
 actually written. The source artifact stays unchanged.
 
+The production scheduler shuffles source batches reproducibly with seed
+20260927, then rotates across the 17 sources one batch at a time. Its first 17
+batches cover every source. Use 17 client tasks to give each source a worker
+in the first wave. Larger sources continue after smaller sources are exhausted;
+the scheduler still covers every original batch. Restarting with a different
+task count reassigns pending batches and preserves completed output files.
+
 The pinned source pool contains 105,582,071 rows across 6,350 row groups.
 The worker checks these row counts before issuing requests. Every nonempty
 row requires at least one MiniMax completion; long rows require more than one.
@@ -122,4 +129,26 @@ uv run iris --cluster=cw-rno2a job run --priority interactive --enable-extra-res
     --endpoint /benfeuer/minimax-m3-science-sft-c16 --concurrency 16 \
     --input-path s3://marin-us-east-02a/marin/users/benfeuer/science-sft-converted/2026.09.27-v3/audit/probe-stratified-85-r3.json \
     --output-path s3://marin-us-east-02a/marin/users/benfeuer/science-sft-converted/2026.09.27-v3/audit/throughput-c16.json
+```
+
+For a larger pool, the experiment's serving entrypoint configures both vLLM's
+running-sequence limit and the broker's per-worker request limit. Its proxy
+accepts up to 2,048 pending requests. Submit it as an interactive CPU job; it
+creates eight-GPU H100 worker jobs at the same priority. Use a separate endpoint
+while the old pool is serving, then restart the resumable clients against the
+new endpoint once its model API answers:
+
+```bash
+uv run iris --cluster=cw-rno2a job run --priority interactive --enable-extra-resources \
+  --job-name minimax-m3-science-sft-scaled-20260927 --cpu 2 --memory 8GB \
+  --disk 20GB --extra cpu --no-wait \
+  -- python -m experiments.datakit.science_sft_conversion.serve \
+    --endpoint /benfeuer/minimax-m3-science-sft-scaled --instances 23 \
+    --max-sequences 16 --timeout-hours 2880 --cache-ttl-days 120
+
+uv run iris --cluster=cw-rno2a job run --priority interactive --enable-extra-resources \
+  --job-name science-sft-conversion-v3-stratified-20260927 --replicas 17 --max-retries 8 \
+  --cpu 8 --memory 32GB --disk 20GB --extra cpu --no-wait \
+  -- python -m experiments.datakit.science_sft_conversion.conversion \
+    --endpoint /benfeuer/minimax-m3-science-sft-scaled --concurrency 24
 ```
