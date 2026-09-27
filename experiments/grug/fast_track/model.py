@@ -400,6 +400,10 @@ class GrugModelConfig:
     attn_res_head_norm: bool = False
     """Multi-head AttnRes: RMS-normalize each head's channel slice of a source for its logits, instead
     of one RMS over all channels."""
+    xsa_mode: str = "fixed"
+    """MLA Exclusive Self Attention strength: ``fixed`` subtracts the full self-value projection,
+    ``learned`` scales it by a per-head scalar (init 1), ``gated`` by ``2 * sigmoid(x @ W_xsa)`` per token and
+    head (``W_xsa`` zero-init, so 1 at init)."""
     logit_soft_cap: float | None = None
     """Tanh soft-cap on the lm_head logits, ``c * tanh(z / c)`` (Gemma 2); None: off."""
     logit_soft_cap_asym: tuple[float, ...] = ()
@@ -593,6 +597,8 @@ class CausalSelfAttention(eqx.Module):
     ve_lambda: Float[Array, " 2"] | None  # (lambda1 on v, lambda2 on the value embedding)
     ve_gate: Float[Array, "D N"] | None
     qk_mult: Float[Array, ""] | None  # learnable logit scale (cfg.learnable_qk_mult); else cfg.qk_mult
+    xsa_scale: Float[Array, " N"] | None  # per-head XSA strength (cfg.xsa_mode == "learned")
+    xsa_gate: Float[Array, "D N"] | None  # per-token XSA gate weights (cfg.xsa_mode == "gated")
     bias_q: Float[Array, " NH"] | None
     bias_dkv: Float[Array, " L"] | None
     cfg: GrugModelConfig = eqx.field(static=True)
@@ -626,6 +632,8 @@ class CausalSelfAttention(eqx.Module):
                 ve_lambda=jnp.array([1.0, 0.0]) if use_ve else None,
                 ve_gate=(reshard(jnp.zeros((d, n)), P(None, None)) if cfg.value_embeds == ValueEmbeds.GATED else None),
                 qk_mult=jnp.asarray(cfg.qk_mult, jnp.float32) if cfg.learnable_qk_mult else None,
+                xsa_scale=jnp.ones((n,), jnp.float32) if cfg.xsa_mode == "learned" else None,
+                xsa_gate=reshard(jnp.zeros((d, n)), P(None, None)) if cfg.xsa_mode == "gated" else None,
                 bias_q=jnp.zeros((n * h,)) if "qkv" in cfg.proj_biases else None,
                 bias_dkv=jnp.zeros((kvl,)) if "qkv" in cfg.proj_biases else None,
                 cfg=cfg,
@@ -650,6 +658,8 @@ class CausalSelfAttention(eqx.Module):
             ve_lambda=None,
             ve_gate=None,
             qk_mult=jnp.asarray(cfg.qk_mult, jnp.float32) if cfg.learnable_qk_mult else None,
+            xsa_scale=jnp.ones((n,), jnp.float32) if cfg.xsa_mode == "learned" else None,
+            xsa_gate=reshard(jnp.zeros((d, n)), P(None, None)) if cfg.xsa_mode == "gated" else None,
             bias_q=None,
             bias_dkv=None,
             cfg=cfg,
@@ -821,7 +831,12 @@ class CausalSelfAttention(eqx.Module):
         aligned_v = reshard(aligned_v, _partition_spec_of(attn_out) or P(_BATCH_AXES, None, None, "model"))
         dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
         v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
-        attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
+        xsa = (dot / (v_norm_sq + 1e-6)) * aligned_v
+        if self.xsa_scale is not None:
+            xsa = xsa * self.xsa_scale.astype(xsa.dtype)[:, None]
+        elif self.xsa_gate is not None:
+            xsa = xsa * (2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.xsa_gate)))[..., None].astype(xsa.dtype)
+        attn_out = attn_out - xsa
         # Headwise gating: sigmoid(x @ attn_gate) produces one scalar per head.
         gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
         attn_out = gate * attn_out
