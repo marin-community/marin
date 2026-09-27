@@ -120,15 +120,20 @@ def _shrink_top_direction(direction, m, amount: float):
     """``direction - amount * u1 v1^T`` per matrix, with ``(u1, v1)`` the top singular pair of ``m``."""
     if not _is_matrix_stack(direction):
         return direction
+    # Broadcast-multiply + sum rather than einsum: under explicit sharding a dot_general contracting a
+    # sharded axis needs an out_sharding, while a reduction over it lowers to a plain all-reduce.
     m32 = m.astype(jnp.float32)
-    v = jnp.sum(m32, axis=-2)
+    v = jnp.sum(m32, axis=-2, keepdims=True)
     for _ in range(_POWER_ITERS):
-        u = jnp.einsum("...io,...o->...i", m32, v)
-        u = u / (jnp.linalg.norm(u, axis=-1, keepdims=True) + 1e-12)
-        v = jnp.einsum("...io,...i->...o", m32, u)
-        v = v / (jnp.linalg.norm(v, axis=-1, keepdims=True) + 1e-12)
-    top = jnp.einsum("...i,...o->...io", u, v)
-    return (direction.astype(jnp.float32) - amount * top).astype(direction.dtype)
+        u = jnp.sum(m32 * v, axis=-1, keepdims=True)
+        u = u / (jnp.sqrt(jnp.sum(jnp.square(u), axis=-2, keepdims=True)) + 1e-12)
+        v = jnp.sum(m32 * u, axis=-2, keepdims=True)
+        v = v / (jnp.sqrt(jnp.sum(jnp.square(v), axis=-1, keepdims=True)) + 1e-12)
+    shrunk = direction.astype(jnp.float32) - amount * (u * v)
+    target = _target_named_sharding(direction)
+    if target is not None:
+        shrunk = reshard(shrunk, target.spec)
+    return shrunk.astype(direction.dtype)
 
 
 def _grug_scale_with_muon(
