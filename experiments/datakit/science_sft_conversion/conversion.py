@@ -69,7 +69,7 @@ class Format:
 FORMATS = (
     Format("paragraphs", "Use short prose paragraphs and end with a line beginning `Answer:`."),
     Format("numbered", "Use numbered steps and end with a line beginning `Final answer:`."),
-    Format("bullets", "Use Markdown bullets and end with a line beginning `Conclusion:`."),
+    Format("bullets", "Use Markdown bullets and end with a clearly labeled `Conclusion:` line."),
     Format("short_then_detail", "Start with a line beginning `Short answer:` and then explain the details."),
     Format("table", "Use a Markdown table for the key facts, followed by a brief conclusion."),
     Format("json", "Return a valid JSON object with `answer`, `evidence`, and `caveats` fields."),
@@ -192,22 +192,24 @@ def _document(source: Source, source_id: str, chunk_index: int, completion: dict
             raise ValueError(f"Missing {field} in conversion response")
     selected = format_for(source.name, source_id, chunk_index)
     answer = completion["answer"].strip()
+    lines = [line.strip() for line in answer.splitlines()]
+    labels = [line.lstrip("*").strip() for line in lines]
     match selected.name:
-        case "paragraphs" if not any(line.startswith("Answer:") for line in answer.splitlines()):
+        case "paragraphs" if not any(line.startswith("Answer:") for line in labels):
             raise ValueError("Paragraph answer lacks its Answer: line")
         case "numbered" if not (
-            any(line.startswith("1.") for line in answer.splitlines())
-            and any(line.startswith("Final answer:") for line in answer.splitlines())
+            any(line.startswith(("1.", "1)")) for line in labels)
+            and any(line.startswith("Final answer:") for line in labels)
         ):
             raise ValueError("Numbered answer lacks steps or a final answer")
         case "bullets" if not (
-            any(line.startswith("- ") for line in answer.splitlines())
-            and any(line.startswith("Conclusion:") for line in answer.splitlines())
+            any(line.startswith(("- ", "* ", "+ ")) for line in lines)
+            and any(line.startswith("Conclusion:") for line in labels)
         ):
             raise ValueError("Bullet answer lacks bullets or a conclusion")
-        case "short_then_detail" if not answer.startswith("Short answer:"):
+        case "short_then_detail" if not labels[0].startswith("Short answer:"):
             raise ValueError("Short answer lacks its requested first line")
-        case "table" if sum(line.startswith("|") for line in answer.splitlines()) < 2:
+        case "table" if sum(line.startswith("|") for line in lines) < 2:
             raise ValueError("Table answer lacks Markdown rows")
         case "json":
             fields = json.loads(answer)
