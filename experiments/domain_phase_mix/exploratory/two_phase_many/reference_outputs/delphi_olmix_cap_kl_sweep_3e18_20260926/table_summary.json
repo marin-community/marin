@@ -1,0 +1,34 @@
+{
+ "cells": 90,
+ "measured_cells": 90,
+ "uncheatable": {
+  "best": {
+   "cap": "8",
+   "kl": 0.025,
+   "measured": 0.9957502011482936,
+   "run": "olmixq_u_kl0p025_cap08"
+  },
+  "deployed": {
+   "cap": "4",
+   "kl": 0.05,
+   "measured": 1.0030395131130625
+  },
+  "directly_trained_cells": 18,
+  "max_tv_to_measuring_run": 0.08345304358135
+ },
+ "table9": {
+  "best": {
+   "cap": "8",
+   "kl": 0.025,
+   "measured": 1.087230193127069,
+   "run": "olmixq_t9_kl0p025_cap08"
+  },
+  "deployed": {
+   "cap": "4",
+   "kl": 0.005,
+   "measured": 1.096266430431802
+  },
+  "directly_trained_cells": 21,
+  "max_tv_to_measuring_run": 0.0793441215466815
+ }
+}

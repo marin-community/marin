@@ -14,7 +14,9 @@
 Launches: the bounded-link validation (three runs), the link-plus-hub validation (two runs), Calvin's coupling
 validation (nine runs, the links' matched-seed controls), the frontier factorial (eighteen runs), the two
 kappa-floor validations (three runs each, KL 0 and KL 0.05) and the flat-profile kappa-floor validation (three
-runs). Uncheatable comes from each run's step-3006 `eval_metrics.jsonl` on GCS;
+runs). Uncheatable comes from each run's step-3006 `eval_metrics.jsonl` on GCS, scored as the fixed seven-component
+weighting the paper uses (`fit_uncheatable.json`); runs evaluated with BPB schema 2 log a pooled aggregate that
+reads about 0.01 BPB higher, kept as `uncheatable_raw_bpb` next to its schema;
 the Table-9 mean comes from the finished native evaluation runs in W&B, matched by
 the `source_run` tag or the candidate id in the run name, and reconstructed from the 51 components as a check.
 Runs that have not finished are listed with status `pending` and NaN values, so the collector can be re-run
@@ -47,6 +49,8 @@ from marin.evaluation.olmo_base_eval.components import table9_components  # noqa
 REFERENCE = REPO_ROOT / "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs"
 BUCKET = "marin-us-east5/pinlin_calvin_xu/data_mixture"
 FINAL_STEP = 3006
+UNCHEATABLE_FIT = REFERENCE / "delphi_frozen_procedure_validation_3e18_20260908" / "fits" / "fit_uncheatable.json"
+OLMIX_SWEEP = REFERENCE / "delphi_olmix_cap_kl_sweep_3e18_20260926"
 WANDB_PROJECT = "marin-community/marin-eval"
 
 
@@ -237,6 +241,14 @@ LAUNCHES = {
         (REFERENCE / "delphi_per_bucket_threshold_proposals_3e18_20260924" / "candidate_weights.csv",),
         grouped=True,
     ),
+    "olmix_cap_kl_sweep": Launch(
+        "olmix_cap_kl_sweep",
+        "delphi_olmix_cap_kl_sweep_3e18_20260926",
+        "olmo_base_eval_table9_delphi_3e18_olmix_cap_kl_sweep",
+        tuple(json.loads((OLMIX_SWEEP / "summary.json").read_text())["candidate_ids"]),
+        OLMIX_SWEEP,
+        (OLMIX_SWEEP / "candidate_weights.csv",),
+    ),
     "path_midpoints": Launch(
         "path_midpoints",
         "delphi_path_midpoints_3e18_20260912",
@@ -290,6 +302,12 @@ LAUNCHES = {
 }
 
 
+def uncheatable_weights() -> dict[str, float]:
+    """The paper's fixed Uncheatable objective: byte-share weights on the seven component BPBs."""
+    fit = json.loads(UNCHEATABLE_FIT.read_text())
+    return {task["component"]: float(weight) for task, weight in zip(fit["tasks"], fit["task_weights"], strict=True)}
+
+
 def _read_text(filesystem: gcsfs.GCSFileSystem, path: str) -> str:
     with filesystem.open(path, "rt") as handle:
         return handle.read()
@@ -333,7 +351,9 @@ def _endpoint_from_path(filesystem: gcsfs.GCSFileSystem, eval_path: str) -> dict
     return {
         "status": "measured" if status == "SUCCESS" else f"endpoint:{status}",
         "eval_metrics_uri": f"gs://{eval_path}",
-        "uncheatable_bpb": float(endpoint["eval/uncheatable_eval/bpb"]),
+        "uncheatable_bpb": sum(weight * float(endpoint[key]) for key, weight in uncheatable_weights().items()),
+        "uncheatable_raw_bpb": float(endpoint["eval/uncheatable_eval/bpb"]),
+        "uncheatable_bpb_schema": str(endpoint.get("eval/bpb_schema_version", "legacy")),
         "uncheatable_macro_bpb": float(endpoint["eval/uncheatable_eval/macro_bpb"]),
         **{
             f"uncheatable_{name}_bpb": float(endpoint[f"eval/uncheatable_eval/{name}/bpb"])
