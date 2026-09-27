@@ -24,12 +24,9 @@ from collections.abc import Sequence
 
 # cloudpickle for callable entrypoints, py-spy/memray for the profiler attach paths.
 _IRIS_RUNTIME_DEPS = ("cloudpickle", "py-spy", "memray")
-# Copied files keep an installed environment usable after `uv cache clean` removes
-# its cache entries, and they keep their file modes. On CoreWeave's node-local XFS
-# the copy shares extents with the cache, so it costs little time or space. Clone
-# mode would do the same, but the task image's uv 0.10.3 drops executable bits when
-# it makes XFS reflinks, which leaves wheel binaries such as ptxas unrunnable.
-_UV_LINK_MODE_FLAG = "--link-mode copy"
+# The worker selects symlink mode on TPU hosts. Copy is the default for direct
+# callers and for Kubernetes, where the node agent can clean the shared cache.
+_UV_LINK_MODE_FLAG = '--link-mode "${UV_LINK_MODE:-copy}"'
 
 
 def _uv_sync_target(packages: Sequence[str] | None) -> str:
