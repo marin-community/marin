@@ -102,19 +102,19 @@ _KDA_BETA_MLP_LEAVES = frozenset({"w_beta_down", "w_beta_up"})
 
 # Matrix families that ``okls_targets`` can move from MuonH to the OKLS direction.
 _OKLS_FAMILIES: dict[str, re.Pattern] = {
-    "attn": re.compile(r"(stacked_blocks|kda_blocks)\.stacked\.attn\.w_(q|k|v|o|g|dkv|uk|uv)$"),
+    "attn": re.compile(r"(stacked_blocks|kda_blocks)\.stacked\.attn\.w_(q|k|v|o|g|dkv|uk|uv|q2|uk2)$"),
     "routed": re.compile(r"\.mlp\.expert_mlp\.w_(gate|up|down)$"),
     "shared": re.compile(r"\.shared\.\d+\.w_(gate|up|down)$"),
     "latent": re.compile(r"\.mlp\.w_latent_(down|up)$"),
     "gated_norm": re.compile(r"gated_norm\.w_(down|up)$"),
     # Per-projection subsets of "attn" (KDA and MLA together).
-    "attn_q": re.compile(r"(stacked_blocks|kda_blocks)\.stacked\.attn\.w_q$"),
-    "attn_k": re.compile(r"(stacked_blocks|kda_blocks)\.stacked\.attn\.w_(k|uk)$"),
+    "attn_q": re.compile(r"(stacked_blocks|kda_blocks)\.stacked\.attn\.w_q2?$"),
+    "attn_k": re.compile(r"(stacked_blocks|kda_blocks)\.stacked\.attn\.w_(k|uk|uk2)$"),
     "attn_v": re.compile(r"(stacked_blocks|kda_blocks)\.stacked\.attn\.w_(v|uv)$"),
     "attn_o": re.compile(r"(stacked_blocks|kda_blocks)\.stacked\.attn\.w_o$"),
     "attn_other": re.compile(r"(stacked_blocks|kda_blocks)\.stacked\.attn\.w_(g|dkv)$"),
     # The softmax (MLA) layers' q and k: KDA L2-normalizes q and k, so their scale is inert there.
-    "mla_qk": re.compile(r"stacked_blocks\.stacked\.attn\.w_(q|uk)$"),
+    "mla_qk": re.compile(r"stacked_blocks\.stacked\.attn\.w_(q|uk|q2|uk2)$"),
 }
 
 
@@ -871,7 +871,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 return "attn_res_query"
             # Inkling rel-pos weights (r_proj and the shared bias bank); value embeddings and their mixing weights.
             if ".rel_pos." in path_lower or re.search(
-                r"(?:^|\.)(value_embed|ve_lambda|ve_gate|xsa_scale|xsa_gate|head_mix|ssmax_scale|shared_gate|laurel_[ab]_\w+|ple_up|moe_out_gate_[wb]|bigram_gate_[wb]|bigram_gate_[ab]_lr|trigram_gate_[wb]|trigram_gate_[ab]_lr|bank_scale|bias_\w+|dyt_alpha|dyt_beta)$",
+                r"(?:^|\.)(value_embed|ve_lambda|ve_gate|xsa_scale|xsa_gate|head_mix|ssmax_scale|shared_gate|laurel_[ab]_\w+|ple_up|moe_out_gate_[wb]|bigram_gate_[wb]|bigram_gate_[ab]_lr|trigram_gate_[wb]|trigram_gate_[ab]_lr|bank_scale|bias_\w+|dyt_alpha|dyt_beta|diff_lambda|diff_lambda_init)$",
                 path_lower,
             ):
                 return "adam"

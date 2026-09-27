@@ -58,7 +58,7 @@ def _target_named_sharding(array) -> NamedSharding | None:
 
 # Stacked attention projections whose last (``_HEAD_OUT_LEAVES``) or second-to-last (``_HEAD_IN_LEAVES``)
 # axis is ``num_heads * head_dim``, for per-head orthogonalization.
-_HEAD_OUT_LEAVES = re.compile(r"(stacked_blocks|kda_blocks)\.stacked\.attn\.(w_q|w_k|w_v|w_g|w_uk|w_uv)")
+_HEAD_OUT_LEAVES = re.compile(r"(stacked_blocks|kda_blocks)\.stacked\.attn\.(w_q|w_k|w_v|w_g|w_uk|w_uv|w_q2|w_uk2)")
 _HEAD_IN_LEAVES = re.compile(r"(stacked_blocks|kda_blocks)\.stacked\.attn\.w_o")
 
 

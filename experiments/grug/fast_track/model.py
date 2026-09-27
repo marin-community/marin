@@ -460,6 +460,12 @@ class GrugModelConfig:
     mla_key_offset: bool = False
     """modded-nanogpt partial key offset (record #49): on the MLA layers, the first half of each head's key
     channels come from the previous token (within documents), enabling one-layer induction."""
+    mla_diff_attn: bool = False
+    """Differential attention (DIFF Transformer, arXiv 2410.05258) on the MLA layers:
+    ``(softmax(q1 k1^T) - lambda softmax(q2 k2^T)) v`` with a second q projection and key up-projection
+    (``w_q2`` / ``w_uk2``, same head_dim and q/k transforms), ``lambda = exp(lq1 . lk1) - exp(lq2 . lk2) +
+    lambda_init``, ``lambda_init = 0.8 - 0.6 exp(-0.3 (layer - 1))`` (1-indexed layer), and each head's output
+    RMS-normalized and scaled by ``1 - lambda_init``."""
     attn_res_final_signed: bool = False
     """Backout-style signed correction on the final AttnRes gate: ``final = mix + sum_n c_n * source_n`` with
     learned ``c`` (zero-init), so the lm_head input can subtract a source (softmax weights can't)."""
@@ -776,19 +782,27 @@ class CausalSelfAttention(eqx.Module):
     xsa_gate: Float[Array, "D N"] | None  # per-token XSA gate weights (cfg.xsa_mode == "gated")
     head_mix: Float[Array, "D 2N"] | None  # [w1 | w2] projections of cfg.mla_head_mix (w2 half zero-init)
     ssmax_scale: Float[Array, " N"] | None  # per-head SSMax log-length query scale (cfg.mla_ssmax)
+    w_q2: Float[Array, "D NH"] | None  # second query projection (cfg.mla_diff_attn)
+    w_uk2: Float[Array, "L NH"] | None  # second key up-projection from the KV latent (cfg.mla_diff_attn)
+    diff_lambda: Float[Array, "4 H"] | None  # [lq1, lk1, lq2, lk2] of the DIFF lambda reparameterization
+    diff_lambda_init: Float[Array, ""] | None  # constant lambda_init of this layer (never trained)
     bias_q: Float[Array, " NH"] | None
     bias_dkv: Float[Array, " L"] | None
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
-    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "CausalSelfAttention":
+    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray, layer_index: jax.Array) -> "CausalSelfAttention":
+        """``layer_index`` (0-indexed, may be traced under the stacked init) sets the DIFF ``lambda_init``."""
         d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.stored_kv_heads, cfg.inferred_head_dim
         std = cfg.initializer_std
         attn_gate = reshard(jnp.zeros((d, n)), P(None, None))
         if cfg.mla:
             k_q, k_dkv, k_uk, k_uv, k_o, k_rel, k_ve = random.split(key, 7)
+            # A separate key stream, so turning mla_diff_attn on leaves every other initial weight unchanged.
+            k_q2, k_uk2, k_lam = random.split(random.fold_in(key, 1), 3)
             kvl = cfg.mla_kv_latent_dim
             use_ve = cfg.value_embeds != ValueEmbeds.NONE
+            diff = cfg.mla_diff_attn
             return CausalSelfAttention(
                 w_q=reshard(_init_weight(k_q, (d, n * h), std), P(_FSDP_AXES, "model")),
                 w_k=None,
@@ -817,12 +831,18 @@ class CausalSelfAttention(eqx.Module):
                 xsa_gate=reshard(jnp.zeros((d, n)), P(None, None)) if cfg.xsa_mode == "gated" else None,
                 head_mix=(reshard(jnp.zeros((d, 2 * n)), P(None, None)) if cfg.mla_head_mix else None),
                 ssmax_scale=jnp.zeros((n,), jnp.float32) if cfg.mla_ssmax else None,
+                w_q2=reshard(_init_weight(k_q2, (d, n * h), std), P(_FSDP_AXES, "model")) if diff else None,
+                w_uk2=reshard(_init_weight(k_uk2, (kvl, n * h), std), P(None, "model")) if diff else None,
+                diff_lambda=0.1 * random.normal(k_lam, (4, h), jnp.float32) if diff else None,
+                diff_lambda_init=((0.8 - 0.6 * jnp.exp(-0.3 * jnp.asarray(layer_index, jnp.float32))) if diff else None),
                 bias_q=jnp.zeros((n * h,)) if "qkv" in cfg.proj_biases else None,
                 bias_dkv=jnp.zeros((kvl,)) if "qkv" in cfg.proj_biases else None,
                 cfg=cfg,
             )
         if "qkv" in cfg.proj_biases:
             raise ValueError("proj_biases 'qkv' is implemented for MLA and KDA only")
+        if cfg.mla_diff_attn:
+            raise ValueError("mla_diff_attn needs mla")
         k_q, k_k, k_v, k_o, k_rel = random.split(key, 5)
         return CausalSelfAttention(
             w_q=reshard(_init_weight(k_q, (d, n * h), std), P(_FSDP_AXES, "model")),
@@ -849,6 +869,10 @@ class CausalSelfAttention(eqx.Module):
             xsa_gate=reshard(jnp.zeros((d, n)), P(None, None)) if cfg.xsa_mode == "gated" else None,
             head_mix=None,
             ssmax_scale=None,
+            w_q2=None,
+            w_uk2=None,
+            diff_lambda=None,
+            diff_lambda_init=None,
             bias_q=None,
             bias_dkv=None,
             cfg=cfg,
@@ -861,19 +885,26 @@ class CausalSelfAttention(eqx.Module):
         token_ids: Int[Array, "B S"] | None,
         kv_share: dict[str, jax.Array] | None = None,
         proj_inputs: dict[str, jax.Array] | None = None,
-    ) -> tuple[jax.Array, jax.Array, jax.Array]:
-        """MLA with a compressed KV latent: full-rank q; k and v up-projected from one normed latent."""
+    ) -> tuple[jax.Array, jax.Array, jax.Array, tuple[jax.Array, jax.Array] | None]:
+        """MLA with a compressed KV latent: full-rank q; k and v up-projected from one normed latent. The
+        last element is the second (q, k) pair of ``mla_diff_attn`` (same latent and SConvs), else None."""
         assert self.w_dkv is not None and self.kv_latent_norm is not None
         head_dim = self.cfg.inferred_head_dim
         proj_inputs = proj_inputs or {}
-        q_flat = jnp.einsum("bsh,hd->bsd", proj_inputs.get("q", x), self.w_q)
+        q_in = proj_inputs.get("q", x)
         latent = jnp.einsum("bsh,hl->bsl", x, self.w_dkv)
-        if self.bias_q is not None and self.bias_dkv is not None:
-            q_flat = q_flat + unshard(self.bias_q).astype(x.dtype)
+        if self.bias_dkv is not None:
             latent = latent + unshard(self.bias_dkv).astype(x.dtype)
-        if self.sconv_q is not None:
-            q_flat = self.sconv_q(q_flat, sconv_segment_ids)
-        q = rearrange(q_flat, "... (n d) -> ... n d", d=head_dim)
+
+        def project_q(w_q: jax.Array) -> jax.Array:
+            q_flat = jnp.einsum("bsh,hd->bsd", q_in, w_q)
+            if self.bias_q is not None:
+                q_flat = q_flat + unshard(self.bias_q).astype(x.dtype)
+            if self.sconv_q is not None:
+                q_flat = self.sconv_q(q_flat, sconv_segment_ids)
+            return rearrange(q_flat, "... (n d) -> ... n d", d=head_dim)
+
+        q = project_q(self.w_q)
         if kv_share is not None and "latent" in kv_share:
             kv_latent = kv_share["latent"]
         else:
@@ -892,10 +923,17 @@ class CausalSelfAttention(eqx.Module):
             if "v" not in proj_inputs
             else self.kv_latent_norm(jnp.einsum("bsh,hl->bsl", proj_inputs["v"], self.w_dkv))
         )
-        k_flat = jnp.einsum("bsl,ld->bsd", k_latent, self.w_uk)
-        if self.sconv_k is not None:
-            k_flat = self.sconv_k(k_flat, sconv_segment_ids)
-        k = rearrange(k_flat, "... (n d) -> ... n d", d=head_dim)
+
+        def project_k(w_uk: jax.Array) -> jax.Array:
+            k_flat = jnp.einsum("bsl,ld->bsd", k_latent, w_uk)
+            if self.sconv_k is not None:
+                k_flat = self.sconv_k(k_flat, sconv_segment_ids)
+            return rearrange(k_flat, "... (n d) -> ... n d", d=head_dim)
+
+        k = project_k(self.w_uk)
+        second_qk = None
+        if self.w_q2 is not None and self.w_uk2 is not None:
+            second_qk = (project_q(self.w_q2), project_k(self.w_uk2))
         v = rearrange(jnp.einsum("bsl,ld->bsd", v_latent, self.w_uv), "... (n d) -> ... n d", d=head_dim)
         if self.value_embed is not None:
             assert self.ve_lambda is not None and token_ids is not None
@@ -907,7 +945,7 @@ class CausalSelfAttention(eqx.Module):
             else:
                 ve_weight = lam[1]
             v = lam[0] * v + ve_weight * reshard(ve, _partition_spec_of(v) or P(_BATCH_AXES, None, None, None))
-        return q, k, v
+        return q, k, v, second_qk
 
     def _gqa_qkv(
         self,
@@ -974,31 +1012,11 @@ class CausalSelfAttention(eqx.Module):
         # segment_ids (packed-document boundaries) come from the mask so the SConv never mixes across a
         # document boundary.
         sconv_segment_ids = _sconv_segment_ids(mask)
+        second_qk = None
         if self.cfg.mla:
-            q, k, v = self._mla_qkv(x, sconv_segment_ids, token_ids, kv_share, proj_inputs)
-            if self.cfg.mla_key_offset:
-                k = _partial_key_offset(k, sconv_segment_ids)
+            q, k, v, second_qk = self._mla_qkv(x, sconv_segment_ids, token_ids, kv_share, proj_inputs)
         else:
             q, k, v = self._gqa_qkv(x, sconv_segment_ids, is_global)
-
-        if self.cfg.qk_norm:
-            q = rms_norm(q)
-            k = rms_norm(k)
-        elif self.cfg.mla_k_norm and self.cfg.mla:
-            # DeepSeek-V4.1: weightless per-head RMSNorm on the keys only; queries keep their scale.
-            if self.cfg.mla_k_norm_shared:
-                # One RMS over all heads' keys per token: 1 cached scalar per token under MLA absorption
-                # instead of one per head.
-                k32 = k.astype(jnp.float32)
-                k = (k32 * jax.lax.rsqrt(jnp.mean(jnp.square(k32), axis=(-2, -1), keepdims=True) + 1e-6)).astype(k.dtype)
-            elif self.cfg.mla_k_norm_split:
-                # With the partial key offset, normalize the previous-token and current-token halves separately.
-                half = k.shape[-1] // 2
-                k = jnp.concatenate([rms_norm(k[..., :half]), rms_norm(k[..., half:])], axis=-1)
-            else:
-                k = rms_norm(k)
-        if self.cfg.mla_q_norm and self.cfg.mla and not self.cfg.qk_norm:
-            q = rms_norm(q)
 
         # Half-RoPE: rotate only the first half of Q/K head_dim; disable_rope skips RoPE on long/global layers.
         def _rope(qh: jax.Array, kh: jax.Array) -> tuple[jax.Array, jax.Array]:
@@ -1011,27 +1029,64 @@ class CausalSelfAttention(eqx.Module):
                 jnp.concatenate([k_rot, kh[..., half:]], axis=-1),
             )
 
-        # The Inkling bias replaces RoPE: no rotation, a per-head content-dependent bias (from x) on the
-        # pre-softmax logits instead.
-        rel_bias = None
-        if self.rel_pos is not None:
-            rel_bias = self.rel_pos(x)
-        elif isinstance(disable_rope, bool):
-            if not disable_rope:
-                q, k = _rope(q, k)
-        else:
-            q_roped, k_roped = _rope(q, k)
-            keep = ~jnp.asarray(disable_rope, dtype=jnp.bool_)
-            q = jnp.where(keep, q_roped, q)
-            k = jnp.where(keep, k_roped, k)
-        q = q * (self.cfg.qk_mult if self.qk_mult is None else self.qk_mult.astype(q.dtype))
-        if self.ssmax_scale is not None:
-            log_keys = jnp.log1p(_positions_in_document(sconv_segment_ids, seq_len).astype(jnp.float32))
-            q = q * (1.0 + self.ssmax_scale[:, None] * log_keys[..., None, None]).astype(q.dtype)
+        def _transform_qk(q: jax.Array, k: jax.Array) -> tuple[jax.Array, jax.Array]:
+            """Key offset, q/k norms, RoPE, qk_mult and SSMax: everything between the projections and the kernel."""
+            if self.cfg.mla and self.cfg.mla_key_offset:
+                k = _partial_key_offset(k, sconv_segment_ids)
+            if self.cfg.qk_norm:
+                q = rms_norm(q)
+                k = rms_norm(k)
+            elif self.cfg.mla_k_norm and self.cfg.mla:
+                # DeepSeek-V4.1: weightless per-head RMSNorm on the keys only; queries keep their scale.
+                if self.cfg.mla_k_norm_shared:
+                    # One RMS over all heads' keys per token: 1 cached scalar per token under MLA absorption
+                    # instead of one per head.
+                    k32 = k.astype(jnp.float32)
+                    k = (k32 * jax.lax.rsqrt(jnp.mean(jnp.square(k32), axis=(-2, -1), keepdims=True) + 1e-6)).astype(
+                        k.dtype
+                    )
+                elif self.cfg.mla_k_norm_split:
+                    # With the partial key offset, normalize the previous-token and current-token halves separately.
+                    half = k.shape[-1] // 2
+                    k = jnp.concatenate([rms_norm(k[..., :half]), rms_norm(k[..., half:])], axis=-1)
+                else:
+                    k = rms_norm(k)
+            if self.cfg.mla_q_norm and self.cfg.mla and not self.cfg.qk_norm:
+                q = rms_norm(q)
+            # The Inkling bias replaces RoPE (no rotation).
+            if self.rel_pos is None:
+                if isinstance(disable_rope, bool):
+                    if not disable_rope:
+                        q, k = _rope(q, k)
+                else:
+                    q_roped, k_roped = _rope(q, k)
+                    keep = ~jnp.asarray(disable_rope, dtype=jnp.bool_)
+                    q = jnp.where(keep, q_roped, q)
+                    k = jnp.where(keep, k_roped, k)
+            q = q * (self.cfg.qk_mult if self.qk_mult is None else self.qk_mult.astype(q.dtype))
+            if self.ssmax_scale is not None:
+                log_keys = jnp.log1p(_positions_in_document(sconv_segment_ids, seq_len).astype(jnp.float32))
+                q = q * (1.0 + self.ssmax_scale[:, None] * log_keys[..., None, None]).astype(q.dtype)
+            return q, k
+
+        # The Inkling bias: a per-head content-dependent bias (from x) on the pre-softmax logits.
+        rel_bias = self.rel_pos(x) if self.rel_pos is not None else None
+        q, k = _transform_qk(q, k)
         # The fa4-cute kernel is GPU-only; fall back to auto-select off-GPU so the model still lowers
         # on CPU (e.g. the grug variant-contract tests).
         attn_impl = "gpu_fa4_cute" if jax.default_backend() == "gpu" else None
         attn_out = attention(q, k, v, mask, implementation=attn_impl, rel_bias=rel_bias)
+        if second_qk is not None:
+            # Differential attention: subtract lambda times a second softmax map over the same values, then
+            # RMS-normalize each head and scale by (1 - lambda_init).
+            assert self.diff_lambda is not None and self.diff_lambda_init is not None
+            q2, k2 = _transform_qk(*second_qk)
+            attn_out2 = attention(q2, k2, v, mask, implementation=attn_impl, rel_bias=rel_bias)
+            lq1, lk1, lq2, lk2 = self.diff_lambda
+            lambda_init = jax.lax.stop_gradient(self.diff_lambda_init)
+            lam = jnp.exp(jnp.sum(lq1 * lk1)) - jnp.exp(jnp.sum(lq2 * lk2)) + lambda_init
+            diff_out = attn_out.astype(jnp.float32) - lam * attn_out2.astype(jnp.float32)
+            attn_out = (rms_norm(diff_out) * (1.0 - lambda_init)).astype(attn_out.dtype)
         # Exclusive Self Attention (XSA): subtract the component of yᵢ parallel to vᵢ, per head.
         # zᵢ = yᵢ - (yᵢᵀvᵢ / ‖vᵢ‖²) vᵢ.
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
@@ -1851,9 +1906,13 @@ class Block(eqx.Module):
     ple_up: Float[Array, "P D"] | None
 
     @staticmethod
-    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray, use_kda: bool = False) -> "Block":
+    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray, layer_index: jax.Array, use_kda: bool = False) -> "Block":
         attn_key, mlp_key, shared_key, gn_attn_key, gn_mlp_key = random.split(key, 5)
-        attn = KimiDeltaAttention.init(cfg, key=attn_key) if use_kda else CausalSelfAttention.init(cfg, key=attn_key)
+        attn = (
+            KimiDeltaAttention.init(cfg, key=attn_key)
+            if use_kda
+            else CausalSelfAttention.init(cfg, key=attn_key, layer_index=layer_index)
+        )
         # KDA blocks have no branch-output SConv (K3 has only the q/k/v convs).
         use_attn_sconv = cfg.sconv and "attn" in cfg.sconv_sites and not use_kda
         # Zero-init: every source scores 0, so each gate starts as a uniform average of its sources.
@@ -2758,7 +2817,8 @@ class Transformer(eqx.Module):
 
         def stack(layers: tuple[int, ...], use_kda: bool) -> ArrayStacked[Block]:
             keys = jnp.stack([block_keys[i] for i in layers])
-            return ArrayStacked.init(len(layers), Block)(cfg, key=keys, use_kda=use_kda)
+            layer_index = jnp.asarray(layers, dtype=jnp.int32)
+            return ArrayStacked.init(len(layers), Block)(cfg, key=keys, layer_index=layer_index, use_kda=use_kda)
 
         softmax_layers, kda_layers = _stack_layer_indices(cfg)
         return Transformer(
