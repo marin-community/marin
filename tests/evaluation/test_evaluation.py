@@ -316,11 +316,14 @@ def test_run_evaluation_batch_shares_one_hosted_judge_across_evaluations(tmp_pat
 
 
 def test_run_evaluation_batch_records_every_eval_when_hosted_judge_fails_to_start(tmp_path, monkeypatch):
+    opened_models: list[str] = []
+
     class InferenceContext:
         def __init__(self, model_name: str):
             self.model_name = model_name
 
         def __enter__(self) -> RemoteInferenceSession:
+            opened_models.append(self.model_name)
             if self.model_name == "judge":
                 raise RemoteInferenceStartupError("judge did not become ready", jobs=())
             return _remote_session("https://candidate.example/v1")
@@ -338,11 +341,64 @@ def test_run_evaluation_batch_records_every_eval_when_hosted_judge_fails_to_star
     with pytest.raises(RuntimeError, match="judge inference failed"):
         run_evaluation_batch(batch)
 
+    assert opened_models == ["candidate", "judge"]
     for evaluation in evaluations:
         record = read_record(str(tmp_path / "records" / evaluation.identity.run_id / "record.json"))
         assert record.status is RunStatus.INFRA_FAILED
         assert record.jobs == {"orchestrator": "/orchestrator"}
         assert "judge did not become ready" in (record.error or "")
+
+
+def test_run_evaluation_batch_retries_hosted_judge_streamer_startup_failure(tmp_path, monkeypatch):
+    opened_models: list[str] = []
+    judge_attempts = 0
+
+    class InferenceContext:
+        def __init__(self, model_name: str):
+            self.model_name = model_name
+
+        def __enter__(self) -> RemoteInferenceSession:
+            nonlocal judge_attempts
+            opened_models.append(self.model_name)
+            if self.model_name == "judge":
+                judge_attempts += 1
+                if judge_attempts < 3:
+                    failed_job = SimpleNamespace(
+                        job_id=f"/judge/failed-{judge_attempts}",
+                        logs=lambda **_kwargs: (
+                            "Could not receive runai_response from libstreamer due to: File access error",
+                        ),
+                    )
+                    raise RemoteInferenceStartupError("judge did not become ready", jobs=(failed_job,))
+            return _remote_session(f"https://{self.model_name}.example/v1")
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+    observed_judges: list[RemoteInferenceSession | None] = []
+
+    def executor(
+        _session: RemoteInferenceSession,
+        _output_dir: str,
+        _env_vars: Mapping[str, str],
+        *,
+        judge: RemoteInferenceSession | None = None,
+    ) -> EvaluationOutcome:
+        observed_judges.append(judge)
+        return EvaluationOutcome(metrics={"task": {"accuracy": 1.0}})
+
+    monkeypatch.setattr("rigging.timing.time.sleep", lambda _seconds: None)
+    _patch_inference_runtime(monkeypatch, lambda config: InferenceContext(config.model.model_id))
+    evaluation = _evaluation(tmp_path, "one", executor)
+
+    run_evaluation_batch(_hosted_judge_batch(tmp_path, (evaluation,)))
+
+    assert opened_models == ["candidate", "judge", "judge", "judge"]
+    assert len(observed_judges) == 1
+    assert observed_judges[0] is not None
+    assert observed_judges[0].model.endpoint.base_url == "https://judge.example/v1"
+    record = read_record(str(tmp_path / "records" / evaluation.identity.run_id / "record.json"))
+    assert record.status is RunStatus.SUCCEEDED
 
 
 def _lm_eval_generation(doc_id: int, metric: str, score: float, response: str) -> dict:

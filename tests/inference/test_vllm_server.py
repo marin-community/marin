@@ -531,10 +531,17 @@ def test_serves_when_startup_succeeds():
         assert environment.model_id == "fake-model"
 
 
-def test_streamer_fault_fails_while_parent_is_still_running(tmp_path):
+@pytest.mark.parametrize(
+    "error",
+    [
+        "Could not receive runai_response from libstreamer due to: File access error",
+        "AWS_ERROR_HTTP_CHANNEL_THROUGHPUT_FAILURE",
+    ],
+)
+def test_streamer_fault_fails_while_parent_is_still_running(tmp_path, error):
     counter = tmp_path / "starts"
     with pytest.raises(RuntimeError, match="Run:ai streamer read fault"):
-        with _environment(_FakeLauncher("stuck-fault", str(counter))) as environment:
+        with _environment(_FakeLauncher("stuck-fault", str(counter), error)) as environment:
             _wait_until_ready(environment)
     assert counter.read_text() == "1"
 

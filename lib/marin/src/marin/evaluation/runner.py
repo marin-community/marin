@@ -3,8 +3,9 @@
 
 """Serve one model and run a batch of endpoint-oriented evaluations."""
 
+import contextlib
 import logging
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import asdict, dataclass, field
 from typing import Protocol
 
@@ -14,6 +15,7 @@ from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, Constra
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.secrets import SecretSpec, resolve_secret_spec
+from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 from marin.evaluation.eval_env import EVAL_ENV_KEYS, EVAL_RUNTIME_ENV_KEYS, env_vars_from_keys
 from marin.evaluation.hardware import AcceleratorChoice
@@ -37,6 +39,7 @@ from marin.evaluation.records import (
     write_record,
 )
 from marin.evaluation.serving_config import inference_config_for_model
+from marin.inference.config import RemoteInferenceConfig
 from marin.inference.iris import RemoteInferenceSession, RemoteInferenceStartupError, remote_inference
 from marin.rollouts.catalog import RolloutRunKind, record_rollout_run, rollout_run_record
 
@@ -50,6 +53,12 @@ _ORCHESTRATOR_MEMORY = "16g"
 _ORCHESTRATOR_DISK = "16g"
 _UNCONSTRAINED = "unconstrained"
 _REPORT_TAIL_LINES = 15
+_HOSTED_JUDGE_STARTUP_ATTEMPTS = 3
+_HOSTED_JUDGE_STARTUP_BACKOFF = ExponentialBackoff(initial=20.0, maximum=120.0, factor=2.0, jitter=0.9)
+_RUNAI_STREAMER_READ_MARKERS = (
+    "could not receive runai_response",
+    "aws_error_http_channel_throughput_failure",
+)
 
 
 @dataclass(frozen=True)
@@ -490,6 +499,39 @@ def _record_startup_failure(
     _record_unstarted(batch, batch.evaluations, exc, jobs, tails, paths)
 
 
+def _is_runai_streamer_startup_failure(exc: Exception) -> bool:
+    if not isinstance(exc, RemoteInferenceStartupError):
+        return False
+    logs = "\n".join(line for handle in exc.jobs for line in _job_tail(handle)).lower()
+    return any(marker in logs for marker in _RUNAI_STREAMER_READ_MARKERS)
+
+
+@contextlib.contextmanager
+def _remote_inference_with_streamer_retry(
+    config: RemoteInferenceConfig,
+) -> Iterator[RemoteInferenceSession]:
+    """Start hosted-judge inference, retrying only transient RunAI object-store reads."""
+
+    def start() -> tuple[contextlib.ExitStack, RemoteInferenceSession]:
+        stack = contextlib.ExitStack()
+        try:
+            session = stack.enter_context(remote_inference(config))
+        except Exception:
+            stack.close()
+            raise
+        return stack, session
+
+    stack, session = retry_with_backoff(
+        start,
+        retryable=_is_runai_streamer_startup_failure,
+        max_attempts=_HOSTED_JUDGE_STARTUP_ATTEMPTS,
+        backoff=_HOSTED_JUDGE_STARTUP_BACKOFF,
+        operation="hosted_judge_startup",
+    )
+    with stack:
+        yield session
+
+
 def _evaluate_with_hosted_judge(
     batch: EvaluationBatch,
     session: RemoteInferenceSession,
@@ -513,7 +555,7 @@ def _evaluate_with_hosted_judge(
         priority=batch.priority_band,
     )
     try:
-        with remote_inference(judge_inference) as judge:
+        with _remote_inference_with_streamer_retry(judge_inference) as judge:
             return evaluate_batch(
                 batch,
                 session,
