@@ -13,6 +13,7 @@ import jax.numpy as jnp
 from jaxtyping import Array, Bool, Float, Int
 
 from levanter.grug._moe.common import _assignment_validity, _scaled_capacity, CapacityDrops, split_moe_w13_output
+from levanter.kernels.pallas.relu2_mlp import fused_relu2, relu2_mlp
 from levanter.grug._moe.ep_common import (
     _assignment_sources,
     _ranks_within_groups,
@@ -460,14 +461,21 @@ def _compute_pooled(
 ) -> _PooledOutput:
     with jax.named_scope("moe_up_down"):
         moe_dim = moe_w2_local.shape[1]
-        hidden = jnp.einsum("erh,ehi->eri", dispatch.compacted_x, moe_w13_local)
-        if moe_w13_local.shape[-1] == moe_dim:
-            # Ungated experts: `moe_w13_local` is W_up alone and the expert is act(x W_up) W_down.
-            activated = activation_fn(hidden)
+        if moe_w13_local.shape[-1] == moe_dim and activation_fn is fused_relu2:
+            # Ungated ReLU^2 with fused-epilogue GEMMs (Pallas Triton on GPU; the same math elsewhere).
+            implementation = "pallas_gpu" if jax.default_backend() == "gpu" else "reference"
+            compacted_output = relu2_mlp(
+                dispatch.compacted_x, moe_w13_local, moe_w2_local, implementation=implementation
+            )
         else:
-            gate, up = split_moe_w13_output(hidden, intermediate_dim=moe_dim, interleaved=False)
-            activated = activation_fn(gate) * up
-        compacted_output = jnp.einsum("eri,eih->erh", activated, moe_w2_local)
+            hidden = jnp.einsum("erh,ehi->eri", dispatch.compacted_x, moe_w13_local)
+            if moe_w13_local.shape[-1] == moe_dim:
+                # Ungated experts: `moe_w13_local` is W_up alone and the expert is act(x W_up) W_down.
+                activated = activation_fn(hidden)
+            else:
+                gate, up = split_moe_w13_output(hidden, intermediate_dim=moe_dim, interleaved=False)
+                activated = activation_fn(gate) * up
+            compacted_output = jnp.einsum("eri,eih->erh", activated, moe_w2_local)
 
     return _PooledOutput(
         compacted_output,

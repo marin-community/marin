@@ -50,6 +50,7 @@ from levanter.grug.grug_moe import (
 )
 from levanter.grug.loss import BlockSizes, fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import unshard
+from levanter.kernels.pallas.relu2_mlp import fused_relu2
 from levanter.kernels.pallas.short_conv import short_conv
 from levanter.tracker.histogram import SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
@@ -463,6 +464,9 @@ class GrugModelConfig:
     shared_ungated_relu2: bool = False
     """Shared experts are ``relu(x @ W_up)^2 @ W_down`` with no gate projection (truly ungated: the gate
     GEMM is dropped from the fused projection). Parameter-match with 1.5x ``shared_expert_intermediate_dim``."""
+    moe_fused_relu2: bool = False
+    """With ``moe_ungated_kernel``, run the ungated ReLU^2 expert MLP through the fused-epilogue kernels
+    (``levanter.kernels.pallas.relu2_mlp``): ``pre`` and ``d post`` never reach HBM."""
     moe_ungated_kernel: bool = False
     """With ``moe_ungated_relu2``, run the pooled-wave experts truly ungated (one ``W_up`` GEMM) instead of
     tying the gate to ``W_up``. Same math; skips the duplicated GEMM."""
@@ -1521,7 +1525,11 @@ class MoEMLP(eqx.Module):
                 combine_weights,
                 em.w_up if ungated else jnp.concatenate([em.w_up, em.w_up], axis=-1),
                 em.w_down,
-                activation=ActivationFunctionEnum.relu2 if ungated else em.activation,
+                activation=(
+                    (fused_relu2 if self.cfg.moe_fused_relu2 else ActivationFunctionEnum.relu2)
+                    if ungated
+                    else em.activation
+                ),
                 implementation=em.implementation,
                 mesh=get_abstract_mesh(),
                 capacity_factor=em.capacity_factor,
