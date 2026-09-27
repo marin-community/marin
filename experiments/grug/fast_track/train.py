@@ -9,7 +9,7 @@ import os
 import re
 import time
 from collections.abc import Callable
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 
@@ -25,7 +25,6 @@ import optax
 from fray.cluster import ResourceConfig
 from haliax import Axis
 from haliax.partitioning import set_mesh
-from jax._src import config as jax_config
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from jax.tree_util import register_dataclass
@@ -128,6 +127,18 @@ def _apply_runtime_defaults(*, inline_watch_enabled: bool) -> None:
     explicit_names = {flag.partition("=")[0] for flag in xla_flags}
     xla_flags.extend(flag for flag in flag_defaults if flag.partition("=")[0] not in explicit_names)
     os.environ["XLA_FLAGS"] = " ".join(xla_flags)
+
+
+@contextmanager
+def _pgle_disabled():
+    """Turn PGLE off process-wide for the duration. ``jax_config.enable_pgle(False)`` is thread-local, so the
+    data loader's background thread would keep profiling its batch jit under PGLE and abort mid-eval."""
+    prev = jax.config.jax_enable_pgle
+    jax.config.update("jax_enable_pgle", False)
+    try:
+        yield
+    finally:
+        jax.config.update("jax_enable_pgle", prev)
 
 
 @dataclass(frozen=True)
@@ -1076,7 +1087,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     # its temporary buffer, thus this copy must die before the next step.
                     with set_mesh(_mesh):
                         model = _reshard_tree_to_mesh(step.eval_model, _mesh)
-                        with jax_config.enable_pgle(False):
+                        with _pgle_disabled():
                             log_dict = eval_model(_ev, model, prefix=_prefix)
                         levanter.tracker.log(log_dict, step=step_count)
 
@@ -1228,7 +1239,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     )
                     with set_mesh(dropless_eval_mesh):
                         blended = _reshard_tree_to_mesh(blended, dropless_eval_mesh)
-                        with jax_config.enable_pgle(False):
+                        with _pgle_disabled():
                             blend_log = eval_model(dropless_evaluator, blended, prefix=prefix)
                     levanter.tracker.log(blend_log, step=int(state.step))
                     del blended
