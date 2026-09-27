@@ -374,6 +374,53 @@ def _power_decay_schedule(peak: float, floor: float, warmup_steps: int, total_st
     return schedule
 
 
+class BiMaxwellState(NamedTuple):
+    count: jax.Array
+    buf: optax.Updates
+    fast: optax.Updates
+    slow: optax.Updates
+
+
+def scale_by_bimaxwell_momentum(momentum: float, switch_step: int) -> optax.GradientTransformation:
+    """Bi-Maxwell momentum (modded-nanogpt #339) for Muon-family groups whose own momentum is 0.
+
+    Before ``switch_step`` it is Nesterov momentum (``buf = m buf + g``, out ``m buf + g``). From
+    ``switch_step`` on, a fast (0.15) and a slow (0.02) EMA of the gradient, both started from
+    ``(1 - m) buf``, mix as ``M = 0.4385 fast + 0.5615 slow`` (mean age about 30 steps) and the output
+    is ``g + m (M - g)``. Newton-Schulz is scale-invariant per matrix, so the two regimes' different
+    scales don't matter."""
+
+    def init(params):
+        zeros = lambda: jax.tree.map(jnp.zeros_like, params)  # noqa: E731
+        return BiMaxwellState(jnp.zeros([], jnp.int32), zeros(), zeros(), zeros())
+
+    def update(updates, state, params=None):
+        count = state.count + 1
+        late = count > switch_step
+        first = count == switch_step + 1
+
+        def leaf(g, buf, fast, slow):
+            new_buf = momentum * buf + g
+            nesterov = momentum * new_buf + g
+            start = (1.0 - momentum) * buf
+            fast0 = jnp.where(first, start, fast)
+            slow0 = jnp.where(first, start, slow)
+            new_fast = fast0 + 0.15 * (g - fast0)
+            new_slow = slow0 + 0.02 * (g - slow0)
+            mixed = 0.4385 * new_fast + 0.5615 * new_slow
+            out = jnp.where(late, g + momentum * (mixed - g), nesterov)
+            return out, jnp.where(late, buf, new_buf), jnp.where(late, new_fast, fast), jnp.where(late, new_slow, slow)
+
+        res = jax.tree.map(leaf, updates, state.buf, state.fast, state.slow)
+
+        def pick(i):
+            return jax.tree.map(lambda _, r: r[i], updates, res)
+
+        return pick(0), BiMaxwellState(count, pick(1), pick(2), pick(3))
+
+    return optax.GradientTransformation(init, update)
+
+
 def cautious(inner: optax.GradientTransformation) -> optax.GradientTransformation:
     """Cautious optimizer (arXiv 2411.16085): keep only the coordinates of the inner direction whose sign
     agrees with the gradient, rescaled by the kept fraction per leaf. ``inner`` returns the descent
@@ -557,6 +604,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     muonh_decay_power: float | None = None
     """Decay shape of the MuonH LR after warmup: ``floor + (peak - floor) * (1 - p**power)`` over training
     progress ``p`` (modded-nanogpt MuonH records #345/#351). None keeps the shared schedule (linear = 1)."""
+    muon_bimaxwell: bool = False
+    """Bi-Maxwell two-timescale momentum on the MuonH groups from 1/3 of training (modded-nanogpt #339)."""
     adam_cautious: bool = False
     """Cautious masking (arXiv 2411.16085) on the plain-Adam groups."""
     muon_mars_gamma: float = 0.0
@@ -585,9 +634,11 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                     components.append(optax.clip_by_global_norm(self.max_grad_norm))
                 if self.muon_mars_gamma:
                     components.append(scale_by_mars_correction(self.muon_mars_gamma, self.momentum))
+                if self.muon_bimaxwell:
+                    components.append(scale_by_bimaxwell_momentum(self.momentum, num_train_steps // 3))
                 components.append(
                     scale_with_grug_muonh(
-                        momentum=self.momentum,
+                        momentum=0.0 if self.muon_bimaxwell else self.momentum,
                         nesterov=self.nesterov,
                         steps=self.backend_steps,
                         muon_eps=self.muon_epsilon,
