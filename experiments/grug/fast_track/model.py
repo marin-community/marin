@@ -483,6 +483,9 @@ class GrugModelConfig:
     the combine weights are renormalized over all selected experts. 0: one uniform bank."""
     moe_bank2_topk: int = 0
     moe_bank2_intermediate_dim: int = 0
+    moe_bank2_scale: bool = False
+    """A learnable output scale per expert bank (init 1, Adam): MuonH pins each bank's weight norm, so without it
+    the banks' relative output magnitudes are fixed by their activations and widths."""
     moe_bank2_activation: str = "relu2"
     """``relu2`` (ungated, like ``moe_ungated_relu2``) or ``swiglu``."""
     expert_leaky_slope: float = 0.0
@@ -1395,6 +1398,7 @@ class MoEMLP(eqx.Module):
     router_bias: jax.Array
     expert_mlp: MoEExpertMlp
     expert_mlp_b: MoEExpertMlp | None
+    bank_scale: Float[Array, " 2"] | None
     w_latent_down: jax.Array | None
     latent_norm: RMSNorm | None
     w_latent_up: jax.Array | None
@@ -1458,6 +1462,7 @@ class MoEMLP(eqx.Module):
                 if cfg.moe_bank2_experts
                 else None
             ),
+            bank_scale=jnp.ones((2,), jnp.float32) if cfg.moe_bank2_experts and cfg.moe_bank2_scale else None,
             cfg=cfg,
         )
 
@@ -1614,6 +1619,8 @@ class MoEMLP(eqx.Module):
                 (selected_experts[:, col : col + bank_k] - start).astype(jnp.int32),
                 combine_weights[:, col : col + bank_k],
             )
+            if self.bank_scale is not None:
+                out = out * self.bank_scale[bank_index - 1].astype(out.dtype)
             outputs.append(out)
             overflows.append(overflow)
             col += bank_k
