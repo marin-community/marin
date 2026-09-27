@@ -66,7 +66,7 @@ full resumable workload:
 
 ```bash
 uv run iris --cluster=cw-rno2a job run --priority interactive --enable-extra-resources \
-  --job-name science-sft-conversion-20260927 --replicas 16 --max-retries 8 \
+  --job-name science-sft-conversion-v2-20260927 --replicas 16 --max-retries 8 \
   --cpu 8 --memory 32GB --disk 20GB --extra cpu --no-wait \
   -- python -m experiments.datakit.science_sft_conversion.conversion
 ```
