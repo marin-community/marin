@@ -552,6 +552,9 @@ class GrugModelConfig:
     embedding; for position t the embeddings of tokens t, t-1, ..., t-(k-1) (k = hidden_dim / window_embed_dim)
     are concatenated slot by slot (zero where a slot crosses a document start), linearly projected to
     ``hidden_dim`` and RMS-normed. 0: off."""
+    window_embed_mode: str = "source"
+    """``source``: the token window is its own AttnRes source. ``add_embed``: it is added to the token-embedding
+    source. As its own source, the gates gave it ~0.001-0.01 weight by step 350, which starved its gradient."""
     embed3_rows: int = 0
     """Rows of a hashed *trigram* table that is its own AttnRes source next to the bigram table, so each
     gate weighs the bigram and trigram views separately (0: off; needs ``second_embed_bigram``)."""
@@ -2837,7 +2840,13 @@ class Transformer(eqx.Module):
                 projected = jnp.einsum(
                     "bsd,de->bse", window, self.window_proj.astype(window.dtype), out_sharding=_batch_spec()
                 )
-                extra_sources = (*extra_sources, self.window_norm(projected))
+                if cfg.window_embed_mode == "add_embed":
+                    # Summed into the token-embedding source, so it can't be gated away before it is useful.
+                    hidden = (hidden + self.window_norm(projected)).astype(hidden.dtype)
+                elif cfg.window_embed_mode == "source":
+                    extra_sources = (*extra_sources, self.window_norm(projected))
+                else:
+                    raise ValueError(f"window_embed_mode must be source or add_embed, got {cfg.window_embed_mode!r}")
             if self.token_embed3 is not None:
                 assert self.embed3_norm is not None and cfg.second_embed_bigram and cfg.second_embed_mode == "source"
                 doc_start = None if segment_ids is None else segment_ids[0]
@@ -3440,7 +3449,8 @@ def _byte_aux_loss(
 
 def _num_extra_embeds(cfg: GrugModelConfig) -> int:
     """Extra embedding tables ahead of the token embedding in the AttnRes source list."""
-    return int(cfg.second_embed) + int(cfg.embed3_rows > 0) + int(cfg.window_embed_dim > 0)
+    window_source = cfg.window_embed_dim > 0 and cfg.window_embed_mode == "source"
+    return int(cfg.second_embed) + int(cfg.embed3_rows > 0) + int(window_source)
 
 
 def _token_window(
