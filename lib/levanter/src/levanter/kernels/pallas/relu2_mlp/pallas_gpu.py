@@ -29,11 +29,14 @@ from jaxtyping import Array, Float
 
 @dataclass(frozen=True, slots=True)
 class BlockSizes:
+    """Defaults from an H100 sweep at the d512 pooled-wave shape (E=48, R=12544, K=M=256, N=384):
+    fused fwd+bwd 3.10 ms vs 4.99 ms for XLA."""
+
     bm: int = 64
     bn: int = 64
     bk: int = 64
     num_warps: int = 4
-    num_stages: int = 3
+    num_stages: int = 2
 
     @classmethod
     def get_default(cls) -> "BlockSizes":
