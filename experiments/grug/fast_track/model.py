@@ -514,6 +514,9 @@ class GrugModelConfig:
     aux_lm_steps: int = 500
     second_embed: bool = False
     embed2_rows: int = 0
+    embed2_fsdp: bool = False
+    """Store the second table (and so its optimizer / EMA state) row-sharded over the FSDP axes, all-gathering
+    a replicated copy for the lookup. Same math; for rungs where the replicated table's state doesn't fit."""
     embed2_grad_fp32: bool = True
     """Second table's backward through the fp32 local scatter + psum (True), or JAX's default bf16
     scatter-add (False). Hashed rows see few adds each, so the bf16 path's atomic contention and rounding
@@ -2440,7 +2443,7 @@ class Transformer(eqx.Module):
                         (cfg.embed2_rows or cfg.vocab_size, cfg.embed2_dim or cfg.hidden_dim),
                         cfg.initializer_std,
                     ),
-                    P(None, None),
+                    P(_FSDP_AXES, None) if cfg.embed2_fsdp else P(None, None),
                 )
                 if cfg.second_embed
                 else None
@@ -2651,7 +2654,8 @@ class Transformer(eqx.Module):
                     doc_start = None if segment_ids is None else segment_ids[0]
                     ids2 = _bigram_hash_ids(token_ids, doc_start, cfg.embed2_rows or cfg.vocab_size, cfg.embed2_ngram)
                 gather2 = _embedding_gather if cfg.embed2_grad_fp32 else _embedding_gather_autodiff
-                rows2 = gather2(self.token_embed2, ids2)
+                table2 = reshard(self.token_embed2, P(None, None)) if cfg.embed2_fsdp else self.token_embed2
+                rows2 = gather2(table2, ids2)
                 if self.embed2_up is not None:
                     rows2 = jnp.einsum(
                         "bsr,rd->bsd", rows2, self.embed2_up.astype(rows2.dtype), out_sharding=_batch_spec()
