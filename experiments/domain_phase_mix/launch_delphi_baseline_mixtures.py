@@ -6,7 +6,9 @@
 This launcher is the issue #6607 training half: proportional and UniMax-8 over
 the Dolma3/Dolmino top-level buckets at a small Delphi scaling ladder.  It uses
 the CompletedAdamH/Delphi model, optimizer, and mesh logic while only replacing
-the training data mixture.
+the training data mixture.  The UniMax epoch-cap sweep (caps 1, 4 and 12 beside
+the ladder's 8) reuses the same graph with ``--with-table9-eval``, which chains
+the Marin-native Table 9 BPB evaluator after each training step.
 """
 
 from __future__ import annotations
@@ -18,7 +20,7 @@ import json
 import logging
 import os
 import sys
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from datetime import timedelta
 from enum import StrEnum
 from pathlib import Path
@@ -34,8 +36,10 @@ from levanter.main import train_lm
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
+from marin.evaluation.olmo_base_eval.run import olmo_base_eval_step
+from marin.execution.context import executor_context
 from marin.execution.executor import ExecutorMainConfig, executor_main
-from marin.execution.types import ExecutorStep, this_output_path
+from marin.execution.types import ExecutorStep, InputName, this_output_path
 from marin.processing.tokenize import step_to_lm_mixture_component
 from marin.scaling_laws import ScalingFit, predict_optimal_config
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
@@ -69,12 +73,14 @@ LOCAL_ARTIFACT_DIR = (
 
 EXPERIMENT_NAME = "pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623"
 DEFAULT_ANALYSIS_OUTPUT_PATH = (
-    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/" "delphi_baseline_mixtures_issue6607_20260623/analysis-af9355"
+    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/analysis-af9355"
 )
 LABEL = "adamh_scaling_v6"
 SEQ_LEN_DELPHI = 4096
 PHASE_SCHEDULE = PhaseSchedule.uniform(2)
-UNIMAX_MAX_EPOCHS = 8.0
+TABLE9_REQUEST_SET_DIR = InputName.hardcoded("raw/eval-datasets/olmo_base_eval_table9/v2")
+DEFAULT_TABLE9_TPU_ZONE = "us-east5-b"
+TABLE9_WANDB_GROUP = "olmo_base_eval_table9_delphi_baseline_mixtures"
 SIMULATED_EPOCH_TARGET_BUDGET = TARGET_BUDGET_DOLMA3_COMMON_CRAWL
 DEFAULT_TPU_REGION = "us-east5"
 DEFAULT_TPU_ZONE = "us-east5-a"
@@ -93,10 +99,28 @@ TARGET_BUDGETS: dict[float, tuple[str, int]] = {
 
 
 class DelphiBaselineMixture(StrEnum):
-    """Objective-agnostic baseline mixtures for issue #6607."""
+    """Objective-agnostic baseline mixtures: proportional and UniMax at several epoch caps."""
 
     PROPORTIONAL = "proportional"
+    UNIMAX_1 = "unimax1"
+    UNIMAX_4 = "unimax4"
     UNIMAX_8 = "unimax8"
+    UNIMAX_12 = "unimax12"
+
+
+# Epoch cap of each UniMax mixture at the fixed target budget; the cap binds only on the smallest buckets.
+UNIMAX_EPOCH_CAPS: dict[DelphiBaselineMixture, float] = {
+    DelphiBaselineMixture.UNIMAX_1: 1.0,
+    DelphiBaselineMixture.UNIMAX_4: 4.0,
+    DelphiBaselineMixture.UNIMAX_8: 8.0,
+    DelphiBaselineMixture.UNIMAX_12: 12.0,
+}
+
+
+def _run_name(mixture: DelphiBaselineMixture, target_flops: float, trainer_seed: int) -> str:
+    """Run name; trainer-seed repeats of a run carry a ``_t<seed>`` suffix, the original run none."""
+    suffix = f"_t{trainer_seed}" if trainer_seed != 0 else ""
+    return f"{mixture.value}_{_slug(target_flops)}{suffix}"
 
 
 @dataclass(frozen=True)
@@ -156,6 +180,9 @@ class SaveDelphiBaselineManifestConfig:
     target_budgets_json: str
     tpu_region: str
     tpu_zone: str
+    run_id_base: int = RUN_ID_BASE
+    trainer_seeds: tuple[int, ...] = (0,)
+    data_seed: int | None = None
 
 
 @dataclass(frozen=True)
@@ -165,10 +192,11 @@ class LaunchArtifacts:
     run_specs: list[DelphiBaselineRunSpec]
     manifest_step: ExecutorStep
     training_steps: list[ExecutorStep]
+    eval_steps: list[ExecutorStep] = field(default_factory=list)
 
     @property
     def steps(self) -> list[ExecutorStep]:
-        return [self.manifest_step, *self.training_steps]
+        return [self.manifest_step, *self.training_steps, *self.eval_steps]
 
 
 def _slug(value: float) -> str:
@@ -184,11 +212,11 @@ def _proportional_weights() -> dict[str, float]:
     return {domain_name: TOP_LEVEL_DOMAIN_TOKEN_COUNTS[domain_name] / total_tokens for domain_name in DOMAIN_NAMES}
 
 
-def _unimax8_weights() -> dict[str, float]:
+def _unimax_weights(max_epochs: float) -> dict[str, float]:
     weights = compute_unimax_weights(
         [TOP_LEVEL_DOMAIN_TOKEN_COUNTS[domain_name] for domain_name in DOMAIN_NAMES],
         budget=float(SIMULATED_EPOCH_TARGET_BUDGET),
-        max_epochs=UNIMAX_MAX_EPOCHS,
+        max_epochs=max_epochs,
     )
     return {domain_name: float(weight) for domain_name, weight in zip(DOMAIN_NAMES, weights, strict=True)}
 
@@ -196,8 +224,8 @@ def _unimax8_weights() -> dict[str, float]:
 def _weights_for_mixture(mixture: DelphiBaselineMixture) -> dict[str, float]:
     if mixture == DelphiBaselineMixture.PROPORTIONAL:
         return _proportional_weights()
-    if mixture == DelphiBaselineMixture.UNIMAX_8:
-        return _unimax8_weights()
+    if mixture in UNIMAX_EPOCH_CAPS:
+        return _unimax_weights(UNIMAX_EPOCH_CAPS[mixture])
     raise ValueError(f"Unsupported Delphi baseline mixture: {mixture!r}")
 
 
@@ -420,6 +448,9 @@ def _predict_run_spec(
     tpu_zone: str,
     batch_size: int,
     run_order: int,
+    run_id_base: int = RUN_ID_BASE,
+    trainer_seed: int = 0,
+    data_seed: int | None = None,
 ) -> DelphiBaselineRunSpec:
     candidate = _candidate_for_budget(
         scaling_fits=scaling_fits,
@@ -429,13 +460,13 @@ def _predict_run_spec(
     train_tokens = round(candidate.tokens)
     realized_train_tokens = candidate.train_steps * batch_size * SEQ_LEN_DELPHI
     phase_weights = _constant_phase_weights(_weights_for_mixture(mixture))
-    run_name = f"{mixture.value}_{_slug(target_flops)}"
+    run_name = _run_name(mixture, target_flops, trainer_seed)
     _validate_phase_weights(phase_weights, run_name=run_name)
     non_embedding_params = int(candidate.model_config.total_trainable_params(0))
     total_params = int(candidate.model_config.total_trainable_params(completed_adamh_heuristic.vocab_size))
     return DelphiBaselineRunSpec(
         run_order=run_order,
-        run_id=RUN_ID_BASE + run_order,
+        run_id=run_id_base + run_order,
         run_name=run_name,
         mixture=mixture.value,
         target_flops=target_flops,
@@ -452,8 +483,8 @@ def _predict_run_spec(
         non_embedding_params=non_embedding_params,
         total_trainable_params=total_params,
         tensor_parallel_size=_tensor_parallel_size(candidate.model_config.hidden_dim, tpu_type),
-        data_seed=RUN_ID_BASE + run_order,
-        trainer_seed=0,
+        data_seed=run_id_base + run_order if data_seed is None else data_seed,
+        trainer_seed=trainer_seed,
         phase_weights=phase_weights,
     )
 
@@ -468,18 +499,22 @@ def save_delphi_baseline_manifest(config: SaveDelphiBaselineManifestConfig) -> N
     run_specs: list[DelphiBaselineRunSpec] = []
     for target_flops, (tpu_type, batch_size) in target_budgets.items():
         for mixture in config.mixtures:
-            run_specs.append(
-                _predict_run_spec(
-                    scaling_fits=scaling_fits,
-                    mixture=mixture,
-                    target_flops=target_flops,
-                    tpu_type=tpu_type,
-                    tpu_region=config.tpu_region,
-                    tpu_zone=config.tpu_zone,
-                    batch_size=batch_size,
-                    run_order=len(run_specs),
+            for trainer_seed in config.trainer_seeds:
+                run_specs.append(
+                    _predict_run_spec(
+                        scaling_fits=scaling_fits,
+                        mixture=mixture,
+                        target_flops=target_flops,
+                        tpu_type=tpu_type,
+                        tpu_region=config.tpu_region,
+                        tpu_zone=config.tpu_zone,
+                        batch_size=batch_size,
+                        run_order=len(run_specs),
+                        run_id_base=config.run_id_base,
+                        trainer_seed=trainer_seed,
+                        data_seed=config.data_seed,
+                    )
                 )
-            )
     fs, _, _ = fsspec.get_fs_token_paths(config.output_path)
     fs.makedirs(config.output_path, exist_ok=True)
     with fs.open(os.path.join(config.output_path, "run_specs.json"), "w") as handle:
@@ -524,7 +559,10 @@ def save_delphi_baseline_manifest(config: SaveDelphiBaselineManifestConfig) -> N
         "source_experiment": EXPERIMENT_NAME,
         "target_budget_tokens": SIMULATED_EPOCH_TARGET_BUDGET,
         "available_top_level_tokens": TOP_LEVEL_TOTAL_AVAILABLE_TOKENS,
-        "unimax_max_epochs": UNIMAX_MAX_EPOCHS,
+        "unimax_epoch_caps": {
+            mixture.value: cap for mixture, cap in UNIMAX_EPOCH_CAPS.items() if mixture in config.mixtures
+        },
+        "run_id_base": config.run_id_base,
     }
     with fs.open(os.path.join(config.output_path, "summary.json"), "w") as handle:
         json.dump(summary, handle, indent=2, sort_keys=True)
@@ -555,15 +593,22 @@ def build_launch_artifacts(
     target_budgets: dict[float, tuple[str, int]],
     tpu_region: str,
     tpu_zone: str,
+    run_id_base: int = RUN_ID_BASE,
+    with_table9_eval: bool = False,
+    table9_tpu_zone: str = DEFAULT_TABLE9_TPU_ZONE,
+    trainer_seeds: tuple[int, ...] = (0,),
+    data_seed: int | None = None,
 ) -> LaunchArtifacts:
-    """Build the executor graph for selected mixtures and FLOP budgets."""
+    """Build the executor graph for selected mixtures and FLOP budgets, optionally with Table 9 evaluations."""
     training_steps: list[ExecutorStep] = []
+    eval_steps: list[ExecutorStep] = []
+    scaling_fits = _read_scaling_fits(analysis_output_path) if with_table9_eval else None
     for target_flops, (tpu_type, batch_size) in target_budgets.items():
         for mixture in mixtures:
-            run_order = len(training_steps)
-            run_name = f"{mixture.value}_{_slug(target_flops)}"
-            training_steps.append(
-                ExecutorStep(
+            for trainer_seed in trainer_seeds:
+                run_order = len(training_steps)
+                run_name = _run_name(mixture, target_flops, trainer_seed)
+                training_step = ExecutorStep(
                     name=f"{EXPERIMENT_NAME}/{run_name}",
                     fn=run_delphi_baseline_training,
                     resources=ResourceConfig.with_tpu(tpu_type, regions=[tpu_region], zone=tpu_zone),
@@ -577,14 +622,37 @@ def build_launch_artifacts(
                         mixture=mixture,
                         label=LABEL,
                         output_path=this_output_path(),
-                        run_id=RUN_ID_BASE + run_order,
+                        run_id=run_id_base + run_order,
                         run_name=run_name,
-                        data_seed=RUN_ID_BASE + run_order,
-                        trainer_seed=0,
+                        data_seed=run_id_base + run_order if data_seed is None else data_seed,
+                        trainer_seed=trainer_seed,
                         validation_configs=validation_configs,
                     ),
                 )
-            )
+                training_steps.append(training_step)
+                if scaling_fits is not None:
+                    candidate = _candidate_for_budget(
+                        scaling_fits=scaling_fits, target_flops=target_flops, batch_size=batch_size
+                    )
+                    eval_steps.append(
+                        olmo_base_eval_step(
+                            name=f"t9_{run_name}",
+                            checkpoint=training_step / f"hf/step-{candidate.train_steps - 1}",
+                            request_set_dir=TABLE9_REQUEST_SET_DIR,
+                            resource_config=ResourceConfig.with_tpu(
+                                "v6e-8", regions=[tpu_region], zone=table9_tpu_zone, disk="80g"
+                            ),
+                            wandb_group=TABLE9_WANDB_GROUP,
+                            provenance={
+                                "evaluator": "marin-native-table9-bpb",
+                                "panel": "delphi_baseline_mixtures_issue6607",
+                                "scale": _slug(target_flops),
+                                "mixture": mixture.value,
+                                "run_name": run_name,
+                                "trainer_seed": str(trainer_seed),
+                            },
+                        )
+                    )
 
     manifest_step = ExecutorStep(
         name=f"{EXPERIMENT_NAME}/manifest",
@@ -602,9 +670,14 @@ def build_launch_artifacts(
             ),
             tpu_region=tpu_region,
             tpu_zone=tpu_zone,
+            run_id_base=run_id_base,
+            trainer_seeds=trainer_seeds,
+            data_seed=data_seed,
         ),
     )
-    return LaunchArtifacts(run_specs=[], manifest_step=manifest_step, training_steps=training_steps)
+    return LaunchArtifacts(
+        run_specs=[], manifest_step=manifest_step, training_steps=training_steps, eval_steps=eval_steps
+    )
 
 
 def _write_local_dry_run_manifest(
@@ -614,23 +687,30 @@ def _write_local_dry_run_manifest(
     target_budgets: dict[float, tuple[str, int]],
     tpu_region: str,
     tpu_zone: str,
+    run_id_base: int = RUN_ID_BASE,
+    trainer_seeds: tuple[int, ...] = (0,),
+    data_seed: int | None = None,
 ) -> list[DelphiBaselineRunSpec]:
     scaling_fits = _read_scaling_fits(analysis_output_path)
     run_specs: list[DelphiBaselineRunSpec] = []
     for target_flops, (tpu_type, batch_size) in target_budgets.items():
         for mixture in mixtures:
-            run_specs.append(
-                _predict_run_spec(
-                    scaling_fits=scaling_fits,
-                    mixture=mixture,
-                    target_flops=target_flops,
-                    tpu_type=tpu_type,
-                    tpu_region=tpu_region,
-                    tpu_zone=tpu_zone,
-                    batch_size=batch_size,
-                    run_order=len(run_specs),
+            for trainer_seed in trainer_seeds:
+                run_specs.append(
+                    _predict_run_spec(
+                        scaling_fits=scaling_fits,
+                        mixture=mixture,
+                        target_flops=target_flops,
+                        tpu_type=tpu_type,
+                        tpu_region=tpu_region,
+                        tpu_zone=tpu_zone,
+                        batch_size=batch_size,
+                        run_order=len(run_specs),
+                        run_id_base=run_id_base,
+                        trainer_seed=trainer_seed,
+                        data_seed=data_seed,
+                    )
                 )
-            )
     LOCAL_ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
     save_delphi_baseline_manifest(
         SaveDelphiBaselineManifestConfig(
@@ -646,6 +726,9 @@ def _write_local_dry_run_manifest(
             ),
             tpu_region=tpu_region,
             tpu_zone=tpu_zone,
+            run_id_base=run_id_base,
+            trainer_seeds=trainer_seeds,
+            data_seed=data_seed,
         )
     )
     return run_specs
@@ -666,6 +749,24 @@ def _parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument("--max-concurrent", type=int, default=DEFAULT_MAX_CONCURRENT)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--analysis-output-path", default=DEFAULT_ANALYSIS_OUTPUT_PATH)
+    parser.add_argument("--run-id-base", type=int, default=RUN_ID_BASE, help="first run id and data seed of this launch")
+    parser.add_argument("--with-table9-eval", action="store_true", help="chain the Table 9 BPB evaluator after each run")
+    parser.add_argument(
+        "--table9-tpu-zone", default=DEFAULT_TABLE9_TPU_ZONE, help="zone of the v6e-8 Table 9 evaluations"
+    )
+    parser.add_argument(
+        "--trainer-seeds",
+        nargs="+",
+        type=int,
+        default=[0],
+        help="one run per trainer seed; seeds other than 0 add a _t<seed> suffix to the run name",
+    )
+    parser.add_argument(
+        "--data-seed",
+        type=int,
+        default=None,
+        help="fixed data seed for every run (trainer-seed repeats of one run); default: the run id",
+    )
     return parser.parse_known_args()
 
 
@@ -699,24 +800,34 @@ def main() -> None:
             target_budgets=target_budgets,
             tpu_region=args.tpu_region,
             tpu_zone=args.tpu_zone,
+            run_id_base=args.run_id_base,
+            trainer_seeds=tuple(args.trainer_seeds),
+            data_seed=args.data_seed,
         )
         logger.info("Wrote %d dry-run specs under %s", len(run_specs), LOCAL_ARTIFACT_DIR)
         return
 
-    analysis_output_path = args.analysis_output_path
-    artifacts = build_launch_artifacts(
-        analysis_output_path=analysis_output_path,
-        validation_configs=validation_configs,
-        mixtures=mixtures,
-        target_budgets=target_budgets,
-        tpu_region=args.tpu_region,
-        tpu_zone=args.tpu_zone,
-    )
+    with executor_context():
+        analysis_output_path = args.analysis_output_path
+        artifacts = build_launch_artifacts(
+            analysis_output_path=analysis_output_path,
+            validation_configs=validation_configs,
+            mixtures=mixtures,
+            target_budgets=target_budgets,
+            tpu_region=args.tpu_region,
+            tpu_zone=args.tpu_zone,
+            run_id_base=args.run_id_base,
+            with_table9_eval=args.with_table9_eval,
+            table9_tpu_zone=args.table9_tpu_zone,
+            trainer_seeds=tuple(args.trainer_seeds),
+            data_seed=args.data_seed,
+        )
     steps = [*artifacts.steps]
     if os.getenv("CI") is not None:
         logger.info(
-            "Built Delphi baseline-mixture graph with %d training steps; skipping executor launch.",
+            "Built Delphi baseline-mixture graph with %d training and %d evaluation steps; skipping executor launch.",
             len(artifacts.training_steps),
+            len(artifacts.eval_steps),
         )
         return
 

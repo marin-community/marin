@@ -1,0 +1,19 @@
+{
+  "all_kappa0_comparator_counts_match": true,
+  "candidate_ids": [
+    "cwspu_u_k025_cap06",
+    "cwspu_u_k05_cap06",
+    "cwspu_u_k1_cap06",
+    "cwspu_t9_k025_cap06",
+    "cwspu_t9_k05_cap06",
+    "cwspu_t9_k1_cap06",
+    "cwspu_t9_k025_cap08",
+    "cwspu_t9_k05_cap08",
+    "cwspu_t9_k1_cap08"
+  ],
+  "candidate_weights_sha256": "e72d1f2c9b3acc6ffde470dbd05db7ed2cf50d5a8c28fddfcad0d5d547c0f241",
+  "maximum_continuous_to_runtime_tv": 0.0030392128260505304,
+  "maximum_runtime_prediction_penalty": 0.00010994182493595517,
+  "no_jobs_launched": true,
+  "runtime_distinct_candidates": 9
+}

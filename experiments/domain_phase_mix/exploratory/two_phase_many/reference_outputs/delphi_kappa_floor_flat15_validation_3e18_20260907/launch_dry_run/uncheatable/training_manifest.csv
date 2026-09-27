@@ -1,0 +1,2 @@
+run_order,run_name,candidate_id,target,epoch_cap,aliases,run_id,data_seed,trainer_seed,train_steps,expected_checkpoint_step,tpu_type,tpu_region,tpu_zone,fit_panel_max_materialized_epoch,runtime_max_simulated_epoch
+0,lwspukff_uncheatable_seed666200_lwspu_u_kff_cap06,lwspu_u_kff_cap06,uncheatable,6,lwspu_u_kff_cap06,7400000,666200,0,3007,3006,v6e-8,us-east5,us-east5-b,5.20615170604762,5.206149100731843

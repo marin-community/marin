@@ -95,8 +95,8 @@
     },
     "family_design": {
       "design_revision": 1,
-      "source_sha256": "ae51cd3fac1d90214e45b88756b95cc42b3379f0455ef2438271ce9d859191c9",
-      "note": "refreshed 2026-09-04 round 4: defaulted options only, cc_hub raises without bucket names; 57 sampled shards reproduce bit-for-bit Pin refreshed 2026-09-06: added the named_pairs interaction branch; every other interaction kind is unchanged. Pin refreshed 2026-09-08: added the softplus_bucket_sum and softplus_bucket_hinge harm branches; existing designs unchanged."
+      "source_sha256": "5d91a8810d5884526eb9275dbd434083f9dc8b1a26059df21359928cc6d8d3a4",
+      "note": "refreshed 2026-09-04 round 4: defaulted options only, cc_hub raises without bucket names; 57 sampled shards reproduce bit-for-bit Pin refreshed 2026-09-06: added the named_pairs interaction branch; every other interaction kind is unchanged. Pin refreshed 2026-09-08: added the softplus_bucket_sum and softplus_bucket_hinge harm branches; existing designs unchanged. Pin refreshed 2026-09-16: the 2026-09-14 softplus_bucket_raw and softplus_bucket_raw_hinge harm branches (convexity checks) were never pinned; existing designs unchanged."
     },
     "features_from_panel": {
       "design_revision": 1,

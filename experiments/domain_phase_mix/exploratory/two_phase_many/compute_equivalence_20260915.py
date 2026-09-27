@@ -3,7 +3,9 @@
 """Compute-equivalent gain of MARINER's fixed mixtures over each baseline on the full-corpus scaling ladder.
 
 Each baseline's measured losses (the plotted points of Figure 6 / Table 2) are fitted against compute: a power law
-L = E + A (C / 1e18)^-alpha through four or more rungs, a line in log10 C otherwise. At each MARINER rung, the
+L = E + A (C / 1e18)^-alpha through four or more rungs, and otherwise piecewise linear in log10 C between adjacent
+rungs (exact through the points; the end segments are extended only to locate and flag crossings beyond the measured
+range). At each MARINER rung, the
 baseline-equivalent compute is where the fitted curve reaches MARINER's measured loss; the multiplier is its ratio to
 MARINER's compute and the saving is one minus its inverse. Multipliers beyond a baseline's measured rungs are flagged
 as extrapolated and left out of the paper's table. Runs above 3e18 FLOPs are single, so no uncertainty is attached.
@@ -43,7 +45,7 @@ class BaselineFit:
     target: str
     baseline: str
     form: str
-    parameters: dict[str, float]
+    parameters: dict[str, float | list[float]]
     rmse: float
     log_compute_min: float
     log_compute_max: float
@@ -51,15 +53,16 @@ class BaselineFit:
     def loss(self, log_compute: float) -> float:
         if self.form == "power":
             return power_law(log_compute, self.parameters["E"], self.parameters["A"], self.parameters["alpha"])
-        return self.parameters["intercept"] + self.parameters["slope"] * log_compute
+        return piecewise_loglinear(log_compute, self.parameters["log_compute"], self.parameters["loss"])
 
     def latex(self) -> str:
         if self.form == "power":
             p = self.parameters
             return f"${p['E']:.3f} + {p['A']:.3f}\\,c^{{-{p['alpha']:.3f}}}$"
-        p = self.parameters
-        intercept_at_unit = p["intercept"] + p["slope"] * np.log10(COMPUTE_UNIT)
-        return f"${intercept_at_unit:.3f} {p['slope']:+.3f}\\,\\log_{{10}} c$"
+        segments = []
+        for slope, intercept_at_unit in piecewise_segments(self.parameters["log_compute"], self.parameters["loss"]):
+            segments.append(f"${intercept_at_unit:.3f} {slope:+.3f}\\,\\log_{{10}} c$")
+        return "; ".join(segments)
 
 
 @dataclass(frozen=True)
@@ -79,6 +82,25 @@ def power_law(log_compute: float, e: float, a: float, alpha: float) -> float:
     return e + a * 10 ** (-alpha * (log_compute - np.log10(COMPUTE_UNIT)))
 
 
+def piecewise_segments(knots_log_compute: list[float], knots_loss: list[float]) -> list[tuple[float, float]]:
+    """Slope and intercept (at c = 1) of each line between adjacent measured rungs, in order of compute."""
+    segments = []
+    for i in range(len(knots_log_compute) - 1):
+        slope = (knots_loss[i + 1] - knots_loss[i]) / (knots_log_compute[i + 1] - knots_log_compute[i])
+        intercept_at_unit = knots_loss[i] - slope * (knots_log_compute[i] - np.log10(COMPUTE_UNIT))
+        segments.append((float(slope), float(intercept_at_unit)))
+    return segments
+
+
+def piecewise_loglinear(log_compute: float, knots_log_compute: list[float], knots_loss: list[float]) -> float:
+    """Linear interpolation in log compute between adjacent rungs; the end segments extend beyond the range."""
+    index = int(
+        np.clip(np.searchsorted(knots_log_compute, log_compute, side="right") - 1, 0, len(knots_log_compute) - 2)
+    )
+    slope, intercept_at_unit = piecewise_segments(knots_log_compute, knots_loss)[index]
+    return float(intercept_at_unit + slope * (log_compute - np.log10(COMPUTE_UNIT)))
+
+
 def fit_baseline(target: str, baseline: str, curve: dict[float, float]) -> BaselineFit:
     compute = np.array(sorted(curve))
     loss = np.array([curve[c] for c in compute])
@@ -92,10 +114,11 @@ def fit_baseline(target: str, baseline: str, curve: dict[float, float]) -> Basel
         predicted = power_law(log_compute, e, a, alpha)
         form = "power"
     else:
-        slope, intercept = np.polyfit(log_compute, loss, 1)
-        parameters = {"intercept": float(intercept), "slope": float(slope)}
-        predicted = intercept + slope * log_compute
-        form = "loglinear"
+        parameters = {"log_compute": [float(x) for x in log_compute], "loss": [float(y) for y in loss]}
+        predicted = np.array(
+            [piecewise_loglinear(x, parameters["log_compute"], parameters["loss"]) for x in log_compute]
+        )
+        form = "piecewise"
     rmse = float(np.sqrt(np.mean((predicted - loss) ** 2)))
     return BaselineFit(target, baseline, form, parameters, rmse, float(log_compute.min()), float(log_compute.max()))
 

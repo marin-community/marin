@@ -212,7 +212,7 @@ def deletion_cells(values: pd.DataFrame, noise: pd.DataFrame, buckets: list[str]
     return cells
 
 
-COLORBAR_LABEL = "t: deletion minus proportional, in units of run-to-run SD"
+COLORBAR_LABEL = "t: deletion minus proportional, in units of run-to-run std"
 
 
 def row_label(task: str, keys: list[str]) -> str:

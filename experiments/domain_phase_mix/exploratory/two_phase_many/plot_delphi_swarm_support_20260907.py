@@ -43,6 +43,10 @@ CORE_COLOR = "#7f97ad"
 PLOT_STYLE = {
     "font.family": "DejaVu Sans",
     "font.size": 7.5,
+    "text.usetex": False,  # a user-level matplotlibrc turns LaTeX text on; the paper's figures never use it
+    "mathtext.fontset": "dejavusans",
+    "pdf.fonttype": 42,
+    "ps.fonttype": 42,
     "axes.titlesize": 8.5,
     "axes.labelsize": 7.5,
     "xtick.labelsize": 7,

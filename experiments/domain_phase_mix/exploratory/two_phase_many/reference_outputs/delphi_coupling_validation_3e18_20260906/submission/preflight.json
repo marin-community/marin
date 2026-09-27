@@ -1,0 +1,40 @@
+{
+  "training_runs": 9,
+  "targets": {
+    "uncheatable": [
+      6
+    ],
+    "table9": [
+      6,
+      8
+    ]
+  },
+  "kappa": [
+    0.25,
+    0.5,
+    1
+  ],
+  "kl": 0,
+  "data_seeds": {
+    "uncheatable": 666200,
+    "table9": 662009
+  },
+  "trainer_seed": 0,
+  "canonical_final_fit_rows": 280,
+  "parent_region": "us-east5",
+  "parent_zone": "us-east5-a",
+  "child_region": "us-east5",
+  "child_zone": "us-east5-b",
+  "tpu_type": "v6e-8",
+  "target_flops": 3e+18,
+  "actual_steps": 3007,
+  "actual_tokens": 1576534016,
+  "shared_launcher_tests_passed": 9,
+  "scoped_typecheck": "pass",
+  "required_lint": "pass",
+  "graph_preflight": "pass",
+  "east5_safety": "pass",
+  "review": "no blocking findings",
+  "echo_prior_work": "403 access denied; local source and Fieldbook recipe verified",
+  "candidate_sha256": "e72d1f2c9b3acc6ffde470dbd05db7ed2cf50d5a8c28fddfcad0d5d547c0f241"
+}

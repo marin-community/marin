@@ -1,0 +1,57 @@
+{
+ "fit": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_three_component_optimum_3e18_20260908/fit_uncheatable_worsened.json",
+ "cap": null,
+ "kl": 0.0,
+ "block_size": 2048,
+ "start_seed": 20260906,
+ "panel_starts": 4,
+ "continuous_prediction": 1.1359993929031602,
+ "runtime_prediction": 1.1359997323008073,
+ "exchange_steps": 0.0,
+ "max_materialized_epoch": 5.63081809398967,
+ "starts": [
+  {
+   "start": 0,
+   "objective": 1.1359993929056555,
+   "raw_feasibility_violation": 4.440892098500626e-16,
+   "success": true,
+   "iterations": 1,
+   "polished": true,
+   "selected": false
+  },
+  {
+   "start": 1,
+   "objective": 1.1359993929112315,
+   "raw_feasibility_violation": 1.1102230246251565e-16,
+   "success": true,
+   "iterations": 1,
+   "polished": true,
+   "selected": false
+  },
+  {
+   "start": 2,
+   "objective": 1.135999392907281,
+   "raw_feasibility_violation": 0.0,
+   "success": true,
+   "iterations": 1,
+   "polished": true,
+   "selected": false
+  },
+  {
+   "start": 3,
+   "objective": 1.1359993929031602,
+   "raw_feasibility_violation": 2.220446049250313e-16,
+   "success": true,
+   "iterations": 49,
+   "selected": true
+  },
+  {
+   "start": 4,
+   "objective": 1.1359993929106655,
+   "raw_feasibility_violation": 0.0,
+   "success": true,
+   "iterations": 50,
+   "selected": false
+  }
+ ]
+}

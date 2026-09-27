@@ -1,0 +1,92 @@
+{
+  "pass": true,
+  "midpoints": 10,
+  "old_endpoints": 13,
+  "matched_fields": [
+    "request_set_dir",
+    "request_set_version",
+    "olmo_eval_git_sha",
+    "num_instances"
+  ],
+  "request_set_dir": "gs://marin-us-east5/raw/eval-datasets/olmo_base_eval_table9/v2",
+  "request_set_version": "1",
+  "olmo_eval_git_sha": "b0cb464f19dbe0cbcfddd8d19afab9cc8257d99c",
+  "leaf_tasks": 104,
+  "instances": 88592,
+  "components": 51,
+  "aggregation": "unweighted 51-component mean; four MMLU components use published subject weights; each leaf BPB is instance-mean continuation BPB with raw UTF8 denominator",
+  "independent_of_levanter_tagged_evaluator": true,
+  "source_files": [
+    "lib/marin/src/marin/evaluation/olmo_base_eval/run.py",
+    "lib/marin/src/marin/evaluation/olmo_base_eval/bpb.py",
+    "lib/marin/src/marin/evaluation/olmo_base_eval/aggregate.py"
+  ],
+  "source_last_commit": "ad5fcdd44d (2026-07-14)",
+  "endpoint_receipts": [
+    {
+      "uri": "gs://marin-us-east5/evaluation/olmo_base_eval_table9/t9c0_cmp_t9_krr_cap16-00e0e9/olmo_base_eval_table9_results.json",
+      "sha256": "0f3642aac12056a236ba140da5a288092b3d68c90f23962742c39f2074d33b11",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/endpoint_t9c0_cmp_t9_krr_cap16-00e0e9.native_details.json"
+    },
+    {
+      "uri": "gs://marin-us-east5/evaluation/olmo_base_eval_table9/t9c0_cmp_t9_lgbm_cap12-add0fa/olmo_base_eval_table9_results.json",
+      "sha256": "c13bb5dce4b9bcd388629aa5b43e20a6d22239404e87778506f1f8d527b5e7c6",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/endpoint_t9c0_cmp_t9_lgbm_cap12-add0fa.native_details.json"
+    },
+    {
+      "uri": "gs://marin-us-east5/evaluation/olmo_base_eval_table9/t9c0_cmp_t9_mk1_cap08-85da1d/olmo_base_eval_table9_results.json",
+      "sha256": "c91f9b1fde03bc5bd6944990e0a1478df93780b2ffe15298b2cab240fa8f4021",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/endpoint_t9c0_cmp_t9_mk1_cap08-85da1d.native_details.json"
+    },
+    {
+      "uri": "gs://marin-us-east5/evaluation/olmo_base_eval_table9/t9c0_cmp_t9_quad_cap12-d42900/olmo_base_eval_table9_results.json",
+      "sha256": "c4a5ee3db5a39f487c60932c40b7e62aba1cad9d1ccd52a5b4acb97ad8b86813",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/endpoint_t9c0_cmp_t9_quad_cap12-d42900.native_details.json"
+    },
+    {
+      "uri": "gs://marin-us-east5/evaluation/olmo_base_eval_table9/t9c0_cmp_t9_spline_cap12-8c80f9/olmo_base_eval_table9_results.json",
+      "sha256": "6bb03050ac12311a04a88fe52689a382f32703e99f7ff8fb28943eb525078a0d",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/endpoint_t9c0_cmp_t9_spline_cap12-8c80f9.native_details.json"
+    },
+    {
+      "uri": "gs://marin-us-east5/evaluation/olmo_base_eval_table9/t9c0_cmp_u_krr_cap12-40f37a/olmo_base_eval_table9_results.json",
+      "sha256": "efc2dafb956d0dae9a1b95dc6a2fa361e434567a0c7472cb24d66edbea457eab",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/endpoint_t9c0_cmp_u_krr_cap12-40f37a.native_details.json"
+    },
+    {
+      "uri": "gs://marin-us-east5/evaluation/olmo_base_eval_table9/t9c0_cmp_u_lgbm_cap08-ae0f80/olmo_base_eval_table9_results.json",
+      "sha256": "813a172b9873aa5abec344a52b830cf42ab2d0f1c65200054aeceb2c7d8cefa3",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/endpoint_t9c0_cmp_u_lgbm_cap08-ae0f80.native_details.json"
+    },
+    {
+      "uri": "gs://marin-us-east5/evaluation/olmo_base_eval_table9/t9c0_cmp_u_quad_cap08-387731/olmo_base_eval_table9_results.json",
+      "sha256": "6eaed8f5ab9b94f201a3633231d00baaea57403f8fdcf4bc77dbad79243b37c7",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/endpoint_t9c0_cmp_u_quad_cap08-387731.native_details.json"
+    },
+    {
+      "uri": "gs://marin-us-east5/evaluation/olmo_base_eval_table9/t9c0_cmp_u_spline_cap08-9be64c/olmo_base_eval_table9_results.json",
+      "sha256": "f84873f0cf1524b1a4d4fa5cbd1501ffd6f5b1e0fc5a753432c9cb818aa2dc5f",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/endpoint_t9c0_cmp_u_spline_cap08-9be64c.native_details.json"
+    },
+    {
+      "uri": "gs://marin-us-east5/evaluation/olmo_base_eval_table9/t9c1_cmp_t9_quad_cap12-82a5fa/olmo_base_eval_table9_results.json",
+      "sha256": "f85f3eba8617ae0565d33cea426120d0ec5d75e80376e65540a146dfb758c00a",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/endpoint_t9c1_cmp_t9_quad_cap12-82a5fa.native_details.json"
+    },
+    {
+      "uri": "gs://marin-us-east5/evaluation/olmo_base_eval_table9/t9c1_cmp_u_quad_cap08-ba9b44/olmo_base_eval_table9_results.json",
+      "sha256": "0e4517a3a6f4dc49f6888cd0a6bd9d84471b709eee3d32fadd122f33dbd24bfa",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/endpoint_t9c1_cmp_u_quad_cap08-ba9b44.native_details.json"
+    },
+    {
+      "uri": "gs://marin-us-east5/evaluation/olmo_base_eval_table9/t9c2_cmp_t9_quad_cap12-5c25f0/olmo_base_eval_table9_results.json",
+      "sha256": "43fd66e368a5945541df8b7138cb7f251d30f70145eb26bc75df6f0d3073d8a9",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/endpoint_t9c2_cmp_t9_quad_cap12-5c25f0.native_details.json"
+    },
+    {
+      "uri": "gs://marin-us-east5/evaluation/olmo_base_eval_table9/t9c2_cmp_u_quad_cap08-6d4c1a/olmo_base_eval_table9_results.json",
+      "sha256": "37786e02c5cbcb9df121e19a0e62f337c34f32ab75575881a29f70c523c4858b",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/endpoint_t9c2_cmp_u_quad_cap08-6d4c1a.native_details.json"
+    }
+  ]
+}

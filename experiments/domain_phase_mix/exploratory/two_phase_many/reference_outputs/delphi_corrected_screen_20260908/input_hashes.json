@@ -1,0 +1,10 @@
+{
+  "historical_predictions.csv": "35106a0d6cb4fb00a814e136b2e4904d53e2b3f979a75917b5ad8a6f1176165c",
+  "panel.npz": "d78a2484f6f89ab5439999a34770bbc84eabf7c31a49ddb87886004d7c4b3061",
+  "provenance.json": "25f8377163090aa0179ec6f8973321ca2f1b0fe51ad21a3c2958cc96837e1cf0",
+  "splits.csv": "90efb83c80e26f1b954c70fdace40eb4c25713bf03b5abf3d45024ab70263ee3",
+  "table9_bank_features.npz": "edca0e09faec8217c0e4887431e4371f5733b46af8fcf84a353ce00dfca1b50e",
+  "table9_bank_labels.csv": "884901eb3df31830ead177bf3c4addb4065e709195482508721ef314eb6ed616",
+  "uncheatable_bank_features.npz": "77db18630dffe184eb6e93e4234291199d98ee766b8c9ba1b9eb748740945305",
+  "uncheatable_bank_labels.csv": "701a1ea5986b03682bf1a1105fee0a95934d9daa754523a1f265155275e6c648"
+}

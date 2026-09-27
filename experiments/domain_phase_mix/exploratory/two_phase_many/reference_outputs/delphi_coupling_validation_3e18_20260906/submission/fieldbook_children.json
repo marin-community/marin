@@ -1,0 +1,362 @@
+[
+  {
+    "candidate_id": "cwspu_u_k025_cap06",
+    "run_id": "run_01m1vbca39pazs3b9y1dr21ka7",
+    "job": {
+      "attrs": {
+        "submission.parent_job": "job_01m1vbkbfhwbm8709xyt4cfzhk"
+      },
+      "code_commit": "dcb4102422cf3c338d67452bf197365c7526ad08",
+      "code_dirty": true,
+      "command": null,
+      "created_at": "2026-09-06T12:41:40Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m1vbajfrdebbsatntj4sm00z",
+      "external_id": "/calvinxu/dm-delphi-3e18-cwspu-kappa-v6e8-20260906/pinlin_calvin_xu-data_mixture-delphi_wspu_coupling_validation_3e18_20260906-uncheatable_seed666200-cwspu_uncheatable_seed666200_cwspu_u_k025_cap06_6a6349a5-61f6658e",
+      "external_system": "iris",
+      "failure_reason": null,
+      "finished_at": null,
+      "id": "job_01m1vbt70p9e35jc7063kg7hw2",
+      "launcher": "iris",
+      "name": "cwspu_u_k025_cap06-train",
+      "retry_of": null,
+      "run_id": "run_01m1vbca39pazs3b9y1dr21ka7",
+      "started_at": null,
+      "status": "queued",
+      "updated_at": "2026-09-06T12:41:40Z"
+    },
+    "link": {
+      "attrs": {},
+      "created_at": "2026-09-06T12:41:40Z",
+      "deleted_at": null,
+      "failure_reason": null,
+      "finished_at": null,
+      "job_id": "job_01m1vbt70p9e35jc7063kg7hw2",
+      "role": "train",
+      "run_id": "run_01m1vbca39pazs3b9y1dr21ka7",
+      "started_at": null,
+      "status": "queued",
+      "updated_at": "2026-09-06T12:41:40Z"
+    }
+  },
+  {
+    "candidate_id": "cwspu_u_k05_cap06",
+    "run_id": "run_01m1vbd4zqgkabsx74vr3vg1ac",
+    "job": {
+      "attrs": {
+        "submission.parent_job": "job_01m1vbkbfhwbm8709xyt4cfzhk"
+      },
+      "code_commit": "dcb4102422cf3c338d67452bf197365c7526ad08",
+      "code_dirty": true,
+      "command": null,
+      "created_at": "2026-09-06T12:41:40Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m1vbajfrdebbsatntj4sm00z",
+      "external_id": "/calvinxu/dm-delphi-3e18-cwspu-kappa-v6e8-20260906/pinlin_calvin_xu-data_mixture-delphi_wspu_coupling_validation_3e18_20260906-uncheatable_seed666200-cwspu_uncheatable_seed666200_cwspu_u_k05_cap06_7bf58d8d-8df125d5",
+      "external_system": "iris",
+      "failure_reason": null,
+      "finished_at": null,
+      "id": "job_01m1vbt77ca6pz0fd0c36wrbav",
+      "launcher": "iris",
+      "name": "cwspu_u_k05_cap06-train",
+      "retry_of": null,
+      "run_id": "run_01m1vbd4zqgkabsx74vr3vg1ac",
+      "started_at": null,
+      "status": "queued",
+      "updated_at": "2026-09-06T12:41:40Z"
+    },
+    "link": {
+      "attrs": {},
+      "created_at": "2026-09-06T12:41:40Z",
+      "deleted_at": null,
+      "failure_reason": null,
+      "finished_at": null,
+      "job_id": "job_01m1vbt77ca6pz0fd0c36wrbav",
+      "role": "train",
+      "run_id": "run_01m1vbd4zqgkabsx74vr3vg1ac",
+      "started_at": null,
+      "status": "queued",
+      "updated_at": "2026-09-06T12:41:40Z"
+    }
+  },
+  {
+    "candidate_id": "cwspu_u_k1_cap06",
+    "run_id": "run_01m1vbd526m7z3xan5tnxn8q9y",
+    "job": {
+      "attrs": {
+        "submission.parent_job": "job_01m1vbkbfhwbm8709xyt4cfzhk"
+      },
+      "code_commit": "dcb4102422cf3c338d67452bf197365c7526ad08",
+      "code_dirty": true,
+      "command": null,
+      "created_at": "2026-09-06T12:41:40Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m1vbajfrdebbsatntj4sm00z",
+      "external_id": "/calvinxu/dm-delphi-3e18-cwspu-kappa-v6e8-20260906/pinlin_calvin_xu-data_mixture-delphi_wspu_coupling_validation_3e18_20260906-uncheatable_seed666200-cwspu_uncheatable_seed666200_cwspu_u_k1_cap06_72512f73-5f5e1c36",
+      "external_system": "iris",
+      "failure_reason": null,
+      "finished_at": null,
+      "id": "job_01m1vbt7dkx7hc9d223xesg3fw",
+      "launcher": "iris",
+      "name": "cwspu_u_k1_cap06-train",
+      "retry_of": null,
+      "run_id": "run_01m1vbd526m7z3xan5tnxn8q9y",
+      "started_at": null,
+      "status": "queued",
+      "updated_at": "2026-09-06T12:41:40Z"
+    },
+    "link": {
+      "attrs": {},
+      "created_at": "2026-09-06T12:41:40Z",
+      "deleted_at": null,
+      "failure_reason": null,
+      "finished_at": null,
+      "job_id": "job_01m1vbt7dkx7hc9d223xesg3fw",
+      "role": "train",
+      "run_id": "run_01m1vbd526m7z3xan5tnxn8q9y",
+      "started_at": null,
+      "status": "queued",
+      "updated_at": "2026-09-06T12:41:40Z"
+    }
+  },
+  {
+    "candidate_id": "cwspu_t9_k025_cap06",
+    "run_id": "run_01m1vbd550bcyyx0s3q3k7wgkg",
+    "job": {
+      "attrs": {
+        "submission.parent_job": "job_01m1vbkbfhwbm8709xyt4cfzhk"
+      },
+      "code_commit": "dcb4102422cf3c338d67452bf197365c7526ad08",
+      "code_dirty": true,
+      "command": null,
+      "created_at": "2026-09-06T12:41:40Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m1vbajfrdebbsatntj4sm00z",
+      "external_id": "/calvinxu/dm-delphi-3e18-cwspu-kappa-v6e8-20260906/pinlin_calvin_xu-data_mixture-delphi_wspu_coupling_validation_3e18_20260906-table9_seed662009-cwspu_table9_seed662009_cwspu_t9_k025_cap06_3ffb88ec-4906884f",
+      "external_system": "iris",
+      "failure_reason": null,
+      "finished_at": null,
+      "id": "job_01m1vbt7kv9z5s38rpg0t9m6x6",
+      "launcher": "iris",
+      "name": "cwspu_t9_k025_cap06-train",
+      "retry_of": null,
+      "run_id": "run_01m1vbd550bcyyx0s3q3k7wgkg",
+      "started_at": null,
+      "status": "queued",
+      "updated_at": "2026-09-06T12:41:40Z"
+    },
+    "link": {
+      "attrs": {},
+      "created_at": "2026-09-06T12:41:40Z",
+      "deleted_at": null,
+      "failure_reason": null,
+      "finished_at": null,
+      "job_id": "job_01m1vbt7kv9z5s38rpg0t9m6x6",
+      "role": "train",
+      "run_id": "run_01m1vbd550bcyyx0s3q3k7wgkg",
+      "started_at": null,
+      "status": "queued",
+      "updated_at": "2026-09-06T12:41:40Z"
+    }
+  },
+  {
+    "candidate_id": "cwspu_t9_k05_cap06",
+    "run_id": "run_01m1vbd57tcrvyhsfgb9ccmakq",
+    "job": {
+      "attrs": {
+        "submission.parent_job": "job_01m1vbkbfhwbm8709xyt4cfzhk"
+      },
+      "code_commit": "dcb4102422cf3c338d67452bf197365c7526ad08",
+      "code_dirty": true,
+      "command": null,
+      "created_at": "2026-09-06T12:41:40Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m1vbajfrdebbsatntj4sm00z",
+      "external_id": "/calvinxu/dm-delphi-3e18-cwspu-kappa-v6e8-20260906/pinlin_calvin_xu-data_mixture-delphi_wspu_coupling_validation_3e18_20260906-table9_seed662009-cwspu_table9_seed662009_cwspu_t9_k05_cap06_3d8dc8d5-9736eb17",
+      "external_system": "iris",
+      "failure_reason": null,
+      "finished_at": null,
+      "id": "job_01m1vbt7t214begmkx2bdd8vmf",
+      "launcher": "iris",
+      "name": "cwspu_t9_k05_cap06-train",
+      "retry_of": null,
+      "run_id": "run_01m1vbd57tcrvyhsfgb9ccmakq",
+      "started_at": null,
+      "status": "queued",
+      "updated_at": "2026-09-06T12:41:40Z"
+    },
+    "link": {
+      "attrs": {},
+      "created_at": "2026-09-06T12:41:40Z",
+      "deleted_at": null,
+      "failure_reason": null,
+      "finished_at": null,
+      "job_id": "job_01m1vbt7t214begmkx2bdd8vmf",
+      "role": "train",
+      "run_id": "run_01m1vbd57tcrvyhsfgb9ccmakq",
+      "started_at": null,
+      "status": "queued",
+      "updated_at": "2026-09-06T12:41:41Z"
+    }
+  },
+  {
+    "candidate_id": "cwspu_t9_k1_cap06",
+    "run_id": "run_01m1vbd5akc909f1xesfdrmscj",
+    "job": {
+      "attrs": {
+        "submission.parent_job": "job_01m1vbkbfhwbm8709xyt4cfzhk"
+      },
+      "code_commit": "dcb4102422cf3c338d67452bf197365c7526ad08",
+      "code_dirty": true,
+      "command": null,
+      "created_at": "2026-09-06T12:41:41Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m1vbajfrdebbsatntj4sm00z",
+      "external_id": "/calvinxu/dm-delphi-3e18-cwspu-kappa-v6e8-20260906/pinlin_calvin_xu-data_mixture-delphi_wspu_coupling_validation_3e18_20260906-table9_seed662009-cwspu_table9_seed662009_cwspu_t9_k1_cap06_e6f02e4f-cd73b181",
+      "external_system": "iris",
+      "failure_reason": null,
+      "finished_at": null,
+      "id": "job_01m1vbt80fp5r24jkm386twwn8",
+      "launcher": "iris",
+      "name": "cwspu_t9_k1_cap06-train",
+      "retry_of": null,
+      "run_id": "run_01m1vbd5akc909f1xesfdrmscj",
+      "started_at": null,
+      "status": "queued",
+      "updated_at": "2026-09-06T12:41:41Z"
+    },
+    "link": {
+      "attrs": {},
+      "created_at": "2026-09-06T12:41:41Z",
+      "deleted_at": null,
+      "failure_reason": null,
+      "finished_at": null,
+      "job_id": "job_01m1vbt80fp5r24jkm386twwn8",
+      "role": "train",
+      "run_id": "run_01m1vbd5akc909f1xesfdrmscj",
+      "started_at": null,
+      "status": "queued",
+      "updated_at": "2026-09-06T12:41:41Z"
+    }
+  },
+  {
+    "candidate_id": "cwspu_t9_k025_cap08",
+    "run_id": "run_01m1vbd5demaqcvabn8576187r",
+    "job": {
+      "attrs": {
+        "submission.parent_job": "job_01m1vbkbfhwbm8709xyt4cfzhk"
+      },
+      "code_commit": "dcb4102422cf3c338d67452bf197365c7526ad08",
+      "code_dirty": true,
+      "command": null,
+      "created_at": "2026-09-06T12:41:41Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m1vbajfrdebbsatntj4sm00z",
+      "external_id": "/calvinxu/dm-delphi-3e18-cwspu-kappa-v6e8-20260906/pinlin_calvin_xu-data_mixture-delphi_wspu_coupling_validation_3e18_20260906-table9_seed662009-cwspu_table9_seed662009_cwspu_t9_k025_cap08_0981cacc-08e3389f",
+      "external_system": "iris",
+      "failure_reason": null,
+      "finished_at": null,
+      "id": "job_01m1vbt872w8aswwpezpkqngwn",
+      "launcher": "iris",
+      "name": "cwspu_t9_k025_cap08-train",
+      "retry_of": null,
+      "run_id": "run_01m1vbd5demaqcvabn8576187r",
+      "started_at": null,
+      "status": "queued",
+      "updated_at": "2026-09-06T12:41:41Z"
+    },
+    "link": {
+      "attrs": {},
+      "created_at": "2026-09-06T12:41:41Z",
+      "deleted_at": null,
+      "failure_reason": null,
+      "finished_at": null,
+      "job_id": "job_01m1vbt872w8aswwpezpkqngwn",
+      "role": "train",
+      "run_id": "run_01m1vbd5demaqcvabn8576187r",
+      "started_at": null,
+      "status": "queued",
+      "updated_at": "2026-09-06T12:41:41Z"
+    }
+  },
+  {
+    "candidate_id": "cwspu_t9_k05_cap08",
+    "run_id": "run_01m1vbd5g7sqybh6f6wtaqbkjd",
+    "job": {
+      "attrs": {
+        "submission.parent_job": "job_01m1vbkbfhwbm8709xyt4cfzhk"
+      },
+      "code_commit": "dcb4102422cf3c338d67452bf197365c7526ad08",
+      "code_dirty": true,
+      "command": null,
+      "created_at": "2026-09-06T12:41:41Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m1vbajfrdebbsatntj4sm00z",
+      "external_id": "/calvinxu/dm-delphi-3e18-cwspu-kappa-v6e8-20260906/pinlin_calvin_xu-data_mixture-delphi_wspu_coupling_validation_3e18_20260906-table9_seed662009-cwspu_table9_seed662009_cwspu_t9_k05_cap08_835691a9-e5337efd",
+      "external_system": "iris",
+      "failure_reason": null,
+      "finished_at": null,
+      "id": "job_01m1vbt8dfx3scece3z70qsa5q",
+      "launcher": "iris",
+      "name": "cwspu_t9_k05_cap08-train",
+      "retry_of": null,
+      "run_id": "run_01m1vbd5g7sqybh6f6wtaqbkjd",
+      "started_at": null,
+      "status": "queued",
+      "updated_at": "2026-09-06T12:41:41Z"
+    },
+    "link": {
+      "attrs": {},
+      "created_at": "2026-09-06T12:41:41Z",
+      "deleted_at": null,
+      "failure_reason": null,
+      "finished_at": null,
+      "job_id": "job_01m1vbt8dfx3scece3z70qsa5q",
+      "role": "train",
+      "run_id": "run_01m1vbd5g7sqybh6f6wtaqbkjd",
+      "started_at": null,
+      "status": "queued",
+      "updated_at": "2026-09-06T12:41:41Z"
+    }
+  },
+  {
+    "candidate_id": "cwspu_t9_k1_cap08",
+    "run_id": "run_01m1vbd5js1hp19bttd5jekr02",
+    "job": {
+      "attrs": {
+        "submission.parent_job": "job_01m1vbkbfhwbm8709xyt4cfzhk"
+      },
+      "code_commit": "dcb4102422cf3c338d67452bf197365c7526ad08",
+      "code_dirty": true,
+      "command": null,
+      "created_at": "2026-09-06T12:41:41Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m1vbajfrdebbsatntj4sm00z",
+      "external_id": "/calvinxu/dm-delphi-3e18-cwspu-kappa-v6e8-20260906/pinlin_calvin_xu-data_mixture-delphi_wspu_coupling_validation_3e18_20260906-table9_seed662009-cwspu_table9_seed662009_cwspu_t9_k1_cap08_6ada1f93-79621a5b",
+      "external_system": "iris",
+      "failure_reason": null,
+      "finished_at": null,
+      "id": "job_01m1vbt8m4w2fa70htsjmzqyxb",
+      "launcher": "iris",
+      "name": "cwspu_t9_k1_cap08-train",
+      "retry_of": null,
+      "run_id": "run_01m1vbd5js1hp19bttd5jekr02",
+      "started_at": null,
+      "status": "queued",
+      "updated_at": "2026-09-06T12:41:41Z"
+    },
+    "link": {
+      "attrs": {},
+      "created_at": "2026-09-06T12:41:41Z",
+      "deleted_at": null,
+      "failure_reason": null,
+      "finished_at": null,
+      "job_id": "job_01m1vbt8m4w2fa70htsjmzqyxb",
+      "role": "train",
+      "run_id": "run_01m1vbd5js1hp19bttd5jekr02",
+      "started_at": null,
+      "status": "queued",
+      "updated_at": "2026-09-06T12:41:41Z"
+    }
+  }
+]

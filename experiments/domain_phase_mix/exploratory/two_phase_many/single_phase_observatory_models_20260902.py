@@ -1478,23 +1478,39 @@ def per_bucket_shape_arrays(shape: Shape, buckets: int) -> dict[str, np.ndarray]
     }
 
 
+# Per-bucket harm columns by harm kind: every kind that is one column per bucket of a threshold-shaped function.
+PER_BUCKET_HARMS: dict[str, tuple[Callable[[np.ndarray, np.ndarray | float], np.ndarray], str]] = {
+    "softplus_bucket": (softplus_harm, "bucket_overexposure"),
+    "softplus_bucket_hinge": (softplus_hinge_harm, "bucket_overexposure_hinge"),
+    "softplus_bucket_raw": (softplus_raw_epoch_harm, "bucket_overexposure_raw"),
+    "softplus_bucket_raw_hinge": (softplus_raw_epoch_hinge_harm, "bucket_overexposure_raw_hinge"),
+}
+
+
 def per_bucket_columns(
-    exposure: np.ndarray, rate: np.ndarray | float, power: np.ndarray | float, threshold: np.ndarray | float
+    exposure: np.ndarray,
+    rate: np.ndarray | float,
+    power: np.ndarray | float,
+    threshold: np.ndarray | float,
+    harm: str = "softplus_bucket",
 ) -> tuple[np.ndarray, np.ndarray]:
     """The successor design's two columns of one bucket (or of every bucket, with per-bucket arrays)."""
-    return -weibull_response(exposure, rate, power), softplus_harm(exposure, threshold)
+    if harm not in PER_BUCKET_HARMS:
+        raise ValueError(f"per-bucket shapes support {sorted(PER_BUCKET_HARMS)}, not harm kind {harm!r}")
+    return -weibull_response(exposure, rate, power), PER_BUCKET_HARMS[harm][0](exposure, threshold)
 
 
-def per_bucket_weibull_softplus_design(features: Features, shape: Shape) -> Design:
-    """The successor design (Weibull benefit and softplus harm per bucket) with bucket-specific shapes."""
+def per_bucket_weibull_softplus_design(features: Features, shape: Shape, harm: str = "softplus_bucket") -> Design:
+    """The successor design (Weibull benefit and the ``harm`` kind per bucket) with bucket-specific shapes."""
     arrays = per_bucket_shape_arrays(shape, features.buckets)
-    benefit, harm = per_bucket_columns(
-        features.exposures, arrays["rate"][None, :], arrays["power"][None, :], arrays["threshold"][None, :]
+    benefit, harm_columns = per_bucket_columns(
+        features.exposures, arrays["rate"][None, :], arrays["power"][None, :], arrays["threshold"][None, :], harm
     )
+    prefix = PER_BUCKET_HARMS[harm][1]
     names = tuple(f"bucket_signal:{index}" for index in range(features.buckets)) + tuple(
-        f"bucket_overexposure:{index}" for index in range(features.buckets)
+        f"{prefix}:{index}" for index in range(features.buckets)
     )
-    return Design(np.concatenate([benefit, harm], axis=1), np.ones(2 * features.buckets), names)
+    return Design(np.concatenate([benefit, harm_columns], axis=1), np.ones(2 * features.buckets), names)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1504,14 +1520,20 @@ class PerBucketShapeGridModel:
     The shared grid optimum seeds a coordinate descent in which every bucket in turn tries each grid shape with the
     other buckets fixed, scored by the same inner-CV error at the same ridge, for at most ``sweeps`` passes or until
     a pass changes nothing; the ridge is then re-selected over its grid. Only the successor design (Weibull benefit
-    and softplus harm per bucket) is supported. ``free_keys`` restricts which shape parameters vary per bucket; the
-    others stay at the shared optimum (one threshold per bucket, for instance).
+    and one threshold-shaped harm column per bucket) is supported; ``harm`` names the harm kind of the shared model
+    so the per-bucket design uses the same harm (``PER_BUCKET_HARMS``). ``free_keys`` restricts which shape
+    parameters vary per bucket; the others stay at the shared optimum (one threshold per bucket, for instance).
     """
 
     shared: GridModel
     head: HeadSpec
     sweeps: int = PER_BUCKET_SWEEPS
     free_keys: tuple[str, ...] = PER_BUCKET_SHAPE_KEYS
+    harm: str = "softplus_bucket"
+
+    def __post_init__(self) -> None:
+        if self.harm not in PER_BUCKET_HARMS:
+            raise ValueError(f"per-bucket shapes support {sorted(PER_BUCKET_HARMS)}, not harm kind {self.harm!r}")
 
     @property
     def model_id(self) -> str:
@@ -1533,7 +1555,12 @@ class PerBucketShapeGridModel:
 
     def design(self, features: Features, shape: Shape) -> Design:
         if is_per_bucket_shape(shape):
-            return cached_design(f"{self.model_id}#per_bucket", features, shape, per_bucket_weibull_softplus_design)
+            return cached_design(
+                f"{self.model_id}#per_bucket#{self.harm}",
+                features,
+                shape,
+                functools.partial(per_bucket_weibull_softplus_design, harm=self.harm),
+            )
         return self._grid().design(features, shape)
 
     def fit(self, features: Features, response: np.ndarray, train: np.ndarray, inner: InnerFolds, seed: int) -> Fitted:
@@ -1543,7 +1570,7 @@ class PerBucketShapeGridModel:
         spec = grid.head_for(selected.shape)
         ridge = float(selected.ridge)
         shape: dict[str, float] = dict(per_bucket_shape(selected.shape, buckets))
-        base = per_bucket_weibull_softplus_design(features, shape)
+        base = per_bucket_weibull_softplus_design(features, shape, self.harm)
         values = base.values.copy()
         score = _cv_rmse(Design(values, base.ridge, base.names), response, ridge, spec, inner)
         fixed_keys = tuple(key for key in PER_BUCKET_SHAPE_KEYS if key not in self.free_keys)
@@ -1564,7 +1591,7 @@ class PerBucketShapeGridModel:
                     triple = tuple(float(candidate[key]) for key in PER_BUCKET_SHAPE_KEYS)
                     if triple == current:
                         continue
-                    benefit, harm = per_bucket_columns(features.exposures[:, bucket], *triple)
+                    benefit, harm = per_bucket_columns(features.exposures[:, bucket], *triple, self.harm)
                     trial = values.copy()
                     trial[:, bucket] = benefit
                     trial[:, buckets + bucket] = harm
@@ -1575,7 +1602,7 @@ class PerBucketShapeGridModel:
                 if best_triple is not None:
                     for key, value in zip(PER_BUCKET_SHAPE_KEYS, best_triple, strict=True):
                         shape[f"{key}:{bucket}"] = value
-                    benefit, harm = per_bucket_columns(features.exposures[:, bucket], *best_triple)
+                    benefit, harm = per_bucket_columns(features.exposures[:, bucket], *best_triple, self.harm)
                     values[:, bucket] = benefit
                     values[:, buckets + bucket] = harm
                     score = best_value
@@ -1610,8 +1637,8 @@ class PerBucketShapeGridModel:
                 ),
                 "effective_rank": effective_rank(design.values[train]),
                 "columns": design.values.shape[1],
-                "fitted_dof": head.active + 1 + len(PER_BUCKET_SHAPE_KEYS) * buckets,
-                "nonlinear_dof": len(PER_BUCKET_SHAPE_KEYS) * buckets,
+                "fitted_dof": head.active + 1 + self.nonlinear_dof(features),
+                "nonlinear_dof": self.nonlinear_dof(features),
                 "refine_evaluations": 0,
                 "link": str(spec.link),
             },
@@ -1624,7 +1651,8 @@ class PerBucketShapeGridModel:
         return predict_head(fitted.head, design.values[rows], self.head_for(fitted.shape, link))
 
     def nonlinear_dof(self, features: Features) -> int:
-        return len(PER_BUCKET_SHAPE_KEYS) * features.buckets
+        """Free shape parameters: one per bucket for each free key, one shared value for each fixed key."""
+        return len(self.free_keys) * features.buckets + (len(PER_BUCKET_SHAPE_KEYS) - len(self.free_keys))
 
 
 FITTED_FLOOR_SEARCH_EVALUATIONS = 24
@@ -1776,6 +1804,107 @@ class FittedFloorModel:
 
     def nonlinear_dof(self, features: Features) -> int:
         return self.base.nonlinear_dof(features) + 1
+
+
+CV_AVERAGE_MAX_MEMBERS = 16
+CV_AVERAGE_MAX_DELTA_SE = 3.0
+
+
+@dataclasses.dataclass(frozen=True)
+class EnsembleMember:
+    weight: float
+    model: FittedFloorModel
+    fitted: Fitted
+
+
+@dataclasses.dataclass(frozen=True)
+class EnsembleHead:
+    members: tuple[EnsembleMember, ...]
+
+
+@dataclasses.dataclass(frozen=True)
+class AveragedFloorModel:
+    """The fitted-floor procedure averaged over near-optimal grid candidates instead of taking the argmin.
+
+    The base grid's inner-CV table ranks (shape, ridge) candidates. Every candidate within ``max_delta_se``
+    inner-fold standard errors of the minimum, up to ``max_members`` in score order, is refitted by the floor
+    procedure at its own shape and ridge, and predictions are averaged with weights
+    exp(-(score - best) / (temperature_se * se)). Each member is convex in the weights wherever the parent is,
+    so the average is too. With a zero standard error only the minimizers are kept.
+    """
+
+    floor: FittedFloorModel
+    temperature_se: float = 1.0
+    max_members: int = CV_AVERAGE_MAX_MEMBERS
+    max_delta_se: float = CV_AVERAGE_MAX_DELTA_SE
+
+    @property
+    def model_id(self) -> str:
+        return self.floor.model_id
+
+    def fit(self, features: Features, response: np.ndarray, train: np.ndarray, inner: InnerFolds, seed: int) -> Fitted:
+        base = self.floor.base
+        if not isinstance(base, GridModel):
+            raise TypeError("inner-CV averaging needs a grid base")
+        selected = base.fit(features, response, train, inner, seed)
+        table = selected.cv_table
+        if table is None:
+            raise ValueError(f"{self.model_id} exposes no inner-CV table")
+        candidates = base.candidate_shapes(features)
+        order = np.argsort(table, axis=None)
+        best = float(table.flat[order[0]])
+        best_shape_index, best_ridge_index = np.unravel_index(int(order[0]), table.shape)
+        best_shape = candidates[best_shape_index]
+        link = LinkKind(str(selected.diagnostics["link"])) if "link" in selected.diagnostics else None
+        folds = _cv_rmse_folds(
+            base.design(features, best_shape),
+            response,
+            float(base.ridge_grid[best_ridge_index]),
+            base.head_for(best_shape, link),
+            inner,
+        )
+        se = float(np.std(folds, ddof=1) / math.sqrt(len(folds))) if len(folds) > 1 else 0.0
+        temperature = max(self.temperature_se * se, 1e-12)
+        members: list[tuple[float, FittedFloorModel, Fitted]] = []
+        for flat in order[: self.max_members]:
+            score = float(table.flat[flat])
+            if not math.isfinite(score) or score - best > self.max_delta_se * se:
+                break
+            shape_index, ridge_index = np.unravel_index(int(flat), table.shape)
+            shape = dict(candidates[shape_index])
+            ridge = float(base.ridge_grid[ridge_index])
+            member_model = dataclasses.replace(
+                self.floor, base=dataclasses.replace(base, shapes=(shape,), ridge_grid=(ridge,))
+            )
+            member_fit = member_model.fit(features, response, train, inner, seed)
+            members.append((math.exp(-(score - best) / temperature), member_model, member_fit))
+        total = sum(weight for weight, _, _ in members)
+        head = EnsembleHead(tuple(EnsembleMember(weight / total, model, fit) for weight, model, fit in members))
+        weights = np.asarray([member.weight for member in head.members])
+        lead = head.members[0].fitted
+        return Fitted(
+            shape=lead.shape,
+            ridge=lead.ridge,
+            head=head,
+            diagnostics={
+                **lead.diagnostics,
+                "ensemble_size": len(head.members),
+                "ensemble_effective_size": float(1.0 / np.sum(weights**2)),
+                "ensemble_lead_weight": float(weights[0]),
+                "ensemble_inner_cv_se": se,
+                "ensemble_temperature": temperature,
+            },
+            cv_table=table,
+        )
+
+    def predict(self, fitted: Fitted, features: Features, rows: np.ndarray) -> np.ndarray:
+        head = fitted.head
+        if not isinstance(head, EnsembleHead):
+            raise TypeError("averaged prediction needs an ensemble head")
+        return sum(member.weight * member.model.predict(member.fitted, features, rows) for member in head.members)
+
+    def nonlinear_dof(self, features: Features) -> int:
+        return self.floor.nonlinear_dof(features)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -3108,6 +3237,19 @@ LIGHTGBM_LEARNING_RATE = 0.01
 LIGHTGBM_ESTIMATOR_GRID = (100, 300, 1000)
 LIGHTGBM_LEAF_GRID = (4, 8, 31)
 LIGHTGBM_SEED = 42
+# RegMix's released regression cell (github.com/sail-sg/regmix, notebook commit dd9d1c3b, cell 13), verbatim.
+RELEASED_REGMIX_PARAMS = {
+    "task": "train",
+    "boosting_type": "gbdt",
+    "objective": "regression",
+    "metric": ["l1", "l2"],
+    "num_iterations": 1000,
+    "seed": 42,
+    "learning_rate": 1e-2,
+    "verbosity": -1,
+}
+RELEASED_REGMIX_EARLY_STOPPING_ROUNDS = 3
+RELEASED_REGMIX_SPLIT_SEED = 42
 MLP_HIDDEN_LAYERS = (64, 64)
 MLP_ALPHA_GRID = (1e-4, 1e-3, 1e-2)
 MLP_MAX_ITER = 3000
@@ -3235,6 +3377,65 @@ class LightGBMModel:
 
     def predict(self, fitted: Fitted, features: Features, rows: np.ndarray) -> np.ndarray:
         return _predict_estimator_head(fitted.head, features.weights[rows])
+
+    def nonlinear_dof(self, features: Features) -> int:
+        del features
+        return 2
+
+
+def released_regmix_split(train: np.ndarray, inner: InnerFolds) -> tuple[np.ndarray, np.ndarray]:
+    """The released recipe's early-stopping split of one fold's training rows, as in the official rerun.
+
+    The pinned calibration rows (training rows that no inner fold validates) always fit; a third of the remaining
+    rows, chosen by legacy RandomState(42), is held out for early stopping.
+    """
+    validated = np.unique(np.concatenate([validation for _, validation in inner]))
+    pinned = np.setdiff1d(train, validated)
+    scored = train[~np.isin(train, pinned)]
+    permutation = np.random.RandomState(RELEASED_REGMIX_SPLIT_SEED).permutation(len(scored))
+    count = round(len(scored) / 3)
+    return np.sort(np.r_[pinned, scored[permutation[count:]]]), np.sort(scored[permutation[:count]])
+
+
+@dataclasses.dataclass(frozen=True)
+class ReleasedLightGBMModel:
+    """RegMix's released regression recipe as a component head: raw weights and responses, early-stopped, no refit."""
+
+    model_id: str = "lightgbm_regmix_released"
+
+    def fit(self, features: Features, response: np.ndarray, train: np.ndarray, inner: InnerFolds, seed: int) -> Fitted:
+        del seed
+        import lightgbm  # noqa: PLC0415
+
+        fitting, validation = released_regmix_split(train, inner)
+        matrix = features.weights
+        regressor = lightgbm.LGBMRegressor(**RELEASED_REGMIX_PARAMS, num_threads=1)
+        regressor.fit(
+            matrix[fitting],
+            response[fitting],
+            eval_set=[(matrix[validation], response[validation])],
+            eval_metric="l2",
+            callbacks=[lightgbm.early_stopping(stopping_rounds=RELEASED_REGMIX_EARLY_STOPPING_ROUNDS, verbose=False)],
+        )
+        best = int(regressor.best_iteration_)
+        return Fitted(
+            {"best_iteration": float(best)},
+            0.0,
+            regressor,
+            {
+                "inner_cv_rmse": float("nan"),
+                "candidates": 1,
+                "converged": True,
+                "boundary_hits": int(best >= RELEASED_REGMIX_PARAMS["num_iterations"]),
+                "effective_rank": matrix.shape[1],
+                "columns": matrix.shape[1],
+                "fitted_dof": best,
+                "nonlinear_dof": 2,
+            },
+        )
+
+    def predict(self, fitted: Fitted, features: Features, rows: np.ndarray) -> np.ndarray:
+        return np.asarray(fitted.head.predict(features.weights[rows]), dtype=float)
 
     def nonlinear_dof(self, features: Features) -> int:
         del features

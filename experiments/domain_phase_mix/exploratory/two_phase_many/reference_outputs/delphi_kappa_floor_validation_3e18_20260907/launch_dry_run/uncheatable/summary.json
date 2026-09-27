@@ -1,0 +1,26 @@
+{
+  "alias_map": {
+    "lwspu_u_kf_cap06": "lwspu_u_kf_cap06"
+  },
+  "analysis_output_path": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/analysis-af9355",
+  "candidate_weights_path": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_kappa_floor_validation_3e18_20260907/runtime_materialization/candidate_weights.csv",
+  "candidate_weights_sha256": "87072f50ac02d1ec27f7c08104b2c94bc9a726428f3da0d15babd854aba10b7f",
+  "cap_scope": "whole training run",
+  "common_random_numbers": {
+    "data_seed": 666200,
+    "trainer_seed": 0
+  },
+  "experiment_name": "pinlin_calvin_xu/data_mixture/delphi_kappa_floor_validation_3e18_20260907/uncheatable_seed666200",
+  "hardware": {
+    "region": "us-east5",
+    "tpu_type": "v6e-8",
+    "zone": "us-east5-b"
+  },
+  "inline_uncheatable_scheduled": true,
+  "native_table9_scheduled": true,
+  "nominal_cells": 1,
+  "policy_class": "single_phase_tied",
+  "runtime_distinct_trainings": 1,
+  "source_panel": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_augmented_swarm_3e18_20260714/source/fit_panel_table9_macro-4f283bacb4ef269c.csv",
+  "source_panel_sha256": "4f283bacb4ef269c396277cbd518ef74212a51741c909a1e1e9ace040751d507"
+}

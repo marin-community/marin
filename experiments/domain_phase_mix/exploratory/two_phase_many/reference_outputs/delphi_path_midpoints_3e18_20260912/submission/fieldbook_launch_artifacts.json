@@ -1,0 +1,53 @@
+[
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789251465.49263,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/submission/submitted.log",
+      "fieldbook.local_size_at_capture": 1352
+    },
+    "content_hash": "sha256:6508c292cdab8b04312b59136d7b001d6186e277bf9ba0111acccbba2b0ab4f6",
+    "created_at": "2026-09-12T22:21:26Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+    "id": "art_01m2bvc45mb1pmwk30wngs8mew",
+    "job_id": "job_01m2btxzfzk44w4fk8f2c6px1q",
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-12T22:21:26Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/submission/submitted.log"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789251625.8598359,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/README.md",
+      "fieldbook.local_size_at_capture": 4788
+    },
+    "content_hash": "sha256:fc60ccd1c3b344d89aa6439e10ddc251520e3e578bd0c244d93f0fc3de7030dc",
+    "created_at": "2026-09-12T22:21:26Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+    "id": "art_01m2bvc4dnckpr9ke1pn3kz3x5",
+    "job_id": "job_01m2btxzfzk44w4fk8f2c6px1q",
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-12T22:21:26Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/README.md"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789251613.8421464,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/submission/actual_launch_audit.json",
+      "fieldbook.local_size_at_capture": 12899
+    },
+    "content_hash": "sha256:1185f5110094836bae935132870183ddf916c523c661abcee0afd49286d0ffe7",
+    "created_at": "2026-09-12T22:21:27Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+    "id": "art_01m2bvc4nm518yzapqw4vk4n2x",
+    "job_id": "job_01m2btxzfzk44w4fk8f2c6px1q",
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-12T22:21:27Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/submission/actual_launch_audit.json"
+  }
+]

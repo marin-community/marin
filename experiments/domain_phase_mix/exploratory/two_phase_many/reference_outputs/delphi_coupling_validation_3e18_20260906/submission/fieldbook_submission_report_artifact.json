@@ -1,0 +1,17 @@
+{
+  "attrs": {
+    "fieldbook.local_mtime_at_capture": 1788698502.5374355,
+    "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_coupling_validation_3e18_20260906/SUBMISSION.md",
+    "fieldbook.local_size_at_capture": 3901
+  },
+  "content_hash": "sha256:ff36bb57f89078957c732af97c4b4638686dd4feec19f0bb3b6f53bc6f65de23",
+  "created_at": "2026-09-06T12:42:19Z",
+  "deleted_at": null,
+  "experiment_id": "exp_01m1vbajfrdebbsatntj4sm00z",
+  "id": "art_01m1vbvd519q72826kkhew2tfp",
+  "job_id": null,
+  "run_id": null,
+  "type": "other",
+  "updated_at": "2026-09-06T12:42:19Z",
+  "uri": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_coupling_validation_3e18_20260906/SUBMISSION.md"
+}

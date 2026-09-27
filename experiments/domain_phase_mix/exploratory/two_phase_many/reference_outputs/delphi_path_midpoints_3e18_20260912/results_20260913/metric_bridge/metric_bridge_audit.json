@@ -1,0 +1,1709 @@
+{
+  "component_keys": [
+    "eval/uncheatable_eval/ao3_english/bpb",
+    "eval/uncheatable_eval/arxiv_computer_science/bpb",
+    "eval/uncheatable_eval/arxiv_physics/bpb",
+    "eval/uncheatable_eval/bbc_news/bpb",
+    "eval/uncheatable_eval/github_cpp/bpb",
+    "eval/uncheatable_eval/github_python/bpb",
+    "eval/uncheatable_eval/wikipedia_english/bpb"
+  ],
+  "frozen_task_weights": [
+    0.1725032419832083,
+    0.1459150285318545,
+    0.1673147061106415,
+    0.1206224088062254,
+    0.1543450059149921,
+    0.1478598606213357,
+    0.0914397685598754
+  ],
+  "schema2_bpb_per_token_loss_ratio": [
+    0.327789901009895,
+    0.2742293496874206,
+    0.30413135280431886,
+    0.30427406007335545,
+    0.39078941905797276,
+    0.34612970750632766,
+    0.3349426002354155
+  ],
+  "source_new": ".experiments/artifacts/status_refresh_20260913_1404/midpoints.json",
+  "source_old": "legacy_endpoint_metric_histories.json",
+  "comparisons": [
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/table9_seed662009_t0/cmp_table9_seed662009_t0_cmp_t9_krr_cap16-8eaf08/checkpoints/eval_metrics.jsonl",
+      "step": 1000,
+      "component_differences": [
+        -1.448601762321644e-06,
+        6.766950264580629e-06,
+        9.20913407109758e-06,
+        8.821073715914451e-07,
+        -0.00029117503874487305,
+        -8.568877753911686e-06,
+        -3.323694452217474e-05
+      ],
+      "aggregate_legacy": 1.1661921739578247,
+      "aggregate_weighted_pooled": 1.1661452794409128,
+      "aggregate_difference": -4.689451691186619e-05,
+      "component_weight_reconstruction_difference": -3.166896656026097e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/table9_seed662009_t0/cmp_table9_seed662009_t0_cmp_t9_krr_cap16-8eaf08/checkpoints/eval_metrics.jsonl",
+      "step": 2000,
+      "component_differences": [
+        -1.4590320080998254e-06,
+        4.272382697401156e-06,
+        9.640093371343639e-06,
+        1.777383938250665e-06,
+        -0.00024868778003350744,
+        -1.5314453842507625e-05,
+        -2.4960715230726294e-05
+      ],
+      "aggregate_legacy": 1.1035442352294922,
+      "aggregate_weighted_pooled": 1.1035034227901992,
+      "aggregate_difference": -4.081243929299205e-05,
+      "component_weight_reconstruction_difference": -8.096619130704141e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/table9_seed662009_t0/cmp_table9_seed662009_t0_cmp_t9_krr_cap16-8eaf08/checkpoints/eval_metrics.jsonl",
+      "step": 3000,
+      "component_differences": [
+        -1.9719086425951105e-06,
+        3.6470459237047947e-06,
+        9.570394738700472e-06,
+        1.8865122608513474e-06,
+        -0.00025216755644918987,
+        -9.479812797863474e-06,
+        -2.247598315419097e-05
+      ],
+      "aggregate_legacy": 1.011958122253418,
+      "aggregate_weighted_pooled": 1.0119177878137973,
+      "aggregate_difference": -4.033443962070393e-05,
+      "component_weight_reconstruction_difference": 2.2424255341491062e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/table9_seed662009_t0/cmp_table9_seed662009_t0_cmp_t9_krr_cap16-8eaf08/checkpoints/eval_metrics.jsonl",
+      "step": 3006,
+      "component_differences": [
+        -1.926822656983518e-06,
+        3.520457395378429e-06,
+        9.600728104297573e-06,
+        1.777174591710562e-06,
+        -0.0002521910829703655,
+        -9.386640038244742e-06,
+        -2.2381380608837986e-05
+      ],
+      "aggregate_legacy": 1.011913776397705,
+      "aggregate_weighted_pooled": 1.0118733911033488,
+      "aggregate_difference": -4.038529435623772e-05,
+      "component_weight_reconstruction_difference": -2.8419180564398516e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/table9_seed662009_t0/cmp_table9_seed662009_t0_cmp_t9_lgbm_cap12-673199/checkpoints/eval_metrics.jsonl",
+      "step": 1000,
+      "component_differences": [
+        -6.151883231719779e-07,
+        6.381135493782608e-06,
+        8.986862555460107e-06,
+        2.215702999741609e-06,
+        -0.0003029705350913181,
+        -9.759309192780563e-06,
+        -3.0189698135840715e-05
+      ],
+      "aggregate_legacy": 1.1776679754257202,
+      "aggregate_weighted_pooled": 1.1776196249937139,
+      "aggregate_difference": -4.835043200634992e-05,
+      "component_weight_reconstruction_difference": 1.92268441168153e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/table9_seed662009_t0/cmp_table9_seed662009_t0_cmp_t9_lgbm_cap12-673199/checkpoints/eval_metrics.jsonl",
+      "step": 2000,
+      "component_differences": [
+        -4.665642496792799e-07,
+        6.194943676929299e-06,
+        8.355994935760336e-06,
+        1.3326311867345453e-06,
+        -0.0002915295062227985,
+        -1.620045116423885e-05,
+        -2.7129396418024143e-05
+      ],
+      "aggregate_legacy": 1.1036059856414795,
+      "aggregate_weighted_pooled": 1.1035584948600112,
+      "aggregate_difference": -4.7490781468262355e-05,
+      "component_weight_reconstruction_difference": -8.334835044365718e-10
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/table9_seed662009_t0/cmp_table9_seed662009_t0_cmp_t9_lgbm_cap12-673199/checkpoints/eval_metrics.jsonl",
+      "step": 3000,
+      "component_differences": [
+        -1.6770566217960692e-06,
+        2.775047306169398e-06,
+        1.0401468935050673e-05,
+        1.5691506725090676e-06,
+        -0.0002491016104985144,
+        -9.961421166160278e-06,
+        -1.9215919927706437e-05
+      ],
+      "aggregate_legacy": 1.0033564567565918,
+      "aggregate_weighted_pooled": 1.003316737452399,
+      "aggregate_difference": -3.9719304192775695e-05,
+      "component_weight_reconstruction_difference": -8.693788533520319e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/table9_seed662009_t0/cmp_table9_seed662009_t0_cmp_t9_lgbm_cap12-673199/checkpoints/eval_metrics.jsonl",
+      "step": 3006,
+      "component_differences": [
+        -1.7812311943199433e-06,
+        2.7266868920516885e-06,
+        1.0275744199317316e-05,
+        1.6774467705982232e-06,
+        -0.0002489885059792085,
+        -1.0085144523497291e-05,
+        -1.9209422100541218e-05
+      ],
+      "aggregate_legacy": 1.0032809972763062,
+      "aggregate_weighted_pooled": 1.0032412905792796,
+      "aggregate_difference": -3.970669702657581e-05,
+      "component_weight_reconstruction_difference": -4.108865470087153e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/table9_seed662009_t0/cmp_table9_seed662009_t0_cmp_t9_quad_cap12-25ffd5/checkpoints/eval_metrics.jsonl",
+      "step": 1000,
+      "component_differences": [
+        -1.6439386163469294e-06,
+        3.0715352163923626e-06,
+        7.564212767707801e-06,
+        1.3640507048329198e-06,
+        -0.0002911832606472542,
+        -4.610767004309402e-06,
+        -2.767785501500697e-05
+      ],
+      "aggregate_legacy": 1.1692004203796387,
+      "aggregate_weighted_pooled": 1.169153774643673,
+      "aggregate_difference": -4.6645735965578083e-05,
+      "component_weight_reconstruction_difference": -8.518738092710976e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/table9_seed662009_t0/cmp_table9_seed662009_t0_cmp_t9_quad_cap12-25ffd5/checkpoints/eval_metrics.jsonl",
+      "step": 2000,
+      "component_differences": [
+        -2.1492307034076674e-06,
+        3.1677399645602122e-06,
+        9.571446756062585e-06,
+        1.5003043021266649e-06,
+        -0.00028673745214524704,
+        -8.750243111532718e-06,
+        -2.769368244393e-05
+      ],
+      "aggregate_legacy": 1.1067007780075073,
+      "aggregate_weighted_pooled": 1.1066546301025841,
+      "aggregate_difference": -4.614790492318832e-05,
+      "component_weight_reconstruction_difference": 6.081674119862157e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/table9_seed662009_t0/cmp_table9_seed662009_t0_cmp_t9_quad_cap12-25ffd5/checkpoints/eval_metrics.jsonl",
+      "step": 3000,
+      "component_differences": [
+        -2.4886067264695555e-06,
+        2.460231948608893e-06,
+        8.760830512377638e-06,
+        1.073550486951902e-06,
+        -0.00028903604772223535,
+        -7.702328721381768e-06,
+        -1.8900775764496558e-05
+      ],
+      "aggregate_legacy": 1.023099422454834,
+      "aggregate_weighted_pooled": 1.0230535267109462,
+      "aggregate_difference": -4.589574388780271e-05,
+      "component_weight_reconstruction_difference": 5.767230515374422e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/table9_seed662009_t0/cmp_table9_seed662009_t0_cmp_t9_quad_cap12-25ffd5/checkpoints/eval_metrics.jsonl",
+      "step": 3006,
+      "component_differences": [
+        -2.425256699911671e-06,
+        2.564653015957319e-06,
+        8.667029632203338e-06,
+        1.0368433793761511e-06,
+        -0.0002891287444430901,
+        -7.573792255133327e-06,
+        -1.8848671401228145e-05
+      ],
+      "aggregate_legacy": 1.023012638092041,
+      "aggregate_weighted_pooled": 1.022966651858538,
+      "aggregate_difference": -4.598623350293707e-05,
+      "component_weight_reconstruction_difference": -4.83225501834994e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/table9_seed662009_t0/cmp_table9_seed662009_t0_cmp_t9_spline_cap12-3e4725/checkpoints/eval_metrics.jsonl",
+      "step": 1000,
+      "component_differences": [
+        -7.091050375773733e-07,
+        3.691789274951063e-06,
+        8.682298936246724e-06,
+        1.036813138233228e-06,
+        -0.00029405139133109603,
+        -4.6789535763647194e-06,
+        -2.4687417280233603e-05
+      ],
+      "aggregate_legacy": 1.1781057119369507,
+      "aggregate_weighted_pooled": 1.1780594082734117,
+      "aggregate_difference": -4.630366353897131e-05,
+      "component_weight_reconstruction_difference": 3.683752902716719e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/table9_seed662009_t0/cmp_table9_seed662009_t0_cmp_t9_spline_cap12-3e4725/checkpoints/eval_metrics.jsonl",
+      "step": 2000,
+      "component_differences": [
+        -1.3410381700662555e-06,
+        2.4388623873772275e-06,
+        8.993979243365757e-06,
+        1.6214687386106874e-06,
+        -0.0003107616169433225,
+        -7.188354167464439e-06,
+        -2.8151360914385748e-05
+      ],
+      "aggregate_legacy": 1.1172038316726685,
+      "aggregate_weighted_pooled": 1.1171540649175975,
+      "aggregate_difference": -4.976675507095685e-05,
+      "component_weight_reconstruction_difference": 9.827804348105929e-09
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/table9_seed662009_t0/cmp_table9_seed662009_t0_cmp_t9_spline_cap12-3e4725/checkpoints/eval_metrics.jsonl",
+      "step": 3000,
+      "component_differences": [
+        -1.8156999272989083e-06,
+        1.6438774088634034e-06,
+        9.215799303019523e-06,
+        9.552953472713455e-07,
+        -0.00026759883231763926,
+        -8.658549034312735e-06,
+        -2.0193364185239204e-05
+      ],
+      "aggregate_legacy": 1.0308867692947388,
+      "aggregate_weighted_pooled": 1.0308439213383962,
+      "aggregate_difference": -4.284795634257321e-05,
+      "component_weight_reconstruction_difference": -2.5056576813398124e-09
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/table9_seed662009_t0/cmp_table9_seed662009_t0_cmp_t9_spline_cap12-3e4725/checkpoints/eval_metrics.jsonl",
+      "step": 3006,
+      "component_differences": [
+        -1.889975679958411e-06,
+        1.6070704489390408e-06,
+        9.111264904770877e-06,
+        8.302679428418003e-07,
+        -0.0002676388162683452,
+        -8.617150069278878e-06,
+        -2.007938492187833e-05
+      ],
+      "aggregate_legacy": 1.0307953357696533,
+      "aggregate_weighted_pooled": 1.0307524242616313,
+      "aggregate_difference": -4.2911508022047684e-05,
+      "component_weight_reconstruction_difference": -2.567475121395546e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/table9_seed662009_t1/cmp_table9_seed662009_t1_cmp_t9_quad_cap12-9ed85d/checkpoints/eval_metrics.jsonl",
+      "step": 1000,
+      "component_differences": [
+        -1.0743255107747984e-06,
+        2.940830753805912e-06,
+        7.93172997815006e-06,
+        8.315608590603318e-07,
+        -0.0002829550769004596,
+        -6.857292323414477e-06,
+        -2.760404474599909e-05
+      ],
+      "aggregate_legacy": 1.166751503944397,
+      "aggregate_weighted_pooled": 1.1667059910786484,
+      "aggregate_difference": -4.5512865748609244e-05,
+      "component_weight_reconstruction_difference": 2.6676305164841096e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/table9_seed662009_t1/cmp_table9_seed662009_t1_cmp_t9_quad_cap12-9ed85d/checkpoints/eval_metrics.jsonl",
+      "step": 2000,
+      "component_differences": [
+        -2.700723787052439e-06,
+        2.920852767873683e-06,
+        7.894478354808498e-06,
+        8.754280951261961e-07,
+        -0.0002992360064567601,
+        -2.8345353575431886e-05,
+        -2.537223593890303e-05
+      ],
+      "aggregate_legacy": 1.1064738035202026,
+      "aggregate_weighted_pooled": 1.1064225315783136,
+      "aggregate_difference": -5.1271941889030614e-05,
+      "component_weight_reconstruction_difference": 3.8041431116297986e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/table9_seed662009_t1/cmp_table9_seed662009_t1_cmp_t9_quad_cap12-9ed85d/checkpoints/eval_metrics.jsonl",
+      "step": 3000,
+      "component_differences": [
+        -2.7599101719566477e-06,
+        2.183141782685638e-06,
+        8.186074379912256e-06,
+        1.2442517349775528e-06,
+        -0.00026975398806683426,
+        -1.0469532445434027e-05,
+        -2.1719008347798052e-05
+      ],
+      "aggregate_legacy": 1.021859049797058,
+      "aggregate_weighted_pooled": 1.021815273336873,
+      "aggregate_difference": -4.37764601850521e-05,
+      "component_weight_reconstruction_difference": 3.0530389771854516e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/table9_seed662009_t1/cmp_table9_seed662009_t1_cmp_t9_quad_cap12-9ed85d/checkpoints/eval_metrics.jsonl",
+      "step": 3006,
+      "component_differences": [
+        -2.742731437521684e-06,
+        2.0748675004789163e-06,
+        8.169355578901971e-06,
+        1.3310399831212294e-06,
+        -0.0002699338866254397,
+        -1.0389876801020215e-05,
+        -2.1742373853328445e-05
+      ],
+      "aggregate_legacy": 1.0217573642730713,
+      "aggregate_weighted_pooled": 1.0217135185996138,
+      "aggregate_difference": -4.384567345749879e-05,
+      "component_weight_reconstruction_difference": -1.5393623264969847e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/table9_seed662009_t2/cmp_table9_seed662009_t2_cmp_t9_quad_cap12-3d3530/checkpoints/eval_metrics.jsonl",
+      "step": 1000,
+      "component_differences": [
+        -1.0501464864365317e-06,
+        4.369898329859012e-06,
+        8.096904353438461e-06,
+        1.2549356951385704e-06,
+        -0.0002892154709741579,
+        -1.1749159451679425e-05,
+        -2.6271956367951432e-05
+      ],
+      "aggregate_legacy": 1.1688647270202637,
+      "aggregate_weighted_pooled": 1.1688178673408225,
+      "aggregate_difference": -4.685967944118019e-05,
+      "component_weight_reconstruction_difference": -4.376987883247807e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/table9_seed662009_t2/cmp_table9_seed662009_t2_cmp_t9_quad_cap12-3d3530/checkpoints/eval_metrics.jsonl",
+      "step": 2000,
+      "component_differences": [
+        -1.9703438107754323e-06,
+        3.4397480992431895e-06,
+        8.32626642210954e-06,
+        1.1658559164740012e-06,
+        -0.000304389429307661,
+        -2.0692641886754792e-05,
+        -2.4020037616034884e-05
+      ],
+      "aggregate_legacy": 1.1070564985275269,
+      "aggregate_weighted_pooled": 1.1070059240958332,
+      "aggregate_difference": -5.057443169365072e-05,
+      "component_weight_reconstruction_difference": -3.32010163806018e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/table9_seed662009_t2/cmp_table9_seed662009_t2_cmp_t9_quad_cap12-3d3530/checkpoints/eval_metrics.jsonl",
+      "step": 2000,
+      "component_differences": [
+        -1.9703438107754323e-06,
+        3.4397480992431895e-06,
+        8.32626642210954e-06,
+        1.1658559164740012e-06,
+        -0.000304389429307661,
+        -2.0692641886754792e-05,
+        -2.4020037616034884e-05
+      ],
+      "aggregate_legacy": 1.1070564985275269,
+      "aggregate_weighted_pooled": 1.1070059240958332,
+      "aggregate_difference": -5.057443169365072e-05,
+      "component_weight_reconstruction_difference": -3.32010163806018e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/table9_seed662009_t2/cmp_table9_seed662009_t2_cmp_t9_quad_cap12-3d3530/checkpoints/eval_metrics.jsonl",
+      "step": 3000,
+      "component_differences": [
+        -2.3215758049310864e-06,
+        1.884330325774286e-06,
+        8.762915256310677e-06,
+        1.6134030549341816e-06,
+        -0.000276161046049328,
+        -5.997737264729075e-06,
+        -1.8556015721316044e-05
+      ],
+      "aggregate_legacy": 1.0216948986053467,
+      "aggregate_weighted_pooled": 1.021651228562507,
+      "aggregate_difference": -4.367004283967191e-05,
+      "component_weight_reconstruction_difference": 2.3679112004515446e-09
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/table9_seed662009_t2/cmp_table9_seed662009_t2_cmp_t9_quad_cap12-3d3530/checkpoints/eval_metrics.jsonl",
+      "step": 3006,
+      "component_differences": [
+        -2.3505683623969986e-06,
+        1.9220469884562164e-06,
+        8.812595005291968e-06,
+        1.5308402576685864e-06,
+        -0.00027641797347832675,
+        -6.0555463176070745e-06,
+        -1.853679284380405e-05
+      ],
+      "aggregate_legacy": 1.0216184854507446,
+      "aggregate_weighted_pooled": 1.0215747307806966,
+      "aggregate_difference": -4.3754670048024025e-05,
+      "component_weight_reconstruction_difference": -3.466927522843832e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/uncheatable_seed666200_t0/cmp_uncheatable_seed666200_t0_cmp_u_krr_cap12-a3985a/checkpoints/eval_metrics.jsonl",
+      "step": 1000,
+      "component_differences": [
+        -6.810397397138956e-07,
+        4.545168573732994e-06,
+        1.0404283299125794e-05,
+        1.4889890118663374e-06,
+        -0.0002952131023253868,
+        -5.6455455650361586e-06,
+        -2.864773854138747e-05
+      ],
+      "aggregate_legacy": 1.1615077257156372,
+      "aggregate_weighted_pooled": 1.1614612077745399,
+      "aggregate_difference": -4.651794109733487e-05,
+      "component_weight_reconstruction_difference": 3.489720667992913e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/uncheatable_seed666200_t0/cmp_uncheatable_seed666200_t0_cmp_u_krr_cap12-a3985a/checkpoints/eval_metrics.jsonl",
+      "step": 2000,
+      "component_differences": [
+        -1.9370134800578143e-06,
+        4.263898753853468e-06,
+        9.10876624526935e-06,
+        1.8657641320807272e-06,
+        -0.0002760179033177712,
+        -8.257509045095368e-06,
+        -2.677954023377893e-05
+      ],
+      "aggregate_legacy": 1.0959982872009277,
+      "aggregate_weighted_pooled": 1.0959540219701376,
+      "aggregate_difference": -4.426523079015254e-05,
+      "component_weight_reconstruction_difference": -3.068608678269413e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/uncheatable_seed666200_t0/cmp_uncheatable_seed666200_t0_cmp_u_krr_cap12-a3985a/checkpoints/eval_metrics.jsonl",
+      "step": 3000,
+      "component_differences": [
+        -2.3089389578068165e-06,
+        3.1485582872026185e-06,
+        1.011881306722806e-05,
+        1.8007791124929895e-06,
+        -0.0002533242016548032,
+        -6.0337608855931535e-06,
+        -2.043680587959784e-05
+      ],
+      "aggregate_legacy": 1.005126714706421,
+      "aggregate_weighted_pooled": 1.0050868379245497,
+      "aggregate_difference": -3.987678187122867e-05,
+      "component_weight_reconstruction_difference": 1.2068309462875959e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/uncheatable_seed666200_t0/cmp_uncheatable_seed666200_t0_cmp_u_krr_cap12-a3985a/checkpoints/eval_metrics.jsonl",
+      "step": 3006,
+      "component_differences": [
+        -2.2372464028030947e-06,
+        3.1127205195602414e-06,
+        9.993518516937527e-06,
+        1.8552153866480126e-06,
+        -0.00025314945839216563,
+        -6.097655149139847e-06,
+        -2.051950016856985e-05
+      ],
+      "aggregate_legacy": 1.005017638206482,
+      "aggregate_weighted_pooled": 1.0049778660876596,
+      "aggregate_difference": -3.9772118822334335e-05,
+      "component_weight_reconstruction_difference": 1.1402900912393932e-07
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/uncheatable_seed666200_t0/cmp_uncheatable_seed666200_t0_cmp_u_lgbm_cap08-a86abc/checkpoints/eval_metrics.jsonl",
+      "step": 1000,
+      "component_differences": [
+        -4.17833523780331e-07,
+        3.4680625864424997e-06,
+        1.005839152123933e-05,
+        1.8280062590303459e-06,
+        -0.0003357453386019227,
+        -9.05115204075102e-06,
+        -3.055658134476502e-05
+      ],
+      "aggregate_legacy": 1.1719069480895996,
+      "aggregate_weighted_pooled": 1.1718532986171981,
+      "aggregate_difference": -5.364947240149576e-05,
+      "component_weight_reconstruction_difference": -3.384747682133593e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/uncheatable_seed666200_t0/cmp_uncheatable_seed666200_t0_cmp_u_lgbm_cap08-a86abc/checkpoints/eval_metrics.jsonl",
+      "step": 2000,
+      "component_differences": [
+        -1.3280003419158248e-06,
+        4.533532978578947e-06,
+        8.942359732033722e-06,
+        2.24554344141481e-06,
+        -0.00029674117439559833,
+        -1.1024430939476915e-05,
+        -2.9067377586011744e-05
+      ],
+      "aggregate_legacy": 1.1039185523986816,
+      "aggregate_weighted_pooled": 1.103870638015184,
+      "aggregate_difference": -4.791438349771582e-05,
+      "component_weight_reconstruction_difference": -2.5357458355301787e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/uncheatable_seed666200_t0/cmp_uncheatable_seed666200_t0_cmp_u_lgbm_cap08-a86abc/checkpoints/eval_metrics.jsonl",
+      "step": 3000,
+      "component_differences": [
+        -1.985981169738693e-06,
+        2.2579280470891305e-06,
+        8.836008013268781e-06,
+        1.6347184514931001e-06,
+        -0.00026544747769030597,
+        -7.441208982883474e-06,
+        -2.21863600498029e-05
+      ],
+      "aggregate_legacy": 1.0003576278686523,
+      "aggregate_weighted_pooled": 1.0003152408788174,
+      "aggregate_difference": -4.23869898349416e-05,
+      "component_weight_reconstruction_difference": 5.0019224095976256e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/uncheatable_seed666200_t0/cmp_uncheatable_seed666200_t0_cmp_u_lgbm_cap08-a86abc/checkpoints/eval_metrics.jsonl",
+      "step": 3006,
+      "component_differences": [
+        -2.00580602860434e-06,
+        2.2132721246848064e-06,
+        8.93362353426852e-06,
+        1.669574977380961e-06,
+        -0.00026533437564557616,
+        -7.4349492754643975e-06,
+        -2.2271600455425755e-05
+      ],
+      "aggregate_legacy": 1.000331163406372,
+      "aggregate_weighted_pooled": 1.0002887703134777,
+      "aggregate_difference": -4.2393092894332796e-05,
+      "component_weight_reconstruction_difference": 2.2727064674654684e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/uncheatable_seed666200_t0/cmp_uncheatable_seed666200_t0_cmp_u_quad_cap08-42ee03/checkpoints/eval_metrics.jsonl",
+      "step": 1000,
+      "component_differences": [
+        -2.6373405388468996e-06,
+        3.3084759218926507e-06,
+        9.470025734037435e-06,
+        5.736178432247385e-07,
+        -0.0003081157537314638,
+        -5.815297085653981e-06,
+        -1.9854772492777784e-05
+      ],
+      "aggregate_legacy": 1.1509207487106323,
+      "aggregate_weighted_pooled": 1.1508721645848485,
+      "aggregate_difference": -4.8584125783790455e-05,
+      "component_weight_reconstruction_difference": -3.4105437141107586e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/uncheatable_seed666200_t0/cmp_uncheatable_seed666200_t0_cmp_u_quad_cap08-42ee03/checkpoints/eval_metrics.jsonl",
+      "step": 2000,
+      "component_differences": [
+        -2.5108332799561595e-06,
+        3.598142785055103e-06,
+        1.1613534215415555e-05,
+        1.2390025641018099e-06,
+        -0.00028332128093055964,
+        -2.0365760016183287e-06,
+        -1.7630971703930243e-05
+      ],
+      "aggregate_legacy": 1.0827441215515137,
+      "aggregate_weighted_pooled": 1.0827006710920597,
+      "aggregate_difference": -4.34504594539753e-05,
+      "component_weight_reconstruction_difference": 7.602378726545567e-09
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/uncheatable_seed666200_t0/cmp_uncheatable_seed666200_t0_cmp_u_quad_cap08-42ee03/checkpoints/eval_metrics.jsonl",
+      "step": 3000,
+      "component_differences": [
+        -3.216896467206354e-06,
+        1.978849518802228e-06,
+        1.0773873047487115e-05,
+        1.0749035987966948e-06,
+        -0.0002594521421642737,
+        -6.232581246656821e-06,
+        -1.4982488518500148e-05
+      ],
+      "aggregate_legacy": 0.9865603446960449,
+      "aggregate_weighted_pooled": 0.9865196645726427,
+      "aggregate_difference": -4.0680123402192514e-05,
+      "component_weight_reconstruction_difference": -9.540786383155364e-09
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/uncheatable_seed666200_t0/cmp_uncheatable_seed666200_t0_cmp_u_quad_cap08-42ee03/checkpoints/eval_metrics.jsonl",
+      "step": 3006,
+      "component_differences": [
+        -3.2486610022086637e-06,
+        2.021064492985225e-06,
+        1.0751218952442798e-05,
+        1.0596268211759963e-06,
+        -0.000259236305581223,
+        -6.198115335975807e-06,
+        -1.4886772012889793e-05
+      ],
+      "aggregate_legacy": 0.9864891767501831,
+      "aggregate_weighted_pooled": 0.9864485772595573,
+      "aggregate_difference": -4.059949062584778e-05,
+      "component_weight_reconstruction_difference": 2.8883042402227943e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/uncheatable_seed666200_t0/cmp_uncheatable_seed666200_t0_cmp_u_spline_cap08-93c8f4/checkpoints/eval_metrics.jsonl",
+      "step": 1000,
+      "component_differences": [
+        -2.0415684738317452e-06,
+        7.45807463764514e-06,
+        1.1138937478172295e-05,
+        3.1801853284108006e-07,
+        -0.00031005433011110917,
+        -8.215343041295675e-06,
+        -2.267466134564522e-05
+      ],
+      "aggregate_legacy": 1.1531022787094116,
+      "aggregate_weighted_pooled": 1.1530537884539132,
+      "aggregate_difference": -4.849025549846786e-05,
+      "component_weight_reconstruction_difference": 1.5030974243046558e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/uncheatable_seed666200_t0/cmp_uncheatable_seed666200_t0_cmp_u_spline_cap08-93c8f4/checkpoints/eval_metrics.jsonl",
+      "step": 2000,
+      "component_differences": [
+        -1.4625231175013909e-06,
+        4.723067213774357e-06,
+        9.626894127201524e-06,
+        5.479818883102894e-07,
+        -0.0002870114828349424,
+        -8.984262977462798e-06,
+        -1.9795685106016592e-05
+      ],
+      "aggregate_legacy": 1.0788999795913696,
+      "aggregate_weighted_pooled": 1.0788546182761185,
+      "aggregate_difference": -4.536131525112452e-05,
+      "component_weight_reconstruction_difference": -3.7697864163632744e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/uncheatable_seed666200_t0/cmp_uncheatable_seed666200_t0_cmp_u_spline_cap08-93c8f4/checkpoints/eval_metrics.jsonl",
+      "step": 3000,
+      "component_differences": [
+        -2.235711931808382e-06,
+        2.1167133057442555e-06,
+        1.0228653268162802e-05,
+        6.242438508330395e-07,
+        -0.0002543493448701195,
+        -8.207717505981371e-06,
+        -1.33746420316605e-05
+      ],
+      "aggregate_legacy": 0.9855899810791016,
+      "aggregate_weighted_pooled": 0.9855500206515914,
+      "aggregate_difference": -3.996042751019946e-05,
+      "component_weight_reconstruction_difference": 2.3795128090142725e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/uncheatable_seed666200_t0/cmp_uncheatable_seed666200_t0_cmp_u_spline_cap08-93c8f4/checkpoints/eval_metrics.jsonl",
+      "step": 3006,
+      "component_differences": [
+        -2.1747660592374984e-06,
+        2.1914866625838414e-06,
+        1.0113612061601884e-05,
+        7.088460796111917e-07,
+        -0.00025447466140449126,
+        -8.301089850504262e-06,
+        -1.3378721020584905e-05
+      ],
+      "aggregate_legacy": 0.9855112433433533,
+      "aggregate_weighted_pooled": 0.9854712126535373,
+      "aggregate_difference": -4.0030689815950815e-05,
+      "component_weight_reconstruction_difference": -2.5326948760451273e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/uncheatable_seed666200_t1/cmp_uncheatable_seed666200_t1_cmp_u_quad_cap08-979c69/checkpoints/eval_metrics.jsonl",
+      "step": 1000,
+      "component_differences": [
+        -2.4998380001584053e-06,
+        4.814456657120658e-06,
+        9.426167221882054e-06,
+        5.587202138723768e-07,
+        -0.0002937827646436464,
+        -1.0554864830258914e-05,
+        -2.0369737210312877e-05
+      ],
+      "aggregate_legacy": 1.150516390800476,
+      "aggregate_weighted_pooled": 1.150469497581131,
+      "aggregate_difference": -4.6893219345145454e-05,
+      "component_weight_reconstruction_difference": -4.18738972385313e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/uncheatable_seed666200_t1/cmp_uncheatable_seed666200_t1_cmp_u_quad_cap08-979c69/checkpoints/eval_metrics.jsonl",
+      "step": 2000,
+      "component_differences": [
+        -2.4002986025450923e-06,
+        3.4609105055150025e-06,
+        1.099792171421754e-05,
+        1.474438672266487e-06,
+        -0.00027222193381126747,
+        -4.448944925017351e-06,
+        -2.0404090816716902e-05
+      ],
+      "aggregate_legacy": 1.0801937580108643,
+      "aggregate_weighted_pooled": 1.0801512688220214,
+      "aggregate_difference": -4.248918884286468e-05,
+      "component_weight_reconstruction_difference": -5.843108841219191e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/uncheatable_seed666200_t1/cmp_uncheatable_seed666200_t1_cmp_u_quad_cap08-979c69/checkpoints/eval_metrics.jsonl",
+      "step": 3000,
+      "component_differences": [
+        -4.040507123992398e-06,
+        2.6958763458262425e-06,
+        1.000520670380034e-05,
+        1.1445475827098761e-06,
+        -0.0002530527879062161,
+        -1.1161436538897895e-05,
+        -1.713283276716382e-05
+      ],
+      "aggregate_legacy": 0.9859609603881836,
+      "aggregate_weighted_pooled": 0.9859201829357431,
+      "aggregate_difference": -4.077745244046582e-05,
+      "component_weight_reconstruction_difference": -1.151228179452346e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/uncheatable_seed666200_t1/cmp_uncheatable_seed666200_t1_cmp_u_quad_cap08-979c69/checkpoints/eval_metrics.jsonl",
+      "step": 3000,
+      "component_differences": [
+        -4.040507123992398e-06,
+        2.6958763458262425e-06,
+        1.000520670380034e-05,
+        1.1445475827098761e-06,
+        -0.0002530527879062161,
+        -1.1161436538897895e-05,
+        -1.713283276716382e-05
+      ],
+      "aggregate_legacy": 0.9859609603881836,
+      "aggregate_weighted_pooled": 0.9859201829357431,
+      "aggregate_difference": -4.077745244046582e-05,
+      "component_weight_reconstruction_difference": -1.151228179452346e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/uncheatable_seed666200_t1/cmp_uncheatable_seed666200_t1_cmp_u_quad_cap08-979c69/checkpoints/eval_metrics.jsonl",
+      "step": 3006,
+      "component_differences": [
+        -4.0246919978947915e-06,
+        2.55745488442205e-06,
+        1.001518334864393e-05,
+        1.1151990912949827e-06,
+        -0.00025289357239499655,
+        -1.111185750601873e-05,
+        -1.7173527472769123e-05
+      ],
+      "aggregate_legacy": 0.9858922958374023,
+      "aggregate_weighted_pooled": 0.9858515350018507,
+      "aggregate_difference": -4.076083555160093e-05,
+      "component_weight_reconstruction_difference": -3.738689136056905e-09
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/uncheatable_seed666200_t2/cmp_uncheatable_seed666200_t2_cmp_u_quad_cap08-c4ec6f/checkpoints/eval_metrics.jsonl",
+      "step": 1000,
+      "component_differences": [
+        -1.9447951424833576e-06,
+        2.906649473555234e-06,
+        8.918496808840715e-06,
+        5.142978021233091e-07,
+        -0.0002930980664513916,
+        -7.744918361196618e-06,
+        -2.057932064714052e-05
+      ],
+      "aggregate_legacy": 1.1491974592208862,
+      "aggregate_weighted_pooled": 1.1491508314004204,
+      "aggregate_difference": -4.6627820465827696e-05,
+      "component_weight_reconstruction_difference": -5.538685288186684e-09
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/uncheatable_seed666200_t2/cmp_uncheatable_seed666200_t2_cmp_u_quad_cap08-c4ec6f/checkpoints/eval_metrics.jsonl",
+      "step": 2000,
+      "component_differences": [
+        -2.6238777768305965e-06,
+        2.794574139874939e-06,
+        1.0152742883962063e-05,
+        1.3559608731394945e-06,
+        -0.0002805084064961827,
+        -1.4605646862730914e-05,
+        -2.079224552242742e-05
+      ],
+      "aggregate_legacy": 1.082465410232544,
+      "aggregate_weighted_pooled": 1.0824197745904647,
+      "aggregate_difference": -4.563564207926696e-05,
+      "component_weight_reconstruction_difference": -9.714879256605968e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/uncheatable_seed666200_t2/cmp_uncheatable_seed666200_t2_cmp_u_quad_cap08-c4ec6f/checkpoints/eval_metrics.jsonl",
+      "step": 3000,
+      "component_differences": [
+        -3.1599784928726393e-06,
+        3.0719225667663608e-06,
+        9.683797505877223e-06,
+        1.0906525007570167e-06,
+        -0.00025234096515869275,
+        -1.5946390688248435e-05,
+        -1.551618194683968e-05
+      ],
+      "aggregate_legacy": 0.9864193201065063,
+      "aggregate_weighted_pooled": 0.9863781931714055,
+      "aggregate_difference": -4.112693510083254e-05,
+      "component_weight_reconstruction_difference": -5.7672149944565376e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/uncheatable_seed666200_t2/cmp_uncheatable_seed666200_t2_cmp_u_quad_cap08-c4ec6f/checkpoints/eval_metrics.jsonl",
+      "step": 3006,
+      "component_differences": [
+        -2.950875534368791e-06,
+        3.148797903529399e-06,
+        9.722440283299605e-06,
+        1.107727696902927e-06,
+        -0.00025222394738855236,
+        -1.5880750785068898e-05,
+        -1.5578093923718228e-05
+      ],
+      "aggregate_legacy": 0.9863525032997131,
+      "aggregate_weighted_pooled": 0.9863115784492038,
+      "aggregate_difference": -4.092485050932737e-05,
+      "component_weight_reconstruction_difference": 6.64936815608641e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_fairness_repeats_3e18_20260908/table9_seed662009_t1/lwspufr_table9_seed662009_t1_lwspu_t9_snc_cap08-067b9a/checkpoints/eval_metrics.jsonl",
+      "step": 1000,
+      "component_differences": [
+        -1.0028153278884844e-06,
+        5.22299528005199e-06,
+        8.663234146721877e-06,
+        8.602643233324159e-07,
+        -0.000306864471738999,
+        -9.193525764450428e-06,
+        -2.7709088019856054e-05
+      ],
+      "aggregate_legacy": 1.1587204933166504,
+      "aggregate_weighted_pooled": 1.1586713646001727,
+      "aggregate_difference": -4.912871647766437e-05,
+      "component_weight_reconstruction_difference": -1.5029978595038074e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_fairness_repeats_3e18_20260908/table9_seed662009_t1/lwspufr_table9_seed662009_t1_lwspu_t9_snc_cap08-067b9a/checkpoints/eval_metrics.jsonl",
+      "step": 2000,
+      "component_differences": [
+        -2.7522749521669e-06,
+        5.708257795111749e-06,
+        9.114141101607132e-06,
+        9.927677311338812e-07,
+        -0.00028450690244830046,
+        -1.1894044669613635e-05,
+        -2.5772464961715258e-05
+      ],
+      "aggregate_legacy": 1.094624638557434,
+      "aggregate_weighted_pooled": 1.0945785586713526,
+      "aggregate_difference": -4.607988608151814e-05,
+      "component_weight_reconstruction_difference": -5.521064383451346e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_fairness_repeats_3e18_20260908/table9_seed662009_t1/lwspufr_table9_seed662009_t1_lwspu_t9_snc_cap08-067b9a/checkpoints/eval_metrics.jsonl",
+      "step": 3000,
+      "component_differences": [
+        -2.732610818068082e-06,
+        2.095144136182725e-06,
+        9.250620354617212e-06,
+        6.259495326510489e-07,
+        -0.00025168956957832833,
+        -7.0782248221545885e-06,
+        -1.7170613339390073e-05
+      ],
+      "aggregate_legacy": 0.9981585741043091,
+      "aggregate_weighted_pooled": 0.9981186182501792,
+      "aggregate_difference": -3.995585412985836e-05,
+      "component_weight_reconstruction_difference": 5.023906335388517e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_fairness_repeats_3e18_20260908/table9_seed662009_t1/lwspufr_table9_seed662009_t1_lwspu_t9_snc_cap08-067b9a/checkpoints/eval_metrics.jsonl",
+      "step": 3006,
+      "component_differences": [
+        -2.9246427297735522e-06,
+        2.1068878354180143e-06,
+        9.224885257452797e-06,
+        4.919454910101706e-07,
+        -0.0002518981771741924,
+        -7.082289991910962e-06,
+        -1.7153321216545336e-05
+      ],
+      "aggregate_legacy": 0.9980798363685608,
+      "aggregate_weighted_pooled": 0.9980397277253144,
+      "aggregate_difference": -4.010864324643926e-05,
+      "component_weight_reconstruction_difference": -1.945032912509248e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_fairness_repeats_3e18_20260908/table9_seed662009_t2/lwspufr_table9_seed662009_t2_lwspu_t9_snc_cap08-6ed4ac/checkpoints/eval_metrics.jsonl",
+      "step": 1000,
+      "component_differences": [
+        -1.6364187689354992e-06,
+        4.9966407966728354e-06,
+        8.808455232323098e-06,
+        1.1467304061874017e-06,
+        -0.0002975690538163933,
+        -1.3354247419661291e-05,
+        -3.1105370465578375e-05
+      ],
+      "aggregate_legacy": 1.1617095470428467,
+      "aggregate_weighted_pooled": 1.1616607762757882,
+      "aggregate_difference": -4.877076705844807e-05,
+      "component_weight_reconstruction_difference": -8.254757233316923e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_fairness_repeats_3e18_20260908/table9_seed662009_t2/lwspufr_table9_seed662009_t2_lwspu_t9_snc_cap08-6ed4ac/checkpoints/eval_metrics.jsonl",
+      "step": 2000,
+      "component_differences": [
+        -2.625018295399073e-06,
+        5.147257182480658e-06,
+        8.63768906489426e-06,
+        8.0528156498616e-07,
+        -0.00027796728904605494,
+        -1.4983680328040094e-05,
+        -2.655856982047844e-05
+      ],
+      "aggregate_legacy": 1.0939496755599976,
+      "aggregate_weighted_pooled": 1.0939040128254696,
+      "aggregate_difference": -4.566273452799585e-05,
+      "component_weight_reconstruction_difference": 4.3537284666328446e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_fairness_repeats_3e18_20260908/table9_seed662009_t2/lwspufr_table9_seed662009_t2_lwspu_t9_snc_cap08-6ed4ac/checkpoints/eval_metrics.jsonl",
+      "step": 3000,
+      "component_differences": [
+        -2.640897500905126e-06,
+        1.6555520296890336e-06,
+        9.201015944038105e-06,
+        8.770995238993606e-07,
+        -0.0002613231745427491,
+        -5.057523178586543e-06,
+        -1.7988322469353335e-05
+      ],
+      "aggregate_legacy": 1.0006256103515625,
+      "aggregate_weighted_pooled": 1.0005843262687617,
+      "aggregate_difference": -4.128408280079654e-05,
+      "component_weight_reconstruction_difference": 1.1227158536186721e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_fairness_repeats_3e18_20260908/table9_seed662009_t2/lwspufr_table9_seed662009_t2_lwspu_t9_snc_cap08-6ed4ac/checkpoints/eval_metrics.jsonl",
+      "step": 3006,
+      "component_differences": [
+        -2.663951683468113e-06,
+        1.6796578752309443e-06,
+        9.194803951118047e-06,
+        8.961887945080349e-07,
+        -0.00026114607986527094,
+        -5.085105987290284e-06,
+        -1.799772168586955e-05
+      ],
+      "aggregate_legacy": 1.0005604028701782,
+      "aggregate_weighted_pooled": 1.0005191782590943,
+      "aggregate_difference": -4.1224611083912066e-05,
+      "component_weight_reconstruction_difference": 4.7499328692524045e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_fairness_repeats_3e18_20260908/uncheatable_seed666200_t1/lwspufr_uncheatable_seed666200_t1_lwspu_u_snc_cap06-dd4b1e/checkpoints/eval_metrics.jsonl",
+      "step": 1000,
+      "component_differences": [
+        -1.987548797766081e-06,
+        4.159345346810284e-06,
+        1.082464218837842e-05,
+        1.1296419326622953e-06,
+        -0.0002849763044630027,
+        -8.94672369067262e-06,
+        -2.6228689064433652e-05
+      ],
+      "aggregate_legacy": 1.1555171012878418,
+      "aggregate_weighted_pooled": 1.1554716061408317,
+      "aggregate_difference": -4.54951470101328e-05,
+      "component_weight_reconstruction_difference": -7.053775341603341e-10
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_fairness_repeats_3e18_20260908/uncheatable_seed666200_t1/lwspufr_uncheatable_seed666200_t1_lwspu_u_snc_cap06-dd4b1e/checkpoints/eval_metrics.jsonl",
+      "step": 2000,
+      "component_differences": [
+        -2.021044268607497e-06,
+        5.282797413297402e-06,
+        9.879033593396258e-06,
+        1.719950946110771e-06,
+        -0.00031082568411444633,
+        -1.1550762916034962e-05,
+        -1.795358369771627e-05
+      ],
+      "aggregate_legacy": 1.0876233577728271,
+      "aggregate_weighted_pooled": 1.0875743722925768,
+      "aggregate_difference": -4.8985480250340885e-05,
+      "component_weight_reconstruction_difference": 5.5902460660561815e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_fairness_repeats_3e18_20260908/uncheatable_seed666200_t1/lwspufr_uncheatable_seed666200_t1_lwspu_u_snc_cap06-dd4b1e/checkpoints/eval_metrics.jsonl",
+      "step": 3000,
+      "component_differences": [
+        -2.8518912156272336e-06,
+        3.6854944233111198e-06,
+        9.81447324233109e-06,
+        1.6090450358774433e-06,
+        -0.0002501380305512946,
+        -6.45622404171764e-06,
+        -1.2838059407327407e-05
+      ],
+      "aggregate_legacy": 0.9834998846054077,
+      "aggregate_weighted_pooled": 0.9834610033728055,
+      "aggregate_difference": -3.8881232602205884e-05,
+      "component_weight_reconstruction_difference": -2.7152367021443524e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_fairness_repeats_3e18_20260908/uncheatable_seed666200_t1/lwspufr_uncheatable_seed666200_t1_lwspu_u_snc_cap06-dd4b1e/checkpoints/eval_metrics.jsonl",
+      "step": 3006,
+      "component_differences": [
+        -2.954244833652808e-06,
+        3.7922672050383355e-06,
+        9.637958442443306e-06,
+        1.6655038366231167e-06,
+        -0.00025011998654045353,
+        -6.486200972877221e-06,
+        -1.290394965725028e-05
+      ],
+      "aggregate_legacy": 0.9834370613098145,
+      "aggregate_weighted_pooled": 0.9833981462052995,
+      "aggregate_difference": -3.891510451492497e-05,
+      "component_weight_reconstruction_difference": -2.855200587070783e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_fairness_repeats_3e18_20260908/uncheatable_seed666200_t2/lwspufr_uncheatable_seed666200_t2_lwspu_u_snc_cap06-fd115f/checkpoints/eval_metrics.jsonl",
+      "step": 1000,
+      "component_differences": [
+        -2.3759369875975267e-06,
+        4.516627452710864e-06,
+        1.0390284972627839e-05,
+        7.142782345592735e-07,
+        -0.00029613634295067026,
+        -1.5725991286963392e-08,
+        -2.591584540501124e-05
+      ],
+      "aggregate_legacy": 1.1543174982070923,
+      "aggregate_weighted_pooled": 1.1542713403707123,
+      "aggregate_difference": -4.615783637995641e-05,
+      "component_weight_reconstruction_difference": -1.523990551532961e-07
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_fairness_repeats_3e18_20260908/uncheatable_seed666200_t2/lwspufr_uncheatable_seed666200_t2_lwspu_u_snc_cap06-fd115f/checkpoints/eval_metrics.jsonl",
+      "step": 2000,
+      "component_differences": [
+        -2.907438611865487e-06,
+        3.1636402588741674e-06,
+        1.0374354648901019e-05,
+        1.0108120545027077e-06,
+        -0.00029143046607460477,
+        -1.122067574887975e-05,
+        -1.76178620656664e-05
+      ],
+      "aggregate_legacy": 1.0841561555862427,
+      "aggregate_weighted_pooled": 1.0841097533251518,
+      "aggregate_difference": -4.640226109087209e-05,
+      "component_weight_reconstruction_difference": 3.084794508723121e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_fairness_repeats_3e18_20260908/uncheatable_seed666200_t2/lwspufr_uncheatable_seed666200_t2_lwspu_u_snc_cap06-fd115f/checkpoints/eval_metrics.jsonl",
+      "step": 3000,
+      "component_differences": [
+        -3.2203818838283382e-06,
+        2.3567276019598182e-06,
+        9.001412588194313e-06,
+        1.2622429375053201e-06,
+        -0.00024665936232637353,
+        -6.892511647427213e-06,
+        -1.488471012600634e-05
+      ],
+      "aggregate_legacy": 0.9825985431671143,
+      "aggregate_weighted_pooled": 0.98255948040965,
+      "aggregate_difference": -3.90627574642366e-05,
+      "component_weight_reconstruction_difference": -5.861561180875441e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_fairness_repeats_3e18_20260908/uncheatable_seed666200_t2/lwspufr_uncheatable_seed666200_t2_lwspu_u_snc_cap06-fd115f/checkpoints/eval_metrics.jsonl",
+      "step": 3006,
+      "component_differences": [
+        -3.353674867145884e-06,
+        2.3553450798630138e-06,
+        9.137544154436128e-06,
+        1.3006624912659248e-06,
+        -0.00024679001384841914,
+        -6.864953926988271e-06,
+        -1.49577240795562e-05
+      ],
+      "aggregate_legacy": 0.9825456738471985,
+      "aggregate_weighted_pooled": 0.9825066768753346,
+      "aggregate_difference": -3.8996971863936025e-05,
+      "component_weight_reconstruction_difference": 2.5721227148167713e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_frozen_procedure_validation_3e18_20260908/table9_seed662009/lwspufp_table9_seed662009_lwspu_t9_snc_cap08-a835d3/checkpoints/eval_metrics.jsonl",
+      "step": 1000,
+      "component_differences": [
+        -1.3519086838886807e-06,
+        6.389210032375914e-06,
+        8.959802412666917e-06,
+        1.0689666125607289e-06,
+        -0.00028597146525000117,
+        -1.6424585845276063e-05,
+        -2.804022099911485e-05
+      ],
+      "aggregate_legacy": 1.160531997680664,
+      "aggregate_weighted_pooled": 1.1604852123601703,
+      "aggregate_difference": -4.678532049373629e-05,
+      "component_weight_reconstruction_difference": 1.8354125774777685e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_frozen_procedure_validation_3e18_20260908/table9_seed662009/lwspufp_table9_seed662009_lwspu_t9_snc_cap08-a835d3/checkpoints/eval_metrics.jsonl",
+      "step": 2000,
+      "component_differences": [
+        -2.475174537996949e-06,
+        4.563953974745516e-06,
+        8.5112433652057e-06,
+        9.893935530858045e-07,
+        -0.0002816660986574293,
+        -1.4429160079543202e-05,
+        -2.727051577133821e-05
+      ],
+      "aggregate_legacy": 1.0942962169647217,
+      "aggregate_weighted_pooled": 1.0942498923849588,
+      "aggregate_difference": -4.632457976283533e-05,
+      "component_weight_reconstruction_difference": -6.09390893302475e-09
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_frozen_procedure_validation_3e18_20260908/table9_seed662009/lwspufp_table9_seed662009_lwspu_t9_snc_cap08-a835d3/checkpoints/eval_metrics.jsonl",
+      "step": 3000,
+      "component_differences": [
+        -2.878570696029925e-06,
+        1.6357988676940494e-06,
+        8.395950688466769e-06,
+        6.927648767973693e-07,
+        -0.00025051486016614,
+        -5.535433525993838e-06,
+        -2.0238733367206052e-05
+      ],
+      "aggregate_legacy": 1.0005120038986206,
+      "aggregate_weighted_pooled": 1.0004718575629865,
+      "aggregate_difference": -4.0146335634094754e-05,
+      "component_weight_reconstruction_difference": -4.197838654462771e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_frozen_procedure_validation_3e18_20260908/table9_seed662009/lwspufp_table9_seed662009_lwspu_t9_snc_cap08-a835d3/checkpoints/eval_metrics.jsonl",
+      "step": 3006,
+      "component_differences": [
+        -2.9649567392375786e-06,
+        1.6268022451360054e-06,
+        8.264417390879686e-06,
+        7.26252846305897e-07,
+        -0.0002506367332377746,
+        -5.524185988758923e-06,
+        -2.0197051979531366e-05
+      ],
+      "aggregate_legacy": 1.0004432201385498,
+      "aggregate_weighted_pooled": 1.0004030745305585,
+      "aggregate_difference": -4.014560799125988e-05,
+      "component_weight_reconstruction_difference": 6.268030983136441e-09
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_frozen_procedure_validation_3e18_20260908/uncheatable_seed666200/lwspufp_uncheatable_seed666200_lwspu_u_snc_cap06-8cf646/checkpoints/eval_metrics.jsonl",
+      "step": 1000,
+      "component_differences": [
+        -1.941681096795378e-06,
+        4.207632682495799e-06,
+        1.1186394480944273e-05,
+        1.2040088488429745e-06,
+        -0.0002939239461688947,
+        -2.3816389582709263e-07,
+        -2.6028698541402662e-05
+      ],
+      "aggregate_legacy": 1.1520917415618896,
+      "aggregate_weighted_pooled": 1.152046273610641,
+      "aggregate_difference": -4.546795124871217e-05,
+      "component_weight_reconstruction_difference": 1.7125700857434367e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_frozen_procedure_validation_3e18_20260908/uncheatable_seed666200/lwspufp_uncheatable_seed666200_lwspu_u_snc_cap06-8cf646/checkpoints/eval_metrics.jsonl",
+      "step": 2000,
+      "component_differences": [
+        -3.2571086352461975e-06,
+        2.5387597748505186e-06,
+        1.1893116831140915e-05,
+        1.0476331493425306e-06,
+        -0.00027153469704022104,
+        4.287253698387339e-06,
+        -1.568166224319434e-05
+      ],
+      "aggregate_legacy": 1.0820667743682861,
+      "aggregate_weighted_pooled": 1.082026060265541,
+      "aggregate_difference": -4.071410274519849e-05,
+      "component_weight_reconstruction_difference": 7.109372002211956e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_frozen_procedure_validation_3e18_20260908/uncheatable_seed666200/lwspufp_uncheatable_seed666200_lwspu_u_snc_cap06-8cf646/checkpoints/eval_metrics.jsonl",
+      "step": 3000,
+      "component_differences": [
+        -3.4856658621684744e-06,
+        1.6705333640842923e-06,
+        9.86541115843842e-06,
+        1.3187270955228314e-06,
+        -0.00025316840543576635,
+        -7.556967771438217e-06,
+        -1.3913557751266126e-05
+      ],
+      "aggregate_legacy": 0.981482207775116,
+      "aggregate_weighted_pooled": 0.9814421307719582,
+      "aggregate_difference": -4.007700315777907e-05,
+      "component_weight_reconstruction_difference": -6.426309040463707e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_frozen_procedure_validation_3e18_20260908/uncheatable_seed666200/lwspufp_uncheatable_seed666200_lwspu_u_snc_cap06-8cf646/checkpoints/eval_metrics.jsonl",
+      "step": 3006,
+      "component_differences": [
+        -3.5752364682117843e-06,
+        1.6644027964751729e-06,
+        9.846671681801311e-06,
+        1.2925286740905761e-06,
+        -0.0002533020380561801,
+        -7.6048011647955605e-06,
+        -1.4024773418164216e-05
+      ],
+      "aggregate_legacy": 0.9814238548278809,
+      "aggregate_weighted_pooled": 0.9813838223192632,
+      "aggregate_difference": -4.003250861761565e-05,
+      "component_weight_reconstruction_difference": 4.0740419482432344e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_3e18_20260908/table9_seed662009_t0/olmixq_table9_seed662009_t0_olmixq_t9_kl0p005_cap04-c314ca/checkpoints/eval_metrics.jsonl",
+      "step": 1000,
+      "component_differences": [
+        4.0195834882794657e-08,
+        3.62047822477507e-06,
+        9.017432541336134e-06,
+        6.110856654029106e-07,
+        -0.0003427476584024758,
+        1.4152230032316027e-07,
+        -3.330457571015799e-05
+      ],
+      "aggregate_legacy": 1.1864148378372192,
+      "aggregate_weighted_pooled": 1.18636105375462,
+      "aggregate_difference": -5.3784082599150906e-05,
+      "component_weight_reconstruction_difference": 2.406819588074427e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_3e18_20260908/table9_seed662009_t0/olmixq_table9_seed662009_t0_olmixq_t9_kl0p005_cap04-c314ca/checkpoints/eval_metrics.jsonl",
+      "step": 2000,
+      "component_differences": [
+        3.0604273071332955e-07,
+        3.3320131453962176e-06,
+        9.909017127274211e-06,
+        2.836933217231774e-07,
+        -0.00034083419372243906,
+        -1.4606315632548217e-06,
+        -2.628363015744206e-05
+      ],
+      "aggregate_legacy": 1.1170568466186523,
+      "aggregate_weighted_pooled": 1.1170038878782242,
+      "aggregate_difference": -5.295874042809956e-05,
+      "component_weight_reconstruction_difference": 3.552483929247785e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_3e18_20260908/table9_seed662009_t0/olmixq_table9_seed662009_t0_olmixq_t9_kl0p005_cap04-c314ca/checkpoints/eval_metrics.jsonl",
+      "step": 3000,
+      "component_differences": [
+        -2.0907689595173196e-06,
+        1.7485446615062017e-06,
+        1.0789215484363623e-05,
+        1.7074266445149533e-07,
+        -0.00028285157444984943,
+        -2.448989161574211e-06,
+        -2.2104107877618517e-05
+      ],
+      "aggregate_legacy": 1.014836072921753,
+      "aggregate_weighted_pooled": 1.0147917823471735,
+      "aggregate_difference": -4.4290574579441966e-05,
+      "component_weight_reconstruction_difference": 2.9190726724692695e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_3e18_20260908/table9_seed662009_t0/olmixq_table9_seed662009_t0_olmixq_t9_kl0p005_cap04-c314ca/checkpoints/eval_metrics.jsonl",
+      "step": 3006,
+      "component_differences": [
+        -1.9780183175832633e-06,
+        1.671285739579531e-06,
+        1.0772369951173033e-05,
+        2.1094373203744965e-07,
+        -0.00028279352174287453,
+        -2.410408352915283e-06,
+        -2.1972364455002946e-05
+      ],
+      "aggregate_legacy": 1.0147544145584106,
+      "aggregate_weighted_pooled": 1.0147101425699296,
+      "aggregate_difference": -4.427198848100389e-05,
+      "component_weight_reconstruction_difference": 1.085828138513989e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_3e18_20260908/table9_seed662009_t1/olmixq_table9_seed662009_t1_olmixq_t9_kl0p005_cap04-b6c6f4/checkpoints/eval_metrics.jsonl",
+      "step": 1000,
+      "component_differences": [
+        -7.751423434232407e-07,
+        2.8959643534332002e-06,
+        8.808278556537985e-06,
+        4.837469047558329e-07,
+        -0.00031348080607251916,
+        3.990981828128071e-06,
+        -3.003351838071211e-05
+      ],
+      "aggregate_legacy": 1.186679720878601,
+      "aggregate_weighted_pooled": 1.1866310097598285,
+      "aggregate_difference": -4.871111877258194e-05,
+      "component_weight_reconstruction_difference": 8.274638751970542e-09
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_3e18_20260908/table9_seed662009_t1/olmixq_table9_seed662009_t1_olmixq_t9_kl0p005_cap04-b6c6f4/checkpoints/eval_metrics.jsonl",
+      "step": 2000,
+      "component_differences": [
+        -1.1368112691201304e-06,
+        3.1473598993692065e-06,
+        1.0678654379647767e-05,
+        3.462998803271944e-07,
+        -0.0003189004285323316,
+        -4.276640844569357e-06,
+        -2.520680535567088e-05
+      ],
+      "aggregate_legacy": 1.1158474683761597,
+      "aggregate_weighted_pooled": 1.1157974138218325,
+      "aggregate_difference": -5.005455432716133e-05,
+      "component_weight_reconstruction_difference": 1.1771243091374117e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_3e18_20260908/table9_seed662009_t1/olmixq_table9_seed662009_t1_olmixq_t9_kl0p005_cap04-b6c6f4/checkpoints/eval_metrics.jsonl",
+      "step": 3000,
+      "component_differences": [
+        -2.725353223320681e-06,
+        1.1007276592422954e-06,
+        1.0372211441067591e-05,
+        3.517453954771099e-07,
+        -0.00027606646690292447,
+        4.941736132635377e-06,
+        -1.8928878284585338e-05
+      ],
+      "aggregate_legacy": 1.014699101448059,
+      "aggregate_weighted_pooled": 1.014656875731292,
+      "aggregate_difference": -4.222571676715248e-05,
+      "component_weight_reconstruction_difference": -8.440079346527796e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_3e18_20260908/table9_seed662009_t1/olmixq_table9_seed662009_t1_olmixq_t9_kl0p005_cap04-b6c6f4/checkpoints/eval_metrics.jsonl",
+      "step": 3006,
+      "component_differences": [
+        -2.7131352451359447e-06,
+        1.0124444962400503e-06,
+        1.0372691615412322e-05,
+        4.0601817707930365e-07,
+        -0.0002759630853593764,
+        4.95537779221511e-06,
+        -1.904980084899144e-05
+      ],
+      "aggregate_legacy": 1.0146279335021973,
+      "aggregate_weighted_pooled": 1.014585755613329,
+      "aggregate_difference": -4.217788886817786e-05,
+      "component_weight_reconstruction_difference": -3.9341896851396996e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_3e18_20260908/table9_seed662009_t2/olmixq_table9_seed662009_t2_olmixq_t9_kl0p005_cap04-40491a/checkpoints/eval_metrics.jsonl",
+      "step": 1000,
+      "component_differences": [
+        -8.11455049598564e-07,
+        4.199239107993691e-06,
+        9.404506650101396e-06,
+        1.6014264270225453e-07,
+        -0.0003155091256941134,
+        7.310343042465917e-06,
+        -3.132399066196889e-05
+      ],
+      "aggregate_legacy": 1.1877180337905884,
+      "aggregate_weighted_pooled": 1.1876696685605395,
+      "aggregate_difference": -4.836523004891902e-05,
+      "component_weight_reconstruction_difference": 4.979745060751384e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_3e18_20260908/table9_seed662009_t2/olmixq_table9_seed662009_t2_olmixq_t9_kl0p005_cap04-40491a/checkpoints/eval_metrics.jsonl",
+      "step": 2000,
+      "component_differences": [
+        -8.261798625230909e-07,
+        3.828079234935444e-06,
+        1.0082738184147289e-05,
+        4.0143673296633153e-07,
+        -0.00030144461434356007,
+        -5.526816745926588e-06,
+        -2.330502099234799e-05
+      ],
+      "aggregate_legacy": 1.1160204410552979,
+      "aggregate_weighted_pooled": 1.1159732108249456,
+      "aggregate_difference": -4.7230230352246494e-05,
+      "component_weight_reconstruction_difference": 9.297228342752817e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_3e18_20260908/table9_seed662009_t2/olmixq_table9_seed662009_t2_olmixq_t9_kl0p005_cap04-40491a/checkpoints/eval_metrics.jsonl",
+      "step": 3000,
+      "component_differences": [
+        -2.0007591732262853e-06,
+        1.2297961662355306e-06,
+        9.998611084860443e-06,
+        1.3651330310615606e-07,
+        -0.00026800283745453957,
+        5.997260007495342e-07,
+        -2.2444385516795506e-05
+      ],
+      "aggregate_legacy": 1.0149998664855957,
+      "aggregate_weighted_pooled": 1.014958010743737,
+      "aggregate_difference": -4.185574185866514e-05,
+      "component_weight_reconstruction_difference": -5.08978499347279e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_3e18_20260908/table9_seed662009_t2/olmixq_table9_seed662009_t2_olmixq_t9_kl0p005_cap04-40491a/checkpoints/eval_metrics.jsonl",
+      "step": 3006,
+      "component_differences": [
+        -2.141138764288897e-06,
+        1.2751566742519316e-06,
+        1.0008941171868457e-05,
+        7.958092917981219e-08,
+        -0.0002677076230609421,
+        6.324211837549498e-07,
+        -2.244127716255484e-05
+      ],
+      "aggregate_legacy": 1.0149279832839966,
+      "aggregate_weighted_pooled": 1.0148862415117628,
+      "aggregate_difference": -4.1741772233816477e-05,
+      "component_weight_reconstruction_difference": 3.5124474662140415e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_3e18_20260908/uncheatable_seed666200_t0/olmixq_uncheatable_seed666200_t0_olmixq_u_kl0p05_cap04-61f9c5/checkpoints/eval_metrics.jsonl",
+      "step": 1000,
+      "component_differences": [
+        -1.1308585532443516e-06,
+        2.8481186562512306e-06,
+        1.1507493925755341e-05,
+        1.6835988270180735e-06,
+        -0.00032123055970845193,
+        8.597458083681175e-06,
+        -2.925809275966529e-05
+      ],
+      "aggregate_legacy": 1.187058448791504,
+      "aggregate_weighted_pooled": 1.187009834315818,
+      "aggregate_difference": -4.8614475685937464e-05,
+      "component_weight_reconstruction_difference": 2.1031970387497267e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_3e18_20260908/uncheatable_seed666200_t0/olmixq_uncheatable_seed666200_t0_olmixq_u_kl0p05_cap04-61f9c5/checkpoints/eval_metrics.jsonl",
+      "step": 2000,
+      "component_differences": [
+        -2.5789076603111027e-06,
+        3.208243411156886e-06,
+        1.173217394256909e-05,
+        2.086492190800371e-06,
+        -0.0003068201126749104,
+        3.9355495373705196e-07,
+        -1.805727447501404e-05
+      ],
+      "aggregate_legacy": 1.112987995147705,
+      "aggregate_weighted_pooled": 1.1129412443462525,
+      "aggregate_difference": -4.675080145255528e-05,
+      "component_weight_reconstruction_difference": -3.959127470309909e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_3e18_20260908/uncheatable_seed666200_t0/olmixq_uncheatable_seed666200_t0_olmixq_u_kl0p05_cap04-61f9c5/checkpoints/eval_metrics.jsonl",
+      "step": 3000,
+      "component_differences": [
+        -2.853001095592944e-06,
+        2.476993355204904e-06,
+        1.2201242291620673e-05,
+        1.9380675044811113e-06,
+        -0.000264387299059643,
+        1.3083078748143961e-06,
+        -1.794300817126171e-05
+      ],
+      "aggregate_legacy": 1.0031481981277466,
+      "aggregate_weighted_pooled": 1.0031080768695502,
+      "aggregate_difference": -4.012125819641277e-05,
+      "component_weight_reconstruction_difference": -1.1640921560029938e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_3e18_20260908/uncheatable_seed666200_t0/olmixq_uncheatable_seed666200_t0_olmixq_u_kl0p05_cap04-61f9c5/checkpoints/eval_metrics.jsonl",
+      "step": 3006,
+      "component_differences": [
+        -2.941208093298897e-06,
+        2.4183876473626853e-06,
+        1.2198944917329868e-05,
+        1.8891477169269422e-06,
+        -0.00026443967224265563,
+        1.2751635697361152e-06,
+        -1.7895852715499316e-05
+      ],
+      "aggregate_legacy": 1.0030388832092285,
+      "aggregate_weighted_pooled": 1.0029987059713097,
+      "aggregate_difference": -4.017723791882588e-05,
+      "component_weight_reconstruction_difference": -2.8895622561364576e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_3e18_20260908/uncheatable_seed666200_t1/olmixq_uncheatable_seed666200_t1_olmixq_u_kl0p05_cap04-d9ee86/checkpoints/eval_metrics.jsonl",
+      "step": 1000,
+      "component_differences": [
+        -1.3043662880907192e-06,
+        5.2664777225874815e-06,
+        1.1865368219066141e-05,
+        1.9661309467178256e-06,
+        -0.0003079810202710753,
+        1.027107468454247e-05,
+        -2.8878553121725048e-05
+      ],
+      "aggregate_legacy": 1.1864359378814697,
+      "aggregate_weighted_pooled": 1.186389977186737,
+      "aggregate_difference": -4.596069473272735e-05,
+      "component_weight_reconstruction_difference": -6.925467554985687e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_3e18_20260908/uncheatable_seed666200_t1/olmixq_uncheatable_seed666200_t1_olmixq_u_kl0p05_cap04-d9ee86/checkpoints/eval_metrics.jsonl",
+      "step": 2000,
+      "component_differences": [
+        -1.4431527435299074e-06,
+        4.853352684852652e-06,
+        1.1237728742896635e-05,
+        1.7557193716655206e-06,
+        -0.0003175805787307695,
+        1.1325386295224504e-05,
+        -1.6893520903060733e-05
+      ],
+      "aggregate_legacy": 1.10838782787323,
+      "aggregate_weighted_pooled": 1.1083413836736424,
+      "aggregate_difference": -4.644419958754753e-05,
+      "component_weight_reconstruction_difference": -1.0829863250627625e-07
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_3e18_20260908/uncheatable_seed666200_t1/olmixq_uncheatable_seed666200_t1_olmixq_u_kl0p05_cap04-d9ee86/checkpoints/eval_metrics.jsonl",
+      "step": 3000,
+      "component_differences": [
+        -2.2879627563643368e-06,
+        2.9948495111620232e-06,
+        1.1243970889474042e-05,
+        2.150620202590048e-06,
+        -0.0002557604232434896,
+        -1.5403746391751127e-06,
+        -1.6000337634380912e-05
+      ],
+      "aggregate_legacy": 1.0006932020187378,
+      "aggregate_weighted_pooled": 1.000654275425657,
+      "aggregate_difference": -3.892659308069035e-05,
+      "component_weight_reconstruction_difference": 5.65704740829176e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_3e18_20260908/uncheatable_seed666200_t1/olmixq_uncheatable_seed666200_t1_olmixq_u_kl0p05_cap04-d9ee86/checkpoints/eval_metrics.jsonl",
+      "step": 3006,
+      "component_differences": [
+        -2.39010099911674e-06,
+        3.0218660286296384e-06,
+        1.1274304255293188e-05,
+        2.167531906183129e-06,
+        -0.000255785816544285,
+        -1.5419708703223733e-06,
+        -1.6068657237022776e-05
+      ],
+      "aggregate_legacy": 1.000598669052124,
+      "aggregate_weighted_pooled": 1.000559678285792,
+      "aggregate_difference": -3.899076633206988e-05,
+      "component_weight_reconstruction_difference": 9.361612818281628e-09
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_3e18_20260908/uncheatable_seed666200_t2/olmixq_uncheatable_seed666200_t2_olmixq_u_kl0p05_cap04-83617e/checkpoints/eval_metrics.jsonl",
+      "step": 1000,
+      "component_differences": [
+        -1.5768795869064434e-06,
+        4.352173388122438e-06,
+        1.264684226520707e-05,
+        2.0390097641431737e-06,
+        -0.00031817539438594444,
+        1.12774963043627e-05,
+        -2.674673116942472e-05
+      ],
+      "aggregate_legacy": 1.186111330986023,
+      "aggregate_weighted_pooled": 1.1860641140033665,
+      "aggregate_difference": -4.721698265641727e-05,
+      "component_weight_reconstruction_difference": -5.495728094828678e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_3e18_20260908/uncheatable_seed666200_t2/olmixq_uncheatable_seed666200_t2_olmixq_u_kl0p05_cap04-83617e/checkpoints/eval_metrics.jsonl",
+      "step": 2000,
+      "component_differences": [
+        -2.5217788210962766e-06,
+        3.7498360956345067e-06,
+        1.1215456249269451e-05,
+        1.6123327388761766e-06,
+        -0.0003350833155614241,
+        6.2403725346049654e-06,
+        -1.694905181626183e-05
+      ],
+      "aggregate_legacy": 1.1096664667129517,
+      "aggregate_weighted_pooled": 1.109616228309589,
+      "aggregate_difference": -5.023840336271235e-05,
+      "component_weight_reconstruction_difference": -7.598692208787838e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_3e18_20260908/uncheatable_seed666200_t2/olmixq_uncheatable_seed666200_t2_olmixq_u_kl0p05_cap04-83617e/checkpoints/eval_metrics.jsonl",
+      "step": 3000,
+      "component_differences": [
+        -2.221521608447574e-06,
+        3.0146392123731047e-06,
+        1.2122012804871574e-05,
+        1.5092128886617928e-06,
+        -0.00026452982453428753,
+        5.587496932357716e-06,
+        -1.816688217615159e-05
+      ],
+      "aggregate_legacy": 1.0029700994491577,
+      "aggregate_weighted_pooled": 1.0029307248994355,
+      "aggregate_difference": -3.937454972224863e-05,
+      "component_weight_reconstruction_difference": 2.2419203160595202e-08
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_3e18_20260908/uncheatable_seed666200_t2/olmixq_uncheatable_seed666200_t2_olmixq_u_kl0p05_cap04-83617e/checkpoints/eval_metrics.jsonl",
+      "step": 3006,
+      "component_differences": [
+        -2.1596876391694053e-06,
+        3.048975479313931e-06,
+        1.216522709635015e-05,
+        1.4354632360547015e-06,
+        -0.0002646013337760378,
+        5.577795449851486e-06,
+        -1.8071971950028853e-05
+      ],
+      "aggregate_legacy": 1.0028690099716187,
+      "aggregate_weighted_pooled": 1.0028296241690664,
+      "aggregate_difference": -3.938580255224977e-05,
+      "component_weight_reconstruction_difference": 9.480949358930957e-10
+    }
+  ],
+  "assumption": "Schema2 BPB/loss ratios identify scored-token to scored-byte ratios for the common fixed validation population; schema1 batch aggregation is model-dependent and cannot be recovered exactly from saved aggregate losses.",
+  "method": "Use frozen pretraining task weights applied to observed schema2 component BPBs; leave frozen predictors and legacy endpoints unchanged. Historical estimator drift is audited by multiplying each saved component token loss by the corresponding schema2 ratio.",
+  "summary": {
+    "legacy_sources": 24,
+    "legacy_checkpoint_records": 98,
+    "pooled_minus_legacy_min_bpb": -5.3784082599150906e-05,
+    "pooled_minus_legacy_max_bpb": -3.8881232602205884e-05,
+    "maximum_absolute_observed_estimator_drift_bpb": 5.3784082599150906e-05,
+    "scope": "Empirical range over saved legacy histories, not a mathematical bound for unobserved model outputs."
+  }
+}

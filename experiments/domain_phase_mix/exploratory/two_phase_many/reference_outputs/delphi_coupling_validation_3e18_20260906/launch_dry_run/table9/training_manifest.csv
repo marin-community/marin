@@ -1,0 +1,7 @@
+run_order,run_name,candidate_id,target,epoch_cap,aliases,run_id,data_seed,trainer_seed,train_steps,expected_checkpoint_step,tpu_type,tpu_region,tpu_zone,fit_panel_max_materialized_epoch,runtime_max_simulated_epoch
+0,cwspu_table9_seed662009_cwspu_t9_k025_cap06,cwspu_t9_k025_cap06,table9,6,cwspu_t9_k025_cap06,7390100,662009,0,3007,3006,v6e-8,us-east5,us-east5-b,5.997787835949025,5.997784834474585
+1,cwspu_table9_seed662009_cwspu_t9_k05_cap06,cwspu_t9_k05_cap06,table9,6,cwspu_t9_k05_cap06,7390101,662009,0,3007,3006,v6e-8,us-east5,us-east5-b,5.997787835949025,5.997784834474585
+2,cwspu_table9_seed662009_cwspu_t9_k1_cap06,cwspu_t9_k1_cap06,table9,6,cwspu_t9_k1_cap06,7390102,662009,0,3007,3006,v6e-8,us-east5,us-east5-b,5.997787835949025,5.997784834474585
+3,cwspu_table9_seed662009_cwspu_t9_k025_cap08,cwspu_t9_k025_cap08,table9,8,cwspu_t9_k025_cap08,7390103,662009,0,3007,3006,v6e-8,us-east5,us-east5-b,7.786191489575644,7.786187593129925
+4,cwspu_table9_seed662009_cwspu_t9_k05_cap08,cwspu_t9_k05_cap08,table9,8,cwspu_t9_k05_cap08,7390104,662009,0,3007,3006,v6e-8,us-east5,us-east5-b,7.7845506177494075,7.784546722124831
+5,cwspu_table9_seed662009_cwspu_t9_k1_cap08,cwspu_t9_k1_cap08,table9,8,cwspu_t9_k1_cap08,7390105,662009,0,3007,3006,v6e-8,us-east5,us-east5-b,7.7845506177494075,7.784546722124831

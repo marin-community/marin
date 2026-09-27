@@ -1,0 +1,176 @@
+[
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789315194.5328445,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/regmix_official_rerun_20260913/submission/HANDOFF.md",
+      "fieldbook.local_size_at_capture": 3603
+    },
+    "content_hash": "sha256:c41abe34f527ee34ad212758811a1e8a1a236b3d47d0cb3035edb9dda0538ec4",
+    "created_at": "2026-09-13T16:00:15Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+    "id": "art_01m2dqyvrwv62qntnxg53n4xdw",
+    "job_id": null,
+    "run_id": null,
+    "type": "report",
+    "updated_at": "2026-09-13T16:00:15Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/regmix_official_rerun_20260913/submission/HANDOFF.md"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789315136.587289,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/regmix_official_rerun_20260913/submission/submission_receipt.json",
+      "fieldbook.local_size_at_capture": 1855
+    },
+    "content_hash": "sha256:20f01a9104d30ca9dacbf4e3e344c553bc67fc2a9d7fda6830c8f6ed36f398b9",
+    "created_at": "2026-09-13T16:00:15Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+    "id": "art_01m2dqyw38ahh5xpdq58j914ez",
+    "job_id": null,
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-13T16:00:15Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/regmix_official_rerun_20260913/submission/submission_receipt.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789315194.5326407,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/regmix_official_rerun_20260913/submission/collection_protocol.json",
+      "fieldbook.local_size_at_capture": 1313
+    },
+    "content_hash": "sha256:9770cb9cbedf07e8f1c6ce2e922a17d7bb31e09287ba78d4c8cc549ba99a2eb1",
+    "created_at": "2026-09-13T16:00:15Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+    "id": "art_01m2dqyweqewxxbj8q4nbtca8t",
+    "job_id": null,
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-13T16:00:15Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/regmix_official_rerun_20260913/submission/collection_protocol.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789315194.5318415,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/regmix_official_rerun_20260913/validation_review_plan.json",
+      "fieldbook.local_size_at_capture": 3186
+    },
+    "content_hash": "sha256:fac516ab71edfd2c5f8be8bb4c285a935cd0f4a46205de53a766e7ecee57d140",
+    "created_at": "2026-09-13T16:00:16Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+    "id": "art_01m2dqywsqdd3zrk5rtr2tcn9g",
+    "job_id": null,
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-13T16:00:16Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/regmix_official_rerun_20260913/validation_review_plan.json"
+  },
+  {
+    "experiment": {
+      "attrs": {
+        "paper.section": "app:response-ablations",
+        "protocol.folds": "five outer, three inner, mixture-blocked, seeds as the frozen procedure"
+      },
+      "created_at": "2026-09-08T21:36:01Z",
+      "deleted_at": null,
+      "description": "Reviewer/PI request (review_feedback_2026-09-08_reader_pi_iclr.md, Major concern 1 and PI item 7): a credible generic non-monotone surrogate fitted and selected under MARINER's protocol, judged on out-of-fold rank correlation, retrospective-bank selection regret and optimism, then its optimized proposals trained at 3e18 on the shared validation panel. Prespecified 2026-09-08 (Calvin + CC): primary = additive quadratic in log-epochs with signed ridge coefficients under MARINER's floor and log link; 1b = identity-link twin; secondary = additive natural cubic spline in log-epochs (three interior knots) under the same floor/link; secondary = kernel ridge regression on the simplex with the Hellinger kernel. RegMix-style trees excluded unless a reviewer asks. Offline runs tonight (2026-09-08); the primary comparator's proposals are validated at 3e18 regardless of offline metrics (three trainer seeds at data seeds 666200/662009, six runs).",
+      "id": "exp_01m21f631n71w9xe9n6krpr2kw",
+      "idempotency_key": "delphi-nonlinear-comparators-20260908",
+      "name": "Conventional nonlinear comparators for MARINER",
+      "status": "active",
+      "tags": [
+        "3e18",
+        "comparator",
+        "delphi",
+        "nonlinear-baseline"
+      ],
+      "updated_at": "2026-09-08T21:36:01Z"
+    },
+    "freshness": {
+      "checkpoint_status": "current",
+      "drifted_artifact_count": 2,
+      "drifted_artifacts": [
+        {
+          "captured": {
+            "fieldbook.local_mtime_at_capture": 1789097866.8532562,
+            "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_comparator_proposals_3e18_20260909/paired_results.csv",
+            "fieldbook.local_size_at_capture": 1925
+          },
+          "drift_kind": "mtime_size",
+          "id": "art_01m2795736y5t7axgq9td204n5",
+          "observed": {
+            "fieldbook.local_mtime_at_capture": 1789163325.4844897,
+            "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_comparator_proposals_3e18_20260909/paired_results.csv",
+            "fieldbook.local_size_at_capture": 2550
+          },
+          "suggested_action": "Run `fieldbook artifact refresh-local` or regenerate the artifact.",
+          "type": "metric-table",
+          "uri": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_comparator_proposals_3e18_20260909/paired_results.csv"
+        },
+        {
+          "captured": {
+            "fieldbook.local_mtime_at_capture": 1789098029.4084535,
+            "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_comparator_proposals_3e18_20260909/diagnostics/calibration.pdf",
+            "fieldbook.local_size_at_capture": 136463
+          },
+          "drift_kind": "missing_file",
+          "id": "art_01m27957casj5czvr0n01ajfsm",
+          "observed": {},
+          "suggested_action": "Run `fieldbook artifact refresh-local` or regenerate the artifact.",
+          "type": "plot",
+          "uri": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_comparator_proposals_3e18_20260909/diagnostics/calibration.pdf"
+        }
+      ],
+      "handoff_status": "current",
+      "last_checkpoint_at": "2026-09-13T15:14:01Z",
+      "last_handoff_at": "2026-09-13T15:14:01Z",
+      "since_last_checkpoint_hours": 0.7709849016666667,
+      "since_last_handoff_hours": 0.7709849016666667,
+      "stale_validation_count": 2,
+      "stale_validations": [
+        {
+          "check_name": "comparator_proposals_measured_vs_mariner",
+          "entity_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+          "entity_type": "experiment",
+          "id": "val_01m2795jtz4m7mgtqg74c0zq9p",
+          "source_artifact_id": "art_01m2795736y5t7axgq9td204n5",
+          "source_drifted": true,
+          "source_updated_at": "2026-09-11T03:46:08Z",
+          "status": "pass",
+          "updated_at": "2026-09-11T03:46:20Z"
+        },
+        {
+          "check_name": "durable_output_refresh_20260911_0200",
+          "entity_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+          "entity_type": "experiment",
+          "id": "val_01m274aevrhnf95vtk1wdzxdb9",
+          "source_artifact_id": "art_01m274acgqwa66n942db0qw4gy",
+          "source_drifted": false,
+          "source_updated_at": "2026-09-11T02:21:40Z",
+          "status": "pass",
+          "updated_at": "2026-09-11T02:21:37Z"
+        }
+      ]
+    },
+    "note": {
+      "attrs": {
+        "session_id": "ses_01m2dpra4kyynye6mps5hs38eb"
+      },
+      "author": null,
+      "body": "# Official RegMix validation submission \u2014 13 September 2026\n\nThe four authorized validations were submitted at 08:55 PDT: the new RegMix endpoint and its 50% MARINER blend for each of Uncheatable and OlmoBaseEval Easy. [Iris job](https://iris.oa.dev/#/job/%2Fcalvinxu%2Fdm-delphi-3e18-regmix-reference-20260913). The coordinator is running and all four training children are queued for east5-b TPU capacity. No failures were reported in the initial check.\n\nEach point uses Qwen3 360M, 1,576,534,016 training tokens, trainer seed 0, and the same data seed as the earlier validation for that objective: 666200 for Uncheatable and 662009 for the suite. The batch costs 1.2e19 nominal training FLOPs plus evaluation. It uses interactive priority, an east5-a CPU coordinator and east5-b v6e-8 training/evaluation jobs, with all four training runs released concurrently.\n\nCC approved the launcher with no blocking issues. Final preflight resolved four training steps and four dependent native evaluations, checked all 180 GCS paths in east5, verified the seven inline Uncheatable components and the configured path to each final step-3006 checkpoint, and checked 455 required source files in the upload. One formatting change after review left the Python AST and all eight output paths unchanged. Frozen mixture counts were copied without further rounding.\n\nAll paths in this paragraph are relative to the submission directory given below. Predictions for the four mixtures are frozen in `validation_predictions.csv`. `collection_protocol.json` names the seven Uncheatable component fields and weights: compute their weighted sum at step 3006 from each training output's `checkpoints/eval_metrics.jsonl`. Lower BPB is better. The current native Uncheatable aggregate differs from the paper's objective. The native OlmoBaseEval Easy evaluator runs after each final checkpoint. Existing paper measurements remain associated with their original adapted-RegMix mixtures until these measurements are available.\n\nFieldbook experiment: `exp_01m21f631n71w9xe9n6krpr2kw`; parent record: `job_01m2dqhmx2kk87t244sgwz6c3j`. Source artifacts, exact launch command, hashes and resolved output paths are in `/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/regmix_official_rerun_20260913/submission`. `full_graph_regional_preflight.json` maps candidate IDs to exact training and evaluation output paths; `submission_receipt.json` maps them to live child jobs. `submit.sh` records the resume command. Preserve the source and candidate hashes when resuming so the executor reuses completed outputs. Save final measurements to `measured_validation.csv` in the official rerun output directory, then record them in Fieldbook and update the paper after checking the frozen prediction residuals.\n\n| Candidate ID | Objective | Mixture |\n| --- | --- | --- |\n| `rgref_u_endpoint_cap64` | Uncheatable | Official RegMix proposal |\n| `rgref_u_midpoint_cap64` | Uncheatable | 50% official RegMix + 50% MARINER |\n| `rgref_t9_endpoint_cap64` | OlmoBaseEval Easy | Official RegMix proposal |\n| `rgref_t9_midpoint_cap64` | OlmoBaseEval Easy | 50% official RegMix + 50% MARINER |\n\nEach blend uses the MARINER proposal optimized for that same objective. \u201cOfficial RegMix\u201d refers to the pinned notebook regression and proposal replay in the accompanying REPORT.md; \u201cadapted RegMix\u201d refers to the earlier tuned-tree implementation and its different proposal sampler. The `cap64` suffix is inactive loader metadata; all four mixtures stay below ten materialized epochs.\n\n## Freshness\n\n- Handoff status: `current`\n- Drifted artifacts: 2\n- Stale validations: 2\n\n### Drifted Artifacts\n- `art_01m2795736y5t7axgq9td204n5` experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_comparator_proposals_3e18_20260909/paired_results.csv (mtime_size)\n- `art_01m27957casj5czvr0n01ajfsm` experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_comparator_proposals_3e18_20260909/diagnostics/calibration.pdf (missing_file)\n\n### Stale Validations\n- `val_01m2795jtz4m7mgtqg74c0zq9p` comparator_proposals_measured_vs_mariner\n- `val_01m274aevrhnf95vtk1wdzxdb9` durable_output_refresh_20260911_0200\n",
+      "body_format": "markdown",
+      "created_at": "2026-09-13T16:00:16Z",
+      "deleted_at": null,
+      "entity_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+      "entity_type": "experiment",
+      "id": "note_01m2dqyx5fjx419v95z5hrf1bj",
+      "note_type": "checkpoint",
+      "resolved_at": null,
+      "status": "open",
+      "title": "Experiment handoff",
+      "updated_at": "2026-09-13T16:00:16Z"
+    }
+  }
+]

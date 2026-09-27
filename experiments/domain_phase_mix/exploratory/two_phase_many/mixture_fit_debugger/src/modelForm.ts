@@ -754,6 +754,63 @@ function grpForm(detail: FitDetail, swarmId: string, policyClass: PolicyClass): 
   };
 }
 
+
+type MarinerVariant = "shared" | "per_bucket_threshold" | "per_bucket_shape";
+
+function marinerForm(detail: FitDetail, convex: boolean, variant: MarinerVariant): ModelForm {
+  const perBucket = variant !== "shared";
+  const sub = perBucket ? "_i" : "";
+  const tauSub = variant === "shared" ? "" : "_i";
+  const benefitTex = String.raw`b${sub}(e)=1-\exp\!\left(-(\rho${sub}\,e)^{\kappa${sub}}\right)`;
+  const harmTex = convex
+    ? String.raw`h${tauSub}(e)=\operatorname{softplus}\!\left(\frac{e-(e^{\tau${tauSub}}-1)}{e^{\tau${tauSub}}}\right)`
+    : String.raw`h${tauSub}(e)=\operatorname{softplus}\!\left(\log(1+e)-\tau${tauSub}\right)^{2}`;
+  const harmExplanation = convex
+    ? "The unsquared softplus of raw epochs past the critical count grows linearly, so the harm is convex in epochs everywhere and the mixture objective is convex in the weights."
+    : "Benefit saturates at one while harm grows like the squared log of the repetition ratio past the threshold; the harm is convex in epochs only below its inflection.";
+  const shapeExplanation =
+    variant === "shared"
+      ? "One (rate, power, threshold) triple per target is chosen from a 168-point grid by inner cross-validation."
+      : variant === "per_bucket_threshold"
+        ? "The shared optimum seeds a coordinate descent that gives every bucket its own threshold; rate and power stay shared."
+        : "The shared optimum seeds a coordinate descent that frees rate, power and threshold for every bucket.";
+  const chips = [
+    fittedChip(detail, "floor", String.raw`\phi`, "floor"),
+    fittedChip(detail, "floor multiplier", String.raw`\kappa_\phi`, "kappa_floor"),
+    fittedChip(detail, "rate", String.raw`\rho`, "shape:rate"),
+    fittedChip(detail, "power", String.raw`\kappa`, "shape:power"),
+    fittedChip(detail, "threshold", String.raw`\tau`, "shape:threshold"),
+    fittedChip(detail, "ridge", String.raw`\lambda`, "ridge"),
+  ].filter((chip): chip is FormulaChip => chip !== null);
+  return {
+    topLevelTex: String.raw`\widehat Y(w)=\phi+\exp\!\left(c-\sum_i\alpha_i\,b${sub}(e_i)+\sum_i\beta_i\,h${tauSub}(e_i)\right),\qquad \alpha_i,\beta_i\ge0`,
+    topLevelExplanation:
+      "MARINER adds saturating benefit and growing repetition harm per bucket inside an exponential link above a fitted floor; fitted here to the selected aggregate target with the paper's frozen procedure.",
+    layers: [
+      aggregateExposureLayer(),
+      {
+        label: "02 / Bucket responses",
+        title: convex ? "Weibull benefit, linear convex harm" : "Weibull benefit, log-epoch harm",
+        tex: String.raw`\begin{array}{c}${benefitTex}\\[4pt]${harmTex}\end{array}`,
+        explanation: `${harmExplanation} ${shapeExplanation}`,
+      },
+      {
+        label: "03 / Link",
+        title: "Fitted floor and log deficit",
+        tex: String.raw`\phi=\bar y_{\mathrm{prop}}-\max\{\kappa_\phi(\bar y_{\mathrm{prop}}-\min_j y_j),\,3\hat\sigma\},\qquad \log(\widehat Y-\phi)=\eta(w)`,
+        explanation: "The floor sits below the best training run by a multiplier chosen by inner cross-validation; effects are multiplicative in the deficit above it.",
+      },
+      {
+        label: "04 / Fit",
+        title: "Grid shapes, nonnegative amplitudes",
+        tex: String.raw`\min_{\alpha,\beta\ge0}\ \sum_j\left(\eta(w_j)-\log(y_j-\phi)\right)^2+\lambda\left(\|\alpha\|^2+\|\beta\|^2\right)`,
+        explanation: "For every grid shape and ridge, amplitudes solve a nonnegative least-squares problem; three inner folds pick the shape, ridge and floor multiplier.",
+      },
+    ],
+    chips,
+  };
+}
+
 export function modelForm(
   modelId: ModelId,
   detail: FitDetail,
@@ -761,6 +818,11 @@ export function modelForm(
   policyClass: PolicyClass,
 ): ModelForm {
   if (modelId === "linear") return linearForm(policyClass);
+  if (modelId === "mariner") return marinerForm(detail, false, "shared");
+  if (modelId === "mariner_per_bucket_threshold") return marinerForm(detail, false, "per_bucket_threshold");
+  if (modelId === "mariner_per_bucket_shape") return marinerForm(detail, false, "per_bucket_shape");
+  if (modelId === "mariner_convex") return marinerForm(detail, true, "shared");
+  if (modelId === "mariner_convex_per_bucket_threshold") return marinerForm(detail, true, "per_bucket_threshold");
   if (modelId === "olmix_loglinear") return olmixLoglinearForm(detail, policyClass);
   if (modelId === "canonical") return dspForm(detail, false, false, policyClass);
   if (modelId === "effective_exposure") return dspForm(detail, true, false, policyClass);

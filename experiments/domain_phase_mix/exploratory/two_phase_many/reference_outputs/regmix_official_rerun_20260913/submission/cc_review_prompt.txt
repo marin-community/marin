@@ -1,0 +1,16 @@
+Read-only review before launching four ML validations. Do not edit, submit, or send messages. The user authorized exactly the new reference-RegMix endpoint and its 50% blend with MARINER for each of Uncheatable and OlmoBaseEval Easy. Trainer seed0, Udata666200, suitedata662009; all at original Qwen3 360M/1.6B proxy scale. This is the same protocol as the completed10midpoint batch, with a new frozen mixture table.
+
+Read these exact files:
+- /Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/launch_delphi_regmix_reference_3e18.py
+- /Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/regmix_official_rerun_20260913/primary_validation_weights.csv
+- /Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/regmix_official_rerun_20260913/candidate_weights.csv
+- /Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/regmix_official_rerun_20260913/submission/candidate_receipt.json
+- /Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/regmix_official_rerun_20260913/submission/launch_command.txt
+- /Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/regmix_official_rerun_20260913/submission/region_validation.json
+- /Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/regmix_official_rerun_20260913/validation_review_plan.json
+- /Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/regmix_official_rerun_20260913/launch_dry_run/uncheatable_seed666200_t0/sweep_manifest.json (if filename differs, use Glob in launch_dry_run)
+Compare with completed launcher /Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/launch_delphi_path_midpoints_3e18.py and shared /Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/launch_delphi_one_phase_dsp_epoch_cap_sweep_3e18.py and launch_delphi_augmented_swarm_3e18.py as needed.
+
+Root's independent audit already verifies every runtime weight unchanged, exactly4unique mixtures, all model/horizon/calibration settings same as historical template, parent interactive1CPU/4GB/east5-a and childv6e-8/east5-b, candidatehash and regionvalidatorpass. Root is separately validating full graph and bundle inclusion immediately before submit. Scope for you: hidden seed/data/identity/count mistakes, resumability/duplicate outputs, missing evaluation dependencies, region/runtime mismatches, and unsafe launch scope. cap64 is deliberately inactive loader metadata (largestactualepochs<10), not a training cap. Current U raw parent aggregate changed; finalcollection will use seven frozen objectiveweights on component BPBs as in the already-audited midpoint batch. No new/swapped regression artifacts entertraining.
+
+Return: verdict, concrete blockingissues with file/line refs, and a short list of anything required before submission. Do not treat nonexistent heldout measurements as a code issue: these are the4runs being validated. No broad redesign, no recommendations for more runs. If acceptable, say so.

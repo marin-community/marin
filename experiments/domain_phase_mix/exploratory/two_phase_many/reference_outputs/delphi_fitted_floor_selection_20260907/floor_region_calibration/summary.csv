@@ -1,0 +1,7 @@
+target,method,bias,rmse,rows
+table9,weibull_softplus_unscaled,0.023735008911100548,0.07968626671016649,1083
+table9,weibull_softplus_unscaled@fitted_floor_link,-0.02682347788275789,0.04087218080014693,1083
+table9,weibull_softplus_unscaled@log_deficit_bounded_link,-0.03806837703251541,0.047849654348307076,1083
+uncheatable,weibull_softplus_unscaled,0.024281685084133888,0.038943688254311444,287
+uncheatable,weibull_softplus_unscaled@fitted_floor_link,-0.005522882566334301,0.018170018838397112,287
+uncheatable,weibull_softplus_unscaled@log_deficit_bounded_link,-0.009528272122896158,0.014992031072511753,287

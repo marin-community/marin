@@ -4,8 +4,8 @@
 """Learning-curve figure: surrogate performance as a function of the number of fitted runs.
 
 Reads the summaries written by ``learning_curve_metrics_20260905`` and draws, per target, the mean over
-draws with its 95% t interval for out-of-fold rank correlation, retrospective-bank rank correlation and
-retrospective regret at 1 (with the random-ranking expectation as reference). An appendix variant adds
+draws with its 95% t interval for out-of-fold rank correlation, held-out rank correlation and
+held-out regret at 1 (with the random-ranking expectation as reference). An appendix variant adds
 complement rank correlation, out-of-fold RMSE in BPB (median and IQR), fold-mean regret and top-5 regret.
 The main regret layout retains the complete positive-valued curves and intervals on logarithmic axes.
 The x axis counts distinct mixtures, including the pinned anchor in the MARINER study; the ten
@@ -48,7 +48,8 @@ RANDOM_LABELS = {"regret_at_1": "random pick", "top5_regret": "best of 5 random 
 PER_BUCKET_COLOR = "#E69F00"
 QUADRATIC_COLOR = "#56B4E9"
 SPLINE_COLOR = "#D55E00"
-REGMIX_COLOR = "#0072B2"
+REGMIX_COLOR = "#0072B2"  # the released recipe, as in the main-text learning curve
+TUNED_TREES_COLOR = "#E69F00"
 MODEL_LABELS = {
     "wspu": "MARINER",
     "mariner": "MARINER",
@@ -56,7 +57,8 @@ MODEL_LABELS = {
     "olmix": "Olmix",
     "quadratic": "Quadratic in log-epochs, floor link",
     "spline": "Natural cubic spline in log-epochs, floor link",
-    "regmix": "RegMix",
+    "regmix": "RegMix, tuned trees",
+    "regmix_official": "RegMix, released recipe",
 }
 MODEL_COLORS = {
     "wspu": WSPU_COLOR,
@@ -65,7 +67,8 @@ MODEL_COLORS = {
     "olmix": OLMIX_COLOR,
     "quadratic": QUADRATIC_COLOR,
     "spline": SPLINE_COLOR,
-    "regmix": REGMIX_COLOR,
+    "regmix": TUNED_TREES_COLOR,
+    "regmix_official": REGMIX_COLOR,
 }
 TARGET_LABELS = {"uncheatable": "Uncheatable", "table9": "OlmoBaseEval Easy"}
 PLOT_STYLE = {
@@ -90,7 +93,7 @@ DRIVE_STEMS = {
     "learning_curve_appendix": "a_learning_curve_diagnostics",
 }
 LOG_X_TICKS = (20, 40, 80, 160, 280)
-STUDY_ANCHOR_RUNS = {"legacy": 0, "mariner": 1}
+STUDY_ANCHOR_RUNS = {"legacy": 0, "mariner": 1, "mariner_regmix": 1}
 COMPLEMENT_MAX_K = 250
 # Nominal parameters per task at M=39: MARINER 2M+5, Olmix's log-linear law M+1. Figure 3 names them in its legend.
 NOMINAL_PARAMETERS = {"mariner": 83, "olmix": 40}
@@ -109,20 +112,20 @@ ROBUST_METRICS = ("rmse",)
 # (evaluation, stratum, metric, panel title, y label, draw the random-ranking reference)
 MAIN_PANELS = (
     ("oof", "pooled", "spearman", "out-of-fold rank", r"Spearman $\rho$", False),
-    ("heldout", "pooled", "spearman", "retrospective bank rank", r"Spearman $\rho$", False),
-    ("heldout", "pooled", "regret_at_1", "retrospective selection", "Regret@1 (BPB)", True),
+    ("heldout", "pooled", "spearman", "held-out rank", r"Spearman $\rho$", False),
+    ("heldout", "pooled", "regret_at_1", "held-out selection", "Regret@1 (BPB)", True),
 )
 # The paper layout: the two columns that carry the claim, with the data-efficiency crossing marked.
 PAPER_PANELS = (
     ("oof", "pooled", "spearman", "out-of-fold rank", r"Spearman $\rho$", False),
-    ("heldout", "pooled", "regret_at_1", "retrospective selection", "Regret@1 (BPB)", True),
+    ("heldout", "pooled", "regret_at_1", "held-out selection", "Regret@1 (BPB)", True),
 )
 CROSSING_PANEL = ("oof", "pooled", "spearman")
 APPENDIX_PANELS = (
     ("complement", "pooled", "spearman", "unseen swarm runs", r"Spearman $\rho$", False),
     ("oof", "pooled", "rmse", "out-of-fold error", "RMSE (BPB)", False),
     ("oof", "fold_mean", "regret_at_1", "per-fold selection", "Mean fold regret@1 (BPB)", False),
-    ("heldout", "pooled", "top5_regret", "retrospective top-5", "Top-5 regret (BPB)", True),
+    ("heldout", "pooled", "top5_regret", "held-out top-5", "Top-5 regret (BPB)", True),
 )
 
 
@@ -180,6 +183,15 @@ def draw_panel(
         frame = series(summary, target, model, evaluation, stratum, metric)
         if frame.empty:
             continue
+        if (evaluation, stratum, metric) == ("oof", "pooled", "spearman"):
+            # A model whose fits are constant within every fold (the released RegMix recipe below about 60
+            # mixtures) has no per-fold correlation; pooling its fold constants would fake one, so those
+            # sizes are left blank like the held-out and unseen-run panels.
+            guard = series(summary, target, model, "oof", "fold_mean", "spearman").set_index("k")[center_column]
+            defined = frame["k"].map(guard).notna().to_numpy()
+            frame = frame[defined]
+            if frame.empty:
+                continue
         mixture_count = frame["mixtures"].to_numpy(float)
         mean = frame[center_column].to_numpy(float)
         low = frame[low_column].to_numpy(float)
@@ -379,11 +391,12 @@ def build_figure(
     handles, labels = axes[0][0].get_legend_handles_labels()
     if handles:
         # Four models no longer fit inside a panel; the legend spans the top of the figure.
+        # Six models (with both RegMix variants) take two legend rows above the panels.
         figure.legend(
-            handles, labels, loc="upper center", ncol=len(handles), frameon=False, fontsize=7, handlelength=1.6
+            handles, labels, loc="upper center", ncol=min(len(handles), 4), frameon=False, fontsize=7, handlelength=1.6
         )
     if not fill:
-        figure.tight_layout(w_pad=1.2, h_pad=1.0, rect=(0, 0, 1, 0.96))
+        figure.tight_layout(w_pad=1.2, h_pad=1.0, rect=(0, 0, 1, 0.96 if len(handles) <= 4 else 0.93))
     return figure, pd.DataFrame(points)
 
 
@@ -448,14 +461,14 @@ def build_regret_figure(
     log_x: bool,
     band: str,
 ) -> tuple[plt.Figure, pd.DataFrame]:
-    """Show both objectives' retrospective-bank regret with complete intervals on a log y axis."""
+    """Show both objectives' held-out regret with complete intervals on a log y axis."""
     missing_models = set(REGRET_MODELS) - set(summary["model"])
     if missing_models:
         raise ValueError(f"Bank-regret summaries are missing models: {sorted(missing_models)}")
     figure, axes = plt.subplots(1, 2, figsize=(width, height))
     figure.subplots_adjust(left=0.10, right=0.985, bottom=0.25, top=0.79, wspace=0.32)
     all_points: list[dict[str, object]] = []
-    panel = ("heldout", "pooled", "regret_at_1", "retrospective selection", "Regret@1 (BPB)", False)
+    panel = ("heldout", "pooled", "regret_at_1", "held-out selection", "Regret@1 (BPB)", False)
     for index, target in enumerate(fits.TARGETS):
         axis = axes[index]
         points = draw_panel(
@@ -514,7 +527,7 @@ def main() -> None:
         choices=("full", "paper", "strip", "regret"),
         default="full",
         help="full: the 2x3 figure and the 2x4 appendix; paper: the 2x2 half-column figure; strip: the same "
-        "four panels in one full-width row; regret: two full-range retrospective-bank regret panels",
+        "four panels in one full-width row; regret: two full-range held-out regret panels",
     )
     args = parser.parse_args()
     if args.layout == "regret" and args.study != "mariner":

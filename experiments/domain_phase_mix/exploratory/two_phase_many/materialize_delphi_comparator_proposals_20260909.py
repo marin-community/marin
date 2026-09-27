@@ -97,6 +97,8 @@ COMPARATORS = (
     # protocol, so their proposals are comparable with the quadratic and spline rows.
     Comparator("cvx", "MARINER, fully convex objective (convex harm)", f"{MARINER_ID}_raw_epoch_hinge", "slsqp"),
     Comparator("add", "MARINER, additive response", "weibull_softplus_unscaled", "slsqp"),
+    # Added 2026-09-24: the Table 1 "one threshold per bucket" ablation, never trained at 3e18 before.
+    Comparator("pbt", "MARINER, one threshold per bucket", f"{MARINER_ID}_per_bucket_threshold", "slsqp"),
 )
 
 

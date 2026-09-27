@@ -1,0 +1,106 @@
+[
+  {
+    "candidate_id": "rgref_u_endpoint_cap64",
+    "response": {
+      "attrs": {
+        "regmix.candidate_sha256": "7c4b8b005b5a8d7eaaa19278d236591a00873f7e3ff3da5ff5031270f91c3899",
+        "regmix.training_output": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_regmix_reference_3e18_20260913/uncheatable_seed666200_t0/rgref_uncheatable_seed666200_t0_rgref_u_endpoint_cap64-b5a5dc"
+      },
+      "created_at": "2026-09-13T15:50:58Z",
+      "deleted_at": null,
+      "description": "Official RegMix validation; data seed 666200, trainer seed 0; four-run authorized batch; final HF checkpoint step-3006.",
+      "existed": false,
+      "experiment_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+      "experiment_ids": [
+        "exp_01m21f631n71w9xe9n6krpr2kw"
+      ],
+      "external_id": null,
+      "external_system": null,
+      "id": "run_01m2dqdwc05grjzbxax032m84y",
+      "idempotency_key": "regmix-official-20260913-rgref_u_endpoint_cap64",
+      "kind": "datapoint",
+      "name": "rgref_u_endpoint_cap64",
+      "parent_run_id": null,
+      "status": "active",
+      "updated_at": "2026-09-13T15:50:58Z"
+    }
+  },
+  {
+    "candidate_id": "rgref_u_midpoint_cap64",
+    "response": {
+      "attrs": {
+        "regmix.candidate_sha256": "7c4b8b005b5a8d7eaaa19278d236591a00873f7e3ff3da5ff5031270f91c3899",
+        "regmix.training_output": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_regmix_reference_3e18_20260913/uncheatable_seed666200_t0/rgref_uncheatable_seed666200_t0_rgref_u_midpoint_cap64-80405e"
+      },
+      "created_at": "2026-09-13T15:50:58Z",
+      "deleted_at": null,
+      "description": "Official RegMix validation; data seed 666200, trainer seed 0; four-run authorized batch; final HF checkpoint step-3006.",
+      "existed": false,
+      "experiment_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+      "experiment_ids": [
+        "exp_01m21f631n71w9xe9n6krpr2kw"
+      ],
+      "external_id": null,
+      "external_system": null,
+      "id": "run_01m2dqdwmfvkmn3amwhvq1n1ga",
+      "idempotency_key": "regmix-official-20260913-rgref_u_midpoint_cap64",
+      "kind": "datapoint",
+      "name": "rgref_u_midpoint_cap64",
+      "parent_run_id": null,
+      "status": "active",
+      "updated_at": "2026-09-13T15:50:58Z"
+    }
+  },
+  {
+    "candidate_id": "rgref_t9_endpoint_cap64",
+    "response": {
+      "attrs": {
+        "regmix.candidate_sha256": "7c4b8b005b5a8d7eaaa19278d236591a00873f7e3ff3da5ff5031270f91c3899",
+        "regmix.training_output": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_regmix_reference_3e18_20260913/table9_seed662009_t0/rgref_table9_seed662009_t0_rgref_t9_endpoint_cap64-02614e"
+      },
+      "created_at": "2026-09-13T15:50:59Z",
+      "deleted_at": null,
+      "description": "Official RegMix validation; data seed 662009, trainer seed 0; four-run authorized batch; final HF checkpoint step-3006.",
+      "existed": false,
+      "experiment_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+      "experiment_ids": [
+        "exp_01m21f631n71w9xe9n6krpr2kw"
+      ],
+      "external_id": null,
+      "external_system": null,
+      "id": "run_01m2dqdwxh3mxbcy6xzw4ptbef",
+      "idempotency_key": "regmix-official-20260913-rgref_t9_endpoint_cap64",
+      "kind": "datapoint",
+      "name": "rgref_t9_endpoint_cap64",
+      "parent_run_id": null,
+      "status": "active",
+      "updated_at": "2026-09-13T15:50:59Z"
+    }
+  },
+  {
+    "candidate_id": "rgref_t9_midpoint_cap64",
+    "response": {
+      "attrs": {
+        "regmix.candidate_sha256": "7c4b8b005b5a8d7eaaa19278d236591a00873f7e3ff3da5ff5031270f91c3899",
+        "regmix.training_output": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_regmix_reference_3e18_20260913/table9_seed662009_t0/rgref_table9_seed662009_t0_rgref_t9_midpoint_cap64-330587"
+      },
+      "created_at": "2026-09-13T15:50:59Z",
+      "deleted_at": null,
+      "description": "Official RegMix validation; data seed 662009, trainer seed 0; four-run authorized batch; final HF checkpoint step-3006.",
+      "existed": false,
+      "experiment_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+      "experiment_ids": [
+        "exp_01m21f631n71w9xe9n6krpr2kw"
+      ],
+      "external_id": null,
+      "external_system": null,
+      "id": "run_01m2dqdx7dttdq4bm7e0h25yr2",
+      "idempotency_key": "regmix-official-20260913-rgref_t9_midpoint_cap64",
+      "kind": "datapoint",
+      "name": "rgref_t9_midpoint_cap64",
+      "parent_run_id": null,
+      "status": "active",
+      "updated_at": "2026-09-13T15:50:59Z"
+    }
+  }
+]

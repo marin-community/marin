@@ -1,0 +1,17 @@
+{
+  "attrs": {},
+  "check_name": "figure10_midpoints_initial_dispatch",
+  "created_at": "2026-09-12T22:21:27Z",
+  "deleted_at": null,
+  "details": {},
+  "entity_id": "job_01m2btxzfzk44w4fk8f2c6px1q",
+  "entity_type": "job",
+  "expected_value": "Ten reviewed midpoint training jobs, interactive v6e-8 in east5-b, exact recipe names and bundle",
+  "id": "val_01m2bvc4xntw3wktw2ftz18s79",
+  "measured_value": "All ten training children queued; expected names and bundle hashes match; coordinator running in east5-a",
+  "session_id": "ses_01m2bsq9b2sp76rjtp26waqp9m",
+  "source_artifact_id": "art_01m2bvc4nm518yzapqw4vk4n2x",
+  "source_job_id": "job_01m2btxzfzk44w4fk8f2c6px1q",
+  "status": "pass",
+  "updated_at": "2026-09-12T22:21:27Z"
+}

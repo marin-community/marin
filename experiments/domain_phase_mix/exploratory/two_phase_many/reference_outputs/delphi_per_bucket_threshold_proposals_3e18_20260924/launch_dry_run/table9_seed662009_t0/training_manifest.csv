@@ -1,0 +1,2 @@
+run_order,run_name,candidate_id,target,epoch_cap,aliases,run_id,data_seed,trainer_seed,train_steps,expected_checkpoint_step,tpu_type,tpu_region,tpu_zone,fit_panel_max_materialized_epoch,runtime_max_simulated_epoch
+0,pbt_table9_seed662009_t0_cmp_t9_pbt_cap08,cmp_t9_pbt_cap08,table9,8,cmp_t9_pbt_cap08,7490100,662009,0,3007,3006,v5p-8,us-east5,us-east5-a,7.926087901708487,7.926083935254373

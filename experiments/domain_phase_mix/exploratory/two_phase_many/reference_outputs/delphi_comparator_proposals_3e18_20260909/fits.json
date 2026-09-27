@@ -1,0 +1,2806 @@
+{
+ "cmp_u_quad": [
+  {
+   "component": "eval/uncheatable_eval/ao3_english/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 1.221120536327362,
+   "kappa": 1.5,
+   "inner_cv_rmse": 0.012134439235844076
+  },
+  {
+   "component": "eval/uncheatable_eval/arxiv_computer_science/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.9699944740786326,
+   "kappa": 3.930562066660293,
+   "inner_cv_rmse": 0.008467860869349472
+  },
+  {
+   "component": "eval/uncheatable_eval/arxiv_physics/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 1.0272601084275679,
+   "kappa": 1.5,
+   "inner_cv_rmse": 0.014102894421247283
+  },
+  {
+   "component": "eval/uncheatable_eval/bbc_news/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 1.0383200428702615,
+   "kappa": 1.5,
+   "inner_cv_rmse": 0.013684800903510708
+  },
+  {
+   "component": "eval/uncheatable_eval/github_cpp/bpb",
+   "shape": {},
+   "ridge": 1.0,
+   "floor": 0.7647099993216886,
+   "kappa": 1.338099451014648,
+   "inner_cv_rmse": 0.014567189349329284
+  },
+  {
+   "component": "eval/uncheatable_eval/github_python/bpb",
+   "shape": {},
+   "ridge": 0.1,
+   "floor": 0.5995691528965654,
+   "kappa": 2.2775559956580365,
+   "inner_cv_rmse": 0.019509641518955522
+  },
+  {
+   "component": "eval/uncheatable_eval/wikipedia_english/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 1.0941702777689155,
+   "kappa": 1.5,
+   "inner_cv_rmse": 0.0204359200099948
+  }
+ ],
+ "cmp_u_spline": [
+  {
+   "component": "eval/uncheatable_eval/ao3_english/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 1.221120536327362,
+   "kappa": 1.5,
+   "inner_cv_rmse": 0.01753847838830845
+  },
+  {
+   "component": "eval/uncheatable_eval/arxiv_computer_science/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.9902539984746412,
+   "kappa": 1.5,
+   "inner_cv_rmse": 0.015202408472215845
+  },
+  {
+   "component": "eval/uncheatable_eval/arxiv_physics/bpb",
+   "shape": {},
+   "ridge": 1.0,
+   "floor": 1.0272601084275679,
+   "kappa": 1.5,
+   "inner_cv_rmse": 0.011172926618161702
+  },
+  {
+   "component": "eval/uncheatable_eval/bbc_news/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 1.0383200428702615,
+   "kappa": 1.5,
+   "inner_cv_rmse": 0.01753741965033581
+  },
+  {
+   "component": "eval/uncheatable_eval/github_cpp/bpb",
+   "shape": {},
+   "ridge": 1.0,
+   "floor": 0.7652855190619418,
+   "kappa": 1.3326737571859486,
+   "inner_cv_rmse": 0.016193412941226247
+  },
+  {
+   "component": "eval/uncheatable_eval/github_python/bpb",
+   "shape": {},
+   "ridge": 0.1,
+   "floor": 0.5964612561300142,
+   "kappa": 2.3028016697904485,
+   "inner_cv_rmse": 0.018707493880939948
+  },
+  {
+   "component": "eval/uncheatable_eval/wikipedia_english/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 1.0941702777689155,
+   "kappa": 1.5,
+   "inner_cv_rmse": 0.022059337128150516
+  }
+ ],
+ "cmp_u_lgbm": [
+  {
+   "component": "eval/uncheatable_eval/ao3_english/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 4.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.016111158777622404
+  },
+  {
+   "component": "eval/uncheatable_eval/arxiv_computer_science/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 4.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.012642000326849185
+  },
+  {
+   "component": "eval/uncheatable_eval/arxiv_physics/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 4.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.01374943801398799
+  },
+  {
+   "component": "eval/uncheatable_eval/bbc_news/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 4.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.017165488650104428
+  },
+  {
+   "component": "eval/uncheatable_eval/github_cpp/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 4.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.017222509996688094
+  },
+  {
+   "component": "eval/uncheatable_eval/github_python/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 4.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.02322004519760024
+  },
+  {
+   "component": "eval/uncheatable_eval/wikipedia_english/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 4.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.01655826070802461
+  }
+ ],
+ "cmp_u_krr": [
+  {
+   "component": "eval/uncheatable_eval/ao3_english/bpb",
+   "shape": {
+    "gamma": 2.0
+   },
+   "ridge": 0.0001,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.008048037042413981
+  },
+  {
+   "component": "eval/uncheatable_eval/arxiv_computer_science/bpb",
+   "shape": {
+    "gamma": 2.0
+   },
+   "ridge": 0.0001,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.009181942241272188
+  },
+  {
+   "component": "eval/uncheatable_eval/arxiv_physics/bpb",
+   "shape": {
+    "gamma": 4.0
+   },
+   "ridge": 0.0001,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.012187251952610959
+  },
+  {
+   "component": "eval/uncheatable_eval/bbc_news/bpb",
+   "shape": {
+    "gamma": 1.0
+   },
+   "ridge": 0.0001,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.011898430992431491
+  },
+  {
+   "component": "eval/uncheatable_eval/github_cpp/bpb",
+   "shape": {
+    "gamma": 0.5
+   },
+   "ridge": 0.001,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.0248149968402102
+  },
+  {
+   "component": "eval/uncheatable_eval/github_python/bpb",
+   "shape": {
+    "gamma": 2.0
+   },
+   "ridge": 0.0001,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.03190909023441192
+  },
+  {
+   "component": "eval/uncheatable_eval/wikipedia_english/bpb",
+   "shape": {
+    "gamma": 2.0
+   },
+   "ridge": 0.01,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.015915849397653826
+  }
+ ],
+ "cmp_u_mk1": [
+  {
+   "component": "eval/uncheatable_eval/ao3_english/bpb",
+   "shape": {
+    "rate": 0.1,
+    "power": 1.0,
+    "threshold": 2.0
+   },
+   "ridge": 0.01,
+   "kappa": 1.5,
+   "flat": true
+  },
+  {
+   "component": "eval/uncheatable_eval/arxiv_computer_science/bpb",
+   "shape": {
+    "rate": 0.1,
+    "power": 1.0,
+    "threshold": 1.0
+   },
+   "ridge": 0.1,
+   "kappa": 4.865909317069008,
+   "flat": false
+  },
+  {
+   "component": "eval/uncheatable_eval/arxiv_physics/bpb",
+   "shape": {
+    "rate": 0.1,
+    "power": 1.0,
+    "threshold": 1.0
+   },
+   "ridge": 0.01,
+   "kappa": 1.5,
+   "flat": true
+  },
+  {
+   "component": "eval/uncheatable_eval/bbc_news/bpb",
+   "shape": {
+    "rate": 0.5,
+    "power": 1.0,
+    "threshold": 2.0
+   },
+   "ridge": 0.1,
+   "kappa": 1.5,
+   "flat": true
+  },
+  {
+   "component": "eval/uncheatable_eval/github_cpp/bpb",
+   "shape": {
+    "rate": 0.5,
+    "power": 1.0,
+    "threshold": 2.0
+   },
+   "ridge": 0.01,
+   "kappa": 2.002268101666054,
+   "flat": false
+  },
+  {
+   "component": "eval/uncheatable_eval/github_python/bpb",
+   "shape": {
+    "rate": 0.5,
+    "power": 1.0,
+    "threshold": 2.0
+   },
+   "ridge": 0.1,
+   "kappa": 2.7040493521175155,
+   "flat": false
+  },
+  {
+   "component": "eval/uncheatable_eval/wikipedia_english/bpb",
+   "shape": {
+    "rate": 2.0,
+    "power": 1.0,
+    "threshold": 2.0
+   },
+   "ridge": 1.0,
+   "kappa": 1.5,
+   "flat": true
+  }
+ ],
+ "cmp_t9_quad": [
+  {
+   "component": "olmo_base_eval/easy_bpb/minerva_math_algebra/bpb",
+   "shape": {},
+   "ridge": 1.0,
+   "floor": 0.8820395441165347,
+   "kappa": 1.4180667331573087,
+   "inner_cv_rmse": 0.041059010024274235
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/minerva_math_counting_and_probability/bpb",
+   "shape": {},
+   "ridge": 1.0,
+   "floor": 0.8321875404317856,
+   "kappa": 1.6047975801209347,
+   "inner_cv_rmse": 0.03762976520184905
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/minerva_math_geometry/bpb",
+   "shape": {},
+   "ridge": 1.0,
+   "floor": 0.9167177046922438,
+   "kappa": 1.4273261370405135,
+   "inner_cv_rmse": 0.04126530498283072
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/minerva_math_intermediate_algebra/bpb",
+   "shape": {},
+   "ridge": 1.0,
+   "floor": 0.8473399063822786,
+   "kappa": 1.4595384527266386,
+   "inner_cv_rmse": 0.04069759687526845
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/minerva_math_number_theory/bpb",
+   "shape": {},
+   "ridge": 1.0,
+   "floor": 0.9220972073942612,
+   "kappa": 1.3626208565419118,
+   "inner_cv_rmse": 0.03985326474319914
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/minerva_math_prealgebra/bpb",
+   "shape": {},
+   "ridge": 1.0,
+   "floor": 0.8390300672718869,
+   "kappa": 1.491858995186733,
+   "inner_cv_rmse": 0.04002768336963024
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/minerva_math_precalculus/bpb",
+   "shape": {},
+   "ridge": 1.0,
+   "floor": 0.7260456251830568,
+   "kappa": 1.4133880842007245,
+   "inner_cv_rmse": 0.034253783072437684
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/codex_humaneval/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": -0.01723962988932981,
+   "kappa": 4.555767277420028,
+   "inner_cv_rmse": 0.03952754980069325
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mbpp/bpb",
+   "shape": {},
+   "ridge": 1.0,
+   "floor": 0.7516218819401673,
+   "kappa": 1.9162625248034906,
+   "inner_cv_rmse": 0.03639487781130196
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_bash/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.8210700796784935,
+   "kappa": 1.4486483261063885,
+   "inner_cv_rmse": 0.053101237875825866
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_c/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.5172362246261605,
+   "kappa": 1.4341369388816794,
+   "inner_cv_rmse": 0.01779561567459912
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_cpp/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.5222591179971983,
+   "kappa": 1.2068376730458203,
+   "inner_cv_rmse": 0.0180773430445127
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_csharp/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.41665635377877797,
+   "kappa": 1.554582935808592,
+   "inner_cv_rmse": 0.01702510128866376
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_go/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.5819021586937102,
+   "kappa": 1.3154049832270394,
+   "inner_cv_rmse": 0.03383954745669539
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_haskell/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.7982860998523826,
+   "kappa": 4.111080077310449,
+   "inner_cv_rmse": 0.05068975860686913
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_java/bpb",
+   "shape": {},
+   "ridge": 1.0,
+   "floor": 0.33470272249599964,
+   "kappa": 1.6607155217243483,
+   "inner_cv_rmse": 0.015538103215667181
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_javascript/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.5505137361701821,
+   "kappa": 1.6409654841061192,
+   "inner_cv_rmse": 0.02365005429931099
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_matlab/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.9825169550473215,
+   "kappa": 1.5,
+   "inner_cv_rmse": 0.03409007423517744
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_php/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.5435565528830707,
+   "kappa": 1.4625747707467527,
+   "inner_cv_rmse": 0.02014675683691767
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_python/bpb",
+   "shape": {},
+   "ridge": 1.0,
+   "floor": 0.7642656156803957,
+   "kappa": 1.8151281902226408,
+   "inner_cv_rmse": 0.03651331745803771
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_r/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.9198583060553318,
+   "kappa": 1.8453765893158938,
+   "inner_cv_rmse": 0.033830762434011084
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_ruby/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.7475268930178344,
+   "kappa": 1.82261244815303,
+   "inner_cv_rmse": 0.047402850974738266
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_rust/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.5159438201375283,
+   "kappa": 1.8286146090324944,
+   "inner_cv_rmse": 0.05600565411303213
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_scala/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.8461344645463367,
+   "kappa": 2.4611325173657836,
+   "inner_cv_rmse": 0.03800458883110513
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_swift/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.36297236758948337,
+   "kappa": 2.88899346985663,
+   "inner_cv_rmse": 0.03867307389022209
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_typescript/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.5025021938799294,
+   "kappa": 1.6646932300349053,
+   "inner_cv_rmse": 0.026811556132600865
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/arc_easy/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 1.0528837577482009,
+   "kappa": 1.6213454204333073,
+   "inner_cv_rmse": 0.1101711083691339
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/arc_challenge/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 1.1983470877455131,
+   "kappa": 1.544596768738977,
+   "inner_cv_rmse": 0.09749727960049276
+  },
+  {
+   "component": "mmlu_stem",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 1.7022468598336746,
+   "kappa": 1.5,
+   "inner_cv_rmse": 0.08832344986823368
+  },
+  {
+   "component": "mmlu_humanities",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.9753417786623596,
+   "kappa": 1.5,
+   "inner_cv_rmse": 0.03623039977383883
+  },
+  {
+   "component": "mmlu_social_sciences",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 1.1476138690435034,
+   "kappa": 1.5,
+   "inner_cv_rmse": 0.038496433754127486
+  },
+  {
+   "component": "mmlu_other",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 1.329293146144869,
+   "kappa": 3.2273634779203437,
+   "inner_cv_rmse": 0.041760040590367586
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/csqa/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 1.3366896233584769,
+   "kappa": 1.010290959711885,
+   "inner_cv_rmse": 0.12140716629774355
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/hellaswag/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.9804772845499685,
+   "kappa": 1.5,
+   "inner_cv_rmse": 0.012082115109263476
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/winogrande/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 1.3759881302502204,
+   "kappa": 1.5,
+   "inner_cv_rmse": 0.017913386516089022
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/socialiqa/bpb",
+   "shape": {},
+   "ridge": 1.0,
+   "floor": 1.260762245226926,
+   "kappa": 1.0092709960659245,
+   "inner_cv_rmse": 0.12982235638921824
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/piqa/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 1.2424407043135586,
+   "kappa": 1.218182073383022,
+   "inner_cv_rmse": 0.07147402465726226
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/coqa/bpb",
+   "shape": {},
+   "ridge": 1.0,
+   "floor": 0.606264552740403,
+   "kappa": 2.169990191828174,
+   "inner_cv_rmse": 0.07635897190571408
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/drop/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 1.6952281921080252,
+   "kappa": 2.198008402336948,
+   "inner_cv_rmse": 0.14961890009923492
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/jeopardy/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 1.4944698874648812,
+   "kappa": 1.5,
+   "inner_cv_rmse": 0.07889452073093409
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/naturalqs/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 1.526513149910344,
+   "kappa": 1.007932745071113,
+   "inner_cv_rmse": 0.12028744923455788
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/squad/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.44134919049376176,
+   "kappa": 3.8273647604669754,
+   "inner_cv_rmse": 0.07084909407690176
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/sciq/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 1.0369951442139822,
+   "kappa": 4.296299942417628,
+   "inner_cv_rmse": 0.13768558513323256
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/basic_skills_arithmetic/bpb",
+   "shape": {},
+   "ridge": 1.0,
+   "floor": 1.6585763608690063,
+   "kappa": 1.4310570905366564,
+   "inner_cv_rmse": 0.17938410999552193
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/basic_skills_coding/bpb",
+   "shape": {},
+   "ridge": 1.0,
+   "floor": 0.2691656378415552,
+   "kappa": 2.1287934412771166,
+   "inner_cv_rmse": 0.07258895165345762
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/basic_skills_common_knowledge/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 1.0385143804736974,
+   "kappa": 1.5,
+   "inner_cv_rmse": 0.07132739803446764
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/basic_skills_logical_reasoning/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.36033647750841324,
+   "kappa": 1.5,
+   "inner_cv_rmse": 0.041605719346339866
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/basic_skills_pattern/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 1.3583853864663795,
+   "kappa": 1.5,
+   "inner_cv_rmse": 0.06649987577336158
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/basic_skills_string_operations/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 2.0023160793610773,
+   "kappa": 3.930562066660293,
+   "inner_cv_rmse": 0.09683671590966378
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/lambada/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.9013167923133376,
+   "kappa": 3.292439441907198,
+   "inner_cv_rmse": 0.025378650208888652
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/medmcqa/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 1.7582693342014815,
+   "kappa": 4.490673464932479,
+   "inner_cv_rmse": 0.1141197342493133
+  }
+ ],
+ "cmp_t9_spline": [
+  {
+   "component": "olmo_base_eval/easy_bpb/minerva_math_algebra/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.889384535476996,
+   "kappa": 1.3802379389593569,
+   "inner_cv_rmse": 0.029871389495120842
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/minerva_math_counting_and_probability/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.8573395283546761,
+   "kappa": 1.4070980970802263,
+   "inner_cv_rmse": 0.027430271519765754
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/minerva_math_geometry/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.9139014724308776,
+   "kappa": 1.4426095094028755,
+   "inner_cv_rmse": 0.033557470285264
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/minerva_math_intermediate_algebra/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.8688729925218694,
+   "kappa": 1.349865326909239,
+   "inner_cv_rmse": 0.027712605818490447
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/minerva_math_number_theory/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.9331482232284685,
+   "kappa": 1.2901358371804792,
+   "inner_cv_rmse": 0.029193090123340596
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/minerva_math_prealgebra/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.85333509623052,
+   "kappa": 1.3961808288297843,
+   "inner_cv_rmse": 0.02948411845610736
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/minerva_math_precalculus/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.7324738782000073,
+   "kappa": 1.3783710586927416,
+   "inner_cv_rmse": 0.024884449903251067
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/codex_humaneval/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.4436494114864119,
+   "kappa": 2.5195999617180043,
+   "inner_cv_rmse": 0.05004955939420781
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mbpp/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.8044580103090668,
+   "kappa": 1.6580566550823264,
+   "inner_cv_rmse": 0.03419736863837457
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_bash/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.8623433021704747,
+   "kappa": 1.3074528486097794,
+   "inner_cv_rmse": 0.06847440280729085
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_c/bpb",
+   "shape": {},
+   "ridge": 1.0,
+   "floor": 0.5434585023443789,
+   "kappa": 1.241447950188838,
+   "inner_cv_rmse": 0.02199596264141298
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_cpp/bpb",
+   "shape": {},
+   "ridge": 1.0,
+   "floor": 0.5288398604322606,
+   "kappa": 1.1590820142413185,
+   "inner_cv_rmse": 0.021910344641698994
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_csharp/bpb",
+   "shape": {},
+   "ridge": 1.0,
+   "floor": 0.44548991304394664,
+   "kappa": 1.2641285904003472,
+   "inner_cv_rmse": 0.016486698962616207
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_go/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.5727609990347527,
+   "kappa": 1.3608635701133418,
+   "inner_cv_rmse": 0.04208722540461114
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_haskell/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.9898434548557961,
+   "kappa": 3.2566786381604875,
+   "inner_cv_rmse": 0.04805999587692241
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_java/bpb",
+   "shape": {},
+   "ridge": 1.0,
+   "floor": 0.36839419864742384,
+   "kappa": 1.3419943084817119,
+   "inner_cv_rmse": 0.019882697951112145
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_javascript/bpb",
+   "shape": {},
+   "ridge": 1.0,
+   "floor": 0.5963457355071815,
+   "kappa": 1.3754960761020032,
+   "inner_cv_rmse": 0.028084444899755177
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_matlab/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.9705739379344063,
+   "kappa": 1.5725673826205508,
+   "inner_cv_rmse": 0.0420282595508644
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_php/bpb",
+   "shape": {},
+   "ridge": 1.0,
+   "floor": 0.5536861145659844,
+   "kappa": 1.3888893173411812,
+   "inner_cv_rmse": 0.02202572707772456
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_python/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.810075355279412,
+   "kappa": 1.5961282709646467,
+   "inner_cv_rmse": 0.03425413689525914
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_r/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 1.007333347015527,
+   "kappa": 1.3706684488643146,
+   "inner_cv_rmse": 0.03546600638791641
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_ruby/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.7568223280753024,
+   "kappa": 1.7923992284194015,
+   "inner_cv_rmse": 0.05195506270831019
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_rust/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.5146047395671179,
+   "kappa": 1.8329120055521648,
+   "inner_cv_rmse": 0.05893097129559353
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_scala/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.8662960640270944,
+   "kappa": 2.356551904994245,
+   "inner_cv_rmse": 0.03831281449082589
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_swift/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.36566016745439534,
+   "kappa": 2.8752763409788704,
+   "inner_cv_rmse": 0.04290786279643823
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_typescript/bpb",
+   "shape": {},
+   "ridge": 1.0,
+   "floor": 0.5458105943391638,
+   "kappa": 1.4185571466346332,
+   "inner_cv_rmse": 0.03394591691366422
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/arc_easy/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 1.0324138104871838,
+   "kappa": 2.277119847551988,
+   "inner_cv_rmse": 0.11177025773619004
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/arc_challenge/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 1.1871496856447563,
+   "kappa": 2.5261998317315606,
+   "inner_cv_rmse": 0.09710827141749655
+  },
+  {
+   "component": "mmlu_stem",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 1.572216747184406,
+   "kappa": 2.8131661234971683,
+   "inner_cv_rmse": 0.06861605865103419
+  },
+  {
+   "component": "mmlu_humanities",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.9753417786623596,
+   "kappa": 1.5,
+   "inner_cv_rmse": 0.04641306015636091
+  },
+  {
+   "component": "mmlu_social_sciences",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 1.1476138690435034,
+   "kappa": 1.5,
+   "inner_cv_rmse": 0.04030588265572388
+  },
+  {
+   "component": "mmlu_other",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 1.370059881519024,
+   "kappa": 1.5,
+   "inner_cv_rmse": 0.05001689738709209
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/csqa/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 1.255663067906544,
+   "kappa": 2.0144365263910897,
+   "inner_cv_rmse": 0.11633764901854675
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/hellaswag/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.9804772845499685,
+   "kappa": 1.5,
+   "inner_cv_rmse": 0.020542921366740408
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/winogrande/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 1.3759881302502204,
+   "kappa": 1.5,
+   "inner_cv_rmse": 0.02240405744194827
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/socialiqa/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 1.2523005254713477,
+   "kappa": 1.2780423814434063,
+   "inner_cv_rmse": 0.14286390842686436
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/piqa/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 1.2419876927149036,
+   "kappa": 1.240621048717845,
+   "inner_cv_rmse": 0.07576071858940775
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/coqa/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.5735569849343757,
+   "kappa": 2.4888920409550708,
+   "inner_cv_rmse": 0.08400618969225565
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/drop/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 1.6616755833841144,
+   "kappa": 2.683401331723463,
+   "inner_cv_rmse": 0.15206633723658464
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/jeopardy/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 1.4944698874648812,
+   "kappa": 1.5,
+   "inner_cv_rmse": 0.07193994046608536
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/naturalqs/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 1.5154148838774366,
+   "kappa": 3.0656989492761264,
+   "inner_cv_rmse": 0.1147089981374371
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/squad/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.38191255137963576,
+   "kappa": 4.948469711105873,
+   "inner_cv_rmse": 0.07011193764811426
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/sciq/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 1.1378193852690437,
+   "kappa": 1.5,
+   "inner_cv_rmse": 0.16184888293943128
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/basic_skills_arithmetic/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 1.6386202731243507,
+   "kappa": 1.4740272820863045,
+   "inner_cv_rmse": 0.16091193935401
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/basic_skills_coding/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.3896183884671325,
+   "kappa": 1.8134830648883933,
+   "inner_cv_rmse": 0.06698617495790614
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/basic_skills_common_knowledge/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.7613104545667253,
+   "kappa": 4.860343623395117,
+   "inner_cv_rmse": 0.09257722057171298
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/basic_skills_logical_reasoning/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.36033647750841324,
+   "kappa": 1.5,
+   "inner_cv_rmse": 0.05063744697328551
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/basic_skills_pattern/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 1.3583853864663795,
+   "kappa": 1.5,
+   "inner_cv_rmse": 0.09181425942837612
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/basic_skills_string_operations/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 2.167626238587979,
+   "kappa": 3.2478047350617256,
+   "inner_cv_rmse": 0.1032307744462482
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/lambada/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 0.9419003534896365,
+   "kappa": 1.5,
+   "inner_cv_rmse": 0.047994725166065906
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/medmcqa/bpb",
+   "shape": {},
+   "ridge": 3.0,
+   "floor": 1.7643630742441694,
+   "kappa": 4.235159363031462,
+   "inner_cv_rmse": 0.1099182415353293
+  }
+ ],
+ "cmp_t9_lgbm": [
+  {
+   "component": "olmo_base_eval/easy_bpb/minerva_math_algebra/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 8.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.033755862376813946
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/minerva_math_counting_and_probability/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 8.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.031644086524409545
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/minerva_math_geometry/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 4.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.03695555224480464
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/minerva_math_intermediate_algebra/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 4.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.03208041784315637
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/minerva_math_number_theory/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 8.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.03418214558919261
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/minerva_math_prealgebra/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 8.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.03381100244566022
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/minerva_math_precalculus/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 8.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.03037111209216274
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/codex_humaneval/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 8.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.032503990302142766
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mbpp/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 4.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.03862826111542958
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_bash/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 4.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.05307363205872088
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_c/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 4.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.018558435195037033
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_cpp/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 4.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.01853288165310701
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_csharp/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 4.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.016736098053818205
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_go/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 4.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.032908014013767785
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_haskell/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 4.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.04631507323223584
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_java/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 4.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.015029971121136017
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_javascript/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 4.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.022252202489812294
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_matlab/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 4.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.032280133274873946
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_php/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 4.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.021647350371995177
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_python/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 4.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.038330437758333516
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_r/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 4.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.0378579032677057
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_ruby/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 4.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.0505400114589746
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_rust/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 4.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.04868587996619405
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_scala/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 4.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.03645873943481528
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_swift/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 4.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.03522170069209592
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_typescript/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 4.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.023572275380838933
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/arc_easy/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 4.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.10391260689355224
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/arc_challenge/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 4.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.07763652954890107
+  },
+  {
+   "component": "mmlu_stem",
+   "shape": {
+    "n_estimators": 300.0,
+    "num_leaves": 4.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.05799174924916678
+  },
+  {
+   "component": "mmlu_humanities",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 4.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.02897443168768205
+  },
+  {
+   "component": "mmlu_social_sciences",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 4.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.03370302021393192
+  },
+  {
+   "component": "mmlu_other",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 8.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.04101682089701539
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/csqa/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 4.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.08834874904288913
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/hellaswag/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 4.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.01465789270436758
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/winogrande/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 4.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.0163647675206362
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/socialiqa/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 4.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.10020145121764877
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/piqa/bpb",
+   "shape": {
+    "n_estimators": 300.0,
+    "num_leaves": 8.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.07872173156395415
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/coqa/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 4.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.06696543837904403
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/drop/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 4.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.1251804695327204
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/jeopardy/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 4.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.05916868291303378
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/naturalqs/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 4.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.09045828370227552
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/squad/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 4.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.05098513201576617
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/sciq/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 8.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.09612272642758993
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/basic_skills_arithmetic/bpb",
+   "shape": {
+    "n_estimators": 300.0,
+    "num_leaves": 8.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.1366817845035836
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/basic_skills_coding/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 4.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.06607801346491136
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/basic_skills_common_knowledge/bpb",
+   "shape": {
+    "n_estimators": 300.0,
+    "num_leaves": 8.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.0625282379180309
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/basic_skills_logical_reasoning/bpb",
+   "shape": {
+    "n_estimators": 300.0,
+    "num_leaves": 4.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.033833824570735076
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/basic_skills_pattern/bpb",
+   "shape": {
+    "n_estimators": 100.0,
+    "num_leaves": 4.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.05864215253308428
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/basic_skills_string_operations/bpb",
+   "shape": {
+    "n_estimators": 300.0,
+    "num_leaves": 8.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.08919214154221139
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/lambada/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 4.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.03177884046246985
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/medmcqa/bpb",
+   "shape": {
+    "n_estimators": 1000.0,
+    "num_leaves": 4.0
+   },
+   "ridge": 0.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.093601032334413
+  }
+ ],
+ "cmp_t9_krr": [
+  {
+   "component": "olmo_base_eval/easy_bpb/minerva_math_algebra/bpb",
+   "shape": {
+    "gamma": 8.0
+   },
+   "ridge": 0.01,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.04304223679494527
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/minerva_math_counting_and_probability/bpb",
+   "shape": {
+    "gamma": 16.0
+   },
+   "ridge": 0.001,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.03771100289237275
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/minerva_math_geometry/bpb",
+   "shape": {
+    "gamma": 8.0
+   },
+   "ridge": 0.01,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.04363748023075803
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/minerva_math_intermediate_algebra/bpb",
+   "shape": {
+    "gamma": 8.0
+   },
+   "ridge": 0.01,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.04002694315675395
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/minerva_math_number_theory/bpb",
+   "shape": {
+    "gamma": 16.0
+   },
+   "ridge": 0.001,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.040270318097859
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/minerva_math_prealgebra/bpb",
+   "shape": {
+    "gamma": 16.0
+   },
+   "ridge": 0.001,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.041442794351946165
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/minerva_math_precalculus/bpb",
+   "shape": {
+    "gamma": 8.0
+   },
+   "ridge": 0.01,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.036383943695866276
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/codex_humaneval/bpb",
+   "shape": {
+    "gamma": 8.0
+   },
+   "ridge": 0.001,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.03884564597063586
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mbpp/bpb",
+   "shape": {
+    "gamma": 1.0
+   },
+   "ridge": 0.0001,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.03903257217866418
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_bash/bpb",
+   "shape": {
+    "gamma": 0.5
+   },
+   "ridge": 0.001,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.059156342229774665
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_c/bpb",
+   "shape": {
+    "gamma": 1.0
+   },
+   "ridge": 0.0001,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.02080844309475569
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_cpp/bpb",
+   "shape": {
+    "gamma": 0.5
+   },
+   "ridge": 0.0001,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.024114464606757976
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_csharp/bpb",
+   "shape": {
+    "gamma": 1.0
+   },
+   "ridge": 0.001,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.02164483390516409
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_go/bpb",
+   "shape": {
+    "gamma": 0.5
+   },
+   "ridge": 0.001,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.03757876671831781
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_haskell/bpb",
+   "shape": {
+    "gamma": 4.0
+   },
+   "ridge": 0.01,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.05176981375410984
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_java/bpb",
+   "shape": {
+    "gamma": 0.5
+   },
+   "ridge": 0.0001,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.018483147283100316
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_javascript/bpb",
+   "shape": {
+    "gamma": 1.0
+   },
+   "ridge": 0.001,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.026079642184468697
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_matlab/bpb",
+   "shape": {
+    "gamma": 2.0
+   },
+   "ridge": 0.01,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.034398227451317744
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_php/bpb",
+   "shape": {
+    "gamma": 0.5
+   },
+   "ridge": 0.01,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.02562202046775297
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_python/bpb",
+   "shape": {
+    "gamma": 1.0
+   },
+   "ridge": 0.0001,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.03909007776645038
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_r/bpb",
+   "shape": {
+    "gamma": 1.0
+   },
+   "ridge": 0.001,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.03763205343103077
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_ruby/bpb",
+   "shape": {
+    "gamma": 1.0
+   },
+   "ridge": 0.01,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.05197337491456409
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_rust/bpb",
+   "shape": {
+    "gamma": 1.0
+   },
+   "ridge": 0.01,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.05878539828259796
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_scala/bpb",
+   "shape": {
+    "gamma": 0.5
+   },
+   "ridge": 0.01,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.04107962417872766
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_swift/bpb",
+   "shape": {
+    "gamma": 0.5
+   },
+   "ridge": 0.01,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.03703267047545931
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_typescript/bpb",
+   "shape": {
+    "gamma": 0.5
+   },
+   "ridge": 0.001,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.028240591491485972
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/arc_easy/bpb",
+   "shape": {
+    "gamma": 4.0
+   },
+   "ridge": 1.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.10933379535402298
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/arc_challenge/bpb",
+   "shape": {
+    "gamma": 16.0
+   },
+   "ridge": 0.01,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.10153716511645212
+  },
+  {
+   "component": "mmlu_stem",
+   "shape": {
+    "gamma": 16.0
+   },
+   "ridge": 0.0001,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.06384655296551946
+  },
+  {
+   "component": "mmlu_humanities",
+   "shape": {
+    "gamma": 0.5
+   },
+   "ridge": 0.1,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.026756158808250805
+  },
+  {
+   "component": "mmlu_social_sciences",
+   "shape": {
+    "gamma": 4.0
+   },
+   "ridge": 0.1,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.035990944676300145
+  },
+  {
+   "component": "mmlu_other",
+   "shape": {
+    "gamma": 8.0
+   },
+   "ridge": 0.01,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.04325433684998703
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/csqa/bpb",
+   "shape": {
+    "gamma": 16.0
+   },
+   "ridge": 0.01,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.11273162940708767
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/hellaswag/bpb",
+   "shape": {
+    "gamma": 4.0
+   },
+   "ridge": 0.01,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.008660024863284122
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/winogrande/bpb",
+   "shape": {
+    "gamma": 0.5
+   },
+   "ridge": 0.1,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.015751399939718067
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/socialiqa/bpb",
+   "shape": {
+    "gamma": 8.0
+   },
+   "ridge": 0.1,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.1339823416027364
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/piqa/bpb",
+   "shape": {
+    "gamma": 4.0
+   },
+   "ridge": 1.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.0764713692641249
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/coqa/bpb",
+   "shape": {
+    "gamma": 4.0
+   },
+   "ridge": 0.1,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.07607233524590441
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/drop/bpb",
+   "shape": {
+    "gamma": 4.0
+   },
+   "ridge": 1.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.14177266373151878
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/jeopardy/bpb",
+   "shape": {
+    "gamma": 4.0
+   },
+   "ridge": 1.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.05676516017869945
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/naturalqs/bpb",
+   "shape": {
+    "gamma": 16.0
+   },
+   "ridge": 0.01,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.12186145965355878
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/squad/bpb",
+   "shape": {
+    "gamma": 8.0
+   },
+   "ridge": 0.1,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.06717427918039252
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/sciq/bpb",
+   "shape": {
+    "gamma": 16.0
+   },
+   "ridge": 0.0001,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.11821728538583877
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/basic_skills_arithmetic/bpb",
+   "shape": {
+    "gamma": 16.0
+   },
+   "ridge": 0.0001,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.15664751211982647
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/basic_skills_coding/bpb",
+   "shape": {
+    "gamma": 8.0
+   },
+   "ridge": 0.001,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.07405173810670897
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/basic_skills_common_knowledge/bpb",
+   "shape": {
+    "gamma": 2.0
+   },
+   "ridge": 0.1,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.058259278547306184
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/basic_skills_logical_reasoning/bpb",
+   "shape": {
+    "gamma": 2.0
+   },
+   "ridge": 1.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.03322708181426484
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/basic_skills_pattern/bpb",
+   "shape": {
+    "gamma": 8.0
+   },
+   "ridge": 1.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.05709921145344556
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/basic_skills_string_operations/bpb",
+   "shape": {
+    "gamma": 4.0
+   },
+   "ridge": 1.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.08553544473751166
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/lambada/bpb",
+   "shape": {
+    "gamma": 4.0
+   },
+   "ridge": 0.001,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.02484408972473977
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/medmcqa/bpb",
+   "shape": {
+    "gamma": 4.0
+   },
+   "ridge": 1.0,
+   "floor": NaN,
+   "kappa": NaN,
+   "inner_cv_rmse": 0.10816157034813602
+  }
+ ],
+ "cmp_t9_mk1": [
+  {
+   "component": "olmo_base_eval/easy_bpb/minerva_math_algebra/bpb",
+   "shape": {
+    "rate": 0.25,
+    "power": 1.0,
+    "threshold": 3.0
+   },
+   "ridge": 0.1,
+   "kappa": 1.4781768450535258,
+   "flat": false
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/minerva_math_counting_and_probability/bpb",
+   "shape": {
+    "rate": 0.1,
+    "power": 1.0,
+    "threshold": 1.0
+   },
+   "ridge": 0.01,
+   "kappa": 1.4429087007325225,
+   "flat": false
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/minerva_math_geometry/bpb",
+   "shape": {
+    "rate": 0.25,
+    "power": 1.0,
+    "threshold": 3.0
+   },
+   "ridge": 0.1,
+   "kappa": 1.4234450645218013,
+   "flat": false
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/minerva_math_intermediate_algebra/bpb",
+   "shape": {
+    "rate": 0.25,
+    "power": 1.0,
+    "threshold": 3.0
+   },
+   "ridge": 0.1,
+   "kappa": 1.5506021650704396,
+   "flat": false
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/minerva_math_number_theory/bpb",
+   "shape": {
+    "rate": 0.25,
+    "power": 1.0,
+    "threshold": 3.0
+   },
+   "ridge": 0.1,
+   "kappa": 1.4195764576813674,
+   "flat": false
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/minerva_math_prealgebra/bpb",
+   "shape": {
+    "rate": 0.25,
+    "power": 1.0,
+    "threshold": 3.0
+   },
+   "ridge": 0.1,
+   "kappa": 1.6585894074442529,
+   "flat": false
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/minerva_math_precalculus/bpb",
+   "shape": {
+    "rate": 0.25,
+    "power": 1.0,
+    "threshold": 3.0
+   },
+   "ridge": 0.1,
+   "kappa": 1.4832044175907475,
+   "flat": false
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/codex_humaneval/bpb",
+   "shape": {
+    "rate": 0.5,
+    "power": 1.0,
+    "threshold": 6.0
+   },
+   "ridge": 1.0,
+   "kappa": 3.8867601859141288,
+   "flat": false
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mbpp/bpb",
+   "shape": {
+    "rate": 0.5,
+    "power": 1.0,
+    "threshold": 1.0
+   },
+   "ridge": 0.0,
+   "kappa": 2.0835601289583887,
+   "flat": false
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_bash/bpb",
+   "shape": {
+    "rate": 0.5,
+    "power": 1.0,
+    "threshold": 5.0
+   },
+   "ridge": 0.01,
+   "kappa": 1.7926263891018406,
+   "flat": false
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_c/bpb",
+   "shape": {
+    "rate": 0.5,
+    "power": 1.0,
+    "threshold": 6.0
+   },
+   "ridge": 0.1,
+   "kappa": 1.4992602715274184,
+   "flat": false
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_cpp/bpb",
+   "shape": {
+    "rate": 0.5,
+    "power": 1.0,
+    "threshold": 6.0
+   },
+   "ridge": 0.1,
+   "kappa": 1.4204145416452532,
+   "flat": false
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_csharp/bpb",
+   "shape": {
+    "rate": 0.5,
+    "power": 1.0,
+    "threshold": 2.0
+   },
+   "ridge": 0.1,
+   "kappa": 1.852298769176962,
+   "flat": false
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_go/bpb",
+   "shape": {
+    "rate": 0.5,
+    "power": 1.0,
+    "threshold": 6.0
+   },
+   "ridge": 0.1,
+   "kappa": 1.3257904528718838,
+   "flat": false
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_haskell/bpb",
+   "shape": {
+    "rate": 0.25,
+    "power": 1.0,
+    "threshold": 3.0
+   },
+   "ridge": 0.1,
+   "kappa": 3.441832427874008,
+   "flat": false
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_java/bpb",
+   "shape": {
+    "rate": 0.5,
+    "power": 1.0,
+    "threshold": 6.0
+   },
+   "ridge": 0.1,
+   "kappa": 1.4246716364864056,
+   "flat": false
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_javascript/bpb",
+   "shape": {
+    "rate": 0.5,
+    "power": 1.0,
+    "threshold": 6.0
+   },
+   "ridge": 0.1,
+   "kappa": 1.581582327703326,
+   "flat": false
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_matlab/bpb",
+   "shape": {
+    "rate": 0.25,
+    "power": 1.0,
+    "threshold": 2.0
+   },
+   "ridge": 0.1,
+   "kappa": 2.5141091851892177,
+   "flat": false
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_php/bpb",
+   "shape": {
+    "rate": 0.5,
+    "power": 1.0,
+    "threshold": 3.0
+   },
+   "ridge": 0.1,
+   "kappa": 1.9176978218965324,
+   "flat": false
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_python/bpb",
+   "shape": {
+    "rate": 0.5,
+    "power": 1.0,
+    "threshold": 1.0
+   },
+   "ridge": 0.0,
+   "kappa": 2.048647570690769,
+   "flat": false
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_r/bpb",
+   "shape": {
+    "rate": 0.25,
+    "power": 1.0,
+    "threshold": 2.0
+   },
+   "ridge": 0.1,
+   "kappa": 1.7990043903963655,
+   "flat": false
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_ruby/bpb",
+   "shape": {
+    "rate": 0.25,
+    "power": 1.0,
+    "threshold": 4.0
+   },
+   "ridge": 0.1,
+   "kappa": 1.982564517653913,
+   "flat": false
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_rust/bpb",
+   "shape": {
+    "rate": 0.25,
+    "power": 1.0,
+    "threshold": 6.0
+   },
+   "ridge": 0.1,
+   "kappa": 1.393151402461785,
+   "flat": false
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_scala/bpb",
+   "shape": {
+    "rate": 0.25,
+    "power": 1.0,
+    "threshold": 3.0
+   },
+   "ridge": 0.1,
+   "kappa": 1.6957954491262643,
+   "flat": false
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_swift/bpb",
+   "shape": {
+    "rate": 0.25,
+    "power": 1.0,
+    "threshold": 4.0
+   },
+   "ridge": 0.1,
+   "kappa": 2.2926413258739813,
+   "flat": false
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/mt_mbpp_typescript/bpb",
+   "shape": {
+    "rate": 0.5,
+    "power": 1.0,
+    "threshold": 6.0
+   },
+   "ridge": 0.1,
+   "kappa": 1.7238753174546295,
+   "flat": false
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/arc_easy/bpb",
+   "shape": {
+    "rate": 2.0,
+    "power": 1.0,
+    "threshold": 2.0
+   },
+   "ridge": 1.0,
+   "kappa": 2.5454459367933313,
+   "flat": false
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/arc_challenge/bpb",
+   "shape": {
+    "rate": 4.0,
+    "power": 1.0,
+    "threshold": 2.0
+   },
+   "ridge": 1.0,
+   "kappa": 1.544596768738977,
+   "flat": false
+  },
+  {
+   "component": "mmlu_stem",
+   "shape": {
+    "rate": 0.1,
+    "power": 1.0,
+    "threshold": 2.0
+   },
+   "ridge": 0.1,
+   "kappa": 2.6918657825092067,
+   "flat": false
+  },
+  {
+   "component": "mmlu_humanities",
+   "shape": {
+    "rate": 1.0,
+    "power": 1.0,
+    "threshold": 2.0
+   },
+   "ridge": 1.0,
+   "kappa": 1.5,
+   "flat": true
+  },
+  {
+   "component": "mmlu_social_sciences",
+   "shape": {
+    "rate": 0.05,
+    "power": 1.0,
+    "threshold": 2.0
+   },
+   "ridge": 0.01,
+   "kappa": 1.3022261711245293,
+   "flat": false
+  },
+  {
+   "component": "mmlu_other",
+   "shape": {
+    "rate": 0.25,
+    "power": 1.0,
+    "threshold": 1.0
+   },
+   "ridge": 0.1,
+   "kappa": 2.7893260477734256,
+   "flat": false
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/csqa/bpb",
+   "shape": {
+    "rate": 4.0,
+    "power": 1.0,
+    "threshold": 2.0
+   },
+   "ridge": 1.0,
+   "kappa": 1.5,
+   "flat": true
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/hellaswag/bpb",
+   "shape": {
+    "rate": 0.1,
+    "power": 1.0,
+    "threshold": 2.0
+   },
+   "ridge": 0.01,
+   "kappa": 1.5,
+   "flat": true
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/winogrande/bpb",
+   "shape": {
+    "rate": 4.0,
+    "power": 1.0,
+    "threshold": 4.0
+   },
+   "ridge": 0.001,
+   "kappa": 1.5,
+   "flat": true
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/socialiqa/bpb",
+   "shape": {
+    "rate": 4.0,
+    "power": 1.0,
+    "threshold": 3.0
+   },
+   "ridge": 1.0,
+   "kappa": 1.007932745071113,
+   "flat": false
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/piqa/bpb",
+   "shape": {
+    "rate": 2.0,
+    "power": 1.0,
+    "threshold": 3.0
+   },
+   "ridge": 1.0,
+   "kappa": 1.0095493390081114,
+   "flat": false
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/coqa/bpb",
+   "shape": {
+    "rate": 4.0,
+    "power": 1.0,
+    "threshold": 2.0
+   },
+   "ridge": 1.0,
+   "kappa": 1.5953792830143136,
+   "flat": false
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/drop/bpb",
+   "shape": {
+    "rate": 4.0,
+    "power": 1.0,
+    "threshold": 2.0
+   },
+   "ridge": 1.0,
+   "kappa": 2.1860250121334763,
+   "flat": false
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/jeopardy/bpb",
+   "shape": {
+    "rate": 0.25,
+    "power": 1.0,
+    "threshold": 6.0
+   },
+   "ridge": 0.1,
+   "kappa": 4.512596504448035,
+   "flat": false
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/naturalqs/bpb",
+   "shape": {
+    "rate": 0.5,
+    "power": 1.0,
+    "threshold": 1.0
+   },
+   "ridge": 1.0,
+   "kappa": 1.007932745071113,
+   "flat": false
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/squad/bpb",
+   "shape": {
+    "rate": 0.25,
+    "power": 1.0,
+    "threshold": 1.0
+   },
+   "ridge": 0.1,
+   "kappa": 2.6291947085238,
+   "flat": false
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/sciq/bpb",
+   "shape": {
+    "rate": 4.0,
+    "power": 1.0,
+    "threshold": 1.0
+   },
+   "ridge": 1.0,
+   "kappa": 3.4125385270398128,
+   "flat": false
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/basic_skills_arithmetic/bpb",
+   "shape": {
+    "rate": 0.1,
+    "power": 1.0,
+    "threshold": 3.0
+   },
+   "ridge": 0.1,
+   "kappa": 1.571678265045499,
+   "flat": false
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/basic_skills_coding/bpb",
+   "shape": {
+    "rate": 0.25,
+    "power": 1.0,
+    "threshold": 4.0
+   },
+   "ridge": 0.1,
+   "kappa": 1.602402540850621,
+   "flat": false
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/basic_skills_common_knowledge/bpb",
+   "shape": {
+    "rate": 0.5,
+    "power": 1.0,
+    "threshold": 2.0
+   },
+   "ridge": 1.0,
+   "kappa": 3.9044453923248517,
+   "flat": false
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/basic_skills_logical_reasoning/bpb",
+   "shape": {
+    "rate": 0.1,
+    "power": 1.0,
+    "threshold": 2.0
+   },
+   "ridge": 1.0,
+   "kappa": 1.5,
+   "flat": true
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/basic_skills_pattern/bpb",
+   "shape": {
+    "rate": 0.05,
+    "power": 1.0,
+    "threshold": 5.0
+   },
+   "ridge": 0.1,
+   "kappa": 1.5,
+   "flat": true
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/basic_skills_string_operations/bpb",
+   "shape": {
+    "rate": 0.25,
+    "power": 1.0,
+    "threshold": 2.0
+   },
+   "ridge": 1.0,
+   "kappa": 3.324849535511621,
+   "flat": false
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/lambada/bpb",
+   "shape": {
+    "rate": 0.05,
+    "power": 1.0,
+    "threshold": 1.0
+   },
+   "ridge": 0.01,
+   "kappa": 3.8245678500208347,
+   "flat": false
+  },
+  {
+   "component": "olmo_base_eval/easy_bpb/medmcqa/bpb",
+   "shape": {
+    "rate": 0.05,
+    "power": 1.0,
+    "threshold": 1.0
+   },
+   "ridge": 0.01,
+   "kappa": 2.630507011538479,
+   "flat": false
+  }
+ ]
+}

@@ -9,8 +9,8 @@
 
 Proportional and UniMax-8 use the archived ladder. MARINER and Olmix use their frozen
 Qwen-fitted policies at every rung. At 3e18, proportional pools eleven runs and each
-fitted policy has three trainer seeds; error bars show one run SD. Later rungs are
-single runs. Missing final objective measurements are omitted.
+fitted policy and UniMax-8 have three trainer seeds; error bars show one run SD. Later
+rungs are single runs. Missing final objective measurements are omitted.
 """
 
 from __future__ import annotations
@@ -42,6 +42,8 @@ NOISE_SUMMARIES = {
     "table9": RELIABILITY_DIR / "snr_fit_tasks_delphi.csv",
 }
 OUTPUT_DIR = SCRIPT_DIR / "reference_outputs" / "scaling_curves_placeholder_20260905"
+# UniMax-8 trainer-seed repeats at 3e18 (collect_unimax8_repeats_3e18_20260922.py), fairness-summary schema.
+UNIMAX_REPEATS = SCRIPT_DIR / "reference_outputs" / "delphi_unimax8_repeats_3e18_20260922" / "repeats_summary.csv"
 INK = "#111111"
 GRID = "#b8b8b8"
 PAPER = "white"
@@ -102,7 +104,7 @@ DPI = 300
 
 
 def first_rung_statistics(
-    snapshot: pd.DataFrame, fairness: pd.DataFrame, noise: pd.DataFrame, matched: pd.DataFrame
+    snapshot: pd.DataFrame, fairness: pd.DataFrame, noise: pd.DataFrame, matched: pd.DataFrame, unimax: pd.DataFrame
 ) -> pd.DataFrame:
     """Pool proportional repeats and use only the specified objective's fitted policies."""
     rows = []
@@ -144,6 +146,21 @@ def first_rung_statistics(
                 "source_metric": metric,
             }
         )
+        repeats = unimax[unimax["metric"].eq(metric)]
+        assert len(repeats) == 1 and int(repeats["n"].iloc[0]) == 3, f"UniMax-8 repeats for {metric}"
+        row = repeats.iloc[0]
+        rows.append(
+            {
+                "target": target,
+                "mixture": "unimax8",
+                "mean": float(row["mean"]),
+                "sd": float(row["sd"]),
+                "n": int(row["n"]),
+                "source_csv": str(UNIMAX_REPEATS),
+                "source_rows": f"unimax8 trainer seeds {row['seeds']}",
+                "source_metric": metric,
+            }
+        )
         olmix_id = series[-1][0]
         olmix = matched[
             matched["candidate_id"].eq(olmix_id) & matched["target"].eq(target) & matched["status"].eq("measured")
@@ -173,8 +190,8 @@ def plotted_points(snapshot: pd.DataFrame, repeats: pd.DataFrame, ladder_path: P
         for mixture, label, _color, _style in series[:2]:
             frame = snapshot[snapshot["mixture"].eq(mixture) & snapshot["is_completed"] & snapshot[column].notna()]
             for _, row in frame.iterrows():
-                if mixture == "proportional" and float(row["flops"]) == SCALES[0]:
-                    continue
+                if mixture in ("proportional", "unimax8") and float(row["flops"]) == SCALES[0]:
+                    continue  # the first rung comes from the pooled or repeated runs below
                 rows.append(
                     {
                         "target": target,
@@ -189,7 +206,7 @@ def plotted_points(snapshot: pd.DataFrame, repeats: pd.DataFrame, ladder_path: P
                         "source_metric": column,
                     }
                 )
-        labels = {"proportional": "Proportional", mariner_id: "MARINER", series[-1][0]: "Olmix"}
+        labels = {"proportional": "Proportional", "unimax8": "UniMax-8", mariner_id: "MARINER", series[-1][0]: "Olmix"}
         for _, row in repeats[repeats["target"].eq(target)].iterrows():
             rows.append({**row.to_dict(), "label": labels[row["mixture"]], "flops": SCALES[0]})
         metric = "uncheatable_bpb" if target == "uncheatable" else "table9_macro_bpb"
@@ -311,12 +328,14 @@ def main() -> None:
     parser.add_argument("--drive-dir", type=Path, default=None)
     parser.add_argument("--ladder-results", type=Path, default=LADDER_RESULTS)
     parser.add_argument("--matched-olmix-results", type=Path, default=MATCHED_OLMIX_RESULTS)
+    parser.add_argument("--unimax-repeats", type=Path, default=UNIMAX_REPEATS)
     args = parser.parse_args()
     snapshot = pd.read_csv(SNAPSHOT)
     fairness = pd.read_csv(FAIRNESS_SUMMARY)
     noise = pd.concat([pd.read_csv(path).iloc[[0]].assign(target=target) for target, path in NOISE_SUMMARIES.items()])
     matched = pd.read_csv(MATCHED_FIRST_RUNG)
-    repeats = first_rung_statistics(snapshot, fairness, noise, matched)
+    unimax = pd.read_csv(args.unimax_repeats)
+    repeats = first_rung_statistics(snapshot, fairness, noise, matched, unimax)
     points = plotted_points(snapshot, repeats, args.ladder_results, args.matched_olmix_results)
     plt.rcParams.update(PLOT_STYLE)
     figure = build_figure(points)

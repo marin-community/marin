@@ -40,6 +40,9 @@ PAPER = "white"
 MARINER_COLOR = "#469C76"
 OLMIX_COLOR = "#CC79A7"
 BAND_COLOR = "#6C6F7D"
+# Per-task segments spanning the surrogates; dashed so they do not read as confidence intervals.
+SEGMENT_STYLES = {"solid": "-", "dashed": (0, (2.5, 1.5))}
+SIGMA = "\N{GREEK SMALL LETTER SIGMA}"
 REGMIX_COLOR = "#0072B2"
 MODEL_CHOICES = {
     "mariner": ("MARINER", MARINER_COLOR),
@@ -105,20 +108,22 @@ def style(axis: plt.Axes) -> None:
         axis.spines[side].set_visible(False)
     for side in ("left", "bottom"):
         axis.spines[side].set_color(INK)
-    axis.set_xlabel("Evaluation SNR (swarm SD / proportional SD)", color=INK, fontsize=7.5)
+    axis.set_xlabel("Evaluation SNR (swarm std / proportional std)", color=INK, fontsize=7.5)
 
 
-def scatter(axis: plt.Axes, frame: pd.DataFrame, column: str, label_points: bool) -> None:
+def scatter(axis: plt.Axes, frame: pd.DataFrame, column: str, label_points: bool, task_segments: str = "dashed") -> None:
     # One thin segment per task spans the surrogates, so the paired difference is readable.
-    axis.vlines(
-        frame["snr"],
-        model_columns(frame, column).min(axis=1),
-        model_columns(frame, column).max(axis=1),
-        color=BAND_COLOR,
-        alpha=0.45,
-        linewidth=0.8,
-        zorder=3,
-    )
+    if task_segments != "none":
+        axis.vlines(
+            frame["snr"],
+            model_columns(frame, column).min(axis=1),
+            model_columns(frame, column).max(axis=1),
+            color=BAND_COLOR,
+            alpha=0.45,
+            linewidth=0.8,
+            linestyles=SEGMENT_STYLES[task_segments],
+            zorder=3,
+        )
     for model, label, color in MODELS:
         for evaluation, marker, size in (("OlmoBaseEval Easy", "o", 22), ("Uncheatable", "D", 24)):
             part = frame[frame["evaluation"].eq(evaluation)]
@@ -157,9 +162,10 @@ def draw_r2_panel(
     *,
     title: str | None = "B. Explained variance against its noise ceiling",
     label_points: bool = True,
+    task_segments: str = "dashed",
 ) -> None:
     """Out-of-fold R^2 against SNR with the ceiling a noise-free predictor of the run mean would reach."""
-    scatter(axis, frame, "r2", label_points=label_points)
+    scatter(axis, frame, "r2", label_points=label_points, task_segments=task_segments)
     grid = np.geomspace(1.0, 40.0, 200)
     axis.plot(grid, 1 - 1 / grid**2, color=BAND_COLOR, linestyle=(0, (4, 2)), linewidth=0.9, zorder=2)
     if label_points:
@@ -182,11 +188,12 @@ def draw_r2_panel(
         axis.set_title(title, loc="left", fontsize=8, fontweight="bold", color=INK)
 
 
-def build_r2_only_figure(frame: pd.DataFrame) -> plt.Figure:
+def build_r2_only_figure(frame: pd.DataFrame, *, task_segments: str = "dashed") -> plt.Figure:
     """Main-text panel with separate keys for method colors and evaluation shapes."""
-    figure = plt.figure(figsize=(3.2, 2.9))
-    axis = figure.add_axes((0.16, 0.23, 0.82, 0.58))
-    draw_r2_panel(axis, frame, title=None, label_points=False)
+    # The canvas is wider than the plotting area so the two-line y label fits without narrowing the axes.
+    figure = plt.figure(figsize=(3.35, 2.9))
+    axis = figure.add_axes((0.205, 0.23, 0.775, 0.58))
+    draw_r2_panel(axis, frame, title=None, label_points=False, task_segments=task_segments)
     style(axis)
     axis.set_xlim(0.9, 42)
     lower_tick = np.floor(model_columns(frame, "r2").min().min() * 2) / 2
@@ -196,8 +203,12 @@ def build_r2_only_figure(frame: pd.DataFrame) -> plt.Figure:
     for tick in axis.get_yticks():
         if tick not in (0.0, 1.0):
             axis.axhline(tick, color=GRID, alpha=0.72, linewidth=0.6, zorder=0)
-    axis.set_ylabel(r"Out-of-fold $R^2$", color=INK, fontsize=8)
-    axis.set_xlabel("Signal-to-noise ratio (SNR)\nSwarm SD / proportional-repeat SD", color=INK, fontsize=7.5)
+    axis.set_ylabel("Cross-validated $R^2$\npredicted vs. measured task loss", color=INK, fontsize=7.5)
+    axis.set_xlabel(
+        f"Signal-to-noise ratio (SNR)\n{SIGMA}(swarm mixtures) / {SIGMA}(proportional repeats)",
+        color=INK,
+        fontsize=8,
+    )
     axis.annotate(
         "Constant-noise ceiling\n" + r"$1-1/\mathrm{SNR}^2$",
         xy=(2.15, 1 - 1 / 2.15**2),
@@ -229,7 +240,7 @@ def build_r2_only_figure(frame: pd.DataFrame) -> plt.Figure:
         method_handles,
         [label for _model, label, _color in MODELS],
         loc="upper center",
-        bbox_to_anchor=(0.57, 1.0),
+        bbox_to_anchor=(0.59, 1.0),
         ncol=len(MODELS),
         fontsize=7.5,
         frameon=False,
@@ -243,7 +254,7 @@ def build_r2_only_figure(frame: pd.DataFrame) -> plt.Figure:
         group_handles,
         ["OlmoBaseEval Easy", "Uncheatable"],
         loc="upper center",
-        bbox_to_anchor=(0.57, 0.925),
+        bbox_to_anchor=(0.59, 0.925),
         ncol=2,
         fontsize=6.6,
         frameon=False,
@@ -253,10 +264,10 @@ def build_r2_only_figure(frame: pd.DataFrame) -> plt.Figure:
     return figure
 
 
-def build_figure(frame: pd.DataFrame, variant: str) -> plt.Figure:
+def build_figure(frame: pd.DataFrame, variant: str, *, task_segments: str = "dashed") -> plt.Figure:
     figure, (left, right) = plt.subplots(1, 2, figsize=(7.0, 2.6))
     table9 = frame[frame["evaluation"].eq("OlmoBaseEval Easy") & ~frame["uncollapsed"].fillna(False)]
-    scatter(left, frame, "rmse_over_panel_sd", label_points=False)
+    scatter(left, frame, "rmse_over_panel_sd", label_points=False, task_segments=task_segments)
     for model, _label, color in MODELS:
         median = float(table9[f"{model}_rmse_over_panel_sd"].median())
         left.axhline(median, color=color, linestyle=(0, (4, 2)), linewidth=0.9, zorder=2)
@@ -283,11 +294,11 @@ def build_figure(frame: pd.DataFrame, variant: str) -> plt.Figure:
         fontsize=6.5,
         color=BAND_COLOR,
     )
-    left.set_ylabel("Out-of-fold RMSE / swarm SD", color=INK, fontsize=7.5)
+    left.set_ylabel("Out-of-fold RMSE / swarm std", color=INK, fontsize=7.5)
     left.set_ylim(0, 1.15)
     left.set_title("A. Fit error as a fraction of the spread", loc="left", fontsize=8, fontweight="bold", color=INK)
     if variant == "r2":
-        draw_r2_panel(right, frame)
+        draw_r2_panel(right, frame, task_segments=task_segments)
         for axis in (left, right):
             style(axis)
             axis.set_xlim(0.9, 42)
@@ -305,7 +316,7 @@ def build_figure(frame: pd.DataFrame, variant: str) -> plt.Figure:
         )
         figure.tight_layout(w_pad=1.5)
         return figure
-    scatter(right, frame, "rmse_over_repeat_sd", label_points=True)
+    scatter(right, frame, "rmse_over_repeat_sd", label_points=True, task_segments=task_segments)
     grid = np.array([1.0, 40.0])
     for model, _label, color in MODELS:
         slope = float(np.sum(table9["snr"] * table9[f"{model}_rmse_over_repeat_sd"]) / np.sum(table9["snr"] ** 2))
@@ -321,7 +332,7 @@ def build_figure(frame: pd.DataFrame, variant: str) -> plt.Figure:
         )
     right.axhspan(0, NOISE_LIMIT, color=BAND_COLOR, alpha=0.10, zorder=1, linewidth=0)
     right.annotate(
-        "within 2 SD of the noise floor",
+        "within 2 std of the noise floor",
         xy=(40, NOISE_LIMIT),
         xytext=(-2, -3),
         textcoords="offset points",
@@ -330,7 +341,7 @@ def build_figure(frame: pd.DataFrame, variant: str) -> plt.Figure:
         fontsize=6.5,
         color=BAND_COLOR,
     )
-    right.set_ylabel("Out-of-fold RMSE / proportional SD", color=INK, fontsize=7.5)
+    right.set_ylabel("Out-of-fold RMSE / proportional std", color=INK, fontsize=7.5)
     right.set_yscale("log")
     right.set_yticks([1, 2, 5, 10, 20])
     right.set_yticklabels(["1", "2", "5", "10", "20"])
@@ -355,7 +366,7 @@ def build_figure(frame: pd.DataFrame, variant: str) -> plt.Figure:
 
 
 def group_table(input_dir: Path = INPUT_DIR) -> pd.DataFrame:
-    """Component-level medians by task group: error as a fraction of the swarm SD, R^2, and the noise share of MSE."""
+    """Component-level medians by task group: error as a fraction of the swarm std, R^2, and the noise share of MSE."""
     table9 = pd.read_csv(input_dir / "snr_fit_components_delphi.csv")
     table9 = table9[table9["component"].notna() & (table9["component"] != "")].copy()
     uncheatable = pd.read_csv(input_dir / "snr_fit_uncheatable_delphi.csv")
@@ -390,13 +401,23 @@ def main() -> None:
     parser.add_argument(
         "--models", nargs="+", choices=tuple(MODEL_CHOICES), default=list(DEFAULT_MODELS), help="models to draw"
     )
+    parser.add_argument(
+        "--task-segments",
+        choices=(*SEGMENT_STYLES, "none"),
+        default="dashed",
+        help="line style of the per-task vertical segment spanning the surrogates, or none for markers only",
+    )
     args = parser.parse_args()
     global MODELS
     MODELS = tuple((key, *MODEL_CHOICES[key]) for key in args.models)
     args.output_dir = args.output_dir or args.input_dir
     frame = load(args.input_dir)
     plt.rcParams.update(PLOT_STYLE)
-    figure = build_r2_only_figure(frame) if args.variant == "r2_only" else build_figure(frame, args.variant)
+    figure = (
+        build_r2_only_figure(frame, task_segments=args.task_segments)
+        if args.variant == "r2_only"
+        else build_figure(frame, args.variant, task_segments=args.task_segments)
+    )
     suffix = {"noise": "", "r2": "_r2", "r2_only": "_r2_only"}[args.variant]
     for extension in ("png", "pdf"):
         figure.savefig(args.output_dir / f"fit_error_vs_snr{suffix}.{extension}", dpi=DPI, bbox_inches="tight")

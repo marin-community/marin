@@ -105,6 +105,12 @@ from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E
 from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
     retained_power_law_model_20260728 as retained_power_law,
 )
+from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
+    single_phase_observatory_models_20260902 as observatory_models,
+)
+from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
+    single_phase_observatory_registry_20260902 as observatory_registry,
+)
 from experiments.domain_phase_mix.exploratory.two_phase_many.standalone_code import dsp_exact as dsp  # noqa: E402
 from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search import (  # noqa: E402
     generic_family_penalty_calibration as grp_calibration,
@@ -182,7 +188,26 @@ MODEL_IDS = (
     "bucket_family_weibull_shared_onset",
     "bucket_family_weibull_family_replay",
     "retained_power_law",
+    "mariner",
+    "mariner_per_bucket_threshold",
+    "mariner_per_bucket_shape",
+    "mariner_convex",
+    "mariner_convex_per_bucket_threshold",
 )
+# MARINER is the paper's frozen one-phase procedure (single_phase_observatory_registry_20260902); each variant
+# maps to a registry entry and is fitted only on phase-tied policies, and only where the one-phase panel is
+# large enough for its inner-CV grid search.
+MARINER_REGISTRY_IDS = {
+    "mariner": observatory_registry.FROZEN_ID,
+    "mariner_per_bucket_threshold": f"{observatory_registry.FROZEN_ID}_per_bucket_threshold",
+    "mariner_per_bucket_shape": f"{observatory_registry.FROZEN_ID}_per_bucket_shape",
+    "mariner_convex": f"{observatory_registry.FROZEN_ID}_raw_epoch_hinge",
+    "mariner_convex_per_bucket_threshold": f"{observatory_registry.FROZEN_ID}_raw_epoch_hinge_per_bucket_threshold",
+}
+MARINER_MODEL_IDS = tuple(MARINER_REGISTRY_IDS)
+SINGLE_PHASE_ONLY_MODEL_IDS = frozenset(MARINER_MODEL_IDS)
+MARINER_MIN_FIT_ROWS = 12
+MARINER_INNER_FOLDS = 3
 # How many least-squares-screened shapes are rescored under the robust head. Twelve keeps a dashboard
 # cell near four minutes on a 39-bucket panel where the full grid would take over an hour.
 RETAINED_POWER_LAW_TOP_SHAPES = 12
@@ -210,6 +235,7 @@ NEW_MODEL_IDS = (
     "bucket_family_power_separate_heads_family_onset",
     "retained_power_law",
     *RETAINED_GRP_MODEL_IDS,
+    *MARINER_MODEL_IDS,
 )
 VISIBLE_NEW_MODEL_IDS = tuple(model_id for model_id in NEW_MODEL_IDS if model_id in VISIBLE_MODEL_IDS)
 LEGACY_MODEL_IDS = tuple(model_id for model_id in MODEL_IDS if model_id not in NEW_MODEL_IDS)
@@ -235,6 +261,11 @@ MODEL_LABELS = {
     "bucket_family_power_separate_heads_family_onset": "Power + separate heads, family onset",
     "bucket_family_weibull_shared_onset": "Weibull GRP, shared onset",
     "bucket_family_weibull_family_replay": "Weibull GRP, family replay",
+    "mariner": "MARINER",
+    "mariner_per_bucket_threshold": "MARINER, one threshold per bucket",
+    "mariner_per_bucket_shape": "MARINER, nonlinear shapes per bucket",
+    "mariner_convex": "MARINER, fully convex objective",
+    "mariner_convex_per_bucket_threshold": "MARINER, fully convex, one threshold per bucket",
 }
 MODEL_DESCRIPTIONS = {
     "linear": "An affine response in policy weights; a transparent no-curvature baseline.",
@@ -280,6 +311,28 @@ MODEL_DESCRIPTIONS = {
     "bucket_family_weibull_family_replay": (
         "Shared Weibull learning and family coverage with literal replay harm learned independently per family."
     ),
+    "mariner": (
+        "The paper's frozen one-phase procedure: a fitted floor plus an exponential of per-bucket saturating "
+        "Weibull benefit and squared-softplus repetition harm in log epochs, shapes shared across buckets and chosen "
+        "by inner cross-validation, nonnegative amplitudes, and a per-target floor multiplier. Fitted here to the "
+        "selected aggregate target rather than task by task."
+    ),
+    "mariner_per_bucket_threshold": (
+        "MARINER with one harm threshold per bucket, chosen by coordinate descent from the shared optimum on the "
+        "same inner-CV error."
+    ),
+    "mariner_per_bucket_shape": (
+        "MARINER with rate, power and threshold all free per bucket by the same coordinate descent (about 200 "
+        "parameters on 39 buckets)."
+    ),
+    "mariner_convex": (
+        "MARINER with the harm replaced by an unsquared softplus of raw epochs past the critical count, convex in "
+        "epochs everywhere, so the mixture objective is convex in the weights and its optimum is global."
+    ),
+    "mariner_convex_per_bucket_threshold": (
+        "The fully convex objective with one critical count per bucket; convexity in the weights is separable "
+        "across buckets, so the optimum stays global."
+    ),
 }
 MODEL_FAMILIES = {
     "linear": ("baseline", "Baseline", "Linear"),
@@ -304,6 +357,11 @@ MODEL_FAMILIES = {
     ),
     "bucket_family_weibull_shared_onset": ("grp", "GRP", "Weibull shared onset"),
     "bucket_family_weibull_family_replay": ("grp", "GRP", "Weibull family replay"),
+    "mariner": ("mariner", "MARINER", "Frozen procedure"),
+    "mariner_per_bucket_threshold": ("mariner", "MARINER", "One threshold per bucket"),
+    "mariner_per_bucket_shape": ("mariner", "MARINER", "Nonlinear shapes per bucket"),
+    "mariner_convex": ("mariner", "MARINER", "Fully convex objective"),
+    "mariner_convex_per_bucket_threshold": ("mariner", "MARINER", "Fully convex, one threshold per bucket"),
 }
 SEPARATE_L2_GRID = (0.03, 0.1, 0.3, 1.0, 1.5, 3.0)
 PRODUCTION_GRP_L2_GRID = (0.0, 1e-4, 1e-3, 1e-2, 0.1, 0.5, 1.0, 3.0)
@@ -1820,6 +1878,166 @@ def fit_linear_baseline(
     )
 
 
+def model_applies(model_id: str, policy_class: str, fit_dataset: pooled.Dataset) -> bool:
+    """MARINER variants fit phase-tied policies only, and only panels large enough for their inner-CV search."""
+    if model_id not in SINGLE_PHASE_ONLY_MODEL_IDS:
+        return True
+    return policy_class == SINGLE_PHASE and fit_dataset.n >= MARINER_MIN_FIT_ROWS
+
+
+def mariner_features(dataset: pooled.Dataset, weights: np.ndarray) -> observatory_models.Features:
+    """MARINER inputs for observatory policies: total simulated epochs per bucket and the tied-equivalent share."""
+    weights = np.asarray(weights, dtype=float)
+    inventory = np.asarray(dataset.c0, dtype=float) + np.asarray(dataset.c1, dtype=float)
+    exposures = weights[:, 0, :] * np.asarray(dataset.c0, dtype=float)[None, :]
+    exposures = exposures + weights[:, 1, :] * np.asarray(dataset.c1, dtype=float)[None, :]
+    return observatory_models.Features(
+        exposures=exposures,
+        weights=exposures / np.maximum(inventory, 1e-12)[None, :],
+        inventory=inventory,
+        early_fraction=np.ones(dataset.m),
+        families=observatory_models.families_from_buckets(dataset.domain_names),
+        buckets_names=tuple(str(name) for name in dataset.domain_names),
+        label=f"observatory:{dataset.name}",
+    )
+
+
+def proportional_anchor(dataset: pooled.Dataset, indices: np.ndarray) -> tuple[float, float]:
+    """Mean and standard deviation of the target over the training rows named as proportional runs, else NaN."""
+    column = next((name for name in ("run_name", "name", "run_id") if name in dataset.frame.columns), None)
+    if column is None:
+        return float("nan"), 0.0
+    names = dataset.frame[column].astype(str).to_numpy()[indices]
+    mask = np.char.find(names.astype(str), "proportional") >= 0
+    if not mask.any():
+        return float("nan"), 0.0
+    values = np.asarray(dataset.y[indices], dtype=float)[mask]
+    return float(values.mean()), float(values.std(ddof=1)) if len(values) > 1 else 0.0
+
+
+@dataclass(frozen=True)
+class MarinerSurrogate:
+    """The frozen one-phase MARINER procedure, or one of its ablations, fitted to one observatory target."""
+
+    dataset: pooled.Dataset
+    model_id: str
+    model: Any
+    fitted: observatory_models.Fitted
+    features: observatory_models.Features
+    tuning: dict[str, Any]
+
+    def predict(self, weights: np.ndarray) -> np.ndarray:
+        query = mariner_features(self.dataset, weights)
+        return np.asarray(self.model.predict(self.fitted, query, np.arange(query.rows)), dtype=float)
+
+
+def fit_mariner(dataset: pooled.Dataset, indices: np.ndarray, model_id: str) -> MarinerSurrogate:
+    """Fit a MARINER registry entry to ``dataset.y`` on ``indices`` with the paper's inner-CV protocol.
+
+    The floor anchor comes from the training rows named as proportional runs when the panel has them; otherwise
+    the registry's fallback (training median, no noise margin) applies. Inner folds interleave the training rows.
+    """
+    entry = observatory_registry.ENTRY_BY_ID[MARINER_REGISTRY_IDS[model_id]]
+    features = mariner_features(dataset, dataset.weights)
+    model = entry.build(features)
+    anchor, noise = proportional_anchor(dataset, indices)
+    if math.isfinite(anchor):
+        head = replace(model.base.head, floor_anchor=anchor, noise_sd=noise)
+        model = replace(model, base=replace(model.base, head=head))
+    train = np.asarray(indices, dtype=int)
+    labels = np.arange(len(train)) % MARINER_INNER_FOLDS
+    inner = tuple((train[labels != fold], train[labels == fold]) for fold in range(MARINER_INNER_FOLDS))
+    fitted = model.fit(features, np.asarray(dataset.y, dtype=float), train, inner, 0)
+    diagnostics = {
+        key: value.item() if isinstance(value, np.generic) else value for key, value in fitted.diagnostics.items()
+    }
+    tuning = {
+        "registryEntry": entry.model_id,
+        "shape": {key: float(value) for key, value in fitted.shape.items()},
+        "ridge": float(fitted.ridge),
+        "link": str(diagnostics.get("link", "")),
+        "kappa": safe_float(diagnostics.get("kappa", float("nan"))),
+        "floor": safe_float(fitted.head.floor),
+        "innerCvRmse": safe_float(diagnostics.get("inner_cv_rmse", float("nan"))),
+        "floorAnchor": safe_float(anchor),
+        "floorAnchorNoise": float(noise),
+        "innerFolds": MARINER_INNER_FOLDS,
+        "fit": (
+            "Frozen one-phase procedure: 168-shape grid x 5 ridges by 3-fold inner-CV RMSE with NNLS amplitudes, "
+            "then the kappa-floor link searched per target; fitted to the aggregate target."
+        ),
+    }
+    return MarinerSurrogate(dataset, model_id, model, fitted, features, tuning)
+
+
+def mariner_parameters(model: MarinerSurrogate) -> list[dict[str, Any]]:
+    """Fit-explorer records: shapes (shared or per bucket), floor, link, and per-bucket amplitudes."""
+    fitted = model.fitted
+    head = fitted.head
+    records: list[dict[str, Any]] = [
+        parameter("floor", "phi", float(head.floor), "Fitted loss floor of the exponential link.", unit="BPB"),
+        parameter("kappa_floor", "kappa_phi", float(head.kappa), "Floor multiplier chosen by inner CV."),
+        parameter("intercept", "c", float(head.intercept), "Log-deficit intercept."),
+        parameter("ridge", "lambda", float(fitted.ridge), "Amplitude ridge chosen by inner CV."),
+    ]
+    shape = dict(fitted.shape)
+    symbols = {"rate": "rho", "power": "kappa", "threshold": "tau"}
+    roles = {
+        "rate": "Weibull benefit rate in epochs.",
+        "power": "Weibull benefit power (at most one, so benefit is concave).",
+        "threshold": "Harm threshold: the critical count is e^tau - 1 epochs.",
+    }
+    for key, value in shape.items():
+        base, _, bucket = key.partition(":")
+        if base not in symbols:
+            continue
+        if bucket:
+            domain = model.dataset.domain_names[int(bucket)]
+            records.append(
+                parameter(
+                    f"shape:{base}:{domain}",
+                    f"{symbols[base]}_i",
+                    float(value),
+                    roles[base],
+                    scope="domain",
+                    domain_id=domain,
+                )
+            )
+        else:
+            records.append(parameter(f"shape:{base}", symbols[base], float(value), roles[base]))
+    grid = model.model.base
+    design = grid.design(model.features, fitted.shape)
+    for name, coefficient in zip(design.names, np.asarray(head.coefficients, dtype=float), strict=True):
+        column, _, index = name.partition(":")
+        if not index.isdigit():
+            records.append(parameter(f"coefficient:{name}", name, float(coefficient), "Design coefficient."))
+            continue
+        domain = model.dataset.domain_names[int(index)]
+        if column == "bucket_signal":
+            records.append(
+                parameter(
+                    f"alpha:{domain}",
+                    "alpha_i",
+                    float(coefficient),
+                    "Benefit amplitude (nonnegative): log-deficit reduction at saturation.",
+                    scope="domain",
+                    domain_id=domain,
+                )
+            )
+        else:
+            records.append(
+                parameter(
+                    f"beta:{domain}",
+                    "beta_i",
+                    float(coefficient),
+                    "Harm amplitude (nonnegative): log-deficit growth past the threshold.",
+                    scope="domain",
+                    domain_id=domain,
+                )
+            )
+    return records
+
+
 def fit_olmix_loglinear_baseline(
     dataset: pooled.Dataset,
     indices: np.ndarray,
@@ -2097,6 +2315,16 @@ def fit_one_model(
 
         def fold_predict(train: np.ndarray, test: np.ndarray) -> np.ndarray:
             return fit_linear_baseline(dataset, train, policy_class).predict(dataset.weights[test])
+
+        full_prediction = full_model.predict(dataset.weights)
+    elif model_id in MARINER_MODEL_IDS:
+        if policy_class != SINGLE_PHASE:
+            raise ValueError(f"{model_id} is a one-phase surrogate")
+        full_model = fit_mariner(dataset, all_indices, model_id)
+        tuning = full_model.tuning
+
+        def fold_predict(train: np.ndarray, test: np.ndarray) -> np.ndarray:
+            return fit_mariner(dataset, train, model_id).predict(dataset.weights[test])
 
         full_prediction = full_model.predict(dataset.weights)
     elif model_id == "olmix_loglinear":
@@ -3353,6 +3581,8 @@ def parameter_records(
 ) -> list[dict[str, Any]]:
     if model_id == "linear":
         return linear_parameters(model)
+    if model_id in MARINER_MODEL_IDS:
+        return mariner_parameters(model)
     if model_id == "olmix_loglinear":
         return olmix_loglinear_parameters(model)
     if model_id in {"canonical", "effective_exposure", "effective_exposure_geometry"}:
@@ -4215,6 +4445,8 @@ def cached_swarm_fit(
         model_dependencies.extend([Path(family_grp.__file__), Path(retained_grp.__file__)])
     elif model_id == "olmix_loglinear":
         model_dependencies.append(Path(olmix_loglinear.__file__))
+    elif model_id in MARINER_MODEL_IDS:
+        model_dependencies.extend([Path(observatory_models.__file__), Path(observatory_registry.__file__)])
     fingerprint_payload: dict[str, Any] = {
         "swarm": swarm_id,
         "target": target_id,
@@ -4313,6 +4545,8 @@ def build_generic_swarm(
             fit_row_indices = np.arange(dataset.n)
         policy_fit_counts[policy_class] = fit_dataset.n
         for model_id in model_ids:
+            if not model_applies(model_id, policy_class, fit_dataset):
+                continue
             result = cached_swarm_fit(
                 swarm_id,
                 target_id,
@@ -4578,6 +4812,8 @@ def build_300m_swarm(legacy: dict[str, Any]) -> dict[str, Any]:
             SINGLE_PHASE: {},
         }
         for model_id in VISIBLE_NEW_MODEL_IDS:
+            if not model_applies(model_id, TWO_PHASE, dataset):
+                continue
             result = cached_swarm_fit(
                 "300m",
                 target_id,
@@ -4675,7 +4911,9 @@ def load_60m_dataset(
     )
 
 
-def load_60m_audit(target_id: str) -> tuple[
+def load_60m_audit(
+    target_id: str,
+) -> tuple[
     pooled.Dataset,
     pooled.Dataset,
     pooled.Dataset,
@@ -4833,6 +5071,8 @@ def build_60m_swarm(model_ids: tuple[str, ...] = VISIBLE_MODEL_IDS) -> dict[str,
             (TWO_PHASE, target_fit_two, target_fit_two_indices),
         ):
             for model_id in model_ids:
+                if not model_applies(model_id, policy_class, fit_dataset):
+                    continue
                 result = cached_swarm_fit(
                     "60m",
                     target_id,
@@ -5446,6 +5686,8 @@ def build_delphi_3e18_swarm(model_ids: tuple[str, ...] = DELPHI_3E18_MODEL_IDS) 
                 fit_row_indices = np.arange(fit_dataset.n)
                 source_paths = [DELPHI_3E18_DATA, DELPHI_3E18_HELDOUTS]
             for model_id in model_ids:
+                if not model_applies(model_id, policy_class, policy_fit_dataset):
+                    continue
                 result = cached_swarm_fit(
                     "delphi_3e18",
                     target_id,

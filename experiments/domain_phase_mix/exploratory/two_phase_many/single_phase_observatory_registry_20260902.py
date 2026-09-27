@@ -1645,7 +1645,9 @@ def _fitted_floor(
         base: models.GridModel | models.PerBucketShapeGridModel = grid(features)
         if per_bucket_shapes:
             # The shape-sharing ablation: the shared grid optimum seeds a per-bucket coordinate descent.
-            base = models.PerBucketShapeGridModel(shared=base, head=base.head, free_keys=per_bucket_keys)
+            base = models.PerBucketShapeGridModel(
+                shared=base, head=base.head, free_keys=per_bucket_keys, harm=options.harm
+            )
         panel = features.label.split("|", 1)[0]
         anchors = floor_anchors()
         if (panel, features.component) in anchors:
@@ -1690,6 +1692,18 @@ def _successor_prior(model_id: str, *, scrambled: bool) -> Builder:
     def build(features: models.Features) -> models.GridModel:
         options = _options(SUCCESSOR_OPTIONS, component_ridge=ablation_prior_table(scrambled))
         return _successor(model_id, options, head=NNLS)(features)
+
+    return build
+
+
+def _averaged(builder: Builder, *, temperature_se: float) -> Builder:
+    """Wrap a fitted-floor builder so predictions average over near-optimal grid candidates (AveragedFloorModel)."""
+
+    def build(features: models.Features) -> models.AveragedFloorModel:
+        floor = builder(features)
+        if not isinstance(floor, models.FittedFloorModel):
+            raise TypeError("inner-CV averaging wraps the fitted-floor procedure")
+        return models.AveragedFloorModel(floor=floor, temperature_se=temperature_se)
 
     return build
 
@@ -2849,6 +2863,12 @@ FROZEN_FLOOR = dict(
     flat_profile_kappa=1.5,
     cap_margin=float("inf"),
 )
+# Cross-task shape shrinkage, fitted by the benchmark's shared stage: model id -> (parent id, sharing unit,
+# shrinkage weight on the other tasks' mean excess inner-CV error).
+SHRUNK_SHAPE_UNITS: dict[str, tuple[str, str, float]] = {
+    f"{FROZEN_ID}_pooled_shape_target_lam05": (FROZEN_ID, "target", 0.5),
+    f"{FROZEN_ID}_pooled_shape_target_lam2": (FROZEN_ID, "target", 2.0),
+}
 EXPONENTIAL_SHAPES = tuple(shape for shape in SUCCESSOR_SHAPES if shape["power"] == 1.0)
 BENEFIT_ONLY_EXPONENTIAL_SHAPES = tuple(shape for shape in EXPONENTIAL_SHAPES if shape["threshold"] == 1.0)
 # The modal shape of the 58 frozen fits (8 tasks): rate 0.25, power 1, threshold 3; the modal ridge (28 tasks) is 0.1.
@@ -2915,6 +2935,65 @@ SIMPLIFICATIONS: tuple[ModelEntry, ...] = (
             **FROZEN_FLOOR,
         ),
         note="Convexity check: unsquared softplus of raw epochs, the slowest-growing convex harm (linear).",
+    ),
+    _ablation(
+        f"{FROZEN_ID}_raw_epoch_hinge_per_bucket_threshold",
+        "weibull_softplus_unscaled",
+        "harm=softplus_raw_epoch_hinge,sharing=per_bucket_threshold",
+        _fitted_floor(
+            f"{FROZEN_ID}_raw_epoch_hinge_per_bucket_threshold",
+            options=_options(SUCCESSOR_OPTIONS, harm="softplus_bucket_raw_hinge"),
+            per_bucket_shapes=True,
+            per_bucket_keys=("threshold",),
+            **FROZEN_FLOOR,
+        ),
+        note=(
+            "Convexity check combined with partial shape sharing: the linear convex harm with one critical count per "
+            "bucket, chosen by the per-bucket coordinate descent; the objective stays convex in the weights."
+        ),
+    ),
+    _ablation(
+        f"{FROZEN_ID}_raw_epoch_hinge_per_bucket_shape",
+        "weibull_softplus_unscaled",
+        "harm=softplus_raw_epoch_hinge,sharing=per_bucket",
+        _fitted_floor(
+            f"{FROZEN_ID}_raw_epoch_hinge_per_bucket_shape",
+            options=_options(SUCCESSOR_OPTIONS, harm="softplus_bucket_raw_hinge"),
+            per_bucket_shapes=True,
+            **FROZEN_FLOOR,
+        ),
+        note=(
+            "Convexity check combined with the shape-sharing ablation: the linear convex harm with one (rate, power, "
+            "threshold) per bucket; every power stays at most one, so the objective is convex in the weights."
+        ),
+    ),
+    *(
+        _ablation(
+            f"{FROZEN_ID}_cv_average_{tag}",
+            "weibull_softplus_unscaled",
+            f"search=grid_cv_weighted_average_{tag}",
+            _averaged(_fitted_floor(f"{FROZEN_ID}_cv_average_{tag}", **FROZEN_FLOOR), temperature_se=temperature),
+            note=(
+                "Selection-variance check: the frozen procedure refitted at every (shape, ridge) grid candidate within "
+                "three inner-fold standard errors of the inner-CV minimum (at most 16), predictions averaged with "
+                f"weights exp(-(score - best) / ({temperature:g} se)); an average of convex members is convex."
+            ),
+        )
+        for tag, temperature in (("1se", 1.0), ("3se", 3.0))
+    ),
+    *(
+        _ablation(
+            model_id,
+            "weibull_softplus_unscaled",
+            f"search=pooled_shape_per_target_lambda{shrink:g}",
+            _fitted_floor(model_id, **FROZEN_FLOOR),
+            note=(
+                "Cross-task shrinkage, fitted by the benchmark's shared stage: each task's shape minimizes its own "
+                f"inner-CV error plus {shrink:g} times the mean excess inner-CV error of the other tasks of the same "
+                "objective (repeat-SD units), then the frozen procedure is refitted at that shape and ridge."
+            ),
+        )
+        for model_id, (_, _, shrink) in SHRUNK_SHAPE_UNITS.items()
     ),
     _ablation(
         f"{FROZEN_ID}_kappa1_hinge",
@@ -3028,6 +3107,32 @@ NONPARAMETRIC: tuple[ModelEntry, ...] = (
         "trees in {100, 300, 1000} and leaves in {4, 8, 31} by inner CV; learning rate 0.01, seed 42",
         _static(models.LightGBMModel()),
         note="RegMix's regressor on the mixture weights; tree count and leaves chosen by the inner folds.",
+    ),
+    ModelEntry(
+        "lightgbm_regmix_released",
+        "parent",
+        (),
+        "gradient_boosted_trees",
+        "RegMix gradient-boosted trees, released recipe",
+        _mechanisms(
+            coordinate="weight",
+            benefit="tree_ensemble",
+            harm="tree_ensemble",
+            link="identity",
+            sharing="nonparametric",
+            head="trees",
+            estimator="lightgbm",
+        ),
+        "none",
+        "none",
+        "lightgbm_regression",
+        "released notebook cell: up to 1000 trees, default leaves, early stopping after 3 rounds on a held-out third; "
+        "learning rate 0.01, seed 42",
+        _static(models.ReleasedLightGBMModel()),
+        note=(
+            "RegMix's released regression recipe (notebook commit dd9d1c3b, cell 13) as component heads: raw weights "
+            "and responses, the early-stopped model kept without refitting."
+        ),
     ),
     ModelEntry(
         "mlp_weights",

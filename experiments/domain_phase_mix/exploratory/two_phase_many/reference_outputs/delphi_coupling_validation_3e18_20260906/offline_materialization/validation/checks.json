@@ -1,0 +1,29 @@
+{
+  "all_selected_weights_simplex_and_cap_feasible": true,
+  "all_source_snapshots_match_frozen_hashes": true,
+  "all_weight_hashes_match": true,
+  "command": "UV_CACHE_DIR=/tmp/delphi_continuous_uv_cache uv run --offline --no-sync python -m experiments.domain_phase_mix.exploratory.two_phase_many.materialize_delphi_coupling_validation_20260906",
+  "failed_restarts": [
+    {
+      "cap": 6,
+      "kappa": 0.5,
+      "message": "Iteration limit reached",
+      "start": 1,
+      "status": 9,
+      "target": "uncheatable"
+    }
+  ],
+  "kappa1_maximum_predictor_objective_parity_error": 4.440892098500626e-16,
+  "kappa1_selected_weights_exactly_match_prior": true,
+  "minimum_factor_across_all_trajectories": 0.7013016970194337,
+  "protocol_persisted_before_all_restart_shards": true,
+  "required_repository_lint": "passed",
+  "restart_shards": 45,
+  "scoped_pyrefly": "0 errors",
+  "selected_policies": 9,
+  "tests": "30 passed",
+  "trajectory_nonpositive_atomic_predictions": 0,
+  "trajectory_nonpositive_factors": 0,
+  "warm_resume_shard_hashes_unchanged": true,
+  "warm_resume_shard_mtimes_unchanged": true
+}

@@ -1,9 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
-"""Complexity ladder: out-of-fold rank accuracy and retrospective-bank regret against nominal parameters per task.
+"""Complexity ladder: out-of-fold rank accuracy and held-out regret against nominal parameters per task.
 
 Reads the 2026-09-08 comparator certify run (and any addendum directories given with --extra) and draws two rows of
-panels: out-of-fold Spearman on the three swarms and bank regret at one on the Qwen3 3e18 bank, for Uncheatable and
+panels: out-of-fold Spearman on the three swarms and held-out regret at one on the Qwen3 3e18 held-out set, for Uncheatable and
 OlmoBaseEval Easy, with models ordered by nominal response parameters per task at M = 39 buckets.
 
 usage: uv run --offline --no-sync python plot_complexity_ladder_20260909.py [--extra DIR ...] [--drive-dir DIR]
@@ -27,7 +27,9 @@ MAIN = SCRIPT_DIR / "reference_outputs" / "single_phase_observatory_comparators_
 OUTPUT_DIR = SCRIPT_DIR / "reference_outputs" / "complexity_ladder_20260909"
 F = "weibull_softplus_unscaled@kappa_floor_link_flat15_nocap"
 M = 39
-# (model id, label, nominal parameters per task, family colour key)
+# Two hidden layers of 64 units on the M standardized weights (MLP_HIDDEN_LAYERS in the models module).
+MLP_PARAMS = 64 * (M + 1) + 64 * 65 + 65
+# (model id, label, nominal parameters per task or None for models without a fixed count, family colour key)
 LADDER = (
     ("linear_weight", "Linear in weights", M + 1, "baseline"),
     ("olmix_loglinear_taskwise", "Olmix", M + 1, "baseline"),
@@ -48,17 +50,22 @@ LADDER = (
     (f"{F}_kappa1", "MARINER, exponential benefit", 2 * M + 4, "simplification"),
     (f"{F}_hinge_harm", "MARINER, hinge harm", 2 * M + 5, "simplification"),
     (F, "MARINER", 2 * M + 5, "mariner"),
-    ("spline_log_epoch@kappa_floor_link_flat15_nocap", "Natural cubic spline in log-epochs, floor link", 4 * M + 2, "comparator"),
-    ("lightgbm_regmix", "LightGBM (RegMix)", 1000, "nonparametric"),
-    ("hellinger_krr", "Hellinger kernel ridge", 1000, "nonparametric"),
-    ("mlp_weights", "MLP", 1000, "nonparametric"),
+    (
+        "spline_log_epoch@kappa_floor_link_flat15_nocap",
+        "Natural cubic spline in log-epochs, floor link",
+        4 * M + 2,
+        "comparator",
+    ),
+    ("mlp_weights", "MLP", MLP_PARAMS, "flexible"),
+    ("lightgbm_regmix", "LightGBM (RegMix)", None, "flexible"),
+    ("hellinger_krr", "Hellinger kernel ridge", None, "flexible"),
 )
 COLORS = {
     "baseline": "#6C6F7D",
     "comparator": "#CC79A7",
     "simplification": "#4C78A8",
     "mariner": "#469C76",
-    "nonparametric": "#E69F00",
+    "flexible": "#E69F00",
 }
 PANELS = (
     ("delphi_3e18_39bucket", "Qwen3 360M/1.6B"),
@@ -141,11 +148,14 @@ def draw(table: pd.DataFrame) -> plt.Figure:
                     rotation=90,
                     color="#444444",
                 )
-        ax.set_title(f"{tlabel}: retrospective-bank regret at one (labels: optimism, BPB)", fontsize=10)
+        ax.set_title(f"{tlabel}: held-out regret at one (labels: optimism, BPB)", fontsize=10)
         ax.set_ylim(0, min(0.2, max(0.03, np.nanmax(y) * 1.4)))
         ax.set_xticks(x)
         ax.set_xticklabels(
-            [f"{lbl}\n({p if p < 1000 else 'nonparametric'})" for lbl, p in zip(table.label, table.params, strict=True)],
+            [
+                f"{lbl}\n({'nonparametric' if pd.isna(p) else int(p)})"
+                for lbl, p in zip(table.label, table.params, strict=True)
+            ],
             rotation=90,
             fontsize=7,
         )

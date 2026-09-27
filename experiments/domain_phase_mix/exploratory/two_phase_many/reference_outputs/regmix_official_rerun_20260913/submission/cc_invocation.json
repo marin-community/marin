@@ -1,0 +1,8 @@
+{
+  "model": "claude-opus-5[1m]",
+  "effort": "max",
+  "cwd": "/tmp/codex-cc-neutral",
+  "account": "plambdafour@proton.me",
+  "api_key_removed": true,
+  "read_only": true
+}

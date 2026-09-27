@@ -1,0 +1,5 @@
+target,table9_pass,table9_passing_anchors,uncheatable_pass,uncheatable_passing_anchors
+cc_high_group,False,,True,A
+dolma3_stack_edu,False,,True,A
+dolmino_olmocr_pdfs_hq,False,,True,B
+dolmino_synth_qa,False,,True,B

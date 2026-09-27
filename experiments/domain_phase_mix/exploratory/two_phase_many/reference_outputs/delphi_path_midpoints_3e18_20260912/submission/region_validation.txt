@@ -1,0 +1,4 @@
+Validated with --expected-child-zone us-east5-b; CPU parent remains us-east5-a.
+Command file: launch_command.txt
+
+region-local launch safety check passed

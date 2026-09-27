@@ -155,6 +155,11 @@ def draw_left(ax, curves, rows, arms=("matched", "target"), x_axis="epochs"):
             xu, yu = minima[domain, "unmatched"]
             ax.plot([xu, xu], [yu, limits[1]], color=color, lw=0.9, ls=(0, (1, 1.5)), zorder=1)
             ax.text(xu, limits[1] - 0.012 * span, f"{star_epochs[domain, "unmatched"]:.1f} ep.", ha="center", va="top", fontsize=7.5, color=color, zorder=6, bbox=pad)
+    if x_axis == "epochs" and not guides:
+        # A dashed connector pairs each domain's proxy and target stars, which share the optimum epoch count.
+        for domain, _, _ in rows:
+            (xm, ym), (xt, yt) = minima[domain, "matched"], minima[domain, "target"]
+            ax.plot([xm, xt], [ym, yt], color=base.COLORS[domain], lw=0.9, ls=(0, (3, 2)), zorder=3)
     labelled = set()
     connected = set()
     occupied = []  # boxes of connector labels, in data units, that other labels must avoid

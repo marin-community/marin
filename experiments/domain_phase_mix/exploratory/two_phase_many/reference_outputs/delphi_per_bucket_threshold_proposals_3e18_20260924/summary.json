@@ -1,0 +1,140 @@
+{
+  "cmp_u_pbt_cap06": {
+    "target": "uncheatable",
+    "comparator": "MARINER, one threshold per bucket",
+    "model_id": "weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_per_bucket_threshold",
+    "optimizer": "slsqp",
+    "nominal_cap_inactive": true,
+    "max_epochs": 5.229187775543406,
+    "q95_epochs": 4.992126912017524,
+    "active_buckets": 25,
+    "effective_buckets": 12.748337561372864,
+    "tv_to_proportional": 0.5405222105611417,
+    "tv_runtime_to_continuous": 0.0019888241649243465,
+    "tv_to_mariner": 0.0615234375,
+    "self_prediction_runtime": 0.9838918218164067,
+    "self_prediction_at_mariner": 0.9842071251901313,
+    "mariner_prediction_runtime": 0.9813762527996613,
+    "mariner_prediction_at_mariner": 0.981031489746078,
+    "optimizer_record": {
+      "starts": [
+        {
+          "start": 0,
+          "objective": 0.9838857840996615,
+          "raw_feasibility_violation": 0.0,
+          "success": true,
+          "iterations": 1,
+          "polished": true,
+          "selected": false
+        },
+        {
+          "start": 1,
+          "objective": 0.9838857841006813,
+          "raw_feasibility_violation": 0.0,
+          "success": true,
+          "iterations": 1,
+          "polished": true,
+          "selected": false
+        },
+        {
+          "start": 2,
+          "objective": 0.983885784100432,
+          "raw_feasibility_violation": 0.0,
+          "success": true,
+          "iterations": 36,
+          "selected": false
+        },
+        {
+          "start": 3,
+          "objective": 0.983885784094513,
+          "raw_feasibility_violation": 2.220446049250313e-16,
+          "success": true,
+          "iterations": 36,
+          "selected": true
+        },
+        {
+          "start": 4,
+          "objective": 0.9838857840992944,
+          "raw_feasibility_violation": 2.220446049250313e-16,
+          "success": true,
+          "iterations": 38,
+          "selected": false
+        }
+      ],
+      "continuous_prediction": 0.983885784094513,
+      "runtime_prediction": 0.9838918218164067,
+      "exchange_steps": 4.0,
+      "max_materialized_epoch": 5.229187775543406
+    },
+    "seconds": 26.579604957951233
+  },
+  "cmp_t9_pbt_cap08": {
+    "target": "table9",
+    "comparator": "MARINER, one threshold per bucket",
+    "model_id": "weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_per_bucket_threshold",
+    "optimizer": "slsqp",
+    "nominal_cap_inactive": true,
+    "max_epochs": 7.926087901708487,
+    "q95_epochs": 6.633100048933705,
+    "active_buckets": 39,
+    "effective_buckets": 19.90539412742299,
+    "tv_to_proportional": 0.49183533187374356,
+    "tv_runtime_to_continuous": 0.0022925002101574737,
+    "tv_to_mariner": 0.048828125,
+    "self_prediction_runtime": 1.0612731582787347,
+    "self_prediction_at_mariner": 1.0617345119170993,
+    "mariner_prediction_runtime": 1.0634929886894278,
+    "mariner_prediction_at_mariner": 1.063076746186674,
+    "optimizer_record": {
+      "starts": [
+        {
+          "start": 0,
+          "objective": 1.0612690227833301,
+          "raw_feasibility_violation": 0.0,
+          "success": true,
+          "iterations": 1,
+          "polished": true,
+          "selected": false
+        },
+        {
+          "start": 1,
+          "objective": 1.061269022786001,
+          "raw_feasibility_violation": 0.0,
+          "success": true,
+          "iterations": 42,
+          "selected": false
+        },
+        {
+          "start": 2,
+          "objective": 1.061269022782,
+          "raw_feasibility_violation": 0.0,
+          "success": true,
+          "iterations": 45,
+          "selected": true
+        },
+        {
+          "start": 3,
+          "objective": 1.0612690227870132,
+          "raw_feasibility_violation": 2.220446049250313e-16,
+          "success": true,
+          "iterations": 37,
+          "selected": false
+        },
+        {
+          "start": 4,
+          "objective": 1.0612690227896238,
+          "raw_feasibility_violation": 0.0,
+          "success": true,
+          "iterations": 1,
+          "polished": true,
+          "selected": false
+        }
+      ],
+      "continuous_prediction": 1.061269022782,
+      "runtime_prediction": 1.0612731582787347,
+      "exchange_steps": 0.0,
+      "max_materialized_epoch": 7.926087901708487
+    },
+    "seconds": 191.02962733292952
+  }
+}

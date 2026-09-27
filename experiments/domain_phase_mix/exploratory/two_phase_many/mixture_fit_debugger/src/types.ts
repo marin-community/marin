@@ -16,7 +16,12 @@ export type ModelId =
   | "bucket_family_power_separate_heads"
   | "bucket_family_power_separate_heads_family_onset"
   | "bucket_family_weibull_shared_onset"
-  | "bucket_family_weibull_family_replay";
+  | "bucket_family_weibull_family_replay"
+  | "mariner"
+  | "mariner_per_bucket_threshold"
+  | "mariner_per_bucket_shape"
+  | "mariner_convex"
+  | "mariner_convex_per_bucket_threshold";
 export type ExplorerTab = "mixtures" | "population" | "fit";
 export type ViewMode = "prediction" | "residual" | "standardized" | "swoosh";
 export type SortMode = "difference" | "phase_difference" | "exposure" | "domain";

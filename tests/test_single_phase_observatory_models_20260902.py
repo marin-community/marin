@@ -682,3 +682,110 @@ def test_olmix_taskwise_log_epoch_coordinate_is_log1p_of_exposures():
     assert np.allclose(model._matrix(features), np.log1p(features.exposures))
     with pytest.raises(ValueError):
         models.OlmixTaskwiseModel(model_id="x", coordinate="epochs")._matrix(features)
+
+
+def test_averaged_floor_model_averages_near_optimal_grid_members_and_collapses_to_the_argmin_when_cold():
+    features = _features()
+    train, inner = _folds(features.rows)
+    options = models.FamilyOptions(family_signal="none", harm="softplus_bucket", benefit="weibull")
+    shapes = tuple({"rate": rate, "power": power, "threshold": 2.0} for rate in (0.25, 0.5, 1.0) for power in (0.5, 1.0))
+    base = models.GridModel(
+        "averaged",
+        lambda feats, shape: models.family_design(feats, shape, options),
+        shapes,
+        (0.01, 0.1),
+        models.HeadSpec(kind=models.HeadKind.NNLS, link=models.LinkKind.KAPPA_FLOOR),
+        3,
+    )
+    floor = models.FittedFloorModel(base=base, kappa_bounds=(1.0, 8.0), candidate_links=(models.LinkKind.KAPPA_FLOOR,))
+    response = _response(features) + np.random.default_rng(5).normal(scale=0.01, size=features.rows)
+
+    warm = models.AveragedFloorModel(floor=floor, temperature_se=3.0, max_delta_se=50.0)
+    fit = warm.fit(features, response, train, inner, 0)
+    members = fit.head.members
+    weights = np.asarray([member.weight for member in members])
+    assert len(members) > 1
+    assert weights[0] == weights.max()
+    assert np.isclose(weights.sum(), 1.0)
+    assert fit.diagnostics["ensemble_size"] == len(members)
+    expected = sum(m.weight * m.model.predict(m.fitted, features, train) for m in members)
+    assert np.allclose(warm.predict(fit, features, train), expected)
+
+    # Every member is the floor procedure at one grid candidate, so the lead member's shape is the grid argmin.
+    argmin = floor.fit(features, response, train, inner, 0)
+    assert members[0].fitted.shape == argmin.shape
+
+    # A negligible temperature keeps only the minimizer, which reproduces the plain fitted-floor prediction.
+    cold = models.AveragedFloorModel(floor=floor, temperature_se=1e-9, max_delta_se=0.0)
+    cold_fit = cold.fit(features, response, train, inner, 0)
+    assert cold_fit.diagnostics["ensemble_size"] == 1
+    assert np.allclose(cold.predict(cold_fit, features, train), floor.predict(argmin, features, train))
+
+
+def test_per_bucket_shape_design_uses_the_shared_harm_kind_and_refuses_others():
+    features = _features()
+    options = models.FamilyOptions(family_signal="none", harm="softplus_bucket_raw_hinge", benefit="weibull")
+    shared = models.GridModel(
+        "convex",
+        lambda feats, shape: models.family_design(feats, shape, options),
+        ({"rate": 0.5, "power": 0.7, "threshold": 2.0},),
+        (0.01,),
+        models.HeadSpec(kind=models.HeadKind.NNLS, link=models.LinkKind.KAPPA_FLOOR),
+        3,
+    )
+    model = models.PerBucketShapeGridModel(shared=shared, head=shared.head, harm=options.harm)
+    shape = models.per_bucket_shape({"rate": 0.5, "power": 0.7, "threshold": 2.0}, features.buckets)
+    shape["threshold:0"] = 4.0
+    design = model.design(features, shape)
+    thresholds = np.full(features.buckets, 2.0)
+    thresholds[0] = 4.0
+    expected = models.softplus_raw_epoch_hinge_harm(features.exposures, thresholds[None, :])
+    harm_columns = design.values[:, features.buckets :]
+    assert np.allclose(harm_columns, expected)
+    assert not np.allclose(harm_columns, models.softplus_harm(features.exposures, thresholds[None, :]))
+    assert design.names[features.buckets] == "bucket_overexposure_raw_hinge:0"
+
+    with pytest.raises(ValueError, match="harm kind"):
+        models.PerBucketShapeGridModel(shared=shared, head=shared.head, harm="softplus_family")
+
+
+def test_per_bucket_descent_scores_candidates_under_the_models_own_harm():
+    """The reported inner-CV score must be reproducible from the returned shape under the model's own design."""
+    features = _features()
+    train, inner = _folds(features.rows)
+    options = models.FamilyOptions(family_signal="none", harm="softplus_bucket_raw_hinge", benefit="weibull")
+    shapes = tuple(
+        {"rate": rate, "power": 0.7, "threshold": threshold} for rate in (0.25, 1.0) for threshold in (1.0, 3.0)
+    )
+    shared = models.GridModel(
+        "convex",
+        lambda feats, shape: models.family_design(feats, shape, options),
+        shapes,
+        (0.01,),
+        models.HeadSpec(kind=models.HeadKind.NNLS, link=models.LinkKind.KAPPA_FLOOR),
+        3,
+    )
+    model = models.PerBucketShapeGridModel(shared=shared, head=shared.head, free_keys=("threshold",), harm=options.harm)
+    response = _response(features) + np.random.default_rng(7).normal(scale=0.01, size=features.rows)
+    fitted = model.fit(features, response, train, inner, 0)
+    design = model.design(features, fitted.shape)
+    spec = model.head_for(fitted.shape)
+    reproduced = models._cv_rmse(design, response, fitted.ridge, spec, inner)
+    assert np.isclose(reproduced, float(fitted.diagnostics["inner_cv_rmse"]), rtol=1e-9, atol=1e-12)
+
+
+def test_per_bucket_nonlinear_dof_counts_only_free_keys_per_bucket():
+    features = _features()
+    options = models.FamilyOptions(family_signal="none", harm="softplus_bucket", benefit="weibull")
+    shared = models.GridModel(
+        "dof",
+        lambda feats, shape: models.family_design(feats, shape, options),
+        ({"rate": 0.5, "power": 0.7, "threshold": 2.0},),
+        (0.01,),
+        models.HeadSpec(kind=models.HeadKind.NNLS, link=models.LinkKind.KAPPA_FLOOR),
+        3,
+    )
+    all_free = models.PerBucketShapeGridModel(shared=shared, head=shared.head)
+    threshold_only = models.PerBucketShapeGridModel(shared=shared, head=shared.head, free_keys=("threshold",))
+    assert all_free.nonlinear_dof(features) == 3 * features.buckets
+    assert threshold_only.nonlinear_dof(features) == features.buckets + 2

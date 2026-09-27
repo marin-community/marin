@@ -1,0 +1,13 @@
+{
+  "canonical_inputs": {
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_3e18_observed_components_20260724/observed_component_panel.csv": "209802db7bcad05d09da01d846d1be75140b181993a08761cee430c7ca19fbed",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/olmo_base_easy_one_phase_parity_panel_300m_20260628/component_metadata.json": "97d94efe47c87ece8b855d3a833961059927873b2acb5a790490f5278ea14c67",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/two_phase_surrogate_collaborator_packet_20260721/data/canonical/delphi_3e18_one_phase_fit.csv": "8fc4732bcf7f4e44476c8b14ade8888ef9d059157f3445740a43aadebad35e10",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/two_phase_surrogate_collaborator_packet_20260721/data/catalog.json": "d3f0201c39d1698fc52a883b3a19086112c95a709f94fb2ed5967706799270d7"
+  },
+  "coordinate_features_path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/single_phase_heldout_benchmark_20260902/heldout_coordinates.csv",
+  "coordinate_features_sha256": "4808bde90f53a1bad1b8c7b223549b41d078e9a58006d47568ca28e2137e06d4",
+  "historical_bank_path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/single_phase_observatory_benchmark_20260902/heldout_round3_canonical/external_heldout_predictions.csv",
+  "historical_bank_sha256": "268a990b5d0f7f2610919ed414dd03a8aaf12c96a557de299eb6b3eaf2e51866",
+  "scope": "canonical 280 final fit; frozen historical bank development only; no ladder inputs"
+}

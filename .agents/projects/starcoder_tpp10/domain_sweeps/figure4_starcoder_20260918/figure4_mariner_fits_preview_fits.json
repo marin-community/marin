@@ -1,0 +1,58 @@
+{
+  "unmatched": {
+    "dolmino_flan": {
+      "arm": "unmatched",
+      "optimum_weight": 0.25662523677478355,
+      "optimum_epochs": 4.0618190024504655,
+      "optimum_loss": 1.482088183318489,
+      "rmse": 0.021772247808216523,
+      "shape": {
+        "rate": 0.05,
+        "power": 0.3,
+        "threshold": 1.0
+      },
+      "ridge": 0.001
+    },
+    "finemath_3plus": {
+      "arm": "unmatched",
+      "optimum_weight": 1.0,
+      "optimum_epochs": 15.827823691460056,
+      "optimum_loss": 1.5169804866649843,
+      "rmse": 0.011352197801072442,
+      "shape": {
+        "rate": 0.5,
+        "power": 0.7,
+        "threshold": 6.0
+      },
+      "ridge": 0.001
+    }
+  },
+  "matched": {
+    "dolmino_flan": {
+      "arm": "matched",
+      "optimum_weight": 0.21371321593474343,
+      "optimum_epochs": 3.382615102350051,
+      "optimum_loss": 1.4934031234175436,
+      "rmse": 0.016873221352096915,
+      "shape": {
+        "rate": 0.25,
+        "power": 0.3,
+        "threshold": 4.0
+      },
+      "ridge": 0.001
+    },
+    "finemath_3plus": {
+      "arm": "matched",
+      "optimum_weight": 0.8170211412334178,
+      "optimum_epochs": 12.931666575638022,
+      "optimum_loss": 1.5704644691372824,
+      "rmse": 0.014183254481143255,
+      "shape": {
+        "rate": 0.5,
+        "power": 0.5,
+        "threshold": 3.0
+      },
+      "ridge": 0.0
+    }
+  }
+}

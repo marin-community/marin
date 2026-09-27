@@ -1,0 +1,9 @@
+run_order,run_name,candidate_id,target,epoch_cap,aliases,run_id,data_seed,trainer_seed,train_steps,expected_checkpoint_step,tpu_type,tpu_region,tpu_zone,fit_panel_max_materialized_epoch,runtime_max_simulated_epoch
+0,lwspukl_uncheatable_seed666200_lwspu_u_kl0p005_cap06,lwspu_u_kl0p005_cap06,uncheatable,6,lwspu_u_kl0p005_cap06,7404000,666200,0,3007,3006,v6e-8,us-east5,us-east5-b,5.240018889042562,5.240018889042562
+1,lwspukl_uncheatable_seed666200_lwspu_u_kl0p01_cap06,lwspu_u_kl0p01_cap06,uncheatable,6,lwspu_u_kl0p01_cap06,7404001,666200,0,3007,3006,v6e-8,us-east5,us-east5-b,5.076268298759983,5.076268298759983
+2,lwspukl_uncheatable_seed666200_lwspu_u_kl0p025_cap06,lwspu_u_kl0p025_cap06,uncheatable,6,lwspu_u_kl0p025_cap06,7404002,666200,0,3007,3006,v6e-8,us-east5,us-east5-b,4.912517708477402,4.912517708477402
+3,lwspukl_uncheatable_seed666200_lwspu_u_kl0p05_cap06,lwspu_u_kl0p05_cap06,uncheatable,6,lwspu_u_kl0p05_cap06,7404003,666200,0,3007,3006,v6e-8,us-east5,us-east5-b,4.585016527912242,4.585016527912242
+4,lwspukl_uncheatable_seed666200_lwspu_u_kl0p075_cap06,lwspu_u_kl0p075_cap06,uncheatable,6,lwspu_u_kl0p075_cap06,7404004,666200,0,3007,3006,v6e-8,us-east5,us-east5-b,4.257515347347082,4.257515347347082
+5,lwspukl_uncheatable_seed666200_lwspu_u_kl0p1_cap06,lwspu_u_kl0p1_cap06,uncheatable,6,lwspu_u_kl0p1_cap06,7404005,666200,0,3007,3006,v6e-8,us-east5,us-east5-b,4.093764757064502,4.093764757064502
+6,lwspukl_uncheatable_seed666200_lwspu_u_kl0p2_cap06,lwspu_u_kl0p2_cap06,uncheatable,6,lwspu_u_kl0p2_cap06,7404006,666200,0,3007,3006,v6e-8,us-east5,us-east5-b,3.602512986216762,3.602512986216762
+7,lwspukl_uncheatable_seed666200_lwspu_u_kl0p5_cap06,lwspu_u_kl0p5_cap06,uncheatable,6,lwspu_u_kl0p5_cap06,7404007,666200,0,3007,3006,v6e-8,us-east5,us-east5-b,2.7837600348038616,2.7837600348038616

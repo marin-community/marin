@@ -228,6 +228,15 @@ LAUNCHES = {
         (REFERENCE / "delphi_convex_additive_proposals_3e18_20260914" / "candidate_weights.csv",),
         grouped=True,
     ),
+    "per_bucket_threshold": Launch(
+        "per_bucket_threshold",
+        "delphi_per_bucket_threshold_3e18_20260924",
+        "olmo_base_eval_table9_delphi_3e18_per_bucket_threshold",
+        ("cmp_u_pbt_cap06", "cmp_t9_pbt_cap08"),
+        REFERENCE / "delphi_per_bucket_threshold_3e18_20260924",
+        (REFERENCE / "delphi_per_bucket_threshold_proposals_3e18_20260924" / "candidate_weights.csv",),
+        grouped=True,
+    ),
     "path_midpoints": Launch(
         "path_midpoints",
         "delphi_path_midpoints_3e18_20260912",

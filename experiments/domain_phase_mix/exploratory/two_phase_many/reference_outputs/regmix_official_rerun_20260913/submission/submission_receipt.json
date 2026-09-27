@@ -1,0 +1,30 @@
+{
+  "status": "submitted",
+  "submitted_at": "2026-09-13T15:55:20Z",
+  "parent_job_id": "/calvinxu/dm-delphi-3e18-regmix-reference-20260913",
+  "dashboard_url": "https://iris.oa.dev/#/job/%2Fcalvinxu%2Fdm-delphi-3e18-regmix-reference-20260913",
+  "parent_state": "running",
+  "children_state": "all four training children queued for TPU capacity",
+  "training_run_count": 4,
+  "native_eval_count": 4,
+  "priority": "interactive",
+  "parent_region": "us-east5",
+  "parent_zone": "us-east5-a",
+  "child_tpu_type": "v6e-8",
+  "child_zone": "us-east5-b",
+  "nominal_training_flops": 1.2e+19,
+  "fieldbook_experiment": "exp_01m21f631n71w9xe9n6krpr2kw",
+  "fieldbook_parent_job": "job_01m2dqhmx2kk87t244sgwz6c3j",
+  "trainer_seed": 0,
+  "data_seeds": {
+    "uncheatable": 666200,
+    "table9": 662009
+  },
+  "child_job_ids": {
+    "rgref_u_endpoint_cap64": "/calvinxu/dm-delphi-3e18-regmix-reference-20260913/pinlin_calvin_xu-data_mixture-delphi_regmix_reference_3e18_20260913-uncheatable_seed666200_t0-rgref_uncheatable_seed666200_t0_rgref_u_endpoint_cap64_f69a08d4-735da43a",
+    "rgref_u_midpoint_cap64": "/calvinxu/dm-delphi-3e18-regmix-reference-20260913/pinlin_calvin_xu-data_mixture-delphi_regmix_reference_3e18_20260913-uncheatable_seed666200_t0-rgref_uncheatable_seed666200_t0_rgref_u_midpoint_cap64_edbcbd95-3b570394",
+    "rgref_t9_endpoint_cap64": "/calvinxu/dm-delphi-3e18-regmix-reference-20260913/pinlin_calvin_xu-data_mixture-delphi_regmix_reference_3e18_20260913-table9_seed662009_t0-rgref_table9_seed662009_t0_rgref_t9_endpoint_cap64_3a43342b-2020b9b6",
+    "rgref_t9_midpoint_cap64": "/calvinxu/dm-delphi-3e18-regmix-reference-20260913/pinlin_calvin_xu-data_mixture-delphi_regmix_reference_3e18_20260913-table9_seed662009_t0-rgref_table9_seed662009_t0_rgref_t9_midpoint_cap64_3a0bae48-412cbf58"
+  },
+  "verified_at": "2026-09-13T15:57:41Z"
+}

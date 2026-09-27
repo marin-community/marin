@@ -1,0 +1,13 @@
+{
+  "input_manifest_sha256": "1bab3c0c9e7e9d86566a9dfe9d31f4456fdb18b4c123197655e7ee55cef83463",
+  "models_sha256": "97ce64ebf85aa83e6802fa1bf93ba01606aa6eddc2cac3798ff195a41f1970ba",
+  "outputs": {
+    "cross_predictions.csv": "a1b002579aa13bfb7dc77f100b49825311e37eea0a15d755651bd7b00dbe1f83",
+    "path_predictions.csv": "41da6023542aa418f707a7906ad534e9f7e5741928f4c85344a1629aad4de391",
+    "policy_weights.csv": "fc2f9c8e5a45d82a05e8b29fa37a13439661b00e280c2d8a12f2e66b4a20a857",
+    "proposal_comparison.csv": "5d8b7cd2c23d62edf23c8599dcd3d2be558d8bd7b4ecc9660d114de79df4dfa6"
+  },
+  "verified_prior_only_candidate_cell_change": true,
+  "verified_unmodified_fit_cell": true,
+  "verified_unmodified_top128_cell": true
+}

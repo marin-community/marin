@@ -45,6 +45,12 @@ STUDIES = {
         "mariner",
         "olmix",
     ),
+    # The mariner study plus both RegMix variants, fitted on the same subsets and folds (2026-09-24).
+    "mariner_regmix": (
+        "experiments.domain_phase_mix.exploratory.two_phase_many.learning_curve_regmix_oof_20260924",
+        "mariner",
+        "olmix",
+    ),
 }
 PRIMARY = "wspu"
 COMPARATOR = "olmix"

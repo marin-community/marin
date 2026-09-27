@@ -1,0 +1,28 @@
+{
+  "accelerator_generation_matched_to_olmix": false,
+  "analysis_output_path": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/analysis-af9355",
+  "candidate_weights_path": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_one_phase_weibull_softplus_epoch_cap_sweep_20260902/candidate_weights.csv",
+  "candidate_weights_sha256": "6eb8fb151b1966330b1501f2e3a6e37812f44294803b8d5d46b054f6cdc928f0",
+  "canonical_model_and_batch_ladder": true,
+  "exact_3e18_v6e_configuration_previously_succeeded": true,
+  "experiment_name": "pinlin_calvin_xu/data_mixture/delphi_one_phase_wspu_scaling_v6e_20260906",
+  "inline_uncheatable_eval_for_every_run": true,
+  "max_concurrent": 8,
+  "native_table9_eval_for_every_run": true,
+  "olmix_comparator_seed_matched": true,
+  "run_count": 8,
+  "source_selection": {
+    "table9": "cap 6, the observed winner in the original frozen sweep",
+    "uncheatable": "cap 6, the observed winner in the original frozen sweep"
+  },
+  "target_flops": [
+    3e+18,
+    2e+19,
+    3e+20,
+    1e+21
+  ],
+  "trainer_seed": 0,
+  "training_region": "us-east5",
+  "training_zone": "us-east5-b",
+  "v6e_capacity_migration": true
+}

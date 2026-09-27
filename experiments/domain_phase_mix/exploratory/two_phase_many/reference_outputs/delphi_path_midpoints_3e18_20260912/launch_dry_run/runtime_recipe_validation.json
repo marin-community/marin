@@ -1,0 +1,247 @@
+{
+  "candidate_sha256": "093e6c5920cad0c38985a0f466bb97517f05cd2b7d374a83568d75d4a60aab9f",
+  "sampler_block_size": 2048,
+  "source_endpoint_manifest_root": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_comparator_proposals_3e18_20260909/launch_dry_run",
+  "runs": [
+    {
+      "candidate_id": "mp50_u_olmix_cap64",
+      "scientific_recipe_matches_endpoint": true,
+      "runtime_blocks_verified": [
+        0,
+        1,
+        187
+      ],
+      "data_seed": 666200,
+      "trainer_seed": 0,
+      "checkpoint_step": 3006,
+      "changed_endpoint_fields": [
+        "max_simulated_epoch",
+        "mean_phase_tv_to_proportional",
+        "panel_source",
+        "phase_weights",
+        "q95_simulated_epoch",
+        "run_id",
+        "run_name",
+        "source_experiment",
+        "source_run_name"
+      ]
+    },
+    {
+      "candidate_id": "mp50_u_quad_cap64",
+      "scientific_recipe_matches_endpoint": true,
+      "runtime_blocks_verified": [
+        0,
+        1,
+        187
+      ],
+      "data_seed": 666200,
+      "trainer_seed": 0,
+      "checkpoint_step": 3006,
+      "changed_endpoint_fields": [
+        "max_simulated_epoch",
+        "mean_phase_tv_to_proportional",
+        "panel_source",
+        "phase_weights",
+        "q95_simulated_epoch",
+        "run_id",
+        "run_name",
+        "run_order",
+        "source_experiment",
+        "source_run_name"
+      ]
+    },
+    {
+      "candidate_id": "mp50_u_spline_cap64",
+      "scientific_recipe_matches_endpoint": true,
+      "runtime_blocks_verified": [
+        0,
+        1,
+        187
+      ],
+      "data_seed": 666200,
+      "trainer_seed": 0,
+      "checkpoint_step": 3006,
+      "changed_endpoint_fields": [
+        "max_simulated_epoch",
+        "mean_phase_tv_to_proportional",
+        "panel_source",
+        "phase_weights",
+        "q95_simulated_epoch",
+        "run_id",
+        "run_name",
+        "run_order",
+        "source_experiment",
+        "source_run_name"
+      ]
+    },
+    {
+      "candidate_id": "mp50_u_lgbm_cap64",
+      "scientific_recipe_matches_endpoint": true,
+      "runtime_blocks_verified": [
+        0,
+        1,
+        187
+      ],
+      "data_seed": 666200,
+      "trainer_seed": 0,
+      "checkpoint_step": 3006,
+      "changed_endpoint_fields": [
+        "max_simulated_epoch",
+        "mean_phase_tv_to_proportional",
+        "panel_source",
+        "phase_weights",
+        "q95_simulated_epoch",
+        "run_id",
+        "run_name",
+        "run_order",
+        "source_experiment",
+        "source_run_name"
+      ]
+    },
+    {
+      "candidate_id": "mp50_u_krr_cap64",
+      "scientific_recipe_matches_endpoint": true,
+      "runtime_blocks_verified": [
+        0,
+        1,
+        187
+      ],
+      "data_seed": 666200,
+      "trainer_seed": 0,
+      "checkpoint_step": 3006,
+      "changed_endpoint_fields": [
+        "max_simulated_epoch",
+        "mean_phase_tv_to_proportional",
+        "panel_source",
+        "phase_weights",
+        "q95_simulated_epoch",
+        "run_id",
+        "run_name",
+        "run_order",
+        "source_experiment",
+        "source_run_name"
+      ]
+    },
+    {
+      "candidate_id": "mp50_t9_olmix_cap64",
+      "scientific_recipe_matches_endpoint": true,
+      "runtime_blocks_verified": [
+        0,
+        1,
+        187
+      ],
+      "data_seed": 662009,
+      "trainer_seed": 0,
+      "checkpoint_step": 3006,
+      "changed_endpoint_fields": [
+        "max_simulated_epoch",
+        "mean_phase_tv_to_proportional",
+        "panel_source",
+        "phase_weights",
+        "q95_simulated_epoch",
+        "run_id",
+        "run_name",
+        "source_experiment",
+        "source_run_name"
+      ]
+    },
+    {
+      "candidate_id": "mp50_t9_quad_cap64",
+      "scientific_recipe_matches_endpoint": true,
+      "runtime_blocks_verified": [
+        0,
+        1,
+        187
+      ],
+      "data_seed": 662009,
+      "trainer_seed": 0,
+      "checkpoint_step": 3006,
+      "changed_endpoint_fields": [
+        "max_simulated_epoch",
+        "mean_phase_tv_to_proportional",
+        "panel_source",
+        "phase_weights",
+        "q95_simulated_epoch",
+        "run_id",
+        "run_name",
+        "run_order",
+        "source_experiment",
+        "source_run_name"
+      ]
+    },
+    {
+      "candidate_id": "mp50_t9_spline_cap64",
+      "scientific_recipe_matches_endpoint": true,
+      "runtime_blocks_verified": [
+        0,
+        1,
+        187
+      ],
+      "data_seed": 662009,
+      "trainer_seed": 0,
+      "checkpoint_step": 3006,
+      "changed_endpoint_fields": [
+        "max_simulated_epoch",
+        "mean_phase_tv_to_proportional",
+        "panel_source",
+        "phase_weights",
+        "q95_simulated_epoch",
+        "run_id",
+        "run_name",
+        "run_order",
+        "source_experiment",
+        "source_run_name"
+      ]
+    },
+    {
+      "candidate_id": "mp50_t9_lgbm_cap64",
+      "scientific_recipe_matches_endpoint": true,
+      "runtime_blocks_verified": [
+        0,
+        1,
+        187
+      ],
+      "data_seed": 662009,
+      "trainer_seed": 0,
+      "checkpoint_step": 3006,
+      "changed_endpoint_fields": [
+        "max_simulated_epoch",
+        "mean_phase_tv_to_proportional",
+        "panel_source",
+        "phase_weights",
+        "q95_simulated_epoch",
+        "run_id",
+        "run_name",
+        "run_order",
+        "source_experiment",
+        "source_run_name"
+      ]
+    },
+    {
+      "candidate_id": "mp50_t9_krr_cap64",
+      "scientific_recipe_matches_endpoint": true,
+      "runtime_blocks_verified": [
+        0,
+        1,
+        187
+      ],
+      "data_seed": 662009,
+      "trainer_seed": 0,
+      "checkpoint_step": 3006,
+      "changed_endpoint_fields": [
+        "max_simulated_epoch",
+        "mean_phase_tv_to_proportional",
+        "panel_source",
+        "phase_weights",
+        "q95_simulated_epoch",
+        "run_id",
+        "run_name",
+        "run_order",
+        "source_experiment",
+        "source_run_name"
+      ]
+    }
+  ],
+  "total_runs": 10,
+  "validation": "pass"
+}

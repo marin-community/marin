@@ -1,0 +1,616 @@
+{
+  "cmp_u_quad_cap08": {
+    "target": "uncheatable",
+    "comparator": "Quadratic in log-epochs, floor link",
+    "model_id": "quadratic_log_epoch@kappa_floor_link_flat15_nocap",
+    "optimizer": "slsqp",
+    "nominal_cap_inactive": true,
+    "max_epochs": 7.35882430641438,
+    "q95_epochs": 5.038634812653034,
+    "active_buckets": 21,
+    "effective_buckets": 10.502710908512487,
+    "tv_to_proportional": 0.5469495863482524,
+    "tv_runtime_to_continuous": 0.0017016479332156104,
+    "tv_to_mariner": 0.13818359375,
+    "self_prediction_runtime": 0.9796437198619382,
+    "self_prediction_at_mariner": 0.9827239775669625,
+    "mariner_prediction_runtime": 0.9843004298939788,
+    "mariner_prediction_at_mariner": 0.981031489746078,
+    "optimizer_record": {
+      "starts": [
+        {
+          "start": 0,
+          "objective": 0.9796409529167677,
+          "raw_feasibility_violation": 4.440892098500626e-16,
+          "success": true,
+          "iterations": 34,
+          "selected": false
+        },
+        {
+          "start": 1,
+          "objective": 0.9796409529226976,
+          "raw_feasibility_violation": 4.196643033083092e-14,
+          "success": true,
+          "iterations": 1,
+          "polished": true,
+          "selected": false
+        },
+        {
+          "start": 2,
+          "objective": 0.9796409529131048,
+          "raw_feasibility_violation": 6.661338147750939e-15,
+          "success": true,
+          "iterations": 1,
+          "polished": true,
+          "selected": false
+        },
+        {
+          "start": 3,
+          "objective": 0.9796409529109433,
+          "raw_feasibility_violation": 4.440892098500626e-16,
+          "success": true,
+          "iterations": 37,
+          "selected": true
+        },
+        {
+          "start": 4,
+          "objective": 0.9796409529346852,
+          "raw_feasibility_violation": 6.619149672815183e-13,
+          "success": true,
+          "iterations": 1,
+          "polished": true,
+          "selected": false
+        }
+      ],
+      "continuous_prediction": 0.9796409529109433,
+      "runtime_prediction": 0.9796437198619382,
+      "exchange_steps": 2.0,
+      "max_materialized_epoch": 7.35882430641438
+    },
+    "seconds": 2.8494081249955343
+  },
+  "cmp_u_spline_cap08": {
+    "target": "uncheatable",
+    "comparator": "Natural cubic spline in log-epochs, floor link",
+    "model_id": "spline_log_epoch@kappa_floor_link_flat15_nocap",
+    "optimizer": "slsqp",
+    "nominal_cap_inactive": true,
+    "max_epochs": 7.24348223264613,
+    "q95_epochs": 6.143663540011403,
+    "active_buckets": 20,
+    "effective_buckets": 10.271820670640196,
+    "tv_to_proportional": 0.5404122133119504,
+    "tv_runtime_to_continuous": 0.0016070345017822202,
+    "tv_to_mariner": 0.18408203125,
+    "self_prediction_runtime": 0.9824921007987935,
+    "self_prediction_at_mariner": 0.986090915448705,
+    "mariner_prediction_runtime": 0.9860686167094046,
+    "mariner_prediction_at_mariner": 0.981031489746078,
+    "optimizer_record": {
+      "starts": [
+        {
+          "start": 0,
+          "objective": 0.9824913330190529,
+          "raw_feasibility_violation": 2.220446049250313e-16,
+          "success": true,
+          "iterations": 32,
+          "selected": true
+        },
+        {
+          "start": 1,
+          "objective": 0.9853204401412132,
+          "raw_feasibility_violation": 4.440892098500626e-16,
+          "success": true,
+          "iterations": 1,
+          "polished": true,
+          "selected": false
+        },
+        {
+          "start": 2,
+          "objective": 0.9853947706433761,
+          "raw_feasibility_violation": 1.3322676295501878e-15,
+          "success": true,
+          "iterations": 1,
+          "polished": true,
+          "selected": false
+        },
+        {
+          "start": 3,
+          "objective": 0.9824913330212544,
+          "raw_feasibility_violation": 0.0,
+          "success": true,
+          "iterations": 1,
+          "polished": true,
+          "selected": false
+        },
+        {
+          "start": 4,
+          "objective": 0.9853204401422326,
+          "raw_feasibility_violation": 8.881784197001252e-16,
+          "success": true,
+          "iterations": 1,
+          "polished": true,
+          "selected": false
+        }
+      ],
+      "continuous_prediction": 0.9824913330190529,
+      "runtime_prediction": 0.9824921007987935,
+      "exchange_steps": 1.0,
+      "max_materialized_epoch": 7.24348223264613
+    },
+    "seconds": 32.728294375003316
+  },
+  "cmp_u_lgbm_cap08": {
+    "target": "uncheatable",
+    "comparator": "LightGBM (RegMix)",
+    "model_id": "lightgbm_regmix",
+    "optimizer": "regmix_topk",
+    "nominal_cap_inactive": true,
+    "max_epochs": 6.781219536136227,
+    "q95_epochs": 5.9416062532151726,
+    "active_buckets": 39,
+    "effective_buckets": 34.87061668110113,
+    "tv_to_proportional": 0.38687621817312795,
+    "tv_runtime_to_continuous": 0.002077109656774922,
+    "tv_to_mariner": 0.51513671875,
+    "self_prediction_runtime": 1.013783948666632,
+    "self_prediction_at_mariner": 1.0083559823343018,
+    "mariner_prediction_runtime": 0.9981797030636298,
+    "mariner_prediction_at_mariner": 0.981031489746078,
+    "optimizer_record": {
+      "candidate_samples": 1000000,
+      "top_k": 128,
+      "best_candidate_prediction": 1.002043343754556,
+      "top_k_mean_prediction": 1.013087723813934,
+      "top_k_mean_tv_spread": 0.3048768442177172,
+      "continuous_prediction": 1.013783948666632,
+      "runtime_prediction": 1.013783948666632
+    },
+    "seconds": 122.98653462500079
+  },
+  "cmp_u_krr_cap12": {
+    "target": "uncheatable",
+    "comparator": "Hellinger kernel ridge",
+    "model_id": "hellinger_krr",
+    "optimizer": "slsqp",
+    "nominal_cap_inactive": true,
+    "max_epochs": 9.62453530921745,
+    "q95_epochs": 6.386733782782895,
+    "active_buckets": 37,
+    "effective_buckets": 20.12659430162078,
+    "tv_to_proportional": 0.5480746392356198,
+    "tv_runtime_to_continuous": 0.004299757667863706,
+    "tv_to_mariner": 0.43896484375,
+    "self_prediction_runtime": 0.95090803704133,
+    "self_prediction_at_mariner": 1.0027851224753126,
+    "mariner_prediction_runtime": 1.0001058342985862,
+    "mariner_prediction_at_mariner": 0.981031489746078,
+    "optimizer_record": {
+      "starts": [
+        {
+          "start": 0,
+          "objective": 0.950874169786196,
+          "raw_feasibility_violation": 2.2648549702353193e-14,
+          "success": true,
+          "iterations": 59,
+          "selected": false
+        },
+        {
+          "start": 1,
+          "objective": 0.9508741665349424,
+          "raw_feasibility_violation": 5.614375631068924e-11,
+          "success": true,
+          "iterations": 70,
+          "selected": true
+        },
+        {
+          "start": 2,
+          "objective": 0.9508741665829181,
+          "raw_feasibility_violation": 3.2327984733626636e-10,
+          "success": false,
+          "iterations": 112,
+          "selected": false
+        },
+        {
+          "start": 3,
+          "objective": 0.9508741666574243,
+          "raw_feasibility_violation": 0.0,
+          "success": true,
+          "iterations": 1,
+          "polished": true,
+          "selected": false
+        },
+        {
+          "start": 4,
+          "objective": 0.950874166926106,
+          "raw_feasibility_violation": 0.0,
+          "success": true,
+          "iterations": 1,
+          "polished": true,
+          "selected": false
+        }
+      ],
+      "continuous_prediction": 0.9508741665349424,
+      "runtime_prediction": 0.95090803704133,
+      "exchange_steps": 8.0,
+      "max_materialized_epoch": 9.62453530921745
+    },
+    "seconds": 3.015388832995086
+  },
+  "cmp_u_mk1_cap06": {
+    "target": "uncheatable",
+    "comparator": "MARINER, exponential benefit",
+    "model_id": "weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1",
+    "optimizer": "reference_power1",
+    "nominal_cap_inactive": true,
+    "max_epochs": 5.252223845039191,
+    "q95_epochs": 4.9669788326837905,
+    "active_buckets": 24,
+    "effective_buckets": 12.207650043260275,
+    "tv_to_proportional": 0.5151315855611416,
+    "tv_runtime_to_continuous": 0.0016389349166115372,
+    "tv_to_mariner": 0.0,
+    "self_prediction_runtime": 0.981031489746078,
+    "self_prediction_at_mariner": 0.981031489746078,
+    "mariner_prediction_runtime": 0.981031489746078,
+    "mariner_prediction_at_mariner": 0.981031489746078,
+    "optimizer_record": {
+      "starts": [
+        {
+          "start": 0,
+          "objective": 0.981029508564815,
+          "raw_feasibility_violation": 4.440892098500626e-16,
+          "success": true,
+          "iterations": 35,
+          "selected": false
+        },
+        {
+          "start": 1,
+          "objective": 0.9810295085730806,
+          "raw_feasibility_violation": 2.220446049250313e-16,
+          "success": true,
+          "iterations": 38,
+          "selected": false
+        },
+        {
+          "start": 2,
+          "objective": 0.9810295085645215,
+          "raw_feasibility_violation": 0.0,
+          "success": true,
+          "iterations": 41,
+          "selected": false
+        },
+        {
+          "start": 3,
+          "objective": 0.981029508559126,
+          "raw_feasibility_violation": 0.0,
+          "success": true,
+          "iterations": 1,
+          "polished": true,
+          "selected": true
+        },
+        {
+          "start": 4,
+          "objective": 0.9810295085623363,
+          "raw_feasibility_violation": 0.0,
+          "success": true,
+          "iterations": 34,
+          "selected": false
+        }
+      ],
+      "continuous_prediction": 0.981029508559126,
+      "runtime_prediction": 0.981031489746078,
+      "exchange_steps": 1.0,
+      "max_materialized_epoch": 5.252223845039191
+    },
+    "seconds": 3.9911959590099286
+  },
+  "cmp_t9_quad_cap12": {
+    "target": "table9",
+    "comparator": "Quadratic in log-epochs, floor link",
+    "model_id": "quadratic_log_epoch@kappa_floor_link_flat15_nocap",
+    "optimizer": "slsqp",
+    "nominal_cap_inactive": true,
+    "max_epochs": 11.188181155520297,
+    "q95_epochs": 6.077363956383719,
+    "active_buckets": 20,
+    "effective_buckets": 10.489655745622567,
+    "tv_to_proportional": 0.677730209510797,
+    "tv_runtime_to_continuous": 0.0012850613620032944,
+    "tv_to_mariner": 0.2177734375,
+    "self_prediction_runtime": 1.0204969433061533,
+    "self_prediction_at_mariner": 1.038693018099401,
+    "mariner_prediction_runtime": 1.0866947652873997,
+    "mariner_prediction_at_mariner": 1.063076746186674,
+    "optimizer_record": {
+      "starts": [
+        {
+          "start": 0,
+          "objective": 1.0204957082073696,
+          "raw_feasibility_violation": 2.220446049250313e-16,
+          "success": true,
+          "iterations": 34,
+          "selected": false
+        },
+        {
+          "start": 1,
+          "objective": 1.023908797477714,
+          "raw_feasibility_violation": 2.4769075679387242e-12,
+          "success": true,
+          "iterations": 36,
+          "selected": false
+        },
+        {
+          "start": 2,
+          "objective": 1.0204957082035326,
+          "raw_feasibility_violation": 1.7386092565629951e-13,
+          "success": true,
+          "iterations": 1,
+          "polished": true,
+          "selected": false
+        },
+        {
+          "start": 3,
+          "objective": 1.0204957081979336,
+          "raw_feasibility_violation": 6.94999613415348e-13,
+          "success": true,
+          "iterations": 1,
+          "polished": true,
+          "selected": true
+        },
+        {
+          "start": 4,
+          "objective": 1.020495708198391,
+          "raw_feasibility_violation": 2.1538326677728037e-14,
+          "success": true,
+          "iterations": 43,
+          "selected": false
+        }
+      ],
+      "continuous_prediction": 1.0204957081979336,
+      "runtime_prediction": 1.0204969433061533,
+      "exchange_steps": 1.0,
+      "max_materialized_epoch": 11.188181155520297
+    },
+    "seconds": 16.851940833003027
+  },
+  "cmp_t9_spline_cap12": {
+    "target": "table9",
+    "comparator": "Natural cubic spline in log-epochs, floor link",
+    "model_id": "spline_log_epoch@kappa_floor_link_flat15_nocap",
+    "optimizer": "slsqp",
+    "nominal_cap_inactive": true,
+    "max_epochs": 10.873024802010958,
+    "q95_epochs": 8.185906098722182,
+    "active_buckets": 21,
+    "effective_buckets": 10.751983783542862,
+    "tv_to_proportional": 0.6735887451282091,
+    "tv_runtime_to_continuous": 0.0013974014451303184,
+    "tv_to_mariner": 0.2470703125,
+    "self_prediction_runtime": 1.0310246290231788,
+    "self_prediction_at_mariner": 1.0425809702211422,
+    "mariner_prediction_runtime": 1.0899722557080467,
+    "mariner_prediction_at_mariner": 1.063076746186674,
+    "optimizer_record": {
+      "starts": [
+        {
+          "start": 0,
+          "objective": 1.031022825646934,
+          "raw_feasibility_violation": 3.774758283725532e-15,
+          "success": true,
+          "iterations": 1,
+          "polished": true,
+          "selected": false
+        },
+        {
+          "start": 1,
+          "objective": 1.03102282564567,
+          "raw_feasibility_violation": 2.1094237467877974e-14,
+          "success": true,
+          "iterations": 1,
+          "polished": true,
+          "selected": false
+        },
+        {
+          "start": 2,
+          "objective": 1.031022825644701,
+          "raw_feasibility_violation": 1.1102230246251565e-15,
+          "success": true,
+          "iterations": 1,
+          "polished": true,
+          "selected": true
+        },
+        {
+          "start": 3,
+          "objective": 1.0310228256454657,
+          "raw_feasibility_violation": 2.220446049250313e-16,
+          "success": true,
+          "iterations": 1,
+          "polished": true,
+          "selected": false
+        },
+        {
+          "start": 4,
+          "objective": 1.0310228256487308,
+          "raw_feasibility_violation": 0.0,
+          "success": true,
+          "iterations": 1,
+          "polished": true,
+          "selected": false
+        }
+      ],
+      "continuous_prediction": 1.031022825644701,
+      "runtime_prediction": 1.0310246290231788,
+      "exchange_steps": 1.0,
+      "max_materialized_epoch": 10.873024802010958
+    },
+    "seconds": 220.46636783299618
+  },
+  "cmp_t9_lgbm_cap12": {
+    "target": "table9",
+    "comparator": "LightGBM (RegMix)",
+    "model_id": "lightgbm_regmix",
+    "optimizer": "regmix_topk",
+    "nominal_cap_inactive": true,
+    "max_epochs": 9.259169039169818,
+    "q95_epochs": 7.951560200811849,
+    "active_buckets": 39,
+    "effective_buckets": 34.317730789613634,
+    "tv_to_proportional": 0.38341096870265967,
+    "tv_runtime_to_continuous": 0.0024191116342318713,
+    "tv_to_mariner": 0.31396484375,
+    "self_prediction_runtime": 1.12204100429595,
+    "self_prediction_at_mariner": 1.1017628635658725,
+    "mariner_prediction_runtime": 1.0861482267594504,
+    "mariner_prediction_at_mariner": 1.063076746186674,
+    "optimizer_record": {
+      "candidate_samples": 1000000,
+      "top_k": 128,
+      "best_candidate_prediction": 1.1186032246077757,
+      "top_k_mean_prediction": 1.1293441720625828,
+      "top_k_mean_tv_spread": 0.2908748431633274,
+      "continuous_prediction": 1.1221751258391164,
+      "runtime_prediction": 1.12204100429595
+    },
+    "seconds": 890.492773416001
+  },
+  "cmp_t9_krr_cap16": {
+    "target": "table9",
+    "comparator": "Hellinger kernel ridge",
+    "model_id": "hellinger_krr",
+    "optimizer": "slsqp",
+    "nominal_cap_inactive": true,
+    "max_epochs": 15.151367518641518,
+    "q95_epochs": 7.997771181902634,
+    "active_buckets": 38,
+    "effective_buckets": 24.961760321165265,
+    "tv_to_proportional": 0.48453100138243244,
+    "tv_runtime_to_continuous": 0.0033815486737946384,
+    "tv_to_mariner": 0.21240234375,
+    "self_prediction_runtime": 1.0249581521703117,
+    "self_prediction_at_mariner": 1.0565581570341918,
+    "mariner_prediction_runtime": 1.0818601496427793,
+    "mariner_prediction_at_mariner": 1.063076746186674,
+    "optimizer_record": {
+      "starts": [
+        {
+          "start": 0,
+          "objective": 1.024898336492268,
+          "raw_feasibility_violation": 0.0,
+          "success": true,
+          "iterations": 47,
+          "selected": true
+        },
+        {
+          "start": 1,
+          "objective": 1.0248983364931132,
+          "raw_feasibility_violation": 2.220446049250313e-16,
+          "success": true,
+          "iterations": 47,
+          "selected": false
+        },
+        {
+          "start": 2,
+          "objective": 1.0248983365048123,
+          "raw_feasibility_violation": 0.0,
+          "success": true,
+          "iterations": 1,
+          "polished": true,
+          "selected": false
+        },
+        {
+          "start": 3,
+          "objective": 1.024898336494696,
+          "raw_feasibility_violation": 0.0,
+          "success": true,
+          "iterations": 1,
+          "polished": true,
+          "selected": false
+        },
+        {
+          "start": 4,
+          "objective": 1.0248983364937745,
+          "raw_feasibility_violation": 0.0,
+          "success": true,
+          "iterations": 44,
+          "selected": false
+        }
+      ],
+      "continuous_prediction": 1.024898336492268,
+      "runtime_prediction": 1.0249581521703117,
+      "exchange_steps": 6.0,
+      "max_materialized_epoch": 15.151367518641518
+    },
+    "seconds": 9.958782790999976
+  },
+  "cmp_t9_mk1_cap08": {
+    "target": "table9",
+    "comparator": "MARINER, exponential benefit",
+    "model_id": "weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1",
+    "optimizer": "reference_power1",
+    "nominal_cap_inactive": true,
+    "max_epochs": 7.643013333790328,
+    "q95_epochs": 6.156107856710546,
+    "active_buckets": 35,
+    "effective_buckets": 18.30865108398357,
+    "tv_to_proportional": 0.5269915818737436,
+    "tv_runtime_to_continuous": 0.0021340048462588587,
+    "tv_to_mariner": 0.04931640625,
+    "self_prediction_runtime": 1.0647194299524136,
+    "self_prediction_at_mariner": 1.0653078883626552,
+    "mariner_prediction_runtime": 1.0641563083310028,
+    "mariner_prediction_at_mariner": 1.063076746186674,
+    "optimizer_record": {
+      "starts": [
+        {
+          "start": 0,
+          "objective": 1.064708040862409,
+          "raw_feasibility_violation": 0.0,
+          "success": true,
+          "iterations": 1,
+          "polished": true,
+          "selected": false
+        },
+        {
+          "start": 1,
+          "objective": 1.0647080408618774,
+          "raw_feasibility_violation": 2.220446049250313e-16,
+          "success": true,
+          "iterations": 41,
+          "selected": true
+        },
+        {
+          "start": 2,
+          "objective": 1.0647080408630085,
+          "raw_feasibility_violation": 0.0,
+          "success": true,
+          "iterations": 1,
+          "polished": true,
+          "selected": false
+        },
+        {
+          "start": 3,
+          "objective": 1.0647080408626906,
+          "raw_feasibility_violation": 1.1102230246251565e-16,
+          "success": true,
+          "iterations": 1,
+          "polished": true,
+          "selected": false
+        },
+        {
+          "start": 4,
+          "objective": 1.0647080408621954,
+          "raw_feasibility_violation": 1.1102230246251565e-16,
+          "success": true,
+          "iterations": 41,
+          "selected": false
+        }
+      ],
+      "continuous_prediction": 1.0647080408618774,
+      "runtime_prediction": 1.0647194299524136,
+      "exchange_steps": 1.0,
+      "max_materialized_epoch": 7.643013333790328
+    },
+    "seconds": 26.109148667004774
+  }
+}

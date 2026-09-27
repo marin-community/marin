@@ -225,3 +225,18 @@ def test_proportional_calibration_row_is_never_held_out():
     for inner_train, inner_validation in harness.heldout_inner_folds(panel):
         assert int(pinned[0]) in set(inner_train.tolist())
         assert int(pinned[0]) not in set(inner_validation.tolist())
+
+
+def test_pooled_shape_indices_shrinks_each_task_toward_the_other_tasks_consensus():
+    # Three tasks, four shapes, one ridge column. Task 0 prefers shape 3 by a hair; the others prefer shape 1 by a lot.
+    tables = [
+        np.array([[1.00], [1.01], [1.05], [0.99]]),
+        np.array([[1.50], [1.00], [1.40], [1.60]]),
+        np.array([[1.30], [1.00], [1.35], [np.inf]]),
+    ]
+    assert harness.pooled_shape_indices(tables, 0.0) == [3, 1, 1]
+    # With shrinkage the others' excess (large at shape 3, zero at shape 1) moves task 0 onto the consensus shape,
+    # while a task whose own margin is large keeps its choice; a candidate non-finite for another task is ignored
+    # in the mean, not poisoned.
+    assert harness.pooled_shape_indices(tables, 1.0) == [1, 1, 1]
+    assert harness.pooled_shape_indices([tables[1]], 5.0) == [1]

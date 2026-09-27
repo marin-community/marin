@@ -1,0 +1,13 @@
+{
+  "README.md": "3d522bb69431efe95b0f623839d1f48ef9d205ac42081cf5a672a5149434e1d7",
+  "candidate_mapping.csv": "19ef65f607b7ac4de1d2c131b939d03ac628877f49f52b07178fb4746d4aedd3",
+  "candidate_mapping.json": "678c70bfca75711266f6059dbaaa1f3600d82dec78e2e2c59adf1c8eac96d0d0",
+  "candidate_weights.csv": "e72d1f2c9b3acc6ffde470dbd05db7ed2cf50d5a8c28fddfcad0d5d547c0f241",
+  "kappa0_comparator_parity.json": "652ae20e868d0cc51d61ca972fc5348bcfb1c0eafe2bb7253856118af5ff87bb",
+  "loader_validation.json": "ebe68249ef028b2630cc152dc36a8fbe693ee8f3d3773b0e1c3c3c9ffaf47808",
+  "protocol.json": "f0d1f4c4283df759e8b7d26af1ca4fa9049ef5a248d0e6396a17e619563b0ea8",
+  "source_snapshot/experiments/domain_phase_mix/exploratory/two_phase_many/materialize_delphi_coupling_runtime_20260906.py": "71730afd079be9b88a023e6f00d2444830a3ba773ecfa1d0b8bdd73017316d4c",
+  "source_snapshot/experiments/domain_phase_mix/exploratory/two_phase_many/materialize_delphi_one_phase_surrogate_challengers_20260831.py": "f581d563addde55de1b4c104083d4c7cfd0f5d4eaed1f411d0291a2576e05e07",
+  "source_snapshot/experiments/domain_phase_mix/exploratory/two_phase_many/select_delphi_phase0_prefix_candidates_20260824.py": "bbc20825030ec85fd817363b55b770b23f8139118751beaaad861718f513a837",
+  "summary.json": "1241c377b4b3f7f25b3ce373608b4b0c9244e1162f2ef37ce59d534d1ef1c898"
+}

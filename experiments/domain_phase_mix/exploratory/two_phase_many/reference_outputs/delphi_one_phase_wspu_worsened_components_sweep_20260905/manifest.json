@@ -1,0 +1,44 @@
+{
+  "model": "weibull_softplus_unscaled",
+  "panel": "delphi_3e18_39bucket",
+  "objective": "byte-weighted aggregate of the three Uncheatable components worsened by the full optimum",
+  "components": {
+    "bbc_news": 0.3136590102415357,
+    "ao3_english": 0.44856670231838985,
+    "wikipedia_english": 0.23777428744007448
+  },
+  "caps": [
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20
+  ],
+  "launch_caps": [
+    4,
+    6,
+    7
+  ],
+  "plateau_cap": 7,
+  "optimizer": "exact separable integer dynamic programming on the 1/2048 runtime grid",
+  "inputs": {
+    "full_sweep_candidate_weights": "6eb8fb151b1966330b1501f2e3a6e37812f44294803b8d5d46b054f6cdc928f0",
+    "heldout_components": "768b53d07eaf9dfe5b5a86b6bbd58f633919050e2e89424f37dab5f4b58769c5",
+    "benchmark_dir": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/single_phase_observatory_benchmark_20260902"
+  },
+  "note": "No training launched."
+}

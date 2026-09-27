@@ -1,0 +1,64 @@
+{
+  "counts": {
+    "runs": 37,
+    "table9_complete": 37,
+    "uncheatable_complete": 37
+  },
+  "frozen_design_sha256": "c5ec2b0ae1b5c68dc44f6ede1a5caa1bd2918f5bfd9f6d0f23be508637856bd6",
+  "observed_at": "2026-09-06T02:53:24.806342+00:00",
+  "run_names": [
+    "apriori_swarm_003_proportional_repeat_block0",
+    "apriori_swarm_004_proportional_repeat_block1",
+    "apriori_swarm_005_proportional_repeat_block2",
+    "apriori_swarm_045_anchor_B_small_pools_forward",
+    "apriori_swarm_048_anchor_B_small_pools_forward_repeat",
+    "apriori_swarm_049_subsample_A_proportional_dolmino_synth_qa_pool0.5_block0",
+    "apriori_swarm_050_subsample_A_proportional_dolmino_synth_qa_pool0.25_block0",
+    "apriori_swarm_051_subsample_A_proportional_dolmino_olmocr_pdfs_hq_pool0.5_block0",
+    "apriori_swarm_052_subsample_A_proportional_dolmino_olmocr_pdfs_hq_pool0.25_block0",
+    "apriori_swarm_053_subsample_A_proportional_dolma3_stack_edu_pool0.5_block0",
+    "apriori_swarm_054_subsample_A_proportional_dolma3_stack_edu_pool0.25_block0",
+    "apriori_swarm_055_subsample_A_proportional_cc_high_group_pool0.5_block0",
+    "apriori_swarm_056_subsample_A_proportional_cc_high_group_pool0.25_block0",
+    "apriori_swarm_057_subsample_B_small_pools_forward_dolmino_synth_qa_pool0.5_block0",
+    "apriori_swarm_058_subsample_B_small_pools_forward_dolmino_synth_qa_pool0.25_block0",
+    "apriori_swarm_059_subsample_B_small_pools_forward_dolmino_olmocr_pdfs_hq_pool0.5_block0",
+    "apriori_swarm_060_subsample_B_small_pools_forward_dolmino_olmocr_pdfs_hq_pool0.25_block0",
+    "apriori_swarm_061_subsample_B_small_pools_forward_dolma3_stack_edu_pool0.5_block0",
+    "apriori_swarm_062_subsample_B_small_pools_forward_dolma3_stack_edu_pool0.25_block0",
+    "apriori_swarm_063_subsample_B_small_pools_forward_cc_high_group_pool0.5_block0",
+    "apriori_swarm_064_subsample_B_small_pools_forward_cc_high_group_pool0.25_block0",
+    "apriori_swarm_065_subsample_A_proportional_dolmino_synth_qa_pool0.5_block1",
+    "apriori_swarm_066_subsample_A_proportional_dolmino_synth_qa_pool0.25_block1",
+    "apriori_swarm_067_subsample_A_proportional_dolmino_olmocr_pdfs_hq_pool0.5_block1",
+    "apriori_swarm_068_subsample_A_proportional_dolmino_olmocr_pdfs_hq_pool0.25_block1",
+    "apriori_swarm_069_subsample_A_proportional_dolma3_stack_edu_pool0.5_block1",
+    "apriori_swarm_070_subsample_A_proportional_dolma3_stack_edu_pool0.25_block1",
+    "apriori_swarm_071_subsample_A_proportional_cc_high_group_pool0.5_block1",
+    "apriori_swarm_072_subsample_A_proportional_cc_high_group_pool0.25_block1",
+    "apriori_swarm_073_subsample_B_small_pools_forward_dolmino_synth_qa_pool0.5_block1",
+    "apriori_swarm_074_subsample_B_small_pools_forward_dolmino_synth_qa_pool0.25_block1",
+    "apriori_swarm_075_subsample_B_small_pools_forward_dolmino_olmocr_pdfs_hq_pool0.5_block1",
+    "apriori_swarm_076_subsample_B_small_pools_forward_dolmino_olmocr_pdfs_hq_pool0.25_block1",
+    "apriori_swarm_077_subsample_B_small_pools_forward_dolma3_stack_edu_pool0.5_block1",
+    "apriori_swarm_078_subsample_B_small_pools_forward_dolma3_stack_edu_pool0.25_block1",
+    "apriori_swarm_079_subsample_B_small_pools_forward_cc_high_group_pool0.5_block1",
+    "apriori_swarm_080_subsample_B_small_pools_forward_cc_high_group_pool0.25_block1"
+  ],
+  "runtime_placement": {
+    "tpu_type": "v6e-8",
+    "tpu_zone": "us-east5-b"
+  },
+  "schema_version": 1,
+  "sources": {
+    "design_table": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_apriori_swarm_280_20260904/swarm_mixtures.csv",
+    "evaluation_group": "olmo_base_eval_table9_delphi_3e18_apriori_swarm",
+    "evaluation_project": "marin-community/marin-eval",
+    "training_groups": [
+      "delphi_3e18_apriori_swarm_canary",
+      "delphi_3e18_apriori_swarm_pilot",
+      "delphi_3e18_apriori_swarm_full"
+    ],
+    "training_project": "marin-community/marin"
+  }
+}

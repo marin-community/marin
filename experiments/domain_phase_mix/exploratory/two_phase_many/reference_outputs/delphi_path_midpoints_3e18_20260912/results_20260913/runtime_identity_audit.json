@@ -1,0 +1,224 @@
+{
+  "pass": true,
+  "midpoint_configs": 10,
+  "endpoint_configs": 24,
+  "equal_config_fields": [
+    "analysis_output_path",
+    "validation_configs",
+    "steps_per_eval",
+    "permanent_checkpoint_interval"
+  ],
+  "equal_run_spec_fields": [
+    "target_flops",
+    "batch_size",
+    "train_steps",
+    "realized_train_tokens",
+    "expected_checkpoint_step",
+    "model_hidden_dim",
+    "model_layers",
+    "non_embedding_params",
+    "total_trainable_params",
+    "tensor_parallel_size",
+    "simulated_epoch_target_budget"
+  ],
+  "validation_configs_sha256": "1f0ef08e2f6d99f973f432a941daaa0d5354642c655f44157f6726863c482574",
+  "validation_names": [
+    "paloma/4chan",
+    "paloma/c4_100_domains",
+    "paloma/c4_en",
+    "paloma/dolma-v1_5",
+    "paloma/dolma_100_programing_languages",
+    "paloma/dolma_100_subreddits",
+    "paloma/falcon-refinedweb",
+    "paloma/gab",
+    "paloma/m2d2_s2orc_unsplit",
+    "paloma/m2d2_wikipedia_unsplit",
+    "paloma/manosphere_meta_sep",
+    "paloma/mc4",
+    "paloma/ptb",
+    "paloma/redpajama",
+    "paloma/twitterAAE_HELM_fixed",
+    "paloma/wikitext_103",
+    "uncheatable_eval/wikipedia_english",
+    "uncheatable_eval/github_python",
+    "uncheatable_eval/github_cpp",
+    "uncheatable_eval/bbc_news",
+    "uncheatable_eval/arxiv_physics",
+    "uncheatable_eval/arxiv_computer_science",
+    "uncheatable_eval/ao3_english"
+  ],
+  "candidate_runtime_weights_verified": true,
+  "trainer_and_data_seeds_verified": true,
+  "source_receipts": [
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_path_midpoints_3e18_20260912/table9_seed662009_t0/mp50_table9_seed662009_t0_mp50_t9_krr_cap64-72ad8a/.executor_info",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/mp50_t9_krr_cap64.executor_info.json",
+      "sha256": "55bb1abf08efcaf1c4e146ec4f63c77be519fe820542fb30cee255187c279c5e"
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_path_midpoints_3e18_20260912/table9_seed662009_t0/mp50_table9_seed662009_t0_mp50_t9_lgbm_cap64-ff80e3/.executor_info",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/mp50_t9_lgbm_cap64.executor_info.json",
+      "sha256": "958debad295b39d3996a0d929a0a642ab874162d7d72cd43b9fd20eb1c11e472"
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_path_midpoints_3e18_20260912/table9_seed662009_t0/mp50_table9_seed662009_t0_mp50_t9_olmix_cap64-ffe96f/.executor_info",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/mp50_t9_olmix_cap64.executor_info.json",
+      "sha256": "ca19097f9186afbd5179dee58f0f001042440784aed1046da5cde69a672aaba5"
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_path_midpoints_3e18_20260912/table9_seed662009_t0/mp50_table9_seed662009_t0_mp50_t9_quad_cap64-952b9c/.executor_info",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/mp50_t9_quad_cap64.executor_info.json",
+      "sha256": "5c05adea05c131a9460fe685ee42fa75701a88f3d13a252adaf36ab5b2aaeaaa"
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_path_midpoints_3e18_20260912/table9_seed662009_t0/mp50_table9_seed662009_t0_mp50_t9_spline_cap64-fc675e/.executor_info",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/mp50_t9_spline_cap64.executor_info.json",
+      "sha256": "a3b7826cb17719bfbba50182ae4b5bcd37397ae1053d13e27f532ebb51ee979d"
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_path_midpoints_3e18_20260912/uncheatable_seed666200_t0/mp50_uncheatable_seed666200_t0_mp50_u_krr_cap64-e1a345/.executor_info",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/mp50_u_krr_cap64.executor_info.json",
+      "sha256": "ce7a0f0a94dfb6bcd45f9fdf540feb971f5ccdab4e7a3b9a0b70b86725ec1a6d"
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_path_midpoints_3e18_20260912/uncheatable_seed666200_t0/mp50_uncheatable_seed666200_t0_mp50_u_lgbm_cap64-ea4c6f/.executor_info",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/mp50_u_lgbm_cap64.executor_info.json",
+      "sha256": "77c02db273883949102e32a70c1765ea9312d092e8def1dc945cfd7090c1bbfd"
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_path_midpoints_3e18_20260912/uncheatable_seed666200_t0/mp50_uncheatable_seed666200_t0_mp50_u_olmix_cap64-60fafc/.executor_info",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/mp50_u_olmix_cap64.executor_info.json",
+      "sha256": "732481e52fd0a4e84075ffd8e57aebd85a7824d07d59ff1163e818e2acbf04fc"
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_path_midpoints_3e18_20260912/uncheatable_seed666200_t0/mp50_uncheatable_seed666200_t0_mp50_u_quad_cap64-744be4/.executor_info",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/mp50_u_quad_cap64.executor_info.json",
+      "sha256": "c2d3ef14bdf2016d6380f5e56ac63230a46687fa817823e02dbe8f86d285060c"
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_path_midpoints_3e18_20260912/uncheatable_seed666200_t0/mp50_uncheatable_seed666200_t0_mp50_u_spline_cap64-d8bcb7/.executor_info",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/mp50_u_spline_cap64.executor_info.json",
+      "sha256": "2027df6013a21140ebe46c453c7da7da074b24a87f12182cb0d12fa87aae21f8"
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_frozen_procedure_validation_3e18_20260908/uncheatable_seed666200/lwspufp_uncheatable_seed666200_lwspu_u_snc_cap06-8cf646/.executor_info",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/endpoint_lwspu_u_snc_cap06_t0.executor_info.json",
+      "sha256": "6520c24275bcd1b2d4a477ea9728d04efc0a0135982bbc095712fe4762266ec4"
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_fairness_repeats_3e18_20260908/uncheatable_seed666200_t1/lwspufr_uncheatable_seed666200_t1_lwspu_u_snc_cap06-dd4b1e/.executor_info",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/endpoint_lwspu_u_snc_cap06_t1.executor_info.json",
+      "sha256": "28b630e8525546375e31322802571fd7c497b5f85ccc3546ebeb74bc4c6ee413"
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_fairness_repeats_3e18_20260908/uncheatable_seed666200_t2/lwspufr_uncheatable_seed666200_t2_lwspu_u_snc_cap06-fd115f/.executor_info",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/endpoint_lwspu_u_snc_cap06_t2.executor_info.json",
+      "sha256": "e4a02e03896941d678e5484789f66ce34426dacdd253519e41233bd8fefdf63f"
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_3e18_20260908/uncheatable_seed666200_t0/olmixq_uncheatable_seed666200_t0_olmixq_u_kl0p05_cap04-61f9c5/.executor_info",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/endpoint_olmixq_u_kl0p05_cap04_t0.executor_info.json",
+      "sha256": "e9eeb821992912b0029ebbe94693bd900ca560db2d345abc0771a09019de8771"
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_3e18_20260908/uncheatable_seed666200_t1/olmixq_uncheatable_seed666200_t1_olmixq_u_kl0p05_cap04-d9ee86/.executor_info",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/endpoint_olmixq_u_kl0p05_cap04_t1.executor_info.json",
+      "sha256": "8f7055a1335547a8a4fdb36d80ae3024fff0aed8a3ea95371cbc514c67bea38d"
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_3e18_20260908/uncheatable_seed666200_t2/olmixq_uncheatable_seed666200_t2_olmixq_u_kl0p05_cap04-83617e/.executor_info",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/endpoint_olmixq_u_kl0p05_cap04_t2.executor_info.json",
+      "sha256": "b5f76677276f5a6e4058b74336071d3eabe706f6b73808d5d867f50b3f6d06b1"
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/uncheatable_seed666200_t0/cmp_uncheatable_seed666200_t0_cmp_u_quad_cap08-42ee03/.executor_info",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/endpoint_cmp_u_quad_cap08_t0.executor_info.json",
+      "sha256": "aa78f2b8a7cd1cea97b2a5faa1816836f00be89e352fe7841ba26718ae6ff518"
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/uncheatable_seed666200_t1/cmp_uncheatable_seed666200_t1_cmp_u_quad_cap08-979c69/.executor_info",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/endpoint_cmp_u_quad_cap08_t1.executor_info.json",
+      "sha256": "2cada0656cfbda1a28b9177c25f3afa04bad49d500badb07218d29dcb5129fe6"
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/uncheatable_seed666200_t2/cmp_uncheatable_seed666200_t2_cmp_u_quad_cap08-c4ec6f/.executor_info",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/endpoint_cmp_u_quad_cap08_t2.executor_info.json",
+      "sha256": "5540ede1fe1a04136c4fbc2320fe8260626284ce9c786e66ee107632f66f2919"
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/uncheatable_seed666200_t0/cmp_uncheatable_seed666200_t0_cmp_u_spline_cap08-93c8f4/.executor_info",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/endpoint_cmp_u_spline_cap08_t0.executor_info.json",
+      "sha256": "63462fdd6ac2705068a110f4732049ebf558aa39de0f116248a10bcc1544b413"
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/uncheatable_seed666200_t0/cmp_uncheatable_seed666200_t0_cmp_u_lgbm_cap08-a86abc/.executor_info",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/endpoint_cmp_u_lgbm_cap08_t0.executor_info.json",
+      "sha256": "0303c29ca4300851acc1a4bb49533e71136f34f65776ee8d64450ede94458f1a"
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/uncheatable_seed666200_t0/cmp_uncheatable_seed666200_t0_cmp_u_krr_cap12-a3985a/.executor_info",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/endpoint_cmp_u_krr_cap12_t0.executor_info.json",
+      "sha256": "9bcc311ec9f6a1b4835f8dbf7f626b7fc46b5f829ec24aa2829c4466e90c5d71"
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_frozen_procedure_validation_3e18_20260908/table9_seed662009/lwspufp_table9_seed662009_lwspu_t9_snc_cap08-a835d3/.executor_info",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/endpoint_lwspu_t9_snc_cap08_t0.executor_info.json",
+      "sha256": "c4f078607f0ae0058d5615ef55080d677ad06ebebd72af1c34ef211012e03327"
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_fairness_repeats_3e18_20260908/table9_seed662009_t1/lwspufr_table9_seed662009_t1_lwspu_t9_snc_cap08-067b9a/.executor_info",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/endpoint_lwspu_t9_snc_cap08_t1.executor_info.json",
+      "sha256": "21cfa4c49a2ff144a2aaef996f8cfe1ec2e746541d64cf96523877c117652e8d"
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_fairness_repeats_3e18_20260908/table9_seed662009_t2/lwspufr_table9_seed662009_t2_lwspu_t9_snc_cap08-6ed4ac/.executor_info",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/endpoint_lwspu_t9_snc_cap08_t2.executor_info.json",
+      "sha256": "0c26492b1f158407c1101e8d870fcaf1113a6770e5e376116f701964550f3d02"
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_3e18_20260908/table9_seed662009_t0/olmixq_table9_seed662009_t0_olmixq_t9_kl0p005_cap04-c314ca/.executor_info",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/endpoint_olmixq_t9_kl0p005_cap04_t0.executor_info.json",
+      "sha256": "04b41034c1c1e49bcb2ae0d87cc369c7b7ba1efc5708f8458aca756ed3dc4572"
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_3e18_20260908/table9_seed662009_t1/olmixq_table9_seed662009_t1_olmixq_t9_kl0p005_cap04-b6c6f4/.executor_info",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/endpoint_olmixq_t9_kl0p005_cap04_t1.executor_info.json",
+      "sha256": "4df50ada64fbb91ef8d100e5d7022124e87a864a7ab312b7dff837f389676b13"
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_matched_olmix_3e18_20260908/table9_seed662009_t2/olmixq_table9_seed662009_t2_olmixq_t9_kl0p005_cap04-40491a/.executor_info",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/endpoint_olmixq_t9_kl0p005_cap04_t2.executor_info.json",
+      "sha256": "8323838388e797f00e2539e1663d089d2b4566dc0773f91efc463510259ad9e7"
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/table9_seed662009_t0/cmp_table9_seed662009_t0_cmp_t9_quad_cap12-25ffd5/.executor_info",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/endpoint_cmp_t9_quad_cap12_t0.executor_info.json",
+      "sha256": "c2bca58b5c0be53d1732e853ebdf14b71fd887afb207f72f9b1015c1ae8db117"
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/table9_seed662009_t1/cmp_table9_seed662009_t1_cmp_t9_quad_cap12-9ed85d/.executor_info",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/endpoint_cmp_t9_quad_cap12_t1.executor_info.json",
+      "sha256": "0f3268105e1f65b57bae96f344d58ca794b4d52ef66e07961262474b0f23770b"
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/table9_seed662009_t2/cmp_table9_seed662009_t2_cmp_t9_quad_cap12-3d3530/.executor_info",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/endpoint_cmp_t9_quad_cap12_t2.executor_info.json",
+      "sha256": "859e8c27d3dd74bd581cadb78fc183088ad1c4557a247650949d14284ac7ea54"
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/table9_seed662009_t0/cmp_table9_seed662009_t0_cmp_t9_spline_cap12-3e4725/.executor_info",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/endpoint_cmp_t9_spline_cap12_t0.executor_info.json",
+      "sha256": "94a0bf6cd44f3493715626df0599dce8082551b46bd1f477f2fad4d43d4b622e"
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/table9_seed662009_t0/cmp_table9_seed662009_t0_cmp_t9_lgbm_cap12-673199/.executor_info",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/endpoint_cmp_t9_lgbm_cap12_t0.executor_info.json",
+      "sha256": "8a76bc276bde42f4c2f970c0ea3d828423748c4c44d241c1286c508893a664cb"
+    },
+    {
+      "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_comparator_proposals_3e18_20260909/table9_seed662009_t0/cmp_table9_seed662009_t0_cmp_t9_krr_cap16-8eaf08/.executor_info",
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/raw/endpoint_cmp_t9_krr_cap16_t0.executor_info.json",
+      "sha256": "dc1cd34098837158c1c152fd9a840bc41069e9fe82592d8d79706de88ebb966b"
+    }
+  ]
+}

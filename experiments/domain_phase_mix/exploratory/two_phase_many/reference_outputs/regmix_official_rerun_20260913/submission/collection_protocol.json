@@ -1,0 +1,20 @@
+{
+  "uncheatable_component_metric_weights": {
+    "eval/uncheatable_eval/ao3_english/bpb": 0.1725032419832083,
+    "eval/uncheatable_eval/arxiv_computer_science/bpb": 0.1459150285318545,
+    "eval/uncheatable_eval/arxiv_physics/bpb": 0.1673147061106415,
+    "eval/uncheatable_eval/bbc_news/bpb": 0.1206224088062254,
+    "eval/uncheatable_eval/github_cpp/bpb": 0.1543450059149921,
+    "eval/uncheatable_eval/github_python/bpb": 0.1478598606213357,
+    "eval/uncheatable_eval/wikipedia_english/bpb": 0.0914397685598754
+  },
+  "uncheatable_formula": "sum(weight[component] * component_bpb), without refitting or changing the frozen weights",
+  "training_metric_path": "<training_output_path>/checkpoints/eval_metrics.jsonl",
+  "final_step": 3006,
+  "suite_metric": "olmo_base_easy/table9_macro_bpb",
+  "suite_definition": "51-component macro BPB; recompute from the native component metrics if necessary using marin.evaluation.olmo_base_eval.aggregate.table9_macro",
+  "metric_direction": "lower is better",
+  "expected_final_output": "measured_validation.csv in the official rerun output directory; preserve candidate_id, objective, role, seeds, all component metrics, source URIs, and prediction residuals",
+  "graph_path": "full_graph_regional_preflight.json",
+  "prediction_path": "validation_predictions.csv"
+}

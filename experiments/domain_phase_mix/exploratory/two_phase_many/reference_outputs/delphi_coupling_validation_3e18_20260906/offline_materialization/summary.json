@@ -1,0 +1,11 @@
+{
+  "maximum_kappa1_reuse_error": 4.440892098500626e-16,
+  "new_strength_restarts": 30,
+  "policies": 9,
+  "restarts": 45,
+  "reused_kappa1_restarts": 15,
+  "selected_nonpositive_atomic_predictions": 0,
+  "selected_nonpositive_factors": 0,
+  "successful_restarts": 44,
+  "unknown_measured_outcomes": true
+}

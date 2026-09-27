@@ -82,6 +82,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--worsened-label", default="News, fiction and Wikipedia optimum (cap 6)")
     parser.add_argument("--note", default="Additive-variant optima at epoch cap 6; bar labels give materialized epochs")
     parser.add_argument("--stem", default="mixture_comparison_cap06", help="output file stem")
+    parser.add_argument(
+        "--proportional-mark",
+        choices=("tick", "none"),
+        default="tick",
+        help="mark each bucket's proportional weight with a vertical tick across its bar pair, or not at all",
+    )
     return parser.parse_args()
 
 
@@ -201,7 +207,9 @@ def layout_rows(rows: list[tuple[str, str]]) -> tuple[dict[str, float], list[tup
     return positions, headers
 
 
-def draw_column(axis: plt.Axes, frame: pd.DataFrame, rows: list[tuple[str, str]], x_max: float) -> float:
+def draw_column(
+    axis: plt.Axes, frame: pd.DataFrame, rows: list[tuple[str, str]], x_max: float, proportional_mark: str = "tick"
+) -> float:
     """Draw one column of grouped bars; return the vertical span in row units."""
     positions, headers = layout_rows(rows)
     ordered = frame.loc[list(positions)]
@@ -211,14 +219,15 @@ def draw_column(axis: plt.Axes, frame: pd.DataFrame, rows: list[tuple[str, str]]
     proportional_pct = 100.0 * ordered["proportional_weight"].to_numpy()
     axis.barh(ys + BAR_OFFSET, full_pct, height=BAR_HEIGHT, color=FULL_COLOR, edgecolor="none", zorder=3)
     axis.barh(ys - BAR_OFFSET, worsened_pct, height=BAR_HEIGHT, color=WORSENED_COLOR, edgecolor="none", zorder=3)
-    axis.vlines(
-        proportional_pct,
-        ys - BAR_OFFSET - BAR_HEIGHT / 2,
-        ys + BAR_OFFSET + BAR_HEIGHT / 2,
-        color=INK,
-        linewidth=1.1,
-        zorder=2,
-    )
+    if proportional_mark == "tick":
+        axis.vlines(
+            proportional_pct,
+            ys - BAR_OFFSET - BAR_HEIGHT / 2,
+            ys + BAR_OFFSET + BAR_HEIGHT / 2,
+            color=INK,
+            linewidth=1.1,
+            zorder=2,
+        )
     for y_row, (_, row) in zip(ys, ordered.iterrows(), strict=True):
         for offset, weight, epochs, color in (
             (BAR_OFFSET, row["full_weight"], row["full_epochs"], FULL_COLOR),
@@ -264,28 +273,33 @@ def draw_column(axis: plt.Axes, frame: pd.DataFrame, rows: list[tuple[str, str]]
     return float(-ys.min() + 2 * COLUMN_PAD)
 
 
-def build_figure(frame: pd.DataFrame, *, full_label: str, worsened_label: str, note: str) -> plt.Figure:
+def build_figure(
+    frame: pd.DataFrame, *, full_label: str, worsened_label: str, note: str, proportional_mark: str = "tick"
+) -> plt.Figure:
     columns = column_rows(frame)
     x_max = 100.0 * max(frame["full_weight"].max(), frame["worsened_weight"].max()) + 3.5
     with plt.rc_context(PLOT_STYLE):
         figure = plt.figure(figsize=FIGURE_SIZE)
         left_axis = figure.add_axes(LEFT_AXES)
-        left_span = draw_column(left_axis, frame, columns["left"], x_max)
+        left_span = draw_column(left_axis, frame, columns["left"], x_max, proportional_mark)
         # Probe the right column's span with a throwaway axis so its height keeps the left column's row spacing.
         probe = figure.add_axes((0.0, 0.0, 0.01, 0.01))
-        right_span = draw_column(probe, frame, columns["right"], x_max)
+        right_span = draw_column(probe, frame, columns["right"], x_max, proportional_mark)
         probe.remove()
         left_x, left_bottom, _left_width, left_height = LEFT_AXES
         right_height = left_height * right_span / left_span
         right_axis = figure.add_axes(
             (RIGHT_AXES_LEFT, left_bottom + left_height - right_height, RIGHT_AXES_WIDTH, right_height)
         )
-        draw_column(right_axis, frame, columns["right"], x_max)
+        draw_column(right_axis, frame, columns["right"], x_max, proportional_mark)
         handles = [
             Patch(facecolor=FULL_COLOR, label=full_label),
             Patch(facecolor=WORSENED_COLOR, label=worsened_label),
-            Line2D([0], [0], linestyle="none", marker="|", markersize=9, markeredgewidth=1.1, color=INK, label=TICK),
         ]
+        if proportional_mark == "tick":
+            handles.append(
+                Line2D([0], [0], linestyle="none", marker="|", markersize=9, markeredgewidth=1.1, color=INK, label=TICK)
+            )
         figure.legend(
             handles=handles,
             loc="upper left",
@@ -316,7 +330,13 @@ def main() -> None:
     frame.loc[[key for kind, key in ordered_rows(frame) if kind == "bucket"]].to_csv(
         args.output_dir / f"{args.stem}.csv"
     )
-    figure = build_figure(frame, full_label=args.full_label, worsened_label=args.worsened_label, note=args.note)
+    figure = build_figure(
+        frame,
+        full_label=args.full_label,
+        worsened_label=args.worsened_label,
+        note=args.note,
+        proportional_mark=args.proportional_mark,
+    )
     figure.savefig(args.output_dir / f"{args.stem}.png", dpi=STATIC_DPI)
     figure.savefig(args.output_dir / f"{args.stem}.pdf")
     plt.close(figure)

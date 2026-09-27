@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "pass": true,
+  "fingerprint": "78b225d045b6d42ed175dd91d5b06cebecca7e7b04ad07102597fd447809337c",
+  "frozen_at_utc": "2026-09-12T22:03:21.208270+00:00",
+  "candidate_count": 10,
+  "prediction_rows": 40,
+  "figure_path_values_verified": 1220,
+  "max_figure_path_difference_bpb": 2.220446049250313e-16,
+  "max_abs_rounding_change_bpb": 0.0011187553177389,
+  "max_abs_mariner_rounding_change_bpb": 0.0003115273371863,
+  "max_rounding_total_variation": 0.003173828125,
+  "candidate_weights_sha256": "093e6c5920cad0c38985a0f466bb97517f05cd2b7d374a83568d75d4a60aab9f",
+  "exact_midpoints_sha256": "320ae3909be5d6a0041be1be8f68e0e9c523a01bb21705d9ad6a10bcde497fb4",
+  "prediction_script_sha256": "1878512b7f812616321c179d2c4bc1850e622bc5a5631c58682bf6a23b46cdab",
+  "midpoint_predictions_csv": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/prediction_freeze/midpoint_predictions.csv",
+  "midpoint_predictions_sha256": "e0cbf8d7876691575002bbd920741cbc1aaa2ba1bcefe189b1283d0131fa181d",
+  "figure_path_parity_csv": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/prediction_freeze/figure_path_parity.csv",
+  "figure_path_parity_sha256": "344e5c1726ceceec05f18ce087f68638a74a808aeb7d486adb7347d8f124ce2a",
+  "target_receipts": {
+    "uncheatable": {
+      "path": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/prediction_freeze_uncheatable.json",
+      "sha256": "8adc63c5c21c96c7306bfdb74165179757190edfd441522db6544eea5c18e62f"
+    },
+    "table9": {
+      "path": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/prediction_freeze_table9.json",
+      "sha256": "24983680d157b1447dd602d048c344bf6179489372df329dc5e55b7a87471021"
+    }
+  },
+  "prediction_scoring": "Score prospective measurements against runtime-coordinate predictions; exact predictions describe the continuous 50% path point.",
+  "fitting_protocol": "Original 280-mixture panel only; MARINER frozen full fits and saved Olmix laws loaded; other baselines deterministically refitted using original inner folds. All 61 points per model/path reproduce the frozen figure.",
+  "lint": "Repository infra/pre-commit.py passed for the final script."
+}

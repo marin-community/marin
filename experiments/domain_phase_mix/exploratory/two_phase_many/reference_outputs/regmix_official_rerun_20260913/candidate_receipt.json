@@ -1,0 +1,10 @@
+{
+  "legacy_seed": 42,
+  "prior_sum": 1.0000000000000002,
+  "sha256": "d12cf2e4cbb63b4c6ff9c83ffcbacc183a35d6fa68f3376d45aa8a905c6b5a67",
+  "shape": [
+    100000,
+    39
+  ],
+  "top_k": 128
+}

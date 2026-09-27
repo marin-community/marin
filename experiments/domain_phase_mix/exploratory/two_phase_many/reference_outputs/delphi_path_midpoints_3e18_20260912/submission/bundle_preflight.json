@@ -1,0 +1,41 @@
+{
+  "checked_at": "2026-09-12T22:01:36.519827+00:00",
+  "status": "pass",
+  "submission_performed": false,
+  "upload_performed": false,
+  "submit_script_sha256": "9230d392b3b6c4d12faf39b2112de7dee4976fb15f015479615316165b408159",
+  "bundle_sha256": "fb16e62d3bfe4986871cd387cf14a1c01bcf82d1b77be44abdb5f501166b5ec9",
+  "bundle_bytes": 25405024,
+  "max_bundle_size_bytes": 26214400,
+  "bundle_file_count": 4752,
+  "required_hashes": {
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/candidate_weights.csv": "093e6c5920cad0c38985a0f466bb97517f05cd2b7d374a83568d75d4a60aab9f",
+    "experiments/domain_phase_mix/launch_delphi_path_midpoints_3e18.py": "941458b7d8475cfaf777a8b5302b6aa61adaa654fa39c0b250bee01aed935dc9",
+    "experiments/domain_phase_mix/launch_delphi_augmented_swarm_3e18.py": "89ce8b1ee477d5cead66ee9abab6145ae3158d7a7f5fe1f44f4500eeb6d372d5",
+    "experiments/domain_phase_mix/launch_delphi_one_phase_dsp_epoch_cap_sweep_3e18.py": "feb5e9df2eac8f991c02eb0752ce49c044fa8f1ff0ffecc13ca60f75e5ecc875",
+    "experiments/domain_phase_mix/two_phase_dolma3_dolmino_top_level.py": "4cac303d43850a8e28771d56e33556f769cda9605333f0da597d4f429359ff8c",
+    "experiments/domain_phase_mix/dolma3_dolmino_top_level_domains.py": "445eb0dc4c04ce87be8d490351701ba61b807bd752ec86796f01c1e54a71971b",
+    "lib/levanter/src/levanter/data/mixture.py": "67e97941a79753b2e5865f7f41c7762436a428599ecd1a60d643aa891a817685",
+    "lib/marin/src/marin/evaluation/olmo_base_eval/run.py": "626f7bca6f377088dfeb83da2d70c1cc6cdb6763a1fa24fa04ac081925b46550",
+    "uv.lock": "347c4bb876ef55f60ecd5cf137d22016aaa742387717d20e296ca0ff2cc05dd5",
+    "pyproject.toml": "853bbaa517afee864dba527f6fbe7df6d3cd72c2117aa8e9ab2fce2918b6a8b8"
+  },
+  "generated_rpc_files": 14,
+  "reference_outputs_in_bundle": [
+    "experiments/domain_phase_mix/exploratory/reference_outputs/starcoder_heteroskedastic_snr_20260523/run_specs.json",
+    "experiments/domain_phase_mix/exploratory/reference_outputs/starcoder_heteroskedastic_snr_20260523/summary.json",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/collaborator_scaling_data_packet_20260430/reference_outputs/joint_model_refreshed_20260426/mct_lrq_no_barrier_canonical/REPORT.md",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/collaborator_scaling_data_packet_20260430/reference_outputs/joint_model_refreshed_20260426/mct_lrq_no_barrier_canonical/summary.json",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/collaborator_scaling_data_packet_20260430/reference_outputs/joint_model_refreshed_20260426/mct_lrq_refresh/MANIFEST.json",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/collaborator_scaling_data_packet_20260430/reference_outputs/joint_model_refreshed_20260426/mct_lrq_refresh/REPORT.md",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/collaborator_scaling_data_packet_20260430/reference_outputs/joint_model_refreshed_20260426/mct_lrq_refresh/models/cbs_lrq74_s5_leave900out.json",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/collaborator_scaling_data_packet_20260430/reference_outputs/joint_model_refreshed_20260426/mct_lrq_refresh/models/cbs_lrq74_s5_seed7.json",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/collaborator_scaling_data_packet_20260430/reference_outputs/joint_model_refreshed_20260426/mct_lrq_refresh/models/mct_lrq74_balanced_leave900out.json",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/collaborator_scaling_data_packet_20260430/reference_outputs/joint_model_refreshed_20260426/mct_lrq_refresh/models/mct_lrq74_balanced_seed7.json",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/collaborator_scaling_data_packet_20260430/reference_outputs/joint_model_refreshed_20260426/mct_lrq_refresh/models/mct_lrq74_drop_leave900out.json",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/collaborator_scaling_data_packet_20260430/reference_outputs/joint_model_refreshed_20260426/mct_lrq_refresh/models/mct_lrq74_drop_seed7.json",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/collaborator_scaling_data_packet_20260430/reference_outputs/joint_model_refreshed_20260426/mct_lrq_refresh/models/s2_rebuild61_leave900out.json",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/collaborator_scaling_data_packet_20260430/reference_outputs/joint_model_refreshed_20260426/mct_lrq_refresh/models/s2_rebuild61_seed7.json",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/candidate_weights.csv"
+  ]
+}

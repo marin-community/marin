@@ -19,9 +19,15 @@ picks a good mixture.
 
 The combined paper figure stacks the first two rows; every row is also written standalone.
 Use --all-pairs to render all three rows from the archived summary without recomputing statistics.
-Only the three baselines are labelled, and their labels are placed automatically: each candidate
-offset is scored by the points, dashed line, statistics box, other labels and leader lines it
-would cover or cross.
+Only the paper's baselines (proportional and UniMax-8) are labelled, and their labels are placed
+automatically: each candidate offset is scored by the points, dashed line, statistics box, other labels and
+leader lines it would cover or cross.
+
+Deployed markers (one shape per method, shared legend) are the methods' Uncheatable optima proposed from the
+Qwen3 3e18 swarm and trained at every setting (--deployed, default
+`mariner_optimum_scale_transfer_20260924/deployed_optima.csv`, columns run_name, label, bpb_60m, bpb_300m,
+bpb_3e18; a pair draws the rows with both of its values). They are excluded from every statistic; their rank
+is the position they would take among the swarm.
 """
 
 from __future__ import annotations
@@ -31,6 +37,7 @@ import hashlib
 import itertools
 import json
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -40,6 +47,7 @@ import pandas as pd
 from matplotlib.axes import Axes
 from matplotlib.colors import Normalize
 from matplotlib.figure import Figure
+from matplotlib.lines import Line2D
 from matplotlib.text import Annotation, Text
 from matplotlib.transforms import Bbox
 from scipy.stats import kendalltau, pearsonr, rankdata, spearmanr
@@ -53,6 +61,8 @@ MATCHED_300M_VS_DELPHI = (
     REFERENCE_OUTPUTS / "300m_vs_delphi_3e18_swarm_correlations_20260719" / "matched_swarm_outcomes.csv"
 )
 DEFAULT_OUTPUT_DIR = REFERENCE_OUTPUTS / "scale_transfer_results_figure_20260905"
+DEPLOYED_OPTIMA = REFERENCE_OUTPUTS / "mariner_optimum_scale_transfer_20260924" / "deployed_optima.csv"
+DEPLOYED_COLUMNS = ("run_name", "label", "bpb_60m", "bpb_300m", "bpb_3e18")
 
 OBJECTIVE = "uncheatable"
 POLICY_CLASS = "single_phase"
@@ -78,11 +88,12 @@ DELPHI_HEADER = "Qwen3 360M/1.6B (AdamH)"
 # The paper figure stacks these rows; every row is also written standalone.
 COMBINED_ROW_KEYS = ("160m_to_360m", "160m_to_200m")
 
+# The paper's named baselines; the uniform mixture stays an unlabelled swarm point.
 BASELINE_LABELS = {
     "baseline_proportional": "Proportional",
-    "baseline_unimax": "UniMax",
-    "baseline_stratified": "Uniform",
+    "baseline_unimax": "UniMax-8",
 }
+SWARM_BASELINE_RUNS = ("baseline_proportional", "baseline_unimax", "baseline_stratified")
 
 PAPER = "#ffffff"
 INK = "#111111"
@@ -90,6 +101,16 @@ GRID = "#b8b8b8"
 LINE = "#555555"
 LEADER = "#777777"
 BASELINE_EDGE = "#d62728"
+DEPLOYED_EDGE = "#111111"
+# Deployed optima are identified by marker shape (one shared legend) and keep the target-BPB fill; direct labels
+# would crowd the lower-left corner where every optimum lands at the paper's 5.5 x 6.0 in size.
+DEPLOYED_MARKERS = {
+    "MARINER": ("*", 125.0),
+    "Olmix": ("D", 34.0),
+    "RegMix (tuned)": ("^", 46.0),
+    "RegMix (released)": ("v", 46.0),
+}
+LEGEND_FILL = "#bdbdbd"
 CMAP = "RdYlGn_r"
 COMBINED_FIGURE_SIZE = (7.4, 6.4)
 ROW_FIGURE_SIZE = (7.4, 3.45)
@@ -108,23 +129,29 @@ PLOT_STYLE = {
     "savefig.facecolor": PAPER,
 }
 # Candidate label positions: offsets in points from the marker, on rings of increasing radius.
-LABEL_RADII = (14.0, 22.0, 32.0, 44.0, 58.0, 74.0)
+LABEL_RADII = (14.0, 22.0, 32.0, 44.0, 58.0, 74.0, 92.0)
 LABEL_ANGLES = tuple(range(0, 360, 10))
 LEADER_MIN_RADIUS = 20.0
 LABEL_PAD_POINTS = 3.0
 STATS_PAD_POINTS = 6.0
 COST_POINT = 3.0
 COST_LINE_SAMPLE = 0.35
-COST_LABEL_OVERLAP = 60.0
+# Overlapping labels are unreadable, so an overlap costs more than any placement short of leaving the axes.
+COST_LABEL_OVERLAP = 250.0
 COST_OUTSIDE_AXES = 300.0
 COST_PER_RADIUS_POINT = 0.02
 COST_LEADER_CROSSING = 45.0
 COST_LEADER_POINT = 0.8
 COST_MARKER_COVERED = 80.0
+# A label read beside another labelled marker names the wrong one: it must lie nearer its own marker than any other.
+COST_NEARER_OTHER_MARKER = 150.0
 LEADER_CLEARANCE_POINTS = 8.0
 LEADER_POINT_CLEARANCE_POINTS = 2.5
 MARKER_CLEARANCE_POINTS = 5.0
 JOINT_CANDIDATES_PER_LABEL = 30
+DESCENT_CANDIDATES_PER_LABEL = 150
+EXHAUSTIVE_LABEL_LIMIT = 3
+COORDINATE_DESCENT_SWEEPS = 20
 
 
 @dataclass(frozen=True)
@@ -136,6 +163,7 @@ class TransferRow:
     target_label: str
     header: str
     frame: pd.DataFrame
+    deployed: pd.DataFrame
     notes: tuple[str, ...]
 
 
@@ -155,6 +183,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--all-pairs", action="store_true", help="combine all rows using the archived statistics")
+    parser.add_argument(
+        "--deployed", type=Path, default=DEPLOYED_OPTIMA, help="deployed-optima table; absent = no markers"
+    )
     parser.add_argument("--summary", type=Path, default=DEFAULT_OUTPUT_DIR / "summary.json")
     parser.add_argument(
         "--combined-width", type=float, default=COMBINED_FIGURE_SIZE[0], help="combined figure width in inches"
@@ -179,8 +210,8 @@ def load_matched_panel() -> pd.DataFrame:
         ["baseline", "deletion"],
         default="swarm",
     )
-    if set(subset.loc[subset["category"].eq("baseline"), "logical_run_name"]) != set(BASELINE_LABELS):
-        raise ValueError("The matched single-phase panel does not contain the three named baselines")
+    if not set(SWARM_BASELINE_RUNS) <= set(subset["logical_run_name"]):
+        raise ValueError("The matched single-phase panel does not contain the three swarm baselines")
     return subset.reset_index(drop=True)
 
 
@@ -211,8 +242,48 @@ def finish_frame(frame: pd.DataFrame) -> pd.DataFrame:
     return frame
 
 
-def load_rows() -> tuple[TransferRow, ...]:
+def describe_path(path: Path) -> str:
+    """The path relative to the script directory when it lies inside it, else as given."""
+    resolved = path.resolve()
+    return str(resolved.relative_to(SCRIPT_DIR)) if resolved.is_relative_to(SCRIPT_DIR) else str(path)
+
+
+def load_deployed(path: Path) -> pd.DataFrame:
+    """Deployed optima with one BPB column per setting (NaN where not yet trained); empty when the file is absent."""
+    if not path.exists():
+        return pd.DataFrame(columns=list(DEPLOYED_COLUMNS))
+    table = pd.read_csv(path)
+    missing = set(DEPLOYED_COLUMNS) - set(table.columns)
+    if missing:
+        raise ValueError(f"{path}: missing columns {sorted(missing)}")
+    if table["run_name"].duplicated().any() or table["label"].duplicated().any():
+        raise ValueError(f"{path}: run names and labels must be unique")
+    return table
+
+
+def deployed_for(deployed: pd.DataFrame, swarm: pd.DataFrame, proxy_column: str, target_column: str) -> pd.DataFrame:
+    """Deployed rows with both settings measured, ranked at the position they would take among the swarm."""
+    rows = deployed.dropna(subset=[proxy_column, target_column])
+    proxy = rows[proxy_column].astype(float).to_numpy()
+    target = rows[target_column].astype(float).to_numpy()
+    swarm_proxy = swarm["bpb_proxy"].to_numpy(dtype=float)
+    swarm_target = swarm["bpb_target"].to_numpy(dtype=float)
+    return pd.DataFrame(
+        {
+            "run_name": rows["run_name"].to_numpy(),
+            "category": "deployed",
+            "bpb_proxy": proxy,
+            "bpb_target": target,
+            "label": rows["label"].to_numpy(),
+            "rank_proxy": [1 + int((swarm_proxy < value).sum()) for value in proxy],
+            "rank_target": [1 + int((swarm_target < value).sum()) for value in target],
+        }
+    )
+
+
+def load_rows(deployed_path: Path = DEPLOYED_OPTIMA) -> tuple[TransferRow, ...]:
     panel = load_matched_panel()
+    deployed = load_deployed(deployed_path)
     sixty = load_60m_single_phase()
     merged = panel.merge(sixty, on="logical_run_name", how="left", validate="one_to_one")
     if merged["bpb_60m"].isna().any():
@@ -244,34 +315,38 @@ def load_rows() -> tuple[TransferRow, ...]:
         "300M values: canonical single-phase panel (singleavg runs, shared stratified alias, pctrl_del_* rows)."
     )
     delphi_note = "Delphi values: 238 new single-phase runs plus 42 exact aliases of phase-tied two-phase runs."
-    deployed_note = (
-        "No mixture optimized at the proxy scale was trained at both scales, so there are no deployed markers."
-    )
+
+    def row_for(
+        key: str, proxy: tuple[str, str, str], target: tuple[str, str, str], notes: tuple[str, ...]
+    ) -> TransferRow:
+        proxy_column, proxy_label, proxy_header = proxy
+        target_column, target_label, target_header = target
+        frame = frame_for(proxy_column, target_column)
+        markers = deployed_for(deployed, frame, proxy_column, target_column)
+        if markers.empty:
+            deployed_note = "No deployed markers: no mixture optimized at a proxy setting is measured at both settings."
+        else:
+            deployed_note = (
+                f"Deployed markers (stars), excluded from the statistics: {', '.join(markers['label'])} from "
+                f"{describe_path(deployed_path)}; ranks are their positions among the {len(frame)} swarm runs."
+            )
+        return TransferRow(
+            key=key,
+            proxy_label=proxy_label,
+            target_label=target_label,
+            header=f"{proxy_header} → {target_header}",
+            frame=frame,
+            deployed=markers,
+            notes=(*notes, deployed_note),
+        )
+
+    sixty = ("bpb_60m", SIXTY_M_LABEL, SIXTY_M_HEADER)
+    three_hundred = ("bpb_300m", THREE_HUNDRED_M_LABEL, THREE_HUNDRED_M_HEADER)
+    delphi = ("bpb_3e18", DELPHI_LABEL, DELPHI_HEADER)
     return (
-        TransferRow(
-            key="160m_to_360m",
-            proxy_label=SIXTY_M_LABEL,
-            target_label=DELPHI_LABEL,
-            header=f"{SIXTY_M_HEADER} → {DELPHI_HEADER}",
-            frame=frame_for("bpb_60m", "bpb_3e18"),
-            notes=(shared_note, sixty_note, delphi_note, deployed_note),
-        ),
-        TransferRow(
-            key="160m_to_200m",
-            proxy_label=SIXTY_M_LABEL,
-            target_label=THREE_HUNDRED_M_LABEL,
-            header=f"{SIXTY_M_HEADER} → {THREE_HUNDRED_M_HEADER}",
-            frame=frame_for("bpb_60m", "bpb_300m"),
-            notes=(shared_note, sixty_note, three_hundred_note, deployed_note),
-        ),
-        TransferRow(
-            key="360m_to_200m",
-            proxy_label=DELPHI_LABEL,
-            target_label=THREE_HUNDRED_M_LABEL,
-            header=f"{DELPHI_HEADER} → {THREE_HUNDRED_M_HEADER}",
-            frame=frame_for("bpb_3e18", "bpb_300m"),
-            notes=(shared_note, delphi_note, three_hundred_note, deployed_note),
-        ),
+        row_for("160m_to_360m", sixty, delphi, (shared_note, sixty_note, delphi_note)),
+        row_for("160m_to_200m", sixty, three_hundred, (shared_note, sixty_note, three_hundred_note)),
+        row_for("360m_to_200m", delphi, three_hundred, (shared_note, delphi_note, three_hundred_note)),
     )
 
 
@@ -344,7 +419,7 @@ def style_axis(axis: Axes) -> None:
         axis.spines[name].set_linewidth(0.8)
 
 
-def scatter_points(axis: Axes, frame: pd.DataFrame, *, x: str, y: str, norm: Normalize) -> None:
+def scatter_points(axis: Axes, frame: pd.DataFrame, deployed: pd.DataFrame, *, x: str, y: str, norm: Normalize) -> None:
     cmap = plt.get_cmap(CMAP)
     swarm = frame.loc[frame["category"].ne("baseline")]
     baselines = frame.loc[frame["category"].eq("baseline")]
@@ -360,6 +435,54 @@ def scatter_points(axis: Axes, frame: pd.DataFrame, *, x: str, y: str, norm: Nor
         edgecolors=BASELINE_EDGE,
         linewidths=1.2,
         zorder=5,
+    )
+    for _, row in deployed.iterrows():
+        marker, size = DEPLOYED_MARKERS[str(row["label"])]
+        axis.scatter(
+            [row[x]],
+            [row[y]],
+            c=[row["bpb_target"]],
+            cmap=cmap,
+            norm=norm,
+            marker=marker,
+            s=size,
+            edgecolors=DEPLOYED_EDGE,
+            linewidths=0.9,
+            zorder=6,
+        )
+
+
+def deployed_legend(figure: Figure, rows: tuple[TransferRow, ...]) -> None:
+    """One legend for the deployed optima's marker shapes, in the order of DEPLOYED_MARKERS."""
+    present = {str(label) for row in rows for label in row.deployed["label"]}
+    if not present:
+        return
+    handles = [
+        Line2D(
+            [],
+            [],
+            linestyle="none",
+            marker=marker,
+            markersize=math.sqrt(size) * 0.62,
+            markerfacecolor=LEGEND_FILL,
+            markeredgecolor=DEPLOYED_EDGE,
+            markeredgewidth=0.8,
+            label=label,
+        )
+        for label, (marker, size) in DEPLOYED_MARKERS.items()
+        if label in present
+    ]
+    figure.legend(
+        handles=handles,
+        title="Uncheatable optima from the Qwen3 swarm",
+        title_fontsize=6.8,
+        fontsize=6.8,
+        loc="lower center",
+        bbox_to_anchor=(0.47, 0.0),
+        ncol=len(handles),
+        frameon=False,
+        handletextpad=0.3,
+        columnspacing=1.2,
     )
 
 
@@ -382,31 +505,34 @@ def plot_bpb_panel(
     axis: Axes, row: TransferRow, stats: dict[str, object], norm: Normalize, *, letter: str
 ) -> PanelDrawing:
     frame = row.frame
+    drawn = pd.concat([frame, row.deployed.assign(label="")], ignore_index=True)
     x_line = np.linspace(float(frame["bpb_proxy"].min()), float(frame["bpb_proxy"].max()), 200)
     y_line = stats["regression_slope"] * x_line + stats["regression_intercept"]
     axis.plot(x_line, y_line, color=LINE, linestyle="--", linewidth=1.0, zorder=1)
-    scatter_points(axis, frame, x="bpb_proxy", y="bpb_target", norm=norm)
+    scatter_points(axis, frame, row.deployed, x="bpb_proxy", y="bpb_target", norm=norm)
     style_axis(axis)
     axis.set_title(f"{letter}. BPB", fontsize=8.6, fontweight="bold", color=INK, pad=6)
     axis.set_xlabel(f"{row.proxy_label} BPB", fontsize=8.2, color=INK, labelpad=4)
     axis.set_ylabel(f"{row.target_label} BPB", fontsize=8.2, color=INK, labelpad=4)
-    x_span = float(frame["bpb_proxy"].max() - frame["bpb_proxy"].min())
-    y_span = float(frame["bpb_target"].max() - frame["bpb_target"].min())
-    axis.set_xlim(float(frame["bpb_proxy"].min()) - 0.10 * x_span, float(frame["bpb_proxy"].max()) + 0.08 * x_span)
-    axis.set_ylim(float(frame["bpb_target"].min()) - 0.10 * y_span, float(frame["bpb_target"].max()) + 0.22 * y_span)
+    x_span = float(drawn["bpb_proxy"].max() - drawn["bpb_proxy"].min())
+    y_span = float(drawn["bpb_target"].max() - drawn["bpb_target"].min())
+    axis.set_xlim(float(drawn["bpb_proxy"].min()) - 0.10 * x_span, float(drawn["bpb_proxy"].max()) + 0.08 * x_span)
+    axis.set_ylim(float(drawn["bpb_target"].min()) - 0.10 * y_span, float(drawn["bpb_target"].max()) + 0.22 * y_span)
     low, high = stats["pearson_ci95"]
     text = stats_box(axis, f"Pearson $r$ = {stats['pearson_r']:.2f} [{low:.2f}, {high:.2f}]\n$n$ = {stats['n']}")
-    return PanelDrawing(axis, frame, "bpb_proxy", "bpb_target", np.column_stack([x_line, y_line]), text)
+    return PanelDrawing(axis, drawn, "bpb_proxy", "bpb_target", np.column_stack([x_line, y_line]), text)
 
 
 def plot_rank_panel(
     axis: Axes, row: TransferRow, stats: dict[str, object], norm: Normalize, *, letter: str
 ) -> PanelDrawing:
     frame = row.frame
+    # Deployed markers share the corner near rank 1, so the rank panel draws them unlabelled (the BPB panel names them).
+    drawn = pd.concat([frame, row.deployed.assign(label="")], ignore_index=True)
     max_rank = int(frame[["rank_proxy", "rank_target"]].to_numpy().max())
     line = np.linspace(1.0, float(max_rank), 200)
     axis.plot(line, line, color=LINE, linestyle="--", linewidth=1.0, zorder=1)
-    scatter_points(axis, frame, x="rank_proxy", y="rank_target", norm=norm)
+    scatter_points(axis, frame, row.deployed, x="rank_proxy", y="rank_target", norm=norm)
     style_axis(axis)
     axis.set_title(f"{letter}. Rank", fontsize=8.6, fontweight="bold", color=INK, pad=6)
     axis.set_xlabel(f"Rank at {row.proxy_label}", fontsize=8.2, color=INK, labelpad=4)
@@ -420,7 +546,7 @@ def plot_rank_panel(
         f"Spearman $\\rho$ = {stats['spearman_rho']:.2f} [{s_low:.2f}, {s_high:.2f}]\n"
         f"Kendall $\\tau$ = {stats['kendall_tau']:.2f} [{k_low:.2f}, {k_high:.2f}]",
     )
-    return PanelDrawing(axis, frame, "rank_proxy", "rank_target", np.column_stack([line, line]), text)
+    return PanelDrawing(axis, drawn, "rank_proxy", "rank_target", np.column_stack([line, line]), text)
 
 
 def _points_in(box: Bbox, points: np.ndarray) -> int:
@@ -488,6 +614,13 @@ class LabelCandidate:
     leader: tuple[np.ndarray, np.ndarray] | None
 
 
+def _box_distance(box: Bbox, point: np.ndarray) -> float:
+    """Distance from a point to the nearest point of a box (zero inside it)."""
+    dx = max(box.x0 - float(point[0]), 0.0, float(point[0]) - box.x1)
+    dy = max(box.y0 - float(point[1]), 0.0, float(point[1]) - box.y1)
+    return math.hypot(dx, dy)
+
+
 def _candidate_cost(
     box: Bbox,
     *,
@@ -504,6 +637,9 @@ def _candidate_cost(
         cost += COST_OUTSIDE_AXES
     padded = box.padded(context.marker_clearance)
     cost += COST_MARKER_COVERED * sum(padded.contains(float(m[0]), float(m[1])) for m in context.markers)
+    own_distance = _box_distance(box, marker)
+    if any(other is not marker and _box_distance(box, other) < own_distance for other in context.markers):
+        cost += COST_NEARER_OTHER_MARKER
     if leader is not None:
         start, end = leader
         cost += COST_LEADER_POINT * _points_near_segment(context.points, start, end, context.point_clearance)
@@ -528,6 +664,71 @@ def _interaction_cost(first: LabelCandidate, second: LabelCandidate) -> float:
     return cost
 
 
+def _joint_cost(combo: Sequence[LabelCandidate]) -> float:
+    total = sum(candidate.cost for candidate in combo)
+    for first, second in itertools.combinations(combo, 2):
+        total += _interaction_cost(first, second)
+    return total
+
+
+def _assign_labels(options: Sequence[Sequence[LabelCandidate]]) -> tuple[LabelCandidate, ...]:
+    """Pick one candidate per label minimizing own costs plus pairwise interactions.
+
+    Up to EXHAUSTIVE_LABEL_LIMIT labels are solved exactly over the product of their candidate lists; beyond that
+    (the deployed markers add up to four labels) coordinate descent from each label's cheapest candidate is used,
+    sweeping the labels until no single change lowers the joint cost.
+    """
+    if len(options) <= EXHAUSTIVE_LABEL_LIMIT:
+        best_total = math.inf
+        best_combo: tuple[LabelCandidate, ...] | None = None
+        for combo in itertools.product(*(choices[:JOINT_CANDIDATES_PER_LABEL] for choices in options)):
+            total = sum(candidate.cost for candidate in combo)
+            if total >= best_total:
+                continue
+            for first, second in itertools.combinations(combo, 2):
+                total += _interaction_cost(first, second)
+                if total >= best_total:
+                    break
+            if total < best_total:
+                best_total = total
+                best_combo = combo
+        assert best_combo is not None
+        return best_combo
+    best: tuple[float, list[LabelCandidate]] | None = None
+    for start in (_cheapest_start(options), _greedy_start(options)):
+        current, current_total = start, _joint_cost(start)
+        for _ in range(COORDINATE_DESCENT_SWEEPS):
+            improved = False
+            for index, choices in enumerate(options):
+                for candidate in choices:
+                    trial = [*current[:index], candidate, *current[index + 1 :]]
+                    trial_total = _joint_cost(trial)
+                    if trial_total < current_total - 1e-9:
+                        current, current_total, improved = trial, trial_total, True
+            if not improved:
+                break
+        if best is None or current_total < best[0]:
+            best = (current_total, current)
+    assert best is not None
+    return tuple(best[1])
+
+
+def _cheapest_start(options: Sequence[Sequence[LabelCandidate]]) -> list[LabelCandidate]:
+    return [choices[0] for choices in options]
+
+
+def _greedy_start(options: Sequence[Sequence[LabelCandidate]]) -> list[LabelCandidate]:
+    """Place the most constrained label first (costliest best candidate), each against those already placed."""
+    order = sorted(range(len(options)), key=lambda index: -options[index][0].cost)
+    chosen: dict[int, LabelCandidate] = {}
+    for index in order:
+        chosen[index] = min(
+            options[index],
+            key=lambda candidate: candidate.cost + sum(_interaction_cost(candidate, other) for other in chosen.values()),
+        )
+    return [chosen[index] for index in range(len(options))]
+
+
 def place_labels(figure: Figure, panel: PanelDrawing) -> None:
     """Label the baselines jointly so labels and leaders avoid points, lines, markers and each other."""
     renderer = figure.canvas.get_renderer()
@@ -535,10 +736,13 @@ def place_labels(figure: Figure, panel: PanelDrawing) -> None:
     pixels_per_point = figure.dpi / 72.0
     named = panel.frame.loc[panel.frame["label"].ne("")]
     markers = {row["label"]: axis.transData.transform([[row[panel.x], row[panel.y]]])[0] for _, row in named.iterrows()}
+    # Unlabelled deployed markers are kept clear of labels and leaders like the labelled ones.
+    deployed = panel.frame.loc[panel.frame["category"].eq("deployed")]
+    avoid = [axis.transData.transform([[row[panel.x], row[panel.y]]])[0] for _, row in deployed.iterrows()]
     context = PlacementContext(
         points=axis.transData.transform(panel.frame[[panel.x, panel.y]].to_numpy(dtype=float)),
         line_points=axis.transData.transform(panel.line_xy),
-        markers=list(markers.values()),
+        markers=[*markers.values(), *avoid],
         axis_box=axis.get_window_extent(renderer),
         stats_box=panel.stats_text.get_window_extent(renderer).padded(STATS_PAD_POINTS * pixels_per_point),
         clearance=LEADER_CLEARANCE_POINTS * pixels_per_point,
@@ -580,23 +784,10 @@ def place_labels(figure: Figure, panel: PanelDrawing) -> None:
                 cost = _candidate_cost(box, radius=radius, marker=markers[label], leader=leader, context=context)
                 options.append(LabelCandidate(cost, offset, radius, box, leader))
         options.sort(key=lambda candidate: candidate.cost)
-        candidates[label] = options[:JOINT_CANDIDATES_PER_LABEL]
+        candidates[label] = options[:DESCENT_CANDIDATES_PER_LABEL]
 
     labels = list(candidates)
-    best_total = math.inf
-    best_combo: tuple[LabelCandidate, ...] | None = None
-    for combo in itertools.product(*(candidates[label] for label in labels)):
-        total = sum(candidate.cost for candidate in combo)
-        if total >= best_total:
-            continue
-        for first, second in itertools.combinations(combo, 2):
-            total += _interaction_cost(first, second)
-            if total >= best_total:
-                break
-        if total < best_total:
-            best_total = total
-            best_combo = combo
-    assert best_combo is not None
+    best_combo = _assign_labels([candidates[label] for label in labels])
     for label, candidate in zip(labels, best_combo, strict=True):
         annotation = annotations[label]
         text_box(annotation, candidate.offset)
@@ -647,7 +838,10 @@ def build_combined_figure(
         figure, axes = plt.subplots(len(rows), 2, figsize=size)
         figure.subplots_adjust(left=0.085, right=0.885, bottom=0.075, top=0.92, wspace=0.30, hspace=0.52)
         if len(rows) == 3:
-            figure.subplots_adjust(left=0.10, right=0.85, bottom=0.065, top=0.915, wspace=0.39, hspace=0.69)
+            has_deployed = any(not row.deployed.empty for row in rows)
+            figure.subplots_adjust(
+                left=0.10, right=0.85, bottom=0.115 if has_deployed else 0.065, top=0.915, wspace=0.39, hspace=0.69
+            )
         letters = iter("ABCDEFGH")
         panels: list[PanelDrawing] = []
         for row_index, row in enumerate(rows):
@@ -666,6 +860,7 @@ def build_combined_figure(
                     panel.stats_text.set_verticalalignment("bottom")
                     panel.stats_text.set_fontsize(6.2)
                     panel.stats_text.set_text(f"{letter}. {panel.stats_text.get_text()}")
+        deployed_legend(figure, rows)
         figure.canvas.draw()
         for panel in panels:
             place_labels(figure, panel)
@@ -683,7 +878,23 @@ def build_row_figure(row: TransferRow, stats: dict[str, object]) -> Figure:
         return figure
 
 
-def write_outputs(output_dir: Path, rows: tuple[TransferRow, ...], stats: dict[str, dict[str, object]]) -> None:
+def deployed_summary(rows: tuple[TransferRow, ...], deployed_path: Path) -> dict[str, object]:
+    """The deployed markers drawn per pair, with the table's hash, so a rendered figure is reproducible."""
+    return {
+        "source": describe_path(deployed_path) if deployed_path.exists() else None,
+        "sha256": sha256_of(deployed_path) if deployed_path.exists() else None,
+        "rows": {
+            row.key: row.deployed[["run_name", "label", "bpb_proxy", "bpb_target", "rank_proxy", "rank_target"]].to_dict(
+                orient="records"
+            )
+            for row in rows
+        },
+    }
+
+
+def write_outputs(
+    output_dir: Path, rows: tuple[TransferRow, ...], stats: dict[str, dict[str, object]], deployed_path: Path
+) -> None:
     points = pd.concat(
         [row.frame.assign(transfer=row.key, proxy_scale=row.proxy_label, target_scale=row.target_label) for row in rows],
         ignore_index=True,
@@ -697,6 +908,7 @@ def write_outputs(output_dir: Path, rows: tuple[TransferRow, ...], stats: dict[s
             str(path.relative_to(SCRIPT_DIR)): sha256_of(path)
             for path in (SIXTY_M_FIT, SIXTY_M_HELDOUTS, MATCHED_300M_VS_DELPHI)
         },
+        "deployed": deployed_summary(rows, deployed_path),
         "rows": {
             row.key: {
                 "proxy_scale": row.proxy_label,
@@ -720,7 +932,7 @@ def save(figure: Figure, stem: Path) -> None:
 
 def main() -> None:
     args = parse_args()
-    rows = load_rows()
+    rows = load_rows(args.deployed)
     if args.all_pairs:
         summary = json.loads(args.summary.read_text())
         for relative_path, expected_hash in summary["inputs"].items():
@@ -733,6 +945,9 @@ def main() -> None:
         args.output_dir.mkdir(parents=True, exist_ok=True)
         figure = build_combined_figure(rows, stats, (args.combined_width, args.combined_height))
         save(figure, args.output_dir / "r3_scale_transfer_all_pairs")
+        (args.output_dir / "r3_scale_transfer_all_pairs_deployed.json").write_text(
+            json.dumps(deployed_summary(rows, args.deployed), indent=2) + "\n"
+        )
         print(f"Rendered {len(rows)} pairs using unchanged statistics from {args.summary}")
         return
     rng = np.random.default_rng(BOOTSTRAP_SEED)
@@ -742,7 +957,7 @@ def main() -> None:
     save(build_combined_figure(combined, stats, (args.combined_width, args.combined_height)), args.output_dir / "figure")
     for row in rows:
         save(build_row_figure(row, stats[row.key]), args.output_dir / f"row_{row.key}")
-    write_outputs(args.output_dir, rows, stats)
+    write_outputs(args.output_dir, rows, stats, args.deployed)
     for row in rows:
         summary = stats[row.key]
         selection = selection_summary(row.frame)

@@ -32,6 +32,8 @@ import os
 import sys
 import time
 import traceback
+import warnings
+from collections.abc import Sequence
 from math import comb
 from pathlib import Path
 from typing import Any
@@ -1056,15 +1058,131 @@ def fit_shared_unit(
     return written
 
 
+def pooled_shape_indices(tables: Sequence[np.ndarray], shrink: float) -> list[int]:
+    """Per-task shape index minimizing own inner-CV error plus ``shrink`` times the other tasks' mean excess error.
+
+    Every table is (shapes, ridges) in repeat-SD units; the ridge is marginalized by its minimum, and a
+    candidate that is non-finite for another task is left out of that task's mean. With one task or a zero
+    ``shrink`` this is each task's own argmin.
+    """
+    own = np.stack([np.min(np.asarray(table, dtype=float), axis=1) for table in tables])
+    finite = np.where(np.isfinite(own), own, np.nan)
+    excess = finite - np.nanmin(finite, axis=1, keepdims=True)
+    choices = []
+    for index in range(len(tables)):
+        others = np.delete(excess, index, axis=0)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            pooled = np.nanmean(others, axis=0) if len(others) else np.zeros(own.shape[1])
+        objective = own[index] + shrink * np.where(np.isfinite(pooled), pooled, 0.0)
+        objective = np.where(np.isfinite(objective), objective, np.inf)
+        choices.append(int(np.argmin(objective)))
+    return choices
+
+
+def fit_shrunk_unit(
+    shared_id: str, parent_id: str, tasks: list[FitTask], output_dir: Path, legacy_split_hash: str, shrink: float
+) -> int:
+    """Pass 2 of the shrunk-shape fit: per-task shape from the pooled objective, then the parent refitted there."""
+    parent = registry.ENTRY_BY_ID[parent_id]
+    shared = registry.ENTRY_BY_ID[shared_id]
+    tables: list[np.ndarray] = []
+    for task in tasks:
+        panel = load_panel(task.panel)
+        cached = load_shard(shared_cache_path(output_dir, task))
+        if cached is None:
+            raise FileNotFoundError(f"missing CV table for {task}")
+        scale = float(panel.component_repeat_sd.get(task.component, 0.0)) or float(cached["train_response_sd"])
+        tables.append(np.asarray(cached["cv_table"], dtype=float) / max(scale, 1e-9))
+    indices = pooled_shape_indices(tables, shrink)
+    unit_hash = hashlib.sha256(
+        json.dumps(sorted(f"{task.panel}|{task.target}|{task.component}" for task in tasks)).encode()
+    ).hexdigest()
+    written = 0
+    for task, table, shape_index in zip(tasks, tables, indices, strict=True):
+        panel = load_panel(task.panel)
+        shared_task = dataclasses.replace(task, model_id=shared_id)
+        hashes = task_protocol_hashes(shared_task, shared, legacy_split_hash, panel, output_dir)
+        path = shard_path(output_dir, shared_task)
+        split = next(
+            item
+            for item in panel_splits(panel, task.repeat + 1)
+            if item.repeat == task.repeat and item.fold == task.fold
+        )
+        existing = load_shard(path) if valid_shard(path, hashes, task.component, split.test) else None
+        if existing is not None and str(existing.get("shared_unit_hash", "")) == unit_hash:
+            continue
+        response = panel.group(task.target).outcomes[:, task.component_index].copy()
+        features = dataclasses.replace(registry.apply_transform(panel.features, parent), component=task.component)
+        model = parent.build(features)
+        grid = model.base if isinstance(model, models.FittedFloorModel) else model
+        if not isinstance(grid, models.GridModel):
+            raise TypeError(f"{parent_id} is not a grid model")
+        candidates = grid.candidate_shapes(features)
+        shape = dict(candidates[shape_index])
+        ridge_index = int(np.argmin(table[shape_index]))
+        ridge = float(grid.ridge_grid[ridge_index])
+        restricted_grid = dataclasses.replace(grid, shapes=(shape,), ridge_grid=(ridge,))
+        restricted = (
+            dataclasses.replace(model, base=restricted_grid)
+            if isinstance(model, models.FittedFloorModel)
+            else restricted_grid
+        )
+        started = time.monotonic()
+        fitted = restricted.fit(features, response, split.train, split.inner, _seed(task))
+        prediction = np.asarray(restricted.predict(fitted, features, split.test), dtype=float)
+        finite = bool(np.isfinite(prediction).all())
+        payload = {
+            "protocol_hash": hashes[0],
+            "model_id": shared_id,
+            "component": task.component,
+            "component_index": task.component_index,
+            "test": split.test,
+            "train_rows": len(split.train),
+            "observed": response[split.test],
+            "constant_prediction": np.full(len(split.test), float(response[split.train].mean())),
+            "status": "ok" if finite else "failed",
+            "error": "" if finite else "non-finite pooled-shape prediction",
+            "prediction": prediction,
+            "train_prediction": np.asarray(restricted.predict(fitted, features, split.train), dtype=float),
+            "shape_json": json.dumps(fitted.shape, sort_keys=True),
+            "ridge": float(fitted.ridge),
+            "cv_table": np.zeros((0, 0)),
+            "shared_unit_hash": unit_hash,
+            "diagnostics_json": json.dumps(
+                {
+                    **{
+                        key: value if not isinstance(value, np.generic) else value.item()
+                        for key, value in fitted.diagnostics.items()
+                    },
+                    "pooled_shrink": shrink,
+                    "pooled_unit_size": len(tasks),
+                    "pooled_shape_index": shape_index,
+                    "own_shape_index": int(np.argmin(np.min(table, axis=1))),
+                },
+                sort_keys=True,
+                default=float,
+            ),
+            "elapsed": time.monotonic() - started,
+        }
+        atomic_save(path, payload)
+        written += 1
+    return written
+
+
 def run_shared_stage(
     plan: TierPlan, model_ids: tuple[str, ...], output_dir: Path, legacy_split_hash: str, workers: int
 ) -> dict[str, int]:
-    """Fit every shared-shape entry in ``model_ids``: cache parent CV tables, then refit per sharing unit."""
+    """Fit every shared- or shrunk-shape entry in ``model_ids``: cache parent CV tables, then refit per unit."""
     counts: dict[str, int] = {}
     for shared_id in model_ids:
-        if shared_id not in registry.SHARED_SHAPE_UNITS:
+        shrink: float | None = None
+        if shared_id in registry.SHARED_SHAPE_UNITS:
+            parent_id, unit = registry.SHARED_SHAPE_UNITS[shared_id]
+        elif shared_id in registry.SHRUNK_SHAPE_UNITS:
+            parent_id, unit, shrink = registry.SHRUNK_SHAPE_UNITS[shared_id]
+        else:
             continue
-        parent_id, unit = registry.SHARED_SHAPE_UNITS[shared_id]
         parent_tasks = plan_tasks(plan, (parent_id,))
         print(f"{shared_id}: caching {len(parent_tasks)} parent CV tables", flush=True)
         with parallel_config(backend="loky", inner_max_num_threads=1):
@@ -1075,10 +1193,16 @@ def run_shared_stage(
         for task in parent_tasks:
             groups.setdefault(shared_unit_key(unit, task), []).append(task)
         with parallel_config(backend="loky", inner_max_num_threads=1):
-            written = Parallel(n_jobs=workers, verbose=5, batch_size=1)(
-                delayed(fit_shared_unit)(shared_id, parent_id, tasks, output_dir, legacy_split_hash)
-                for tasks in groups.values()
-            )
+            if shrink is None:
+                written = Parallel(n_jobs=workers, verbose=5, batch_size=1)(
+                    delayed(fit_shared_unit)(shared_id, parent_id, tasks, output_dir, legacy_split_hash)
+                    for tasks in groups.values()
+                )
+            else:
+                written = Parallel(n_jobs=workers, verbose=5, batch_size=1)(
+                    delayed(fit_shrunk_unit)(shared_id, parent_id, tasks, output_dir, legacy_split_hash, shrink)
+                    for tasks in groups.values()
+                )
         counts[shared_id] = int(sum(written))
         print(f"{shared_id}: {len(groups)} units, {counts[shared_id]} shards written", flush=True)
     return counts
@@ -2768,13 +2892,21 @@ def main() -> None:
 
     counts: dict[str, int] = {}
     if args.stage in ("fit", "all"):
-        fit_ids = tuple(model_id for model_id in model_ids if model_id not in registry.SHARED_SHAPE_UNITS)
+        fit_ids = tuple(
+            model_id
+            for model_id in model_ids
+            if model_id not in registry.SHARED_SHAPE_UNITS and model_id not in registry.SHRUNK_SHAPE_UNITS
+        )
         tasks = plan_tasks(plan, fit_ids)
         counts = run_tasks(tasks, args.output_dir, split_hash, args.workers)
     if args.stage in ("fit", "shared", "all"):
         counts.update(run_shared_stage(plan, model_ids, args.output_dir, split_hash, args.workers))
     if args.stage in ("heldout", "all") and args.tier in ("certify", "finalist"):
-        heldout_ids = parse_models(args.heldout_models)
+        heldout_ids = tuple(
+            model_id for model_id in parse_models(args.heldout_models) if model_id not in registry.SHRUNK_SHAPE_UNITS
+        )
+        if len(heldout_ids) < len(parse_models(args.heldout_models)):
+            print("heldout: pooled-shape entries need every task at once and are skipped", flush=True)
         counts["heldout"] = run_heldout(args.output_dir, heldout_ids, args.workers, split_hash)["fitted"]
     if args.stage in ("report", "all", "heldout"):
         tasks = plan_tasks(plan, report_ids)
