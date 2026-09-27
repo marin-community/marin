@@ -10,7 +10,7 @@ from marin.datakit.sft import SftInput, build_sft_store
 
 CONTEXT = 32_768
 SHUFFLE_SEED = 0
-SOURCE_NAME = "science-forward/minimax-m3-formatted-2026.09.27-v1"
+SOURCE_NAME = "science-forward/minimax-m3-formatted-2026.09.27-v2"
 
 
 def main() -> None:

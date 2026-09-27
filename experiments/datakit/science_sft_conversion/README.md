@@ -11,11 +11,16 @@ gets one of six answer formats chosen from a stable source ID hash. MiniMax
 generates a user request, an assistant `reasoning_content` span, and a final
 answer. The worker validates the three fields, the requested final format, and
 Datakit's Harmony message structure before writing `CHAT_SCHEMA` Parquet.
+For prose, code, and textbook passages, the worker appends the source chunk to
+the user turn so the assistant's answer has its evidence. For the Nemotron math
+textbooks and Swallow math QA sources, MiniMax extracts a standalone question
+without exposing its worked solution. The earlier v1 probe omitted context in
+some user turns; do not train on v1 outputs.
 Output files live under
-`s3://marin-us-east-02a/marin/users/benfeuer/science-sft-converted/2026.09.27-v1/outputs/main/`.
+`s3://marin-us-east-02a/marin/users/benfeuer/science-sft-converted/2026.09.27-v2/outputs/main/`.
 `experiments.datasets.science_forward_converted.science_forward_converted_dataset()`
 registers this Parquet directory as the Datakit source
-`science-forward/minimax-m3-formatted-2026.09.27-v1`. The handle references
+`science-forward/minimax-m3-formatted-2026.09.27-v2`. The handle references
 the existing output and does not start conversion.
 Each file covers one 1,024-row source batch; completed batches are skipped on
 restart. A failed batch remains unwritten and fails the Iris task after four
@@ -75,7 +80,7 @@ uv run iris --cluster=cw-rno2a job run --priority interactive --enable-extra-res
   --job-name science-sft-conversion-probe-20260927 --cpu 4 --memory 16GB \
   --disk 10GB --extra cpu --no-wait \
   -- python -m experiments.datakit.science_sft_conversion.probe \
-    --output-path s3://marin-us-east-02a/marin/users/benfeuer/science-sft-converted/2026.09.27-v1/audit/probe-17.json
+    --output-path s3://marin-us-east-02a/marin/users/benfeuer/science-sft-converted/2026.09.27-v2/audit/probe-17.json
 ```
 
 The conversion is complete only when every expected source batch has a

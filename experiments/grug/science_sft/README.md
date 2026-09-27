@@ -16,8 +16,8 @@ uv run iris --cluster=cw-rno2a job run --priority interactive --enable-extra-res
   --job-name science-sft-converted-store-20260927 --cpu 8 --memory 32GB \
   --disk 20GB --extra cpu --no-wait \
   -- python -m experiments.grug.science_sft.prepare \
-    --input-path s3://marin-us-east-02a/marin/users/benfeuer/science-sft-converted/2026.09.27-v1/outputs/main \
-    --output-path s3://marin-us-east-02a/marin/users/benfeuer/science-sft-converted-store/2026.09.27-v1 \
+    --input-path s3://marin-us-east-02a/marin/users/benfeuer/science-sft-converted/2026.09.27-v2/outputs/main \
+    --output-path s3://marin-us-east-02a/marin/users/benfeuer/science-sft-converted-store/2026.09.27-v2 \
     --tokenizer s3://marin-us-east-02a/models/open-athena--Snowball-67B-A2B-5.7T-Mixed-RLVR-Step38 \
     --num-shards 1024 --max-workers 32
 ```
@@ -32,8 +32,8 @@ uv run iris --cluster=cw-rno2a job run --priority interactive --enable-extra-res
   --job-name science-sft-converted-step38-20260927 --cpu 8 --memory 32GB \
   --disk 20GB --extra cpu --no-wait -e WANDB_API_KEY "$WANDB_API_KEY" \
   -- python -m experiments.grug.science_sft.launch \
-    --store-path s3://marin-us-east-02a/marin/users/benfeuer/science-sft-converted-store/2026.09.27-v1 \
-    --version 2026.09.27-v1
+    --store-path s3://marin-us-east-02a/marin/users/benfeuer/science-sft-converted-store/2026.09.27-v2 \
+    --version 2026.09.27-v2
 ```
 
 The launcher checks the model mirror revision and refuses a store with a
