@@ -118,6 +118,8 @@ def test_file_config_fields_reach_the_evalchemy_command():
     assert command[command.index("--seed") + 1] == "1234"
     model_args = dict(pair.split("=", 1) for pair in command[command.index("--model_args") + 1].split(","))
     assert model_args["timeout"] == "900"
+    assert model_args["transport_retry_budget"] == "1800"
+    assert model_args["transport_attempt_timeout"] == "300"
     assert model_args["max_length"] == "32768"
 
 

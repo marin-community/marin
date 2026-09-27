@@ -26,6 +26,9 @@ from pathlib import Path
 CONFIG_ENV_KEY = "EVALCHEMY_CLIENT_CONFIG"
 EVALCHEMY_RESULTS_PREFIX = "results_"
 EVALCHEMY_RESULTS_SUFFIX = ".json"
+_REQUEST_TIMEOUT = 1800
+_TRANSPORT_RETRY_BUDGET = 1800
+_TRANSPORT_ATTEMPT_TIMEOUT = 300
 
 # Without a configured cap, an lm-eval-native generation task gets the served context minus this
 # prompt reserve, so the model config's context window sets its budget the way Evalchemy's own
@@ -149,10 +152,12 @@ def build_model_args(config: dict, use_chat: bool, max_length: int | None) -> st
         # once); one request exhausting its retries mid-burst closes lm-eval's shared session and
         # fails the whole task, so give each request enough headroom to ride out a burst.
         "max_retries": 8,
-        # lm-eval's per-request client timeout defaults to 300s; a long reasoning generation
-        # (multi-thousand-token chat benchmark) can exceed that, and a spurious timeout retry-storms
-        # the endpoint. 1800s covers a full max_gen_toks generation on a slow serve.
-        "timeout": 1800,
+        # A long reasoning generation can legitimately need the full policy window. Transport
+        # attempts use a shorter deadline so a stalled proxy request can be retried without
+        # extending that window.
+        "timeout": _REQUEST_TIMEOUT,
+        "transport_retry_budget": _TRANSPORT_RETRY_BUDGET,
+        "transport_attempt_timeout": _TRANSPORT_ATTEMPT_TIMEOUT,
     }
     args.update(config.get("extra_model_args", {}))
     if max_length is not None:
