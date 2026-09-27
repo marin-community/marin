@@ -592,6 +592,9 @@ class GrugModelConfig:
     """Engram-style multi-head hashing: each bigram row is split into this many slices of ``hidden_dim / heads``, each
     indexed by its own hash of the bigram, so a collision corrupts only the slices whose hashes collide. The table is
     stored as ``[heads * rows, hidden_dim / heads]`` (the same parameters and gathered bytes as one table)."""
+    embed2_head_orders: tuple[int, ...] = ()
+    """With ``embed2_hash_heads``, the n-gram order of each head (e.g. ``(2, 2, 3, 3)``: two bigram and two trigram
+    slices in the same table and gather). Empty: every head uses ``embed2_ngram``."""
     trigram_gate: bool = False
     """The ``bigram_gate`` content gate (same rank) on the trigram source (``embed3_rows``), with its own parameters."""
     bigram_gate_rank: int = 0
@@ -2983,11 +2986,12 @@ class Transformer(eqx.Module):
                     doc_start = None if segment_ids is None else segment_ids[0]
                     rows_per_head = cfg.embed2_rows or cfg.vocab_size
                     heads = cfg.embed2_hash_heads
+                    if cfg.embed2_head_orders and len(cfg.embed2_head_orders) != heads:
+                        raise ValueError(f"embed2_head_orders needs {heads} entries, got {cfg.embed2_head_orders}")
                     head_ids = jnp.stack(
                         [
-                            _bigram_hash_ids(token_ids, doc_start, rows_per_head, cfg.embed2_ngram, salt=h)
-                            + h * rows_per_head
-                            for h in range(heads)
+                            _bigram_hash_ids(token_ids, doc_start, rows_per_head, order, salt=h) + h * rows_per_head
+                            for h, order in enumerate(cfg.embed2_head_orders or (cfg.embed2_ngram,) * heads)
                         ],
                         axis=-1,
                     )
