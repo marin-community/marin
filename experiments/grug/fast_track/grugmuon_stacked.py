@@ -99,6 +99,38 @@ def _merge_heads(x: jax.Array, like: jax.Array, axis: int) -> jax.Array:
     return reshard(merged, target) if target is not None else merged
 
 
+_POWER_ITERS = 3
+
+
+def _is_matrix_stack(x) -> bool:
+    return x is not None and hasattr(x, "ndim") and x.ndim in (2, 3, 4)
+
+
+def _pre_normalize(x, mode: str):
+    if not _is_matrix_stack(x):
+        return x
+    if mode not in ("in", "out"):
+        raise ValueError(f"pre_norm must be none, in or out, got {mode!r}")
+    axis = -2 if mode == "out" else -1
+    x32 = x.astype(jnp.float32)
+    return (x32 / (jnp.sqrt(jnp.sum(jnp.square(x32), axis=axis, keepdims=True)) + 1e-8)).astype(x.dtype)
+
+
+def _shrink_top_direction(direction, m, amount: float):
+    """``direction - amount * u1 v1^T`` per matrix, with ``(u1, v1)`` the top singular pair of ``m``."""
+    if not _is_matrix_stack(direction):
+        return direction
+    m32 = m.astype(jnp.float32)
+    v = jnp.sum(m32, axis=-2)
+    for _ in range(_POWER_ITERS):
+        u = jnp.einsum("...io,...o->...i", m32, v)
+        u = u / (jnp.linalg.norm(u, axis=-1, keepdims=True) + 1e-12)
+        v = jnp.einsum("...io,...i->...o", m32, u)
+        v = v / (jnp.linalg.norm(v, axis=-1, keepdims=True) + 1e-12)
+    top = jnp.einsum("...i,...o->...io", u, v)
+    return (direction.astype(jnp.float32) - amount * top).astype(direction.dtype)
+
+
 def _grug_scale_with_muon(
     momentum=0.95,
     nesterov=True,
@@ -106,8 +138,16 @@ def _grug_scale_with_muon(
     muon_eps=1e-8,
     coefficient_type="quintic",
     head_dim: int | None = None,
+    pre_norm: str = "none",
+    top_shrink: float = 0.0,
 ):
     """Muon gradient transformation for the stacked model (2D/3D/4D leaves).
+
+    ``pre_norm`` normalizes the momentum before Newton-Schulz (MuonEq, arXiv 2603.28254): ``"out"`` gives
+    every output unit's column unit norm, ``"in"`` every input unit's row. ``top_shrink`` (SAMuon-lite,
+    arXiv 2608.25990) subtracts ``top_shrink * u1 v1^T`` from the orthogonalized direction, with ``(u1, v1)``
+    the momentum's top singular pair from ``_POWER_ITERS`` power iterations. ``1 - 1/gamma`` matches
+    SAMuon's ``gamma * NS(M) - (gamma - 1) u1 v1^T`` once the hyperball step fixes the overall scale.
 
     With ``head_dim``, the stacked attention projections (``_head_axis``) are orthogonalized per head:
     each ``[D, head_dim]`` (or ``[head_dim, D]``) block of every layer is its own Newton-Schulz matrix.
@@ -175,6 +215,9 @@ def _grug_scale_with_muon(
             )
             updates = split
 
+        if pre_norm != "none":
+            updates = jax.tree.map(lambda x: _pre_normalize(x, pre_norm), updates, is_leaf=lambda x: x is None)
+        momentum_dirs = updates
         mesh = jax.sharding.get_abstract_mesh()
         if mesh.empty or not _intra_rack_axes(mesh):
             updates = jax.tree_util.tree_map_with_path(
@@ -185,6 +228,10 @@ def _grug_scale_with_muon(
             )
         else:
             updates = _bucketed_newton_schulz(updates, params, mesh, steps, muon_eps, coefficient_type)
+        if top_shrink:
+            updates = jax.tree.map(
+                lambda o, m: _shrink_top_direction(o, m, top_shrink), updates, momentum_dirs, is_leaf=lambda x: x is None
+            )
         if head_axes is not None:
             updates = jax.tree.map(
                 lambda u, o, a: u if u is None or a is None else _merge_heads(u, o, a),
