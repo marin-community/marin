@@ -436,6 +436,9 @@ class GrugModelConfig:
     (random init) and ``B`` (zero init), both trained with Adam (0: off)."""
     mla_k_norm: bool = False
     """Weightless per-head RMSNorm on the MLA keys only, no query norm (DeepSeek-V4.1's setup)."""
+    mla_k_norm_shared: bool = False
+    """With ``mla_k_norm``, normalize the keys by one RMS over all heads per token instead of per head. Under MLA
+    absorption this caches 1 scalar per token instead of ``num_heads``."""
     mla_k_norm_split: bool = False
     """With ``mla_k_norm``, RMS-normalize the two key halves separately, i.e. the previous-token half from
     ``mla_key_offset`` and the current-token half, so neither dominates the logit by magnitude."""
@@ -968,7 +971,12 @@ class CausalSelfAttention(eqx.Module):
             k = rms_norm(k)
         elif self.cfg.mla_k_norm and self.cfg.mla:
             # DeepSeek-V4.1: weightless per-head RMSNorm on the keys only; queries keep their scale.
-            if self.cfg.mla_k_norm_split:
+            if self.cfg.mla_k_norm_shared:
+                # One RMS over all heads' keys per token: 1 cached scalar per token under MLA absorption
+                # instead of one per head.
+                k32 = k.astype(jnp.float32)
+                k = (k32 * jax.lax.rsqrt(jnp.mean(jnp.square(k32), axis=(-2, -1), keepdims=True) + 1e-6)).astype(k.dtype)
+            elif self.cfg.mla_k_norm_split:
                 # With the partial key offset, normalize the previous-token and current-token halves separately.
                 half = k.shape[-1] // 2
                 k = jnp.concatenate([rms_norm(k[..., :half]), rms_norm(k[..., half:])], axis=-1)
