@@ -325,6 +325,7 @@ def build_h100_ladder_run(
     seed: int = 0,
     profile: bool = False,
     dump_hlo: bool = False,
+    pgle_runs: int = 0,
     ema_beta: float | None = None,
     ema_last_steps: int | None = None,
     ema_blend_sweep: tuple[float, ...] = (),
@@ -447,7 +448,11 @@ def build_h100_ladder_run(
             seed=seed,
             train_batch_size=batch_size,
             num_train_steps=num_steps,
-            jax_config=dict(DEFAULT_JAX_CONFIG),
+            jax_config=(
+                {**DEFAULT_JAX_CONFIG, "jax_enable_pgle": True, "jax_pgle_profiling_runs": pgle_runs}
+                if pgle_runs
+                else dict(DEFAULT_JAX_CONFIG)
+            ),
             profiler=ProfilerConfig(enabled=profile, start_step=PROFILE_START_STEP, num_steps=PROFILE_NUM_STEPS),
             mp=jmp.get_policy(mp_policy),
             tracker=WandbConfig(
@@ -620,6 +625,13 @@ def _submit_to_cluster(run_id: str, target_cluster: str | None, priority: str) -
 )
 @click.option("--profile", is_flag=True, help="Capture a JAX profile of a few steps (uploaded as a W&B artifact).")
 @click.option("--dump-hlo", is_flag=True, help="Write the compiled train-step HLO to <output>/train_step.hlo.txt.")
+@click.option(
+    "--pgle-runs",
+    type=int,
+    default=0,
+    help="Profile-guided latency estimation: profile this many steps, then recompile with measured collective "
+    "latencies for the latency-hiding scheduler (0: off).",
+)
 @click.option("--ema-beta", type=float, default=None, help="Weight-EMA decay; evals after the EMA start score the EMA.")
 @click.option("--ema-last-steps", type=int, default=None, help="Run the weight EMA over only the last N steps.")
 @click.option(
@@ -693,6 +705,7 @@ def main(
     seed: int,
     profile: bool,
     dump_hlo: bool,
+    pgle_runs: int,
     ema_beta: float | None,
     ema_last_steps: int | None,
     ema_blend: tuple[float, ...],
@@ -722,6 +735,7 @@ def main(
         seed=seed,
         profile=profile,
         dump_hlo=dump_hlo,
+        pgle_runs=pgle_runs,
         ema_beta=ema_beta,
         ema_last_steps=ema_last_steps,
         ema_blend_sweep=tuple(ema_blend),
