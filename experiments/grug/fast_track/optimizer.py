@@ -448,6 +448,15 @@ def cautious(inner: optax.GradientTransformation) -> optax.GradientTransformatio
     return optax.GradientTransformation(inner.init, update)
 
 
+def scale_by_grad_power(power: float) -> optax.GradientTransformation:
+    """GradPower (arXiv 2505.24275; Parameter Golf #1682): ``g <- sign(g) |g|^power`` elementwise."""
+
+    def update(updates, state, params=None):
+        return jax.tree.map(lambda g: jnp.sign(g) * jnp.abs(g) ** power, updates), state
+
+    return optax.GradientTransformation(lambda params: optax.EmptyState(), update)
+
+
 def scale_by_mars_correction(gamma: float, momentum: float) -> optax.GradientTransformation:
     """MARS-M (arXiv 2510.21800) gradient correction for the Muon momentum:
     ``C = G + gamma * momentum / (1 - momentum) * (G - G_prev)``, clipped to Frobenius norm 1 per leaf."""
@@ -618,6 +627,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     """Bi-Maxwell two-timescale momentum on the MuonH groups from 1/3 of training (modded-nanogpt #339)."""
     adam_cautious: bool = False
     """Cautious masking (arXiv 2411.16085) on the plain-Adam groups."""
+    muon_grad_power: float = 1.0
+    """GradPower exponent on the MuonH-group gradients before momentum (1: off; Parameter Golf #1682 used 0.9)."""
     muon_mars_gamma: float = 0.0
     """MARS-M variance-reduction strength for the MuonH groups (0: off; the paper uses 0.025)."""
     snoo_period: int = 0
@@ -642,6 +653,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 components = []
                 if self.max_grad_norm:
                     components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                if self.muon_grad_power != 1.0:
+                    components.append(scale_by_grad_power(self.muon_grad_power))
                 if self.muon_mars_gamma:
                     components.append(scale_by_mars_correction(self.muon_mars_gamma, self.momentum))
                 if self.muon_bimaxwell:
@@ -810,7 +823,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 return "attn_res_query"
             # Inkling rel-pos weights (r_proj and the shared bias bank); value embeddings and their mixing weights.
             if ".rel_pos." in path_lower or re.search(
-                r"\.(value_embed|ve_lambda|ve_gate|xsa_scale|xsa_gate|head_mix|ssmax_scale|shared_gate|laurel_[ab]_\w+|bias_\w+)$",
+                r"\.(value_embed|ve_lambda|ve_gate|xsa_scale|xsa_gate|head_mix|ssmax_scale|shared_gate|laurel_[ab]_\w+|moe_out_gate_[wb]|bias_\w+)$",
                 path_lower,
             ):
                 return "adam"

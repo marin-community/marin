@@ -70,6 +70,8 @@ _CE_BLOCK_SIZES = BlockSizes(b_block_size=_CE_TOKENS_PER_RANK, v_block_size=8192
 # Axes the non-expert params FSDP-shard over.
 _FSDP_AXES: tuple[str, ...] = ("data", "expert")
 _LM_HEAD_PARTITION_SPEC = P(_FSDP_AXES, "model")
+# Input channels the per-token MoE output gate reads (cfg.moe_out_gate).
+_MOE_OUT_GATE_DIMS = 12
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
@@ -468,6 +470,12 @@ class GrugModelConfig:
     shared_ungated_relu2: bool = False
     """Shared experts are ``relu(x @ W_up)^2 @ W_down`` with no gate projection (truly ungated: the gate
     GEMM is dropped from the fused projection). Parameter-match with 1.5x ``shared_expert_intermediate_dim``."""
+    expert_leaky_slope: float = 0.0
+    """Ungated ReLU^2 experts (routed and shared) use ``leaky_relu(u, slope)^2`` instead (Parameter Golf #493 /
+    #549: 0.5; #1948: 0.3). 0: plain ReLU^2."""
+    moe_out_gate: bool = False
+    """Parameter Golf #1941: per-token gate ``sigmoid(x[:, :12] w + b)`` (w = 0, b = +5, about 0.993 at init) on each
+    block's whole MoE output (routed + shared)."""
     moe_fused_relu2: bool = False
     """With ``moe_ungated_kernel``, run the ungated ReLU^2 expert MLP through the fused-epilogue kernels
     (``levanter.kernels.pallas.relu2_mlp``): ``pre`` and ``d post`` never reach HBM."""
@@ -1540,11 +1548,7 @@ class MoEMLP(eqx.Module):
                 combine_weights,
                 em.w_up if ungated else jnp.concatenate([em.w_up, em.w_up], axis=-1),
                 em.w_down,
-                activation=(
-                    (fused_relu2 if self.cfg.moe_fused_relu2 else ActivationFunctionEnum.relu2)
-                    if ungated
-                    else em.activation
-                ),
+                activation=_ungated_expert_activation(self.cfg) if ungated else _tied_expert_activation(self.cfg, em),
                 implementation=em.implementation,
                 mesh=get_abstract_mesh(),
                 capacity_factor=em.capacity_factor,
@@ -1639,7 +1643,8 @@ def moe_and_shared_fused(
         act = ActivationFunctionEnum(mlp.cfg.expert_activation).to_jax_fn()
         hidden = jnp.concatenate([act(g) * u for g, u in zip(gates, ups, strict=True)], axis=1)
     else:
-        hidden = jnp.concatenate([jnp.square(jax.nn.relu(u)) for u in ups], axis=1)
+        slope = mlp.cfg.expert_leaky_slope
+        hidden = jnp.concatenate([jnp.square(jax.nn.leaky_relu(u, slope)) for u in ups], axis=1)
     w_down = jnp.concatenate([reshard(e.w_down, replicated) for e in shared], axis=0)
     shared_out = jnp.einsum("tm,md->td", hidden, w_down, out_sharding=_batch_spec())
     if shared_gate is not None:
@@ -1686,6 +1691,8 @@ class Block(eqx.Module):
     sconv_mlp: "ShortConv | None"
     sconv_mlp_in: "ShortConv | None"  # Canon-C conv on the normed MLP input ("mlp_in" in cfg.sconv_sites)
     shared_gate: Float[Array, " D"] | None  # cfg.shared_expert_gate
+    moe_out_gate_w: Float[Array, " G"] | None  # cfg.moe_out_gate
+    moe_out_gate_b: Float[Array, ""] | None
     # Block AttnRes pseudo-queries of the attention and MLP sublayers (None without cfg.attn_res).
     attn_res_query_attn: Float[Array, " D"] | None
     attn_res_query_mlp: Float[Array, " D"] | None
@@ -1742,6 +1749,8 @@ class Block(eqx.Module):
                 ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel) if cfg.sconv and "mlp" in cfg.sconv_sites else None
             ),
             shared_gate=jnp.zeros((cfg.hidden_dim,), jnp.float32) if cfg.shared_expert_gate else None,
+            moe_out_gate_w=jnp.zeros((_MOE_OUT_GATE_DIMS,), jnp.float32) if cfg.moe_out_gate else None,
+            moe_out_gate_b=jnp.full((), 5.0, jnp.float32) if cfg.moe_out_gate else None,
             sconv_mlp_in=(
                 ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel) if cfg.sconv and "mlp_in" in cfg.sconv_sites else None
             ),
@@ -1839,6 +1848,11 @@ class Block(eqx.Module):
             )
         else:
             out, stats = self.mlp(mlp_in, hash_token_ids=hash_token_ids, noise_key=noise_key)
+        if self.moe_out_gate_w is not None and self.moe_out_gate_b is not None:
+            gate_logit = jnp.einsum(
+                "bsg,g->bs", normed[..., :_MOE_OUT_GATE_DIMS].astype(jnp.float32), self.moe_out_gate_w
+            )
+            out = out * jax.nn.sigmoid(gate_logit + self.moe_out_gate_b)[..., None].astype(out.dtype)
         if self.bias_mlp_out is not None:
             out = out + unshard(self.bias_mlp_out).astype(out.dtype)
         if self.sconv_mlp is not None:
@@ -1934,6 +1948,24 @@ def _smear(
         prev = jnp.where(starts[..., None], 0, prev)
     gate = jax.nn.sigmoid(jnp.einsum("bsk,k->bs", hidden[..., :12].astype(jnp.float32), w))[..., None]
     return (hidden.astype(jnp.float32) + lam * gate * prev.astype(jnp.float32)).astype(hidden.dtype)
+
+
+def _ungated_expert_activation(cfg: "GrugModelConfig"):
+    """Activation of the ungated experts: ``leaky_relu(u, slope)^2`` (plain ReLU^2 at slope 0)."""
+    if cfg.expert_leaky_slope:
+        if cfg.moe_fused_relu2:
+            raise ValueError("moe_fused_relu2 implements plain ReLU^2 only; set expert_leaky_slope=0")
+        slope = cfg.expert_leaky_slope
+        return lambda u: jnp.square(jax.nn.leaky_relu(u, slope))
+    return fused_relu2 if cfg.moe_fused_relu2 else ActivationFunctionEnum.relu2
+
+
+def _tied_expert_activation(cfg: "GrugModelConfig", em: MoEExpertMlp):
+    """``act`` with ``act(u) * u == leaky_relu(u, slope)^2`` for backends that take the gate tied to ``W_up``."""
+    if cfg.moe_ungated_relu2 and cfg.expert_leaky_slope:
+        slope_sq = cfg.expert_leaky_slope**2
+        return lambda u: jax.nn.leaky_relu(u, slope_sq)
+    return em.activation
 
 
 def _logit_cap(cfg: "GrugModelConfig") -> float | tuple[float, float, float] | None:
