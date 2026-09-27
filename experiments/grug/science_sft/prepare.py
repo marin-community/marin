@@ -11,6 +11,9 @@ from marin.datakit.sft import SftInput, build_sft_store
 CONTEXT = 32_768
 SHUFFLE_SEED = 0
 SOURCE_NAME = "science-forward/minimax-m3-formatted-2026.09.27-v2"
+MODEL_REPO = "open-athena/Snowball-67B-A2B-5.7T-Mixed-RLVR-Step38"
+MODEL_REVISION = "cfc1d845dae89b067cdc7250d0164abefa5a69cf"
+TOKENIZER = f"{MODEL_REPO}@{MODEL_REVISION}"
 
 
 def main() -> None:
@@ -21,6 +24,8 @@ def main() -> None:
     parser.add_argument("--num-shards", type=int, required=True)
     parser.add_argument("--max-workers", type=int, required=True)
     args = parser.parse_args()
+    if args.tokenizer != TOKENIZER:
+        raise ValueError(f"Expected the pinned Step38 tokenizer {TOKENIZER}")
     logging.basicConfig(level=logging.INFO)
     result = build_sft_store(
         [SftInput(SOURCE_NAME, args.input_path)],

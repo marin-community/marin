@@ -19,8 +19,8 @@ from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.schedule import BatchSchedule
 from marin.datakit.sft import SftSourceCounts, SftTokenStore
 
-from experiments.grug.science_sft.launch import MODEL_PATH, build_run_config
-from experiments.grug.science_sft.prepare import SOURCE_NAME
+from experiments.grug.science_sft.launch import build_run_config
+from experiments.grug.science_sft.prepare import SOURCE_NAME, TOKENIZER
 from experiments.grug.science_sft.train import (
     RouterBiasUpdate,
     RouterFreeze,
@@ -37,7 +37,7 @@ def test_converted_science_run_uses_one_pass_and_per_step_qb():
     store = SftTokenStore(
         path="local",
         cache_path="local/train",
-        tokenizer=MODEL_PATH,
+        tokenizer=TOKENIZER,
         max_length=32_768,
         seed=0,
         sources={SOURCE_NAME: SftSourceCounts(conversations=130)},

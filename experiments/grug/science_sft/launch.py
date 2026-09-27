@@ -23,12 +23,11 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.grug.moe.optimizer import GrugMoeAdamHConfig
-from experiments.grug.science_sft.prepare import CONTEXT, SOURCE_NAME
+from experiments.grug.science_sft.prepare import CONTEXT, MODEL_REVISION, SOURCE_NAME, TOKENIZER
 from experiments.grug.science_sft.train import GrugRunConfig, GrugTrainerConfig, RouterBiasUpdate, RouterFreeze, run_grug
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig
 
 MODEL_PATH = "s3://marin-us-east-02a/models/open-athena--Snowball-67B-A2B-5.7T-Mixed-RLVR-Step38"
-MODEL_REVISION = "cfc1d845dae89b067cdc7250d0164abefa5a69cf"
 OUTPUT_ROOT = "s3://marin-us-east-02a/marin/users/benfeuer/grug-science-converted-sft-runs"
 BATCH = 64
 NODES = 8
@@ -42,7 +41,7 @@ def build_run_config(store: SftTokenStore, version: str) -> GrugRunConfig:
     """Build a one-epoch SFT run with per-step QB router updates."""
     if not _VERSION_RE.fullmatch(version):
         raise ValueError("Version must contain only letters, digits, '.', '_', and '-'")
-    if store.max_length != CONTEXT or store.tokenizer != MODEL_PATH:
+    if store.max_length != CONTEXT or store.tokenizer != TOKENIZER:
         raise ValueError("SFT store context or tokenizer does not match the pinned Snowball model")
     if set(store.sources) != {SOURCE_NAME}:
         raise ValueError("SFT store does not contain exactly the audited converted science source")
