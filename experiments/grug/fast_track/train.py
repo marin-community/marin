@@ -301,7 +301,13 @@ def _to_dropless_local(
     """
 
     def stack_expert_mlps(m: Transformer) -> list:
-        return [stack.stacked.mlp.expert_mlp for stack in m.layer_stacks()]
+        # Every expert bank of every stack (``expert_mlp_b`` with heterogeneous experts).
+        banks = []
+        for stack in m.layer_stacks():
+            banks.append(stack.stacked.mlp.expert_mlp)
+            if stack.stacked.mlp.expert_mlp_b is not None:
+                banks.append(stack.stacked.mlp.expert_mlp_b)
+        return banks
 
     dropless = [
         dataclasses.replace(expert_mlp, implementation=implementation, expert_chunks=1)
