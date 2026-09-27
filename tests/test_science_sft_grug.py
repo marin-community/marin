@@ -10,7 +10,6 @@ import jmp
 import numpy as np
 import optax
 import pytest
-from marin.datakit.sft import SftSourceCounts, SftTokenStore
 from jax.sharding import AxisType, Mesh
 from jax.sharding import PartitionSpec as P
 from levanter.data.dataset import ListAsyncDataset
@@ -18,7 +17,10 @@ from levanter.data.text.datasets import DirectDatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.schedule import BatchSchedule
+from marin.datakit.sft import SftSourceCounts, SftTokenStore
 
+from experiments.grug.science_sft.launch import MODEL_PATH, build_run_config
+from experiments.grug.science_sft.prepare import SOURCE_NAME
 from experiments.grug.science_sft.train import (
     RouterBiasUpdate,
     RouterFreeze,
@@ -28,8 +30,6 @@ from experiments.grug.science_sft.train import (
     initial_state,
     reinitialize_token_rows,
 )
-from experiments.grug.science_sft.launch import MODEL_PATH, build_run_config
-from experiments.grug.science_sft.prepare import SOURCE_NAME
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig
 
 

@@ -22,9 +22,9 @@ from marin.training.training import temporary_checkpoint_base_path
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
+from experiments.grug.moe.optimizer import GrugMoeAdamHConfig
 from experiments.grug.science_sft.prepare import CONTEXT, SOURCE_NAME
 from experiments.grug.science_sft.train import GrugRunConfig, GrugTrainerConfig, RouterBiasUpdate, RouterFreeze, run_grug
-from experiments.grug.moe.optimizer import GrugMoeAdamHConfig
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig
 
 MODEL_PATH = "s3://marin-us-east-02a/models/open-athena--Snowball-67B-A2B-5.7T-Mixed-RLVR-Step38"
@@ -122,28 +122,28 @@ def build_run_config(store: SftTokenStore, version: str) -> GrugRunConfig:
         lr_schedule="linear",
     )
     return GrugRunConfig(
-            model=model,
-            data=data,
-            optimizer=optimizer,
-            resources=ResourceConfig.with_gpu(
-                "H100", count=8, cpu=32, ram="512g", disk="256g", replicas=NODES, preemptible=False
-            ),
-            trainer=GrugTrainerConfig(
-                trainer=trainer,
-                initialize_from_hf=MODEL_PATH,
-                max_data_epochs=1,
-                special_token_lr_ids=CONTROL_IDS,
-                special_token_lr_multiplier=math.sqrt(32),
-                router_freeze=RouterFreeze.BIAS,
-                router_bias_update=RouterBiasUpdate.PER_STEP,
-                z_loss_weight=1e-4,
-                ema_beta=None,
-                log_every=1,
-                replica_axis_size=1,
-                expert_axis_size=EXPERT_PARALLEL,
-            ),
-            eval=None,
-        )
+        model=model,
+        data=data,
+        optimizer=optimizer,
+        resources=ResourceConfig.with_gpu(
+            "H100", count=8, cpu=32, ram="512g", disk="256g", replicas=NODES, preemptible=False
+        ),
+        trainer=GrugTrainerConfig(
+            trainer=trainer,
+            initialize_from_hf=MODEL_PATH,
+            max_data_epochs=1,
+            special_token_lr_ids=CONTROL_IDS,
+            special_token_lr_multiplier=math.sqrt(32),
+            router_freeze=RouterFreeze.BIAS,
+            router_bias_update=RouterBiasUpdate.PER_STEP,
+            z_loss_weight=1e-4,
+            ema_beta=None,
+            log_every=1,
+            replica_axis_size=1,
+            expert_axis_size=EXPERT_PARALLEL,
+        ),
+        eval=None,
+    )
 
 
 def launch(store_path: str, version: str) -> None:

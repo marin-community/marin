@@ -45,7 +45,10 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
-from experiments.grug.science_sft.hf_initialization import load_vendored_transformer_from_hf, pending_qb_betas_from_export
+from experiments.grug.science_sft.hf_initialization import (
+    load_vendored_transformer_from_hf,
+    pending_qb_betas_from_export,
+)
 from experiments.june_tpu_67b_a2b.checkpointing import restore_grug_state_from_checkpoint
 from experiments.june_tpu_67b_a2b.dispatch import dispatch_grug_training_run
 from experiments.june_tpu_67b_a2b.moe.model import Block, GrugModelConfig, Transformer

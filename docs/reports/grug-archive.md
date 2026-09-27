@@ -60,6 +60,13 @@ goes stale on the next commit.
 - Purpose: one-rack GB200 EP64 throughput and MFU baseline.
 - Issue: https://github.com/marin-community/marin/issues/7279
 
+### grug-science-sft
+- Path: `experiments/grug/science_sft/`
+- Origin: `experiments/june_tpu_67b_a2b/moe/` via the Step38 science SFT experiment
+- Introduced: 4020d3488e
+- Status: active
+- Purpose: packed, masked SFT from a Snowball HF export with per-step QB router updates.
+
 ### grug-fast-track
 - Path: `experiments/grug/fast_track/`
 - Origin: `moe_hero_ep`
