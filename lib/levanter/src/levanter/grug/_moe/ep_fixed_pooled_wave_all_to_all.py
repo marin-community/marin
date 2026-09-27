@@ -461,8 +461,13 @@ def _compute_pooled(
     with jax.named_scope("moe_up_down"):
         moe_dim = moe_w2_local.shape[1]
         hidden = jnp.einsum("erh,ehi->eri", dispatch.compacted_x, moe_w13_local)
-        gate, up = split_moe_w13_output(hidden, intermediate_dim=moe_dim, interleaved=False)
-        compacted_output = jnp.einsum("eri,eih->erh", activation_fn(gate) * up, moe_w2_local)
+        if moe_w13_local.shape[-1] == moe_dim:
+            # Ungated experts: `moe_w13_local` is W_up alone and the expert is act(x W_up) W_down.
+            activated = activation_fn(hidden)
+        else:
+            gate, up = split_moe_w13_output(hidden, intermediate_dim=moe_dim, interleaved=False)
+            activated = activation_fn(gate) * up
+        compacted_output = jnp.einsum("eri,eih->erh", activated, moe_w2_local)
 
     return _PooledOutput(
         compacted_output,

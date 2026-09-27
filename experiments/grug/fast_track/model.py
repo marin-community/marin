@@ -450,6 +450,9 @@ class GrugModelConfig:
     shared_ungated_relu2: bool = False
     """Shared experts are ``relu(x @ W_up)^2 @ W_down`` with no gate projection (truly ungated: the gate
     GEMM is dropped from the fused projection). Parameter-match with 1.5x ``shared_expert_intermediate_dim``."""
+    moe_ungated_kernel: bool = False
+    """With ``moe_ungated_relu2``, run the pooled-wave experts truly ungated (one ``W_up`` GEMM) instead of
+    tying the gate to ``W_up``. Same math; skips the duplicated GEMM."""
     moe_dense_router_grad: bool = False
     """Default MoE (Panda et al. 2025): the router also gets a gradient for the experts it did not pick,
     through ``sum_{e not in top-k} (w_e - sg(w_e)) * sg(y_e)``. That term is zero in the forward pass.
@@ -1479,15 +1482,17 @@ class MoEMLP(eqx.Module):
             # Keep the expert input scale independent of the down-projection initialization.
             routed_input = self.latent_norm(reshard(projected[1], _batch_spec()))
         if self.expert_mlp.w_gate is None:
-            # Ungated ReLU^2 experts: the gate is tied to W_up, so relu(u) * u = relu(u)^2.
+            # Ungated ReLU^2 experts. The pooled-wave backend runs them ungated (W_up alone, relu^2); other
+            # backends (the dropless eval) get the gate tied to W_up, since relu(u) * u = relu(u)^2.
             em = self.expert_mlp
+            ungated = em.implementation == "fixed_pooled_wave_all_to_all" and self.cfg.moe_ungated_kernel
             moe_out = moe_mlp(
                 routed_input,
                 selected_experts.astype(jnp.int32),
                 combine_weights,
-                jnp.concatenate([em.w_up, em.w_up], axis=-1),
+                em.w_up if ungated else jnp.concatenate([em.w_up, em.w_up], axis=-1),
                 em.w_down,
-                activation=em.activation,
+                activation=ActivationFunctionEnum.relu2 if ungated else em.activation,
                 implementation=em.implementation,
                 mesh=get_abstract_mesh(),
                 capacity_factor=em.capacity_factor,
