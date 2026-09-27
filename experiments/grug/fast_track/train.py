@@ -78,9 +78,10 @@ DEFAULT_COLLECTIVE_OVERLAP_LIMIT = 4
 DEFAULT_DROPLESS_MOE_IMPLEMENTATION: MoeImplementation = "sonic_cute"
 # Full inline norm watch failed with overlap 4. Overlap 1 completed the selected full-watch gate.
 INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT = 1
-# TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU
-# command buffers after the CUDA graph failure is fixed.
-XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
+# XLA's default command-buffer (CUDA graph) set with collectives left eager: the hang in
+# https://github.com/marin-community/marin/issues/5675 bisects to the COLLECTIVES capture set. At d512
+# (lc1-cmdbuf-full, 2817 steps) this is +1.8% ex/s at the same loss; the step is host-launch bound.
+XLA_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer=FUSION,CUBLAS,CUBLASLT,CUSTOM_CALL,CUDNN"
 
 
 class WatchMode(StrEnum):
@@ -118,7 +119,7 @@ def _apply_runtime_defaults(*, inline_watch_enabled: bool) -> None:
         "--xla_gpu_enable_latency_hiding_scheduler=true",
         # Size the jit_train_step temp arena below the allocator limit, leaving slack for fragmentation.
         "--xla_gpu_memory_limit_slop_factor=85",
-        XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG,
+        XLA_GPU_COMMAND_BUFFER_FLAG,
     )
     explicit_names = {flag.partition("=")[0] for flag in xla_flags}
     xla_flags.extend(flag for flag in flag_defaults if flag.partition("=")[0] not in explicit_names)
