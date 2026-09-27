@@ -582,7 +582,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 return "attn_res_query"
             # Inkling rel-pos weights (r_proj and the shared bias bank); value embeddings and their mixing weights.
             if ".rel_pos." in path_lower or re.search(
-                r"\.(value_embed|ve_lambda|ve_gate|xsa_scale|xsa_gate|bias_\w+)$", path_lower
+                r"\.(value_embed|ve_lambda|ve_gate|xsa_scale|xsa_gate|head_mix|bias_\w+)$", path_lower
             ):
                 return "adam"
             if "token_embed" in path_lower:

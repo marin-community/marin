@@ -405,10 +405,20 @@ class GrugModelConfig:
     ``rms`` (RMSNorm with a learned gain), ``rms_nogain`` (RMSNorm, no gain) or ``none`` (the raw table row)."""
     embed_scale: float = 1.0
     """Constant multiplier on the (normed) token embedding: its weight in the AttnRes mixes."""
+    smear: bool = False
+    """modded-nanogpt Smear (record #34): ``x_t += lambda * sigmoid(x_t[:12] @ w) * x_{t-1}`` on the embedding,
+    within documents (``lambda`` learned, init 0)."""
+    mla_head_mix: bool = False
+    """Post-attention rank-1 dynamic cross-head mix on MLA (a post-kernel stand-in for DCMHA's query-wise
+    post-softmax composition): ``y_h += w2_h(t) * sum_g w1_g(t) y_g`` with ``[w1, w2] = x @ W`` (``W2`` zero-init)."""
+    attn_res_dynamic_rank: int = 0
+    """MUDD-style dynamic AttnRes: each gate adds a per-token logit delta ``GELU(rms_norm(stream) @ W1) @ W2``
+    over its sources (this hidden width, ``W2`` zero-init) to the static-query logits. 0: off."""
     xsa_mode: str = "fixed"
     """MLA Exclusive Self Attention strength: ``fixed`` subtracts the full self-value projection,
     ``learned`` scales it by a per-head scalar (init 1), ``gated`` by ``2 * sigmoid(x @ W_xsa)`` per token and
-    head (``W_xsa`` zero-init, so 1 at init)."""
+    head (``W_xsa`` zero-init, so 1 at init), ``tanh`` by ``tanh(alpha_h)`` with ``alpha`` zero-init (modded-nanogpt
+    record #82: no XSA at init)."""
     logit_soft_cap: float | None = None
     """Tanh soft-cap on the lm_head logits, ``c * tanh(z / c)`` (Gemma 2); None: off."""
     logit_soft_cap_asym: tuple[float, ...] = ()
@@ -604,6 +614,7 @@ class CausalSelfAttention(eqx.Module):
     qk_mult: Float[Array, ""] | None  # learnable logit scale (cfg.learnable_qk_mult); else cfg.qk_mult
     xsa_scale: Float[Array, " N"] | None  # per-head XSA strength (cfg.xsa_mode == "learned")
     xsa_gate: Float[Array, "D N"] | None  # per-token XSA gate weights (cfg.xsa_mode == "gated")
+    head_mix: Float[Array, "D 2N"] | None  # [w1 | w2] projections of cfg.mla_head_mix (w2 half zero-init)
     bias_q: Float[Array, " NH"] | None
     bias_dkv: Float[Array, " L"] | None
     cfg: GrugModelConfig = eqx.field(static=True)
@@ -637,8 +648,13 @@ class CausalSelfAttention(eqx.Module):
                 ve_lambda=jnp.array([1.0, 0.0]) if use_ve else None,
                 ve_gate=(reshard(jnp.zeros((d, n)), P(None, None)) if cfg.value_embeds == ValueEmbeds.GATED else None),
                 qk_mult=jnp.asarray(cfg.qk_mult, jnp.float32) if cfg.learnable_qk_mult else None,
-                xsa_scale=jnp.ones((n,), jnp.float32) if cfg.xsa_mode == "learned" else None,
+                xsa_scale=(
+                    jnp.full((n,), 1.0 if cfg.xsa_mode == "learned" else 0.0, jnp.float32)
+                    if cfg.xsa_mode in ("learned", "tanh")
+                    else None
+                ),
                 xsa_gate=reshard(jnp.zeros((d, n)), P(None, None)) if cfg.xsa_mode == "gated" else None,
+                head_mix=(reshard(jnp.zeros((d, 2 * n)), P(None, None)) if cfg.mla_head_mix else None),
                 bias_q=jnp.zeros((n * h,)) if "qkv" in cfg.proj_biases else None,
                 bias_dkv=jnp.zeros((kvl,)) if "qkv" in cfg.proj_biases else None,
                 cfg=cfg,
@@ -663,8 +679,13 @@ class CausalSelfAttention(eqx.Module):
             ve_lambda=None,
             ve_gate=None,
             qk_mult=jnp.asarray(cfg.qk_mult, jnp.float32) if cfg.learnable_qk_mult else None,
-            xsa_scale=jnp.ones((n,), jnp.float32) if cfg.xsa_mode == "learned" else None,
+            xsa_scale=(
+                jnp.full((n,), 1.0 if cfg.xsa_mode == "learned" else 0.0, jnp.float32)
+                if cfg.xsa_mode in ("learned", "tanh")
+                else None
+            ),
             xsa_gate=reshard(jnp.zeros((d, n)), P(None, None)) if cfg.xsa_mode == "gated" else None,
+            head_mix=None,
             bias_q=None,
             bias_dkv=None,
             cfg=cfg,
@@ -838,10 +859,18 @@ class CausalSelfAttention(eqx.Module):
         v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
         xsa = (dot / (v_norm_sq + 1e-6)) * aligned_v
         if self.xsa_scale is not None:
-            xsa = xsa * self.xsa_scale.astype(xsa.dtype)[:, None]
+            scale = jnp.tanh(self.xsa_scale) if self.cfg.xsa_mode == "tanh" else self.xsa_scale
+            xsa = xsa * scale.astype(xsa.dtype)[:, None]
         elif self.xsa_gate is not None:
             xsa = xsa * (2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.xsa_gate)))[..., None].astype(xsa.dtype)
         attn_out = attn_out - xsa
+        if self.head_mix is not None:
+            n_heads = attn_out.shape[2]
+            w = jnp.einsum("bsd,dm->bsm", x, self.head_mix).astype(jnp.float32)
+            # w1 = 1 + x @ W_1 (a head-average at init), w2 = x @ W_2 (zero at init: no mixing yet).
+            w1, w2 = 1.0 + w[..., :n_heads], w[..., n_heads:]
+            mixed = jnp.einsum("bsg,bsgd->bsd", w1 / n_heads, attn_out.astype(jnp.float32))
+            attn_out = attn_out + (w2[..., None] * mixed[:, :, None, :]).astype(attn_out.dtype)
         # Headwise gating: sigmoid(x @ attn_gate) produces one scalar per head.
         gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
         attn_out = gate * attn_out
@@ -1651,6 +1680,18 @@ def _batch_shards() -> int:
     return math.prod(mesh.shape[a] for a in axes)
 
 
+def _smear(
+    hidden: Float[Array, "B S D"], w: jax.Array, lam: jax.Array, segment_ids: Int[Array, "B S"] | None
+) -> Float[Array, "B S D"]:
+    """modded-nanogpt Smear: ``x_t + lam * sigmoid(x_t[:12] @ w) * x_{t-1}``, zeroed at document starts."""
+    prev = jnp.pad(hidden[:, :-1], ((0, 0), (1, 0), (0, 0)))
+    if segment_ids is not None:
+        starts = jnp.pad(segment_ids[:, 1:] != segment_ids[:, :-1], ((0, 0), (1, 0)), constant_values=True)
+        prev = jnp.where(starts[..., None], 0, prev)
+    gate = jax.nn.sigmoid(jnp.einsum("bsk,k->bs", hidden[..., :12].astype(jnp.float32), w))[..., None]
+    return (hidden.astype(jnp.float32) + lam * gate * prev.astype(jnp.float32)).astype(hidden.dtype)
+
+
 def _logit_cap(cfg: "GrugModelConfig") -> float | tuple[float, float, float] | None:
     if cfg.logit_soft_cap_asym:
         a, b, c = cfg.logit_soft_cap_asym
@@ -1829,6 +1870,15 @@ def _bias_gate_logits(
     temperature = extras.get("temperature")
     if temperature is not None:
         logits = [logit * temperature[gate_index] for logit in logits]
+    dyn_w1 = extras.get("dyn_w1")
+    if dyn_w1 is not None:
+        # MUDD-style per-token logit delta from the gate's current residual stream (W2 zero-init).
+        total = sources[0].astype(jnp.float32)
+        for src in sources[1:]:
+            total = total + src.astype(jnp.float32)
+        hid = jax.nn.gelu(jnp.einsum("bsd,dr->bsr", rms_norm(total, eps), dyn_w1[gate_index]))
+        delta = jnp.einsum("bsr,rn->bsn", hid, extras["dyn_w2"][gate_index])
+        logits = [logit + delta[..., c] for logit, c in zip(logits, columns, strict=True)]
     for name in ("bias", "mask"):
         table = extras.get(name)
         if table is not None:
@@ -2134,6 +2184,11 @@ class Transformer(eqx.Module):
     """Pull-AttnRes source keys (``attn_res_pull``); the last row is the partial's."""
     attn_res_query_embed: Float[Array, "G D"] | None
     """Per-gate pull projection for the embedding logit (``attn_res_pull_embed``)."""
+    attn_res_query_dyn1: Float[Array, "G D R"] | None
+    attn_res_query_dyn2: Float[Array, "G R N"] | None
+    """``attn_res_dynamic_rank`` MLP per gate, in query-stack order (``dyn2`` zero-init)."""
+    smear_w: Float[Array, " 12"] | None
+    smear_lambda: Float[Array, ""] | None
     attn_res_query_sub: Float[Array, "G H S"] | None
     """Hierarchical multi-head AttnRes sub-queries (``attn_res_head_sub``), zero-init, in query-stack order."""
     attn_res_query_temp: Float[Array, "G H"] | None
@@ -2236,6 +2291,34 @@ class Transformer(eqx.Module):
                 if cfg.attn_res_pull_embed
                 else None
             ),
+            attn_res_query_dyn1=(
+                (1.0 / math.sqrt(cfg.hidden_dim))
+                * random.normal(
+                    random.fold_in(key, 13),
+                    (
+                        _attn_res_num_gates(cfg) + cfg.num_layers * int(cfg.attn_res_v_gate),
+                        cfg.hidden_dim,
+                        cfg.attn_res_dynamic_rank,
+                    ),
+                    jnp.float32,
+                )
+                if cfg.attn_res_dynamic_rank > 0
+                else None
+            ),
+            attn_res_query_dyn2=(
+                jnp.zeros(
+                    (
+                        _attn_res_num_gates(cfg) + cfg.num_layers * int(cfg.attn_res_v_gate),
+                        cfg.attn_res_dynamic_rank,
+                        _attn_res_num_sources(cfg),
+                    ),
+                    jnp.float32,
+                )
+                if cfg.attn_res_dynamic_rank > 0
+                else None
+            ),
+            smear_w=jnp.zeros((12,), jnp.float32) if cfg.smear else None,
+            smear_lambda=jnp.zeros((), jnp.float32) if cfg.smear else None,
             attn_res_query_sub=(
                 jnp.zeros(
                     (
@@ -2343,6 +2426,9 @@ class Transformer(eqx.Module):
             q_segment_ids, _ = mask.segment_ids
             q_segment_ids = _batch_reshard(q_segment_ids)
             segment_ids = (q_segment_ids, q_segment_ids)
+        if self.smear_w is not None and self.smear_lambda is not None:
+            seg = None if segment_ids is None else segment_ids[0]
+            hidden = _smear(hidden, self.smear_w, self.smear_lambda, seg)
         short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
         long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
 
@@ -2834,6 +2920,8 @@ def _gate_extras(model: "Transformer", num_gates: int) -> dict[str, jax.Array | 
         "blend": model.attn_res_query_blend,
         "blend_proj": model.attn_res_query_blend_proj,
         "temperature": _temperature_rows(model),
+        "dyn_w1": model.attn_res_query_dyn1,
+        "dyn_w2": model.attn_res_query_dyn2,
     }
     return extras if any(v is not None for v in extras.values()) else None
 
