@@ -803,7 +803,7 @@ wheels = [
 [[package]]
 name = "harbor"
 version = "0.8.1"
-source = { git = "https://github.com/marin-community/harbor.git?branch=main#21e0ea6a0cc1a0b617aebd86988ea93e1795f84a" }
+source = { git = "https://github.com/marin-community/harbor.git?branch=main#227080ef74251aad3404a2740f6b7d5cc36fef01" }
 dependencies = [
     { name = "dirhash" },
     { name = "fastapi" },
@@ -838,7 +838,7 @@ tau3 = [
 [[package]]
 name = "harbor-tau3-bench-adapter"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/harbor.git?subdirectory=adapters%2Ftau3-bench&branch=main#21e0ea6a0cc1a0b617aebd86988ea93e1795f84a" }
+source = { git = "https://github.com/marin-community/harbor.git?subdirectory=adapters%2Ftau3-bench&branch=main#227080ef74251aad3404a2740f6b7d5cc36fef01" }
 dependencies = [
     { name = "harbor" },
 ]
