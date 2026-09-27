@@ -193,21 +193,26 @@ def _grug_scale_with_muon(
         return new_updates, (muon_state, count, second_moment)
 
     def muon_update(updates, state, params=None, denoms=None):
-        buf = jax.tree.map(
-            lambda m, g: None if g is None else momentum * m + g,
-            state.momentum_buffer,
-            updates,
-            is_leaf=lambda x: x is None,
-        )
-        if nesterov:
-            updates = jax.tree.map(
+        if momentum == 0.0:
+            # A caller-side momentum (e.g. Bi-Maxwell) already mixed the direction; leave the buffer untouched so
+            # the donated state aliases through instead of costing a parameter-sized read and write per step.
+            buf = state.momentum_buffer
+        else:
+            buf = jax.tree.map(
                 lambda m, g: None if g is None else momentum * m + g,
-                buf,
+                state.momentum_buffer,
                 updates,
                 is_leaf=lambda x: x is None,
             )
-        else:
-            updates = buf
+            if nesterov:
+                updates = jax.tree.map(
+                    lambda m, g: None if g is None else momentum * m + g,
+                    buf,
+                    updates,
+                    is_leaf=lambda x: x is None,
+                )
+            else:
+                updates = buf
 
         def transform_array(path, x, param):
             if not hasattr(x, "ndim") or x.ndim not in (2, 3, 4):
