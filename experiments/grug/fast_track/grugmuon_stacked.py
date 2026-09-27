@@ -140,6 +140,7 @@ def _grug_scale_with_muon(
     head_dim: int | None = None,
     pre_norm: str = "none",
     top_shrink: float = 0.0,
+    precond_beta2: float | None = None,
 ):
     """Muon gradient transformation for the stacked model (2D/3D/4D leaves).
 
@@ -148,16 +149,45 @@ def _grug_scale_with_muon(
     arXiv 2608.25990) subtracts ``top_shrink * u1 v1^T`` from the orthogonalized direction, with ``(u1, v1)``
     the momentum's top singular pair from ``_POWER_ITERS`` power iterations. ``1 - 1/gamma`` matches
     SAMuon's ``gamma * NS(M) - (gamma - 1) u1 v1^T`` once the hyperball step fixes the overall scale.
+    ``precond_beta2`` (Muon2, arXiv 2604.09967) divides the momentum elementwise by the root of a
+    bias-corrected EMA of the squared gradient before Newton-Schulz; the state is then
+    ``(ScaleByMuonState, count, second_moment)``.
 
     With ``head_dim``, the stacked attention projections (``_head_axis``) are orthogonalized per head:
     each ``[D, head_dim]`` (or ``[head_dim, D]``) block of every layer is its own Newton-Schulz matrix.
     """
     steps = int(steps)
+    if precond_beta2 is not None and head_dim is not None:
+        raise ValueError("precond_beta2 does not support per-head orthogonalization (head_dim)")
 
     def init_fn(params):
-        return ScaleByMuonState(momentum_buffer=otu.tree_zeros_like(params))
+        muon_state = ScaleByMuonState(momentum_buffer=otu.tree_zeros_like(params))
+        if precond_beta2 is None:
+            return muon_state
+        second_moment = jax.tree.map(
+            lambda p: jnp.zeros_like(p, dtype=jnp.float32) if _is_matrix_stack(p) else None, params
+        )
+        return muon_state, jnp.zeros([], jnp.int32), second_moment
 
     def update_fn(updates, state, params=None):
+        if precond_beta2 is None:
+            return muon_update(updates, state, params)
+        muon_state, count, second_moment = state
+        count = count + 1
+        second_moment = jax.tree.map(
+            lambda v, g: v if v is None else precond_beta2 * v + (1 - precond_beta2) * jnp.square(g.astype(jnp.float32)),
+            second_moment,
+            updates,
+            is_leaf=lambda x: x is None,
+        )
+        correction = 1 - precond_beta2 ** count.astype(jnp.float32)
+        denoms = jax.tree.map(
+            lambda v: v if v is None else jnp.sqrt(v / correction) + 1e-8, second_moment, is_leaf=lambda x: x is None
+        )
+        new_updates, muon_state = muon_update(updates, muon_state, params, denoms)
+        return new_updates, (muon_state, count, second_moment)
+
+    def muon_update(updates, state, params=None, denoms=None):
         buf = jax.tree.map(
             lambda m, g: None if g is None else momentum * m + g,
             state.momentum_buffer,
@@ -215,6 +245,13 @@ def _grug_scale_with_muon(
             )
             updates = split
 
+        if denoms is not None:
+            updates = jax.tree.map(
+                lambda d, u: u if d is None else (u.astype(jnp.float32) / d).astype(u.dtype),
+                denoms,
+                updates,
+                is_leaf=lambda x: x is None,
+            )
         if pre_norm != "none":
             updates = jax.tree.map(lambda x: _pre_normalize(x, pre_norm), updates, is_leaf=lambda x: x is None)
         momentum_dirs = updates

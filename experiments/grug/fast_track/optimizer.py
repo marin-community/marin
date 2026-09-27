@@ -181,6 +181,7 @@ def scale_with_grug_muonh(
     hyperball_per_expert: bool = False,
     pre_norm: str = "none",
     top_shrink: float = 0.0,
+    precond_beta2: float | None = None,
 ) -> optax.GradientTransformation:
     """MuonH transform for the stacked model: Newton-Schulz direction + Frobenius hyperball step.
 
@@ -197,6 +198,7 @@ def scale_with_grug_muonh(
         head_dim=head_dim,
         pre_norm=pre_norm,
         top_shrink=top_shrink,
+        precond_beta2=precond_beta2,
     )
 
     def _neuron_second_moment(x):
@@ -501,6 +503,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     """MuonH momentum normalization before Newton-Schulz: ``none``, ``out`` or ``in`` (MuonEq)."""
     muon_top_shrink: float = 0.0
     """SAMuon-lite: remove this fraction of the top singular direction from the MuonH direction (``1 - 1/gamma``)."""
+    muon_precond_beta2: float | None = None
+    """Muon2: Adam second-moment preconditioning of the MuonH momentum before Newton-Schulz (None: off)."""
     snoo_period: int = 0
     """SNOO outer step every this many inner steps (0: off)."""
     snoo_lr: float = 0.5
@@ -528,6 +532,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                         hyperball_per_expert=self.hyperball_per_expert,
                         pre_norm=self.muon_pre_norm,
                         top_shrink=self.muon_top_shrink,
+                        precond_beta2=self.muon_precond_beta2,
                     )
                 )
                 components.append(_match_named_update_sharding())
