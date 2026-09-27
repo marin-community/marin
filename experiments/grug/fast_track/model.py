@@ -556,6 +556,10 @@ class GrugModelConfig:
     next token (256-way each, positions past the token's end masked), weighted by a schedule the trainer
     passes (``byte_aux_weight``, decayed to 0 by ``byte_aux_decay_frac`` of training). 0: off."""
     byte_aux_weight: float = 0.1
+    byte_aux_mid_layer: bool = False
+    """Feed the byte head the RMS-normed mid-network AttnRes stream (the embedding plus the first half of the
+    completed blocks) instead of the final hidden, so the byte objective shapes mid-network features rather than
+    the lm_head input."""
     byte_aux_decay_frac: float = 0.5
     window_embed_dim: int = 0
     """Explicit short context window as an AttnRes source: every token gets a small ``window_embed_dim``-wide
@@ -3198,6 +3202,10 @@ class Transformer(eqx.Module):
         aux_hidden = None
         if cfg.aux_lm_layer is not None:
             raise ValueError("aux_lm_layer is not supported by this AttnRes loop")
+        if cfg.byte_aux_mid_layer:
+            # Mid-network stream for the byte head: the embedding plus the first half of the completed blocks.
+            stream = state[0][len(extra_sources) :]
+            aux_hidden = functools.reduce(jnp.add, stream[: max(1, len(stream) // 2)])
 
         def all_passes(state):
             per_pass, z_terms = [pass0_stats], list(pass0_z)
@@ -3360,11 +3368,16 @@ class Transformer(eqx.Module):
                 out_specs=P(_BATCH_AXES, None, None),
             )(byte_table, reshard(labels, P(_BATCH_AXES, None)))
             head = self.byte_head
+            byte_in = hidden
+            if self.config.byte_aux_mid_layer:
+                if aux_hidden is None:
+                    raise ValueError("byte_aux_mid_layer needs the AttnRes mid-network stream (attn_res=True)")
+                byte_in = reshard(rms_norm(aux_hidden.astype(hidden.dtype)), _batch_spec())
             byte_loss = jax.lax.cond(
                 byte_aux_weight > 0,
                 lambda h: _byte_aux_loss(h, head, targets, loss_weight),
                 lambda h: jnp.zeros((), jnp.float32),
-                hidden,
+                byte_in,
             )
             loss = loss + byte_aux_weight.astype(loss_dtype) * byte_loss.astype(loss_dtype)
         if return_router_metrics:
@@ -3388,7 +3401,7 @@ class Transformer(eqx.Module):
             if mtp_loss is not None:
                 summarized_metrics["train/attn_res/mtp_loss"] = mtp_loss
             if byte_loss is not None:
-                summarized_metrics["train/byte_aux_loss"] = byte_loss
+                summarized_metrics["train/aux/byte_loss"] = byte_loss
             num_moe_layers = router_metrics["router_z_loss_per_layer"].shape[0]
             summarized_metrics["train/router/z_loss_logging_only"] = (
                 jnp.sum(router_metrics["router_z_loss_per_layer"]) / num_moe_layers

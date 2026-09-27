@@ -1145,7 +1145,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     router_metrics = {
                         key: value
                         for key, value in metrics.items()
-                        if key.startswith(("train/router/", "moe_bias/", "train/attn_res/"))
+                        if key.startswith(("train/router/", "moe_bias/", "train/attn_res/", "train/aux/"))
                         and key not in ("train/router/routing_counts_per_layer", "qb_beta_per_layer")
                     }
                     if router_metrics:
