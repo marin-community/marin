@@ -175,10 +175,15 @@ def test_loom_pr_review_launcher_starts_one_bounded_review_session() -> None:
 
     assert set(trigger) == {"pull_request_target"}
     assert job["permissions"] == {"contents": "read", "id-token": "write"}
-    checkout, launch = job["steps"]
+    checkout, author, launch = job["steps"]
     assert checkout["uses"].startswith("actions/checkout@")
     assert checkout["with"]["ref"] == "main"
-    assert checkout["with"]["sparse-checkout"] == ".github/actions/launch-loom-run"
+    assert set(checkout["with"]["sparse-checkout"].split()) == {
+        ".github/actions/launch-loom-run",
+        ".github/actions/check-write-access",
+    }
+    assert author["uses"] == "./.github/actions/check-write-access"
+    assert launch["if"] == "steps.author.outputs.allowed == 'true'"
     assert launch["uses"] == "./.github/actions/launch-loom-run"
     assert "head.repo.full_name == github.repository" in job["if"]
     assert "strategy" not in job

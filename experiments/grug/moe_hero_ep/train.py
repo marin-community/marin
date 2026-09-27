@@ -365,7 +365,7 @@ class GrugRunConfig:
     # long schedule requires the two to differ. None runs the whole schedule.
     stop_after_steps: int | None = None
     # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
-    # via the iris.hooks.multigpu_main supervisor instead of one process per node.
+    # via the iris.jax.multigpu_main supervisor instead of one process per node.
     processes_per_task: int = 1
     # Retry budgets for the training job. The two are separate gates and the job fails when either
     # one trips, thus raise them together. The defaults make a failure terminal, which is what a run

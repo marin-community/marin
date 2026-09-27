@@ -14,7 +14,14 @@ from types import SimpleNamespace
 import click
 import pytest
 from click.testing import CliRunner
-from finestore.eval import ARCHIVE_ROLLOUTS_TABLE, EvalSample, EvaluationStore, Grading, SampleKind
+from finestore.eval import (
+    ARCHIVE_ROLLOUTS_TABLE,
+    EvalSample,
+    EvaluationStore,
+    Grading,
+    SampleKind,
+    sample_from_archive_row,
+)
 from finestore.reader import ReadView
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.rpc import job_pb2
@@ -46,8 +53,10 @@ from marin.evaluation.runner import (
     EvaluationError,
     EvaluationIdentity,
     EvaluationOutcome,
+    HostedJudge,
     LaunchProvenance,
     evaluate_batch,
+    run_evaluation_batch,
     submit_evaluation_batch,
 )
 from marin.evaluation.serving_config import inference_config_for_model
@@ -58,7 +67,7 @@ from marin.inference.config import (
     SpeculativeMethod,
     SpeculativeServingConfig,
 )
-from marin.inference.iris import RemoteInferenceSession
+from marin.inference.iris import RemoteInferenceSession, RemoteInferenceStartupError
 from marin.inference.types import OpenAIEndpoint, RunningModel
 from prometheus_client.parser import text_string_to_metric_families
 from rigging.filesystem.storage_path import StoragePath
@@ -170,6 +179,8 @@ def _successful_evaluation(
     session: RemoteInferenceSession,
     output_dir: str,
     _env_vars: Mapping[str, str],
+    *,
+    judge: RemoteInferenceSession | None = None,
 ) -> EvaluationOutcome:
     output = StoragePath(output_dir)
     output.mkdirs()
@@ -181,6 +192,8 @@ def _failed_evaluation(
     _session: RemoteInferenceSession,
     _output_dir: str,
     _env_vars: Mapping[str, str],
+    *,
+    judge: RemoteInferenceSession | None = None,
 ) -> EvaluationOutcome:
     raise EvaluationError(
         "evaluation failed",
@@ -216,6 +229,120 @@ def _remote_session(endpoint: str = "https://inference.example/v1") -> RemoteInf
         tensor_parallel_size=1,
         backend_name="vllm",
     )
+
+
+def _patch_inference_runtime(monkeypatch: pytest.MonkeyPatch, remote) -> None:
+    """Point the batch runner at a fake inference runtime with ``remote`` as its session factory."""
+    monkeypatch.setattr("marin.evaluation.runner.configure_coreweave_s3", lambda: None)
+    monkeypatch.setattr("marin.evaluation.runner.iris_ctx", lambda: SimpleNamespace(job_id="/orchestrator"))
+    monkeypatch.setattr("marin.evaluation.runner.remote_inference", remote)
+    monkeypatch.setattr(
+        "marin.evaluation.runner.inference_config_for_model",
+        lambda model, *_args, **_kwargs: SimpleNamespace(model=SimpleNamespace(model_id=model.name)),
+    )
+
+
+def _hosted_judge_batch(tmp_path, evaluations: tuple[Evaluation, ...]) -> EvaluationBatch:
+    """One GPU batch with a co-hosted judge session beside the candidate model."""
+    accelerator = AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=1, target_cluster="cw-rno2a")
+    return EvaluationBatch(
+        group_id="group",
+        user="tester",
+        version=None,
+        description=None,
+        records_prefix=str(tmp_path / "records"),
+        model=ModelConfig(name="candidate", location="org/candidate", resource_hint=ResourceHint(hbm_gb=3)),
+        accelerator=accelerator,
+        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
+        capability_origin="https://iris.example",
+        api_model="candidate",
+        evaluations=evaluations,
+        provenance=LaunchProvenance(git_sha="abc", launch_host="host"),
+        submission_cluster="marin",
+        judge=HostedJudge(
+            model=ModelConfig(name="judge", location="org/judge", resource_hint=ResourceHint(hbm_gb=3)),
+            accelerator=accelerator,
+            api_model="judge",
+        ),
+    )
+
+
+def test_run_evaluation_batch_shares_one_hosted_judge_across_evaluations(tmp_path, monkeypatch):
+    opened_models: list[str] = []
+    observed_judges: list[RemoteInferenceSession | None] = []
+
+    class InferenceContext:
+        def __init__(self, session: RemoteInferenceSession):
+            self.session = session
+
+        def __enter__(self) -> RemoteInferenceSession:
+            return self.session
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+    def remote(config):
+        model = config.model.model_id
+        opened_models.append(model)
+        return InferenceContext(_remote_session(f"https://{model}.example/v1"))
+
+    def executor(
+        _session: RemoteInferenceSession,
+        _output_dir: str,
+        _env_vars: Mapping[str, str],
+        *,
+        judge: RemoteInferenceSession | None = None,
+    ) -> EvaluationOutcome:
+        observed_judges.append(judge)
+        return EvaluationOutcome(metrics={"task": {"accuracy": 1.0}})
+
+    _patch_inference_runtime(monkeypatch, remote)
+    batch = _hosted_judge_batch(
+        tmp_path,
+        (_evaluation(tmp_path, "one", executor), _evaluation(tmp_path, "two", executor)),
+    )
+
+    run_evaluation_batch(batch)
+
+    assert opened_models == ["candidate", "judge"]
+    assert len(observed_judges) == 2
+    assert observed_judges[0] is observed_judges[1]
+    assert observed_judges[0] is not None
+    assert observed_judges[0].model.endpoint.base_url == "https://judge.example/v1"
+    record = read_record(str(tmp_path / "records" / "run-one" / "record.json"))
+    assert record.judge is not None
+    assert record.judge.model.name == "judge"
+    assert record.judge.hardware.accelerator == "H100x1"
+
+
+def test_run_evaluation_batch_records_every_eval_when_hosted_judge_fails_to_start(tmp_path, monkeypatch):
+    class InferenceContext:
+        def __init__(self, model_name: str):
+            self.model_name = model_name
+
+        def __enter__(self) -> RemoteInferenceSession:
+            if self.model_name == "judge":
+                raise RemoteInferenceStartupError("judge did not become ready", jobs=())
+            return _remote_session("https://candidate.example/v1")
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+    evaluations = (
+        _evaluation(tmp_path, "one", _successful_evaluation),
+        _evaluation(tmp_path, "two", _successful_evaluation),
+    )
+    batch = _hosted_judge_batch(tmp_path, evaluations)
+    _patch_inference_runtime(monkeypatch, lambda config: InferenceContext(config.model.model_id))
+
+    with pytest.raises(RuntimeError, match="judge inference failed"):
+        run_evaluation_batch(batch)
+
+    for evaluation in evaluations:
+        record = read_record(str(tmp_path / "records" / evaluation.identity.run_id / "record.json"))
+        assert record.status is RunStatus.INFRA_FAILED
+        assert record.jobs == {"orchestrator": "/orchestrator"}
+        assert "judge did not become ready" in (record.error or "")
 
 
 def _lm_eval_generation(doc_id: int, metric: str, score: float, response: str) -> dict:
@@ -587,6 +714,38 @@ def test_evalchemy_executor_excludes_infrastructure_failures(tmp_path, monkeypat
     }
 
 
+def test_evalchemy_executor_uses_aggregate_count_when_custom_task_omits_sample_scores(tmp_path, monkeypatch):
+    output_dir = f"file://{tmp_path / 'custom-with-aggregate-grades'}"
+    rows = []
+    for doc_id in range(3):
+        row = _lm_eval_generation(doc_id, "accuracy", float(doc_id > 0), "4")
+        row.pop("metrics")
+        row.pop("accuracy")
+        row.update({"source_id": doc_id, "sample_ordinal": doc_id})
+        rows.append(row)
+    _write_evalchemy_output(
+        output_dir,
+        "mmlu-pro",
+        {"MMLUPro": {"accuracy_avg": 2 / 3, "total_examples": 3}},
+        {"MMLUPro": rows},
+    )
+    monkeypatch.setattr(
+        "marin.evaluation.evalchemy.runner._run_evalchemy_child",
+        lambda _model, _config, _output_dir, _env_vars: "/eval/completed",
+    )
+    executor = EvalchemyExecutor(
+        EvalchemyRunConfig(name="mmlu-pro", tasks=(EvalTaskConfig(name="MMLUPro", num_fewshot=0),))
+    )
+
+    outcome = executor(_remote_session(), output_dir, {})
+
+    assert outcome.coverage == {
+        "mmlu-pro": TaskCoverage(n_benchmark=3, n_attempted=3, n_scored=3, n_correct=None, n_unanswered=0)
+    }
+    [archived] = ReadView(output_dir).scan("samples").to_pylist(maps_as_pydicts="strict")[:1]
+    assert sample_from_archive_row(archived).metrics == {}
+
+
 def test_evalchemy_executor_rebuilds_native_prompts_before_normalizing_rollouts(tmp_path, monkeypatch):
     output_dir = f"file://{tmp_path / 'native-prompt'}"
     prompt = json.dumps([{"role": "user", "content": "Question: 2+2?"}])
@@ -758,6 +917,56 @@ def test_submit_evaluation_batch_uses_resolved_federated_cluster_and_priority(mo
         Constraint.create(key=CLUSTER_CONSTRAINT_KEY, op=ConstraintOp.EQ, value="cw-rno2a")
     ]
     assert captured["priority_band"] == job_pb2.PRIORITY_BAND_INTERACTIVE
+
+
+def test_build_evaluation_batch_places_hosted_judge_with_candidate(monkeypatch):
+    _install_fake_harbor_preflight(monkeypatch)
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+    spec = LaunchSpec(
+        model=models()["qwen3-8b"],
+        evals=("aime-harbor",),
+        evalchemy_definitions=(),
+        harbor_definitions=(),
+        platform=Platform.GPU,
+        accelerator="H100x1",
+        limit=1,
+        records_prefix="memory://records",
+        submission_cluster="marin",
+        federated_cluster="cw-rno2a",
+        priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
+        judge_model=models()["qwen3.5-122b-a10b-fp8"],
+        judge_accelerator="H100x8",
+    )
+
+    batch = build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester")
+
+    assert batch.accelerator.target_cluster == "cw-rno2a"
+    assert batch.judge is not None
+    assert batch.judge.accelerator.label == "H100x8"
+    assert batch.judge.accelerator.target_cluster == "cw-rno2a"
+    assert batch.judge.api_model == "qwen3.5-122b-a10b-fp8"
+
+
+def test_build_evaluation_batch_rejects_hosted_judge_for_evalchemy_evaluations(monkeypatch):
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+    spec = LaunchSpec(
+        model=models()["qwen3-8b"],
+        evals=("mmlu-smoke",),
+        evalchemy_definitions=(),
+        harbor_definitions=(),
+        platform=Platform.GPU,
+        accelerator="H100x1",
+        limit=1,
+        records_prefix="memory://records",
+        submission_cluster="marin",
+        federated_cluster="cw-rno2a",
+        priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
+        judge_model=models()["qwen3.5-122b-a10b-fp8"],
+        judge_accelerator="H100x8",
+    )
+
+    with pytest.raises(ValueError, match="serves Harbor verifiers only"):
+        build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester")
 
 
 def test_build_evaluation_batch_uses_submission_cluster_for_direct_endpoint(monkeypatch):
@@ -1369,6 +1578,40 @@ def test_launch_dry_run_accepts_file_backed_model_config(tmp_path, monkeypatch):
     )
 
     assert result.exit_code == 0, result.output
+
+
+def test_launch_dry_run_accepts_hosted_judge(monkeypatch):
+    _install_fake_harbor_preflight(monkeypatch)
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "launch",
+            "--model",
+            "qwen3-0.6b",
+            "--judge-model",
+            "qwen3.5-122b-a10b-fp8",
+            "--judge-accelerator",
+            "H100x8",
+            "--harbor-config",
+            "experiments/evaluation/configs/harbor/simpleqa-hosted-judge.yaml",
+            "--platform",
+            "gpu",
+            "--accelerator",
+            "H100x1",
+            "--federated_cluster",
+            "cw-rno2a",
+            "--limit",
+            "2",
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "judge: qwen3.5-122b-a10b-fp8" in result.output
+    assert "accel=H100x8" in result.output
+    assert "region_or_cluster=cw-rno2a" in result.output
 
 
 def test_resolve_model_config_rejects_registry_and_file_selectors_together(tmp_path):

@@ -191,7 +191,7 @@ class ModelConfigRef(BaseModel):
     identity: str | None = None
     revision: str | None
     tokenizer: str | None
-    tokenizer_revision: str | None
+    tokenizer_revision: str | None = None
     apply_chat_template: bool
     resource_hint: ModelResourceConfig
     serve: ModelServeConfig
@@ -325,6 +325,15 @@ class HardwareRef(BaseModel):
     accelerator: str
     region_or_cluster: str | None
     task_count: int = 1
+
+
+class HostedJudgeRef(BaseModel):
+    """The model and hardware used for verifier-only hosted inference."""
+
+    model_config = ConfigDict(frozen=True)
+
+    model: ModelRef
+    hardware: HardwareRef
 
 
 class Provenance(BaseModel):
@@ -462,6 +471,7 @@ class EvalRunRecord(BaseModel):
     """A free-text note on why the launch was run (``--description``), e.g. ``Trying out a new sweep
     after fixing RL``. Shared by every record in a group and surfaced on the launch in the dashboard."""
     model: ModelRef
+    judge: HostedJudgeRef | None = None
     evaluation: EvalRef = Field(alias="eval")
     hardware: HardwareRef
     status: RunStatus

@@ -84,9 +84,6 @@ def create_local_autoscaler(
     temp_path = Path(temp_dir.name)
     cache_path = temp_path / "cache"
     cache_path.mkdir()
-    fake_bundle = temp_path / "fake_bundle"
-    fake_bundle.mkdir()
-    (fake_bundle / "pyproject.toml").write_text("[project]\nname = 'test'\n")
 
     port_allocator = PortAllocator()
 
@@ -117,7 +114,6 @@ def create_local_autoscaler(
         project_id="local",
         controller_address=controller_address,
         cache_path=cache_path,
-        fake_bundle=fake_bundle,
         port_allocator=port_allocator,
         threads=threads,
         worker_attributes_by_group=worker_attributes_by_group,

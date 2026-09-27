@@ -719,7 +719,8 @@ class HfMarinTokenizer:
     def as_hf_tokenizer(self) -> Any:
         from transformers import AutoTokenizer  # noqa: PLC0415  # guarded: avoid eager torch
 
-        tokenizer = AutoTokenizer.from_pretrained(self._name_or_path, trust_remote_code=True)
+        repo_id, _, revision = self._name_or_path.partition("@")
+        tokenizer = AutoTokenizer.from_pretrained(repo_id, revision=revision or None, trust_remote_code=True)
         if self._chat_template is not None and getattr(tokenizer, "chat_template", None) != self._chat_template:
             tokenizer.chat_template = self._chat_template
         return tokenizer
@@ -866,7 +867,8 @@ def _stage_from_hf(name_or_path: str, local_dir: str) -> None:
     Raises ``RepositoryNotFoundError`` / ``OSError`` if the repo or
     network is unreachable (matches pre-mirror behaviour).
     """
-    snapshot_dir = snapshot_download(name_or_path, allow_patterns=_TOKENIZER_ALLOW_PATTERNS)
+    repo_id, _, revision = name_or_path.partition("@")
+    snapshot_dir = snapshot_download(repo_id, revision=revision or None, allow_patterns=_TOKENIZER_ALLOW_PATTERNS)
 
     mirror_base = f"mirror://{_MIRROR_TOKENIZER_PREFIX}/{name_or_path}/hf-hub-{_hf_hub_version}"
 

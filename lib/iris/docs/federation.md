@@ -55,6 +55,13 @@ all. A peer that reports no band split
 (a worker-daemon backend, or one predating the field) reclaims nothing and is gated on its free
 amount alone.
 
+A `--reserve H100` marker on a CPU job requires an H100 peer but carries no numeric capacity
+gate. When other placement scores tie, the job prefers the peer with the most effective `h100`
+capacity. The CPU job does not reserve that capacity and can still be placed when every eligible
+peer reports zero; later GPU child jobs have no capacity guarantee. A peer without a readable
+capacity metric ranks after measured peers, and a peer reporting no `h100` capacity scores zero.
+A hash of the job id and peer id breaks ties, so different jobs need not choose the same peer.
+
 Three properties keep placement honest without pretending to be exact:
 
 - **Never summed across backends.** A job pins to one backend, so 6 free on one backend plus 4

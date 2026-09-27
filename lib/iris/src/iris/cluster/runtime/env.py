@@ -48,7 +48,7 @@ HF_HUB_CACHE_PATH = "/hf/cache"
 CARGO_HOME_PATH = "/cargo"
 # Unclaimed node-local scratch, for anything that needs a real directory on the
 # node rather than a bucket. Tasks pick their own subdirectory; nothing prunes
-# it. `iris.runtime.jax_init` puts XLA's per-fusion autotune cache under
+# it. `iris.jax.init` puts XLA's per-fusion autotune cache under
 # `/cache/xla` because XLA opens that directory from C++ through `tsl::Env`,
 # which has no object-store filesystem.
 SCRATCH_CACHE_PATH = "/cache"

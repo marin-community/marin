@@ -263,6 +263,7 @@ For machine-readable job data, use the Iris Python client (`IrisClient`) directl
 - **`-e KEY VALUE`** uses two positional args. If `$VALUE` is unset, the parser eats the next token. Always quote: `-e KEY "${VALUE}"`.
 - **`--gpu` requests hardware; `--extra gpu` requests the Python dependency extra.** Need both for GPU JAX jobs.
 - **A job that dies in BUILDING with a `uv sync` error is failing setup before your command starts.** The default is `uv sync --all-packages --no-dev`. Scope it with CLI `--sync-package <member>` or SDK `EnvironmentSpec(sync_packages=[...])`; skip setup entirely with CLI `--no-sync` or SDK `EnvironmentSpec(setup_scripts=[])` for a bring-your-own image. The build log labels each step (`[iris setup] step N/M`) so you can tell which script failed. See "Task Setup" in `AGENTS.md`.
+- **Docker task setup uses the larger of one core and the task's CPU request.** The run container uses the task's CPU request. Reserved and preemptible workers enforce these values as CPU quotas; on-demand workers use them as relative CPU shares.
 - **Use `--gpu` or `--tpu` to request accelerators, instead of `--region` or `--zone`.** Let Iris handle scaling group constraints. Use `--region` or `--zone` when you are trying to pin data to a particular location.
 - **`--reserve`** is a hard zone constraint: it confines the job to a zone where the named accelerator has actually been obtained (empirically — a live, non-erroring slice in the region), and the job waits if none exists yet (an availability probe meanwhile scales the accelerator up). It does not hold capacity and does not attach accelerator devices. Use `--tpu`/`--gpu` on the task that needs hardware.
 - **`executor_main` parent jobs** (e.g., canary ferries) submit GPU sub-tasks via Fray. The parent must be CPU-only (`--cpu 1 --memory 2g`), otherwise it hogs the GPU node and deadlocks. Memory at or above 4 GB requires `--enable-extra-resources` (see "Validator opt-in" below).
@@ -382,6 +383,8 @@ iris process profile cpu -t /user/job/0     # profile a running task container
 ```
 
 **Prefer `iris process profile` over SSH** for profiling — it uses the `/system/process` RPC and avoids direct VM access. SSH is a fallback only when the RPC doesn't cover your needs.
+
+Iris compares JAX compile keys across participating GPU processes before a multi-process compile enters XLA. A `GPU compile fingerprint mismatch` error lists each process index and compile key; check for rank-dependent lowering, shapes, or compiler options. A missing peer fails this check after 60 seconds with the identities that arrived. This check uses JAX's pre-compile key, so a stall caused by divergence inside XLA can still require a native thread profile (`iris process profile --native -t <task> threads`).
 
 GPU environments set `NCCL_RAS_ENABLE=1`, `NCCL_DEBUG=INFO`, and `NCCL_DEBUG_SUBSYS=INIT,BOOTSTRAP,ENV,NET,GRAPH,TUNING,RAS`. The default timestamp is `[%F %T.%3f]`. Short debug-smoke jobs may additionally select `COLL,PROXY,NVLS,REG`; do not use `TRACE` or `CALL` for normal runs.
 

@@ -299,14 +299,8 @@ jobs:
     if: ${{ contains(fromJSON(needs.select.outputs.suites), 'iris-e2e-smoke') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    env:
-      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
     steps:
       - uses: actions/checkout@v5
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "22"
 
       - uses: astral-sh/setup-uv@v7
         with:
@@ -342,15 +336,6 @@ jobs:
           uv run --package marin-iris --frozen --group test pytest \
             lib/iris/tests/e2e/test_smoke.py \
             -m requires_cluster -o "addopts=" --tb=short -v
-
-      - name: Verify screenshots with Claude
-        # Skip on PRs without secrets access (forks, dependabot): no token means
-        # the claude CLI can't authenticate, so the step would only error out.
-        if: always() && env.CLAUDE_CODE_OAUTH_TOKEN != '' && hashFiles('iris-screenshots/*.txt') != ''
-        run: |
-          npm install -g @anthropic-ai/claude-code
-          python -m lib.iris.scripts.verify_screenshots \
-            --screenshot-dir ${{ github.workspace }}/iris-screenshots
 
       - name: Upload screenshots
         if: always()
