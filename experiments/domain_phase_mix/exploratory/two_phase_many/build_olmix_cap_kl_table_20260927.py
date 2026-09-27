@@ -18,14 +18,14 @@ import math
 from pathlib import Path
 
 import pandas as pd
+from uncheatable_objective import uncheatable_weights
 
 SWEEP = Path(__file__).resolve().parent / "reference_outputs" / "delphi_olmix_cap_kl_sweep_3e18_20260926"
 CAPS = ("1", "4", "8", "12", "none")
 KLS = (0.0, 0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.2, 0.5)
-METRIC = {"uncheatable": "uncheatable_bpb", "table9": "table9_macro_bpb"}
+METRIC: dict[str, str] = {"uncheatable": "uncheatable_bpb", "table9": "table9_macro_bpb"}
 DEPLOYED = {"uncheatable": ("4", 0.05), "table9": ("4", 0.005)}
 MARINER_SEED0 = SWEEP.parent / "delphi_frozen_procedure_validation_3e18_20260908" / "measured_results.csv"
-UNCHEATABLE_FIT = SWEEP.parent / "delphi_frozen_procedure_validation_3e18_20260908" / "fits" / "fit_uncheatable.json"
 CAPTION = (
     "Measured BPB of matched Olmix proposals at Qwen3 360M/1.6B across the epoch cap and the KL weight $\\lambda$ of "
     "Olmix's optimizer, each trained once at the data and trainer seeds of MARINER's seed-0 runs ({u:.4f} on "
@@ -42,7 +42,7 @@ def filled_grid(grid: pd.DataFrame, measured: pd.DataFrame) -> pd.DataFrame:
     rows = []
     for cell in grid.itertuples():
         run = values.loc[cell.run]
-        value = float(run[METRIC[cell.target]]) if run["status"] == "measured" else math.nan
+        value = float(run[METRIC[str(cell.target)]]) if run["status"] == "measured" else math.nan
         rows.append(
             {
                 "target": cell.target,
@@ -87,11 +87,10 @@ def table_rows(filled: pd.DataFrame) -> str:
 
 def mariner_seed0() -> tuple[float, float]:
     """MARINER's seed-0 losses at the sweep's seeds: fixed-weight Uncheatable and the OlmoBaseEval Easy mean."""
-    fit = json.loads(UNCHEATABLE_FIT.read_text())
     runs = pd.read_csv(MARINER_SEED0).set_index("candidate_id")
     u = runs.loc["lwspu_u_snc_cap06"]
-    components = (task["component"].split("/")[2] for task in fit["tasks"])
-    uncheatable = sum(w * float(u[f"uncheatable_{c}_bpb"]) for w, c in zip(fit["task_weights"], components, strict=True))
+    # Metric keys are eval/uncheatable_eval/<component>/bpb; the collector writes uncheatable_<component>_bpb.
+    uncheatable = sum(w * float(u[f"uncheatable_{key.split('/')[2]}_bpb"]) for key, w in uncheatable_weights().items())
     return uncheatable, float(runs.loc["lwspu_t9_snc_cap08", "table9_macro_bpb"])
 
 

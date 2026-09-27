@@ -45,11 +45,11 @@ sys.path.insert(0, str(REPO_ROOT / "lib/marin/src"))
 
 from marin.evaluation.olmo_base_eval.aggregate import table9_macro  # noqa: E402
 from marin.evaluation.olmo_base_eval.components import table9_components  # noqa: E402
+from uncheatable_objective import BPB_SCHEMA_KEY, RAW_UNCHEATABLE_KEY, fixed_uncheatable_bpb  # noqa: E402
 
 REFERENCE = REPO_ROOT / "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs"
 BUCKET = "marin-us-east5/pinlin_calvin_xu/data_mixture"
 FINAL_STEP = 3006
-UNCHEATABLE_FIT = REFERENCE / "delphi_frozen_procedure_validation_3e18_20260908" / "fits" / "fit_uncheatable.json"
 OLMIX_SWEEP = REFERENCE / "delphi_olmix_cap_kl_sweep_3e18_20260926"
 WANDB_PROJECT = "marin-community/marin-eval"
 
@@ -302,12 +302,6 @@ LAUNCHES = {
 }
 
 
-def uncheatable_weights() -> dict[str, float]:
-    """The paper's fixed Uncheatable objective: byte-share weights on the seven component BPBs."""
-    fit = json.loads(UNCHEATABLE_FIT.read_text())
-    return {task["component"]: float(weight) for task, weight in zip(fit["tasks"], fit["task_weights"], strict=True)}
-
-
 def _read_text(filesystem: gcsfs.GCSFileSystem, path: str) -> str:
     with filesystem.open(path, "rt") as handle:
         return handle.read()
@@ -351,9 +345,9 @@ def _endpoint_from_path(filesystem: gcsfs.GCSFileSystem, eval_path: str) -> dict
     return {
         "status": "measured" if status == "SUCCESS" else f"endpoint:{status}",
         "eval_metrics_uri": f"gs://{eval_path}",
-        "uncheatable_bpb": sum(weight * float(endpoint[key]) for key, weight in uncheatable_weights().items()),
-        "uncheatable_raw_bpb": float(endpoint["eval/uncheatable_eval/bpb"]),
-        "uncheatable_bpb_schema": str(endpoint.get("eval/bpb_schema_version", "legacy")),
+        "uncheatable_bpb": fixed_uncheatable_bpb(endpoint),
+        "uncheatable_raw_bpb": float(endpoint[RAW_UNCHEATABLE_KEY]),
+        "uncheatable_bpb_schema": str(endpoint.get(BPB_SCHEMA_KEY, "legacy")),
         "uncheatable_macro_bpb": float(endpoint["eval/uncheatable_eval/macro_bpb"]),
         **{
             f"uncheatable_{name}_bpb": float(endpoint[f"eval/uncheatable_eval/{name}/bpb"])

@@ -105,7 +105,10 @@ def measured_runs(path: Path, target_column: str) -> pd.DataFrame:
 def nominal_parameters() -> dict[str, int | None]:
     """Nominal response parameters per task by model id from the complexity ladder; None for nonparametric models."""
     ladder = pd.read_csv(LADDER)
-    table = {row.model: None if row.family == NONPARAMETRIC_FAMILY else int(row.params) for row in ladder.itertuples()}
+    table = {
+        row.model: None if row.family == NONPARAMETRIC_FAMILY or pd.isna(row.params) else int(row.params)
+        for row in ladder.itertuples()
+    }
     return {**EXTRA_PARAMETERS, **table}
 
 

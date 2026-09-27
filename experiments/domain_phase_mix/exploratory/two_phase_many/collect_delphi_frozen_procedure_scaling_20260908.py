@@ -3,8 +3,9 @@
 """Collect a scaling ladder from GCS: MARINER's (`launch_delphi_frozen_procedure_scaling.py`) or the matched Olmix
 policies' (`launch_delphi_matched_olmix_scaling.py`), which train at the same seeds, sizes and hardware.
 
-For every rung that has finished training, reads the final `eval_metrics.jsonl` (byte-weighted Uncheatable BPB and its
-components) from the run's checkpoint directory and the native Table-9 evaluator's `olmo_base_eval_table9_results.json`
+For every rung that has finished training, reads the final `eval_metrics.jsonl` from the run's checkpoint directory
+(Uncheatable scored with the paper's fixed seven-component weighting, `uncheatable_objective.py`; the logged aggregate
+and its BPB schema are kept beside it) and the native Table-9 evaluator's `olmo_base_eval_table9_results.json`
 from the evaluation step's output, then writes `measured_results.csv` beside the launch manifests. Rungs still training
 are listed with status `training:<state>` so the figure and table builders skip them.
 
@@ -21,12 +22,12 @@ from pathlib import Path
 
 import fsspec
 import pandas as pd
+from uncheatable_objective import BPB_SCHEMA_KEY, RAW_UNCHEATABLE_KEY, fixed_uncheatable_bpb
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 EVAL_ROOT = "gs://marin-us-east5/evaluation/olmo_base_eval_table9"
 SCALES = ("2e19", "3e20", "1e21")
 RUN_PATTERN = re.compile(r"^(?P<policy>[a-z0-9_]+)_(?P<scale>[0-9]e[0-9]{2})_seed(?P<seed>[0-9]+)-[0-9a-f]{6}$")
-UNCHEATABLE_KEY = "eval/uncheatable_eval/bpb"
 
 
 @dataclass(frozen=True)
@@ -80,7 +81,9 @@ def collect(ladder: Ladder) -> pd.DataFrame:
             final = json.loads(fs.cat(eval_path).decode().strip().splitlines()[-1])
             row["status"] = "measured"
             row["final_step"] = int(final["step"])
-            row["uncheatable_bpb"] = float(final[UNCHEATABLE_KEY])
+            row["uncheatable_bpb"] = fixed_uncheatable_bpb(final)
+            row["uncheatable_raw_bpb"] = float(final[RAW_UNCHEATABLE_KEY])
+            row["uncheatable_bpb_schema"] = str(final.get(BPB_SCHEMA_KEY, "legacy"))
             row["uncheatable_macro_bpb"] = float(final["eval/uncheatable_eval/macro_bpb"])
             for key, value in final.items():
                 component = re.fullmatch(r"eval/uncheatable_eval/([a-z0-9_]+)/bpb", key)

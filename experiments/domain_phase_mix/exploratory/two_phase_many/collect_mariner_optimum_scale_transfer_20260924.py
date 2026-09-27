@@ -8,12 +8,13 @@
 
 """Collect the deployed-optimum runs of the scale-transfer figure into `deployed_optima.csv`.
 
-The four Uncheatable optima of the paper's Table 5 (MARINER, matched Olmix, tuned and released RegMix) were
-trained at Llama 160M/1.2B and 200M/6B by `launch_mariner_optimum_scale_transfer.py` (Iris parent
-`/calvinxu/dm-mopt-scale-transfer-20260924-retry3`). For every run whose executor status is SUCCESS, the final
-line of `checkpoints/eval_metrics.jsonl` gives the byte-weighted Uncheatable BPB (`eval/uncheatable_eval/bpb`),
-the metric the swarm panels of `plot_scale_transfer_results_figure_20260905.py` use. The Qwen3 360M/1.6B values
-are the measured Table 5 entries (seed means for MARINER and Olmix). Runs not yet landed leave NaN, and the
+The four Uncheatable optima of the paper's Table 5 (MARINER, matched Olmix, tuned and released RegMix) were trained
+at Llama 160M/1.2B and 200M/6B by `launch_mariner_optimum_scale_transfer.py` (Iris parent
+`/calvinxu/dm-mopt-scale-transfer-20260924-retry3`). For every run whose executor status is SUCCESS, the final line
+of `checkpoints/eval_metrics.jsonl` gives the Uncheatable BPB under the paper's fixed seven-component weighting
+(`uncheatable_objective.py`), which the legacy swarm runs of `plot_scale_transfer_results_figure_20260905.py` log as
+`eval/uncheatable_eval/bpb`; these runs log schema-2 aggregates, kept as `uncheatable_raw_bpb`. The Qwen3 360M/1.6B
+values are the measured Table 5 entries (seed means for MARINER and Olmix). Runs not yet landed leave NaN, and the
 figure draws a pair only when both of its settings are measured.
 """
 
@@ -24,13 +25,13 @@ from pathlib import Path
 
 import fsspec
 import pandas as pd
+from uncheatable_objective import BPB_SCHEMA_KEY, RAW_UNCHEATABLE_KEY, fixed_uncheatable_bpb
 
 logger = logging.getLogger(__name__)
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 OUTPUT_DIR = SCRIPT_DIR / "reference_outputs" / "mariner_optimum_scale_transfer_20260924"
 TRAINING_ROOT = "gs://marin-us-east5/checkpoints/pinlin_calvin_xu/data_mixture"
-UNCHEATABLE_KEY = "eval/uncheatable_eval/bpb"
 SCALES = {"60m_1p2b": ("bpb_60m", 4577), "300m_6b": ("bpb_300m", 22888)}
 RUN_LABELS = {
     "mariner_u": "MARINER",
@@ -68,7 +69,9 @@ def collect() -> tuple[pd.DataFrame, pd.DataFrame]:
                         raise ValueError(f"{run_dir}: final eval step {final['step']} != {expected_steps - 1}")
                     row["status"] = "measured"
                     row["final_step"] = int(final["step"])
-                    row["uncheatable_bpb"] = float(final[UNCHEATABLE_KEY])
+                    row["uncheatable_bpb"] = fixed_uncheatable_bpb(final)
+                    row["uncheatable_raw_bpb"] = float(final[RAW_UNCHEATABLE_KEY])
+                    row["uncheatable_bpb_schema"] = str(final.get(BPB_SCHEMA_KEY, "legacy"))
                     row["eval_metrics_uri"] = eval_path
             provenance.append(row)
     provenance_frame = pd.DataFrame(provenance)
