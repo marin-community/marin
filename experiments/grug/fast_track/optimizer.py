@@ -8,7 +8,7 @@ from typing import NamedTuple
 import jax
 import jax.numpy as jnp
 import optax
-from levanter.optim.config import OptimizerConfig
+from levanter.optim.config import OptimizerConfig, _convert_frac_or_steps
 from levanter.optim.util import CoefficientType
 from levanter.utils.jax_utils import leaf_key_paths
 
@@ -361,6 +361,19 @@ def _sphere_norm(x: jax.Array) -> jax.Array:
     return jnp.sqrt(jnp.sum(jnp.square(x.astype(jnp.float32)), axis=axes, keepdims=True))
 
 
+def _power_decay_schedule(peak: float, floor: float, warmup_steps: int, total_steps: int, power: float):
+    """Linear warmup to ``peak``, then ``floor + (peak - floor) * (1 - p**power)``, ``p`` = post-warmup progress."""
+
+    def schedule(step):
+        step = jnp.asarray(step, jnp.float32)
+        warm = peak * step / max(warmup_steps, 1)
+        progress = jnp.clip((step - warmup_steps) / max(total_steps - warmup_steps, 1), 0.0, 1.0)
+        decayed = floor + (peak - floor) * (1.0 - progress**power)
+        return jnp.where(step < warmup_steps, warm, decayed)
+
+    return schedule
+
+
 def cautious(inner: optax.GradientTransformation) -> optax.GradientTransformation:
     """Cautious optimizer (arXiv 2411.16085): keep only the coordinates of the inner direction whose sign
     agrees with the gradient, rescaled by the kept fraction per leaf. ``inner`` returns the descent
@@ -541,6 +554,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     """SAMuon-lite: remove this fraction of the top singular direction from the MuonH direction (``1 - 1/gamma``)."""
     muon_precond_beta2: float | None = None
     """Muon2: Adam second-moment preconditioning of the MuonH momentum before Newton-Schulz (None: off)."""
+    muonh_decay_power: float | None = None
+    """Decay shape of the MuonH LR after warmup: ``floor + (peak - floor) * (1 - p**power)`` over training
+    progress ``p`` (modded-nanogpt MuonH records #345/#351). None keeps the shared schedule (linear = 1)."""
     adam_cautious: bool = False
     """Cautious masking (arXiv 2411.16085) on the plain-Adam groups."""
     muon_mars_gamma: float = 0.0
@@ -552,6 +568,14 @@ class GrugMoeMuonHConfig(OptimizerConfig):
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
+        if self.muonh_decay_power is not None:
+            learning_rate_schedule = _power_decay_schedule(
+                self.learning_rate,
+                self.learning_rate * self.min_lr_ratio,
+                _convert_frac_or_steps(self.warmup, num_train_steps),
+                num_train_steps,
+                self.muonh_decay_power,
+            )
         adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
 
         def optimizer(learning_rate, adam_lr):

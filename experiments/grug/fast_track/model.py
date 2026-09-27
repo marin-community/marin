@@ -416,6 +416,9 @@ class GrugModelConfig:
     ``rms`` (RMSNorm with a learned gain), ``rms_nogain`` (RMSNorm, no gain) or ``raw`` (the table row as is)."""
     embed_scale: float = 1.0
     """Constant multiplier on the (normed) token embedding: its weight in the AttnRes mixes."""
+    router_share_block: int = 1
+    """PathMoE (arXiv 2603.18297): consecutive layers of each block stack share one router matrix, in groups of
+    this many stack entries (the first layer of each group owns it). Per-layer QB biases stay separate. 1: off."""
     sublayer_out_norm: bool = False
     """Peri-LN (arXiv 2502.02732): RMSNorm with a gain (init 1) on each attention and MLP sublayer output
     before it becomes an AttnRes source, so the source mix combines unit-RMS values."""
@@ -2657,6 +2660,8 @@ class Transformer(eqx.Module):
             mask = AttentionMask.causal()
 
         cfg = self.config
+        if cfg.router_share_block > 1:
+            self = _share_routers(self, cfg.router_share_block)
         gather = _embedding_gather if cfg.embed_grad_fp32 else _embedding_gather_autodiff
         hidden = gather(self.token_embed, token_ids)
         if cfg.embed_norm_mode == "rms":
@@ -3270,6 +3275,19 @@ def _attn_res_num_sources(cfg: GrugModelConfig) -> int:
         return 2 * cfg.num_layers * cfg.loop_passes + _num_extra_embeds(cfg) + 1
     rolled = sum(1 for i in range(cfg.num_layers * cfg.loop_passes) if i % seg_size == 0 and i // seg_size < cap)
     return rolled + _num_extra_embeds(cfg) + 1
+
+
+def _share_routers(model: "Transformer", block: int) -> "Transformer":
+    """Replace each stack's per-layer router with its group leader's (``block`` consecutive entries per group)."""
+    stacks = model.layer_stacks()
+    shared = []
+    for stack in stacks:
+        router = stack.stacked.mlp.router
+        if router is None:
+            raise ValueError("router_share_block needs the full-rank router (router_rank=None)")
+        leaders = (jnp.arange(router.shape[0]) // block) * block
+        shared.append(reshard(jnp.take(router, leaders, axis=0), _partition_spec_of(router)))
+    return eqx.tree_at(lambda t: [s.stacked.mlp.router for s in t.layer_stacks()], model, shared)
 
 
 def _num_extra_embeds(cfg: GrugModelConfig) -> int:
