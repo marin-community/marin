@@ -11,7 +11,13 @@ import pytest
 from marin.datakit.chat_normalize import CHAT_SCHEMA, ChatChannel
 
 from experiments.datakit.science_sft_conversion.audit import audit
-from experiments.datakit.science_sft_conversion.conversion import Source, WorkItem, _document, _output_path
+from experiments.datakit.science_sft_conversion.conversion import (
+    ConversionMode,
+    Source,
+    WorkItem,
+    _document,
+    _output_path,
+)
 
 
 def test_bold_markdown_conclusion_is_valid() -> None:
@@ -23,7 +29,7 @@ def test_bold_markdown_conclusion_is_valid() -> None:
         "answer": "- Mass: 2 kg\n- Force: 6 N\n\n**Conclusion:** Final speed is 9 m/s.",
     }
 
-    record = _document(source, "test-2", passage, 0, completion)
+    record = _document(source, "test-2", passage, 0, completion, ConversionMode.GROUNDED)
 
     assert passage in record["messages"][0]["content"][0]["text"]
     assert record["messages"][1]["channel"] == ChatChannel.ANALYSIS
@@ -32,7 +38,9 @@ def test_bold_markdown_conclusion_is_valid() -> None:
     assert record["messages"][2]["content"][0]["text"] == completion["answer"]
 
     with pytest.raises(ValueError):
-        _document(source, "test-2", passage, 0, {**completion, "answer": "- Mass: 2 kg\n- Force: 6 N"})
+        _document(
+            source, "test-2", passage, 0, {**completion, "answer": "- Mass: 2 kg\n- Force: 6 N"}, ConversionMode.GROUNDED
+        )
 
 
 def test_worked_solution_stays_out_of_the_user_turn() -> None:
@@ -44,16 +52,78 @@ def test_worked_solution_stays_out_of_the_user_turn() -> None:
         "answer": "Short answer: 4.\nAdding two and two gives four.",
     }
 
-    record = _document(source, "test-2", passage, 0, completion)
+    record = _document(source, "test-2", passage, 0, completion, ConversionMode.STANDALONE)
 
     assert passage not in record["messages"][0]["content"][0]["text"]
     assert "What is 2 + 2?" in record["messages"][0]["content"][0]["text"]
+    grounded = _document(source, "test-2", passage, 0, completion, ConversionMode.GROUNDED)
+    assert passage in grounded["messages"][0]["content"][0]["text"]
     with pytest.raises(ValueError, match="omitted from the user turn"):
-        _document(source, "test-2", passage, 0, {**completion, "user": "Using the source passage, solve 2 + 2."})
+        _document(
+            source,
+            "test-2",
+            passage,
+            0,
+            {**completion, "user": "Using the source passage, solve 2 + 2."},
+            ConversionMode.STANDALONE,
+        )
     with pytest.raises(ValueError, match="omitted from the user turn"):
-        _document(source, "test-2", passage, 0, {**completion, "reasoning_content": "The passage says 2 + 2 = 4."})
+        _document(
+            source,
+            "test-2",
+            passage,
+            0,
+            {**completion, "reasoning_content": "The passage says 2 + 2 = 4."},
+            ConversionMode.STANDALONE,
+        )
     with pytest.raises(ValueError, match="withhold its solution"):
-        _document(source, "test-2", passage, 0, {**completion, "user": "Set up 2 + 2, but do not solve it."})
+        _document(
+            source,
+            "test-2",
+            passage,
+            0,
+            {**completion, "user": "Set up 2 + 2, but do not solve it."},
+            ConversionMode.STANDALONE,
+        )
+    with pytest.raises(ValueError, match="create an exercise"):
+        _document(
+            source,
+            "test-2",
+            passage,
+            0,
+            {**completion, "user": "Construct a self-contained exercise on addition. Then solve it."},
+            ConversionMode.STANDALONE,
+        )
+    with pytest.raises(ValueError, match="withhold its solution"):
+        _document(
+            source,
+            "test-2",
+            passage,
+            0,
+            {**completion, "user": "What is 2 + 2? Do not provide the final answer."},
+            ConversionMode.STANDALONE,
+        )
+
+
+def test_numbered_worked_solution_accepts_step_headings() -> None:
+    source = Source("nemotron_specialized/math_textbooks", "", 0, 0)
+    completion = {
+        "user": "A coin has heads probability b or 1-b, where b > 1/2. Derive the posterior odds after one head.",
+        "reasoning_content": "Use Bayes' theorem to update the prior odds.",
+        "answer": "**Step 1 — Apply Bayes' theorem.**\nThe odds multiply by b/(1-b).\nFinal answer: updated odds.",
+    }
+
+    record = _document(
+        source,
+        "00001a321e0eff9c465f857eed9de1ee",
+        "Worked answer: updated odds.",
+        0,
+        completion,
+        ConversionMode.STANDALONE,
+    )
+
+    assert "Worked answer" not in record["messages"][0]["content"][0]["text"]
+    assert record["messages"][2]["content"][0]["text"] == completion["answer"]
 
 
 def test_audit_detects_short_batch(tmp_path) -> None:

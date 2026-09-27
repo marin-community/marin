@@ -10,7 +10,7 @@ from marin.datakit.sft import SftInput, build_sft_store
 
 CONTEXT = 32_768
 SHUFFLE_SEED = 0
-SOURCE_NAME = "science-forward/minimax-m3-formatted-2026.09.27-v2"
+SOURCE_NAME = "science-forward/minimax-m3-formatted-2026.09.27-v3"
 MODEL_REPO = "open-athena/Snowball-67B-A2B-5.7T-Mixed-RLVR-Step38"
 MODEL_REVISION = "cfc1d845dae89b067cdc7250d0164abefa5a69cf"
 TOKENIZER = f"{MODEL_REPO}@{MODEL_REVISION}"
