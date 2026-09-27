@@ -72,15 +72,17 @@ uv run iris --cluster=cw-rno2a job run --priority interactive --enable-extra-res
 ```
 
 To inspect the conversion across all 17 sources while the full run proceeds,
-write one source chunk and its validated conversation per source to a separate
-JSON file:
+write sampled source chunks and their validated conversations to a separate
+JSON file. The first sample is the first row used by the original probe; the
+remaining samples use reproducible random shards, row groups, and chunks:
 
 ```bash
 uv run iris --cluster=cw-rno2a job run --priority interactive --enable-extra-resources \
-  --job-name science-sft-conversion-probe-20260927 --cpu 4 --memory 16GB \
+  --job-name science-sft-conversion-probe-stratified-20260927 --cpu 4 --memory 16GB \
   --disk 10GB --extra cpu --no-wait \
   -- python -m experiments.datakit.science_sft_conversion.probe \
-    --output-path s3://marin-us-east-02a/marin/users/benfeuer/science-sft-converted/2026.09.27-v2/audit/probe-17.json
+    --samples-per-source 5 --seed 20260927 \
+    --output-path s3://marin-us-east-02a/marin/users/benfeuer/science-sft-converted/2026.09.27-v2/audit/probe-stratified-85.json
 ```
 
 The conversion is complete only when every expected source batch has a
