@@ -758,6 +758,10 @@ def _parse_as(annotation: Any, text: str, name: str) -> Any:
         return annotation(text)
     if annotation in (int, float, str):
         return annotation(text)
+    if typing.get_origin(annotation) is typing.Literal:
+        if text not in args:
+            raise ValueError(f"{name}: {text!r} is not one of {args}")
+        return text
     raise ValueError(f"{name}: unsupported field type {annotation}")
 
 
