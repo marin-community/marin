@@ -9,10 +9,8 @@ import dataclasses
 import functools
 import logging
 import time
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import cast
 
 import equinox as eqx
 import jax
@@ -30,7 +28,6 @@ from jax.tree_util import register_dataclass
 from jaxtyping import PRNGKeyArray
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
-from levanter.checkpoint import load_checkpoint
 from levanter.data.dataset import AsyncDataset
 from levanter.data.loader import DataLoader
 from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_batch_schedule
@@ -54,6 +51,7 @@ from experiments.june_tpu_67b_a2b.dispatch import dispatch_grug_training_run
 from experiments.june_tpu_67b_a2b.moe.model import Block, GrugModelConfig, Transformer
 
 logger = logging.getLogger(__name__)
+TRAIN_LOSS_KEY = "train/loss"
 
 
 class RouterFreeze(StrEnum):
@@ -98,7 +96,7 @@ class GrugTrainerConfig:
     """Shard queries and hidden activations across sequence; gather K/V for attention."""
 
     reinitialize_token_ids: tuple[int, ...] = ()
-    """Reset these LM-head rows and their moments only when initializing from the base checkpoint."""
+    """Reset these LM-head rows and moments when initializing from a base checkpoint or HF export."""
 
     reinitialize_token_anchors: tuple[tuple[int, ...], ...] = ()
     """Ordinary-token anchors, in the same order as reinitialize_token_ids."""
@@ -112,15 +110,6 @@ class GrugTrainerConfig:
 
     router_bias_update: RouterBiasUpdate = RouterBiasUpdate.FIXED
     """Use the source QB threshold or overwrite it with each step's estimate."""
-
-    sft_weights_only_init: bool = False
-    """SFT/RL init semantics (marin #650). When True and the run has no checkpoint of
-    its own to auto-resume from, the trainer loads only the model weights (params +
-    ``pending_qb_betas``) from ``TrainerConfig.initialize_from`` and keeps the fresh
-    optimizer state and ``step=0`` -- i.e. a fresh LR schedule over the base weights,
-    not a full-state resume. False (default) keeps the byte-identical continued-pretrain
-    behaviour where ``initialize_from`` loads the whole train state (weights + optimizer +
-    step). Own-run checkpoints still take precedence, so preemption resumes normally."""
 
     initialize_from_hf: str | None = None
     """Pinned HF export used for a fresh-optimizer weights-only initialization."""
@@ -432,35 +421,6 @@ def initial_state(
     )
 
 
-def init_weights_only_from_checkpoint(
-    state: GrugTrainState,
-    checkpoint_path: str,
-    *,
-    mesh: Mesh | None,
-    load_ema: bool,
-    _load_fn: Callable[..., object] = load_checkpoint,
-) -> GrugTrainState:
-    """Load only model weights from an external checkpoint, resetting the optimizer.
-
-    This is the SFT/RL init (marin #650): the base checkpoint supplies ``params`` and the
-    ``pending_qb_betas`` router-bias state; the optimizer state and ``step`` stay at their
-    fresh values in ``state`` so training starts a new LR schedule from step 0 instead of
-    resuming the base run's optimizer/step.
-
-    ``load_ema`` mirrors the loaded weights into ``ema_params`` when the run tracks an EMA.
-    """
-    # Deserialize only the ``params`` subtree and the ``pending_qb_betas`` leaf, keyed by their
-    # GrugTrainState field names so they match the on-disk paths. allow_partial lets the base
-    # checkpoint's other leaves (opt_state / step / ema_params) go unread, so the base run's
-    # optimizer tree is never touched and stays fresh from ``state``.
-    exemplar: dict[str, object] = {"params": state.params, "pending_qb_betas": state.pending_qb_betas}
-    loaded = cast("dict[str, object]", _load_fn(exemplar, checkpoint_path, mesh=mesh, allow_partial=True))
-    updates: dict[str, object] = {"params": loaded["params"], "pending_qb_betas": loaded["pending_qb_betas"]}
-    if load_ema and state.ema_params is not None:
-        updates["ema_params"] = loaded["params"]
-    return dataclasses.replace(state, **updates)
-
-
 def init_weights_only_from_hf(
     model_config: GrugModelConfig,
     checkpoint_path: str,
@@ -549,7 +509,7 @@ def _make_train_step(
             )
 
         (loss, summarized_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_params)
-        metrics = {"train/loss": loss, **summarized_metrics}
+        metrics = {TRAIN_LOSS_KEY: loss, **summarized_metrics}
         updates, opt_state = optimizer.update(grads, state.opt_state, qb_params)
         if special_token_lr_ids:
             # Scale after Adam normalization so the multiplier changes the effective LR.
@@ -667,7 +627,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         data_key = jax.random.PRNGKey(config.trainer.data_seed)
 
     # Grug uses raw PartitionSpecs rather than Trainer's logical axis mapping.
-    # Keep the mesh compact so the batch pspec derived by `_batch_spec(mesh)` spans slices directly.
+    # Keep the mesh compact so the batch axis spans slices directly.
     # replica_axis_size=None lets compact_grug_mesh default to jax.process_count() (full
     # cross-slice replication); set it to 1 on GrugTrainerConfig for cross-slice FSDP.
     mesh = compact_grug_mesh(
@@ -767,25 +727,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         config.trainer.reinitialize_token_ids,
                         config.trainer.reinitialize_token_anchors,
                     )
-        elif config.trainer.sft_weights_only_init:
-            # SFT/RL: auto-resume from this run's own checkpoints if present (preemption),
-            # otherwise load only base weights (+ pending_qb_betas) and keep the fresh
-            # optimizer/step (marin #650). initialize_from is deliberately withheld here so
-            # the restore never does a full-state load; the weights-only init runs below.
-            state = restore_grug_state_from_checkpoint(
-                state,
-                checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
-                load_checkpoint_setting=trainer.load_checkpoint,
-                mesh=mesh,
-                allow_partial=trainer.allow_partial_checkpoint,
-            )
-            if int(state.step) == 0 and trainer.initialize_from is not None:
-                state = init_weights_only_from_checkpoint(
-                    state,
-                    trainer.initialize_from,
-                    mesh=mesh,
-                    load_ema=config.trainer.ema_beta is not None,
-                )
         elif config.trainer.reinitialize_token_ids:
             if trainer.initialize_from is None or config.trainer.ema_beta is not None:
                 raise ValueError("Token reinitialization requires a base checkpoint and no EMA")
@@ -887,29 +828,27 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         last_loss: float | jax.Array = 0.0
         last_step_duration = 0.0
 
-        # Main optimization loop.
         try:
             while int(state.step) < trainer.num_train_steps:
                 with jax.profiler.TraceAnnotation("load_batch"):
                     batch = next(iterator)
                 step_start = time.perf_counter()
                 current_step = int(state.step)
-                # grad_watch runs only on its configured interval.
                 compute_watch = (
                     watch_config.is_enabled and watch_config.interval > 0 and current_step % watch_config.interval == 0
                 )
                 state, metrics, watch_stats = train_step(state, batch, compute_watch=compute_watch)
                 step = int(state.step) - 1
 
-                jax.block_until_ready(metrics["train/loss"])
+                jax.block_until_ready(metrics[TRAIN_LOSS_KEY])
 
-                if not bool(jnp.isfinite(metrics["train/loss"])):
+                if not bool(jnp.isfinite(metrics[TRAIN_LOSS_KEY])):
                     raise FloatingPointError(f"Non-finite Grug loss at step {int(state.step)}")
                 duration = time.perf_counter() - step_start
                 hook_start = time.perf_counter()
                 with jax.profiler.TraceAnnotation("callbacks"):
-                    state_callbacks.run(state, loss=metrics["train/loss"], step_duration=duration)
-                    last_loss = metrics["train/loss"]
+                    state_callbacks.run(state, loss=metrics[TRAIN_LOSS_KEY], step_duration=duration)
+                    last_loss = metrics[TRAIN_LOSS_KEY]
                     last_step_duration = duration
                     levanter.tracker.log({"throughput/hook_time": time.perf_counter() - hook_start}, step=step)
                     levanter.tracker.log({"throughput/loading_time": iterator.this_load_time}, step=step)
