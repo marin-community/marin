@@ -195,6 +195,18 @@ def _embedding_gather_bwd(residuals, g: jax.Array):
 _embedding_gather.defvjp(_embedding_gather_fwd, _embedding_gather_bwd)
 
 
+def _embedding_gather_autodiff(token_embed: jax.Array, token_ids: Int[Array, "B S"]) -> Float[Array, "B S D"]:
+    """``_embedding_gather`` with JAX's default transpose: the backward scatter-adds straight into the
+    (bf16) table (``embed_grad_fp32=False``, the pre-fix behavior)."""
+    token_ids = reshard(token_ids, P(_BATCH_AXES, None))
+    return shard_map(
+        _local_gather,
+        mesh=get_abstract_mesh(),
+        in_specs=(P(None, None), P(_BATCH_AXES, None)),
+        out_specs=P(_BATCH_AXES, None, None),
+    )(token_embed, token_ids)
+
+
 # Pair-combine multiplier and murmur3 finalizer constants for the (previous, current) bigram hash.
 _BIGRAM_HASH_PAIR = 0x9E3779B1
 _MURMUR_C1 = 0x85EBCA6B
@@ -388,6 +400,9 @@ class GrugModelConfig:
     attn_res_head_norm: bool = False
     """Multi-head AttnRes: RMS-normalize each head's channel slice of a source for its logits, instead
     of one RMS over all channels."""
+    embed_grad_fp32: bool = True
+    """Accumulate the token-embedding gradient in float32 (``_embedding_gather``); False restores JAX's
+    default gather transpose, which scatter-adds into the bf16 table."""
     attn_res_dual_query: bool = False
     """Two pseudo-queries per AttnRes gate: each mixes the sources with its own softmax, and the two mixes
     are merged per token by ``s = sigmoid(rms_norm(stream) . w + b)`` (``w``, ``b`` zero-init, so s = 1/2),
@@ -2165,7 +2180,8 @@ class Transformer(eqx.Module):
             mask = AttentionMask.causal()
 
         cfg = self.config
-        hidden = _embedding_gather(self.token_embed, token_ids)
+        gather = _embedding_gather if cfg.embed_grad_fp32 else _embedding_gather_autodiff
+        hidden = gather(self.token_embed, token_ids)
         hidden = self.embed_norm(hidden)
         if self.embed_gated_norm is not None:
             hidden = self.embed_gated_norm(hidden)
