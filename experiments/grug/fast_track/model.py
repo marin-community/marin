@@ -215,10 +215,16 @@ def _embedding_gather_autodiff(token_embed: jax.Array, token_ids: Int[Array, "B 
 _BIGRAM_HASH_PAIR = 0x9E3779B1
 _MURMUR_C1 = 0x85EBCA6B
 _MURMUR_C2 = 0xC2B2AE35
+# Per-head salt step for the multi-head n-gram hash (salt 0 is the single-head hash).
+_HASH_SALT_STEP = 0x27D4EB2D
 
 
 def _bigram_hash_ids(
-    token_ids: Int[Array, "B S"], segment_ids: Int[Array, "B S"] | None, num_buckets: int, ngram: int = 2
+    token_ids: Int[Array, "B S"],
+    segment_ids: Int[Array, "B S"] | None,
+    num_buckets: int,
+    ngram: int = 2,
+    salt: int = 0,
 ) -> Int[Array, "B S"]:
     """Hash each n-gram ending at a token (the ``ngram - 1`` previous tokens, then the token) into
     ``num_buckets`` rows. A previous token before position 0 or in an earlier document is replaced by the
@@ -230,7 +236,7 @@ def _bigram_hash_ids(
             other_doc = jnp.pad(segment_ids[:, lag:] != segment_ids[:, :-lag], ((0, 0), (lag, 0)), constant_values=True)
             prev = jnp.where(other_doc, num_buckets, prev)
         x = (x + prev.astype(jnp.uint32)) * jnp.uint32(_BIGRAM_HASH_PAIR)
-    x = x + token_ids.astype(jnp.uint32)
+    x = x + token_ids.astype(jnp.uint32) + jnp.uint32((salt * _HASH_SALT_STEP) & 0xFFFFFFFF)
     x = (x ^ (x >> 16)) * jnp.uint32(_MURMUR_C1)
     x = (x ^ (x >> 13)) * jnp.uint32(_MURMUR_C2)
     x = x ^ (x >> 16)
@@ -582,6 +588,12 @@ class GrugModelConfig:
     """Engram-style content gate on the bigram source: ``g_t = sigmoid(sum_d w_d rms(e_t)_d rms(b_t)_d + c)`` scales
     each token's bigram row by how its token embedding and bigram row interact, which the static AttnRes queries
     can't express (w = 0 and c = +2 at init)."""
+    embed2_hash_heads: int = 1
+    """Engram-style multi-head hashing: each bigram row is split into this many slices of ``hidden_dim / heads``, each
+    indexed by its own hash of the bigram, so a collision corrupts only the slices whose hashes collide. The table is
+    stored as ``[heads * rows, hidden_dim / heads]`` (the same parameters and gathered bytes as one table)."""
+    trigram_gate: bool = False
+    """The ``bigram_gate`` content gate (same rank) on the trigram source (``embed3_rows``), with its own parameters."""
     bigram_gate_rank: int = 0
     """With ``bigram_gate``, a per-channel gate instead of a scalar: ``g_t = sigmoid(rms(e_t) * rms(b_t) @ A @ B + c)``
     with rank-r ``A`` (random) and ``B`` (zero), so each token keeps some bigram features and drops others."""
@@ -2578,6 +2590,10 @@ class Transformer(eqx.Module):
     bigram_gate_b: Float[Array, ""] | None
     bigram_gate_a_lr: Float[Array, "D R"] | None
     bigram_gate_b_lr: Float[Array, "R D"] | None
+    trigram_gate_w: Float[Array, " D"] | None
+    trigram_gate_b: Float[Array, ""] | None
+    trigram_gate_a_lr: Float[Array, "D R"] | None
+    trigram_gate_b_lr: Float[Array, "R D"] | None
     token_embed3: jax.Array | None
     embed3_norm: RMSNorm | None
     token_embed_window: jax.Array | None
@@ -2675,7 +2691,10 @@ class Transformer(eqx.Module):
                 reshard(
                     _init_weight(
                         embed2_key,
-                        (cfg.embed2_rows or cfg.vocab_size, cfg.embed2_dim or cfg.hidden_dim),
+                        (
+                            (cfg.embed2_rows or cfg.vocab_size) * cfg.embed2_hash_heads,
+                            (cfg.embed2_dim or cfg.hidden_dim) // cfg.embed2_hash_heads,
+                        ),
                         cfg.initializer_std,
                     ),
                     P(_FSDP_AXES, None) if cfg.embed2_fsdp else P(None, None),
@@ -2695,6 +2714,22 @@ class Transformer(eqx.Module):
             embed2_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps) if cfg.second_embed else None,
             bigram_gate_w=jnp.zeros((cfg.hidden_dim,), jnp.float32) if cfg.bigram_gate else None,
             bigram_gate_b=jnp.full((), 2.0, jnp.float32) if cfg.bigram_gate else None,
+            trigram_gate_w=jnp.zeros((cfg.hidden_dim,), jnp.float32) if cfg.trigram_gate else None,
+            trigram_gate_b=jnp.full((), 2.0, jnp.float32) if cfg.trigram_gate else None,
+            trigram_gate_a_lr=(
+                _init_weight(
+                    random.fold_in(embed2_key, 13),
+                    (cfg.hidden_dim, cfg.bigram_gate_rank),
+                    1.0 / math.sqrt(cfg.hidden_dim),
+                )
+                if cfg.trigram_gate and cfg.bigram_gate_rank
+                else None
+            ),
+            trigram_gate_b_lr=(
+                jnp.zeros((cfg.bigram_gate_rank, cfg.hidden_dim), jnp.float32)
+                if cfg.trigram_gate and cfg.bigram_gate_rank
+                else None
+            ),
             bigram_gate_a_lr=(
                 _init_weight(
                     random.fold_in(embed2_key, 9),
@@ -2942,34 +2977,47 @@ class Transformer(eqx.Module):
             if self.token_embed2 is not None:
                 assert self.embed2_norm is not None
                 ids2 = token_ids
-                if cfg.second_embed_bigram:
-                    doc_start = None if segment_ids is None else segment_ids[0]
-                    ids2 = _bigram_hash_ids(token_ids, doc_start, cfg.embed2_rows or cfg.vocab_size, cfg.embed2_ngram)
                 gather2 = _embedding_gather if cfg.embed2_grad_fp32 else _embedding_gather_autodiff
                 table2 = reshard(self.token_embed2, P(None, None)) if cfg.embed2_fsdp else self.token_embed2
-                rows2 = gather2(table2, ids2)
+                if cfg.second_embed_bigram and cfg.embed2_hash_heads > 1:
+                    doc_start = None if segment_ids is None else segment_ids[0]
+                    rows_per_head = cfg.embed2_rows or cfg.vocab_size
+                    heads = cfg.embed2_hash_heads
+                    head_ids = jnp.stack(
+                        [
+                            _bigram_hash_ids(token_ids, doc_start, rows_per_head, cfg.embed2_ngram, salt=h)
+                            + h * rows_per_head
+                            for h in range(heads)
+                        ],
+                        axis=-1,
+                    )
+                    b_, s_ = token_ids.shape
+                    flat_ids = jax.lax.reshape(head_ids, (b_, s_ * heads), out_sharding=P(_BATCH_AXES, None))
+                    head_rows = gather2(table2, flat_ids)
+                    rows2 = jax.lax.reshape(
+                        head_rows, (b_, s_, head_rows.shape[-1] * heads), out_sharding=P(_BATCH_AXES, None, None)
+                    )
+                else:
+                    if cfg.second_embed_bigram:
+                        doc_start = None if segment_ids is None else segment_ids[0]
+                        ids2 = _bigram_hash_ids(
+                            token_ids, doc_start, cfg.embed2_rows or cfg.vocab_size, cfg.embed2_ngram
+                        )
+                    rows2 = gather2(table2, ids2)
                 if self.embed2_up is not None:
                     rows2 = jnp.einsum(
                         "bsr,rd->bsd", rows2, self.embed2_up.astype(rows2.dtype), out_sharding=_batch_spec()
                     )
                 embed2 = self.embed2_norm(rows2)
                 if self.bigram_gate_w is not None and self.bigram_gate_b is not None:
-                    # Both inputs are already RMS-normed (embed_norm / embed2_norm); stay in the compute dtype so the
-                    # gate is a couple of fused elementwise passes over [B, S, D] rather than fp32 ones.
-                    interaction = hidden.astype(embed2.dtype) * embed2
-                    if self.bigram_gate_a_lr is not None and self.bigram_gate_b_lr is not None:
-                        low = jnp.einsum("bsd,dr->bsr", interaction, self.bigram_gate_a_lr.astype(embed2.dtype))
-                        logits = jnp.einsum(
-                            "bsr,rd->bsd", low, self.bigram_gate_b_lr.astype(embed2.dtype), out_sharding=_batch_spec()
-                        )
-                        gate = jax.nn.sigmoid(logits + self.bigram_gate_b.astype(embed2.dtype))
-                        embed2 = embed2 * gate
-                    else:
-                        gate = jax.nn.sigmoid(
-                            jnp.einsum("bsd,d->bs", interaction, self.bigram_gate_w.astype(embed2.dtype))
-                            + self.bigram_gate_b.astype(embed2.dtype)
-                        )
-                        embed2 = embed2 * gate[..., None]
+                    embed2, gate = _content_gate(
+                        hidden,
+                        embed2,
+                        self.bigram_gate_w,
+                        self.bigram_gate_b,
+                        self.bigram_gate_a_lr,
+                        self.bigram_gate_b_lr,
+                    )
                     bigram_gate_stats = {
                         "attn_res_bigram_gate_mean": jax.lax.stop_gradient(jnp.mean(gate)),
                         "attn_res_bigram_gate_std": jax.lax.stop_gradient(jnp.std(gate)),
@@ -2998,7 +3046,19 @@ class Transformer(eqx.Module):
                 ids3 = _bigram_hash_ids(token_ids, doc_start, cfg.embed3_rows, 3)
                 table3 = reshard(self.token_embed3, P(None, None)) if cfg.embed2_fsdp else self.token_embed3
                 gather3 = _embedding_gather if cfg.embed2_grad_fp32 else _embedding_gather_autodiff
-                extra_sources = (*extra_sources, self.embed3_norm(gather3(table3, ids3)))
+                embed3 = self.embed3_norm(gather3(table3, ids3))
+                if self.trigram_gate_w is not None and self.trigram_gate_b is not None:
+                    embed3, gate3 = _content_gate(
+                        hidden,
+                        embed3,
+                        self.trigram_gate_w,
+                        self.trigram_gate_b,
+                        self.trigram_gate_a_lr,
+                        self.trigram_gate_b_lr,
+                    )
+                    bigram_gate_stats["attn_res_trigram_gate_mean"] = jax.lax.stop_gradient(jnp.mean(gate3))
+                    bigram_gate_stats["attn_res_trigram_gate_std"] = jax.lax.stop_gradient(jnp.std(gate3))
+                extra_sources = (*extra_sources, embed3)
             hidden, stacked_router_stats, final_gate_stats = self._attn_res_layers(
                 hidden,
                 token_ids,
@@ -3600,6 +3660,28 @@ def _byte_aux_loss(
     picked = jnp.take_along_axis(logits, jnp.maximum(targets, 0)[..., None], axis=-1)[..., 0]
     valid = (targets >= 0).astype(jnp.float32) * loss_weight[..., None].astype(jnp.float32)
     return jnp.sum((lse - picked) * valid) / jnp.maximum(jnp.sum(valid), 1.0)
+
+
+def _content_gate(
+    hidden: Float[Array, "B S D"],
+    source: Float[Array, "B S D"],
+    w: jax.Array,
+    bias: jax.Array,
+    a_lr: jax.Array | None,
+    b_lr: jax.Array | None,
+) -> tuple[Float[Array, "B S D"], jax.Array]:
+    """Engram-style content gate on an n-gram source: ``sigmoid(f(hidden * source) + bias)``, with ``f`` a rank-r
+    projection to per-channel logits (``a_lr``, ``b_lr``) or a ``w`` dot to one logit per token. Both inputs are
+    RMS-normed already, so it stays in the compute dtype."""
+    dtype = source.dtype
+    interaction = hidden.astype(dtype) * source
+    if a_lr is not None and b_lr is not None:
+        low = jnp.einsum("bsd,dr->bsr", interaction, a_lr.astype(dtype))
+        logits = jnp.einsum("bsr,rd->bsd", low, b_lr.astype(dtype), out_sharding=_batch_spec())
+        gate = jax.nn.sigmoid(logits + bias.astype(dtype))
+        return source * gate, gate
+    gate = jax.nn.sigmoid(jnp.einsum("bsd,d->bs", interaction, w.astype(dtype)) + bias.astype(dtype))
+    return source * gate[..., None], gate
 
 
 def _num_extra_embeds(cfg: GrugModelConfig) -> int:
