@@ -165,7 +165,7 @@ def build_from_datasets(
         write_kwargs["batch_size"] = batch_size
 
     def _write_shard(records, shard_info):
-        """Write one shard and emit ``(path, exemplar)``.
+        """Write one shard and emit ``(path, exemplar, has_cache)``.
 
         ``exemplar`` is ``None`` for empty shards and for skipped (already-written)
         shards; the coordinator picks the first non-``None`` one for consolidation.
@@ -174,11 +174,11 @@ def build_from_datasets(
         if skip_existing:
             if StoragePath(prefix_join(shard_path, ".success")).exists():
                 logger.info("Skipping write, output exists: %s", shard_path)
-                yield (shard_path, None)
+                yield (shard_path, None, True)
                 return
         result = write_levanter_cache(records, shard_path, **write_kwargs)
         exemplar = result["exemplar"]
-        yield (shard_path, _structural_exemplar(exemplar) if exemplar is not None else None)
+        yield (shard_path, _structural_exemplar(exemplar) if exemplar is not None else None, result["count"] > 0)
 
     temp_shards = dataset.map(_strip_join_columns).map_shard(_write_shard)
 
@@ -186,8 +186,8 @@ def build_from_datasets(
     shard_results = ctx.execute(temp_shards, map_task_resources=task_resources).results
     tokenize_elapsed = time.monotonic() - tokenize_start
 
-    shard_paths = [path for path, _ in shard_results]
-    exemplar = next((ex for _, ex in shard_results if ex is not None), None)
+    shard_paths = [path for path, _, has_cache in shard_results if has_cache]
+    exemplar = next((ex for _, ex, _ in shard_results if ex is not None), None)
 
     consolidate_start = time.monotonic()
     logger.info("Consolidating %d shards into %s", len(shard_paths), output_path)
