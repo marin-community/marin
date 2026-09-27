@@ -402,7 +402,7 @@ class GrugModelConfig:
     of one RMS over all channels."""
     embed_norm_mode: str = "rms"
     """Token-embedding norm before it enters the stack (AttnRes mixes it raw against the layer outputs):
-    ``rms`` (RMSNorm with a learned gain), ``rms_nogain`` (RMSNorm, no gain) or ``none`` (the raw table row)."""
+    ``rms`` (RMSNorm with a learned gain), ``rms_nogain`` (RMSNorm, no gain) or ``raw`` (the table row as is)."""
     embed_scale: float = 1.0
     """Constant multiplier on the (normed) token embedding: its weight in the AttnRes mixes."""
     smear: bool = False
@@ -2412,8 +2412,8 @@ class Transformer(eqx.Module):
             hidden = self.embed_norm(hidden)
         elif cfg.embed_norm_mode == "rms_nogain":
             hidden = rms_norm(hidden.astype(jnp.float32), cfg.layer_norm_eps).astype(hidden.dtype)
-        elif cfg.embed_norm_mode != "none":
-            raise ValueError(f"embed_norm_mode must be rms, rms_nogain or none, got {cfg.embed_norm_mode!r}")
+        elif cfg.embed_norm_mode != "raw":
+            raise ValueError(f"embed_norm_mode must be rms, rms_nogain or raw, got {cfg.embed_norm_mode!r}")
         if cfg.embed_scale != 1.0:
             hidden = (hidden * cfg.embed_scale).astype(hidden.dtype)
         if self.embed_gated_norm is not None:
