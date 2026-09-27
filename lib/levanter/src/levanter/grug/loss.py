@@ -52,6 +52,7 @@ def fused_linear_softmax_cross_entropy_loss(
     precision: jax.lax.PrecisionLike = None,
     implementation: str | tuple[str, ...] | None = None,
     block_sizes: BlockSizes | None = None,
+    logit_soft_cap: float | None = None,
 ) -> jax.Array:
     """Compute cross-entropy loss via the fused kernel path.
 
@@ -109,7 +110,7 @@ def fused_linear_softmax_cross_entropy_loss(
             weight=flat_weight,
             logsumexp_weight=logsumexp_weight,
             dtype=dtype,
-            logit_soft_cap=None,
+            logit_soft_cap=logit_soft_cap,
             precision=precision,
             implementation=implementation,
             block_sizes=block_sizes,
