@@ -33,6 +33,7 @@ from iris.cluster.runtime.env import (
     IRIS_WORKER_REGION_ENV,
     STANDARD_MOUNTS,
     TASK_OUTPUT_FINALIZING_STATUS,
+    UV_LINK_MODE_ENV,
     build_common_iris_env,
 )
 from iris.cluster.runtime.output_capture import capture_task_outputs_for_attempt
@@ -742,6 +743,9 @@ class TaskAttempt:
 
         env.update(self._task_env)
         env.update(dict(self.request.environment.env_vars))
+        # TPU hosts need symlinked wheels even for their CPU tasks. Apply this
+        # after task env so a job cannot restore disk-heavy copy mode there.
+        env[UV_LINK_MODE_ENV] = "symlink" if self._worker_metadata.device.HasField("tpu") else "copy"
         # The controller owns the process-incarnation identity. User and cluster
         # env cannot replace it with a value shared by two attempts.
         env.pop(IRIS_ATTEMPT_UID_ENV, None)
