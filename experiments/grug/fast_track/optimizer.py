@@ -235,6 +235,42 @@ def scale_with_grug_muonh(
     return optax.GradientTransformation(init_fn, update_fn)
 
 
+def scale_by_sinkhorn_momentum(
+    *, momentum: float, iters: int, nesterov: bool, eps: float = 1e-8
+) -> optax.GradientTransformation:
+    """Momentum followed by Sinkhorn balancing (DeepSeek-V4.1-Flash; SinkGD, Scetbon et al. 2025).
+
+    Keeps one momentum buffer per matrix. The direction alternately rescales every row, then every
+    column, of the (Nesterov) momentum to unit RMS, ``iters`` times, so every token row and every
+    output channel of an embedding / head matrix moves at a comparable rate. Only a momentum buffer is
+    stored, like Muon.
+    """
+
+    def _rms(x, axis):
+        return jnp.sqrt(jnp.mean(jnp.square(x), axis=axis, keepdims=True))
+
+    def _balance(m):
+        x = m.astype(jnp.float32)
+        for _ in range(iters):
+            x = x / (_rms(x, -1) + eps)
+            x = x / (_rms(x, -2) + eps)
+        return x
+
+    def init_fn(params):
+        return jax.tree.map(lambda p: jnp.zeros_like(p, dtype=jnp.float32), params)
+
+    def update_fn(updates, state, params=None):
+        del params
+        mu = jax.tree.map(lambda m, g: momentum * m + g.astype(jnp.float32), state, updates)
+        direction_source = (
+            jax.tree.map(lambda m, g: g.astype(jnp.float32) + momentum * m, mu, updates) if nesterov else mu
+        )
+        directions = jax.tree.map(lambda m, g: _balance(m).astype(g.dtype), direction_source, updates)
+        return directions, mu
+
+    return optax.GradientTransformation(init_fn, update_fn)
+
+
 def scale_with_grug_muon_free(
     *,
     momentum: float,
@@ -287,6 +323,19 @@ def scale_with_grug_muon_free(
         return new_updates, (muon_state, init_norms)
 
     return optax.GradientTransformation(init_fn, update_fn)
+
+
+def _sinkhorn_hyperball(momentum: float, iters: int, nesterov: bool, learning_rate) -> optax.GradientTransformation:
+    """Sinkhorn-balanced momentum direction with the MuonH/AdamH Frobenius hyperball step."""
+    sinkhorn = scale_by_sinkhorn_momentum(momentum=momentum, iters=iters, nesterov=nesterov)
+
+    def update_fn(updates, state, params=None):
+        if params is None:
+            raise ValueError("sinkhornh requires params for the hyperball step")
+        directions, state = sinkhorn.update(updates, state, params)
+        return _scale_invariant_hyperball_updates(params, directions, learning_rate), state
+
+    return optax.GradientTransformation(sinkhorn.init, update_fn)
 
 
 @OptimizerConfig.register_subclass("grug_fast_track_muonh_v1")
@@ -353,8 +402,14 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     okls_root_every: int = 1
     """Recompute the OKLS inverse roots every this many steps (stored in between)."""
     lm_head_group: str = "adamh"
-    """LR group of ``output_proj``: ``adamh`` or ``muonh``."""
+    """LR group of ``output_proj``: ``adamh``, ``muonh`` or ``sinkhornh`` (Sinkhorn-balanced momentum + hyperball)."""
     embed_group: str = "adam"
+    sinkhorn_momentum: float = 0.95
+    sinkhorn_iters: int = 5
+    sinkhorn_nesterov: bool = True
+    sinkhorn_lr_mult: float = 1.0
+    """LR multiplier of the Sinkhorn groups: ``sinkhorn`` (embedding, at the Adam LR) and ``sinkhornh`` (lm_head,
+    hyperball at the MuonH LR, like AdamH)."""
     """LR group of ``token_embed``: ``adam`` or ``adamh``."""
     muon_free_families: tuple[str, ...] = ()
     """Matrix families (keys of ``_OKLS_FAMILIES``, e.g. ``attn_q``, ``attn_k``) that drop the hyperball:
@@ -463,6 +518,18 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                     ),
                     _match_named_update_sharding(),
                 ),
+                "sinkhorn": optax.chain(
+                    scale_by_sinkhorn_momentum(
+                        momentum=self.sinkhorn_momentum, iters=self.sinkhorn_iters, nesterov=self.sinkhorn_nesterov
+                    ),
+                    optax.scale(-adam_lr * self.sinkhorn_lr_mult),
+                ),
+                "sinkhornh": _sinkhorn_hyperball(
+                    self.sinkhorn_momentum,
+                    self.sinkhorn_iters,
+                    self.sinkhorn_nesterov,
+                    learning_rate * self.sinkhorn_lr_mult,
+                ),
                 "kda_decay": plain_adam_at(adam_lr * self.kda_decay_lr_mult, self.kda_decay_beta1, self.kda_decay_beta2),
             }
             return optax.multi_transform(transforms, self.create_mask)
@@ -473,12 +540,12 @@ class GrugMoeMuonHConfig(OptimizerConfig):
         )
 
     def __post_init__(self):
-        if self.lm_head_group not in ("adamh", "muonh"):
-            raise ValueError(f"lm_head_group must be adamh or muonh, got {self.lm_head_group!r}")
+        if self.lm_head_group not in ("adamh", "muonh", "sinkhornh"):
+            raise ValueError(f"lm_head_group must be adamh, muonh or sinkhornh, got {self.lm_head_group!r}")
         if self.kda_beta_mlp_group not in ("kda_beta", "adam"):
             raise ValueError(f"kda_beta_mlp_group must be kda_beta or adam, got {self.kda_beta_mlp_group!r}")
-        if self.embed_group not in ("adam", "adamh"):
-            raise ValueError(f"embed_group must be adam or adamh, got {self.embed_group!r}")
+        if self.embed_group not in ("adam", "adamh", "sinkhorn"):
+            raise ValueError(f"embed_group must be adam, adamh or sinkhorn, got {self.embed_group!r}")
 
     def create_mask(self, params):
         paths = leaf_key_paths(params)
