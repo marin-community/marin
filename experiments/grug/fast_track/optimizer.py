@@ -396,27 +396,37 @@ def scale_by_bimaxwell_momentum(momentum: float, switch_step: int) -> optax.Grad
 
     def update(updates, state, params=None):
         count = state.count + 1
-        late = count > switch_step
-        first = count == switch_step + 1
 
-        def leaf(g, buf, fast, slow):
-            new_buf = momentum * buf + g
-            nesterov = momentum * new_buf + g
-            start = (1.0 - momentum) * buf
-            fast0 = jnp.where(first, start, fast)
-            slow0 = jnp.where(first, start, slow)
-            new_fast = fast0 + 0.15 * (g - fast0)
-            new_slow = slow0 + 0.02 * (g - slow0)
-            mixed = 0.4385 * new_fast + 0.5615 * new_slow
-            out = jnp.where(late, g + momentum * (mixed - g), nesterov)
-            return out, jnp.where(late, buf, new_buf), jnp.where(late, new_fast, fast), jnp.where(late, new_slow, slow)
+        def early(args):
+            g_tree, buf_tree, fast_tree, slow_tree = args
+            new_buf = jax.tree.map(lambda g, b: momentum * b + g, g_tree, buf_tree)
+            out = jax.tree.map(lambda g, b: momentum * b + g, g_tree, new_buf)
+            return out, new_buf, fast_tree, slow_tree
 
-        res = jax.tree.map(leaf, updates, state.buf, state.fast, state.slow)
+        def late(args):
+            g_tree, buf_tree, fast_tree, slow_tree = args
+            # At the switch step, start both EMAs from the Nesterov buffer's EMA-scale value.
+            first = count == switch_step + 1
 
-        def pick(i):
-            return jax.tree.map(lambda _, r: r[i], updates, res)
+            def leaf(g, buf, fast, slow):
+                start = (1.0 - momentum) * buf
+                fast = jnp.where(first, start, fast)
+                slow = jnp.where(first, start, slow)
+                fast = fast + 0.15 * (g - fast)
+                slow = slow + 0.02 * (g - slow)
+                return g + momentum * (0.4385 * fast + 0.5615 * slow - g), fast, slow
 
-        return pick(0), BiMaxwellState(count, pick(1), pick(2), pick(3))
+            res = jax.tree.map(leaf, g_tree, buf_tree, fast_tree, slow_tree)
+
+            def pick(i):
+                return jax.tree.map(lambda _, r: r[i], g_tree, res)
+
+            return pick(0), buf_tree, pick(1), pick(2)
+
+        out, buf, fast, slow = jax.lax.cond(
+            count > switch_step, late, early, (updates, state.buf, state.fast, state.slow)
+        )
+        return out, BiMaxwellState(count, buf, fast, slow)
 
     return optax.GradientTransformation(init, update)
 
