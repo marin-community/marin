@@ -406,6 +406,12 @@ class GrugModelConfig:
     ``rms`` (RMSNorm with a learned gain), ``rms_nogain`` (RMSNorm, no gain) or ``raw`` (the table row as is)."""
     embed_scale: float = 1.0
     """Constant multiplier on the (normed) token embedding: its weight in the AttnRes mixes."""
+    mla_key_offset: bool = False
+    """modded-nanogpt partial key offset (record #49): on the MLA layers, the first half of each head's key
+    channels come from the previous token (within documents), enabling one-layer induction."""
+    attn_res_final_signed: bool = False
+    """Backout-style signed correction on the final AttnRes gate: ``final = mix + sum_n c_n * source_n`` with
+    learned ``c`` (zero-init), so the lm_head input can subtract a source (softmax weights can't)."""
     smear: bool = False
     """modded-nanogpt Smear (record #34): ``x_t += lambda * sigmoid(x_t[:12] @ w) * x_{t-1}`` on the embedding,
     within documents (``lambda`` learned, init 0)."""
@@ -822,6 +828,8 @@ class CausalSelfAttention(eqx.Module):
         sconv_segment_ids = _sconv_segment_ids(mask)
         if self.cfg.mla:
             q, k, v = self._mla_qkv(x, sconv_segment_ids, token_ids, kv_share, proj_inputs)
+            if self.cfg.mla_key_offset:
+                k = _partial_key_offset(k, sconv_segment_ids)
         else:
             q, k, v = self._gqa_qkv(x, sconv_segment_ids, is_global)
 
@@ -1725,6 +1733,16 @@ def _expert_mlp_init(cfg: "GrugModelConfig", expert_width: int, key: PRNGKeyArra
     return eqx.tree_at(lambda m: m.w_gate, mlp, None, is_leaf=lambda x: x is None) if cfg.moe_ungated_relu2 else mlp
 
 
+def _partial_key_offset(k: Float[Array, "B S H D"], segment_ids: Int[Array, "B S"] | None) -> jax.Array:
+    """Replace the first half of each key's channels with the previous token's (zero at document starts)."""
+    half = k.shape[-1] // 2
+    prev = jnp.pad(k[:, :-1, :, :half], ((0, 0), (1, 0), (0, 0), (0, 0)))
+    if segment_ids is not None:
+        starts = jnp.pad(segment_ids[:, 1:] != segment_ids[:, :-1], ((0, 0), (1, 0)), constant_values=True)
+        prev = jnp.where(starts[..., None, None], 0, prev)
+    return reshard(jnp.concatenate([prev.astype(k.dtype), k[..., half:]], axis=-1), _partition_spec_of(k))
+
+
 def _smear(
     hidden: Float[Array, "B S D"], w: jax.Array, lam: jax.Array, segment_ids: Int[Array, "B S"] | None
 ) -> Float[Array, "B S D"]:
@@ -2232,6 +2250,8 @@ class Transformer(eqx.Module):
     attn_res_query_dyn1: Float[Array, "G D R"] | None
     attn_res_query_dyn2: Float[Array, "G R N"] | None
     """``attn_res_dynamic_rank`` MLP per gate, in query-stack order (``dyn2`` zero-init)."""
+    attn_res_query_backout: Float[Array, " N"] | None
+    """Signed per-source correction of the final AttnRes gate (``attn_res_final_signed``), zero-init."""
     smear_w: Float[Array, " 12"] | None
     smear_lambda: Float[Array, ""] | None
     attn_res_query_sub: Float[Array, "G H S"] | None
@@ -2361,6 +2381,9 @@ class Transformer(eqx.Module):
                 )
                 if cfg.attn_res_dynamic_rank > 0
                 else None
+            ),
+            attn_res_query_backout=(
+                jnp.zeros((_attn_res_num_sources(cfg),), jnp.float32) if cfg.attn_res_final_signed else None
             ),
             smear_w=jnp.zeros((12,), jnp.float32) if cfg.smear else None,
             smear_lambda=jnp.zeros((), jnp.float32) if cfg.smear else None,
@@ -2739,6 +2762,11 @@ class Transformer(eqx.Module):
                 mixed = _stream_sum((*blocks, partial)).astype(jnp.float32)
             elif cfg.attn_res_additive:
                 mixed = mixed + _stream_sum((*blocks, partial)).astype(jnp.float32)
+            if self.attn_res_query_backout is not None:
+                srcs = [*blocks, partial]
+                cols = [*range(len(blocks)), -1]
+                for src, c in zip(srcs, cols, strict=True):
+                    mixed = mixed + self.attn_res_query_backout[c] * src.astype(jnp.float32)
             weight_logs[final_index] = (
                 jax.lax.stop_gradient(jnp.mean(weights, axis=tuple(range(1, weights.ndim)))),
                 True,
