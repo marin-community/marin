@@ -9,7 +9,6 @@ from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
 
-import fsspec
 import numpy as np
 from fray.types import ResourceConfig
 from haliax import Axis
@@ -34,6 +33,8 @@ from marin.datakit.chat_render import chat_training_record
 from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from marin.execution.artifact import Artifact, write_artifact
 from marin.processing.tokenize.store_builder import build_from_datasets, write_stats_json
+
+SOURCE_COUNTS_DIR = "source-counts"
 
 
 @dataclass(frozen=True)
@@ -101,7 +102,7 @@ def _tokenize_conversations(
             count.tokens += length
             count.assistant_tokens += int(np.count_nonzero(encoded["assistant_masks"]))
             yield {"id": row["id"], **encoded}
-    path = prefix_join(output_path, f"source-counts/{shard.shard_idx:05d}.json")
+    path = prefix_join(output_path, f"{SOURCE_COUNTS_DIR}/{shard.shard_idx:05d}.json")
     StoragePath(path).write_text(json.dumps({name: count.model_dump() for name, count in counts.items()}))
 
 
@@ -127,10 +128,10 @@ def build_sft_store(
         raise ValueError("SFT sources must be nonempty and have distinct names")
     files = []
     for source in sources:
-        paths = fsspec.open_files(prefix_join(source.path, "*.parquet"), mode="rb")
+        paths = StoragePath(prefix_join(source.path, "*.parquet")).glob()
         if not paths:
             raise FileNotFoundError(f"No normalized Parquet shards for {source.name}: {source.path}")
-        files.extend(SftInput(source.name, path.full_name) for path in paths)
+        files.extend(SftInput(source.name, str(path)) for path in paths)
     rows = (
         Dataset.from_list(files)
         .flat_map(_read_source_file)
@@ -151,7 +152,7 @@ def build_sft_store(
     )
     counts = {source.name: SftSourceCounts() for source in sources}
     for shard in range(num_shards):
-        path = prefix_join(output_path, f"source-counts/{shard:05d}.json")
+        path = prefix_join(output_path, f"{SOURCE_COUNTS_DIR}/{shard:05d}.json")
         for name, values in json.loads(StoragePath(path).read_text()).items():
             previous = counts[name]
             counts[name] = SftSourceCounts(**{key: getattr(previous, key) + value for key, value in values.items()})
