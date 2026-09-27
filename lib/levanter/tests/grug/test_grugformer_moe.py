@@ -30,6 +30,9 @@ from levanter.grug._moe.common import (
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
 from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
 from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import (
+    FP8_DISPATCH_BLOCK,
+    _fp8_pack_rows,
+    _fp8_unpack_rows,
     _moe_mlp_ep_fixed_pooled_wave_a2a_local,
     _expand_compacted,
     _interleaved_receiver_ranks,
@@ -1080,6 +1083,7 @@ def test_fixed_pooled_wave_all_to_all_matches_dense_value_and_gradients():
             token_sharding_axes=("expert",),
             transport_capacity_factor=4.0,
             num_expert_waves=num_expert_waves,
+            fp8_dispatch=False,
         )[0]
 
     sharded_pooled_output = jax.shard_map(
@@ -1160,6 +1164,7 @@ def test_fixed_pooled_wave_all_to_all_reports_sender_and_receiver_drops():
             token_sharding_axes=("expert",),
             transport_capacity_factor=0.75,
             num_expert_waves=3,
+            fp8_dispatch=False,
         )
 
     sharded_pooled_output = jax.shard_map(
@@ -1178,6 +1183,118 @@ def test_fixed_pooled_wave_all_to_all_reports_sender_and_receiver_drops():
     np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-5, atol=1e-5)
     assert int(overflow.sender_dropped) == 3
     assert int(overflow.receiver_dropped) == 3
+
+
+def test_fp8_dispatch_rows_roundtrip_within_e4m3_rounding():
+    hidden_dim = 2 * FP8_DISPATCH_BLOCK
+    # Rows spanning six orders of magnitude, with the second block of the last row all zero.
+    x = jax.random.normal(jax.random.key(0), (5, hidden_dim)) * jnp.logspace(-3, 3, 5)[:, None]
+    x = x.at[-1, FP8_DISPATCH_BLOCK:].set(0)
+
+    packed = _fp8_pack_rows(x)
+    roundtrip = _fp8_unpack_rows(packed, hidden_dim=hidden_dim, dtype=jnp.float32)
+
+    assert packed.dtype == jnp.uint8
+    assert packed.shape == (5, hidden_dim + 4 * 2)
+    blocks = np.asarray(x).reshape(5, 2, FP8_DISPATCH_BLOCK)
+    # e4m3 keeps 3 mantissa bits (relative error <= 2^-4); subnormals near zero are spaced 2^-9 of the scale.
+    block_scale = np.abs(blocks).max(axis=-1, keepdims=True) / 448
+    error = np.abs(np.asarray(roundtrip).reshape(blocks.shape) - blocks)
+    assert np.all(error <= 2**-4 * np.abs(blocks) + 2**-10 * block_scale)
+    np.testing.assert_array_equal(np.asarray(roundtrip)[-1, FP8_DISPATCH_BLOCK:], 0)
+
+
+@pytest.mark.timeout(180)
+def test_fp8_dispatch_matches_full_precision_dispatch_across_shards():
+    env = os.environ.copy()
+    env["JAX_PLATFORMS"] = "cpu"
+    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
+    script = """
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+
+        from levanter.grug.grug_moe import moe_mlp
+
+        mesh = Mesh(
+            np.asarray(jax.devices()).reshape(1, 4, 1),
+            axis_names=("data", "expert", "model"),
+            axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+        )
+        tokens, hidden_dim, intermediate_dim, num_experts, topk = 64, 256, 32, 16, 4
+        keys = jax.random.split(jax.random.key(0), 5)
+        x = jax.random.normal(keys[0], (tokens, hidden_dim))
+        combine_weights, selected_experts = jax.lax.top_k(jax.random.normal(keys[1], (tokens, num_experts)), topk)
+        combine_weights = jax.nn.softmax(combine_weights, axis=-1)
+        w_up_gate = jax.random.normal(keys[2], (num_experts, hidden_dim, 2 * intermediate_dim)) / 16
+        w_down = jax.random.normal(keys[3], (num_experts, intermediate_dim, hidden_dim)) / 6
+        cotangent = jax.random.normal(keys[4], (tokens, hidden_dim))
+
+        batch_sharding = NamedSharding(mesh, P(("data", "expert"), None))
+        expert_sharding = NamedSharding(mesh, P("expert", None, None))
+        x, selected_experts, combine_weights, cotangent = (
+            jax.device_put(a, batch_sharding) for a in (x, selected_experts, combine_weights, cotangent)
+        )
+        w_up_gate, w_down = (jax.device_put(a, expert_sharding) for a in (w_up_gate, w_down))
+
+        def loss(fp8_dispatch, x, combine_weights, w_up_gate, w_down):
+            out = moe_mlp(
+                x,
+                selected_experts,
+                combine_weights,
+                w_up_gate,
+                w_down,
+                activation=jax.nn.silu,
+                implementation="fixed_pooled_wave_all_to_all",
+                mesh=mesh,
+                capacity_factor=4.0,
+                pooled_transport_capacity_factor=4.0,
+                num_expert_waves=2,
+                fp8_dispatch=fp8_dispatch,
+            )
+            return jnp.sum(out * cotangent), out
+
+        def relative_error(actual, expected):
+            return float(jnp.linalg.norm(actual - expected) / jnp.linalg.norm(expected))
+
+        args = (x, combine_weights, w_up_gate, w_down)
+        with jax.set_mesh(mesh), jax.default_matmul_precision("highest"):
+            grad_fn = jax.grad(loss, argnums=(1, 2, 3, 4), has_aux=True)
+            expected_gradients, expected = jax.jit(grad_fn, static_argnums=0)(False, *args)
+            actual_gradients, actual = jax.jit(grad_fn, static_argnums=0)(True, *args)
+            jaxpr = jax.make_jaxpr(grad_fn, static_argnums=0)(True, *args)
+
+        def all_to_all_dtypes(jaxpr):
+            found = []
+            for eqn in jaxpr.eqns:
+                if eqn.primitive.name == "all_to_all":
+                    found.append(eqn.invars[0].aval.dtype)
+                for param in eqn.params.values():
+                    for sub in param if isinstance(param, (tuple, list)) else (param,):
+                        sub = getattr(sub, "jaxpr", sub)
+                        if isinstance(sub, jax.extend.core.Jaxpr):
+                            found.extend(all_to_all_dtypes(sub))
+            return found
+
+        dtypes = all_to_all_dtypes(jaxpr.jaxpr)
+        # Per wave: the uint8 forward dispatch; float32 combine (plus its remat), combine backward and
+        # dispatch backward.
+        assert sorted(map(str, dtypes)) == sorted(["uint8"] * 2 + ["float32"] * 8), dtypes
+        # e4m3's 3 mantissa bits give ~3% RMS activation error; gradients see it only through the forward.
+        assert relative_error(actual, expected) < 0.05
+        for actual_gradient, expected_gradient in zip(actual_gradients, expected_gradients, strict=True):
+            assert relative_error(actual_gradient, expected_gradient) < 0.05
+    """
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(script)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.parametrize("implementation", ["ring", "fixed_all_to_all", "fixed_pooled_wave_all_to_all"])

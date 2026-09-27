@@ -356,6 +356,7 @@ class MoEExpertMlp(eqx.Module):
     pooled_transport_capacity_factor: float | None = eqx.field(static=True, default=None)
     expert_chunks: int = eqx.field(static=True, default=1)
     num_expert_waves: int = eqx.field(static=True, default=1)
+    fp8_dispatch: bool = eqx.field(static=True, default=False)
 
     @staticmethod
     def init(
@@ -372,6 +373,7 @@ class MoEExpertMlp(eqx.Module):
         pooled_transport_capacity_factor: float | None = None,
         expert_chunks: int = 1,
         num_expert_waves: int = 1,
+        fp8_dispatch: bool = False,
         pspecs: MoEExpertMlpPspecs = MoEExpertMlpPspecs(),
     ) -> "MoEExpertMlp":
         resolved_implementation = resolve_moe_implementation(implementation)
@@ -395,6 +397,7 @@ class MoEExpertMlp(eqx.Module):
             pooled_transport_capacity_factor=pooled_transport_capacity_factor,
             expert_chunks=expert_chunks,
             num_expert_waves=num_expert_waves,
+            fp8_dispatch=fp8_dispatch,
         )
 
     @named_call
@@ -424,6 +427,7 @@ class MoEExpertMlp(eqx.Module):
             report_capacity_overflow=report_capacity_overflow,
             expert_chunks=self.expert_chunks,
             num_expert_waves=self.num_expert_waves,
+            fp8_dispatch=self.fp8_dispatch,
         )
 
 
@@ -444,6 +448,7 @@ def moe_mlp(
     report_capacity_overflow: bool = False,
     expert_chunks: int = 1,
     num_expert_waves: int = 1,
+    fp8_dispatch: bool = False,
 ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], MoeDispatchCounts]:
     """Functional routed MoE MLP core used by Grug modules and benchmarks.
 
@@ -462,9 +467,12 @@ def moe_mlp(
 
     `pooled_transport_capacity_factor` sets the sender capacity for each
     destination pool. `num_expert_waves` sets the static wave count for the
-    fixed pooled-wave implementation.
+    fixed pooled-wave implementation. `fp8_dispatch` sends that implementation's
+    dispatched activations as block-scaled FP8 (combine and backward stay bf16).
     """
     resolved_implementation = resolve_moe_implementation(implementation)
+    if fp8_dispatch and resolved_implementation != "fixed_pooled_wave_all_to_all":
+        raise ValueError(f"fp8_dispatch requires fixed_pooled_wave_all_to_all, got {resolved_implementation!r}")
 
     if mesh is None:
         mesh = _current_mesh()
@@ -567,6 +575,7 @@ def moe_mlp(
                 _moe_mlp_ep_fixed_pooled_wave_a2a_local,
                 transport_capacity_factor=pooled_transport_capacity_factor,
                 num_expert_waves=num_expert_waves,
+                fp8_dispatch=fp8_dispatch,
             )
         elif resolved_implementation == "deepep":
             shard_local_fn = _moe_mlp_ep_deepep_local

@@ -21,6 +21,12 @@ from levanter.grug._moe.ep_common import (
 )
 from levanter.grug._moe.sonic import sonic_gather_sum_available, sonic_gather_sum_masked
 
+FP8_DISPATCH_BLOCK = 128
+"""Channels sharing one fp32 scale in the FP8 dispatch (DeepSeek-V3's 1x128 activation tiles)."""
+_FP8_DISPATCH_DTYPE = jnp.float8_e4m3fn
+_FP8_DISPATCH_MAX = float(jnp.finfo(_FP8_DISPATCH_DTYPE).max)
+_FP32_BYTES = 4
+
 
 class _PooledDispatch(NamedTuple):
     compacted_x: Float[Array, "E R H"]
@@ -297,6 +303,76 @@ def _expand_compacted_bwd(residual, cotangent):
 _expand_compacted.defvjp(_expand_compacted_fwd, _expand_compacted_bwd)
 
 
+def _fp8_dispatch_row_bytes(hidden_dim: int) -> int:
+    return hidden_dim + _FP32_BYTES * (hidden_dim // FP8_DISPATCH_BLOCK)
+
+
+def _fp8_pack_rows(x: Float[Array, "... H"]) -> Array:
+    """Quantize rows to e4m3 with one fp32 scale per 128-channel block, packed as bytes.
+
+    Each packed row is the ``H`` fp8 codes followed by the ``H / 128`` scales' bytes, so codes and
+    scales travel in one byte collective (NCCL has no fp8 wire type on older XLA; bytes always work).
+    """
+    hidden_dim = x.shape[-1]
+    blocks = x.reshape(*x.shape[:-1], hidden_dim // FP8_DISPATCH_BLOCK, FP8_DISPATCH_BLOCK).astype(jnp.float32)
+    scale = jnp.max(jnp.abs(blocks), axis=-1, keepdims=True) / _FP8_DISPATCH_MAX
+    scale = jnp.where(scale > 0, scale, 1.0)
+    codes = jax.lax.bitcast_convert_type((blocks / scale).astype(_FP8_DISPATCH_DTYPE), jnp.uint8)
+    scale_bytes = jax.lax.bitcast_convert_type(scale[..., 0], jnp.uint8)
+    return jnp.concatenate(
+        [codes.reshape(*x.shape[:-1], hidden_dim), scale_bytes.reshape(*x.shape[:-1], -1)],
+        axis=-1,
+    )
+
+
+def _fp8_unpack_rows(packed: Array, *, hidden_dim: int, dtype: jnp.dtype) -> Float[Array, "... H"]:
+    num_blocks = hidden_dim // FP8_DISPATCH_BLOCK
+    leading = packed.shape[:-1]
+    codes = jax.lax.bitcast_convert_type(packed[..., :hidden_dim], _FP8_DISPATCH_DTYPE)
+    codes = codes.reshape(*leading, num_blocks, FP8_DISPATCH_BLOCK).astype(jnp.float32)
+    scale = jax.lax.bitcast_convert_type(
+        packed[..., hidden_dim:].reshape(*leading, num_blocks, _FP32_BYTES),
+        jnp.float32,
+    )
+    return (codes * scale[..., None]).reshape(*leading, hidden_dim).astype(dtype)
+
+
+def _fp8_dispatch_all_to_all_impl(payload: Float[Array, "S rows H"], metadata_rows: int) -> Float[Array, "S rows H"]:
+    hidden_dim = payload.shape[-1]
+    row_bytes = _fp8_dispatch_row_bytes(hidden_dim)
+    # Header rows hold expert ids in [0, local_experts], exact as bytes (checked by the caller).
+    header = payload[:, :metadata_rows].astype(jnp.uint8)
+    header = jnp.pad(header, ((0, 0), (0, 0), (0, row_bytes - hidden_dim)))
+    packed = jnp.concatenate([header, _fp8_pack_rows(payload[:, metadata_rows:])], axis=1)
+    received = jax.lax.all_to_all(packed, "expert", split_axis=0, concat_axis=0, tiled=True)
+    received = received.reshape(packed.shape)
+    received_header = received[:, :metadata_rows, :hidden_dim].astype(payload.dtype)
+    received_x = _fp8_unpack_rows(received[:, metadata_rows:], hidden_dim=hidden_dim, dtype=payload.dtype)
+    return jnp.concatenate([received_header, received_x], axis=1)
+
+
+@partial(jax.custom_vjp, nondiff_argnums=(1,))
+def _fp8_dispatch_all_to_all(payload: Float[Array, "S rows H"], metadata_rows: int) -> Float[Array, "S rows H"]:
+    """Dispatch all-to-all that moves activations as block-scaled FP8 (DeepSeek-V3 section 3.3).
+
+    The backward is a straight-through bf16 all-to-all of the cotangent: quantization is treated as
+    identity, so only the forward activations see FP8 error and gradients keep full precision.
+    """
+    return _fp8_dispatch_all_to_all_impl(payload, metadata_rows)
+
+
+def _fp8_dispatch_all_to_all_fwd(payload, metadata_rows):
+    return _fp8_dispatch_all_to_all_impl(payload, metadata_rows), None
+
+
+def _fp8_dispatch_all_to_all_bwd(metadata_rows, residual, cotangent):
+    del metadata_rows, residual
+    return (jax.lax.all_to_all(cotangent, "expert", split_axis=0, concat_axis=0, tiled=True),)
+
+
+_fp8_dispatch_all_to_all.defvjp(_fp8_dispatch_all_to_all_fwd, _fp8_dispatch_all_to_all_bwd)
+
+
 def _in_band_expert_header(
     encoded_experts: Int[Array, " send"],
     *,
@@ -369,6 +445,7 @@ def _dispatch_pooled(
     receiver_limit: Int[Array, ""],
     assignments_per_shard: int,
     topk: int,
+    fp8_dispatch: bool,
 ) -> _PooledDispatch:
     tokens_per_shard, hidden_dim = x_local.shape
     send_size = expert_shards * pool_capacity
@@ -404,13 +481,17 @@ def _dispatch_pooled(
             sender_linear_indices,
             sender_keep,
         )
-        received_payload = jax.lax.all_to_all(
-            payload,
-            "expert",
-            split_axis=0,
-            concat_axis=0,
-            tiled=True,
-        ).reshape(expert_shards, metadata_rows + pool_capacity, hidden_dim)
+        if fp8_dispatch:
+            received_payload = _fp8_dispatch_all_to_all(payload, metadata_rows)
+        else:
+            received_payload = jax.lax.all_to_all(
+                payload,
+                "expert",
+                split_axis=0,
+                concat_axis=0,
+                tiled=True,
+            )
+        received_payload = received_payload.reshape(expert_shards, metadata_rows + pool_capacity, hidden_dim)
         received_header = received_payload[:, :metadata_rows]
         received_x = received_payload[:, metadata_rows:].reshape(send_size, hidden_dim)
         received_encoded_experts = received_header.reshape(expert_shards, -1)[:, :pool_capacity].reshape(send_size)
@@ -533,8 +614,13 @@ def _moe_mlp_ep_fixed_pooled_wave_a2a_local(
     token_sharding_axes: tuple[str, ...],
     transport_capacity_factor: float,
     num_expert_waves: int,
+    fp8_dispatch: bool,
 ) -> tuple[Float[Array, "Tlocal H"], CapacityDrops]:
-    """Stripe each destination pool over fixed waves and report drops at each transport stage."""
+    """Stripe each destination pool over fixed waves and report drops at each transport stage.
+
+    ``fp8_dispatch`` sends the dispatched activations as block-scaled e4m3 (see
+    ``_fp8_dispatch_all_to_all``); the combine and all backward collectives stay in the input dtype.
+    """
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
         raise ValueError(f"num_experts={num_experts} must be divisible by local expert count={local_experts}")
@@ -548,6 +634,10 @@ def _moe_mlp_ep_fixed_pooled_wave_a2a_local(
         raise ValueError(
             f"local expert count={local_experts} must be divisible by num_expert_waves={num_expert_waves}"
         )
+    if fp8_dispatch and x_local.shape[1] % FP8_DISPATCH_BLOCK != 0:
+        raise ValueError(f"fp8_dispatch needs hidden dim divisible by {FP8_DISPATCH_BLOCK}, got {x_local.shape[1]}")
+    if fp8_dispatch and local_experts > jnp.iinfo(jnp.uint8).max:
+        raise ValueError(f"fp8_dispatch sends expert ids as bytes; local expert count={local_experts} exceeds 255")
 
     tokens_per_shard, hidden_dim = x_local.shape
     expert_shards = num_experts // local_experts
@@ -618,6 +708,7 @@ def _moe_mlp_ep_fixed_pooled_wave_a2a_local(
             receiver_limit=logical_receiver_capacity,
             assignments_per_shard=assignments_per_shard,
             topk=topk,
+            fp8_dispatch=fp8_dispatch,
         )
         compute = partial(
             _compute_pooled,
