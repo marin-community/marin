@@ -573,7 +573,9 @@ def _empty_head_replay(shape: tuple[int, int, int, int] | None, mp: jmp.Policy) 
     return {
         "replay_hidden": jax.sharding.reshard(jnp.zeros((slots, b, s, d), mp.compute_dtype), spec4),
         "replay_labels": jax.sharding.reshard(jnp.zeros((slots, b, s), jnp.int32), spec3),
-        "replay_weight": jax.sharding.reshard(jnp.zeros((slots, b, s), jnp.float32), spec3),
+        # Ones, not zeros: an unfilled slot must give a finite CE (its replay scale is 0 until filled),
+        # while an all-zero weight makes the weighted-mean CE 0/0 = NaN in the loss and the gradients.
+        "replay_weight": jax.sharding.reshard(jnp.ones((slots, b, s), jnp.float32), spec3),
     }
 
 
