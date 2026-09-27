@@ -402,6 +402,9 @@ class GrugModelConfig:
     of one RMS over all channels."""
     logit_soft_cap: float | None = None
     """Tanh soft-cap on the lm_head logits, ``c * tanh(z / c)`` (Gemma 2); None: off."""
+    logit_soft_cap_asym: tuple[float, ...] = ()
+    """Asymmetric logit cap ``A * sigmoid((z + B) / C)`` as ``(A, B, C)`` (modded-nanogpt record #54);
+    overrides ``logit_soft_cap`` when set."""
     kda_beta_negative: bool = False
     """KDA write strength ``beta = 2 * sigmoid(logit - log 3)`` in (0, 2), so the transition ``I - beta k k^T``
     can have negative eigenvalues (Grazzi et al. 2025); the shift keeps the mean beta at init at 1/2."""
@@ -1620,6 +1623,13 @@ def _batch_shards() -> int:
     return math.prod(mesh.shape[a] for a in axes)
 
 
+def _logit_cap(cfg: "GrugModelConfig") -> float | tuple[float, float, float] | None:
+    if cfg.logit_soft_cap_asym:
+        a, b, c = cfg.logit_soft_cap_asym
+        return (float(a), float(b), float(c))
+    return cfg.logit_soft_cap
+
+
 def _small_top_k(x: Float[Array, "T E"], k: int) -> tuple[Float[Array, "T k"], Int[Array, "T k"]]:
     """``jax.lax.top_k`` over the last axis as ``k`` unrolled max/argmax passes (values stop-gradient).
 
@@ -2656,7 +2666,7 @@ class Transformer(eqx.Module):
                 dtype=loss_dtype,
                 implementation="xla_fast_bwd",
                 block_sizes=_CE_BLOCK_SIZES,
-                logit_soft_cap=self.config.logit_soft_cap,
+                logit_soft_cap=_logit_cap(self.config),
             )
 
         cross_entropy_loss = lm_loss(hidden)

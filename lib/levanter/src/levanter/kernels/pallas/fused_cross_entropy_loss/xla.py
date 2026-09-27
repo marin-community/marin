@@ -12,6 +12,7 @@ from jaxtyping import Array, Float, Int
 from .config import BlockSizes
 from .reference import (
     _cross_entropy_exp,
+    logit_soft_cap_and_deriv,
     linear_softmax_cross_entropy_loss_reference,
     linear_softmax_cross_entropy_loss_streaming,
 )
@@ -151,7 +152,7 @@ def _linear_softmax_cross_entropy_loss_streaming_fwd(
     block_size: int,
     dtype: Optional[jnp.dtype],
     batch_block_size: int,
-    logit_soft_cap: Optional[float],
+    logit_soft_cap: Optional[float | tuple[float, float, float]],
     precision: jax.lax.PrecisionLike,
 ) -> tuple[Float[Array, "B"], Float[Array, "B"]]:
     if batch_block_size <= 0:
@@ -217,7 +218,7 @@ def _linear_softmax_cross_entropy_loss_streaming_fwd_with_argmax(
     block_size: int,
     dtype: Optional[jnp.dtype],
     batch_block_size: int,
-    logit_soft_cap: Optional[float],
+    logit_soft_cap: Optional[float | tuple[float, float, float]],
     precision: jax.lax.PrecisionLike,
 ) -> tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:
     if batch_block_size <= 0:
@@ -288,7 +289,7 @@ def _linear_softmax_cross_entropy_loss_streaming_bwd(
     block_size: int,
     dtype: Optional[jnp.dtype],
     batch_block_size: int,
-    logit_soft_cap: Optional[float],
+    logit_soft_cap: Optional[float | tuple[float, float, float]],
     precision: jax.lax.PrecisionLike,
 ) -> tuple[Float[Array, "B H"], Float[Array, "H V"]]:
     if block_size <= 0:
@@ -348,10 +349,8 @@ def _linear_softmax_cross_entropy_loss_streaming_bwd(
 
             cap_deriv = jnp.asarray(1.0, dtype=logits.dtype)
             if logit_soft_cap is not None:
-                tanh_arg = logits / logit_soft_cap
-                tanh_val = jnp.tanh(tanh_arg)
-                logits = tanh_val * logit_soft_cap
-                cap_deriv = (1.0 - tanh_val**2).astype(logits.dtype)
+                logits, cap_deriv = logit_soft_cap_and_deriv(logits, logit_soft_cap)
+                cap_deriv = cap_deriv.astype(logits.dtype)
 
             logits = jnp.where(valid[None, :], logits, -jnp.inf)
             probs = _cross_entropy_exp(logits - lse_block[:, None].astype(logits.dtype))
@@ -406,7 +405,7 @@ def _linear_softmax_cross_entropy_loss_streaming_bwd_scan(
     block_size: int,
     dtype: Optional[jnp.dtype],
     batch_block_size: int,
-    logit_soft_cap: Optional[float],
+    logit_soft_cap: Optional[float | tuple[float, float, float]],
     precision: jax.lax.PrecisionLike,
 ) -> tuple[Float[Array, "B H"], Float[Array, "H V"]]:
     """Backward pass over vocab blocks, structured for GPU tensor cores.
@@ -487,9 +486,7 @@ def _linear_softmax_cross_entropy_loss_streaming_bwd_scan(
 
         cap_deriv = None
         if logit_soft_cap is not None:
-            tanh_val = jnp.tanh(logits / logit_soft_cap)
-            logits = tanh_val * logit_soft_cap
-            cap_deriv = 1.0 - tanh_val**2
+            logits, cap_deriv = logit_soft_cap_and_deriv(logits, logit_soft_cap)
 
         in_vocab = (v_start + v_offsets) < v_dim
         probs = jnp.where(in_vocab[None, :], _cross_entropy_exp(logits - lse_blk[:, None]), 0.0)
@@ -573,7 +570,7 @@ def _linear_softmax_cross_entropy_loss_streaming_custom_vjp(
     block_size: int,
     batch_block_size: int,
     dtype: Optional[jnp.dtype],
-    logit_soft_cap: Optional[float],
+    logit_soft_cap: Optional[float | tuple[float, float, float]],
     precision: jax.lax.PrecisionLike,
     fast_backward: bool,
     bwd_batch_block_size: int | None,
@@ -600,7 +597,7 @@ def _linear_softmax_cross_entropy_loss_streaming_custom_vjp_fwd(
     block_size: int,
     batch_block_size: int,
     dtype: Optional[jnp.dtype],
-    logit_soft_cap: Optional[float],
+    logit_soft_cap: Optional[float | tuple[float, float, float]],
     precision: jax.lax.PrecisionLike,
     fast_backward: bool,
     bwd_batch_block_size: int | None,
@@ -627,7 +624,7 @@ def _linear_softmax_cross_entropy_loss_streaming_custom_vjp_bwd(
     block_size: int,
     batch_block_size: int,
     dtype: Optional[jnp.dtype],
-    logit_soft_cap: Optional[float],
+    logit_soft_cap: Optional[float | tuple[float, float, float]],
     precision: jax.lax.PrecisionLike,
     fast_backward: bool,
     bwd_batch_block_size: int | None,
@@ -685,7 +682,7 @@ def linear_softmax_cross_entropy_loss_xla(
     *,
     block_sizes: BlockSizes | None = None,
     dtype: Optional[jnp.dtype] = jnp.float32,
-    logit_soft_cap: Optional[float] = None,
+    logit_soft_cap: Optional[float | tuple[float, float, float]] = None,
     precision: jax.lax.PrecisionLike = None,
     return_argmax: bool = False,
     fast_backward: bool | None = None,

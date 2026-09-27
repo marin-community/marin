@@ -57,10 +57,28 @@ def _cross_entropy_logaddexp(left: jax.Array, right: jax.Array) -> jax.Array:
     return jax.lax.platform_dependent(left, right, tpu=_tpu_logaddexp, default=jnp.logaddexp)
 
 
-def _apply_logit_soft_cap(logits: Float[Array, "B V"], logit_soft_cap: Optional[float]) -> Float[Array, "B V"]:
+def _apply_logit_soft_cap(
+    logits: Float[Array, "B V"], logit_soft_cap: Optional[float | tuple[float, float, float]]
+) -> Float[Array, "B V"]:
+    """Tanh cap ``c * tanh(z / c)`` for a float, or the asymmetric ``A * sigmoid((z + B) / C)`` for ``(A, B, C)``."""
     if logit_soft_cap is None:
         return logits
+    if isinstance(logit_soft_cap, tuple):
+        a, b, c = logit_soft_cap
+        return a * jax.nn.sigmoid((logits + b) / c)
     return jnp.tanh(logits / logit_soft_cap) * logit_soft_cap
+
+
+def logit_soft_cap_and_deriv(
+    logits: jax.Array, logit_soft_cap: float | tuple[float, float, float]
+) -> tuple[jax.Array, jax.Array]:
+    """The capped logits and d(capped)/d(raw), for the manual backward passes."""
+    if isinstance(logit_soft_cap, tuple):
+        a, b, c = logit_soft_cap
+        sig = jax.nn.sigmoid((logits + b) / c)
+        return a * sig, (a / c) * sig * (1.0 - sig)
+    tanh_val = jnp.tanh(logits / logit_soft_cap)
+    return tanh_val * logit_soft_cap, 1.0 - tanh_val**2
 
 
 def linear_softmax_cross_entropy_loss_reference(
