@@ -26,7 +26,7 @@ The worker checks these row counts before issuing requests. Every nonempty
 row requires at least one MiniMax completion; long rows require more than one.
 
 The conversion uses the shared `/benfeuer/minimax-m3-science-sft` Iris endpoint
-on `cw-rno2a`. Serve MiniMax M3 from a merged Marin checkout. Three H100x8
+on `cw-rno2a`. Serve MiniMax M3 from the science SFT worktree. Three H100x8
 workers share one brokered endpoint at Iris's interactive priority. The
 65,536-token context exceeds the worker's 8,000-character source chunk size.
 CoreWeave's S3 cache needs lower RunAI reader concurrency and a longer read
@@ -61,7 +61,7 @@ full resumable workload:
 
 ```bash
 uv run iris --cluster=cw-rno2a job run --priority interactive --enable-extra-resources \
-  --job-name science-sft-conversion-20260927 --replicas 16 \
+  --job-name science-sft-conversion-20260927 --replicas 16 --max-retries 8 \
   --cpu 8 --memory 32GB --disk 20GB --extra cpu --no-wait \
   -- python -m experiments.datakit.science_sft_conversion.conversion
 ```
@@ -69,7 +69,7 @@ uv run iris --cluster=cw-rno2a job run --priority interactive --enable-extra-res
 The conversion is complete only when every expected source batch has a
 validated output file. Audit batch coverage, Parquet schema, and the minimum
 record count before registering the converted chat source in Datakit or using
-it for SFT. Run the audit from a merged checkout with CoreWeave S3 access:
+it for SFT. Run the audit from the science SFT worktree with CoreWeave S3 access:
 
 ```bash
 uv run python -m experiments.datakit.science_sft_conversion.audit
