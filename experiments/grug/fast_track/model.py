@@ -539,6 +539,11 @@ class GrugModelConfig:
     aux_lm_steps: int = 500
     second_embed: bool = False
     embed2_rows: int = 0
+    window_embed_dim: int = 0
+    """Explicit short context window as an AttnRes source: every token gets a small ``window_embed_dim``-wide
+    embedding; for position t the embeddings of tokens t, t-1, ..., t-(k-1) (k = hidden_dim / window_embed_dim)
+    are concatenated slot by slot (zero where a slot crosses a document start), linearly projected to
+    ``hidden_dim`` and RMS-normed. 0: off."""
     embed3_rows: int = 0
     """Rows of a hashed *trigram* table that is its own AttnRes source next to the bigram table, so each
     gate weighs the bigram and trigram views separately (0: off; needs ``second_embed_bigram``)."""
@@ -2454,6 +2459,9 @@ class Transformer(eqx.Module):
     embed2_norm: RMSNorm | None
     token_embed3: jax.Array | None
     embed3_norm: RMSNorm | None
+    token_embed_window: jax.Array | None
+    window_proj: jax.Array | None
+    window_norm: RMSNorm | None
     embed2_up: jax.Array | None
     embed2_lambda: Float[Array, " G"] | None
     """Per-gate weight of the second embedding on each sublayer input (``second_embed_mode="input"``)."""
@@ -2572,6 +2580,23 @@ class Transformer(eqx.Module):
                 else None
             ),
             embed3_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps) if cfg.embed3_rows else None,
+            token_embed_window=(
+                reshard(
+                    _init_weight(random.fold_in(embed2_key, 5), (cfg.vocab_size, cfg.window_embed_dim), 1.0),
+                    P(None, None),
+                )
+                if cfg.window_embed_dim
+                else None
+            ),
+            window_proj=(
+                reshard(
+                    _init_weight(random.fold_in(embed2_key, 6), (cfg.hidden_dim, cfg.hidden_dim), cfg.initializer_std),
+                    P(_FSDP_AXES, "model"),
+                )
+                if cfg.window_embed_dim
+                else None
+            ),
+            window_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps) if cfg.window_embed_dim else None,
             embed2_up=(
                 reshard(
                     _init_weight(
@@ -2781,6 +2806,14 @@ class Transformer(eqx.Module):
                     input_embed2 = embed2
                 else:
                     extra_sources = (embed2,)
+            if self.token_embed_window is not None:
+                assert self.window_proj is not None and self.window_norm is not None
+                doc_start = None if segment_ids is None else segment_ids[0]
+                window = _token_window(gather(self.token_embed_window, token_ids), doc_start, cfg.hidden_dim)
+                projected = jnp.einsum(
+                    "bsd,de->bse", window, self.window_proj.astype(window.dtype), out_sharding=_batch_spec()
+                )
+                extra_sources = (*extra_sources, self.window_norm(projected))
             if self.token_embed3 is not None:
                 assert self.embed3_norm is not None and cfg.second_embed_bigram and cfg.second_embed_mode == "source"
                 doc_start = None if segment_ids is None else segment_ids[0]
@@ -3347,7 +3380,25 @@ def _share_routers(model: "Transformer", block: int) -> "Transformer":
 
 def _num_extra_embeds(cfg: GrugModelConfig) -> int:
     """Extra embedding tables ahead of the token embedding in the AttnRes source list."""
-    return int(cfg.second_embed) + int(cfg.embed3_rows > 0)
+    return int(cfg.second_embed) + int(cfg.embed3_rows > 0) + int(cfg.window_embed_dim > 0)
+
+
+def _token_window(
+    emb: Float[Array, "B S N"], segment_ids: Int[Array, "B S"] | None, width: int
+) -> Float[Array, "B S W"]:
+    """Concatenate each position's last ``width // N`` token embeddings (slot j = token t - j), zeroing slots that
+    reach before position 0 or into an earlier document."""
+    n = emb.shape[-1]
+    if width % n:
+        raise ValueError(f"window_embed_dim={n} must divide hidden_dim={width}")
+    slots = []
+    for lag in range(width // n):
+        shifted = jnp.pad(emb[:, : emb.shape[1] - lag], ((0, 0), (lag, 0), (0, 0))) if lag else emb
+        if segment_ids is not None and lag:
+            same_doc = jnp.pad(segment_ids[:, lag:] == segment_ids[:, :-lag], ((0, 0), (lag, 0)))
+            shifted = jnp.where(same_doc[..., None], shifted, 0)
+        slots.append(shifted)
+    return reshard(jnp.concatenate(slots, axis=-1), _batch_spec())
 
 
 def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> Float[Array, "..."]:
