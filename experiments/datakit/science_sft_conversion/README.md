@@ -13,6 +13,10 @@ answer. The worker validates the three fields, the requested final format, and
 Datakit's Harmony message structure before writing `CHAT_SCHEMA` Parquet.
 Output files live under
 `s3://marin-us-east-02a/marin/users/benfeuer/science-sft-converted/2026.09.27-v1/outputs/main/`.
+`experiments.datasets.science_forward_converted.science_forward_converted_dataset()`
+registers this Parquet directory as the Datakit source
+`science-forward/minimax-m3-formatted-2026.09.27-v1`. The handle references
+the existing output and does not start conversion.
 Each file covers one 1,024-row source batch; completed batches are skipped on
 restart. A failed batch remains unwritten and fails the Iris task after four
 request attempts. The source artifact stays unchanged.

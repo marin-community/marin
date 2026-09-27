@@ -30,12 +30,12 @@ from rigging.filesystem.atomic import atomic_rename
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import prefix_join
 
+from experiments.datasets.science_forward_converted import OUTPUT_MAIN_DIR, OUTPUT_ROOT, SOURCE_NAME
+
 logger = logging.getLogger(__name__)
 
 MODEL = "MiniMaxAI/MiniMax-M3-MXFP8"
 ENDPOINT = "/benfeuer/minimax-m3-science-sft"
-OUTPUT_ROOT = "s3://marin-us-east-02a/marin/users/benfeuer/science-sft-converted/2026.09.27-v1"
-OUTPUT_MAIN_DIR = "outputs/main"
 SOURCES_PATH = Path(__file__).with_name("sources.json")
 MAX_SOURCE_CHARS = 8_000
 INPUT_BATCH_SIZE = 1_024
@@ -43,7 +43,6 @@ MAX_GENERATION_TOKENS = 8_192
 MAX_CONCURRENT_REQUESTS = 4
 MAX_ATTEMPTS = 4
 REQUEST_TIMEOUT = 1_800.0
-SOURCE_NAME = "science-forward/minimax-m3-formatted-2026.09.27-v1"
 PROMPT_VERSION = "2026.09.27-v1"
 
 
