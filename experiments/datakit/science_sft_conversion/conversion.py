@@ -53,6 +53,13 @@ class Source:
 
 
 @dataclass(frozen=True)
+class WorkItem:
+    source: Source
+    url: str
+    row_group: int
+
+
+@dataclass(frozen=True)
 class Format:
     name: str
     instruction: str
@@ -122,14 +129,14 @@ def _source_files(source: Source) -> list[str]:
     return files
 
 
-def _work_items() -> list[tuple[Source, str, int]]:
-    work = []
+def _work_items() -> list[WorkItem]:
+    work: list[WorkItem] = []
     for source in sources():
         for url in _source_files(source):
             fs, path = filesystem_for(url)
             with fs.open(path, "rb") as stream:
                 row_groups = pq.ParquetFile(stream).metadata.num_row_groups
-            work.extend((source, url, index) for index in range(row_groups))
+            work.extend(WorkItem(source, url, index) for index in range(row_groups))
     return work
 
 
@@ -314,8 +321,8 @@ async def run_worker(max_items: int | None, max_batches: int | None) -> None:
     work = _work_items()[info.task_index :: info.num_tasks]
     if max_items is not None:
         work = work[:max_items]
-    for source, url, row_group in work:
-        await convert_work_item(source, url, row_group, endpoint, max_batches)
+    for item in work:
+        await convert_work_item(item.source, item.url, item.row_group, endpoint, max_batches)
 
 
 def main() -> None:
