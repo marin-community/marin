@@ -2954,17 +2954,22 @@ class Transformer(eqx.Module):
                     )
                 embed2 = self.embed2_norm(rows2)
                 if self.bigram_gate_w is not None and self.bigram_gate_b is not None:
-                    interaction = rms_norm(hidden.astype(jnp.float32)) * rms_norm(embed2.astype(jnp.float32))
+                    # Both inputs are already RMS-normed (embed_norm / embed2_norm); stay in the compute dtype so the
+                    # gate is a couple of fused elementwise passes over [B, S, D] rather than fp32 ones.
+                    interaction = hidden.astype(embed2.dtype) * embed2
                     if self.bigram_gate_a_lr is not None and self.bigram_gate_b_lr is not None:
-                        low = jnp.einsum("bsd,dr->bsr", interaction, self.bigram_gate_a_lr)
-                        logits = jnp.einsum("bsr,rd->bsd", low, self.bigram_gate_b_lr, out_sharding=_batch_spec())
-                        gate = jax.nn.sigmoid(logits + self.bigram_gate_b)
-                        embed2 = (embed2 * gate).astype(embed2.dtype)
+                        low = jnp.einsum("bsd,dr->bsr", interaction, self.bigram_gate_a_lr.astype(embed2.dtype))
+                        logits = jnp.einsum(
+                            "bsr,rd->bsd", low, self.bigram_gate_b_lr.astype(embed2.dtype), out_sharding=_batch_spec()
+                        )
+                        gate = jax.nn.sigmoid(logits + self.bigram_gate_b.astype(embed2.dtype))
+                        embed2 = embed2 * gate
                     else:
                         gate = jax.nn.sigmoid(
-                            jnp.einsum("bsd,d->bs", interaction, self.bigram_gate_w) + self.bigram_gate_b
+                            jnp.einsum("bsd,d->bs", interaction, self.bigram_gate_w.astype(embed2.dtype))
+                            + self.bigram_gate_b.astype(embed2.dtype)
                         )
-                        embed2 = (embed2 * gate[..., None]).astype(embed2.dtype)
+                        embed2 = embed2 * gate[..., None]
                     bigram_gate_stats = {
                         "attn_res_bigram_gate_mean": jax.lax.stop_gradient(jnp.mean(gate)),
                         "attn_res_bigram_gate_std": jax.lax.stop_gradient(jnp.std(gate)),
