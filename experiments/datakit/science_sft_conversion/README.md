@@ -80,7 +80,7 @@ full resumable workload:
 
 ```bash
 uv run iris --cluster=cw-rno2a job run --priority interactive --enable-extra-resources \
-  --job-name science-sft-conversion-v3-20260927 --replicas 16 --max-retries 8 \
+  --job-name science-sft-conversion-v3-stratified-stage-20260927 --replicas 17 --max-retries 8 \
   --cpu 8 --memory 32GB --disk 20GB --extra cpu --no-wait \
   -- python -m experiments.datakit.science_sft_conversion.conversion
 ```
@@ -136,26 +136,47 @@ running-sequence limit and the broker's per-worker request limit. Its proxy
 accepts up to 2,048 pending requests. Submit it as an interactive CPU job; it
 creates eight-GPU H100 worker jobs at the same priority. Use a separate endpoint
 while the old pool is serving, then restart the resumable clients against the
-new endpoint once its model API answers:
+new endpoint once its model API answers. A response proves at least one replica
+is ready; inspect the worker jobs to count ready replicas before raising client
+concurrency to the full-pool target.
 
-The serving entrypoint pins MiniMax revision
+The serving entrypoint can retain the existing regional model cache at a
+CoreWeave prefix outside `tmp/ttl=*`. The source is the pinned model snapshot
+resolved under `tmp/ttl=14d/quick-serve-models`; a cache miss downloads it from
+Hugging Face. Use this option while the regional cache is still present.
+It copies objects within the same bucket, checks
+file sizes, and writes the completion marker after every copy succeeds. This
+keeps replacement workers from depending on an expired temporary cache.
+The 120-day service deadline closes the serving session and its workers when
+it expires. It is separate from the temporary cache retention.
+
+The serving entrypoint pins the Hugging Face MiniMax model checkpoint revision
 `c5454eb03678d8710e54a4e0fc681b9f3b4a3dba`. It defaults to eight-way tensor
 parallelism and one data-parallel group. To test two data-parallel groups sharing
 eight-way expert parallelism, pass `--tensor-parallel-size 4 --data-parallel-size 2`.
 The product of these two degrees must equal eight GPUs per worker. Compare the
-same sampled workload before using a different topology for the production pool.
+same sampled workload against the default topology, measuring output tokens per
+second and validation rejection counts, before changing the production topology.
+
+The commands below request 23 replicas at a maximum of 64 running sequences
+per replica, with the broker admitting up to 64 in-flight requests per worker.
+Seventeen clients at concurrency 44 offer 748 simultaneous
+requests, about 32 per replica when all 23 are serving. Adjust client concurrency
+using measured completion throughput and queue latency. Stop the old conversion
+job before submitting its replacement against the same output directory.
 
 ```bash
 uv run iris --cluster=cw-rno2a job run --priority interactive --enable-extra-resources \
-  --job-name minimax-m3-science-sft-scaled-20260927 --cpu 2 --memory 8GB \
+  --job-name minimax-m3-science-sft-scaled-20260927 --cpu 4 --memory 16GB \
   --disk 20GB --extra cpu --no-wait \
   -- python -m experiments.datakit.science_sft_conversion.serve \
     --endpoint /benfeuer/minimax-m3-science-sft-scaled --instances 23 \
-    --max-sequences 16 --timeout-hours 2880 --cache-ttl-days 120
+    --max-sequences 64 --timeout-hours 2880 \
+    --model-cache-path s3://marin-us-east-02a/marin/users/benfeuer/science-sft-models/MiniMaxAI_MiniMax-M3-MXFP8_c5454eb03678d8710e54a4e0fc681b9f3b4a3dba
 
 uv run iris --cluster=cw-rno2a job run --priority interactive --enable-extra-resources \
   --job-name science-sft-conversion-v3-stratified-20260927 --replicas 17 --max-retries 8 \
   --cpu 8 --memory 32GB --disk 20GB --extra cpu --no-wait \
   -- python -m experiments.datakit.science_sft_conversion.conversion \
-    --endpoint /benfeuer/minimax-m3-science-sft-scaled --concurrency 24
+    --endpoint /benfeuer/minimax-m3-science-sft-scaled --concurrency 44
 ```
