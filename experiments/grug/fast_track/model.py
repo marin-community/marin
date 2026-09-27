@@ -230,6 +230,12 @@ def _bigram_hash_ids(
     return (x % jnp.uint32(num_buckets)).astype(jnp.int32)
 
 
+def _padded_spec(x: jax.Array) -> tuple:
+    """``x``'s partition spec entries, padded with None to ``x.ndim``."""
+    spec = tuple(_partition_spec_of(x) or ())
+    return spec + (None,) * (x.ndim - len(spec))
+
+
 def _partition_spec_of(x: jax.Array) -> P | None:
     sharding = jax.typeof(x).sharding if isinstance(x, core.Tracer) else x.sharding
     if isinstance(sharding, NamedSharding):
@@ -437,6 +443,11 @@ class GrugModelConfig:
     shared_ungated_relu2: bool = False
     """Shared experts are ``relu(x @ W_up)^2 @ W_down`` with no gate projection (truly ungated: the gate
     GEMM is dropped from the fused projection). Parameter-match with 1.5x ``shared_expert_intermediate_dim``."""
+    moe_dense_router_grad: bool = False
+    """Default MoE (Panda et al. 2025): the router also gets a gradient for the experts it did not pick,
+    through ``sum_{e not in top-k} (w_e - sg(w_e)) * sg(y_e)``. That term is zero in the forward pass.
+    ``y_e`` is expert e applied to the mean input of the tokens routed to it in this batch, so it stands
+    in for the expert's typical output. Only for the renormalized-sigmoid combine."""
     moe_ungated_relu2: bool = False
     """Routed experts are ``relu(x @ W_up)^2 @ W_down`` (no gate projection). Run through the gated kernels
     as ``relu(g) * u`` with the gate tied to ``W_up`` (``relu(u) * u = relu(u)^2``), so every MoE backend
@@ -1333,6 +1344,42 @@ class MoEMLP(eqx.Module):
             weights.append(reshard(self.w_latent_down.astype(dtype), P(None, None)))
         return weights
 
+    def _default_expert_term(
+        self,
+        routed_input: Float[Array, "T L"],
+        router_logits: Float[Array, "T E"],
+        selected_experts: Int[Array, "T K"],
+        unbiased_topk: Float[Array, "T K"],
+    ) -> Float[Array, "T L"]:
+        """Zero-valued term carrying the dense router gradient of ``moe_dense_router_grad``."""
+        if self.cfg.router_combine != RouterCombine.SIGMOID_RENORM:
+            raise ValueError("moe_dense_router_grad supports only the renormalized-sigmoid combine")
+        sg = jax.lax.stop_gradient
+        em = self.expert_mlp
+        selected = jnp.sum(jax.nn.one_hot(selected_experts, self.cfg.num_experts, dtype=jnp.float32), axis=1)
+        counts = jnp.sum(selected, axis=0)
+        mean_in = jnp.einsum("te,tl->el", selected, sg(routed_input).astype(jnp.float32), out_sharding=P(None, None))
+        mean_in = mean_in / jnp.maximum(counts, 1.0)[:, None]
+        up_spec = _padded_spec(em.w_up)
+        mean_in = reshard(mean_in, P(up_spec[0], up_spec[1]))
+        hidden_spec = P(up_spec[0], up_spec[2])
+        up = jnp.einsum("el,eli->ei", mean_in, sg(em.w_up).astype(jnp.float32), out_sharding=hidden_spec)
+        gate = (
+            up
+            if em.w_gate is None
+            else jnp.einsum("el,eli->ei", mean_in, sg(em.w_gate).astype(jnp.float32), out_sharding=hidden_spec)
+        )
+        hidden = em.activation.to_fn()(gate) * up
+        down_spec = _padded_spec(em.w_down)
+        expert_out = jnp.einsum(
+            "ei,eil->el", hidden, sg(em.w_down).astype(jnp.float32), out_sharding=P(down_spec[0], down_spec[2])
+        )
+        expert_out = reshard(expert_out, P(None, None))
+        denom = sg(jnp.sum(jax.nn.sigmoid(unbiased_topk), axis=-1, keepdims=True))
+        weights = jax.nn.sigmoid(router_logits) * (self.cfg.routing_renorm_sum / (denom + 1e-9))
+        delta = (weights - sg(weights)) * (1.0 - selected)
+        return jnp.einsum("te,el->tl", delta, expert_out, out_sharding=_partition_spec_of(routed_input))
+
     @named_call
     def __call__(
         self,
@@ -1445,6 +1492,10 @@ class MoEMLP(eqx.Module):
                 report_capacity_overflow=True,
             )
         routed_flat, capacity_overflow = moe_out
+        if self.cfg.moe_dense_router_grad:
+            routed_flat = routed_flat + self._default_expert_term(
+                routed_input, router_logits, selected_experts, unbiased_topk
+            ).astype(routed_flat.dtype)
         dropped_assignments = capacity_overflow.dropped
         sender_dropped_assignments = capacity_overflow.sender_dropped
         receiver_dropped_assignments = capacity_overflow.receiver_dropped
