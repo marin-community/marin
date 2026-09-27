@@ -1167,6 +1167,29 @@ class CausalSelfAttention(eqx.Module):
         return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec)
 
 
+def _learned_knob_stats(layer: "Block", i: int) -> dict[str, jax.Array]:
+    """Values of the small learned knobs of layer ``i`` (value residual mix, DIFF lambda, DyT alpha, PLE
+    up-projection norm), exported as ``train/attn_res/knob_*`` to diagnose how each feature is used."""
+    stats = {}
+    vres = getattr(layer.attn, "vres_lambda", None)
+    if vres is not None:
+        stats[f"attn_res_knob_vres_l1_L{i}"], stats[f"attn_res_knob_vres_l2_L{i}"] = jax.lax.stop_gradient(vres)
+    if isinstance(layer.attn, CausalSelfAttention) and layer.attn.diff_lambda is not None:
+        lq1, lk1, lq2, lk2 = jax.lax.stop_gradient(layer.attn.diff_lambda)
+        stats[f"attn_res_knob_diff_lambda_L{i}"] = (
+            jnp.exp(jnp.dot(lq1, lk1)) - jnp.exp(jnp.dot(lq2, lk2)) + layer.attn.diff_lambda_init
+        )
+    for name in ("rms_attn", "rms_mlp"):
+        norm = getattr(layer, name)
+        if isinstance(norm, DyT):
+            stats[f"attn_res_knob_dyt_alpha_{name.removeprefix('rms_')}_L{i}"] = jax.lax.stop_gradient(norm.dyt_alpha)
+    if layer.ple_up is not None:
+        stats[f"attn_res_knob_ple_up_norm_L{i}"] = jnp.linalg.norm(
+            jax.lax.stop_gradient(layer.ple_up).astype(jnp.float32)
+        )
+    return stats
+
+
 def _vres_lambda_init(cfg: GrugModelConfig) -> jax.Array | None:
     return jnp.asarray(cfg.value_residual_init, jnp.float32) if cfg.value_residual_layers else None
 
@@ -3726,6 +3749,7 @@ class Transformer(eqx.Module):
             if layer.attn_out_scale is not None and layer.mlp_out_scale is not None:
                 final_stats[f"attn_res_scale_attn_L{i}"] = jax.lax.stop_gradient(layer.attn_out_scale)
                 final_stats[f"attn_res_scale_mlp_L{i}"] = jax.lax.stop_gradient(layer.mlp_out_scale)
+            final_stats.update(_learned_knob_stats(layer, i))
         hidden = reshard(mixed.astype(hidden.dtype), _batch_spec())
         if aux_hidden is not None:
             final_stats[_AUX_HIDDEN] = aux_hidden
