@@ -428,6 +428,9 @@ class GrugModelConfig:
     kda_beta_negative: bool = False
     """KDA write strength ``beta = 2 * sigmoid(logit - log 3)`` in (0, 2), so the transition ``I - beta k k^T``
     can have negative eigenvalues (Grazzi et al. 2025); the shift keeps the mean beta at init at 1/2."""
+    shared_ungated_relu2: bool = False
+    """Shared experts are ``relu(x @ W_up)^2 @ W_down`` with no gate projection (truly ungated: the gate
+    GEMM is dropped from the fused projection). Parameter-match with 1.5x ``shared_expert_intermediate_dim``."""
     moe_ungated_relu2: bool = False
     """Routed experts are ``relu(x @ W_up)^2 @ W_down`` (no gate projection). Run through the gated kernels
     as ``relu(g) * u`` with the gate tied to ``W_up`` (``relu(u) * u = relu(u)^2``), so every MoE backend
@@ -1478,7 +1481,10 @@ def moe_and_shared_fused(
     x_flat = rearrange(x, "b s d -> (b s) d")
     replicated = P(None, None)
     moe_weights = mlp.input_projection_weights(x_flat.dtype)
-    shared_weights = [reshard(e.w_gate, replicated) for e in shared] + [reshard(e.w_up, replicated) for e in shared]
+    gated = shared[0].w_gate is not None
+    shared_weights = [reshard(e.w_gate, replicated) for e in shared if gated] + [
+        reshard(e.w_up, replicated) for e in shared
+    ]
     weights = moe_weights + shared_weights
     if not part_inputs:
         fused = jnp.einsum("td,de->te", x_flat, jnp.concatenate(weights, axis=1), out_sharding=_batch_spec())
@@ -1497,9 +1503,13 @@ def moe_and_shared_fused(
         hash_token_ids=hash_token_ids,
         noise_key=noise_key,
     )
-    gates, ups = parts[len(moe_weights) : len(moe_weights) + len(shared)], parts[len(moe_weights) + len(shared) :]
-    act = ActivationFunctionEnum(mlp.cfg.expert_activation).to_jax_fn()
-    hidden = jnp.concatenate([act(g) * u for g, u in zip(gates, ups, strict=True)], axis=1)
+    n_gate = len(shared) if gated else 0
+    gates, ups = parts[len(moe_weights) : len(moe_weights) + n_gate], parts[len(moe_weights) + n_gate :]
+    if gated:
+        act = ActivationFunctionEnum(mlp.cfg.expert_activation).to_jax_fn()
+        hidden = jnp.concatenate([act(g) * u for g, u in zip(gates, ups, strict=True)], axis=1)
+    else:
+        hidden = jnp.concatenate([jnp.square(jax.nn.relu(u)) for u in ups], axis=1)
     w_down = jnp.concatenate([reshard(e.w_down, replicated) for e in shared], axis=0)
     shared_out = jnp.einsum("tm,md->td", hidden, w_down, out_sharding=_batch_spec())
     return routed + _batch_reshard(rearrange(shared_out, "(b s) d -> b s d", b=b, s=s)), stats
@@ -1556,6 +1566,8 @@ class Block(eqx.Module):
                 shared = tuple(
                     DenseMLP.init(cfg.hidden_dim, per_expert_dim, cfg.initializer_std, key=key) for key in shared_keys
                 )
+                if cfg.shared_ungated_relu2:
+                    shared = tuple(eqx.tree_at(lambda m: m.w_gate, e, None, is_leaf=lambda x: x is None) for e in shared)
         return Block(
             rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
