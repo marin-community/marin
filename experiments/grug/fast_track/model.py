@@ -436,6 +436,9 @@ class GrugModelConfig:
     (random init) and ``B`` (zero init), both trained with Adam (0: off)."""
     mla_k_norm: bool = False
     """Weightless per-head RMSNorm on the MLA keys only, no query norm (DeepSeek-V4.1's setup)."""
+    mla_q_norm: bool = False
+    """Weightless per-head RMSNorm on the MLA queries (composes with ``mla_k_norm``). Queries are recomputed per
+    token, so under MLA absorption this adds nothing to the cache."""
     mla_k_norm_shared: bool = False
     """With ``mla_k_norm``, normalize the keys by one RMS over all heads per token instead of per head. Under MLA
     absorption this caches 1 scalar per token instead of ``num_heads``."""
@@ -982,6 +985,8 @@ class CausalSelfAttention(eqx.Module):
                 k = jnp.concatenate([rms_norm(k[..., :half]), rms_norm(k[..., half:])], axis=-1)
             else:
                 k = rms_norm(k)
+        if self.cfg.mla_q_norm and self.cfg.mla and not self.cfg.qk_norm:
+            q = rms_norm(q)
 
         # Half-RoPE: rotate only the first half of Q/K head_dim; disable_rope skips RoPE on long/global layers.
         def _rope(qh: jax.Array, kh: jax.Array) -> tuple[jax.Array, jax.Array]:
