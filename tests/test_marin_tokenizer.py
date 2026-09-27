@@ -28,7 +28,7 @@ from levanter.tokenizers import MarinTokenizer, load_tokenizer
 from marin.datakit.chat_normalize import CHAT_SCHEMA
 from marin.datakit.chat_render import chat_training_record, render_chat_record, render_marin_chat
 from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
-from marin.datakit.sft import SftInput, build_sft_store, sft_data_config
+from marin.datakit.sft import SftInput, SftTokenStore, build_sft_store, sft_data_config
 from openai_harmony import Author, Message, Role
 from transformers import AutoTokenizer, PreTrainedTokenizer
 
@@ -265,6 +265,7 @@ def test_harmony_sft_store_preserves_assistant_masks(marin_tokenizer_fixture: Ma
     assert store.sources["arithmetic"].conversations == 1
     assert store.sources["arithmetic"].assistant_tokens > 0
     assert sum(rows[0]["assistant_masks"]) == store.sources["arithmetic"].assistant_tokens
+    assert SftTokenStore.raw_load(str(tmp_path / "store")) == store
 
     dataset = (
         sft_data_config({"arithmetic": store}, minimum_weight=0.01)
