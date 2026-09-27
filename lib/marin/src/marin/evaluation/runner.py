@@ -55,11 +55,6 @@ _UNCONSTRAINED = "unconstrained"
 _REPORT_TAIL_LINES = 15
 _HOSTED_JUDGE_STARTUP_ATTEMPTS = 3
 _HOSTED_JUDGE_STARTUP_BACKOFF = ExponentialBackoff(initial=20.0, maximum=120.0, factor=2.0, jitter=0.9)
-_RUNAI_STREAMER_READ_MARKERS = (
-    "run:ai streamer read fault",
-    "could not receive runai_response",
-    "aws_error_http_channel_throughput_failure",
-)
 
 
 @dataclass(frozen=True)
@@ -500,18 +495,23 @@ def _record_startup_failure(
     _record_unstarted(batch, batch.evaluations, exc, jobs, tails, paths)
 
 
-def _is_runai_streamer_startup_failure(exc: Exception) -> bool:
-    if not isinstance(exc, RemoteInferenceStartupError):
-        return False
-    logs = "\n".join(line for handle in exc.jobs for line in _job_tail(handle)).lower()
-    return any(marker in logs for marker in _RUNAI_STREAMER_READ_MARKERS)
+def _is_submitted_inference_startup_failure(exc: Exception) -> bool:
+    """Retry an endpoint that reached Iris but never became usable.
+
+    Job logs are eventually consistent across federated clusters, so their
+    contents cannot safely control retry behavior at the instant a child job
+    becomes terminal. Failures before a job is submitted have no handles and
+    remain non-retryable here.
+    """
+
+    return isinstance(exc, RemoteInferenceStartupError) and bool(exc.jobs)
 
 
 @contextlib.contextmanager
-def _remote_inference_with_streamer_retry(
+def _remote_inference_with_startup_retry(
     config: RemoteInferenceConfig,
 ) -> Iterator[RemoteInferenceSession]:
-    """Start hosted-judge inference, retrying only transient RunAI object-store reads."""
+    """Start hosted-judge inference with bounded replacement of failed endpoints."""
 
     def start() -> tuple[contextlib.ExitStack, RemoteInferenceSession]:
         stack = contextlib.ExitStack()
@@ -524,7 +524,7 @@ def _remote_inference_with_streamer_retry(
 
     stack, session = retry_with_backoff(
         start,
-        retryable=_is_runai_streamer_startup_failure,
+        retryable=_is_submitted_inference_startup_failure,
         max_attempts=_HOSTED_JUDGE_STARTUP_ATTEMPTS,
         backoff=_HOSTED_JUDGE_STARTUP_BACKOFF,
         operation="hosted_judge_startup",
@@ -556,7 +556,7 @@ def _evaluate_with_hosted_judge(
         priority=batch.priority_band,
     )
     try:
-        with _remote_inference_with_streamer_retry(judge_inference) as judge:
+        with _remote_inference_with_startup_retry(judge_inference) as judge:
             return evaluate_batch(
                 batch,
                 session,

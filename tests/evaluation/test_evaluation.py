@@ -349,14 +349,7 @@ def test_run_evaluation_batch_records_every_eval_when_hosted_judge_fails_to_star
         assert "judge did not become ready" in (record.error or "")
 
 
-@pytest.mark.parametrize(
-    "streamer_error",
-    (
-        "vLLM server logged a Run:ai streamer read fault before becoming ready.",
-        "Could not receive runai_response from libstreamer due to: File access error",
-    ),
-)
-def test_run_evaluation_batch_retries_hosted_judge_streamer_startup_failure(tmp_path, monkeypatch, streamer_error):
+def test_run_evaluation_batch_retries_hosted_judge_startup_failure(tmp_path, monkeypatch):
     opened_models: list[str] = []
     judge_attempts = 0
 
@@ -372,7 +365,7 @@ def test_run_evaluation_batch_retries_hosted_judge_streamer_startup_failure(tmp_
                 if judge_attempts < 3:
                     failed_job = SimpleNamespace(
                         job_id=f"/judge/failed-{judge_attempts}",
-                        logs=lambda **_kwargs: (streamer_error,),
+                        logs=lambda **_kwargs: ("endpoint startup failed",),
                     )
                     raise RemoteInferenceStartupError("judge did not become ready", jobs=(failed_job,))
             return _remote_session(f"https://{self.model_name}.example/v1")
