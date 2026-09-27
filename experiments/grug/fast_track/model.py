@@ -46,6 +46,7 @@ from levanter.grug.attention import (
 from levanter.grug.grug_moe import (
     MoeActivation,
     MoEExpertMlp,
+    moe_mlp,
 )
 from levanter.grug.loss import BlockSizes, fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import unshard
@@ -427,6 +428,11 @@ class GrugModelConfig:
     kda_beta_negative: bool = False
     """KDA write strength ``beta = 2 * sigmoid(logit - log 3)`` in (0, 2), so the transition ``I - beta k k^T``
     can have negative eigenvalues (Grazzi et al. 2025); the shift keeps the mean beta at init at 1/2."""
+    moe_ungated_relu2: bool = False
+    """Routed experts are ``relu(x @ W_up)^2 @ W_down`` (no gate projection). Run through the gated kernels
+    as ``relu(g) * u`` with the gate tied to ``W_up`` (``relu(u) * u = relu(u)^2``), so every MoE backend
+    computes it unchanged; the gate GEMM is still paid. Parameter-match with 1.5x ``num_experts`` and
+    ``num_experts_per_token``."""
     expert_activation: str = "silu"
     """Gate activation of the routed and shared GLU experts (an ``ActivationFunctionEnum`` value, e.g.
     ``relu2`` for ReLU^2-GLU as in Primer / ReMoE)."""
@@ -1303,19 +1309,7 @@ class MoEMLP(eqx.Module):
             latent_out_norm=(
                 RMSNorm.init(latent, cfg.layer_norm_eps) if latent is not None and cfg.latent_out_norm else None
             ),
-            expert_mlp=MoEExpertMlp.init(
-                num_experts=cfg.num_experts,
-                hidden_dim=expert_width,
-                intermediate_dim=cfg.intermediate_dim,
-                initializer_std=cfg.initializer_std,
-                key=k_expert,
-                implementation="fixed_pooled_wave_all_to_all",
-                activation=ActivationFunctionEnum(cfg.expert_activation),
-                capacity_factor=cfg.capacity_factor,
-                pooled_transport_capacity_factor=cfg.pooled_transport_capacity_factor,
-                expert_chunks=1,
-                num_expert_waves=1,
-            ),
+            expert_mlp=_expert_mlp_init(cfg, expert_width, k_expert),
             cfg=cfg,
         )
 
@@ -1413,13 +1407,32 @@ class MoEMLP(eqx.Module):
         if self.w_latent_down is not None and self.latent_norm is not None:
             # Keep the expert input scale independent of the down-projection initialization.
             routed_input = self.latent_norm(reshard(projected[1], _batch_spec()))
-        moe_out = self.expert_mlp(
-            routed_input,
-            selected_experts.astype(jnp.int32),
-            combine_weights,
-            mesh=get_abstract_mesh(),
-            report_capacity_overflow=True,
-        )
+        if self.expert_mlp.w_gate is None:
+            # Ungated ReLU^2 experts: the gate is tied to W_up, so relu(u) * u = relu(u)^2.
+            em = self.expert_mlp
+            moe_out = moe_mlp(
+                routed_input,
+                selected_experts.astype(jnp.int32),
+                combine_weights,
+                jnp.concatenate([em.w_up, em.w_up], axis=-1),
+                em.w_down,
+                activation=em.activation,
+                implementation=em.implementation,
+                mesh=get_abstract_mesh(),
+                capacity_factor=em.capacity_factor,
+                pooled_transport_capacity_factor=em.pooled_transport_capacity_factor,
+                report_capacity_overflow=True,
+                expert_chunks=em.expert_chunks,
+                num_expert_waves=em.num_expert_waves,
+            )
+        else:
+            moe_out = self.expert_mlp(
+                routed_input,
+                selected_experts.astype(jnp.int32),
+                combine_weights,
+                mesh=get_abstract_mesh(),
+                report_capacity_overflow=True,
+            )
         routed_flat, capacity_overflow = moe_out
         dropped_assignments = capacity_overflow.dropped
         sender_dropped_assignments = capacity_overflow.sender_dropped
@@ -1678,6 +1691,26 @@ def _batch_shards() -> int:
     mesh = get_abstract_mesh()
     axes = _BATCH_AXES if isinstance(_BATCH_AXES, tuple) else (_BATCH_AXES,)
     return math.prod(mesh.shape[a] for a in axes)
+
+
+def _expert_mlp_init(cfg: "GrugModelConfig", expert_width: int, key: PRNGKeyArray) -> MoEExpertMlp:
+    """The routed expert bank; ``moe_ungated_relu2`` drops the gate (``w_gate=None``) and uses ReLU."""
+    mlp = MoEExpertMlp.init(
+        num_experts=cfg.num_experts,
+        hidden_dim=expert_width,
+        intermediate_dim=cfg.intermediate_dim,
+        initializer_std=cfg.initializer_std,
+        key=key,
+        implementation="fixed_pooled_wave_all_to_all",
+        activation=(
+            ActivationFunctionEnum.relu if cfg.moe_ungated_relu2 else ActivationFunctionEnum(cfg.expert_activation)
+        ),
+        capacity_factor=cfg.capacity_factor,
+        pooled_transport_capacity_factor=cfg.pooled_transport_capacity_factor,
+        expert_chunks=1,
+        num_expert_waves=1,
+    )
+    return eqx.tree_at(lambda m: m.w_gate, mlp, None, is_leaf=lambda x: x is None) if cfg.moe_ungated_relu2 else mlp
 
 
 def _smear(
