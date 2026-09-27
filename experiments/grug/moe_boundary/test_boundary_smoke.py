@@ -8,6 +8,7 @@ loss actually going down with the operator active.
 """
 
 import dataclasses
+import glob
 import json
 import logging
 import uuid
@@ -130,3 +131,109 @@ def test_boundary_training_smoke_loss_decreases(tmp_path):
     finish_records = [r for r in records if r.get("event") == "finish"]
     assert len(finish_records) == 1, "run must finish exactly once"
     assert "throughput/total_tokens" in finish_records[0]["summary"]
+
+
+def _run_smoke_run(tmp_path, checkpoint_base, num_train_steps, logger_name):
+    """Run the smoke config for ``num_train_steps`` steps, capturing log records."""
+    stream = StringIO()
+    handler = logging.StreamHandler(stream)
+    logger = logging.getLogger(logger_name)
+    logger.handlers.clear()
+    logger.propagate = False
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+
+    seq_len = _SEQ
+    vocab_size = _VOCAB
+    examples = []
+    for i in range(8):
+        tokens = (jnp.arange(seq_len, dtype=jnp.int32) + i) % vocab_size
+        examples.append(GrugLmExample.causal(tokens))
+    eval_examples = [GrugLmExample.causal((jnp.arange(seq_len, dtype=jnp.int32) + 100) % vocab_size)]
+    data_config = LmDataConfig(
+        components={
+            "direct": DirectDatasetComponent(
+                datasets={"train": ListAsyncDataset(examples), "validation": ListAsyncDataset(eval_examples)}
+            )
+        },
+        vocab_size=vocab_size,
+        tokenizer="passthrough",
+    )
+
+    cfg = _small_boundary_config()
+    trainer_config = TrainerConfig(
+        id="test-grug-boundary-resume",
+        num_train_steps=num_train_steps,
+        train_batch_size=max(1, len(jax.devices())),
+        tracker=JsonLoggerConfig(logger_name=logger_name),
+        require_accelerator=False,
+        use_explicit_mesh_axes=True,
+        distributed=DistributedConfig(initialize_jax_distributed=False),
+        log_dir=tmp_path / "logs",
+        checkpointer=CheckpointerConfig(base_path=str(checkpoint_base)),
+    )
+
+    run_cfg = train_module.GrugRunConfig(
+        model=cfg,
+        data=data_config,
+        resources=ResourceConfig.with_cpu(),
+        trainer=train_module.GrugTrainerConfig(trainer=trainer_config, log_every=1, z_loss_weight=0.0, ema_beta=None),
+        eval=train_module.GrugEvalConfig(
+            eval_batch_size=1,
+            steps_per_eval=5,
+            max_eval_batches=1,
+            eval_current=True,
+            eval_ema=False,
+        ),
+        optimizer=AdamConfig(learning_rate=1e-3),
+    )
+    try:
+        train_module.run_grug(run_cfg)
+    finally:
+        logger.removeHandler(handler)
+
+    records = [json.loads(line) for line in stream.getvalue().splitlines() if line.strip()]
+    return records
+
+
+@pytest.mark.timeout(600)
+def test_boundary_training_smoke_resume_from_checkpoint(tmp_path):
+    """Train 6 steps, then resume with a longer horizon in the same checkpoint root.
+
+    The resume path releases the initialized state to ShapeDtypeStructs before restoring
+    (checkpoint restore must not stage shards on top of live init state). It must pick up the
+    saved step (6), continue to the new horizon (11), and keep the loss decreasing.
+    """
+    checkpoint_base = tmp_path / "checkpoints"
+
+    first = _run_smoke_run(tmp_path, checkpoint_base, num_train_steps=6, logger_name="test-grug-boundary-resume-first")
+    first_steps = [r["step"] for r in first if r.get("event") == "log"]
+    assert first_steps, "first run logged no steps"
+    final_step = first_steps[-1]
+    assert final_step >= 5, f"first run should reach at least step 5, got {final_step}"
+
+    # Checkpoint must exist on disk before the resume run.
+    saved = sorted(glob.glob(str(checkpoint_base / "**" / "step-*"), recursive=True))
+    assert saved, "no step-* checkpoint written by the first run"
+
+    second = _run_smoke_run(
+        tmp_path, checkpoint_base, num_train_steps=11, logger_name="test-grug-boundary-resume-second"
+    )
+    second_steps = [r["step"] for r in second if r.get("event") == "log"]
+    assert second_steps, "resume run logged no steps"
+    # Resume must not repeat the checkpointed step: it continues past it.
+    assert (
+        min(second_steps) > final_step
+    ), f"resume run restarted from scratch: first logged step {min(second_steps)} <= checkpointed {final_step}"
+    # num_train_steps=11 trains steps 7..11, whose loss is logged with the *pre-step* state.
+    assert max(second_steps) == 10, f"resume run should log through step 10, got {max(second_steps)}"
+
+    first_losses = [
+        r["metrics"]["train/loss"] for r in first if r.get("event") == "log" and "train/loss" in r.get("metrics", {})
+    ]
+    second_losses = [
+        r["metrics"]["train/loss"] for r in second if r.get("event") == "log" and "train/loss" in r.get("metrics", {})
+    ]
+    assert (
+        second_losses[-1] < first_losses[0]
+    ), f"resumed run's final loss {second_losses[-1]} should beat the first run's initial loss {first_losses[0]}"

@@ -3,6 +3,7 @@
 
 import dataclasses
 import functools
+import gc
 import logging
 import time
 from dataclasses import dataclass, field
@@ -272,6 +273,24 @@ def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
     return eqx.tree_at(lambda t: t.blocks, model, tuple(new_blocks))
 
 
+def _release_state_arrays(state: GrugTrainState) -> GrugTrainState:
+    """Replace device arrays with ShapeDtypeStructs carrying their shardings, then free HBM.
+
+    Restore reads into an exemplar whose leaves only carry shape/dtype/sharding, so staging the
+    checkpoint shards happens against empty device memory instead of on top of the initialized
+    state. Kept separate from ``initial_state`` so the no-checkpoint path re-initializes normally.
+    """
+    template = jax.tree.map(
+        lambda leaf: (
+            jax.ShapeDtypeStruct(leaf.shape, leaf.dtype, sharding=leaf.sharding) if isinstance(leaf, jax.Array) else leaf
+        ),
+        state,
+    )
+    jax.tree.map(lambda leaf: leaf.delete() if isinstance(leaf, jax.Array) else None, state)
+    gc.collect()
+    return template
+
+
 def initial_state(
     model_config: GrugModelConfig,
     *,
@@ -434,6 +453,13 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             )
 
         state = _init_state(model_key)
+        # Materializing the initial state fills HBM; restore then stages checkpoint shards on top
+        # and OOMs (observed at d1280 on v4-32: 32.9/33.0 GB in use before staging). Release the
+        # initialized arrays, restore into shape-only templates that carry the shardings, and
+        # re-initialize only when no checkpoint loaded. Same pattern as moe_hero_ep.
+        released_initial_state = trainer.load_checkpoint is not False and not trainer.allow_partial_checkpoint
+        if released_initial_state:
+            state = _release_state_arrays(state)
 
         state = restore_grug_state_from_checkpoint(
             state,
@@ -442,6 +468,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             mesh=mesh,
             allow_partial=trainer.allow_partial_checkpoint,
         )
+        if released_initial_state and any(isinstance(leaf, jax.ShapeDtypeStruct) for leaf in jax.tree.leaves(state)):
+            state = _init_state(model_key)
         if trainer.initialize_from is not None:
             state = init_weights_only_from_checkpoint(
                 state,
