@@ -952,6 +952,11 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         last_step_duration = 0.0
         host_gap_start: float | None = None
         gc.callbacks.append(_warn_on_long_gc)
+        # Move every object alive at loop start (the model/optimizer pytrees, compiled executables, data
+        # loader state) into the permanent generation: otherwise each gen-2 collection traverses them all
+        # (0.4-0.6 s at d512), each rank pauses at a different step, and every collective waits for it.
+        gc.collect()
+        gc.freeze()
         hlo_written = False
 
         # Main optimization loop.
