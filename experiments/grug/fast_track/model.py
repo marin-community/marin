@@ -510,6 +510,10 @@ class GrugModelConfig:
     aux_lm_steps: int = 500
     second_embed: bool = False
     embed2_rows: int = 0
+    embed2_dim: int | None = None
+    """Low-rank second table: ``embed2_rows x embed2_dim`` rows up-projected to ``hidden_dim`` by a shared
+    ``embed2_up`` matrix (None: full-width rows). Shrinks the table's per-step gradient all-reduce and
+    optimizer work by ``hidden_dim / embed2_dim``."""
     """Rows of the second embedding table (0: ``vocab_size``). With ``second_embed_bigram`` the (previous,
     current) hash spreads over these rows, so a table much larger than the vocab keeps bigrams apart."""
     second_embed_mode: str = "source"
@@ -2332,6 +2336,7 @@ class Transformer(eqx.Module):
     """Pseudo-query of the final AttnRes gate, whose mix feeds the final norms and the lm_head."""
     token_embed2: jax.Array | None
     embed2_norm: RMSNorm | None
+    embed2_up: jax.Array | None
     embed2_lambda: Float[Array, " G"] | None
     """Per-gate weight of the second embedding on each sublayer input (``second_embed_mode="input"``)."""
     attn_res_query_bias: Float[Array, "G N"] | None
@@ -2420,7 +2425,11 @@ class Transformer(eqx.Module):
             ),
             token_embed2=(
                 reshard(
-                    _init_weight(embed2_key, (cfg.embed2_rows or cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std),
+                    _init_weight(
+                        embed2_key,
+                        (cfg.embed2_rows or cfg.vocab_size, cfg.embed2_dim or cfg.hidden_dim),
+                        cfg.initializer_std,
+                    ),
                     P(None, None),
                 )
                 if cfg.second_embed
@@ -2436,6 +2445,18 @@ class Transformer(eqx.Module):
                 else None
             ),
             embed2_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps) if cfg.second_embed else None,
+            embed2_up=(
+                reshard(
+                    _init_weight(
+                        random.fold_in(embed2_key, 1),
+                        (cfg.embed2_dim, cfg.hidden_dim),
+                        1.0 / math.sqrt(cfg.embed2_dim),
+                    ),
+                    P(None, None),
+                )
+                if cfg.second_embed and cfg.embed2_dim
+                else None
+            ),
             attn_res_query_bias=(
                 jnp.zeros((2 * cfg.num_layers * cfg.loop_passes + 1, _attn_res_num_sources(cfg)), jnp.float32)
                 if cfg.attn_res_logit_bias
@@ -2619,7 +2640,12 @@ class Transformer(eqx.Module):
                 if cfg.second_embed_bigram:
                     doc_start = None if segment_ids is None else segment_ids[0]
                     ids2 = _bigram_hash_ids(token_ids, doc_start, cfg.embed2_rows or cfg.vocab_size)
-                embed2 = self.embed2_norm(_embedding_gather(self.token_embed2, ids2))
+                rows2 = _embedding_gather(self.token_embed2, ids2)
+                if self.embed2_up is not None:
+                    rows2 = jnp.einsum(
+                        "bsr,rd->bsd", rows2, self.embed2_up.astype(rows2.dtype), out_sharding=_batch_spec()
+                    )
+                embed2 = self.embed2_norm(rows2)
                 if cfg.second_embed_mode == "input":
                     input_embed2 = embed2
                 else:
