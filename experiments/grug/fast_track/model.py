@@ -412,6 +412,10 @@ class GrugModelConfig:
     ``rms`` (RMSNorm with a learned gain), ``rms_nogain`` (RMSNorm, no gain) or ``raw`` (the table row as is)."""
     embed_scale: float = 1.0
     """Constant multiplier on the (normed) token embedding: its weight in the AttnRes mixes."""
+    mla_ssmax: bool = False
+    """Scalable-softmax (SSMax, arXiv 2501.19399) on the MLA layers: each query is scaled by
+    ``1 + s_h * log(n)``, with ``n`` the number of keys it can see in its document and ``s_h`` a
+    zero-init per-head parameter, so the softmax can stay sharp as the context grows."""
     mla_key_offset: bool = False
     """modded-nanogpt partial key offset (record #49): on the MLA layers, the first half of each head's key
     channels come from the previous token (within documents), enabling one-layer induction."""
@@ -440,6 +444,9 @@ class GrugModelConfig:
     kda_beta_negative: bool = False
     """KDA write strength ``beta = 2 * sigmoid(logit - log 3)`` in (0, 2), so the transition ``I - beta k k^T``
     can have negative eigenvalues (Grazzi et al. 2025); the shift keeps the mean beta at init at 1/2."""
+    shared_expert_gate: bool = False
+    """Qwen-MoE shared-expert gate: the shared experts' output is scaled per token by ``2 * sigmoid(x @ w)``,
+    with ``w`` zero-init so the gate starts at 1."""
     shared_ungated_relu2: bool = False
     """Shared experts are ``relu(x @ W_up)^2 @ W_down`` with no gate projection (truly ungated: the gate
     GEMM is dropped from the fused projection). Parameter-match with 1.5x ``shared_expert_intermediate_dim``."""
@@ -641,6 +648,7 @@ class CausalSelfAttention(eqx.Module):
     xsa_scale: Float[Array, " N"] | None  # per-head XSA strength (cfg.xsa_mode == "learned")
     xsa_gate: Float[Array, "D N"] | None  # per-token XSA gate weights (cfg.xsa_mode == "gated")
     head_mix: Float[Array, "D 2N"] | None  # [w1 | w2] projections of cfg.mla_head_mix (w2 half zero-init)
+    ssmax_scale: Float[Array, " N"] | None  # per-head SSMax log-length query scale (cfg.mla_ssmax)
     bias_q: Float[Array, " NH"] | None
     bias_dkv: Float[Array, " L"] | None
     cfg: GrugModelConfig = eqx.field(static=True)
@@ -681,6 +689,7 @@ class CausalSelfAttention(eqx.Module):
                 ),
                 xsa_gate=reshard(jnp.zeros((d, n)), P(None, None)) if cfg.xsa_mode == "gated" else None,
                 head_mix=(reshard(jnp.zeros((d, 2 * n)), P(None, None)) if cfg.mla_head_mix else None),
+                ssmax_scale=jnp.zeros((n,), jnp.float32) if cfg.mla_ssmax else None,
                 bias_q=jnp.zeros((n * h,)) if "qkv" in cfg.proj_biases else None,
                 bias_dkv=jnp.zeros((kvl,)) if "qkv" in cfg.proj_biases else None,
                 cfg=cfg,
@@ -712,6 +721,7 @@ class CausalSelfAttention(eqx.Module):
             ),
             xsa_gate=reshard(jnp.zeros((d, n)), P(None, None)) if cfg.xsa_mode == "gated" else None,
             head_mix=None,
+            ssmax_scale=None,
             bias_q=None,
             bias_dkv=None,
             cfg=cfg,
@@ -873,6 +883,9 @@ class CausalSelfAttention(eqx.Module):
             q = jnp.where(keep, q_roped, q)
             k = jnp.where(keep, k_roped, k)
         q = q * (self.cfg.qk_mult if self.qk_mult is None else self.qk_mult.astype(q.dtype))
+        if self.ssmax_scale is not None:
+            log_keys = jnp.log1p(_positions_in_document(sconv_segment_ids, seq_len).astype(jnp.float32))
+            q = q * (1.0 + self.ssmax_scale[:, None] * log_keys[..., None, None]).astype(q.dtype)
         # The fa4-cute kernel is GPU-only; fall back to auto-select off-GPU so the model still lowers
         # on CPU (e.g. the grug variant-contract tests).
         attn_impl = "gpu_fa4_cute" if jax.default_backend() == "gpu" else None
@@ -1369,7 +1382,7 @@ class MoEMLP(eqx.Module):
             if em.w_gate is None
             else jnp.einsum("el,eli->ei", mean_in, sg(em.w_gate).astype(jnp.float32), out_sharding=hidden_spec)
         )
-        hidden = em.activation.to_fn()(gate) * up
+        hidden = em.activation.to_jax_fn()(gate) * up
         down_spec = _padded_spec(em.w_down)
         expert_out = jnp.einsum(
             "ei,eil->el", hidden, sg(em.w_down).astype(jnp.float32), out_sharding=P(down_spec[0], down_spec[2])
@@ -1527,6 +1540,7 @@ def moe_and_shared_fused(
     part_inputs: dict[str, jax.Array] | None = None,
     hash_token_ids: Int[Array, "B S"] | None = None,
     noise_key: jax.Array | None = None,
+    shared_gate: Float[Array, " D"] | None = None,
 ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
     """Routed MoE plus the shared SwiGLU experts with every projection of ``x`` in one GEMM.
 
@@ -1571,6 +1585,9 @@ def moe_and_shared_fused(
         hidden = jnp.concatenate([jnp.square(jax.nn.relu(u)) for u in ups], axis=1)
     w_down = jnp.concatenate([reshard(e.w_down, replicated) for e in shared], axis=0)
     shared_out = jnp.einsum("tm,md->td", hidden, w_down, out_sharding=_batch_spec())
+    if shared_gate is not None:
+        gate_logit = jnp.einsum("td,d->t", x_flat.astype(jnp.float32), unshard(shared_gate))
+        shared_out = shared_out * (2.0 * jax.nn.sigmoid(gate_logit))[:, None].astype(shared_out.dtype)
     return routed + _batch_reshard(rearrange(shared_out, "(b s) d -> b s d", b=b, s=s)), stats
 
 
@@ -1590,6 +1607,8 @@ class Block(eqx.Module):
     shared: tuple[DenseMLP, ...] | None
     sconv_attn: "ShortConv | None"
     sconv_mlp: "ShortConv | None"
+    sconv_mlp_in: "ShortConv | None"  # Canon-C conv on the normed MLP input ("mlp_in" in cfg.sconv_sites)
+    shared_gate: Float[Array, " D"] | None  # cfg.shared_expert_gate
     # Block AttnRes pseudo-queries of the attention and MLP sublayers (None without cfg.attn_res).
     attn_res_query_attn: Float[Array, " D"] | None
     attn_res_query_mlp: Float[Array, " D"] | None
@@ -1638,6 +1657,10 @@ class Block(eqx.Module):
             sconv_attn=(ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel) if use_attn_sconv else None),
             sconv_mlp=(
                 ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel) if cfg.sconv and "mlp" in cfg.sconv_sites else None
+            ),
+            shared_gate=jnp.zeros((cfg.hidden_dim,), jnp.float32) if cfg.shared_expert_gate else None,
+            sconv_mlp_in=(
+                ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel) if cfg.sconv and "mlp_in" in cfg.sconv_sites else None
             ),
             attn_res_query_attn=attn_res_query,
             attn_res_query_mlp=attn_res_query,
@@ -1707,7 +1730,10 @@ class Block(eqx.Module):
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         """``sum_stream`` feeds ``sum_parts`` (``router`` / ``latent`` / ``shared``) instead of ``h``;
         ``hash_token_ids`` / ``noise_key`` go to the router (``moe_hash_layers``, ``moe_gumbel_tau``)."""
-        mlp_in = _spread_mlp_input(self.mlp_gated_norm(self.rms_mlp(h)), self.attn.cfg)
+        normed = self.mlp_gated_norm(self.rms_mlp(h))
+        if self.sconv_mlp_in is not None:
+            normed = self.sconv_mlp_in(normed, _sconv_segment_ids(mask))
+        mlp_in = _spread_mlp_input(normed, self.attn.cfg)
         part_inputs = None
         if sum_parts:
             assert sum_stream is not None
@@ -1717,7 +1743,9 @@ class Block(eqx.Module):
         if isinstance(self.mlp, DenseMLP):
             out = self.mlp(mlp_in, moe_output_reshard=False)
         elif self.shared is not None:
-            out, stats = moe_and_shared_fused(self.mlp, self.shared, mlp_in, part_inputs, hash_token_ids, noise_key)
+            out, stats = moe_and_shared_fused(
+                self.mlp, self.shared, mlp_in, part_inputs, hash_token_ids, noise_key, self.shared_gate
+            )
         else:
             out, stats = self.mlp(mlp_in, hash_token_ids=hash_token_ids, noise_key=noise_key)
         if self.bias_mlp_out is not None:
@@ -1782,6 +1810,15 @@ def _expert_mlp_init(cfg: "GrugModelConfig", expert_width: int, key: PRNGKeyArra
         num_expert_waves=1,
     )
     return eqx.tree_at(lambda m: m.w_gate, mlp, None, is_leaf=lambda x: x is None) if cfg.moe_ungated_relu2 else mlp
+
+
+def _positions_in_document(segment_ids: Int[Array, "B S"] | None, seq_len: int) -> jax.Array:
+    """Each token's 0-based position within its packed document (``[S]`` when unpacked)."""
+    idx = jnp.arange(seq_len, dtype=jnp.int32)
+    if segment_ids is None:
+        return idx
+    starts = jnp.pad(segment_ids[:, 1:] != segment_ids[:, :-1], ((0, 0), (1, 0)), constant_values=True)
+    return idx - jax.lax.cummax(jnp.where(starts, idx, 0), axis=1)
 
 
 def _partial_key_offset(k: Float[Array, "B S H D"], segment_ids: Int[Array, "B S"] | None) -> jax.Array:
