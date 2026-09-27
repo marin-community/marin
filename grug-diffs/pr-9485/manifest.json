@@ -1,0 +1,22 @@
+{
+  "added_variants": [
+    "science_sft"
+  ],
+  "base_sha": "3a4e6506d47b31d4e938bf9bb21540d7cac45307",
+  "head_sha": "f1f3d8c4e97d565357d790e87796f607b4366174",
+  "report_count": 1,
+  "reports": [
+    {
+      "closest_variant": "base",
+      "distance_score": 1920,
+      "report_relpath": "science_sft/index.html",
+      "status_counts": {
+        "added": 5,
+        "changed": 3,
+        "removed": 1,
+        "unchanged": 0
+      },
+      "variant": "science_sft"
+    }
+  ]
+}
