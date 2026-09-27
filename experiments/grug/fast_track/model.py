@@ -472,6 +472,16 @@ class GrugModelConfig:
     shared_ungated_relu2: bool = False
     """Shared experts are ``relu(x @ W_up)^2 @ W_down`` with no gate projection (truly ungated: the gate
     GEMM is dropped from the fused projection). Parameter-match with 1.5x ``shared_expert_intermediate_dim``."""
+    moe_bank2_experts: int = 0
+    """Heterogeneous experts: the last ``moe_bank2_experts`` of ``num_experts`` form a second expert bank with its
+    own width (``moe_bank2_intermediate_dim``) and activation (``moe_bank2_activation``). One router scores all
+    experts; each token takes ``num_experts_per_token - moe_bank2_topk`` experts from bank 1 and ``moe_bank2_topk``
+    from bank 2 (a fixed split, so each bank's FLOPs are fixed), QB balances each bank against its own K/E, and
+    the combine weights are renormalized over all selected experts. 0: one uniform bank."""
+    moe_bank2_topk: int = 0
+    moe_bank2_intermediate_dim: int = 0
+    moe_bank2_activation: str = "relu2"
+    """``relu2`` (ungated, like ``moe_ungated_relu2``) or ``swiglu``."""
     expert_leaky_slope: float = 0.0
     """Ungated ReLU^2 experts (routed and shared) use ``leaky_relu(u, slope)^2`` instead (Parameter Golf #493 /
     #549: 0.5; #1948: 0.3). 0: plain ReLU^2."""
@@ -1365,6 +1375,7 @@ class MoEMLP(eqx.Module):
     router_norm: "RMSNorm | None"
     router_bias: jax.Array
     expert_mlp: MoEExpertMlp
+    expert_mlp_b: MoEExpertMlp | None
     w_latent_down: jax.Array | None
     latent_norm: RMSNorm | None
     w_latent_up: jax.Array | None
@@ -1422,7 +1433,12 @@ class MoEMLP(eqx.Module):
             latent_out_norm=(
                 RMSNorm.init(latent, cfg.layer_norm_eps) if latent is not None and cfg.latent_out_norm else None
             ),
-            expert_mlp=_expert_mlp_init(cfg, expert_width, k_expert),
+            expert_mlp=_expert_mlp_init(_bank_config(cfg, 1), expert_width, k_expert),
+            expert_mlp_b=(
+                _expert_mlp_init(_bank_config(cfg, 2), expert_width, random.fold_in(k_expert, 2))
+                if cfg.moe_bank2_experts
+                else None
+            ),
             cfg=cfg,
         )
 
@@ -1499,11 +1515,19 @@ class MoEMLP(eqx.Module):
             router_logits = projected[0].astype(jnp.float32)
         biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
         router_probs = jax.nn.softmax(router_logits, axis=-1)
-        # Select top-(K+1) on biased logits; the (K+1)-th is the QB threshold alpha.
-        _topk_logits, selected_experts = _small_top_k(biased_logits, self.cfg.num_experts_per_token + 1)
-        qb_alpha = _topk_logits[:, -1:]
-        selected_experts = selected_experts[:, :-1]
         k = self.cfg.num_experts_per_token
+        banks = _expert_banks(self.cfg)
+        # Select top-(K+1) on biased logits per bank; the (K+1)-th is that bank's QB threshold alpha.
+        bank_selected, bank_alpha = [], []
+        for start, size, bank_k in banks:
+            topk_logits, sel = _small_top_k(biased_logits[:, start : start + size], bank_k + 1)
+            bank_alpha.append(topk_logits[:, -1:])
+            bank_selected.append(sel[:, :-1] + start)
+        selected_experts = jnp.concatenate(bank_selected, axis=-1) if len(banks) > 1 else bank_selected[0]
+        if len(banks) > 1 and (
+            self.cfg.moe_gumbel_tau > 0 or hash_token_ids is not None or self.cfg.moe_dense_router_grad
+        ):
+            raise ValueError("moe_bank2_experts does not support Gumbel routing, hash routing or the dense router grad")
         if noise_key is not None and self.cfg.moe_gumbel_tau > 0:
             noisy = biased_logits + self.cfg.moe_gumbel_tau * _gumbel_noise(noise_key, biased_logits.shape)
             _, selected_experts = _small_top_k(noisy, k)
@@ -1540,14 +1564,19 @@ class MoEMLP(eqx.Module):
         )
         # Sharded QB: estimate each expert's threshold beta from the margins `s - alpha` by binning
         # them into fixed bins over the live global range and reading the (1-K/E) quantile.
-        s_minus_alpha = reshard(router_logits - qb_alpha, P(_BATCH_AXES, None))
-        beta, margin_min, margin_max = _qb_beta_hist(
-            s_minus_alpha,
-            mesh,
-            num_experts_per_token=self.cfg.num_experts_per_token,
-            num_experts=self.cfg.num_experts,
-            n_bins=_QB_HIST_BINS,
-        )
+        bank_stats = [
+            _qb_beta_hist(
+                reshard(router_logits[:, start : start + size] - alpha, P(_BATCH_AXES, None)),
+                mesh,
+                num_experts_per_token=bank_k,
+                num_experts=size,
+                n_bins=_QB_HIST_BINS,
+            )
+            for (start, size, bank_k), alpha in zip(banks, bank_alpha, strict=True)
+        ]
+        beta = jnp.concatenate([b for b, _, _ in bank_stats], axis=-1)
+        margin_min = functools.reduce(jnp.minimum, [lo for _, lo, _ in bank_stats])
+        margin_max = functools.reduce(jnp.maximum, [hi for _, _, hi in bank_stats])
         router_stats["qb_beta"] = beta
         router_stats["margin_min"] = margin_min
         router_stats["margin_max"] = margin_max
@@ -1556,35 +1585,23 @@ class MoEMLP(eqx.Module):
         if self.w_latent_down is not None and self.latent_norm is not None:
             # Keep the expert input scale independent of the down-projection initialization.
             routed_input = self.latent_norm(reshard(projected[1], _batch_spec()))
-        if self.expert_mlp.w_gate is None:
-            # Ungated ReLU^2 experts. The pooled-wave backend runs them ungated (W_up alone, relu^2); other
-            # backends (the dropless eval) get the gate tied to W_up, since relu(u) * u = relu(u)^2.
-            em = self.expert_mlp
-            ungated = em.implementation == "fixed_pooled_wave_all_to_all" and self.cfg.moe_ungated_kernel
-            moe_out = moe_mlp(
+        bank_mlps = [self.expert_mlp] if self.expert_mlp_b is None else [self.expert_mlp, self.expert_mlp_b]
+        outputs, overflows, col = [], [], 0
+        for (start, _, bank_k), em, bank_index in zip(banks, bank_mlps, (1, 2), strict=False):
+            out, overflow = _run_expert_bank(
+                em,
+                _bank_config(self.cfg, bank_index),
                 routed_input,
-                selected_experts.astype(jnp.int32),
-                combine_weights,
-                em.w_up if ungated else jnp.concatenate([em.w_up, em.w_up], axis=-1),
-                em.w_down,
-                activation=_ungated_expert_activation(self.cfg) if ungated else _tied_expert_activation(self.cfg, em),
-                implementation=em.implementation,
-                mesh=get_abstract_mesh(),
-                capacity_factor=em.capacity_factor,
-                pooled_transport_capacity_factor=em.pooled_transport_capacity_factor,
-                report_capacity_overflow=True,
-                expert_chunks=em.expert_chunks,
-                num_expert_waves=em.num_expert_waves,
+                (selected_experts[:, col : col + bank_k] - start).astype(jnp.int32),
+                combine_weights[:, col : col + bank_k],
             )
-        else:
-            moe_out = self.expert_mlp(
-                routed_input,
-                selected_experts.astype(jnp.int32),
-                combine_weights,
-                mesh=get_abstract_mesh(),
-                report_capacity_overflow=True,
-            )
-        routed_flat, capacity_overflow = moe_out
+            outputs.append(out)
+            overflows.append(overflow)
+            col += bank_k
+        routed_flat = functools.reduce(jnp.add, outputs)
+        capacity_overflow = overflows[0]
+        if len(overflows) > 1:
+            capacity_overflow = jax.tree.map(lambda *xs: functools.reduce(jnp.add, xs), *overflows)
         if self.cfg.moe_dense_router_grad:
             routed_flat = routed_flat + self._default_expert_term(
                 routed_input, router_logits, selected_experts, unbiased_topk
@@ -1967,6 +1984,66 @@ def _smear(
         prev = jnp.where(starts[..., None], 0, prev)
     gate = jax.nn.sigmoid(jnp.einsum("bsk,k->bs", hidden[..., :12].astype(jnp.float32), w))[..., None]
     return (hidden.astype(jnp.float32) + lam * gate * prev.astype(jnp.float32)).astype(hidden.dtype)
+
+
+def _expert_banks(cfg: "GrugModelConfig") -> list[tuple[int, int, int]]:
+    """``(first expert, number of experts, experts per token)`` for each expert bank."""
+    if not cfg.moe_bank2_experts:
+        return [(0, cfg.num_experts, cfg.num_experts_per_token)]
+    size_a = cfg.num_experts - cfg.moe_bank2_experts
+    k_a = cfg.num_experts_per_token - cfg.moe_bank2_topk
+    if size_a <= k_a or cfg.moe_bank2_experts <= cfg.moe_bank2_topk or k_a < 1 or cfg.moe_bank2_topk < 1:
+        raise ValueError("each expert bank needs 1 <= top-k < its expert count (QB selects top-(k+1))")
+    return [(0, size_a, k_a), (size_a, cfg.moe_bank2_experts, cfg.moe_bank2_topk)]
+
+
+def _bank_config(cfg: "GrugModelConfig", bank: int) -> "GrugModelConfig":
+    """The per-bank view of ``cfg`` used to build and run that bank's experts."""
+    if not cfg.moe_bank2_experts:
+        return cfg
+    _, size, bank_k = _expert_banks(cfg)[bank - 1]
+    if bank == 1:
+        return dataclasses.replace(cfg, num_experts=size, num_experts_per_token=bank_k)
+    if cfg.moe_bank2_activation not in ("relu2", "swiglu"):
+        raise ValueError(f"moe_bank2_activation must be relu2 or swiglu, got {cfg.moe_bank2_activation!r}")
+    return dataclasses.replace(
+        cfg,
+        num_experts=size,
+        num_experts_per_token=bank_k,
+        intermediate_dim=cfg.moe_bank2_intermediate_dim or cfg.intermediate_dim,
+        moe_ungated_relu2=cfg.moe_bank2_activation == "relu2",
+        expert_activation="silu",
+        expert_leaky_slope=cfg.expert_leaky_slope if cfg.moe_bank2_activation == "relu2" else 0.0,
+    )
+
+
+def _run_expert_bank(
+    em: MoEExpertMlp,
+    cfg: "GrugModelConfig",
+    routed_input: jax.Array,
+    selected: jax.Array,
+    combine_weights: jax.Array,
+):
+    """Dispatch one expert bank: ungated ReLU^2 through the pooled-wave ungated path (or the tied gate on other
+    backends), gated experts through ``MoEExpertMlp``."""
+    if em.w_gate is None:
+        ungated = em.implementation == "fixed_pooled_wave_all_to_all" and cfg.moe_ungated_kernel
+        return moe_mlp(
+            routed_input,
+            selected,
+            combine_weights,
+            em.w_up if ungated else jnp.concatenate([em.w_up, em.w_up], axis=-1),
+            em.w_down,
+            activation=_ungated_expert_activation(cfg) if ungated else _tied_expert_activation(cfg, em),
+            implementation=em.implementation,
+            mesh=get_abstract_mesh(),
+            capacity_factor=em.capacity_factor,
+            pooled_transport_capacity_factor=em.pooled_transport_capacity_factor,
+            report_capacity_overflow=True,
+            expert_chunks=em.expert_chunks,
+            num_expert_waves=em.num_expert_waves,
+        )
+    return em(routed_input, selected, combine_weights, mesh=get_abstract_mesh(), report_capacity_overflow=True)
 
 
 def _ungated_expert_activation(cfg: "GrugModelConfig"):
