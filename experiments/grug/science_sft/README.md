@@ -8,9 +8,8 @@ step's QB thresholds. It uses eight H100x8 nodes, batch size 64, a 5e-6 peak
 learning rate, 5% warmup, and W&B online logging.
 
 The converted source must first pass the completeness audit documented in
-`experiments/datakit/science_sft_conversion/README.md`. The conversion and
-token-store code must be merged before launching from a clean Marin main
-checkout. Build the token store on RNO2A with CoreWeave storage access:
+`experiments/datakit/science_sft_conversion/README.md`. Build the token store
+from the science SFT worktree on RNO2A with CoreWeave storage access:
 
 ```bash
 uv run iris --cluster=cw-rno2a job run --priority interactive --enable-extra-resources \
@@ -25,7 +24,7 @@ uv run iris --cluster=cw-rno2a job run --priority interactive --enable-extra-res
 
 Inspect the resulting artifact's source counts. Preparation fails if any
 conversation exceeds the 32K context. Once the store is complete, submit the
-training coordinator from merged main. Its task environment must contain
+training coordinator from the same worktree. Its task environment must contain
 CoreWeave credentials and `WANDB_API_KEY`:
 
 ```bash
