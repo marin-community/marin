@@ -18,7 +18,27 @@ restart. A failed batch remains unwritten and fails the Iris task after four
 request attempts. The source artifact stays unchanged.
 
 The conversion uses the shared `/benfeuer/minimax-m3-science-sft` Iris endpoint
-on `cw-rno2a`. Start one small batch before the full run:
+on `cw-rno2a`. Serve MiniMax M3 from a merged Marin checkout. Three H100x8
+workers share one brokered endpoint at Iris's interactive priority. The
+65,536-token context exceeds the worker's 8,000-character source chunk size.
+CoreWeave's S3 cache needs lower RunAI reader concurrency and a longer read
+window while all workers load the 428B-parameter checkpoint:
+
+```bash
+uv run marin-serve iris MiniMaxAI/MiniMax-M3-MXFP8 --cluster cw-rno2a \
+  --gpu H100x8 --instances 3 --name minimax-m3-science-sft-20260927 \
+  --endpoint-name /benfeuer/minimax-m3-science-sft \
+  --max-model-len 65536 --max-num-batched-tokens 8192 \
+  --cpu 64 --memory 1024g --disk 800g --timeout-hours 168 \
+  --proxy-timeout 1800 --vllm-version 0.30.0 \
+  --streamer-concurrency 2 --streamer-s3-request-timeout-ms 30000 \
+  --vllm-arg=--max-num-seqs=8 --vllm-arg=--gpu-memory-utilization=0.97 \
+  --vllm-arg=--block-size=128 --vllm-arg=--reasoning-parser=minimax_m3 \
+  --vllm-arg=--kv-cache-dtype=fp8 --vllm-arg=--enable-expert-parallel --no-wait
+```
+
+After the endpoint answers a structured completion, start one small batch
+before the full run:
 
 ```bash
 uv run iris --cluster=cw-rno2a job run --priority interactive --enable-extra-resources \
