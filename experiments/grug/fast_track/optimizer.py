@@ -144,14 +144,42 @@ def _gate_router_decay_mask(params):
     return jax.tree.map(is_target, params, paths)
 
 
+def _ademamix_beta3_schedule(beta1: float, beta3: float, total_steps: int):
+    """AdEMAMix's beta3 warmup: linear in half-life from ``beta1``'s to ``beta3``'s over ``total_steps``."""
+    log_b1, log_b3 = jnp.log(beta1), jnp.log(beta3)
+
+    def schedule(step):
+        frac = jnp.clip(step / total_steps, 0.0, 1.0)
+        return jnp.exp(log_b1 * log_b3 / ((1 - frac) * log_b3 + frac * log_b1))
+
+    return schedule
+
+
+class GrokfastState(NamedTuple):
+    ema: optax.Updates
+
+
+def scale_by_grokfast_ema(alpha: float, lamb: float) -> optax.GradientTransformation:
+    """Grokfast-EMA: add ``lamb`` x an EMA (decay ``alpha``) of the gradients to each gradient."""
+
+    def init_fn(params):
+        return GrokfastState(jax.tree.map(jnp.zeros_like, params))
+
+    def update_fn(updates, state, params=None):
+        ema = jax.tree.map(lambda e, g: alpha * e + (1 - alpha) * g.astype(e.dtype), state.ema, updates)
+        updates = jax.tree.map(lambda g, e: (g + lamb * e).astype(g.dtype), updates, ema)
+        return updates, GrokfastState(ema)
+
+    return optax.GradientTransformation(init_fn, update_fn)
+
+
 def _scale_by_adam_gate_router_decay(
-    b1: float, b2: float, eps: float, weight_decay: float, total_steps: int
+    adam: optax.GradientTransformation, weight_decay: float, total_steps: int
 ) -> optax.GradientTransformation:
     """``scale_by_adam`` plus decoupled weight decay on ``attn_gate`` and the ``router`` weight,
     annealed linearly to 0 over ``total_steps``. The coefficient reads the Adam ``count`` and the
     state stays ``ScaleByAdamState``, so a checkpoint written without decay resumes at the right step
     with its moments intact."""
-    adam = optax.scale_by_adam(b1, b2, eps)
 
     def init_fn(params):
         return adam.init(params)
@@ -633,6 +661,15 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     """GradPower exponent on the MuonH-group gradients before momentum (1: off; Parameter Golf #1682 used 0.9)."""
     muon_mars_gamma: float = 0.0
     """MARS-M variance-reduction strength for the MuonH groups (0: off; the paper uses 0.025)."""
+    adam_ademamix_alpha: float = 0.0
+    """AdEMAMix (arXiv 2409.03152) on the plain-Adam groups: weight of a slow gradient EMA added to Adam's
+    first moment, warmed up linearly over the run (0: off; the paper uses 5-8)."""
+    adam_ademamix_beta3: float = 0.999
+    """Decay of the AdEMAMix slow EMA, warmed up over the run as in the paper."""
+    grokfast_lambda: float = 0.0
+    """Grokfast-EMA (arXiv 2405.20233): every gradient gets ``lambda`` x its EMA added before the optimizer
+    (0: off; the paper uses 2)."""
+    grokfast_alpha: float = 0.98
     snoo_period: int = 0
     """SNOO outer step every this many inner steps (0: off)."""
     snoo_lr: float = 0.5
@@ -689,18 +726,25 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 components.append(scale_by_adamh(self.beta1, self.beta2, self.epsilon, lr))
                 return optax.chain(*components)
 
+            def adam_core(beta1, beta2):
+                if not self.adam_ademamix_alpha:
+                    return optax.scale_by_adam(beta1, beta2, self.epsilon)
+                return optax.contrib.scale_by_ademamix(
+                    beta1,
+                    beta2,
+                    _ademamix_beta3_schedule(beta1, self.adam_ademamix_beta3, num_train_steps),
+                    optax.linear_schedule(0.0, self.adam_ademamix_alpha, num_train_steps),
+                    self.epsilon,
+                )
+
             def adam_transform_at(lr):
                 components = []
                 if self.max_grad_norm:
                     components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                adam = adam_core(self.beta1, self.beta2)
                 if self.gate_router_weight_decay > 0.0:
-                    adam = _scale_by_adam_gate_router_decay(
-                        self.beta1, self.beta2, self.epsilon, self.gate_router_weight_decay, num_train_steps
-                    )
-                    components.append(cautious(adam) if self.adam_cautious else adam)
-                else:
-                    adam = optax.scale_by_adam(self.beta1, self.beta2, self.epsilon)
-                    components.append(cautious(adam) if self.adam_cautious else adam)
+                    adam = _scale_by_adam_gate_router_decay(adam, self.gate_router_weight_decay, num_train_steps)
+                components.append(cautious(adam) if self.adam_cautious else adam)
                 components.append(optax.scale(-lr))
                 return optax.chain(*components)
 
@@ -708,9 +752,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 components = []
                 if self.max_grad_norm:
                     components.append(optax.clip_by_global_norm(self.max_grad_norm))
-                adam = optax.scale_by_adam(
-                    self.beta1 if beta1 is None else beta1, self.beta2 if beta2 is None else beta2, self.epsilon
-                )
+                adam = adam_core(self.beta1 if beta1 is None else beta1, self.beta2 if beta2 is None else beta2)
                 components.append(cautious(adam) if self.adam_cautious else adam)
                 components.append(optax.scale(-lr))
                 return optax.chain(*components)
@@ -769,6 +811,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 "kda_decay": plain_adam_at(adam_lr * self.kda_decay_lr_mult, self.kda_decay_beta1, self.kda_decay_beta2),
             }
             inner = optax.multi_transform(transforms, self.create_mask)
+            if self.grokfast_lambda:
+                inner = optax.chain(scale_by_grokfast_ema(self.grokfast_alpha, self.grokfast_lambda), inner)
             if self.snoo_period <= 0:
                 return inner
             return snoo(
