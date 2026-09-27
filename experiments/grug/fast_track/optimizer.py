@@ -729,7 +729,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 path_lower,
             ):
                 return "adam"
-            if "token_embed2" in path_lower and self.embed2_lr_mult != 1.0:
+            if ("token_embed2" in path_lower or "token_embed3" in path_lower) and self.embed2_lr_mult != 1.0:
                 return "embed2"
             if "token_embed" in path_lower:
                 return self.embed_group

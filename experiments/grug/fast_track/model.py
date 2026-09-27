@@ -520,6 +520,9 @@ class GrugModelConfig:
     aux_lm_steps: int = 500
     second_embed: bool = False
     embed2_rows: int = 0
+    embed3_rows: int = 0
+    """Rows of a hashed *trigram* table that is its own AttnRes source next to the bigram table, so each
+    gate weighs the bigram and trigram views separately (0: off; needs ``second_embed_bigram``)."""
     embed2_fsdp: bool = False
     """Store the second table (and so its optimizer / EMA state) row-sharded over the FSDP axes, all-gathering
     a replicated copy for the lookup. Same math; for rungs where the replicated table's state doesn't fit."""
@@ -2391,6 +2394,8 @@ class Transformer(eqx.Module):
     """Pseudo-query of the final AttnRes gate, whose mix feeds the final norms and the lm_head."""
     token_embed2: jax.Array | None
     embed2_norm: RMSNorm | None
+    token_embed3: jax.Array | None
+    embed3_norm: RMSNorm | None
     embed2_up: jax.Array | None
     embed2_lambda: Float[Array, " G"] | None
     """Per-gate weight of the second embedding on each sublayer input (``second_embed_mode="input"``)."""
@@ -2500,6 +2505,15 @@ class Transformer(eqx.Module):
                 else None
             ),
             embed2_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps) if cfg.second_embed else None,
+            token_embed3=(
+                reshard(
+                    _init_weight(random.fold_in(embed2_key, 3), (cfg.embed3_rows, cfg.hidden_dim), cfg.initializer_std),
+                    P(_FSDP_AXES, None) if cfg.embed2_fsdp else P(None, None),
+                )
+                if cfg.embed3_rows
+                else None
+            ),
+            embed3_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps) if cfg.embed3_rows else None,
             embed2_up=(
                 reshard(
                     _init_weight(
@@ -2707,6 +2721,13 @@ class Transformer(eqx.Module):
                     input_embed2 = embed2
                 else:
                     extra_sources = (embed2,)
+            if self.token_embed3 is not None:
+                assert self.embed3_norm is not None and cfg.second_embed_bigram and cfg.second_embed_mode == "source"
+                doc_start = None if segment_ids is None else segment_ids[0]
+                ids3 = _bigram_hash_ids(token_ids, doc_start, cfg.embed3_rows, 3)
+                table3 = reshard(self.token_embed3, P(None, None)) if cfg.embed2_fsdp else self.token_embed3
+                gather3 = _embedding_gather if cfg.embed2_grad_fp32 else _embedding_gather_autodiff
+                extra_sources = (*extra_sources, self.embed3_norm(gather3(table3, ids3)))
             hidden, stacked_router_stats, final_gate_stats = self._attn_res_layers(
                 hidden,
                 token_ids,
@@ -3191,7 +3212,7 @@ def _gate_extras(model: "Transformer", num_gates: int) -> dict[str, jax.Array | 
         if not cfg.attn_res_full:
             raise ValueError("attn_res_mask_attn_for needs attn_res_full")
         mask = np.zeros((num_gates, _attn_res_num_sources(cfg)), np.float32)
-        offset = int(cfg.second_embed)
+        offset = _num_extra_embeds(cfg)
         for layer in cfg.attn_res_mask_attn_for:
             # Full AttnRes sources: embedding(s), then layer j's attention output at 1 + 2j, MoE at 2 + 2j.
             for j in range(layer):
@@ -3246,9 +3267,14 @@ def _attn_res_num_sources(cfg: GrugModelConfig) -> int:
     seg_size = max(1, cfg.num_layers // cfg.attn_res_num_blocks)
     cap = cfg.attn_res_num_blocks * cfg.loop_passes
     if cfg.attn_res_full:
-        return 2 * cfg.num_layers * cfg.loop_passes + int(cfg.second_embed) + 1
+        return 2 * cfg.num_layers * cfg.loop_passes + _num_extra_embeds(cfg) + 1
     rolled = sum(1 for i in range(cfg.num_layers * cfg.loop_passes) if i % seg_size == 0 and i // seg_size < cap)
-    return rolled + int(cfg.second_embed) + 1
+    return rolled + _num_extra_embeds(cfg) + 1
+
+
+def _num_extra_embeds(cfg: GrugModelConfig) -> int:
+    """Extra embedding tables ahead of the token embedding in the AttnRes source list."""
+    return int(cfg.second_embed) + int(cfg.embed3_rows > 0)
 
 
 def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> Float[Array, "..."]:
