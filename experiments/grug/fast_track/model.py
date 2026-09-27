@@ -430,6 +430,9 @@ class GrugModelConfig:
     (random init) and ``B`` (zero init), both trained with Adam (0: off)."""
     mla_k_norm: bool = False
     """Weightless per-head RMSNorm on the MLA keys only, no query norm (DeepSeek-V4.1's setup)."""
+    mla_k_norm_split: bool = False
+    """With ``mla_k_norm``, RMS-normalize the two key halves separately, i.e. the previous-token half from
+    ``mla_key_offset`` and the current-token half, so neither dominates the logit by magnitude."""
     mla_ssmax: bool = False
     """Scalable-softmax (SSMax, arXiv 2501.19399) on the MLA layers: each query is scaled by
     ``1 + s_h * log(n)``, with ``n`` the number of keys it can see in its document and ``s_h`` a
@@ -937,7 +940,12 @@ class CausalSelfAttention(eqx.Module):
             k = rms_norm(k)
         elif self.cfg.mla_k_norm and self.cfg.mla:
             # DeepSeek-V4.1: weightless per-head RMSNorm on the keys only; queries keep their scale.
-            k = rms_norm(k)
+            if self.cfg.mla_k_norm_split:
+                # With the partial key offset, normalize the previous-token and current-token halves separately.
+                half = k.shape[-1] // 2
+                k = jnp.concatenate([rms_norm(k[..., :half]), rms_norm(k[..., half:])], axis=-1)
+            else:
+                k = rms_norm(k)
 
         # Half-RoPE: rotate only the first half of Q/K head_dim; disable_rope skips RoPE on long/global layers.
         def _rope(qh: jax.Array, kh: jax.Array) -> tuple[jax.Array, jax.Array]:
