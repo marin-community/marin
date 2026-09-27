@@ -54,6 +54,7 @@ from experiments.grug.checkpointing import (
     restore_grug_state_from_checkpoint,
 )
 from experiments.grug.dispatch import dispatch_grug_training_run
+from experiments.grug.fast_track.byte_targets import token_byte_table
 from experiments.grug.fast_track.model import (
     FINAL_HIDDEN_KEY,
     DenseMLP,
@@ -649,6 +650,8 @@ def _loss_and_grads(
     step: jax.Array | None = None,
     loop_active: bool | None = None,
     head_replay: HeadReplay | None = None,
+    byte_table: jax.Array | None = None,
+    byte_weight: jax.Array | None = None,
 ):
     """``loop_active`` is a static pass selector for looped growth (see ``GrugModelConfig.loop_grow_step``)."""
     aux_weight = None if step is None else _aux_loss_weight(params.config, step)
@@ -670,6 +673,8 @@ def _loss_and_grads(
             train_terms=True,
             route_key=route_key,
             head_replay=head_replay,
+            byte_table=byte_table,
+            byte_aux_weight=byte_weight,
         )
 
     return jax.value_and_grad(loss_fn, has_aux=True)(params)
@@ -719,7 +724,11 @@ def _make_train_step(
     head_replay_period: int = 100,
     head_replay_scale: float = 0.1,
     watch_config: WatchConfig | None = None,
+    byte_table: jax.Array | None = None,
+    byte_aux_steps: int = 0,
 ):
+    """``byte_table`` (with ``byte_aux_steps``) turns on the byte-level auxiliary loss, its weight decaying
+    linearly from the model's ``byte_aux_weight`` to 0 at ``byte_aux_steps``."""
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
     if watch_config is not None:
@@ -748,8 +757,12 @@ def _make_train_step(
                 weight=state.replay_weight[oldest],
                 scale=jnp.where(filled, head_replay_scale, 0.0).astype(jnp.float32),
             )
+        byte_weight = None
+        if byte_table is not None:
+            progress = state.step.astype(jnp.float32) / max(byte_aux_steps, 1)
+            byte_weight = qb_params.config.byte_aux_weight * jnp.clip(1.0 - progress, 0.0, 1.0)
         (loss, summarized_metrics), grads = _loss_and_grads(
-            qb_params, batch, mp, z_loss, state.step, loop_active, head_replay
+            qb_params, batch, mp, z_loss, state.step, loop_active, head_replay, byte_table, byte_weight
         )
         final_hidden = summarized_metrics.pop(FINAL_HIDDEN_KEY, None)
         metrics = {"train/loss": loss, **summarized_metrics}
@@ -826,6 +839,11 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         raise ValueError("trainer.id was not initialized")
 
     optimizer = config.optimizer.build(trainer.num_train_steps)
+    byte_table = None
+    if config.model.byte_aux_bytes:
+        byte_table = jnp.asarray(
+            token_byte_table(config.data.the_tokenizer, config.model.vocab_size, config.model.byte_aux_bytes)
+        )
     watch_config = trainer.watch
     diagnostic_watch_step = None
     inline_watch_config = watch_config if watch_config.is_enabled else None
@@ -848,6 +866,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         head_replay_period=config.trainer.head_replay_period,
         head_replay_scale=config.trainer.head_replay_scale,
         watch_config=inline_watch_config,
+        byte_table=byte_table,
+        byte_aux_steps=int(config.model.byte_aux_decay_frac * trainer.num_train_steps),
     )
 
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)

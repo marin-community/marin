@@ -539,6 +539,12 @@ class GrugModelConfig:
     aux_lm_steps: int = 500
     second_embed: bool = False
     embed2_rows: int = 0
+    byte_aux_bytes: int = 0
+    """Byte-level auxiliary loss: a separate head predicts the first ``byte_aux_bytes`` UTF-8 bytes of the
+    next token (256-way each, positions past the token's end masked), weighted by a schedule the trainer
+    passes (``byte_aux_weight``, decayed to 0 by ``byte_aux_decay_frac`` of training). 0: off."""
+    byte_aux_weight: float = 0.1
+    byte_aux_decay_frac: float = 0.5
     window_embed_dim: int = 0
     """Explicit short context window as an AttnRes source: every token gets a small ``window_embed_dim``-wide
     embedding; for position t the embeddings of tokens t, t-1, ..., t-(k-1) (k = hidden_dim / window_embed_dim)
@@ -2460,6 +2466,7 @@ class Transformer(eqx.Module):
     token_embed3: jax.Array | None
     embed3_norm: RMSNorm | None
     token_embed_window: jax.Array | None
+    byte_head: jax.Array | None
     window_proj: jax.Array | None
     window_norm: RMSNorm | None
     embed2_up: jax.Array | None
@@ -2597,6 +2604,18 @@ class Transformer(eqx.Module):
                 else None
             ),
             window_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps) if cfg.window_embed_dim else None,
+            byte_head=(
+                reshard(
+                    _init_weight(
+                        random.fold_in(out_key, 11),
+                        (cfg.hidden_dim, cfg.byte_aux_bytes * _BYTE_CLASSES),
+                        cfg.initializer_std,
+                    ),
+                    P(None, None),
+                )
+                if cfg.byte_aux_bytes
+                else None
+            ),
             embed2_up=(
                 reshard(
                     _init_weight(
@@ -3160,6 +3179,8 @@ class Transformer(eqx.Module):
         train_terms: bool = False,
         route_key: jax.Array | None = None,
         head_replay: "HeadReplay | None" = None,
+        byte_table: Int[Array, "V N"] | None = None,
+        byte_aux_weight: jax.Array | None = None,
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
         """``aux_loss_weight`` scales the early auxiliary LM loss (``aux_lm_layer``); it is skipped at 0.
         ``train_terms`` adds the training-only objectives (MTP, AttnRes z-loss); evals leave it off so they
@@ -3239,6 +3260,22 @@ class Transformer(eqx.Module):
             loss = loss + self.config.mtp_weight * mtp_loss
         if replay_loss is not None and head_replay is not None:
             loss = loss + head_replay.scale.astype(loss_dtype) * replay_loss
+        byte_loss = None
+        if self.byte_head is not None and byte_table is not None and byte_aux_weight is not None and train_terms:
+            targets = shard_map(
+                _local_gather,
+                mesh=get_abstract_mesh(),
+                in_specs=(P(None, None), P(_BATCH_AXES, None)),
+                out_specs=P(_BATCH_AXES, None, None),
+            )(byte_table, reshard(labels, P(_BATCH_AXES, None)))
+            head = self.byte_head
+            byte_loss = jax.lax.cond(
+                byte_aux_weight > 0,
+                lambda h: _byte_aux_loss(h, head, targets, loss_weight),
+                lambda h: jnp.zeros((), jnp.float32),
+                hidden,
+            )
+            loss = loss + byte_aux_weight.astype(loss_dtype) * byte_loss.astype(loss_dtype)
         if return_router_metrics:
             final_gate_metrics = {
                 f"train/attn_res/{name.removeprefix('attn_res_')}": router_metrics.pop(name)
@@ -3259,6 +3296,8 @@ class Transformer(eqx.Module):
                 summarized_metrics["train/attn_res/aux_lm_loss"] = aux_loss
             if mtp_loss is not None:
                 summarized_metrics["train/attn_res/mtp_loss"] = mtp_loss
+            if byte_loss is not None:
+                summarized_metrics["train/byte_aux_loss"] = byte_loss
             num_moe_layers = router_metrics["router_z_loss_per_layer"].shape[0]
             summarized_metrics["train/router/z_loss_logging_only"] = (
                 jnp.sum(router_metrics["router_z_loss_per_layer"]) / num_moe_layers
@@ -3376,6 +3415,22 @@ def _share_routers(model: "Transformer", block: int) -> "Transformer":
         leaders = (jnp.arange(router.shape[0]) // block) * block
         shared.append(reshard(jnp.take(router, leaders, axis=0), _partition_spec_of(router)))
     return eqx.tree_at(lambda t: [s.stacked.mlp.router for s in t.layer_stacks()], model, shared)
+
+
+_BYTE_CLASSES = 256
+
+
+def _byte_aux_loss(
+    hidden: Float[Array, "B S D"], head: jax.Array, targets: Int[Array, "B S N"], loss_weight: Float[Array, "B S"]
+) -> jax.Array:
+    """Mean 256-way cross-entropy over the target token's first N bytes (``targets`` is -1 past its end)."""
+    b, s, n = targets.shape
+    logits = jnp.einsum("bsd,dk->bsk", hidden, head.astype(hidden.dtype), out_sharding=_batch_spec())
+    logits = logits.reshape(b, s, n, _BYTE_CLASSES).astype(jnp.float32)
+    lse = jax.nn.logsumexp(logits, axis=-1)
+    picked = jnp.take_along_axis(logits, jnp.maximum(targets, 0)[..., None], axis=-1)[..., 0]
+    valid = (targets >= 0).astype(jnp.float32) * loss_weight[..., None].astype(jnp.float32)
+    return jnp.sum((lse - picked) * valid) / jnp.maximum(jnp.sum(valid), 1.0)
 
 
 def _num_extra_embeds(cfg: GrugModelConfig) -> int:
