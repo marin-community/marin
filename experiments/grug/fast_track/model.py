@@ -575,6 +575,10 @@ class GrugModelConfig:
     embed3_rows: int = 0
     """Rows of a hashed *trigram* table that is its own AttnRes source next to the bigram table, so each
     gate weighs the bigram and trigram views separately (0: off; needs ``second_embed_bigram``)."""
+    bigram_gate: bool = False
+    """Engram-style content gate on the bigram source: ``g_t = sigmoid(sum_d w_d rms(e_t)_d rms(b_t)_d + c)`` scales
+    each token's bigram row by how its token embedding and bigram row interact, which the static AttnRes queries
+    can't express (w = 0 and c = +2 at init)."""
     embed2_fsdp: bool = False
     """Store the second table (and so its optimizer / EMA state) row-sharded over the FSDP axes, all-gathering
     a replicated copy for the lookup. Same math; for rungs where the replicated table's state doesn't fit."""
@@ -2560,6 +2564,8 @@ class Transformer(eqx.Module):
     """Pseudo-query of the final AttnRes gate, whose mix feeds the final norms and the lm_head."""
     token_embed2: jax.Array | None
     embed2_norm: RMSNorm | None
+    bigram_gate_w: Float[Array, " D"] | None
+    bigram_gate_b: Float[Array, ""] | None
     token_embed3: jax.Array | None
     embed3_norm: RMSNorm | None
     token_embed_window: jax.Array | None
@@ -2675,6 +2681,8 @@ class Transformer(eqx.Module):
                 else None
             ),
             embed2_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps) if cfg.second_embed else None,
+            bigram_gate_w=jnp.zeros((cfg.hidden_dim,), jnp.float32) if cfg.bigram_gate else None,
+            bigram_gate_b=jnp.full((), 2.0, jnp.float32) if cfg.bigram_gate else None,
             token_embed3=(
                 reshard(
                     _init_weight(random.fold_in(embed2_key, 3), (cfg.embed3_rows, cfg.hidden_dim), cfg.initializer_std),
@@ -2897,6 +2905,7 @@ class Transformer(eqx.Module):
         valid = _batch_reshard(valid)
 
         final_gate_stats: dict[str, jax.Array] = {}
+        bigram_gate_stats: dict[str, jax.Array] = {}
         if cfg.second_embed and not cfg.attn_res:
             raise ValueError("second_embed requires attn_res")
         if cfg.attn_res:
@@ -2918,6 +2927,14 @@ class Transformer(eqx.Module):
                         "bsr,rd->bsd", rows2, self.embed2_up.astype(rows2.dtype), out_sharding=_batch_spec()
                     )
                 embed2 = self.embed2_norm(rows2)
+                if self.bigram_gate_w is not None and self.bigram_gate_b is not None:
+                    interaction = rms_norm(hidden.astype(jnp.float32)) * rms_norm(embed2.astype(jnp.float32))
+                    gate = jax.nn.sigmoid(jnp.einsum("bsd,d->bs", interaction, self.bigram_gate_w) + self.bigram_gate_b)
+                    embed2 = (embed2 * gate[..., None]).astype(embed2.dtype)
+                    bigram_gate_stats = {
+                        "attn_res_bigram_gate_mean": jax.lax.stop_gradient(jnp.mean(gate)),
+                        "attn_res_bigram_gate_std": jax.lax.stop_gradient(jnp.std(gate)),
+                    }
                 if cfg.second_embed_mode == "input":
                     input_embed2 = embed2
                 else:
@@ -3003,6 +3020,7 @@ class Transformer(eqx.Module):
                 "margin_max_per_layer": stacked_router_stats["margin_max"],
             }
         router_metrics.update(final_gate_stats)
+        router_metrics.update(bigram_gate_stats)
         hidden = self.final_norm(hidden)
         if self.final_gated_norm is not None:
             hidden = self.final_gated_norm(hidden)
