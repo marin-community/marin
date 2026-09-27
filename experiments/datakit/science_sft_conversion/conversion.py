@@ -47,7 +47,10 @@ REQUEST_TIMEOUT = 1_800.0
 NEMOTRON_MATH_TEXTBOOKS = "nemotron_specialized/math_textbooks"
 SWALLOW_MATH_QA = "swallow-math-v2/qa"
 QUESTION_SOLUTION_SOURCES = frozenset({NEMOTRON_MATH_TEXTBOOKS, SWALLOW_MATH_QA})
-MISSING_CONTEXT_RE = re.compile(r"\b(?:the|source|provided|above) passage\b|\b(?:above|provided) text\b", re.I)
+MISSING_CONTEXT_RE = re.compile(
+    r"\b(?:the|source|provided|above) (?:passage|text)\b|\bprovided in (?:the|this) text\b", re.I
+)
+WITHHELD_SOLUTION_RE = re.compile(r"\b(?:do not|don't|without)\s+(?:solve|derive|calculate|simplify)\b", re.I)
 
 
 @dataclass(frozen=True)
@@ -88,7 +91,8 @@ SYSTEM_PROMPT = (
     "instruction in the user field; the conversion pipeline appends it. "
     "If the passage has a question and worked solution, put the complete standalone question, including all "
     "needed inputs and starting equations, in the user field without its solution or target formula. "
-    "Never refer to an equation or passage that is absent from the user field. "
+    "For worked solutions, the user must ask for a complete solution; never tell the assistant not to solve it. "
+    "Never refer to an equation or passage that is absent from the user field in any response field. "
     "For other passages, write a question or task about "
     "the passage; the conversion pipeline will attach the passage to the user turn. "
     "Preserve the source's facts, formulas, names, identifiers, units, and sequence symbols as fully as possible. "
@@ -188,13 +192,15 @@ def _row_request(source: Source, source_id: str, chunk: str, chunk_index: int, c
         user_instruction = (
             "Write a standalone exercise with the definitions, premises, and starting equations needed to solve "
             "it. Omit every formula or result the assistant is asked to derive, even if the source states it. "
-            "Do not add a new numerical case or refer to the source passage."
+            "Ask for a complete solution. Do not add a new numerical case. Do not mention the source passage "
+            "in the user, reasoning, or answer fields."
         )
     elif source.name == SWALLOW_MATH_QA:
         user_instruction = (
             "Include every explicit Question in this chunk with its inputs and given conversion factors. "
             "Omit all worked answers, derived formulas, code implementations, and final numeric results. "
-            "Do not refer to the source passage."
+            "Ask the assistant to solve every question. Do not mention the source text in the user, reasoning, "
+            "or answer fields."
         )
     else:
         user_instruction = (
@@ -230,8 +236,10 @@ def _document(source: Source, source_id: str, chunk: str, chunk_index: int, comp
     selected = format_for(source.name, source_id, chunk_index)
     user = completion["user"].strip()
     if source.name in QUESTION_SOLUTION_SOURCES:
-        if MISSING_CONTEXT_RE.search(user):
-            raise ValueError("Question refers to a passage omitted from the user turn")
+        if any(MISSING_CONTEXT_RE.search(completion[field]) for field in ("user", "reasoning_content", "answer")):
+            raise ValueError("Conversion refers to a passage omitted from the user turn")
+        if WITHHELD_SOLUTION_RE.search(user):
+            raise ValueError("Question tells the assistant to withhold its solution")
     else:
         user = f"{user}\n\nSource passage:\n{chunk}"
     answer = completion["answer"].strip()

@@ -50,6 +50,10 @@ def test_worked_solution_stays_out_of_the_user_turn() -> None:
     assert "What is 2 + 2?" in record["messages"][0]["content"][0]["text"]
     with pytest.raises(ValueError, match="omitted from the user turn"):
         _document(source, "test-2", passage, 0, {**completion, "user": "Using the source passage, solve 2 + 2."})
+    with pytest.raises(ValueError, match="omitted from the user turn"):
+        _document(source, "test-2", passage, 0, {**completion, "reasoning_content": "The passage says 2 + 2 = 4."})
+    with pytest.raises(ValueError, match="withhold its solution"):
+        _document(source, "test-2", passage, 0, {**completion, "user": "Set up 2 + 2, but do not solve it."})
 
 
 def test_audit_detects_short_batch(tmp_path) -> None:
