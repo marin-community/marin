@@ -428,6 +428,8 @@ class GrugModelConfig:
     laurel_rank: int = 0
     """LAuReL-LR (arXiv 2411.07501): each sublayer input becomes ``h + (h A) B`` with a rank-r ``A``
     (random init) and ``B`` (zero init), both trained with Adam (0: off)."""
+    mla_k_norm: bool = False
+    """Weightless per-head RMSNorm on the MLA keys only, no query norm (DeepSeek-V4.1's setup)."""
     mla_ssmax: bool = False
     """Scalable-softmax (SSMax, arXiv 2501.19399) on the MLA layers: each query is scaled by
     ``1 + s_h * log(n)``, with ``n`` the number of keys it can see in its document and ``s_h`` a
@@ -915,6 +917,9 @@ class CausalSelfAttention(eqx.Module):
 
         if self.cfg.qk_norm:
             q = rms_norm(q)
+            k = rms_norm(k)
+        elif self.cfg.mla_k_norm and self.cfg.mla:
+            # DeepSeek-V4.1: weightless per-head RMSNorm on the keys only; queries keep their scale.
             k = rms_norm(k)
 
         # Half-RoPE: rotate only the first half of Q/K head_dim; disable_rope skips RoPE on long/global layers.
