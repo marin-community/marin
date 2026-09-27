@@ -19,3 +19,5 @@ serve:
     - '128'
     - --language-model-only
     - --enable-prefix-caching
+    - --model-loader-extra-config
+    - '{"distributed":true}'
