@@ -455,6 +455,10 @@ class GrugModelConfig:
     logit_soft_cap_asym: tuple[float, ...] = ()
     """Asymmetric logit cap ``A * sigmoid((z + B) / C)`` as ``(A, B, C)`` (modded-nanogpt record #54);
     overrides ``logit_soft_cap`` when set."""
+    kda_write_gate: bool = False
+    """Gated DeltaNet-2 (arXiv 2605.22791) write gate: each KDA value channel is scaled by ``2 sigmoid(x W_w)``
+    before the delta-rule update, a channel-wise write strength next to KDA's per-head beta. Runs through the
+    existing kernel."""
     kda_beta_negative: bool = False
     """KDA write strength ``beta = 2 * sigmoid(logit - log 3)`` in (0, 2), so the transition ``I - beta k k^T``
     can have negative eigenvalues (Grazzi et al. 2025); the shift keeps the mean beta at init at 1/2."""
@@ -1007,6 +1011,7 @@ class KimiDeltaAttention(eqx.Module):
     w_v: Float[Array, "D NH"]
     w_o: Float[Array, "NH D"]
     w_g: Float[Array, "D NH"]  # [D, N] with cfg.kda_gate_per_head
+    w_write: Float[Array, "D NH"] | None  # channel-wise value write gate (cfg.kda_write_gate)
     w_a_down: Float[Array, "D R"]
     w_a_up: Float[Array, "R NH"]
     a_log: Float[Array, " N"]
@@ -1038,6 +1043,11 @@ class KimiDeltaAttention(eqx.Module):
             w_g=reshard(
                 _init_weight(k_g, (d, n if cfg.kda_gate_per_head else n * h), std),
                 P(None, None) if cfg.kda_gate_per_head else P(_FSDP_AXES, "model"),
+            ),
+            w_write=(
+                reshard(_init_weight(random.fold_in(k_v, 7), (d, n * h), std), P(_FSDP_AXES, "model"))
+                if cfg.kda_write_gate
+                else None
             ),
             w_a_down=reshard(_init_weight(k_ad, (d, r), std), P(_FSDP_AXES, None)),
             w_a_up=reshard(
@@ -1102,6 +1112,11 @@ class KimiDeltaAttention(eqx.Module):
         q = project(self.w_q, self.sconv_q, 0, "q")
         k = project(self.w_k, self.sconv_k, 1, "k")
         v = project(self.w_v, self.sconv_v, 2, "v")
+        if self.w_write is not None:
+            write = jnp.einsum("bsh,hd->bsd", proj_inputs.get("v", x), self.w_write)
+            v = v * rearrange(
+                2.0 * jax.nn.sigmoid(write.astype(jnp.float32)), "... (n d) -> ... n d", d=head_dim
+            ).astype(v.dtype)
         a_low = jnp.einsum("bsd,dr->bsr", x, self.w_a_down)
         if self.sconv_a is not None:
             a_low = self.sconv_a(a_low, segment_ids)
