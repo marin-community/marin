@@ -22,7 +22,6 @@ from experiments.datakit.science_sft_conversion.conversion import (
     Source,
     _convert_chunk,
     _source_files,
-    format_for,
     sources,
     split_source,
 )
@@ -78,16 +77,16 @@ async def probe(output_url: str, samples_per_source: int, seed: int) -> None:
         )
 
     results = []
-    for (source, source_id, chunk, chunk_index, chunk_count), record in zip(samples, records, strict=True):
+    for (source, source_id, chunk, chunk_index, chunk_count), result in zip(samples, records, strict=True):
         results.append(
             {
                 "source": source.name,
                 "source_id": source_id,
-                "format": format_for(source.name, source_id, chunk_index).name,
+                "format": result.answer_format.name,
                 "chunk_index": chunk_index,
                 "chunk_count": chunk_count,
                 "source_chunk": chunk,
-                "record": record,
+                "record": result.record,
             }
         )
         logger.info("Validated %s in %s format", source.name, results[-1]["format"])

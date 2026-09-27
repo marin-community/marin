@@ -92,6 +92,12 @@ class ConversionMode(StrEnum):
     GROUNDED = "grounded"
 
 
+@dataclass(frozen=True)
+class ConvertedChunk:
+    record: dict
+    answer_format: Format
+
+
 FORMATS = (
     Format("paragraphs", "Use short prose paragraphs and end with a line beginning `Answer:`."),
     Format("numbered", "Use numbered steps and end with a line beginning `Final answer:`."),
@@ -186,7 +192,7 @@ def _output_path(source: Source, url: str, row_group: int, batch_index: int, out
 
 
 def _row_request(
-    source: Source, source_id: str, chunk: str, chunk_index: int, chunk_count: int, mode: ConversionMode
+    source: Source, chunk: str, chunk_index: int, chunk_count: int, selected: Format, mode: ConversionMode
 ) -> dict:
     response_format = {
         "type": "json_schema",
@@ -205,7 +211,6 @@ def _row_request(
             },
         },
     }
-    selected = format_for(source.name, source_id, chunk_index)
     if mode == ConversionMode.GROUNDED:
         user_instruction = (
             "Write a substantive task covering the passage's main facts or steps. The pipeline will append "
@@ -251,12 +256,17 @@ def _row_request(
 
 
 def _document(
-    source: Source, source_id: str, chunk: str, chunk_index: int, completion: dict, mode: ConversionMode
+    source: Source,
+    source_id: str,
+    chunk: str,
+    chunk_index: int,
+    completion: dict,
+    selected: Format,
+    mode: ConversionMode,
 ) -> dict:
     for field in ("user", "reasoning_content", "answer"):
         if not isinstance(completion.get(field), str) or not completion[field].strip():
             raise ValueError(f"Missing {field} in conversion response")
-    selected = format_for(source.name, source_id, chunk_index)
     user = completion["user"].strip()
     if mode == ConversionMode.STANDALONE:
         if any(MISSING_CONTEXT_RE.search(completion[field]) for field in ("user", "reasoning_content", "answer")):
@@ -316,49 +326,65 @@ async def _convert_chunk(
     chunk: str,
     chunk_index: int,
     chunk_count: int,
-) -> dict:
+) -> ConvertedChunk:
     async with semaphore:
+        initial_format = format_for(source.name, source_id, chunk_index)
+        format_index = FORMATS.index(initial_format)
+        formats = FORMATS[format_index:] + FORMATS[:format_index]
         modes = (
-            [ConversionMode.STANDALONE, ConversionMode.GROUNDED]
+            (ConversionMode.STANDALONE, ConversionMode.GROUNDED)
             if source.name in QUESTION_SOLUTION_SOURCES
-            else [ConversionMode.GROUNDED]
+            else (ConversionMode.GROUNDED,)
         )
         for mode in modes:
-            body = _row_request(source, source_id, chunk, chunk_index, chunk_count, mode)
-            for attempt in range(MAX_ATTEMPTS):
-                content = None
-                try:
-                    response = await client.post(f"{endpoint}/v1/chat/completions", json=body)
-                    response.raise_for_status()
-                    result = response.json()
-                    choice = result["choices"][0]
-                    if choice["finish_reason"] != "stop":
-                        raise ValueError(f"Generation ended with {choice['finish_reason']}")
-                    content = choice["message"]["content"]
-                    return _document(source, source_id, chunk, chunk_index, json.loads(content), mode)
-                except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as error:
-                    if content is not None:
-                        body["messages"].extend(
-                            [
-                                {"role": "assistant", "content": content},
-                                {
-                                    "role": "user",
-                                    "content": (
-                                        f"The previous JSON was rejected: {error}. Return a corrected JSON object. "
-                                        "The user question must contain everything the assistant needs to answer it; "
-                                        "do not mention an absent passage. Follow the requested answer format."
-                                    ),
-                                },
-                            ]
-                        )
-                    if attempt + 1 == MAX_ATTEMPTS:
-                        if mode == ConversionMode.STANDALONE:
-                            logger.warning(
-                                "Using source-grounded fallback for %s/%s/%d", source.name, source_id, chunk_index
+            for selected in formats[:1] if mode == ConversionMode.STANDALONE else formats:
+                body = _row_request(source, chunk, chunk_index, chunk_count, selected, mode)
+                for attempt in range(MAX_ATTEMPTS):
+                    content = None
+                    try:
+                        response = await client.post(f"{endpoint}/v1/chat/completions", json=body)
+                        response.raise_for_status()
+                        result = response.json()
+                        choice = result["choices"][0]
+                        if choice["finish_reason"] != "stop":
+                            raise ValueError(f"Generation ended with {choice['finish_reason']}")
+                        content = choice["message"]["content"]
+                        record = _document(source, source_id, chunk, chunk_index, json.loads(content), selected, mode)
+                        return ConvertedChunk(record, selected)
+                    except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as error:
+                        if content is not None:
+                            body["messages"].extend(
+                                [
+                                    {"role": "assistant", "content": content},
+                                    {
+                                        "role": "user",
+                                        "content": (
+                                            f"The previous JSON was rejected: {error}. Return a corrected JSON object. "
+                                            "Make the question self-contained. Do not mention an absent passage. "
+                                            "Follow the requested answer format."
+                                        ),
+                                    },
+                                ]
                             )
+                        if attempt + 1 == MAX_ATTEMPTS:
+                            if mode == ConversionMode.STANDALONE:
+                                logger.warning(
+                                    "Using source-grounded fallback for %s/%s/%d", source.name, source_id, chunk_index
+                                )
+                            elif selected != formats[-1]:
+                                logger.warning(
+                                    "Trying another answer format for %s/%s/%d after %s",
+                                    source.name,
+                                    source_id,
+                                    chunk_index,
+                                    selected.name,
+                                )
+                            else:
+                                raise RuntimeError(
+                                    f"Conversion failed for {source.name}/{source_id}/{chunk_index}"
+                                ) from error
                             break
-                        raise RuntimeError(f"Conversion failed for {source.name}/{source_id}/{chunk_index}") from error
-                    await asyncio.sleep(min(2**attempt, 16) + random.random())
+                        await asyncio.sleep(min(2**attempt, 16) + random.random())
     raise AssertionError("Unreachable retry exit")
 
 
@@ -370,16 +396,15 @@ async def _convert_batch(
     rows: list[dict],
 ) -> tuple[list[dict], Counter[str]]:
     jobs = []
-    counts: Counter[str] = Counter()
     for row in rows:
         source_id = str(row["id"])
         chunks = split_source(row["text"])
         if not chunks:
             raise ValueError(f"Empty source row {source.name}/{source_id}")
         for chunk_index, chunk in enumerate(chunks):
-            counts[format_for(source.name, source_id, chunk_index).name] += 1
             jobs.append(_convert_chunk(client, semaphore, endpoint, source, source_id, chunk, chunk_index, len(chunks)))
-    return list(await asyncio.gather(*jobs)), counts
+    results = await asyncio.gather(*jobs)
+    return [result.record for result in results], Counter(result.answer_format.name for result in results)
 
 
 async def convert_work_item(source: Source, url: str, row_group: int, endpoint: str, max_batches: int | None) -> None:

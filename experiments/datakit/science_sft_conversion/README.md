@@ -28,8 +28,10 @@ registers this Parquet directory as the Datakit source
 the existing output and does not start conversion.
 Each file covers one 1,024-row source batch; completed batches are skipped on
 restart. A failed batch remains unwritten and fails the Iris task after four
-source-grounded attempts, or four attempts for sources that start in the
-source-grounded mode. The source artifact stays unchanged.
+attempts at each of the six answer formats. The worker starts with the format
+chosen by the source ID hash, then tries the remaining formats in a fixed order
+if validation keeps failing. Its logged format counts reflect the format
+actually written. The source artifact stays unchanged.
 
 The pinned source pool contains 105,582,071 rows across 6,350 row groups.
 The worker checks these row counts before issuing requests. Every nonempty
@@ -83,11 +85,11 @@ remaining samples use reproducible random shards, row groups, and chunks:
 
 ```bash
 uv run iris --cluster=cw-rno2a job run --priority interactive --enable-extra-resources \
-  --job-name science-sft-conversion-probe-v3-r2-20260927 --cpu 4 --memory 16GB \
+  --job-name science-sft-conversion-probe-v3-r3-20260927 --cpu 4 --memory 16GB \
   --disk 10GB --extra cpu --no-wait \
   -- python -m experiments.datakit.science_sft_conversion.probe \
     --samples-per-source 5 --seed 20260927 \
-    --output-path s3://marin-us-east-02a/marin/users/benfeuer/science-sft-converted/2026.09.27-v3/audit/probe-stratified-85-r2.json
+    --output-path s3://marin-us-east-02a/marin/users/benfeuer/science-sft-converted/2026.09.27-v3/audit/probe-stratified-85-r3.json
 ```
 
 The conversion is complete only when every expected source batch has a

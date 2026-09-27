@@ -17,7 +17,15 @@ from experiments.datakit.science_sft_conversion.conversion import (
     WorkItem,
     _document,
     _output_path,
+    format_for,
 )
+
+
+def validated_document(
+    source: Source, source_id: str, passage: str, chunk_index: int, completion: dict, mode: ConversionMode
+) -> dict:
+    selected = format_for(source.name, source_id, chunk_index)
+    return _document(source, source_id, passage, chunk_index, completion, selected, mode)
 
 
 def test_bold_markdown_conclusion_is_valid() -> None:
@@ -29,7 +37,7 @@ def test_bold_markdown_conclusion_is_valid() -> None:
         "answer": "- Mass: 2 kg\n- Force: 6 N\n\n**Conclusion:** Final speed is 9 m/s.",
     }
 
-    record = _document(source, "test-2", passage, 0, completion, ConversionMode.GROUNDED)
+    record = validated_document(source, "test-2", passage, 0, completion, ConversionMode.GROUNDED)
 
     assert passage in record["messages"][0]["content"][0]["text"]
     assert record["messages"][1]["channel"] == ChatChannel.ANALYSIS
@@ -38,7 +46,7 @@ def test_bold_markdown_conclusion_is_valid() -> None:
     assert record["messages"][2]["content"][0]["text"] == completion["answer"]
 
     with pytest.raises(ValueError):
-        _document(
+        validated_document(
             source, "test-2", passage, 0, {**completion, "answer": "- Mass: 2 kg\n- Force: 6 N"}, ConversionMode.GROUNDED
         )
 
@@ -52,14 +60,14 @@ def test_worked_solution_stays_out_of_the_user_turn() -> None:
         "answer": "Short answer: 4.\nAdding two and two gives four.",
     }
 
-    record = _document(source, "test-2", passage, 0, completion, ConversionMode.STANDALONE)
+    record = validated_document(source, "test-2", passage, 0, completion, ConversionMode.STANDALONE)
 
     assert passage not in record["messages"][0]["content"][0]["text"]
     assert "What is 2 + 2?" in record["messages"][0]["content"][0]["text"]
-    grounded = _document(source, "test-2", passage, 0, completion, ConversionMode.GROUNDED)
+    grounded = validated_document(source, "test-2", passage, 0, completion, ConversionMode.GROUNDED)
     assert passage in grounded["messages"][0]["content"][0]["text"]
     with pytest.raises(ValueError, match="omitted from the user turn"):
-        _document(
+        validated_document(
             source,
             "test-2",
             passage,
@@ -68,7 +76,7 @@ def test_worked_solution_stays_out_of_the_user_turn() -> None:
             ConversionMode.STANDALONE,
         )
     with pytest.raises(ValueError, match="omitted from the user turn"):
-        _document(
+        validated_document(
             source,
             "test-2",
             passage,
@@ -77,7 +85,7 @@ def test_worked_solution_stays_out_of_the_user_turn() -> None:
             ConversionMode.STANDALONE,
         )
     with pytest.raises(ValueError, match="withhold its solution"):
-        _document(
+        validated_document(
             source,
             "test-2",
             passage,
@@ -86,7 +94,7 @@ def test_worked_solution_stays_out_of_the_user_turn() -> None:
             ConversionMode.STANDALONE,
         )
     with pytest.raises(ValueError, match="create an exercise"):
-        _document(
+        validated_document(
             source,
             "test-2",
             passage,
@@ -95,7 +103,7 @@ def test_worked_solution_stays_out_of_the_user_turn() -> None:
             ConversionMode.STANDALONE,
         )
     with pytest.raises(ValueError, match="withhold its solution"):
-        _document(
+        validated_document(
             source,
             "test-2",
             passage,
@@ -113,7 +121,7 @@ def test_numbered_worked_solution_accepts_step_headings() -> None:
         "answer": "**Step 1 — Apply Bayes' theorem.**\nThe odds multiply by b/(1-b).\nFinal answer: updated odds.",
     }
 
-    record = _document(
+    record = validated_document(
         source,
         "00001a321e0eff9c465f857eed9de1ee",
         "Worked answer: updated odds.",
