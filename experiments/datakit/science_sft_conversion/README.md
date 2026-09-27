@@ -21,7 +21,7 @@ The conversion uses the shared `/benfeuer/minimax-m3-science-sft` Iris endpoint
 on `cw-rno2a`. Start one small batch before the full run:
 
 ```bash
-uv run iris --cluster=cw-rno2a job run --priority interactive \
+uv run iris --cluster=cw-rno2a job run --priority interactive --enable-extra-resources \
   --job-name science-sft-conversion-smoke-20260927 \
   --cpu 8 --memory 32GB --disk 20GB --extra cpu --no-wait \
   -- python -m experiments.datakit.science_sft_conversion.conversion \
@@ -32,7 +32,7 @@ After checking the first generated records and model response, submit the
 full resumable workload:
 
 ```bash
-uv run iris --cluster=cw-rno2a job run --priority interactive \
+uv run iris --cluster=cw-rno2a job run --priority interactive --enable-extra-resources \
   --job-name science-sft-conversion-20260927 --replicas 16 \
   --cpu 8 --memory 32GB --disk 20GB --extra cpu --no-wait \
   -- python -m experiments.datakit.science_sft_conversion.conversion

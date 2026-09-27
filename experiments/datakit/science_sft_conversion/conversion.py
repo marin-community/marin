@@ -26,6 +26,7 @@ from iris.cluster.client.job_info import get_job_info
 from marin.datakit.chat_normalize import CHAT_SCHEMA, validate_chat_messages
 from marin.datakit.download.rollout_transforms import openai_chat_document
 from openai_harmony import Message
+from rigging.filesystem.atomic import atomic_rename
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import prefix_join
 
@@ -296,8 +297,9 @@ async def convert_work_item(source: Source, url: str, row_group: int, endpoint: 
                 rows = batch.to_pylist()
                 documents, format_counts = await _convert_batch(client, semaphore, endpoint, source, rows)
                 table = pa.Table.from_pylist(documents, schema=CHAT_SCHEMA)
-                with output_fs.open(output_path, "wb") as destination:
-                    pq.write_table(table, destination, compression="zstd")
+                with atomic_rename(output_path, filesystem=output_fs) as temporary_path:
+                    with output_fs.open(temporary_path, "wb") as destination:
+                        pq.write_table(table, destination, compression="zstd")
                 logger.info(
                     "Converted %s row group %d batch %d: %d rows, %d chat records, formats=%s",
                     source.name,
