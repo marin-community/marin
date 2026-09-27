@@ -262,7 +262,7 @@ def _active_params(cfg: GrugModelConfig) -> int:
     routed = cfg.num_experts_per_token * 3 * expert_width * cfg.intermediate_dim
     latent_proj = 0 if cfg.latent_dim is None else 2 * d * cfg.latent_dim
     shared = cfg.num_shared_experts * 3 * d * cfg.shared_expert_intermediate_dim
-    router = d * cfg.num_experts
+    router = d * (cfg.num_experts + cfg.num_null_experts)
     return cfg.num_layers * (attn + router + routed + latent_proj + shared)
 
 

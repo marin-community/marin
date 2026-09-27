@@ -577,7 +577,7 @@ def initial_state(
         master_params=master_params,
         ema_params=params if ema_beta is not None else None,
         opt_state=opt_state,
-        pending_qb_betas=jnp.zeros((num_moe_layers, model_config.num_experts)),
+        pending_qb_betas=jnp.zeros((num_moe_layers, model_config.num_experts + model_config.num_null_experts)),
         **_empty_head_replay(head_replay_shape, mp),
     )
 

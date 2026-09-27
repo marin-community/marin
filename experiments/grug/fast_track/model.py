@@ -510,6 +510,24 @@ class GrugModelConfig:
     experts; each token takes ``num_experts_per_token - moe_bank2_topk`` experts from bank 1 and ``moe_bank2_topk``
     from bank 2 (a fixed split, so each bank's FLOPs are fixed), QB balances each bank against its own K/E, and
     the combine weights are renormalized over all selected experts. 0: one uniform bank."""
+    moe_null_experts: int = 0
+    """MoE++ (arXiv 2410.07348) zero experts: extra router columns past ``num_experts`` (after them come the
+    ``moe_copy_experts`` and ``moe_const_experts`` columns) whose output is 0. The router takes top-K over the
+    real and all zero-computation experts, so a token uses between 0 and K real experts; the combine weights
+    are renormalized over all K slots, so a null slot's weight is taken from the real experts. Null slots go to
+    the real-expert backend as combine-weight-0 assignments spread over the experts (the fixed-capacity EP
+    dispatch still carries and computes them), so this changes the math, not the FLOPs. 0: off."""
+    moe_copy_experts: int = 0
+    """MoE++ copy experts (zero-computation): output = the expert input (the latent-space token)."""
+    moe_const_experts: int = 0
+    """MoE++ constant experts (zero-computation): output = ``a1 * x + a2 * v`` with a learned vector ``v`` and
+    ``[a1, a2] = softmax(x @ W_c)`` per constant expert (``v``, ``W_c`` zero-init, Adam)."""
+    moe_null_target_frac: float | None = None
+    """QB treatment of the zero-computation experts. None: they are free (router bias 0) and QB only balances
+    the real experts against each other at their measured load, with the mean real bias pinned at 0, so the
+    real-vs-null split is left to the learned router logits. A float: one QB over all columns sends this
+    fraction of the top-K slots to the zero-computation experts (split evenly), like MoE++'s tau-weighted
+    balance loss."""
     moe_bank2_topk: int = 0
     moe_bank2_intermediate_dim: int = 0
     moe_bank2_scale: bool = False
@@ -666,6 +684,16 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be < num_experts, because QB routing selects top-(k+1)")
         if self.local_mixer == LocalMixer.KDA and not self.attn_res:
             raise ValueError("local_mixer=kda requires attn_res (KDA layers run in the unrolled AttnRes loop)")
+        if self.num_null_experts:
+            if self.moe_bank2_experts or self.moe_hash_layers or self.moe_dense_router_grad:
+                raise ValueError("zero-computation experts do not support moe_bank2, hash layers or dense router grad")
+            if self.moe_null_target_frac is not None and not 0.0 < self.moe_null_target_frac < 1.0:
+                raise ValueError(f"moe_null_target_frac must be in (0, 1), got {self.moe_null_target_frac}")
+
+    @property
+    def num_null_experts(self) -> int:
+        """Zero-computation (zero + copy + constant) experts, the router columns past ``num_experts``."""
+        return self.moe_null_experts + self.moe_copy_experts + self.moe_const_experts
 
     @property
     def Embed(self) -> Axis:
@@ -1496,9 +1524,11 @@ def _bincount_upper_quantile(
     n_bins: int,
     lo: jax.Array,
     hi: jax.Array,
-    target_rank: float,
+    target_rank: float | jax.Array,
 ) -> jax.Array:
     """Per-expert (1-K/E) upper quantile of ``s_local`` via one fused bincount over ``[lo, hi]``.
+
+    ``target_rank`` is the number of tokens at or above each expert's threshold: a scalar, or one per expert.
 
     Runs inside a ``shard_map``: a single ``jnp.bincount`` over an expert-major flat index
     (``expert*n_bins + bin``, clip-to-edge) builds the local per-expert histogram, one integer ``psum``
@@ -1511,7 +1541,8 @@ def _bincount_upper_quantile(
     local_counts = jnp.bincount(flat, length=num_experts * n_bins).reshape(num_experts, n_bins)
     counts = jax.lax.psum(local_counts, axis_name=_BATCH_AXES).astype(jnp.float32)
     cum_from_top = jnp.cumsum(counts[:, ::-1], axis=-1)[:, ::-1]  # #{margins in bins >= b}
-    bstar = jnp.clip(jnp.sum((cum_from_top >= target_rank).astype(jnp.int32), axis=-1) - 1, 0, n_bins - 1)
+    target_rank = jnp.broadcast_to(jnp.asarray(target_rank, jnp.float32), (num_experts,))
+    bstar = jnp.clip(jnp.sum((cum_from_top >= target_rank[:, None]).astype(jnp.int32), axis=-1) - 1, 0, n_bins - 1)
     ct_b = jnp.take_along_axis(cum_from_top, bstar[:, None], axis=-1)[:, 0]
     h_b = jnp.take_along_axis(counts, bstar[:, None], axis=-1)[:, 0]
     lower_edge = lo + bstar.astype(jnp.float32) * bin_width
@@ -1522,7 +1553,7 @@ def _qb_beta_hist(
     s_ma: jax.Array,
     mesh: jax.sharding.AbstractMesh,
     *,
-    num_experts_per_token: int,
+    target_share: float | jax.Array,
     num_experts: int,
     n_bins: int,
 ) -> tuple[jax.Array, jax.Array, jax.Array]:
@@ -1531,13 +1562,15 @@ def _qb_beta_hist(
     A ``pmin``/``pmax`` sets the grid to the exact current range of the margins, then
     ``_bincount_upper_quantile`` reads the per-expert threshold. Replaces the per-device ``top_k`` +
     ``pmean`` estimate with a smoother global quantile at the cost of the per-expert count reduction.
+    ``target_share`` is the fraction of tokens each expert should take (``K/E``), or one per expert.
 
     Returns ``(beta, margin_min, margin_max)``: the per-expert threshold plus the live margin range
     (the grid ``lo``/``hi``), surfaced for logging.
     """
-    target_rank = float(s_ma.shape[0]) * num_experts_per_token / num_experts  # tokens at/above beta per expert
+    # Tokens at/above beta per expert.
+    target_rank = jnp.broadcast_to(jnp.asarray(float(s_ma.shape[0]) * target_share, jnp.float32), (num_experts,))
 
-    def _fn(s_local: jax.Array) -> tuple[jax.Array, jax.Array, jax.Array]:
+    def _fn(s_local: jax.Array, target_rank: jax.Array) -> tuple[jax.Array, jax.Array, jax.Array]:
         # pmin/pmax have no autodiff rule and the range is a control quantity, so detach their inputs;
         # the bincount path drops tangents at the integer bin cast, so it needs none downstream either.
         lo = jax.lax.pmin(jax.lax.stop_gradient(jnp.min(s_local)), axis_name=_BATCH_AXES)
@@ -1548,7 +1581,9 @@ def _qb_beta_hist(
         )
         return beta, lo, hi  # surface the live margin range for logging
 
-    return shard_map(_fn, mesh=mesh, in_specs=(P(_BATCH_AXES, None),), out_specs=(P(), P(), P()))(s_ma)
+    return shard_map(_fn, mesh=mesh, in_specs=(P(_BATCH_AXES, None), P()), out_specs=(P(), P(), P()))(
+        s_ma, reshard(target_rank, P())
+    )
 
 
 class MoEMLP(eqx.Module):
@@ -1562,6 +1597,8 @@ class MoEMLP(eqx.Module):
     expert_mlp: MoEExpertMlp
     expert_mlp_b: MoEExpertMlp | None
     bank_scale: Float[Array, " 2"] | None
+    null_const_v: Float[Array, "C L"] | None
+    null_const_w: Float[Array, "C L 2"] | None
     w_latent_down: jax.Array | None
     latent_norm: RMSNorm | None
     w_latent_up: jax.Array | None
@@ -1577,7 +1614,7 @@ class MoEMLP(eqx.Module):
         if cfg.num_experts % expert_axis_size != 0:
             raise ValueError(f"num_experts={cfg.num_experts} must be divisible by expert axis size={expert_axis_size}")
 
-        d, e = cfg.hidden_dim, cfg.num_experts
+        d, e = cfg.hidden_dim, cfg.num_experts + cfg.num_null_experts
         # Routed experts live in the latent space; the router reads the full-width token, so its
         # own projection keeps `hidden_dim`.
         expert_width = cfg.latent_dim if cfg.latent_dim is not None else d
@@ -1626,6 +1663,12 @@ class MoEMLP(eqx.Module):
                 else None
             ),
             bank_scale=jnp.ones((2,), jnp.float32) if cfg.moe_bank2_experts and cfg.moe_bank2_scale else None,
+            null_const_v=(
+                jnp.zeros((cfg.moe_const_experts, expert_width), jnp.float32) if cfg.moe_const_experts else None
+            ),
+            null_const_w=(
+                jnp.zeros((cfg.moe_const_experts, expert_width, 2), jnp.float32) if cfg.moe_const_experts else None
+            ),
             cfg=cfg,
         )
 
@@ -1674,6 +1717,75 @@ class MoEMLP(eqx.Module):
         delta = (weights - sg(weights)) * (1.0 - selected)
         return jnp.einsum("te,el->tl", delta, expert_out, out_sharding=_partition_spec_of(routed_input))
 
+    def _null_qb_stats(
+        self, margins: Float[Array, "T N"], selected_experts: Int[Array, "T K"], mesh: jax.sharding.AbstractMesh
+    ) -> tuple[jax.Array, jax.Array, jax.Array]:
+        """QB ``(beta, margin_min, margin_max)`` over the real plus zero-computation router columns.
+
+        With ``moe_null_target_frac`` every column is balanced: the real experts share ``K (1 - f)`` slots per
+        token, the zero-computation experts ``K f``. Without it the zero-computation columns get beta 0 (no bias,
+        free to use) and the real experts are balanced at this step's measured real load, with their mean beta
+        removed so QB never moves the real-vs-null split.
+        """
+        num_real, num_null = self.cfg.num_experts, self.cfg.num_null_experts
+        k = self.cfg.num_experts_per_token
+        margins = reshard(margins, P(_BATCH_AXES, None))
+        frac = self.cfg.moe_null_target_frac
+        if frac is not None:
+            share = jnp.concatenate(
+                [jnp.full((num_real,), k * (1.0 - frac) / num_real), jnp.full((num_null,), k * frac / num_null)]
+            )
+            return _qb_beta_hist(
+                margins, mesh, target_share=share, num_experts=num_real + num_null, n_bins=_QB_HIST_BINS
+            )
+        real_slots = jax.lax.stop_gradient(jnp.mean(jnp.sum(selected_experts < num_real, axis=-1, dtype=jnp.float32)))
+        beta, lo, hi = _qb_beta_hist(
+            margins[:, :num_real], mesh, target_share=real_slots / num_real, num_experts=num_real, n_bins=_QB_HIST_BINS
+        )
+        beta = jnp.concatenate([beta - jnp.mean(beta), jnp.zeros((num_null,), beta.dtype)])
+        return beta, lo, hi
+
+    def _split_null_slots(
+        self,
+        routed_input: Float[Array, "T L"],
+        selected_experts: Int[Array, "T K"],
+        combine_weights: Float[Array, "T K"],
+    ) -> tuple[Int[Array, "T K"], Float[Array, "T K"], Float[Array, "T L"]]:
+        """Split the top-K slots into real-expert assignments and the zero-computation experts' output.
+
+        Returns ``(selected, weights, null_out)``: every null slot becomes a combine-weight-0 assignment to a
+        real expert (spread over the experts by token and slot, so it loads the fixed-capacity dispatch like a
+        balanced real slot), and ``null_out`` is the weighted sum of the copy and constant experts' outputs.
+        """
+        cfg = self.cfg
+        num_real = cfg.num_experts
+        copy_start = num_real + cfg.moe_null_experts
+        const_start = copy_start + cfg.moe_copy_experts
+        is_null = selected_experts >= num_real
+        t, k = selected_experts.shape
+        slot_ids = jax.lax.broadcasted_iota(jnp.int32, (t, k), 0) * k + jax.lax.broadcasted_iota(jnp.int32, (t, k), 1)
+        spread = reshard(slot_ids % num_real, _partition_spec_of(selected_experts))
+        selected = jnp.where(is_null, spread, selected_experts)
+        weights = jnp.where(is_null, jnp.zeros_like(combine_weights), combine_weights)
+
+        w = combine_weights.astype(jnp.float32)
+        in_spec = _partition_spec_of(routed_input)
+        x = routed_input.astype(jnp.float32)
+        is_copy = (selected_experts >= copy_start) & (selected_experts < const_start)
+        x_scale = jnp.sum(jnp.where(is_copy, w, 0.0), axis=-1)
+        null_out = jnp.zeros_like(x)
+        if self.null_const_v is not None and self.null_const_w is not None:
+            # [T, C]: each constant expert's summed combine weight (0 where it was not picked).
+            const_w = jnp.einsum(
+                "tk,tkc->tc",
+                w,
+                jax.nn.one_hot(selected_experts - const_start, cfg.moe_const_experts, dtype=jnp.float32),
+            )
+            mix = jax.nn.softmax(jnp.einsum("tl,clm->tcm", x, self.null_const_w), axis=-1)
+            x_scale = x_scale + jnp.sum(const_w * mix[..., 0], axis=-1)
+            null_out = jnp.einsum("tc,cl->tl", const_w * mix[..., 1], self.null_const_v, out_sharding=in_spec)
+        return selected, weights, null_out + x_scale[:, None] * x
+
     @named_call
     def __call__(
         self,
@@ -1704,6 +1816,10 @@ class MoEMLP(eqx.Module):
         router_probs = jax.nn.softmax(router_logits, axis=-1)
         k = self.cfg.num_experts_per_token
         banks = _expert_banks(self.cfg)
+        num_real = self.cfg.num_experts
+        if self.cfg.num_null_experts:
+            # The zero-computation experts compete in the one bank's top-K.
+            banks = [(0, num_real + self.cfg.num_null_experts, k)]
         # Select top-(K+1) on biased logits per bank; the (K+1)-th is that bank's QB threshold alpha.
         bank_selected, bank_alpha = [], []
         for start, size, bank_k in banks:
@@ -1746,21 +1862,24 @@ class MoEMLP(eqx.Module):
             reshard(router_probs, P(_BATCH_AXES, None)),
             reshard(router_logits, P(_BATCH_AXES, None)),
             mesh,
-            num_experts=self.cfg.num_experts,
+            num_experts=num_real + self.cfg.num_null_experts,
             batch_axes=_BATCH_AXES,
         )
         # Sharded QB: estimate each expert's threshold beta from the margins `s - alpha` by binning
         # them into fixed bins over the live global range and reading the (1-K/E) quantile.
-        bank_stats = [
-            _qb_beta_hist(
-                reshard(router_logits[:, start : start + size] - alpha, P(_BATCH_AXES, None)),
-                mesh,
-                num_experts_per_token=bank_k,
-                num_experts=size,
-                n_bins=_QB_HIST_BINS,
-            )
-            for (start, size, bank_k), alpha in zip(banks, bank_alpha, strict=True)
-        ]
+        if self.cfg.num_null_experts:
+            bank_stats = [self._null_qb_stats(router_logits - bank_alpha[0], selected_experts, mesh)]
+        else:
+            bank_stats = [
+                _qb_beta_hist(
+                    reshard(router_logits[:, start : start + size] - alpha, P(_BATCH_AXES, None)),
+                    mesh,
+                    target_share=bank_k / size,
+                    num_experts=size,
+                    n_bins=_QB_HIST_BINS,
+                )
+                for (start, size, bank_k), alpha in zip(banks, bank_alpha, strict=True)
+            ]
         beta = jnp.concatenate([b for b, _, _ in bank_stats], axis=-1)
         margin_min = functools.reduce(jnp.minimum, [lo for _, lo, _ in bank_stats])
         margin_max = functools.reduce(jnp.maximum, [hi for _, _, hi in bank_stats])
@@ -1773,14 +1892,19 @@ class MoEMLP(eqx.Module):
             # Keep the expert input scale independent of the down-projection initialization.
             routed_input = self.latent_norm(reshard(projected[1], _batch_spec()))
         bank_mlps = [self.expert_mlp] if self.expert_mlp_b is None else [self.expert_mlp, self.expert_mlp_b]
+        real_selected, real_weights, null_out = selected_experts, combine_weights, None
+        if self.cfg.num_null_experts:
+            real_selected, real_weights, null_out = self._split_null_slots(
+                routed_input, selected_experts, combine_weights
+            )
         outputs, overflows, col = [], [], 0
         for (start, _, bank_k), em, bank_index in zip(banks, bank_mlps, (1, 2), strict=False):
             out, overflow = _run_expert_bank(
                 em,
                 _bank_config(self.cfg, bank_index),
                 routed_input,
-                (selected_experts[:, col : col + bank_k] - start).astype(jnp.int32),
-                combine_weights[:, col : col + bank_k],
+                (real_selected[:, col : col + bank_k] - start).astype(jnp.int32),
+                real_weights[:, col : col + bank_k],
             )
             if self.bank_scale is not None:
                 out = out * self.bank_scale[bank_index - 1].astype(out.dtype)
@@ -1788,6 +1912,8 @@ class MoEMLP(eqx.Module):
             overflows.append(overflow)
             col += bank_k
         routed_flat = functools.reduce(jnp.add, outputs)
+        if null_out is not None:
+            routed_flat = routed_flat + null_out.astype(routed_flat.dtype)
         capacity_overflow = overflows[0]
         if len(overflows) > 1:
             capacity_overflow = jax.tree.map(lambda *xs: functools.reduce(jnp.add, xs), *overflows)
@@ -3330,7 +3456,7 @@ class Transformer(eqx.Module):
             # One cross-device reduction for the whole layer stack, not one per layer (see router_metrics).
             reduced_router_stats = reduce_router_stats(
                 stacked_router_stats,
-                num_experts=cfg.num_experts,
+                num_experts=cfg.num_experts + cfg.num_null_experts,
                 num_experts_per_token=cfg.num_experts_per_token,
                 num_tokens=batch_size * seq_len,
             )
@@ -3756,6 +3882,8 @@ class Transformer(eqx.Module):
                 return loss, {"train/cross_entropy_loss": cross_entropy_loss, **final_gate_metrics}
             summarized_metrics = summarize_router_metrics(router_metrics)
             summarized_metrics.update(final_gate_metrics)
+            if self.config.num_null_experts:
+                summarized_metrics.update(_null_slot_metrics(self.config, router_metrics["routing_counts_per_layer"]))
             summarized_metrics["train/cross_entropy_loss"] = cross_entropy_loss
             if replay_loss is not None:
                 summarized_metrics["train/head_replay_loss"] = replay_loss
@@ -3782,6 +3910,23 @@ class Transformer(eqx.Module):
 
 
 FINAL_HIDDEN_KEY = "_final_hidden"
+
+
+def _null_slot_metrics(cfg: GrugModelConfig, routing_counts: Float[Array, "L N"]) -> dict[str, jax.Array]:
+    """Fraction of the top-K slots that went to the zero-computation experts: per layer, and per type."""
+    counts = routing_counts.astype(jnp.float32)
+    total = jnp.maximum(jnp.sum(counts, axis=-1), 1.0)
+    bounds = list(
+        itertools.accumulate((cfg.num_experts, cfg.moe_null_experts, cfg.moe_copy_experts, cfg.moe_const_experts))
+    )
+    null_frac = jnp.sum(counts[:, bounds[0] :], axis=-1) / total
+    out = {"train/router/null_frac_mean": jnp.mean(null_frac)}
+    for name, lo, hi in zip(("zero", "copy", "const"), bounds[:-1], bounds[1:], strict=True):
+        if hi > lo:
+            out[f"train/router/null_frac_{name}_mean"] = jnp.mean(jnp.sum(counts[:, lo:hi], axis=-1) / total)
+    for i in range(counts.shape[0]):
+        out[f"train/router/layer_{i}/null_frac"] = null_frac[i]
+    return out
 
 
 @dataclass(frozen=True)
