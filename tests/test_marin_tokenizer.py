@@ -291,6 +291,72 @@ def test_harmony_sft_store_preserves_assistant_masks(marin_tokenizer_fixture: Ma
     assert resumed.packed_sequences == store.packed_sequences
 
 
+def test_harmony_sft_store_counts_training_pack_boundaries(marin_tokenizer_fixture: MarinTokenizerFixture, tmp_path):
+    messages = [
+        Message.from_role_and_content(Role.USER, "Compute one plus one."),
+        Message.from_role_and_content(Role.ASSISTANT, "Two.").with_channel("final"),
+    ]
+    source_path = tmp_path / "source"
+    source_path.mkdir()
+    rows = [
+        {
+            "id": f"example-{index}",
+            "messages": [message.to_dict() for message in messages],
+            "chat_template_kwargs": json.dumps({"enable_thinking": True}),
+        }
+        for index in range(80)
+    ]
+    pq.write_table(pa.Table.from_pylist(rows, schema=CHAT_SCHEMA), source_path / "part.parquet")
+
+    with set_current_client(LocalClient()):
+        store = build_sft_store(
+            [SftInput("short", str(source_path))],
+            output_path=str(tmp_path / "store"),
+            tokenizer=marin_tokenizer_fixture.path,
+            max_length=32768,
+            seed=0,
+            num_shards=1,
+            max_workers=1,
+        )
+
+    training = sft_data_config({"short": store}, minimum_weight=0.01).train_sets(
+        Axis("position", 32768), initial_batch_size=1, key=jax.random.PRNGKey(0)
+    )["sft/source/short"]
+    assert store.sources["short"].conversations == 80
+    assert store.packed_sequences == len(training.as_sync_dataset()) == 1
+
+
+def test_harmony_sft_store_counts_all_overlength_source(marin_tokenizer_fixture: MarinTokenizerFixture, tmp_path):
+    source_path = tmp_path / "source"
+    source_path.mkdir()
+    record = {
+        "id": "long",
+        "messages": [
+            Message.from_role_and_content(Role.USER, "Explain arithmetic.").to_dict(),
+            Message.from_role_and_content(Role.ASSISTANT, "Addition combines quantities.")
+            .with_channel("final")
+            .to_dict(),
+        ],
+        "chat_template_kwargs": json.dumps({"enable_thinking": True}),
+    }
+    pq.write_table(pa.Table.from_pylist([record], schema=CHAT_SCHEMA), source_path / "part.parquet")
+
+    with set_current_client(LocalClient()):
+        store = build_sft_store(
+            [SftInput("long", str(source_path))],
+            output_path=str(tmp_path / "store"),
+            tokenizer=marin_tokenizer_fixture.path,
+            max_length=2,
+            seed=0,
+            num_shards=1,
+            max_workers=1,
+        )
+
+    assert store.sources["long"].overlength_conversations == 1
+    assert store.sources["long"].conversations == 0
+    assert store.packed_sequences == 0
+
+
 def test_chat_processor_renders_tool_calls(marin_chat_tokenizer: MarinTokenizer):
     processor = ChatProcessor(marin_chat_tokenizer, mask_user_turns=True)
     result = processor(

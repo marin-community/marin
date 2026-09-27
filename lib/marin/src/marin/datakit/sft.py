@@ -167,7 +167,9 @@ def build_sft_store(
             cache_path,
             {"input_ids": np.zeros(0, dtype=np.int32), "assistant_masks": np.zeros(0, dtype=np.int32)},
         )
-        packed_sequences = len(ChatDataset(cache, Axis("position", max_length)).as_sync_dataset())
+        packed_sequences = len(
+            ChatDataset(cache, Axis("position", max_length), max_segments_per_example=max_length).as_sync_dataset()
+        )
     result = SftTokenStore(
         path=output_path,
         cache_path=cache_path,
