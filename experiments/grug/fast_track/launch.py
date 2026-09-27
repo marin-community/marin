@@ -325,6 +325,9 @@ def build_h100_ladder_run(
     seed: int = 0,
     profile: bool = False,
     dump_hlo: bool = False,
+    ema_beta: float | None = None,
+    ema_last_steps: int | None = None,
+    ema_blend_sweep: tuple[float, ...] = (),
     max_retries_failure: int = MAX_RETRIES_FAILURE,
     model_settings: Mapping[str, str] | None = None,
     optimizer_settings: Mapping[str, str] | None = None,
@@ -408,6 +411,9 @@ def build_h100_ladder_run(
         save_checkpoints=save_checkpoints,
         expert_axis_size=expert_axis_size,
         replica_axis_size=replica_axis_size,
+        ema_beta=ema_beta,
+        ema_last_steps=ema_last_steps,
+        ema_blend_sweep=ema_blend_sweep,
     )
     train_resources = ResourceConfig.with_gpu(
         "H100",
@@ -608,6 +614,14 @@ def _submit_to_cluster(run_id: str, target_cluster: str | None, priority: str) -
 )
 @click.option("--profile", is_flag=True, help="Capture a JAX profile of a few steps (uploaded as a W&B artifact).")
 @click.option("--dump-hlo", is_flag=True, help="Write the compiled train-step HLO to <output>/train_step.hlo.txt.")
+@click.option("--ema-beta", type=float, default=None, help="Weight-EMA decay; evals after the EMA start score the EMA.")
+@click.option("--ema-last-steps", type=int, default=None, help="Run the weight EMA over only the last N steps.")
+@click.option(
+    "--ema-blend",
+    type=float,
+    multiple=True,
+    help="After training, also evaluate a*EMA + (1-a)*final weights for each given a (repeatable).",
+)
 @click.option(
     "--max-retries",
     type=click.IntRange(min=0),
@@ -665,6 +679,9 @@ def main(
     seed: int,
     profile: bool,
     dump_hlo: bool,
+    ema_beta: float | None,
+    ema_last_steps: int | None,
+    ema_blend: tuple[float, ...],
     max_retries: int,
     z_loss_weight: float,
     model_set: tuple[str, ...],
@@ -689,6 +706,9 @@ def main(
         seed=seed,
         profile=profile,
         dump_hlo=dump_hlo,
+        ema_beta=ema_beta,
+        ema_last_steps=ema_last_steps,
+        ema_blend_sweep=tuple(ema_blend),
         max_retries_failure=max_retries,
         model_settings=_parse_settings(model_set),
         optimizer_settings=_parse_settings(opt_set),

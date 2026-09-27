@@ -144,6 +144,14 @@ class GrugTrainerConfig:
     save_checkpoints: bool = False
     # Write the compiled (optimized) train-step HLO text here after the first step, for profile attribution.
     hlo_dump_path: str | None = None
+    # Weight EMA over the last ``ema_last_steps`` steps (the whole run when None): until then the EMA
+    # tracks the params, afterwards ``ema <- ema_beta * ema + (1 - ema_beta) * params``. Evals from the
+    # EMA start on score the EMA. None: no EMA.
+    ema_beta: float | None = None
+    ema_last_steps: int | None = None
+    # After training, also evaluate ``a * ema + (1 - a) * params`` for each ``a`` here (logged under
+    # ``eval_blend<a>/``), to sweep how much of the EMA to keep.
+    ema_blend_sweep: tuple[float, ...] = ()
 
     # Grug builds its own compact (replica_dcn, data, expert, model) mesh instead of using
     # the Trainer's logical axis mapping; `data` absorbs whatever these two leave free.
@@ -650,6 +658,7 @@ def _make_train_step(
     *,
     z_loss_weight: float,
     ema_beta: float | None = None,
+    ema_start_step: int = 0,
     watch_config: WatchConfig | None = None,
 ):
     one = jnp.array(1, dtype=jnp.int32)
@@ -689,8 +698,11 @@ def _make_train_step(
         else:
             # EMA tracks the QB-biased params, so re-apply the pending betas before blending.
             qb_ema_params = _apply_qb_betas(state.ema_params, state.pending_qb_betas)
+            ema_active = state.step >= ema_start_step
             ema_params = jax.tree_util.tree_map(
-                lambda old, new: ema_beta * old + (1.0 - ema_beta) * new, qb_ema_params, params
+                lambda old, new: jnp.where(ema_active, ema_beta * old + (1.0 - ema_beta) * new, new),
+                qb_ema_params,
+                params,
             )
 
         watch_stats = None
@@ -749,10 +761,15 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             watch_config=watch_config,
         )
         inline_watch_config = None
+    ema_start_step = (
+        0 if config.trainer.ema_last_steps is None else max(0, trainer.num_train_steps - config.trainer.ema_last_steps)
+    )
     train_step = _make_train_step(
         optimizer,
         trainer.mp,
         z_loss_weight=config.trainer.z_loss_weight,
+        ema_beta=config.trainer.ema_beta,
+        ema_start_step=ema_start_step,
         watch_config=inline_watch_config,
     )
 
@@ -787,6 +804,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 optimizer=optimizer,
                 mp=trainer.mp,
                 key=model_rng,
+                ema_beta=config.trainer.ema_beta,
             )
 
         state = _init_state(model_key)
@@ -880,7 +898,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         state_callbacks = StateCallbackRunner[GrugTrainState](
             step_getter=lambda s: s.step,
             model_getter=lambda s: s.params,
-            eval_model_getter=lambda s: s.params,
+            # From the EMA start on, evals score the EMA weights.
+            eval_model_getter=lambda s: (
+                s.ema_params if s.ema_params is not None and int(s.step) > ema_start_step else s.params
+            ),
             opt_state_getter=lambda s: s.opt_state,
         )
         if progress_watchdog is not None:
@@ -941,7 +962,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     # train-mesh params. The train step needs almost the whole device budget for
                     # its temporary buffer, thus this copy must die before the next step.
                     with set_mesh(_mesh):
-                        model = _reshard_tree_to_mesh(step.model, _mesh)
+                        model = _reshard_tree_to_mesh(step.eval_model, _mesh)
                         with jax_config.enable_pgle(False):
                             log_dict = eval_model(_ev, model, prefix=_prefix)
                         levanter.tracker.log(log_dict, step=step_count)
@@ -1069,6 +1090,19 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         else:
             # Mirror classic trainer behavior: force callbacks on the last completed step.
             state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
+            if config.trainer.ema_blend_sweep:
+                if state.ema_params is None or dropless_evaluator is None or dropless_eval_mesh is None:
+                    raise ValueError("ema_blend_sweep needs ema_beta and the dropless evaluator")
+                for alpha in config.trainer.ema_blend_sweep:
+                    blended = jax.tree_util.tree_map(
+                        lambda e, p, a=alpha: a * e + (1.0 - a) * p, state.ema_params, state.params
+                    )
+                    with set_mesh(dropless_eval_mesh):
+                        blended = _reshard_tree_to_mesh(blended, dropless_eval_mesh)
+                        with jax_config.enable_pgle(False):
+                            blend_log = eval_model(dropless_evaluator, blended, prefix=f"eval_blend{alpha:g}")
+                    levanter.tracker.log(blend_log, step=int(state.step))
+                    del blended
             if checkpointer is not None:
                 with callbacks.progress_event_scope(
                     state_callbacks.emit_event,
