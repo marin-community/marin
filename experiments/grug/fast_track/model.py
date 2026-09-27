@@ -400,6 +400,11 @@ class GrugModelConfig:
     attn_res_head_norm: bool = False
     """Multi-head AttnRes: RMS-normalize each head's channel slice of a source for its logits, instead
     of one RMS over all channels."""
+    embed_norm_mode: str = "rms"
+    """Token-embedding norm before it enters the stack (AttnRes mixes it raw against the layer outputs):
+    ``rms`` (RMSNorm with a learned gain), ``rms_nogain`` (RMSNorm, no gain) or ``none`` (the raw table row)."""
+    embed_scale: float = 1.0
+    """Constant multiplier on the (normed) token embedding: its weight in the AttnRes mixes."""
     xsa_mode: str = "fixed"
     """MLA Exclusive Self Attention strength: ``fixed`` subtracts the full self-value projection,
     ``learned`` scales it by a per-head scalar (init 1), ``gated`` by ``2 * sigmoid(x @ W_xsa)`` per token and
@@ -2320,7 +2325,14 @@ class Transformer(eqx.Module):
         cfg = self.config
         gather = _embedding_gather if cfg.embed_grad_fp32 else _embedding_gather_autodiff
         hidden = gather(self.token_embed, token_ids)
-        hidden = self.embed_norm(hidden)
+        if cfg.embed_norm_mode == "rms":
+            hidden = self.embed_norm(hidden)
+        elif cfg.embed_norm_mode == "rms_nogain":
+            hidden = rms_norm(hidden.astype(jnp.float32), cfg.layer_norm_eps).astype(hidden.dtype)
+        elif cfg.embed_norm_mode != "none":
+            raise ValueError(f"embed_norm_mode must be rms, rms_nogain or none, got {cfg.embed_norm_mode!r}")
+        if cfg.embed_scale != 1.0:
+            hidden = (hidden * cfg.embed_scale).astype(hidden.dtype)
         if self.embed_gated_norm is not None:
             hidden = self.embed_gated_norm(hidden)
 
