@@ -328,6 +328,7 @@ def build_h100_ladder_run(
     ema_beta: float | None = None,
     ema_last_steps: int | None = None,
     ema_blend_sweep: tuple[float, ...] = (),
+    ema_group_sweep: bool = False,
     max_retries_failure: int = MAX_RETRIES_FAILURE,
     model_settings: Mapping[str, str] | None = None,
     optimizer_settings: Mapping[str, str] | None = None,
@@ -414,6 +415,7 @@ def build_h100_ladder_run(
         ema_beta=ema_beta,
         ema_last_steps=ema_last_steps,
         ema_blend_sweep=ema_blend_sweep,
+        ema_group_sweep=ema_group_sweep,
     )
     train_resources = ResourceConfig.with_gpu(
         "H100",
@@ -622,6 +624,7 @@ def _submit_to_cluster(run_id: str, target_cluster: str | None, priority: str) -
     multiple=True,
     help="After training, also evaluate a*EMA + (1-a)*final weights for each given a (repeatable).",
 )
+@click.option("--ema-group-sweep", is_flag=True, help="After training, probe each parameter group's EMA blend.")
 @click.option(
     "--max-retries",
     type=click.IntRange(min=0),
@@ -682,6 +685,7 @@ def main(
     ema_beta: float | None,
     ema_last_steps: int | None,
     ema_blend: tuple[float, ...],
+    ema_group_sweep: bool,
     max_retries: int,
     z_loss_weight: float,
     model_set: tuple[str, ...],
@@ -709,6 +713,7 @@ def main(
         ema_beta=ema_beta,
         ema_last_steps=ema_last_steps,
         ema_blend_sweep=tuple(ema_blend),
+        ema_group_sweep=ema_group_sweep,
         max_retries_failure=max_retries,
         model_settings=_parse_settings(model_set),
         optimizer_settings=_parse_settings(opt_set),
