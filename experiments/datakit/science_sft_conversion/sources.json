@@ -3,87 +3,104 @@
     {
       "name": "biocollection/free_text_stream",
       "normalized_parquet_prefix": "s3://marin-us-east-02a/marin/users/benfeuer/grug-science-100b-pool/2026.09.21-v1/normalized/biocollection/free_text_stream_03f74b58/outputs/main",
-      "shards": 59
+      "shards": 59,
+      "rows": 36900548
     },
     {
       "name": "biocollection/instruction_stream",
       "normalized_parquet_prefix": "s3://marin-us-east-02a/marin/users/benfeuer/grug-science-100b-pool/2026.09.21-v1/normalized/biocollection/instruction_stream_4343d811/outputs/main",
-      "shards": 36
+      "shards": 36,
+      "rows": 23588716
     },
     {
       "name": "nemotron_specialized/math_textbooks",
       "normalized_parquet_prefix": "s3://marin-us-east-02a/marin/users/benfeuer/grug-science-100b-pool/2026.09.21-v1/normalized/snowball_replay/nemotron_specialized/math_textbooks_a074b011/outputs/main",
-      "shards": 114
+      "shards": 114,
+      "rows": 12899253
     },
     {
       "name": "swallow-math-v2/qa",
       "normalized_parquet_prefix": "s3://marin-us-east-02a/marin/users/benfeuer/grug-science-100b-pool/2026.09.21-v1/normalized/swallow-math-v2/qa_461ac715/outputs/main",
-      "shards": 152
+      "shards": 152,
+      "rows": 12634788
     },
     {
       "name": "swallow-math-v2/textbook",
       "normalized_parquet_prefix": "s3://marin-us-east-02a/marin/users/benfeuer/grug-science-100b-pool/2026.09.21-v1/normalized/swallow-math-v2/textbook_b079c2c0/outputs/main",
-      "shards": 255
+      "shards": 255,
+      "rows": 13302310
     },
     {
       "name": "ultradata-math/l2",
       "normalized_parquet_prefix": "s3://marin-us-east-02a/marin/users/benfeuer/grug-science-100b-pool/2026.09.21-v1/normalized/ultradata-math/l2_c22d89c1/outputs/main",
-      "shards": 235
+      "shards": 235,
+      "rows": 6111411
     },
     {
       "name": "arxiv/physics-compatible-novel-abstracts",
       "normalized_parquet_prefix": "s3://marin-us-east-02a/marin/users/benfeuer/grug-science-100b-pool/2026.09.21-v1/normalized/arxiv/physics-compatible-novel-abstracts_e8200a5f/outputs/main",
-      "shards": 1
+      "shards": 1,
+      "rows": 129996
     },
     {
       "name": "hal/mathematics-licensed-abstracts",
       "normalized_parquet_prefix": "s3://marin-us-east-02a/marin/users/benfeuer/grug-science-100b-pool/2026.09.21-v1/normalized/hal/mathematics-licensed-abstracts_8bb5519e/outputs/main",
-      "shards": 1
+      "shards": 1,
+      "rows": 11080
     },
     {
       "name": "openstax/physics",
       "normalized_parquet_prefix": "s3://marin-us-east-02a/marin/users/benfeuer/grug-science-100b-pool/2026.09.21-v1/normalized/openstax/physics_216d53dc/outputs/main",
-      "shards": 1
+      "shards": 1,
+      "rows": 100
     },
     {
       "name": "openstax/chemistry",
       "normalized_parquet_prefix": "s3://marin-us-east-02a/marin/users/benfeuer/grug-science-100b-pool/2026.09.21-v1/normalized/openstax/chemistry_65be90bd/outputs/main",
-      "shards": 1
+      "shards": 1,
+      "rows": 171
     },
     {
       "name": "openstax/biology",
       "normalized_parquet_prefix": "s3://marin-us-east-02a/marin/users/benfeuer/grug-science-100b-pool/2026.09.21-v1/normalized/openstax/biology_31d31fc2/outputs/main",
-      "shards": 1
+      "shards": 1,
+      "rows": 570
     },
     {
       "name": "openstax/college-physics",
       "normalized_parquet_prefix": "s3://marin-us-east-02a/marin/users/benfeuer/grug-science-100b-pool/2026.09.21-v1/normalized/openstax/college-physics_6cc88710/outputs/main",
-      "shards": 1
+      "shards": 1,
+      "rows": 318
     },
     {
       "name": "openstax/university-physics",
       "normalized_parquet_prefix": "s3://marin-us-east-02a/marin/users/benfeuer/grug-science-100b-pool/2026.09.21-v1/normalized/openstax/university-physics_ab3c050b/outputs/main",
-      "shards": 1
+      "shards": 1,
+      "rows": 322
     },
     {
       "name": "openstax/organic-chemistry",
       "normalized_parquet_prefix": "s3://marin-us-east-02a/marin/users/benfeuer/grug-science-100b-pool/2026.09.21-v1/normalized/openstax/organic-chemistry_6510ba98/outputs/main",
-      "shards": 1
+      "shards": 1,
+      "rows": 342
     },
     {
       "name": "mit-ocw/physics/classical-mechanics",
       "normalized_parquet_prefix": "s3://marin-us-east-02a/marin/users/benfeuer/grug-science-100b-pool/2026.09.21-v1/normalized/mit-ocw/physics/classical-mechanics_cfc4347b/outputs/main",
-      "shards": 1
+      "shards": 1,
+      "rows": 1154
     },
     {
       "name": "mit-ocw/biology/fundamentals",
       "normalized_parquet_prefix": "s3://marin-us-east-02a/marin/users/benfeuer/grug-science-100b-pool/2026.09.21-v1/normalized/mit-ocw/biology/fundamentals_8eb501cc/outputs/main",
-      "shards": 1
+      "shards": 1,
+      "rows": 463
     },
     {
       "name": "mit-ocw/chemistry/solid-state",
       "normalized_parquet_prefix": "s3://marin-us-east-02a/marin/users/benfeuer/grug-science-100b-pool/2026.09.21-v1/normalized/mit-ocw/chemistry/solid-state_88a7f485/outputs/main",
-      "shards": 1
+      "shards": 1,
+      "rows": 529
     }
   ]
 }

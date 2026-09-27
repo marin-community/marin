@@ -13,9 +13,13 @@ answer. The worker validates the three fields, the requested final format, and
 Datakit's Harmony message structure before writing `CHAT_SCHEMA` Parquet.
 Output files live under
 `s3://marin-us-east-02a/marin/users/benfeuer/science-sft-converted/2026.09.27-v1/chat/`.
-Each file covers one 16-row source batch; completed batches are skipped on
+Each file covers one 1,024-row source batch; completed batches are skipped on
 restart. A failed batch remains unwritten and fails the Iris task after four
 request attempts. The source artifact stays unchanged.
+
+The pinned source pool contains 105,582,071 rows across 6,350 row groups.
+The worker checks these row counts before issuing requests. Every nonempty
+row requires at least one MiniMax completion; long rows require more than one.
 
 The conversion uses the shared `/benfeuer/minimax-m3-science-sft` Iris endpoint
 on `cw-rno2a`. Serve MiniMax M3 from a merged Marin checkout. Three H100x8

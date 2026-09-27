@@ -37,7 +37,7 @@ ENDPOINT = "/benfeuer/minimax-m3-science-sft"
 OUTPUT_ROOT = "s3://marin-us-east-02a/marin/users/benfeuer/science-sft-converted/2026.09.27-v1"
 SOURCES_PATH = Path(__file__).with_name("sources.json")
 MAX_SOURCE_CHARS = 8_000
-INPUT_BATCH_SIZE = 16
+INPUT_BATCH_SIZE = 1_024
 MAX_GENERATION_TOKENS = 8_192
 MAX_CONCURRENT_REQUESTS = 4
 MAX_ATTEMPTS = 4
@@ -51,6 +51,7 @@ class Source:
     name: str
     normalized_parquet_prefix: str
     shards: int
+    rows: int
 
 
 @dataclass(frozen=True)
@@ -133,11 +134,15 @@ def _source_files(source: Source) -> list[str]:
 def _work_items() -> list[WorkItem]:
     work: list[WorkItem] = []
     for source in sources():
+        source_rows = 0
         for url in _source_files(source):
             fs, path = filesystem_for(url)
             with fs.open(path, "rb") as stream:
-                row_groups = pq.ParquetFile(stream).metadata.num_row_groups
-            work.extend(WorkItem(source, url, index) for index in range(row_groups))
+                metadata = pq.ParquetFile(stream).metadata
+            source_rows += metadata.num_rows
+            work.extend(WorkItem(source, url, index) for index in range(metadata.num_row_groups))
+        if source_rows != source.rows:
+            raise ValueError(f"{source.name}: expected {source.rows} rows, found {source_rows}")
     return work
 
 

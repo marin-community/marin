@@ -7,7 +7,7 @@ from experiments.datakit.science_sft_conversion.conversion import Source, _docum
 
 
 def test_bold_markdown_conclusion_is_valid() -> None:
-    source = Source("probe/physics", "", 0)
+    source = Source("probe/physics", "", 0, 0)
     completion = {
         "user": "Calculate the final speed and present the result in Markdown bullets.",
         "reasoning_content": "F = ma gives a = 3 m/s²; v = at gives 9 m/s.",
