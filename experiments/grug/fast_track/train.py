@@ -6,6 +6,7 @@ import functools
 import gc
 import logging
 import os
+import re
 import time
 from collections.abc import Callable
 from contextlib import nullcontext
@@ -152,6 +153,10 @@ class GrugTrainerConfig:
     # After training, also evaluate ``a * ema + (1 - a) * params`` for each ``a`` here (logged under
     # ``eval_blend<a>/``), to sweep how much of the EMA to keep.
     ema_blend_sweep: tuple[float, ...] = ()
+    # Per-group blend probe: with every group at ``ema_group_base_blend``, also evaluate each group of
+    # ``EMA_BLEND_GROUPS`` at 0 (raw final weights) and at 1 (pure EMA), logged as ``eval_blend_<group><a>/``.
+    ema_group_sweep: bool = False
+    ema_group_base_blend: float = 0.5
 
     # Grug builds its own compact (replica_dcn, data, expert, model) mesh instead of using
     # the Trainer's logical axis mapping; `data` absorbs whatever these two leave free.
@@ -1090,17 +1095,33 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         else:
             # Mirror classic trainer behavior: force callbacks on the last completed step.
             state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
-            if config.trainer.ema_blend_sweep:
+            blends: list[tuple[str, Callable[[str], float]]] = [
+                (f"eval_blend{a:g}", lambda _path, a=a: a) for a in config.trainer.ema_blend_sweep
+            ]
+            if config.trainer.ema_group_sweep:
+                base = config.trainer.ema_group_base_blend
+                for group in (*EMA_BLEND_GROUPS, "other"):
+                    for a in (0.0, 1.0):
+                        blends.append(
+                            (
+                                f"eval_blend_{group}{a:g}",
+                                lambda path, a=a, group=group: a if _ema_blend_group(path) == group else base,
+                            )
+                        )
+            if blends:
                 if state.ema_params is None or dropless_evaluator is None or dropless_eval_mesh is None:
-                    raise ValueError("ema_blend_sweep needs ema_beta and the dropless evaluator")
-                for alpha in config.trainer.ema_blend_sweep:
-                    blended = jax.tree_util.tree_map(
-                        lambda e, p, a=alpha: a * e + (1.0 - a) * p, state.ema_params, state.params
+                    raise ValueError("EMA blend evals need ema_beta and the dropless evaluator")
+                for prefix, alpha_for in blends:
+                    blended = jax.tree_util.tree_map_with_path(
+                        lambda path, e, p, alpha_for=alpha_for: (a := alpha_for(jax.tree_util.keystr(path))) * e
+                        + (1.0 - a) * p,
+                        state.ema_params,
+                        state.params,
                     )
                     with set_mesh(dropless_eval_mesh):
                         blended = _reshard_tree_to_mesh(blended, dropless_eval_mesh)
                         with jax_config.enable_pgle(False):
-                            blend_log = eval_model(dropless_evaluator, blended, prefix=f"eval_blend{alpha:g}")
+                            blend_log = eval_model(dropless_evaluator, blended, prefix=prefix)
                     levanter.tracker.log(blend_log, step=int(state.step))
                     del blended
             if checkpointer is not None:
@@ -1120,6 +1141,20 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
 # Every rank logs host-side stalls longer than this: a late rank stalls every other rank's collectives.
 HOST_GAP_WARN = 0.1
+# Parameter groups of the per-group EMA blend probe (regex over the pytree key path); "other" is the rest.
+EMA_BLEND_GROUPS: dict[str, str] = {
+    "lmhead": r"output_proj",
+    "embed": r"token_embed",
+    "attn": r"\.attn\b|\.attn\.",
+    "moe": r"\.mlp\b|\.shared\b",
+}
+
+
+def _ema_blend_group(path: str) -> str:
+    """The ``EMA_BLEND_GROUPS`` group of a key path, or ``other``."""
+    return next((group for group, pattern in EMA_BLEND_GROUPS.items() if re.search(pattern, path)), "other")
+
+
 # Seed of the training-only router noise (``moe_gumbel_tau``); folded with the step.
 ROUTE_NOISE_SEED = 7
 GC_EVERY_STEPS = 50
