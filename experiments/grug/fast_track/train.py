@@ -588,6 +588,9 @@ def _loss_and_grads(
 ):
     """``loop_active`` is a static pass selector for looped growth (see ``GrugModelConfig.loop_grow_step``)."""
     aux_weight = None if step is None else _aux_loss_weight(params.config, step)
+    route_key = None
+    if step is not None and params.config.moe_gumbel_tau > 0:
+        route_key = jax.random.fold_in(jax.random.PRNGKey(ROUTE_NOISE_SEED), step)
 
     def loss_fn(model):
         compute_params = mp.cast_to_compute(model)
@@ -601,6 +604,7 @@ def _loss_and_grads(
             aux_loss_weight=aux_weight,
             loop_active=loop_active,
             train_terms=True,
+            route_key=route_key,
         )
 
     return jax.value_and_grad(loss_fn, has_aux=True)(params)
@@ -1082,6 +1086,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
 # Every rank logs host-side stalls longer than this: a late rank stalls every other rank's collectives.
 HOST_GAP_WARN = 0.1
+# Seed of the training-only router noise (``moe_gumbel_tau``); folded with the step.
+ROUTE_NOISE_SEED = 7
 GC_EVERY_STEPS = 50
 GC_PAUSE_WARN = 0.05
 _gc_start: dict[str, float] = {}

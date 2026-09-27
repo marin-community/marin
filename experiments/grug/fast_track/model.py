@@ -400,6 +400,15 @@ class GrugModelConfig:
     attn_res_head_norm: bool = False
     """Multi-head AttnRes: RMS-normalize each head's channel slice of a source for its logits, instead
     of one RMS over all channels."""
+    expert_activation: str = "silu"
+    """Gate activation of the routed and shared GLU experts (an ``ActivationFunctionEnum`` value, e.g.
+    ``relu2`` for ReLU^2-GLU as in Primer / ReMoE)."""
+    moe_hash_layers: tuple[int, ...] = ()
+    """Physical layers whose routed experts are picked by a fixed token-id hash (Hash Layers, Roller et
+    al. 2021): each vocab id maps to K distinct random experts; combine weights still come from the router."""
+    moe_gumbel_tau: float = 0.0
+    """Training-only Gumbel noise (scale tau) added to the biased router logits before top-K: samples K
+    experts without replacement from softmax(logits / tau) instead of taking the top K. Evals use top-K."""
     embed_grad_fp32: bool = True
     """Accumulate the token-embedding gradient in float32 (``_embedding_gather``); False restores JAX's
     default gather transpose, which scatter-adds into the bf16 table."""
@@ -1233,7 +1242,7 @@ class MoEMLP(eqx.Module):
                 initializer_std=cfg.initializer_std,
                 key=k_expert,
                 implementation="fixed_pooled_wave_all_to_all",
-                activation=ActivationFunctionEnum.silu,
+                activation=ActivationFunctionEnum(cfg.expert_activation),
                 capacity_factor=cfg.capacity_factor,
                 pooled_transport_capacity_factor=cfg.pooled_transport_capacity_factor,
                 expert_chunks=1,
@@ -1256,9 +1265,13 @@ class MoEMLP(eqx.Module):
         self,
         x: Float[Array, "B S D"],
         projected: list[jax.Array] | None = None,
+        hash_token_ids: Int[Array, "B S"] | None = None,
+        noise_key: jax.Array | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         """``projected`` holds ``x_flat @ w`` for each of ``input_projection_weights`` when the caller
-        computed them already (fused with other projections of the same input)."""
+        computed them already (fused with other projections of the same input). ``hash_token_ids`` picks
+        the experts by token-id hash (``moe_hash_layers``); ``noise_key`` adds the training-only Gumbel
+        noise of ``moe_gumbel_tau`` to the expert selection."""
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
         if projected is None:
@@ -1279,9 +1292,21 @@ class MoEMLP(eqx.Module):
         _topk_logits, selected_experts = _small_top_k(biased_logits, self.cfg.num_experts_per_token + 1)
         qb_alpha = _topk_logits[:, -1:]
         selected_experts = selected_experts[:, :-1]
+        k = self.cfg.num_experts_per_token
+        if noise_key is not None and self.cfg.moe_gumbel_tau > 0:
+            noisy = biased_logits + self.cfg.moe_gumbel_tau * _gumbel_noise(noise_key, biased_logits.shape)
+            _, selected_experts = _small_top_k(noisy, k)
+        if hash_token_ids is not None:
+            table = reshard(jnp.asarray(_hash_expert_table(self.cfg.vocab_size, self.cfg.num_experts, k)), P(None, None))
+            flat_ids = reshard(rearrange(hash_token_ids, "b s -> (b s)"), P(_BATCH_AXES))
+            selected_experts = shard_map(
+                _local_gather,
+                mesh=get_abstract_mesh(),
+                in_specs=(P(None, None), P(_BATCH_AXES)),
+                out_specs=P(_BATCH_AXES, None),
+            )(table, flat_ids)
         # Sigmoid combine weights on unbiased logits for selected experts.
         unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
-        k = self.cfg.num_experts_per_token
         renorm_sum = self.cfg.routing_renorm_sum
         if self.cfg.router_combine == RouterCombine.SOFTMAX_RENORM:
             combine_weights_f = renorm_sum * jax.nn.softmax(unbiased_topk, axis=-1)
@@ -1357,6 +1382,8 @@ def moe_and_shared_fused(
     shared: tuple[DenseMLP, ...],
     x: Float[Array, "B S D"],
     part_inputs: dict[str, jax.Array] | None = None,
+    hash_token_ids: Int[Array, "B S"] | None = None,
+    noise_key: jax.Array | None = None,
 ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
     """Routed MoE plus the shared SwiGLU experts with every projection of ``x`` in one GEMM.
 
@@ -1383,9 +1410,15 @@ def moe_and_shared_fused(
             jnp.einsum("td,de->te", flats.get(n, x_flat), w, out_sharding=_batch_spec())
             for n, w in zip(names, weights, strict=True)
         ]
-    routed, stats = mlp(part_inputs.get("latent", x) if part_inputs else x, projected=parts[: len(moe_weights)])
+    routed, stats = mlp(
+        part_inputs.get("latent", x) if part_inputs else x,
+        projected=parts[: len(moe_weights)],
+        hash_token_ids=hash_token_ids,
+        noise_key=noise_key,
+    )
     gates, ups = parts[len(moe_weights) : len(moe_weights) + len(shared)], parts[len(moe_weights) + len(shared) :]
-    hidden = jnp.concatenate([jax.nn.silu(g) * u for g, u in zip(gates, ups, strict=True)], axis=1)
+    act = ActivationFunctionEnum(mlp.cfg.expert_activation).to_jax_fn()
+    hidden = jnp.concatenate([act(g) * u for g, u in zip(gates, ups, strict=True)], axis=1)
     w_down = jnp.concatenate([reshard(e.w_down, replicated) for e in shared], axis=0)
     shared_out = jnp.einsum("tm,md->td", hidden, w_down, out_sharding=_batch_spec())
     return routed + _batch_reshard(rearrange(shared_out, "(b s) d -> b s d", b=b, s=s)), stats
@@ -1517,8 +1550,11 @@ class Block(eqx.Module):
         mask: AttentionMask | jax.Array,
         sum_stream: Float[Array, "B S D"] | None = None,
         sum_parts: tuple[str, ...] = (),
+        hash_token_ids: Int[Array, "B S"] | None = None,
+        noise_key: jax.Array | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        """``sum_stream`` feeds ``sum_parts`` (``router`` / ``latent`` / ``shared``) instead of ``h``."""
+        """``sum_stream`` feeds ``sum_parts`` (``router`` / ``latent`` / ``shared``) instead of ``h``;
+        ``hash_token_ids`` / ``noise_key`` go to the router (``moe_hash_layers``, ``moe_gumbel_tau``)."""
         mlp_in = _spread_mlp_input(self.mlp_gated_norm(self.rms_mlp(h)), self.attn.cfg)
         part_inputs = None
         if sum_parts:
@@ -1529,9 +1565,9 @@ class Block(eqx.Module):
         if isinstance(self.mlp, DenseMLP):
             out = self.mlp(mlp_in, moe_output_reshard=False)
         elif self.shared is not None:
-            out, stats = moe_and_shared_fused(self.mlp, self.shared, mlp_in, part_inputs)
+            out, stats = moe_and_shared_fused(self.mlp, self.shared, mlp_in, part_inputs, hash_token_ids, noise_key)
         else:
-            out, stats = self.mlp(mlp_in)
+            out, stats = self.mlp(mlp_in, hash_token_ids=hash_token_ids, noise_key=noise_key)
         if self.bias_mlp_out is not None:
             out = out + unshard(self.bias_mlp_out).astype(out.dtype)
         if self.sconv_mlp is not None:
@@ -1551,6 +1587,29 @@ class Block(eqx.Module):
         x = x + self.attn_branch(x, mask, disable_rope, is_global)
         mlp_out, router_stats = self.mlp_branch(x, mask)
         return x + mlp_out, router_stats
+
+
+@functools.lru_cache(maxsize=4)
+def _hash_expert_table(vocab_size: int, num_experts: int, k: int) -> np.ndarray:
+    """``[vocab, k]`` distinct random experts per token id (fixed seed), for ``moe_hash_layers``."""
+    rng = np.random.default_rng(0)
+    return np.argsort(rng.random((vocab_size, num_experts)), axis=1)[:, :k].astype(np.int32)
+
+
+def _gumbel_noise(key: jax.Array, shape: tuple[int, int]) -> jax.Array:
+    """Batch-sharded ``[T, E]`` standard Gumbel noise, drawn locally per shard (no global array)."""
+
+    def local(key_data):
+        shard_key = jax.random.fold_in(key_data[0], jax.lax.axis_index(_BATCH_AXES))
+        return jax.random.gumbel(shard_key, (shape[0] // _batch_shards(), shape[1]), jnp.float32)
+
+    return shard_map(local, mesh=get_abstract_mesh(), in_specs=(P(None),), out_specs=P(_BATCH_AXES, None))(key[None])
+
+
+def _batch_shards() -> int:
+    mesh = get_abstract_mesh()
+    axes = _BATCH_AXES if isinstance(_BATCH_AXES, tuple) else (_BATCH_AXES,)
+    return math.prod(mesh.shape[a] for a in axes)
 
 
 def _small_top_k(x: Float[Array, "T E"], k: int) -> tuple[Float[Array, "T k"], Int[Array, "T k"]]:
@@ -1773,6 +1832,7 @@ def _attn_res_layer(
     use_long: bool,
     layer_index: int,
     eps: float,
+    noise_key: jax.Array | None = None,
     kv_share: dict[str, jax.Array] | None = None,
 ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
     """One Block AttnRes layer on ``diff_args = (layer, blocks, block_logits, partial, queries)``.
@@ -1815,7 +1875,7 @@ def _attn_res_layer(
     partial = attn_out if partial is None else partial + attn_out
     # The MLP re-attends over the history including this layer's attention write.
     h, z_mlp, w_mlp = _attn_res_mix(blocks, block_logits, partial, queries, 2 * layer_index + 1, eps, logit_bias, **opts)
-    mlp_out, router_stats = layer.mlp_branch(h, mask)
+    mlp_out, router_stats = layer.mlp_branch(h, mask, **_route_kwargs(cfg, physical, token_ids, noise_key))
     return partial + mlp_out, {
         **router_stats,
         **v_stats,
@@ -1825,7 +1885,7 @@ def _attn_res_layer(
     }
 
 
-def _attn_res_layer_full(diff_args, mask, token_ids, use_long, layer_index, eps, kv_share=None):
+def _attn_res_layer_full(diff_args, mask, token_ids, use_long, layer_index, eps, noise_key=None, kv_share=None):
     """One full-AttnRes layer: the attention output becomes its own source before the MoE gate, and the
     MoE output is returned as the partial, which the next layer rolls into its own source. Returns
     ``(partial, blocks, block_logits, router_stats)`` like ``_attn_res_layer_passthrough``."""
@@ -1871,7 +1931,13 @@ def _attn_res_layer_full(diff_args, mask, token_ids, use_long, layer_index, eps,
     if "mlp_router" in sum_components:
         sum_parts += ("router",)
     sum_parts = tuple(dict.fromkeys(sum_parts))
-    mlp_out, router_stats = layer.mlp_branch(h, mask, _stream_sum(blocks) if sum_parts else None, sum_parts)
+    mlp_out, router_stats = layer.mlp_branch(
+        h,
+        mask,
+        _stream_sum(blocks) if sum_parts else None,
+        sum_parts,
+        **_route_kwargs(cfg, layer_index % cfg.num_layers, token_ids, noise_key),
+    )
     stats = {
         **router_stats,
         **v_stats,
@@ -1882,6 +1948,16 @@ def _attn_res_layer_full(diff_args, mask, token_ids, use_long, layer_index, eps,
     return mlp_out, blocks, block_logits, stats
 
 
+def _route_kwargs(
+    cfg: GrugModelConfig, physical_layer: int, token_ids: jax.Array, noise_key: jax.Array | None
+) -> dict[str, jax.Array | None]:
+    """Router extras for one layer: token ids on ``moe_hash_layers``, the per-layer noise key otherwise."""
+    return {
+        "hash_token_ids": token_ids if physical_layer in cfg.moe_hash_layers else None,
+        "noise_key": noise_key,
+    }
+
+
 def _stream_sum(sources: tuple[jax.Array, ...]) -> jax.Array:
     """The straight sum of the AttnRes sources (a standard residual stream), in the sources' dtype."""
     total = sources[0].astype(jnp.float32)
@@ -1890,16 +1966,16 @@ def _stream_sum(sources: tuple[jax.Array, ...]) -> jax.Array:
     return reshard(total.astype(sources[0].dtype), _batch_spec())
 
 
-def _attn_res_layer_passthrough(diff_args, mask, token_ids, use_long, layer_index, eps, kv_share=None):
+def _attn_res_layer_passthrough(diff_args, mask, token_ids, use_long, layer_index, eps, noise_key=None, kv_share=None):
     """``_attn_res_layer`` returning ``(partial, blocks, block_logits, router_stats)``: the history is
     passed through so ``_attn_res_layer_remat`` can thread each block's cotangent layer to layer."""
     _, blocks, block_logits, _, _, _ = diff_args
-    partial, router_stats = _attn_res_layer(diff_args, mask, token_ids, use_long, layer_index, eps, kv_share)
+    partial, router_stats = _attn_res_layer(diff_args, mask, token_ids, use_long, layer_index, eps, noise_key, kv_share)
     return partial, blocks, block_logits, router_stats
 
 
 @eqx.filter_custom_vjp
-def _attn_res_layer_remat(diff_args, mask, token_ids, use_long, layer_index, eps):
+def _attn_res_layer_remat(diff_args, mask, token_ids, use_long, layer_index, eps, noise_key):
     """``_attn_res_layer_passthrough`` with a backward shaped for the unrolled layer loop.
 
     The history is passed through unchanged so each block's cotangent is threaded layer to layer and
@@ -1911,17 +1987,19 @@ def _attn_res_layer_remat(diff_args, mask, token_ids, use_long, layer_index, eps
     layer's starts. Without the barriers the unrolled loop's peak memory at d1024 is 3.6x the scanned
     baseline's.
     """
-    return _attn_res_layer_passthrough(diff_args, mask, token_ids, use_long, layer_index, eps)
+    return _attn_res_layer_passthrough(diff_args, mask, token_ids, use_long, layer_index, eps, noise_key)
 
 
 @_attn_res_layer_remat.def_fwd
-def _attn_res_layer_remat_fwd(perturbed, diff_args, mask, token_ids, use_long, layer_index, eps):
+def _attn_res_layer_remat_fwd(perturbed, diff_args, mask, token_ids, use_long, layer_index, eps, noise_key):
     del perturbed
-    return _attn_res_layer_passthrough(diff_args, mask, token_ids, use_long, layer_index, eps), None
+    return _attn_res_layer_passthrough(diff_args, mask, token_ids, use_long, layer_index, eps, noise_key), None
 
 
 @_attn_res_layer_remat.def_bwd
-def _attn_res_layer_remat_bwd(residuals, grad_out, perturbed, diff_args, mask, token_ids, use_long, layer_index, eps):
+def _attn_res_layer_remat_bwd(
+    residuals, grad_out, perturbed, diff_args, mask, token_ids, use_long, layer_index, eps, noise_key
+):
     del residuals, perturbed
     # Router stats are logging-only and carry no cotangent.
     d_partial, d_blocks, d_block_logits, _d_stats = grad_out
@@ -1935,7 +2013,7 @@ def _attn_res_layer_remat_bwd(residuals, grad_out, perturbed, diff_args, mask, t
             (diff_args, d_partial, d_blocks, d_block_logits)
         )
         _, vjp_fn = jax.vjp(
-            lambda args: _attn_res_layer(args, mask, token_ids, use_long, layer_index, eps)[0], diff_args
+            lambda args: _attn_res_layer(args, mask, token_ids, use_long, layer_index, eps, noise_key)[0], diff_args
         )
         ((d_layer, d_blocks_own, d_block_logits_own, d_partial_in, d_queries, d_logit_bias),) = vjp_fn(d_partial)
         d_blocks = tuple(a + b for a, b in zip(d_blocks, d_blocks_own, strict=True))
@@ -2173,9 +2251,10 @@ class Transformer(eqx.Module):
         token_ids: Int[Array, "B S"],
         mask: AttentionMask | jax.Array | None = None,
         loop_active: bool | None = None,
+        route_key: jax.Array | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         """``loop_active`` (static, with ``loop_grow_step``) selects one pass (False) or all ``loop_passes``
-        (True); None runs all passes."""
+        (True); None runs all passes. ``route_key`` (training only) seeds ``moe_gumbel_tau``."""
         if mask is None:
             mask = AttentionMask.causal()
 
@@ -2227,8 +2306,13 @@ class Transformer(eqx.Module):
                 loop_active,
                 long_mask.with_fa4_bounds(long_lower_bounds, valid),
                 long_mask.with_fa4_bounds(short_lower_bounds, valid),
+                route_key,
             )
         else:
+            if cfg.moe_hash_layers or cfg.moe_gumbel_tau > 0:
+                raise ValueError(
+                    "moe_hash_layers / moe_gumbel_tau need attn_res (the scanned stack has no router extras)"
+                )
             # One compiled Block body scanned over the stacked layers; per-layer short/long is a
             # Bool[num_layers] scan input, and the FA4 metadata is selected per layer with jnp.where.
             mask_schedule = _long_layer_schedule(cfg.num_layers, cfg.global_every, cfg.global_layers)
@@ -2287,6 +2371,7 @@ class Transformer(eqx.Module):
         loop_active: bool | None,
         long_layer_mask: AttentionMask,
         short_layer_mask: AttentionMask,
+        route_key: jax.Array | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array], dict[str, jax.Array]]:
         """Block AttnRes over the layers, unrolled so each gate reads only its valid sources.
 
@@ -2406,6 +2491,7 @@ class Transformer(eqx.Module):
                     use_long,
                     eff,
                     eps,
+                    None if route_key is None else jax.random.fold_in(route_key, eff),
                 )
                 if cfg.attn_res_full:
                     partial, blocks, block_logits, stats = _attn_res_layer_full(*layer_args, kv_share)
@@ -2540,11 +2626,12 @@ class Transformer(eqx.Module):
         aux_loss_weight: jax.Array | None = None,
         loop_active: bool | None = None,
         train_terms: bool = False,
+        route_key: jax.Array | None = None,
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
         """``aux_loss_weight`` scales the early auxiliary LM loss (``aux_lm_layer``); it is skipped at 0.
         ``train_terms`` adds the training-only objectives (MTP, AttnRes z-loss); evals leave it off so they
         score the plain next-token loss."""
-        hidden, router_metrics = self(token_ids, mask=mask, loop_active=loop_active)
+        hidden, router_metrics = self(token_ids, mask=mask, loop_active=loop_active, route_key=route_key)
         aux_hidden = router_metrics.pop(_AUX_HIDDEN, None)
         attn_res_z = router_metrics.pop(_ATTN_RES_Z, None)
         labels = jnp.pad(token_ids[:, 1:], ((0, 0), (0, 1))).astype(jnp.int32)
