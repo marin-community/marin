@@ -416,6 +416,12 @@ class GrugModelConfig:
     ``rms`` (RMSNorm with a learned gain), ``rms_nogain`` (RMSNorm, no gain) or ``raw`` (the table row as is)."""
     embed_scale: float = 1.0
     """Constant multiplier on the (normed) token embedding: its weight in the AttnRes mixes."""
+    sublayer_out_norm: bool = False
+    """Peri-LN (arXiv 2502.02732): RMSNorm with a gain (init 1) on each attention and MLP sublayer output
+    before it becomes an AttnRes source, so the source mix combines unit-RMS values."""
+    laurel_rank: int = 0
+    """LAuReL-LR (arXiv 2411.07501): each sublayer input becomes ``h + (h A) B`` with a rank-r ``A``
+    (random init) and ``B`` (zero init), both trained with Adam (0: off)."""
     mla_ssmax: bool = False
     """Scalable-softmax (SSMax, arXiv 2501.19399) on the MLA layers: each query is scaled by
     ``1 + s_h * log(n)``, with ``n`` the number of keys it can see in its document and ``s_h`` a
@@ -1619,6 +1625,26 @@ def _sconv_segment_ids(mask: AttentionMask | jax.Array) -> jax.Array | None:
     return segment_ids[0] if segment_ids is not None else None
 
 
+def _laurel_a(cfg: "GrugModelConfig", key: PRNGKeyArray) -> jax.Array | None:
+    if not cfg.laurel_rank:
+        return None
+    return reshard(_init_weight(key, (cfg.hidden_dim, cfg.laurel_rank), 1.0 / math.sqrt(cfg.hidden_dim)), P(None, None))
+
+
+def _laurel_b(cfg: "GrugModelConfig") -> jax.Array | None:
+    if not cfg.laurel_rank:
+        return None
+    return reshard(jnp.zeros((cfg.laurel_rank, cfg.hidden_dim), jnp.float32), P(None, None))
+
+
+def _laurel(h: Float[Array, "B S D"], a: jax.Array | None, b: jax.Array | None) -> Float[Array, "B S D"]:
+    """``h + (h A) B`` (LAuReL-LR), or ``h`` when off."""
+    if a is None or b is None:
+        return h
+    low = jnp.einsum("bsd,dr->bsr", h, a.astype(h.dtype), out_sharding=_batch_spec())
+    return h + jnp.einsum("bsr,rd->bsd", low, b.astype(h.dtype), out_sharding=_batch_spec())
+
+
 class Block(eqx.Module):
     rms_attn: RMSNorm
     attn_gated_norm: GatedNorm
@@ -1638,6 +1664,12 @@ class Block(eqx.Module):
     # Learnable sublayer output scalars (None without cfg.sublayer_scales).
     attn_out_scale: Float[Array, ""] | None
     mlp_out_scale: Float[Array, ""] | None
+    out_norm_attn: "RMSNorm | None"
+    out_norm_mlp: "RMSNorm | None"
+    laurel_a_attn: Float[Array, "D R"] | None
+    laurel_b_attn: Float[Array, "R D"] | None
+    laurel_a_mlp: Float[Array, "D R"] | None
+    laurel_b_mlp: Float[Array, "R D"] | None
     bias_attn_out: Float[Array, " D"] | None
     bias_mlp_out: Float[Array, " D"] | None
 
@@ -1689,6 +1721,12 @@ class Block(eqx.Module):
             attn_res_query_v=attn_res_query if cfg.attn_res_v_gate else None,
             attn_out_scale=jnp.ones((), dtype=jnp.float32) if cfg.sublayer_scales else None,
             mlp_out_scale=jnp.ones((), dtype=jnp.float32) if cfg.sublayer_scales else None,
+            out_norm_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps) if cfg.sublayer_out_norm else None,
+            out_norm_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps) if cfg.sublayer_out_norm else None,
+            laurel_a_attn=_laurel_a(cfg, random.fold_in(key, 91)),
+            laurel_b_attn=_laurel_b(cfg),
+            laurel_a_mlp=_laurel_a(cfg, random.fold_in(key, 92)),
+            laurel_b_mlp=_laurel_b(cfg),
             bias_attn_out=jnp.zeros((cfg.hidden_dim,)) if "attn_out" in cfg.proj_biases else None,
             bias_mlp_out=jnp.zeros((cfg.hidden_dim,)) if "mlp_out" in cfg.proj_biases else None,
         )
@@ -1707,7 +1745,7 @@ class Block(eqx.Module):
     ) -> Float[Array, "B S D"]:
         """``sum_stream`` (with ``sum_components``) feeds those q/k/v projections from the straight-sum
         stream, through the same RMSNorm and GatedNorm, instead of the AttnRes mix ``h``."""
-        attn_in = self.attn_gated_norm(self.rms_attn(h))
+        attn_in = self.attn_gated_norm(self.rms_attn(_laurel(h, self.laurel_a_attn, self.laurel_b_attn)))
         proj_inputs = None
         attn_components = tuple(c for c in sum_components if c in ("q", "k", "v"))
         if attn_components:
@@ -1737,6 +1775,8 @@ class Block(eqx.Module):
             out = out + unshard(self.bias_attn_out).astype(out.dtype)
         if self.sconv_attn is not None:
             out = self.sconv_attn(out, _sconv_segment_ids(mask))
+        if self.out_norm_attn is not None:
+            out = self.out_norm_attn(out)
         if self.attn_out_scale is not None:
             out = out * self.attn_out_scale.astype(out.dtype)
         return out
@@ -1752,7 +1792,7 @@ class Block(eqx.Module):
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         """``sum_stream`` feeds ``sum_parts`` (``router`` / ``latent`` / ``shared``) instead of ``h``;
         ``hash_token_ids`` / ``noise_key`` go to the router (``moe_hash_layers``, ``moe_gumbel_tau``)."""
-        normed = self.mlp_gated_norm(self.rms_mlp(h))
+        normed = self.mlp_gated_norm(self.rms_mlp(_laurel(h, self.laurel_a_mlp, self.laurel_b_mlp)))
         if self.sconv_mlp_in is not None:
             normed = self.sconv_mlp_in(normed, _sconv_segment_ids(mask))
         mlp_in = _spread_mlp_input(normed, self.attn.cfg)
@@ -1774,6 +1814,8 @@ class Block(eqx.Module):
             out = out + unshard(self.bias_mlp_out).astype(out.dtype)
         if self.sconv_mlp is not None:
             out = self.sconv_mlp(out, _sconv_segment_ids(mask))
+        if self.out_norm_mlp is not None:
+            out = self.out_norm_mlp(out)
         if self.mlp_out_scale is not None:
             out = out * self.mlp_out_scale.astype(out.dtype)
         return out, stats

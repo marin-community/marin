@@ -361,6 +361,42 @@ def _sphere_norm(x: jax.Array) -> jax.Array:
     return jnp.sqrt(jnp.sum(jnp.square(x.astype(jnp.float32)), axis=axes, keepdims=True))
 
 
+def cautious(inner: optax.GradientTransformation) -> optax.GradientTransformation:
+    """Cautious optimizer (arXiv 2411.16085): keep only the coordinates of the inner direction whose sign
+    agrees with the gradient, rescaled by the kept fraction per leaf. ``inner`` returns the descent
+    direction before the ``-lr`` scale."""
+
+    def update(updates, state, params=None):
+        direction, state = inner.update(updates, state, params)
+
+        def mask(u, g):
+            keep = (u * g > 0).astype(u.dtype)
+            return u * keep / jnp.maximum(jnp.mean(keep), 1e-3)
+
+        return jax.tree.map(mask, direction, updates), state
+
+    return optax.GradientTransformation(inner.init, update)
+
+
+def scale_by_mars_correction(gamma: float, momentum: float) -> optax.GradientTransformation:
+    """MARS-M (arXiv 2510.21800) gradient correction for the Muon momentum:
+    ``C = G + gamma * momentum / (1 - momentum) * (G - G_prev)``, clipped to Frobenius norm 1 per leaf."""
+    coef = gamma * momentum / (1.0 - momentum)
+
+    def init(params):
+        return jax.tree.map(jnp.zeros_like, params)
+
+    def update(updates, prev, params=None):
+        def correct(g, p):
+            c = g + coef * (g - p)
+            norm = jnp.sqrt(jnp.sum(jnp.square(c.astype(jnp.float32))))
+            return (c / jnp.maximum(norm, 1.0)).astype(g.dtype)
+
+        return jax.tree.map(correct, updates, prev), updates
+
+    return optax.GradientTransformation(init, update)
+
+
 def snoo(
     inner: optax.GradientTransformation,
     labels_fn,
@@ -505,6 +541,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     """SAMuon-lite: remove this fraction of the top singular direction from the MuonH direction (``1 - 1/gamma``)."""
     muon_precond_beta2: float | None = None
     """Muon2: Adam second-moment preconditioning of the MuonH momentum before Newton-Schulz (None: off)."""
+    adam_cautious: bool = False
+    """Cautious masking (arXiv 2411.16085) on the plain-Adam groups."""
+    muon_mars_gamma: float = 0.0
+    """MARS-M variance-reduction strength for the MuonH groups (0: off; the paper uses 0.025)."""
     snoo_period: int = 0
     """SNOO outer step every this many inner steps (0: off)."""
     snoo_lr: float = 0.5
@@ -519,6 +559,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 components = []
                 if self.max_grad_norm:
                     components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                if self.muon_mars_gamma:
+                    components.append(scale_by_mars_correction(self.muon_mars_gamma, self.momentum))
                 components.append(
                     scale_with_grug_muonh(
                         momentum=self.momentum,
@@ -550,13 +592,13 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 if self.max_grad_norm:
                     components.append(optax.clip_by_global_norm(self.max_grad_norm))
                 if self.gate_router_weight_decay > 0.0:
-                    components.append(
-                        _scale_by_adam_gate_router_decay(
-                            self.beta1, self.beta2, self.epsilon, self.gate_router_weight_decay, num_train_steps
-                        )
+                    adam = _scale_by_adam_gate_router_decay(
+                        self.beta1, self.beta2, self.epsilon, self.gate_router_weight_decay, num_train_steps
                     )
+                    components.append(cautious(adam) if self.adam_cautious else adam)
                 else:
-                    components.append(optax.scale_by_adam(self.beta1, self.beta2, self.epsilon))
+                    adam = optax.scale_by_adam(self.beta1, self.beta2, self.epsilon)
+                    components.append(cautious(adam) if self.adam_cautious else adam)
                 components.append(optax.scale(-lr))
                 return optax.chain(*components)
 
@@ -564,11 +606,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 components = []
                 if self.max_grad_norm:
                     components.append(optax.clip_by_global_norm(self.max_grad_norm))
-                components.append(
-                    optax.scale_by_adam(
-                        self.beta1 if beta1 is None else beta1, self.beta2 if beta2 is None else beta2, self.epsilon
-                    )
+                adam = optax.scale_by_adam(
+                    self.beta1 if beta1 is None else beta1, self.beta2 if beta2 is None else beta2, self.epsilon
                 )
+                components.append(cautious(adam) if self.adam_cautious else adam)
                 components.append(optax.scale(-lr))
                 return optax.chain(*components)
 
@@ -684,7 +725,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 return "attn_res_query"
             # Inkling rel-pos weights (r_proj and the shared bias bank); value embeddings and their mixing weights.
             if ".rel_pos." in path_lower or re.search(
-                r"\.(value_embed|ve_lambda|ve_gate|xsa_scale|xsa_gate|head_mix|ssmax_scale|shared_gate|bias_\w+)$",
+                r"\.(value_embed|ve_lambda|ve_gate|xsa_scale|xsa_gate|head_mix|ssmax_scale|shared_gate|laurel_[ab]_\w+|bias_\w+)$",
                 path_lower,
             ):
                 return "adam"
