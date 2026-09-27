@@ -3,15 +3,15 @@
     "science_sft"
   ],
   "base_sha": "07192b90c653c5d3a81e96db944e09c509f15db1",
-  "head_sha": "4552959f50d5ef0582177e59b9bb329d49e35bbb",
+  "head_sha": "162a79d341573f64322680185cfbae5a49a9c9dd",
   "report_count": 1,
   "reports": [
     {
       "closest_variant": "base",
-      "distance_score": 1533,
+      "distance_score": 1920,
       "report_relpath": "science_sft/index.html",
       "status_counts": {
-        "added": 3,
+        "added": 5,
         "changed": 3,
         "removed": 1,
         "unchanged": 0
