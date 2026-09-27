@@ -44,7 +44,9 @@ MAX_GENERATION_TOKENS = 8_192
 MAX_CONCURRENT_REQUESTS = 4
 MAX_ATTEMPTS = 4
 REQUEST_TIMEOUT = 1_800.0
-QUESTION_SOLUTION_SOURCES = frozenset({"nemotron_specialized/math_textbooks", "swallow-math-v2/qa"})
+NEMOTRON_MATH_TEXTBOOKS = "nemotron_specialized/math_textbooks"
+SWALLOW_MATH_QA = "swallow-math-v2/qa"
+QUESTION_SOLUTION_SOURCES = frozenset({NEMOTRON_MATH_TEXTBOOKS, SWALLOW_MATH_QA})
 MISSING_CONTEXT_RE = re.compile(r"\b(?:the|source|provided|above) passage\b|\b(?:above|provided) text\b", re.I)
 
 
@@ -85,7 +87,7 @@ SYSTEM_PROMPT = (
     "The user field must ask a substantive question or task grounded in the passage. Do not put the answer format "
     "instruction in the user field; the conversion pipeline appends it. "
     "If the passage has a question and worked solution, put the complete standalone question, including all "
-    "needed inputs and any formula that the question requires, in the user field without its solution. "
+    "needed inputs and starting equations, in the user field without its solution or target formula. "
     "Never refer to an equation or passage that is absent from the user field. "
     "For other passages, write a question or task about "
     "the passage; the conversion pipeline will attach the passage to the user turn. "
@@ -182,13 +184,23 @@ def _row_request(source: Source, source_id: str, chunk: str, chunk_index: int, c
         },
     }
     selected = format_for(source.name, source_id, chunk_index)
-    user_instruction = (
-        "Write the full question, inputs, and any formula needed to solve it without the solution. "
-        "Do not refer to the source passage or text, or to an omitted formula."
-        if source.name in QUESTION_SOLUTION_SOURCES
-        else "Write a task about the source. The pipeline will append the source passage and answer format "
-        "to the user turn."
-    )
+    if source.name == NEMOTRON_MATH_TEXTBOOKS:
+        user_instruction = (
+            "Write a standalone exercise with the definitions, premises, and starting equations needed to solve "
+            "it. Omit every formula or result the assistant is asked to derive, even if the source states it. "
+            "Do not add a new numerical case or refer to the source passage."
+        )
+    elif source.name == SWALLOW_MATH_QA:
+        user_instruction = (
+            "Include every explicit Question in this chunk with its inputs and given conversion factors. "
+            "Omit all worked answers, derived formulas, code implementations, and final numeric results. "
+            "Do not refer to the source passage."
+        )
+    else:
+        user_instruction = (
+            "Write a task about the source. The pipeline will append the source passage and answer format "
+            "to the user turn."
+        )
     return {
         "model": MODEL,
         "messages": [
