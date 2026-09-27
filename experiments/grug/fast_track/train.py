@@ -952,11 +952,13 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         last_step_duration = 0.0
         host_gap_start: float | None = None
         gc.callbacks.append(_warn_on_long_gc)
-        # Move every object alive at loop start (the model/optimizer pytrees, compiled executables, data
-        # loader state) into the permanent generation: otherwise each gen-2 collection traverses them all
-        # (0.4-0.6 s at d512), each rank pauses at a different step, and every collective waits for it.
+        # Automatic GC pauses each rank at a different step (gen-2 over the model/optimizer pytrees and
+        # compiled executables: 0.4-0.6 s at d512), and every collective waits for the paused rank. So
+        # freeze everything alive at loop start, disable automatic collection, and collect on every rank
+        # at the same step every GC_EVERY_STEPS, after the step completes.
         gc.collect()
         gc.freeze()
+        gc.disable()
         hlo_written = False
 
         # Main optimization loop.
@@ -1043,6 +1045,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         callbacks.ProgressEvent.CHECKPOINT_FINISHED,
                     ):
                         checkpointer.on_step(tree=state, step=int(state.step))
+                if current_step % GC_EVERY_STEPS == 0:
+                    gc.collect()
+                    gc.freeze()
                 host_gap_start = time.perf_counter()
                 if host_gap_start - ready_time > HOST_GAP_WARN:
                     logger.warning(
@@ -1069,6 +1074,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     checkpointer.on_step(tree=state, step=int(state.step), force=True)
                     checkpointer.wait_until_finished()
         finally:
+            gc.enable()
             state_callbacks.emit_event(callbacks.ProgressEvent.TRAINING_FINISHED)
 
     levanter.tracker.current_tracker().finish()
@@ -1076,6 +1082,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
 # Every rank logs host-side stalls longer than this: a late rank stalls every other rank's collectives.
 HOST_GAP_WARN = 0.1
+GC_EVERY_STEPS = 50
 GC_PAUSE_WARN = 0.05
 _gc_start: dict[str, float] = {}
 
