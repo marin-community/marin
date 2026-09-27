@@ -579,6 +579,9 @@ class GrugModelConfig:
     """Engram-style content gate on the bigram source: ``g_t = sigmoid(sum_d w_d rms(e_t)_d rms(b_t)_d + c)`` scales
     each token's bigram row by how its token embedding and bigram row interact, which the static AttnRes queries
     can't express (w = 0 and c = +2 at init)."""
+    bigram_gate_rank: int = 0
+    """With ``bigram_gate``, a per-channel gate instead of a scalar: ``g_t = sigmoid(rms(e_t) * rms(b_t) @ A @ B + c)``
+    with rank-r ``A`` (random) and ``B`` (zero), so each token keeps some bigram features and drops others."""
     embed2_fsdp: bool = False
     """Store the second table (and so its optimizer / EMA state) row-sharded over the FSDP axes, all-gathering
     a replicated copy for the lookup. Same math; for rungs where the replicated table's state doesn't fit."""
@@ -2566,6 +2569,8 @@ class Transformer(eqx.Module):
     embed2_norm: RMSNorm | None
     bigram_gate_w: Float[Array, " D"] | None
     bigram_gate_b: Float[Array, ""] | None
+    bigram_gate_a_lr: Float[Array, "D R"] | None
+    bigram_gate_b_lr: Float[Array, "R D"] | None
     token_embed3: jax.Array | None
     embed3_norm: RMSNorm | None
     token_embed_window: jax.Array | None
@@ -2683,6 +2688,20 @@ class Transformer(eqx.Module):
             embed2_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps) if cfg.second_embed else None,
             bigram_gate_w=jnp.zeros((cfg.hidden_dim,), jnp.float32) if cfg.bigram_gate else None,
             bigram_gate_b=jnp.full((), 2.0, jnp.float32) if cfg.bigram_gate else None,
+            bigram_gate_a_lr=(
+                _init_weight(
+                    random.fold_in(embed2_key, 9),
+                    (cfg.hidden_dim, cfg.bigram_gate_rank),
+                    1.0 / math.sqrt(cfg.hidden_dim),
+                )
+                if cfg.bigram_gate and cfg.bigram_gate_rank
+                else None
+            ),
+            bigram_gate_b_lr=(
+                jnp.zeros((cfg.bigram_gate_rank, cfg.hidden_dim), jnp.float32)
+                if cfg.bigram_gate and cfg.bigram_gate_rank
+                else None
+            ),
             token_embed3=(
                 reshard(
                     _init_weight(random.fold_in(embed2_key, 3), (cfg.embed3_rows, cfg.hidden_dim), cfg.initializer_std),
@@ -2929,8 +2948,16 @@ class Transformer(eqx.Module):
                 embed2 = self.embed2_norm(rows2)
                 if self.bigram_gate_w is not None and self.bigram_gate_b is not None:
                     interaction = rms_norm(hidden.astype(jnp.float32)) * rms_norm(embed2.astype(jnp.float32))
-                    gate = jax.nn.sigmoid(jnp.einsum("bsd,d->bs", interaction, self.bigram_gate_w) + self.bigram_gate_b)
-                    embed2 = (embed2 * gate[..., None]).astype(embed2.dtype)
+                    if self.bigram_gate_a_lr is not None and self.bigram_gate_b_lr is not None:
+                        low = jnp.einsum("bsd,dr->bsr", interaction, self.bigram_gate_a_lr)
+                        logits = jnp.einsum("bsr,rd->bsd", low, self.bigram_gate_b_lr, out_sharding=_batch_spec())
+                        gate = jax.nn.sigmoid(logits + self.bigram_gate_b)
+                        embed2 = (embed2 * gate).astype(embed2.dtype)
+                    else:
+                        gate = jax.nn.sigmoid(
+                            jnp.einsum("bsd,d->bs", interaction, self.bigram_gate_w) + self.bigram_gate_b
+                        )
+                        embed2 = (embed2 * gate[..., None]).astype(embed2.dtype)
                     bigram_gate_stats = {
                         "attn_res_bigram_gate_mean": jax.lax.stop_gradient(jnp.mean(gate)),
                         "attn_res_bigram_gate_std": jax.lax.stop_gradient(jnp.std(gate)),
