@@ -580,6 +580,10 @@ class GrugModelConfig:
     aux_lm_steps: int = 500
     second_embed: bool = False
     embed2_rows: int = 0
+    ple_dim: int = 0
+    """Per-layer embeddings (Gemma 3n PLE): a ``[vocab, num_layers * ple_dim]`` token table whose layer-``l`` slice
+    (RMS-normed) is added to layer ``l``'s attention input as ``h + (gelu(rms(h) W_gate) * ple_l) W_up``, ``W_up``
+    zero-init. Stored and sharded like the second table (``embed2_fsdp``, ``embed2_grad_fp32``). 0: off."""
     byte_aux_bytes: int = 0
     """Byte-level auxiliary loss: a separate head predicts the first ``byte_aux_bytes`` UTF-8 bytes of the
     next token (256-way each, positions past the token's end masked), weighted by a schedule the trainer
@@ -1802,6 +1806,17 @@ def _laurel(h: Float[Array, "B S D"], a: jax.Array | None, b: jax.Array | None) 
     return h + jnp.einsum("bsr,rd->bsd", low, b.astype(h.dtype), out_sharding=_batch_spec())
 
 
+def _ple_inject(layer: "Block", h: Float[Array, "B S D"], extras: dict[str, jax.Array | None] | None) -> jax.Array:
+    """``h + (gelu(rms(h) W_gate) * ple) W_up`` with this layer's normed PLE rows ``extras["ple"]``, or ``h``."""
+    rows = None if extras is None else extras.get("ple")
+    if rows is None:
+        return h
+    assert layer.ple_gate is not None and layer.ple_up is not None
+    gate = jnp.einsum("bsd,dp->bsp", rms_norm(h), layer.ple_gate.astype(h.dtype), out_sharding=_batch_spec())
+    low = jax.nn.gelu(gate) * rows.astype(h.dtype)
+    return h + jnp.einsum("bsp,pd->bsd", low, layer.ple_up.astype(h.dtype), out_sharding=_batch_spec())
+
+
 class Block(eqx.Module):
     rms_attn: RMSNorm | DyT
     attn_gated_norm: GatedNorm
@@ -1831,6 +1846,9 @@ class Block(eqx.Module):
     laurel_b_mlp: Float[Array, "R D"] | None
     bias_attn_out: Float[Array, " D"] | None
     bias_mlp_out: Float[Array, " D"] | None
+    # Per-layer-embedding gate and zero-init up-projection (cfg.ple_dim).
+    ple_gate: Float[Array, "D P"] | None
+    ple_up: Float[Array, "P D"] | None
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray, use_kda: bool = False) -> "Block":
@@ -1898,6 +1916,17 @@ class Block(eqx.Module):
             laurel_b_mlp=_laurel_b(cfg),
             bias_attn_out=jnp.zeros((cfg.hidden_dim,)) if "attn_out" in cfg.proj_biases else None,
             bias_mlp_out=jnp.zeros((cfg.hidden_dim,)) if "mlp_out" in cfg.proj_biases else None,
+            ple_gate=(
+                reshard(
+                    _init_weight(random.fold_in(key, 93), (cfg.hidden_dim, cfg.ple_dim), cfg.initializer_std),
+                    P(None, None),
+                )
+                if cfg.ple_dim
+                else None
+            ),
+            ple_up=(
+                reshard(jnp.zeros((cfg.ple_dim, cfg.hidden_dim), jnp.float32), P(None, None)) if cfg.ple_dim else None
+            ),
         )
 
     def attn_branch(
@@ -2416,6 +2445,7 @@ def _attn_res_layer(
         "source_delta": cfg.attn_res_source_delta,
     }
     h, z_attn, w_attn = _attn_res_mix(blocks, block_logits, partial, queries, 2 * layer_index, eps, logit_bias, **opts)
+    h = _ple_inject(layer, h, logit_bias)
     attn_branch = type(layer).attn_branch
     if cfg.attn_res_remat_attention:
         attn_branch = eqx.filter_checkpoint(attn_branch, policy=None)
@@ -2467,6 +2497,7 @@ def _attn_res_layer_full(diff_args, mask, token_ids, use_long, layer_index, eps,
     }
     sum_components = cfg.attn_res_sum_inputs
     h, z_attn, w_attn = _attn_res_mix(blocks, block_logits, None, queries, 2 * layer_index, eps, logit_bias, **opts)
+    h = _ple_inject(layer, h, logit_bias)
     attn_side_stream = _stream_sum(blocks)
     v_stats: dict[str, jax.Array] = {}
     # V gate on KDA layers only: an MLA layer's K and V share one KV latent.
@@ -2658,6 +2689,8 @@ class Transformer(eqx.Module):
     window_proj: jax.Array | None
     window_norm: RMSNorm | None
     embed2_up: jax.Array | None
+    token_embed_ple: jax.Array | None
+    """Per-layer-embedding table ``[vocab, num_layers * ple_dim]`` (``ple_dim``)."""
     embed2_lambda: Float[Array, " G"] | None
     """Per-gate weight of the second embedding on each sublayer input (``second_embed_mode="input"``)."""
     attn_res_query_bias: Float[Array, "G N"] | None
@@ -2757,6 +2790,18 @@ class Transformer(eqx.Module):
                     P(_FSDP_AXES, None) if cfg.embed2_fsdp else P(None, None),
                 )
                 if cfg.second_embed
+                else None
+            ),
+            token_embed_ple=(
+                reshard(
+                    _init_weight(
+                        random.fold_in(embed2_key, 17),
+                        (cfg.vocab_size, cfg.num_layers * cfg.ple_dim),
+                        cfg.initializer_std,
+                    ),
+                    P(_FSDP_AXES, None) if cfg.embed2_fsdp else P(None, None),
+                )
+                if cfg.ple_dim
                 else None
             ),
             embed2_lambda=(
@@ -3024,8 +3069,8 @@ class Transformer(eqx.Module):
 
         final_gate_stats: dict[str, jax.Array] = {}
         bigram_gate_stats: dict[str, jax.Array] = {}
-        if cfg.second_embed and not cfg.attn_res:
-            raise ValueError("second_embed requires attn_res")
+        if (cfg.second_embed or cfg.ple_dim) and not cfg.attn_res:
+            raise ValueError("second_embed and ple_dim require attn_res")
         if cfg.attn_res:
             extra_sources = ()
             input_embed2 = None
@@ -3117,6 +3162,11 @@ class Transformer(eqx.Module):
                     bigram_gate_stats["attn_res_trigram_gate_mean"] = jax.lax.stop_gradient(jnp.mean(gate3))
                     bigram_gate_stats["attn_res_trigram_gate_std"] = jax.lax.stop_gradient(jnp.std(gate3))
                 extra_sources = (*extra_sources, embed3)
+            ple_rows = None
+            if self.token_embed_ple is not None:
+                gather_ple = _embedding_gather if cfg.embed2_grad_fp32 else _embedding_gather_autodiff
+                table_ple = reshard(self.token_embed_ple, P(None, None)) if cfg.embed2_fsdp else self.token_embed_ple
+                ple_rows = gather_ple(table_ple, token_ids)
             hidden, stacked_router_stats, final_gate_stats = self._attn_res_layers(
                 hidden,
                 token_ids,
@@ -3126,6 +3176,7 @@ class Transformer(eqx.Module):
                 long_mask.with_fa4_bounds(short_lower_bounds, valid),
                 route_key,
                 input_embed2,
+                ple_rows,
             )
         else:
             if cfg.moe_hash_layers or cfg.moe_gumbel_tau > 0:
@@ -3193,6 +3244,7 @@ class Transformer(eqx.Module):
         short_layer_mask: AttentionMask,
         route_key: jax.Array | None = None,
         input_embed2: jax.Array | None = None,
+        ple_rows: jax.Array | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array], dict[str, jax.Array]]:
         """Block AttnRes over the layers, unrolled so each gate reads only its valid sources.
 
@@ -3203,6 +3255,9 @@ class Transformer(eqx.Module):
         computed once when it is rolled, and each gate then only scores the partial. Blocks are shared
         by reference, so block memory is one copy per block. With ``AttnResLayerBackward.RECOMPUTE``
         each layer is rematerialized by ``_attn_res_layer_remat``, which saves only its inputs.
+
+        ``ple_rows`` (``ple_dim``) holds every layer's per-layer-embedding rows side by side; layer ``i``
+        gets its RMS-normed slice through its ``extras["ple"]``.
 
         Returns the final gate's mix, the per-layer router stats and the final gate's mean max weight
         and mean entropy.
@@ -3308,8 +3363,12 @@ class Transformer(eqx.Module):
                     partial = inject if partial is None else partial + inject
                 use_long = _is_long_layer(i, num_layers, cfg.global_every, cfg.global_layers)
                 partial_before = partial
+                layer_extras = logit_bias
+                if ple_rows is not None:
+                    ple_i = rms_norm(ple_rows[..., i * cfg.ple_dim : (i + 1) * cfg.ple_dim], eps)
+                    layer_extras = {**(logit_bias or {}), "ple": ple_i}
                 layer_args = (
-                    (layer, blocks, block_logits, partial, queries, logit_bias),
+                    (layer, blocks, block_logits, partial, queries, layer_extras),
                     long_layer_mask if use_long else short_layer_mask,
                     token_ids,
                     use_long,
