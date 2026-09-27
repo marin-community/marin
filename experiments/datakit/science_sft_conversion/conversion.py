@@ -148,7 +148,9 @@ def _work_items() -> list[WorkItem]:
 
 def _output_path(source: Source, url: str, row_group: int, batch_index: int) -> str:
     shard = url.rsplit("/", 1)[-1].removesuffix(".parquet")
-    return prefix_join(OUTPUT_ROOT, f"chat/{source.name}/{shard}/rg-{row_group:05d}/batch-{batch_index:06d}.parquet")
+    source_name = source.name.replace("/", "__")
+    filename = f"{source_name}__{shard}__rg-{row_group:05d}__batch-{batch_index:06d}.parquet"
+    return prefix_join(OUTPUT_ROOT, f"outputs/main/{filename}")
 
 
 def _row_request(source: Source, source_id: str, chunk: str, chunk_index: int, chunk_count: int) -> dict:

@@ -12,7 +12,7 @@ generates a user request, an assistant `reasoning_content` span, and a final
 answer. The worker validates the three fields, the requested final format, and
 Datakit's Harmony message structure before writing `CHAT_SCHEMA` Parquet.
 Output files live under
-`s3://marin-us-east-02a/marin/users/benfeuer/science-sft-converted/2026.09.27-v1/chat/`.
+`s3://marin-us-east-02a/marin/users/benfeuer/science-sft-converted/2026.09.27-v1/outputs/main/`.
 Each file covers one 1,024-row source batch; completed batches are skipped on
 restart. A failed batch remains unwritten and fails the Iris task after four
 request attempts. The source artifact stays unchanged.
