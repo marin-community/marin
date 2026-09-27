@@ -76,6 +76,7 @@ def build_run_config(store: SftTokenStore, version: str) -> GrugRunConfig:
         qk_mult=1.5703274004183787,
         max_seq_len=CONTEXT,
         attention_implementation="gpu_fa4_cute",
+        ce_implementation="batched_xla",
     )
     trainer = TrainerConfig(
         id=identity,
