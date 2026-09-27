@@ -56,7 +56,7 @@ from iris.cluster.types import (
     EnvironmentSpec,
     is_job_finished,
 )
-from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_value
+from iris.rpc.proto_display import priority_band_value
 from rigging.config_discovery import find_project_root
 from rigging.connect import capability_path, proxy_path
 from rigging.timing import Duration
@@ -366,7 +366,7 @@ def _mint_and_print_capability_url(
 @click.option("--instances", type=click.IntRange(min=1), default=1, help="Number of Iris inference instances.")
 @click.option(
     "--priority",
-    type=click.Choice(PRIORITY_BAND_NAMES),
+    type=click.Choice(["interactive", "batch"]),
     default=None,
     help="Iris priority band for the service and its child inference workers.",
 )
