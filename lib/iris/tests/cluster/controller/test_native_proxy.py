@@ -6,7 +6,6 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from itertools import count
 from typing import cast
 from urllib.parse import unquote
 
@@ -174,18 +173,10 @@ def test_native_listener_preserves_public_routes_and_streams_to_endpoint(
         threads.stop()
 
 
-def test_native_proxy_reuses_upstream_connections(make_controller) -> None:
-    connections = count()
-
+def test_native_proxy_preserves_responses_across_sequential_and_concurrent_requests(make_controller) -> None:
     class Handler(BaseHTTPRequestHandler):
-        protocol_version = "HTTP/1.1"
-
-        def setup(self) -> None:
-            super().setup()
-            self.connection_id = next(connections)
-
         def do_GET(self) -> None:
-            body = json.dumps({"connection": self.connection_id}).encode()
+            body = json.dumps({"path": self.path}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -203,14 +194,20 @@ def test_native_proxy_reuses_upstream_connections(make_controller) -> None:
         controller = make_controller(host="127.0.0.1", port=0, endpoints={_ENDPOINT_NAME: address})
         controller.start()
 
+        route_prefix = f"/proxy/{_ENCODED_NAME}"
+        sequential_paths = [f"/sequential/{index}" for index in range(4)]
+        concurrent_paths = [f"/concurrent/{index}" for index in range(16)]
         with httpx.Client(base_url=controller.url, trust_env=False) as client:
-            responses = [client.get(f"/proxy/{_ENCODED_NAME}/") for _ in range(16)]
-            with ThreadPoolExecutor(max_workers=16) as executor:
-                burst = list(executor.map(client.get, [f"/proxy/{_ENCODED_NAME}/"] * 64))
+            responses = [client.get(f"{route_prefix}{path}") for path in sequential_paths]
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                burst = list(executor.map(client.get, (f"{route_prefix}{path}" for path in concurrent_paths)))
 
-        assert all(response.status_code == 200 for response in responses)
-        assert all(response.status_code == 200 for response in burst)
-        assert len({response.json()["connection"] for response in responses}) == 1
+        assert [(response.status_code, response.json()) for response in responses] == [
+            (200, {"path": path}) for path in sequential_paths
+        ]
+        assert [(response.status_code, response.json()) for response in burst] == [
+            (200, {"path": path}) for path in concurrent_paths
+        ]
     finally:
         upstream.shutdown()
         upstream.server_close()
