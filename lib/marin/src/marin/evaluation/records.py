@@ -167,7 +167,8 @@ class ModelGenerationConfig(BaseModel):
 
     max_gen_toks: int | None
     extra_gen_kwargs: dict[str, str]
-    chat_template_kwargs: dict[str, bool] = Field(default_factory=dict)
+    chat_template_kwargs: dict[str, bool | str] = Field(default_factory=dict)
+    thinking_off_template_kwargs: dict[str, bool | str] = Field(default_factory=dict)
 
 
 class ModelAgentConfig(BaseModel):
@@ -256,7 +257,7 @@ class EvalchemyRef(BaseModel):
     seed: int | None
     extra_gen_kwargs: dict[str, str] = Field(default_factory=dict)
     extra_model_args: dict[str, str | int | float | bool] = Field(default_factory=dict)
-    chat_template_kwargs: dict[str, bool] = Field(default_factory=dict)
+    chat_template_kwargs: dict[str, bool | str] = Field(default_factory=dict)
     max_length: int | None = None
     judge: EvalchemyJudgeRef | None = Field(default=None, exclude_if=lambda value: value is None)
 

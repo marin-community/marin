@@ -118,6 +118,13 @@ class EvalchemyDefinition:
                     self.name,
                     max_gen_toks,
                 )
+        chat_template_kwargs = {
+            **model.generation.chat_template_kwargs,
+            **config.chat_template_kwargs,
+        }
+        if config.chat_template_kwargs.get("enable_thinking") is False and model.generation.thinking_off_template_kwargs:
+            chat_template_kwargs.pop("enable_thinking")
+            chat_template_kwargs.update(model.generation.thinking_off_template_kwargs)
         return replace(
             config,
             apply_chat_template=(
@@ -129,10 +136,7 @@ class EvalchemyDefinition:
                 **config.extra_gen_kwargs,
                 **model.generation.extra_gen_kwargs,
             },
-            chat_template_kwargs={
-                **model.generation.chat_template_kwargs,
-                **config.chat_template_kwargs,
-            },
+            chat_template_kwargs=chat_template_kwargs,
         )
 
 
