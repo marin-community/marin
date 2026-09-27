@@ -950,6 +950,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         last_loss: float | jax.Array = 0.0
         last_step_duration = 0.0
+        host_gap_start: float | None = None
+        gc.callbacks.append(_warn_on_long_gc)
         hlo_written = False
 
         # Main optimization loop.
@@ -967,6 +969,14 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 else:
                     watch_stats = None
                 step_start = time.perf_counter()
+                if host_gap_start is not None and step_start - host_gap_start > HOST_GAP_WARN:
+                    logger.warning(
+                        "host gap %.3f s before step %d on process %d (load %.3f s)",
+                        step_start - host_gap_start,
+                        current_step,
+                        jax.process_index(),
+                        iterator.this_load_time,
+                    )
                 state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_STARTED)
                 grow_step = config.model.loop_grow_step
                 # Looped growth compiles one program per pass count (a traced switch would keep both alive).
@@ -977,6 +987,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 step = int(state.step) - 1
 
                 jax.block_until_ready(metrics["train/loss"])
+                ready_time = time.perf_counter()
                 if config.trainer.hlo_dump_path is not None and not hlo_written and jax.process_index() == 0:
                     _write_train_step_hlo(train_step, state, batch, loop_active, config.trainer.hlo_dump_path)
                 hlo_written = True
@@ -1027,6 +1038,14 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         callbacks.ProgressEvent.CHECKPOINT_FINISHED,
                     ):
                         checkpointer.on_step(tree=state, step=int(state.step))
+                host_gap_start = time.perf_counter()
+                if host_gap_start - ready_time > HOST_GAP_WARN:
+                    logger.warning(
+                        "post-step host work %.3f s after step %d on process %d",
+                        host_gap_start - ready_time,
+                        current_step,
+                        jax.process_index(),
+                    )
 
         except BaseException:
             logger.exception(
@@ -1048,6 +1067,21 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             state_callbacks.emit_event(callbacks.ProgressEvent.TRAINING_FINISHED)
 
     levanter.tracker.current_tracker().finish()
+
+
+# Every rank logs host-side stalls longer than this: a late rank stalls every other rank's collectives.
+HOST_GAP_WARN = 0.1
+GC_PAUSE_WARN = 0.05
+_gc_start: dict[str, float] = {}
+
+
+def _warn_on_long_gc(phase: str, info: dict) -> None:
+    if phase == "start":
+        _gc_start["t"] = time.perf_counter()
+        return
+    pause = time.perf_counter() - _gc_start.get("t", time.perf_counter())
+    if pause > GC_PAUSE_WARN:
+        logger.warning("gc gen%d pause %.3f s on process %d", info.get("generation", -1), pause, jax.process_index())
 
 
 def _write_train_step_hlo(train_step, state, batch, loop_active: bool | None, path: str) -> None:
