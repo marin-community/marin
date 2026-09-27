@@ -986,6 +986,12 @@ def _fake_vllm_app() -> Starlette:
     async def metrics(_request):
         return PlainTextResponse("# TYPE vllm:generation_tokens_total counter\nvllm:generation_tokens_total 42\n")
 
+    async def tokenize(request):
+        payload = await request.json()
+        if payload["model"] != "fake-model":
+            return JSONResponse({"error": {"type": "NotFoundError"}}, status_code=404)
+        return JSONResponse({"tokens": [4, 9, 12], "count": 3, "received_request": payload})
+
     return Starlette(
         routes=[
             Route("/health", health),
@@ -993,6 +999,7 @@ def _fake_vllm_app() -> Starlette:
             Route("/v1/chat/completions", chat, methods=["POST"]),
             Route("/v1/completions", completions, methods=["POST"]),
             Route("/metrics", metrics),
+            Route("/tokenize", tokenize, methods=["POST"]),
         ]
     )
 
@@ -1068,6 +1075,20 @@ def test_dashboard_serves_ui_and_reverse_proxies_streaming():
                 timeout=10,
             )
             assert _collect_sse_text(completion, "text") == "123456"
+
+            tokenization_payload = {
+                "model": "fake-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "add_generation_prompt": True,
+                "chat_template_kwargs": {"enable_thinking": False},
+            }
+            tokenized = requests.post(f"{base}/tokenize", json=tokenization_payload, timeout=10)
+            assert tokenized.status_code == 200
+            assert tokenized.json() == {"tokens": [4, 9, 12], "count": 3, "received_request": tokenization_payload}
+
+            rejected = requests.post(f"{base}/tokenize", json={"model": "missing-model"}, timeout=10)
+            assert rejected.status_code == 404
+            assert rejected.json() == {"error": {"type": "NotFoundError"}}
 
 
 def test_dashboard_health_reports_loading_when_upstream_down():
