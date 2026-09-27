@@ -62,6 +62,9 @@ files; `--platform tpu|gpu` overrides the model's default; `--accelerator` overr
 heuristic with an exact slice (`v6e-8` or `H100x8`); `--limit` caps eval instances;
 `--judge-model` or `--judge-model-config` selects an optional managed judge for Harbor
 verifiers, and `--judge-accelerator` overrides its slice; the judge must colocate with the candidate;
+`--seed` overrides the Evalchemy seed for every selected task and records it;
+`--retry-unscored-harbor-trials` retries only durable Harbor trials without verifier results;
+`--resume-results-path` resumes one Harbor evaluation from an object-store result path;
 `--federated_cluster` overrides the GPU fleet's target cluster; `--priority` sets the Iris priority
 band for the orchestrator and serve jobs; `--records-prefix` overrides where records land. The
 launcher always submits through the `marin` Iris controller.

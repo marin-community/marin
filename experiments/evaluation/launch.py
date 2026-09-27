@@ -23,7 +23,7 @@ from marin.evaluation.harbor.driver_config import (
     ValidatedHarborConfig,
     preflight_harbor_configs,
 )
-from marin.evaluation.harbor.runner import canonical_served_name
+from marin.evaluation.harbor.runner import HarborExecutor, canonical_served_name
 from marin.evaluation.hardware import AcceleratorChoice, Platform, default_platform
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.records import (
@@ -76,8 +76,10 @@ class LaunchSpec:
     judge_model: ModelConfig | None = None
     judge_accelerator: str | None = None
     seed: int | None = None
+    retry_unscored_harbor_trials: bool = False
     version: str | None = None
     description: str | None = None
+    resume_results_path: str | None = None
 
 
 def _git_sha() -> str:
@@ -153,6 +155,7 @@ def _resolve_definitions(
     model: ModelConfig,
     limit: int | None,
     seed: int | None,
+    retry_unscored_harbor_trials: bool,
 ) -> tuple[tuple[str, _ResolvedDefinition], ...]:
     evalchemy_definitions = [definition for _, definition in definitions if isinstance(definition, EvalchemyDefinition)]
     evalchemy_sources = iter(load_evalchemy_config(definition.config_path) for definition in evalchemy_definitions)
@@ -191,7 +194,12 @@ def _resolve_definitions(
                 _ResolvedDefinition(
                     record_ref=definition.record_ref_for(config, runtime_task_limit),
                     runtime_descriptor=definition.runtime_descriptor,
-                    executor=definition.executor_for(config, model, runtime_task_limit),
+                    executor=definition.executor_for(
+                        config,
+                        model,
+                        runtime_task_limit,
+                        retry_unscored_harbor_trials,
+                    ),
                     secret_env=dict(definition.secret_env_for(config)),
                 ),
             )
@@ -246,7 +254,18 @@ def build_evaluation_batch(
         isinstance(definition, HarborDefinition) for _, definition in requested_definitions
     ):
         model = replace(model, serve=resolved_serve_config(model))
-    definitions = _resolve_definitions(requested_definitions, model, spec.limit, spec.seed)
+    definitions = _resolve_definitions(
+        requested_definitions,
+        model,
+        spec.limit,
+        spec.seed,
+        spec.retry_unscored_harbor_trials,
+    )
+    if spec.resume_results_path is not None:
+        if len(definitions) != 1 or not isinstance(definitions[0][1].executor, HarborExecutor):
+            raise ValueError("--resume-results-path requires exactly one Harbor evaluation")
+        if "://" not in spec.resume_results_path:
+            raise ValueError("--resume-results-path must be an object-store path")
     if judge is not None and any(isinstance(definition.executor, EvalchemyExecutor) for _, definition in definitions):
         raise ValueError("--judge-model serves Harbor verifiers only; remove it or drop the Evalchemy evaluations")
     records_prefix = records_prefix_for(accelerator, spec)
@@ -259,7 +278,7 @@ def build_evaluation_batch(
                 raise ValueError(f"evaluations declare conflicting secret specifications for {name}")
             secret_env[name] = spec_value
         run_id = _run_id(model.name, eval_key)
-        output_dir = prefix_join(records_prefix, f"{run_id}/results")
+        output_dir = spec.resume_results_path or prefix_join(records_prefix, f"{run_id}/results")
         evaluations.append(
             Evaluation(
                 identity=EvaluationIdentity(

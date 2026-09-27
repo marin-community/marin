@@ -133,3 +133,45 @@ def test_promote_gpu_release_keeps_the_pin_when_the_rendered_wheel_fails_validat
         update_external.promote_gpu_release(manifest_path)
     assert pin.read_text() == original
     assert not list(tmp_path.glob("gpu.*.toml.tmp"))
+
+
+def test_upgrade_project_lock_refreshes_every_distribution_from_the_project_repository(tmp_path, monkeypatch):
+    update_external = _update_external()
+    project_dir = tmp_path / "harbor"
+    project_dir.mkdir()
+    harbor_source = "https://github.com/marin-community/harbor.git?branch=main#" + "1" * 40
+    adapter_source = (
+        "https://github.com/marin-community/harbor.git?" "subdirectory=adapters%2Ftau3-bench&branch=main#" + "1" * 40
+    )
+    unrelated_source = "https://github.com/example/unrelated.git?branch=main#" + "2" * 40
+    (project_dir / "uv.lock").write_text(
+        f"""
+[[package]]
+name = "harbor"
+source = {{ git = "{harbor_source}" }}
+
+[[package]]
+name = "harbor-tau3-bench-adapter"
+source = {{ git = "{adapter_source}" }}
+
+[[package]]
+name = "unrelated"
+source = {{ git = "{unrelated_source}" }}
+""".strip()
+        + "\n"
+    )
+    project = update_external.ExternalProject("harbor", "harbor", "HARBOR")
+    monkeypatch.setattr(update_external, "EXTERNAL_ROOT", tmp_path)
+    commands: list[list[str]] = []
+
+    def record_command(command: list[str], *, check: bool) -> None:
+        assert check is True
+        commands.append(command)
+
+    monkeypatch.setattr(update_external.subprocess, "run", record_command)
+
+    update_external.upgrade_project_lock(project)
+
+    command = commands.pop()
+    upgraded = [command[index + 1] for index, argument in enumerate(command) if argument == "--upgrade-package"]
+    assert upgraded == ["harbor", "harbor-tau3-bench-adapter"]

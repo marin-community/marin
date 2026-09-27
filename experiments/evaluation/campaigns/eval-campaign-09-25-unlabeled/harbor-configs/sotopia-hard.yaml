@@ -1,0 +1,45 @@
+n_concurrent_trials: 4
+release_trial_payloads_in_memory: true
+retry:
+  max_retries: 3
+  exclude_exceptions: []
+  include_exceptions:
+  - InternalServerError
+  - APIConnectionError
+  - APITimeoutError
+  - AgentSetupTimeoutError
+  - DaytonaSandboxStopError
+  - DaytonaProcessError
+  - LLMRequestTimeoutError
+  - TrialTimeoutError
+  - ArtifactWriteTimeoutError
+  - ContainerRegistryThrottledError
+  - Tau3RuntimeInfrastructureError
+  - Tau3TargetInfrastructureError
+  - VerifierTimeoutError
+  - VerifierRuntimeError
+  wait_multiplier: 2.0
+  min_wait_sec: 1.0
+  max_wait_sec: 60.0
+environment:
+  type: daytona
+agents:
+- name: sotopia
+  import_path: marin.evaluation.harbor.sotopia_agent:SotopiaAgent
+  override_setup_timeout_sec: 360
+  override_timeout_sec: 1800
+  kwargs:
+    partner_model: openai/openai/gpt-oss-120b
+    partner_api_base: https://api.together.xyz/v1
+    evaluator_model: openai/openai/gpt-oss-120b
+    evaluator_api_base: https://api.together.xyz/v1
+  env:
+    CUSTOM_API_KEY: ${TOGETHER_API_KEY}
+    OPENAI_API_KEY: ${TOGETHER_API_KEY}
+datasets:
+- name: hf://open-athena/sotopia-hard-harbor
+  ref: 65be6de928ab289e43a2730182b5b75cf2f75d41
+verifier:
+  override_timeout_sec: 300
+  env:
+    TOGETHER_API_KEY: ${TOGETHER_API_KEY}
