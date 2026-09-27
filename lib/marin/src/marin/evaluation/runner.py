@@ -56,6 +56,7 @@ _REPORT_TAIL_LINES = 15
 _HOSTED_JUDGE_STARTUP_ATTEMPTS = 3
 _HOSTED_JUDGE_STARTUP_BACKOFF = ExponentialBackoff(initial=20.0, maximum=120.0, factor=2.0, jitter=0.9)
 _RUNAI_STREAMER_READ_MARKERS = (
+    "run:ai streamer read fault",
     "could not receive runai_response",
     "aws_error_http_channel_throughput_failure",
 )
