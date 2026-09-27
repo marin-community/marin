@@ -514,6 +514,10 @@ class GrugModelConfig:
     aux_lm_steps: int = 500
     second_embed: bool = False
     embed2_rows: int = 0
+    embed2_grad_fp32: bool = True
+    """Second table's backward through the fp32 local scatter + psum (True), or JAX's default bf16
+    scatter-add (False). Hashed rows see few adds each, so the bf16 path's atomic contention and rounding
+    matter less than for the token table."""
     embed2_ngram: int = 2
     """With ``second_embed_bigram``, the n-gram length hashed into the table (2: bigram, 3: trigram)."""
     embed2_dim: int | None = None
@@ -2646,7 +2650,8 @@ class Transformer(eqx.Module):
                 if cfg.second_embed_bigram:
                     doc_start = None if segment_ids is None else segment_ids[0]
                     ids2 = _bigram_hash_ids(token_ids, doc_start, cfg.embed2_rows or cfg.vocab_size, cfg.embed2_ngram)
-                rows2 = _embedding_gather(self.token_embed2, ids2)
+                gather2 = _embedding_gather if cfg.embed2_grad_fp32 else _embedding_gather_autodiff
+                rows2 = gather2(self.token_embed2, ids2)
                 if self.embed2_up is not None:
                     rows2 = jnp.einsum(
                         "bsr,rd->bsd", rows2, self.embed2_up.astype(rows2.dtype), out_sharding=_batch_spec()
