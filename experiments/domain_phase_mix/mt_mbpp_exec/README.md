@@ -44,7 +44,10 @@ engine with the sandbox image.
 
 3. Generate on TPU. `--prepare` writes a frozen plan and uploads the requests to the region's bucket; the launch
    commands in `$P/launch_*_commands.txt` and `$P/euw4/` submit it with `--submit --mode mt_mbpp`. Decoding is greedy,
-   at most 1,024 tokens, and stops at the closing code fence.
+   at most 1,024 tokens, and stops at the closing code fence. A frozen plan pins the SHA-256 of the runner, the
+   Levanter inference path and `uv.lock`, plus the runtime package versions; the runner refuses a checkout or
+   environment that differs. `plan_euw4.json` and `plan_east5b.json` match commit `b70dacca15`, the last commit before
+   the 2026-09-26 merge of `main`; resubmit them from that commit, or prepare a new plan.
 
    ```bash
    uv run python -m experiments.domain_phase_mix.evaluate_table9_accuracy --prepare --region us-east5 --tpu-type v6e-4 --checkpoint-plan $P/checkpoints_east5.json --requests $P/requests --plan $P/plan_east5.json
