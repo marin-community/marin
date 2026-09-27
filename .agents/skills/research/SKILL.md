@@ -22,8 +22,11 @@ or operational guidance. Keep raw logs and dense data in their source systems.
 ## Investigate
 
 1. State the question, decision, and stopping condition.
-2. Search the current checkout and Echo for Marin context. Use primary external
-   sources when the question benefits from outside evidence.
+2. Search the current checkout for task-local context. Search Echo for Marin
+   context unless the same logical session already completed a relevant search
+   and the question, repository scope, and freshness requirements have not
+   changed. Reuse and cite those results instead of repeating the search. Use
+   primary external sources when the question benefits from outside evidence.
 3. Test the leading explanation against contradictions, negative results, and
    materially different operating regimes.
 4. Stop when additional sources or experiments no longer change the decision,

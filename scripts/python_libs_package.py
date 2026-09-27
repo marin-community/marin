@@ -6,7 +6,7 @@
 
 Builds the pure-Python marin-* lib packages (marin-core, marin-iris,
 marin-fray, marin-haliax, marin-levanter, marin-rigging, marin-zephyr,
-marin-finestore) into dist/. The package release engine passes one exact
+marin-finestore, marin-shellbox) into dist/. The package release engine passes one exact
 version to this builder.
 Publication is done by `.github/workflows/marin-release-libs-wheels.yaml` via
 `pypa/gh-action-pypi-publish` with OIDC trusted publishing. This script never
@@ -64,6 +64,7 @@ PACKAGES: dict[str, dict[str, str]] = {
     "marin-zephyr": {"path": "lib/zephyr", "version_file": "pyproject.toml", "kind": "pyproject"},
     "marin-levanter": {"path": "lib/levanter", "version_file": "pyproject.toml", "kind": "pyproject"},
     "marin-haliax": {"path": "lib/haliax", "version_file": "src/haliax/__about__.py", "kind": "about_py"},
+    "marin-shellbox": {"path": "lib/shellbox", "version_file": "pyproject.toml", "kind": "pyproject"},
 }
 
 

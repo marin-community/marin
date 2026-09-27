@@ -12,11 +12,12 @@ from tempfile import TemporaryDirectory
 
 import httpx
 from marin.publish import sites
+from pydantic import BaseModel, Field
 from rigging.filesystem.conditional_object import conditional_object
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
-from experiments.grug.moe_hero_ep.ops.vibe_check.completions import SampleResult, SampleStore
+from experiments.grug.moe_hero_ep.ops.vibe_check.completions import SampleStore, SamplingSpec, digest
 
 logger = logging.getLogger(__name__)
 
@@ -28,28 +29,82 @@ COMMENT_MARKER = "<!-- hero-checkpoint-completions-v1 -->"
 ISSUES_API = "https://api.github.com/repos/marin-community/marin/issues"
 ISSUE_API = f"{ISSUES_API}/8827"
 COMMENT_PAGE_SIZE = 100
+CATALOG_KEY = "reports/catalog.json"
+UNKNOWN_RUN = "Unknown run"
+UNKNOWN_RELEASE = "Unknown sampling version"
+
+
+class ReportEntry(BaseModel):
+    id: str
+    url: str
+    step: int | None = Field(default=None, ge=0)
+    run_id: str = UNKNOWN_RUN
+    release: str = UNKNOWN_RELEASE
+    spec_id: str = ""
+    completed_at: str = ""
+
+
+def report_entry(sample_id: str, data: dict) -> ReportEntry:
+    """Read report metadata without imposing the current sampler schema on historical results."""
+    rows = data.get("completions", [])
+    rows = [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+    samples = [sample for row in rows for sample in (row["samples"] if isinstance(row.get("samples"), list) else [row])]
+    if not any(
+        isinstance(sample, dict)
+        and (
+            isinstance(sample.get("text"), str)
+            or (
+                isinstance(sample.get("token_scores"), list)
+                and any(
+                    isinstance(token, dict) and isinstance(token.get("text"), str) for token in sample["token_scores"]
+                )
+            )
+        )
+        for sample in samples
+    ):
+        raise ValueError("Result has no completed samples")
+    request = data.get("request") or {}
+    if not isinstance(request, dict):
+        raise ValueError("Result request must be an object")
+    checkpoint = request.get("checkpoint") or {}
+    spec = request.get("spec") or {}
+    if not isinstance(checkpoint, dict) or not isinstance(spec, dict):
+        raise ValueError("Checkpoint and sampling specification must be objects")
+    # Hash the original fields. New schema defaults would change historical request IDs.
+    if checkpoint and spec and digest({"checkpoint": checkpoint, "spec": spec}) != sample_id:
+        raise ValueError("Result provenance does not match its filename")
+    return ReportEntry(
+        id=sample_id,
+        url=prefix_join(sites.PUBLIC_URL_BASE, public_result_key(sample_id)),
+        step=checkpoint.get("step"),
+        run_id=checkpoint.get("run_id") or UNKNOWN_RUN,
+        release=spec.get("release") or UNKNOWN_RELEASE,
+        spec_id=digest(spec) if spec else "",
+        completed_at=data.get("completed_at") or "",
+    )
 
 
 def public_result_key(sample_id: str) -> str:
     return f"{REPORT_USER}/{REPORT_SLUG}/results/{sample_id}.json"
 
 
-def report_manifest(results: list[SampleResult], report_date: str, previous_url: str) -> dict:
-    requests = sorted(
-        (result.request for result in results), key=lambda row: (row.checkpoint.step, row.sample_id), reverse=True
+def report_manifest(
+    entries: list[ReportEntry], report_date: str, previous_url: str, *, current_spec_id: str = ""
+) -> dict:
+    entries = sorted(
+        entries,
+        key=lambda row: (
+            row.step if row.step is not None else -1,
+            row.spec_id == current_spec_id,
+            row.completed_at,
+            row.id,
+        ),
+        reverse=True,
     )
     return {
         "date": report_date,
         "previous_url": previous_url,
-        "entries": [
-            {
-                "id": request.sample_id,
-                "run_id": request.checkpoint.run_id,
-                "step": request.checkpoint.step,
-                "url": prefix_join(sites.PUBLIC_URL_BASE, public_result_key(request.sample_id)),
-            }
-            for request in requests
-        ],
+        "entries": [entry.model_dump() for entry in entries],
     }
 
 
@@ -103,7 +158,7 @@ def update_issue_comment(body: str, token: str) -> None:
         response.raise_for_status()
 
 
-def publish_daily(store: SampleStore, day: date, results: list[SampleResult]) -> str:
+def publish_daily(store: SampleStore, day: date, manifest: dict) -> str:
     """Publish a fixed daily snapshot after the first result arrives.
 
     The workflow serializes callers. A retry uses the saved snapshot, even if
@@ -114,12 +169,11 @@ def publish_daily(store: SampleStore, day: date, results: list[SampleResult]) ->
     previous_url = published[-1].read_text() if published else ""
     if published and published[-1].name >= f"{report_date}.url":
         return previous_url
-    if not results:
+    if not manifest["entries"]:
         return previous_url
     snapshot = conditional_object(str(store.root / f"reports/{report_date}.json"))
     saved = snapshot.read()
     if saved is None:
-        manifest = report_manifest(results, report_date, previous_url)
         snapshot.write(json.dumps(manifest).encode(), expected_version=None)
     else:
         manifest = json.loads(saved.data)
@@ -138,27 +192,46 @@ def publish_daily(store: SampleStore, day: date, results: list[SampleResult]) ->
     return site.url
 
 
-def publish_reports(store: SampleStore, day: date, comment: Callable[[str], None]) -> str:
-    """Update the current report and retain one nonempty snapshot per report day."""
-    results = store.results()
-    for result in results:
-        key = result.request.sample_id
-        target = conditional_object(prefix_join(sites.PUBLIC_ROOT, public_result_key(key)))
+def publish_reports(store: SampleStore, day: date, comment: Callable[[str], None], *, spec: SamplingSpec) -> str:
+    """Add completed results to the catalog and publish only when new usable results exist."""
+    catalog = conditional_object(str(store.root / CATALOG_KEY))
+    saved = catalog.read()
+    entries = [ReportEntry.model_validate(row) for row in json.loads(saved.data)["entries"]] if saved else []
+    known = {entry.id for entry in entries}
+    added = []
+    for sample_id in sorted(store.completed_ids() - known):
+        raw = StoragePath(store.result_uri(sample_id)).read_bytes()
+        try:
+            data = json.loads(raw)
+            if not isinstance(data, dict):
+                raise ValueError("Result must be a JSON object")
+            entry = report_entry(sample_id, data)
+        except ValueError as error:
+            logger.warning("Skip unusable result %s: %s", sample_id, error)
+            continue
+        target = conditional_object(prefix_join(sites.PUBLIC_ROOT, public_result_key(sample_id)))
         if target.version() is None:
-            target.write(result.model_dump_json().encode(), expected_version=None)
+            target.write(raw, expected_version=None)
+        added.append(entry)
+    latest = prefix_join(sites.PUBLIC_URL_BASE, LATEST_REPORT_KEY)
+    if not added:
+        logger.info("No new usable completions; retain the current report (%d catalog entries)", len(entries))
+        return latest
+    entries.extend(added)
     published = sorted((store.root / REPORT_URL_PATTERN).glob(), key=lambda path: path.name)
     previous_url = published[-1].read_text() if published else ""
-    manifest = report_manifest(results, day.isoformat(), previous_url)
+    manifest = report_manifest(entries, day.isoformat(), previous_url, current_spec_id=digest(spec.model_dump()))
+    daily_url = publish_daily(store, day, manifest)
     latest = publish_current(manifest)
-    daily_url = publish_daily(store, day, results)
     links = f"[Current completions]({latest})"
     if daily_url:
         links += f" · [Daily snapshot]({daily_url})"
     comment(
         f"🤖 Hero checkpoint completions · {day.isoformat()} UTC\n\n"
         f"{links}\n\n"
-        f"{len(results)} completed sample sets. "
-        "The current report updates hourly. Dated snapshots stay fixed.\n\n"
+        f"{len(entries)} completed sample sets across sampling versions. "
+        "The current report updates when new results arrive. Dated snapshots stay fixed.\n\n"
         f"{COMMENT_MARKER}"
     )
+    catalog.write(json.dumps(manifest).encode(), expected_version=saved.version if saved else None)
     return latest

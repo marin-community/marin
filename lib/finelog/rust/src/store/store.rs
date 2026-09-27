@@ -991,6 +991,10 @@ impl Store {
         let mut next = active.clone();
         next.version = Some(next_version);
         next.logical_schema = MessageField::some(schema_to_proto_owned(&next_logical));
+        let source_layout = next.source_layout.get_or_insert_default();
+        source_layout.sort_columns.clear();
+        source_layout.max_row_group_rows = None;
+        next.artifact_policy = MessageField::none();
         let next_bytes = next.encode_to_vec();
         let next_view = TableSpecView::decode_view(&next_bytes).map_err(|error| {
             StatsError::Internal(format!("encode evolved table spec for {name:?}: {error}"))
@@ -3297,6 +3301,126 @@ mod tests {
         );
 
         cold.shutdown(Duration::from_secs(1)).await;
+        std::fs::remove_dir_all(data_dir).ok();
+        std::fs::remove_dir_all(remote_dir).ok();
+    }
+
+    /// A managed index or projection change must update the retained artifact
+    /// policy alongside the logical schema. Otherwise every cold boot retries
+    /// the server-owned registration and leaves ingest degraded.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_managed_artifact_change_evolves_the_object_spec() {
+        let PublishedObjectTableFixture {
+            store,
+            data_dir,
+            remote_dir,
+            ..
+        } = published_object_table("managed_artifact_evolution").await;
+
+        let projection = CoveringProjection::new(
+            "busy-workers",
+            "worker_id",
+            ["w-1"],
+            ["worker_id", "timestamp_ms"],
+        );
+        let mut evolved = worker_schema().with_covering_projection(projection.clone());
+        let worker_id = evolved
+            .columns
+            .iter_mut()
+            .find(|column| column.name == "worker_id")
+            .unwrap();
+        *worker_id = worker_id.clone().with_exact_values(["w-1"]);
+
+        tokio::task::block_in_place(|| {
+            store.register_managed_table("iris.worker", evolved.clone(), StoragePolicy::default())
+        })
+        .unwrap();
+
+        let lifecycle = store.spec_lifecycle("iris.worker").unwrap();
+        assert_eq!(lifecycle.active_version(), 2);
+        assert_eq!(lifecycle.desired_version(), 0);
+        let effective = store.get_table_schema("iris.worker").unwrap();
+        assert_eq!(
+            effective.column("worker_id").unwrap().index.exact_values,
+            ["w-1"]
+        );
+        assert_eq!(
+            effective.projections.as_slice(),
+            std::slice::from_ref(&projection)
+        );
+
+        store.publish_object_catalog("iris.worker").await.unwrap();
+        store.shutdown(Duration::from_secs(1)).await;
+        drop(store);
+        std::fs::remove_dir_all(&data_dir).unwrap();
+        let cold = Store::new(
+            Some(data_dir.clone()),
+            remote_dir.to_string_lossy().into_owned(),
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Shadow,
+        )
+        .unwrap();
+        cold.recover_tables().await.unwrap();
+        let recovered = cold.get_table_schema("iris.worker").unwrap();
+        assert_eq!(
+            recovered.column("worker_id").unwrap().index.exact_values,
+            ["w-1"]
+        );
+        assert_eq!(recovered.projections, [projection]);
+
+        cold.shutdown(Duration::from_secs(1)).await;
+        std::fs::remove_dir_all(data_dir).ok();
+        std::fs::remove_dir_all(remote_dir).ok();
+    }
+
+    /// Schema-owned source layout fields must be regenerated during managed
+    /// evolution while spec-owned layout fields remain intact.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_managed_layout_change_evolves_the_object_spec() {
+        let PublishedObjectTableFixture {
+            store,
+            data_dir,
+            remote_dir,
+            ..
+        } = published_object_table("managed_layout_evolution").await;
+
+        let active_layout = store
+            .spec_lifecycle("iris.worker")
+            .unwrap()
+            .active
+            .unwrap()
+            .source_layout
+            .into_option()
+            .unwrap();
+        let evolved = worker_schema()
+            .with_sort_columns(["worker_id", "timestamp_ms"])
+            .with_max_row_group_rows(131_072);
+        tokio::task::block_in_place(|| {
+            store.register_managed_table("iris.worker", evolved, StoragePolicy::default())
+        })
+        .unwrap();
+
+        let lifecycle = store.spec_lifecycle("iris.worker").unwrap();
+        assert_eq!(lifecycle.active_version(), 1);
+        assert_eq!(lifecycle.desired_version(), 2);
+        let desired = lifecycle.desired.unwrap();
+        let desired_layout = desired.source_layout.as_option().unwrap();
+        assert_eq!(desired_layout.sort_columns, ["worker_id", "timestamp_ms"]);
+        assert_eq!(desired_layout.max_row_group_rows, Some(131_072));
+        assert_eq!(
+            desired_layout.target_object_bytes,
+            active_layout.target_object_bytes
+        );
+        assert_eq!(
+            desired
+                .logical_schema
+                .as_option()
+                .unwrap()
+                .max_row_group_rows,
+            Some(131_072)
+        );
+
+        store.shutdown(Duration::from_secs(1)).await;
         std::fs::remove_dir_all(data_dir).ok();
         std::fs::remove_dir_all(remote_dir).ok();
     }

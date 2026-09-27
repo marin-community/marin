@@ -30,6 +30,10 @@ fetch server-side, so nothing outside the container reaches it.
 
 ```
 GET /finelog/{cluster}/query?sql=&from=&to=      finelog SQL
+GET /finelog/{cluster}/v1/{node,training,runs,rl,async-rl,accelerator,jobs}/overview
+                                                    bounded shared dashboard datasets
+GET /finelog/{cluster}/v1/zephyr/overview        bounded ranked shuffle snapshot
+GET /finelog/{cluster}/v1/rl/recent              bounded recent RL runs
 GET /finelog/marin/fleet_health                  main query probe + k8s mirror readiness
 GET /finelog/marin/relay_status                  direct regional relay heartbeats
 GET /finelog/marin/alerts/fleet_health           alert rows: server labels + value(0|1)
@@ -82,6 +86,84 @@ window to compare token throughput, request pressure, KV-cache use,
 latency/outcomes, and worst-replica freshness after a serve exits; reset-aware
 deltas preserve replica identity, and an explicit no-data row distinguishes
 missing telemetry from healthy application silence.
+
+The inference pages open on five minutes and refresh every two minutes. Ranges of
+seven hours or less fetch the selected series' samples with one bridge query.
+That query scans the vLLM and MarinSkyRL namespaces once each. The bridge
+computes all panels locally with DuckDB and shares the result across both pages.
+Every dashboard panel requests the same 15-second bucket;
+the bridge raises it as needed to cap each trend at 360 points. The fetch retains
+a three-minute counter lookback and rejects
+more than one million samples or 50,000 series. Local calculation uses one thread,
+a 512 MB memory limit, no disk spill, and a lock because Grafana and the bridge
+share one CPU. Dense short ranges may still hit the sample limit.
+
+Longer ranges, up to seven days, fetch only the signals used by the summary
+with the same two bounded namespace scans. The bridge aggregates these samples
+locally. The summary
+shows reset-aware token and outcome totals, an hourly generated-token timeline,
+observed waiting and KV-cache peaks, and native ITL from coherent counter pairs.
+The same sample and memory limits apply. It omits latency
+tails, output-length distribution, per-engine detail, and client or proxy time.
+Zoom to seven hours or less for those server details. Run triage separates
+query health (detail, summary-only, empty, timeout, or sample limit) from
+selected-range run attention. When first-token observations outnumber
+`request_success_total` finishes, it shows both counts and points to the
+evaluator in Iris. TTFT is counted when a first token appears; the finish
+counter changes later. Separate vLLM failure and timeout counters are not in
+this comparison; inspect the outcome panel for them.
+An in-progress or partial window can have a gap without a failed request. A
+missing counter or a query failure gives no run conclusion. The cue does not
+identify client or proxy timeouts. Other panels point to query health when
+they have no data. Missing historical ITL stays unavailable rather than being
+inferred from TPOT.
+
+The identity picker retains request-state discovery. For ranges longer than
+seven hours, it scans the first seven hours to stay within Finelog's deadline.
+Paste an exact job, run, or execution ID into **Manual serve ID** when the
+desired session began later. The diagnostics page links the selected or manual
+serve to Iris; follow its evaluator child to inspect client results, retries,
+and proxy logs. vLLM counters do not measure that time.
+
+To replay both pages against the existing four-node data in
+[Marin #8929](https://github.com/marin-community/marin/issues/8929), run from the
+repository root (the replay uses the repository's Finelog connection helpers):
+
+```bash
+PYTHONPATH=infra/grafana/src uv run python infra/grafana/benchmarks/inference_query_cost.py \
+  --identity snowball-throughput-20260905-four-node \
+  --from-ms 1788576120000 --to-ms 1788576150000 \
+  --output /tmp/inference-query-after
+```
+
+The replay requests the selector, sends each page's panels in parallel, then
+repeats both pages with a warm cache. It saves SQL, Arrow inputs, responses,
+upstream call counts and durations, and page latency. `--refresh-after 120` also
+waits two minutes and advances the window. To compare the original draft, extract
+`infra/grafana/{src,dashboards}` from commit
+`4ace1ba5eb91cd184dec17c704ec7aa5962a9ac3` with `git archive`, point `PYTHONPATH` at
+that extracted `src/`, and pass its parent as `--grafana-dir`. Keep the identity,
+window, and request sequence the same, and use a separate output directory.
+These are read-only live queries; repeat only the windows needed for comparison.
+
+The Node Details, Zephyr, Training, Runs, RL (sync and async), Accelerators, Jobs,
+and Home dashboards use the same shared-dataset contract. Each endpoint validates every
+identity and time input, runs a small fixed set of domain queries, and projects all
+panel views locally. Concurrent panel requests coalesce on one logical cache key;
+the `view` parameter only filters the cached result. A cold traversal uses one
+Finelog source for Node and Zephyr, three for Training, two for Runs, three for RL,
+nine for async RL, three for Accelerators, and five for Jobs. Those boundaries are intentional:
+crossing namespaces or mixing fleet-wide per-device data with compact summaries
+just to reach one RPC would make the query less predictable.
+
+`src/dashboard_dataset.py` owns only cache-independent execution rules: declared
+row/sample caps, one-thread DuckDB projection, a 512 MB memory cap, and no disk
+spill. The domain modules own metric names, source SQL, windows, cardinality caps,
+and counter/latest-state semantics. Fleet accelerator raster data is additionally
+limited to 60 time slices; aggregate charts retain up to 100. A budget breach is a
+400 asking the operator to narrow the filters or window, never an unbounded retry.
+Selectors remain independent `/query` requests because discovery has different
+indexing and window requirements from panel calculation.
 
 `fleet_health` reads one row from `finelog-marin`'s `log` namespace and combines that
 result with the three CoreWeave mirror Deployments' HTTP-readiness state. A hub query
@@ -230,21 +312,27 @@ of repeating the Kubernetes object name.
 | Node | Node details | `nodes.json` | What is happening on one physical GPU node? | cluster, node |
 | Workload | Jobs | `jobs.json` | What is running, queued, and stuck? | cluster, job |
 | Workload | Runs | `runs.json` | How is each Levanter training run doing? | cluster, run |
-| Workload | RL Post-training | `rl_runs.json` | How is one reinforcement-learning run doing? | cluster, run |
+| Workload | RL Post-training (sync) | `rl_runs.json` | How is one reinforcement-learning run doing? | cluster, run |
+| Workload | RL Post-training (async) | `async_rl.json` | Is concurrent rollout work useful, fresh, and keeping the policy trainer busy? | cluster, run, job, execution |
 | Workload | Training run | `training.json` | Is one training run on track? | run |
 | Workload | Inference overview | `inference_overview.json` | Is inference progressing, and are responses slow or queues growing? | identity kind, serve |
 | Workload | Inference diagnostics | `inference.json` | Which engines, request stages, or workload changes explain the slowdown? | identity kind, serve |
 | Services | Infra | `infra.json` | Are nightly runs, main CI, workers, and hero training healthy? | none |
 
-Getting a run onto the RL Post-training view is a MarinSkyRL-side question: which launch paths export
-the telemetry environment, what a run id should look like, and which panels a synchronous run
-leaves blank by design. MarinSkyRL documents it at `docs/grafana-rl-runs.md`.
+Getting a run onto an RL Post-training view is a MarinSkyRL-side question: which launch paths export
+the telemetry environment, what a run id should look like, and which training loop the run stamps on
+its records. Each view's run picker offers only its own loop. MarinSkyRL documents it at
+`docs/grafana-rl-runs.md`.
 
 The two inference dashboards keep the selected identity and time range when
 linked. The existing `marin-inference` UID now opens diagnostics, preserving old
 links and panel IDs; `marin-inference-overview` is the entry point from Home.
 Shared charts use the existing panel-fragment stitcher. Both dashboards read
-the cached `/v1/vllm/overview` result; no new collector or metric is required.
+the cached `/v1/vllm/overview` result. Their identity picker reads only
+`num_requests_running` rows from Finelog's `session-discovery` projection,
+including MarinSkyRL rows whose `metric_source` is `vllm`. These current-state
+samples preserve the selected time-window semantics and include long-lived
+sessions observed during the window. No new collector or metric is required.
 
 Inference rates describe the observed engines, not upstream demand. Running
 requests are admitted to scheduling, not a GPU batch size; iteration tokens mix
@@ -320,9 +408,10 @@ selected the latter is the fleet backlog broken out by job, and narrowed to one
 job it is that job's queue over time.
 
 `training.json` shows whether one run is on track. `runs.json` compares runs. The
-single-value selector puts the newest hero run first. It uses `run_id` across
-clusters and discovers runs from a fixed 12-hour window, so widening the graph
-range does not turn the selector into a whole-store scan. A `run_id` supplied in
+single-value selector puts the newest hero run first. It uses the process-zero
+phase heartbeat to discover `run_id` values across clusters from a fixed 12-hour
+window, so widening the graph range does not turn the selector into a
+whole-store scan. A `run_id` supplied in
 the dashboard URL remains available for older graph windows. The status strip
 uses one 15-minute query over the semantic `levanter.metrics` table for ten
 fields. The strip includes the two hero
@@ -463,10 +552,13 @@ causes. `severity=critical` routes to `ops-critical` (email
 ops@openathena.ai, and the bridge, which announces the alert in Slack and opens a
 Loom triage session on that thread). `severity=warning`
 matches the always-active `dashboard-only` mute timing: Grafana continues
-evaluating and displaying the alert, but creates no notification. Every rule sets
-`noDataState: Alerting` and `execErrState: Alerting`, and the alert endpoints return
-explicit zeros when healthy, so monitoring-path failures use the same
-critical or warning handling as the rule.
+evaluating and displaying the alert, but creates no notification. Every rule
+sets explicit error and no-data behavior, and the alert endpoints return
+explicit zeros when healthy. Every rule alerts on invalid query results and
+other execution errors. Finelog alert endpoints convert only retryable service
+failures into valid non-firing results because `FinelogFleetUnhealthy` reports
+that shared failure. The CoreWeave storage rules stay normal when a successful
+query returns no data.
 
 Federation peer reachability comes from `ListPeers` on the Marin controller.
 The controller heartbeat traverses production DNS, TLS, Traefik, the source-IP
@@ -759,11 +851,19 @@ token is attenuated to that subset even if the app holds broader grants.
 
 ## Adding a dashboard
 
-Drop JSON in `dashboards/` and redeploy. Panels use the Infinity datasource with
-`url: /query` and an `sql` param, plus `from`/`to` set to `${__from}`/`${__to}`.
-Write the window into the SQL as `{{from}}` / `{{to}}`, and bin the time axis with
-`date_bin(INTERVAL '${__interval_ms} milliseconds', ts)` so Grafana sizes the
-buckets to the panel — see `dashboards/jobs.json`.
+Drop JSON in `dashboards/` and redeploy. A one-off panel can use the Infinity
+datasource with `url: /query`, an `sql` param, and `from`/`to` set to
+`${__from}`/`${__to}`. Write the window into that SQL as `{{from}}` / `{{to}}`,
+and bin the time axis with
+`date_bin(INTERVAL '${__interval_ms} milliseconds', ts)`.
+
+When two or more panels scan the same identity, namespace, and window, add a fixed
+shared-dataset endpoint instead. Put the bounded source query and fixed local views
+in a domain module, use `DashboardDataset` for its caps and cache key, and have each
+panel pass the same query-affecting parameters plus its `view`. Do not accept SQL or
+metric names from the request. Keep separate sources when namespaces or cardinality
+profiles differ; Jobs deliberately uses five sources, while Node uses one. Add a
+page-level test that requests every view and asserts the cold Finelog call count.
 
 Dashboards address the `finelog-marin` hub directly rather than through a
 datasource variable. The hub is the fleet view: the CoreWeave clusters forward

@@ -28,6 +28,13 @@ revision directly. There are three pin kinds:
   and `uv.lock` records its hash. This fork sits outside the weekly refresh; see
   the XLA fork section below.
 
+Prefer the same exact vLLM source commit for GPU and TPU when that commit passes
+both device gates. This is not a lockstep rule: the lanes keep separate wheels,
+dependency environments, manifests, gates, promotion inputs, and release
+cadences. A lane may use a different source for compatibility or qualification;
+record the reason and prefer reconverging at a later commit that passes both
+gates. Never delay one lane solely to keep the source SHAs equal.
+
 ## The weekly refresh
 
 `.github/workflows/ops-fork-ferry.yaml` runs every Monday at 08:00 UTC. It has one

@@ -30,7 +30,6 @@ from levanter.tensorstore_serialization import (
     TensorStoreReadConfig,
     TensorStoreWriteConfig,
     _capped_chunk_shape,
-    _HostByteBudget,
     _trim_host_memory_after_commits,
     _transfer_shard_to_pageable_host,
     build_kvstore_spec,
@@ -39,6 +38,7 @@ from levanter.tensorstore_serialization import (
 )
 from levanter.testing import eight_device_checkpoints
 from levanter.testing.eight_device_checkpoints import run_on_eight_devices
+from levanter.utils.byte_budget import HostByteBudget
 
 _ASYNC_TEST_TIMEOUT = 5
 
@@ -308,7 +308,7 @@ def test_staged_bytes_stay_admitted_until_their_write_is_released():
     """TensorStore holds a shard snapshot until the commit, so admission must outlive the copy."""
 
     async def scenario():
-        gate = _HostByteBudget(100)
+        gate = HostByteBudget(100)
         await gate.acquire(60)
 
         queued = asyncio.create_task(gate.acquire(60))

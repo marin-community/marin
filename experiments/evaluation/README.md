@@ -8,8 +8,8 @@ model once, runs every selected eval against that endpoint in order, and writes 
 inspectable (own record, own eval-child job and logs, own parquet), all sharing a `group_id`. Evaldash
 scans those records into its Postgres query index.
 
-`marin.evaluation.runner` opens one `remote_inference` session and passes its Iris endpoint URL to
-each executor. An evaluation failure is recorded and later evaluations continue. If inference fails,
+`marin.evaluation.runner` opens one candidate `remote_inference` session and optionally one shared
+hosted-judge session, then passes their Iris endpoint URLs to each executor. An evaluation failure is recorded and later evaluations continue. If inference fails,
 the current and remaining evaluations are recorded as infrastructure failures. This directory holds
 the model and suite catalogs, Marin fleet policy, and CLI choices.
 
@@ -45,6 +45,14 @@ uv run python -m experiments.evaluation.cli launch --model snowball --evals gsm8
 # Override GPU placement and scheduling priority.
 uv run python -m experiments.evaluation.cli launch --model snowball --evals gsm8k-smoke \
   --federated_cluster cw-rno2a --priority interactive
+
+# Co-host one judge for every Harbor verifier in this batch.
+uv run python -m experiments.evaluation.cli launch \
+  --model qwen3-8b \
+  --platform gpu \
+  --judge-model qwen3.5-122b-a10b-fp8 --judge-accelerator H100x8 \
+  --harbor-config experiments/evaluation/configs/harbor/simpleqa-hosted-judge.yaml \
+  --federated_cluster cw-rno2a --limit 2
 ```
 
 Key options: exactly one of `--model` or `--model-config` selects a registry entry or a catalog-schema
@@ -52,6 +60,8 @@ YAML/JSON file. `--evals` takes a suite name (`smoke`, `core`) or comma-separate
 (`gsm8k,mmlu-smoke`); repeatable `--evalchemy-config` and `--harbor-config` options add evaluator-native
 files; `--platform tpu|gpu` overrides the model's default; `--accelerator` overrides the sizing
 heuristic with an exact slice (`v6e-8` or `H100x8`); `--limit` caps eval instances;
+`--judge-model` or `--judge-model-config` selects an optional managed judge for Harbor
+verifiers, and `--judge-accelerator` overrides its slice; the judge must colocate with the candidate;
 `--federated_cluster` overrides the GPU fleet's target cluster; `--priority` sets the Iris priority
 band for the orchestrator and serve jobs; `--records-prefix` overrides where records land. The
 launcher always submits through the `marin` Iris controller.
@@ -140,12 +150,18 @@ and on failure, so a failed run is still accounted for -- and a failure carries 
 last 100 log lines (`log_tails`), so most failures are diagnosable straight from the record (or the
 dashboard) without cluster access.
 
-Alongside the results tree, each task's individually-scored questions are exported as parquet:
-lm-eval runs with `--log_samples`, and the orchestrator converts every `samples_*.jsonl` into a
-parquet sibling (`marin.evaluation.lm_eval_samples` normalizes lm-eval's native row shape into
-`EvalSample`, the per-sample contract in `finestore.eval`, with the parquet schema *being* the
-Pydantic model) -- load them with pandas/duckdb, or read them back with `EvalSample.model_validate`,
-to zoom into any run.
+For vLLM runs, `inference_metrics` contains the cumulative counter delta for that evaluator's window
+on the shared server. It includes prompt tokens, generation tokens, elapsed time, and generation
+tokens per second. A speculative run also includes draft count, proposed and accepted token counts,
+mean acceptance length, and draft acceptance rate. The normalized model configuration in the same
+record pins the target identity, tokenizer identity, and optional draft identity.
+
+Within its FineStore archive, each evaluator writes individually scored questions to the `samples`
+table using `EvalSample`, the shared schema in `finestore.eval`. Evalchemy writes its native
+aggregate JSON and `--log_samples` JSONL directly as FineStore source artifacts. Harbor preserves
+its native results and trajectories and writes flattened trajectory steps to the `steps` table; its
+ordinary job tree remains resume state. Load the normalized tables with
+pandas/duckdb, or read rows back with `EvalSample.model_validate`, to zoom into any run.
 
 Evaldash treats these records as the source of truth. Its background ingestor scans every configured
 object-store prefix and upserts the `eval_runs` and `eval_metrics` tables implemented in
@@ -153,12 +169,22 @@ object-store prefix and upserts the `eval_runs` and `eval_metrics` tables implem
 
 ## Evals in pipelines
 
-`pipeline.py` exposes the same run as an `ArtifactStep`:
-`eval_step(CatalogEvaluationModel("qwen3-1.7b"), "smoke", version="2026.07.19")` is a lazy,
-versioned handle. The step submits the same CPU orchestrator used by the CLI and writes eval outputs
-to the launcher's shared `evals` root; its artifact path contains the pipeline cache record. The slice
-override is a runtime arg, so changing it does not change the artifact identity. Produced-model
-adapters such as `SkyRLEvaluationModel` use the same `eval_step` entry point.
+`pipeline.py` exposes the same run as an `ArtifactStep`. Pass a checked-in `ModelConfig` directly to
+`eval_step(models()["qwen3-1.7b"], "smoke", version="2026.07.19")`. The step submits the
+same CPU orchestrator used by the CLI and writes eval outputs to the launcher's shared `evals` root;
+its artifact path contains the pipeline cache record. The slice
+override is a runtime arg, so changing it does not change the artifact identity.
+
+For produced models, pass the producer handles in `deps` and resolve their locations in
+`resolve_model(ctx)`. Use `ArtifactStep.adopt` when a model already exists outside the graph.
+The resolver returns a plain `ModelConfig` with the target URI and identity; a drafted arm also
+sets `ServeConfig.speculative` with the resolved draft URI, identity, method, and proposal length.
+Control, initial-draft, and trained-draft arms use the same `eval_step` function. SkyRL experiments
+resolve terminal policy metadata in their experiment resolver. No extra model-metadata step runs.
+
+The resulting `EvaluationResult.results_paths` tuple points at the sealed FineStore archives in run
+order. Downstream offline rollout processing should depend on this typed result instead of rebuilding
+archive paths from run IDs.
 
 ## Evalchemy config files
 
@@ -173,10 +199,10 @@ uv run python -m experiments.evaluation.cli launch \
   --dry-run
 ```
 
-The checked-in `mmlu-pro`, `gpqa-diamond`, `cruxeval`, `financebench`, `ifbench`, and
-`mrcr` files preserve Marin's publication-policy defaults. Select them individually with repeatable
-`--evalchemy-config` options on a compatible backend; the `chat` suite remains the shorter
-general-purpose selection. The policies were validated on H100. GPQA Diamond's seeded requests are
+The checked-in `mmlu-pro`, `gpqa-diamond`, `cruxeval`, `financebench`, `ifeval`, `ifbench`, and
+`mrcr` files preserve Marin's publication-policy defaults. They are registered by name, so select
+them with `--evals` or `eval_step`; they belong to no suite, and the `chat` suite remains the
+shorter general-purpose selection. The policies were validated on H100. GPQA Diamond's seeded requests are
 not compatible with the TPU vLLM backend.
 
 Marin decodes the `evalchemy_config.EvaluationConfig`-compatible fields without importing Evalchemy.
@@ -193,7 +219,10 @@ packages, such as `ifeval`. `apply_chat_template` defaults to the model catalog 
 explicit file value overrides it. The model catalog supplies generation overlays, and an explicit
 launcher `--limit` overrides the file limit. `record.json` stores the resulting task
 options and normalized Evalchemy launch configuration under `eval.tasks` and `eval.evalchemy`; the
-record provenance stores the exact Evalchemy requirement, including runtime extras.
+record provenance stores the exact Evalchemy requirement, including runtime extras. FinanceBench
+also requires a `judge` block with a dedicated endpoint, model, and secret reference. Marin forwards
+those values as `JUDGE_*` variables while preserving the local candidate endpoint credentials. The
+record stores the judge endpoint and model, but omits its credential reference and resolved value.
 
 `--evalchemy-config` is additive with registry `--evals` and file-backed `--harbor-config`. The
 launcher preserves argument order by source: registry entries, Evalchemy files, then Harbor files.
@@ -204,7 +233,7 @@ default.
 
 The `agentic` suite (`tb2`, `swebench`, `gaia`, `bfcl`, `aider`, `medagentbench`, `financeagent`) runs
 in-sandbox agentic benchmarks through the same launcher. Each preset names an `hf://` repository whose
-root contains Harbor task directories. The runner materializes that repository at its configured
+root contains Harbor task directories. Harbor resolves that repository at its configured
 revision, the launcher serves the model once and mints a capability URL for the served endpoint, and
 an in-sandbox terminal agent (Daytona) reaches the model through that URL. Harbor's verifier scores
 each trial, which normalizes into one agentic `EvalSample` (reward ->
@@ -236,10 +265,10 @@ explicit `tasks` are rejected.
 
 The pinned subprocess returns deterministic policy JSON, a SHA-256 digest, and dataset/agent/environment
 metadata. Marin treats the JSON as opaque. At execution it supplies a separate overlay for `job_name`,
-`jobs_dir`, the served model, endpoint, materialized dataset path, model-catalog kwargs, and `--limit`.
+`jobs_dir`, the served model, endpoint, local dataset path, model-catalog kwargs, and `--limit`.
 The isolated driver applies that overlay to typed Harbor models and validates the complete effective job
 before calling Harbor. Policy agent kwargs override model-catalog kwargs; endpoint, model, output path,
-materialized source, and an explicit `--limit` are reserved runtime values.
+local source, and an explicit `--limit` are reserved runtime values.
 
 Write Hugging Face sources as `datasets[].name: hf://org/repository` with an optional `ref`; do not put
 an `hf://` URI in `datasets[].path`. Local `path` values must be relative to the config file, must name
@@ -279,8 +308,8 @@ uv run python -m experiments.evaluation.cli launch \
   --model grug-agentic-s3-step1903 --evals ot-tblite --limit 1
 ```
 
-The profile materializes `DCAgent/dev_set_v2` from a pinned Hugging Face commit before passing its
-task directories to Harbor.
+Harbor downloads the `DCAgent/dev_set_v2` snapshot at the pinned Hugging Face commit and loads its
+task directories.
 
 Mechanism code lives under `marin.evaluation.evalchemy` and `marin.evaluation.harbor`; the common
 runner depends only on the callable executor protocol and the shared record types.

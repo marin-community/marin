@@ -16,12 +16,15 @@ from pathlib import Path
 import pytest
 from marin.evaluation.model_config import AgentConfig, GenerationConfig, ModelConfig, ResourceHint, ServeConfig
 from marin.evaluation.records import (
+    BenchmarkMetadataRef,
+    BenchmarkMetricRef,
     EvalchemyRef,
     EvalRef,
     EvalRunRecord,
     EvalTaskRef,
     HarborRef,
     HardwareRef,
+    MetricKind,
     ModelAgentConfig,
     ModelConfigRef,
     ModelGenerationConfig,
@@ -37,6 +40,27 @@ from marin.evaluation.records import (
     scan_records,
     write_record,
 )
+
+
+def test_benchmark_metadata_rejects_duplicate_canonical_metric_names():
+    metric = BenchmarkMetricRef(
+        name="accuracy",
+        source_name="acc",
+        kind=MetricKind.BINARY,
+        higher_is_better=True,
+    )
+
+    with pytest.raises(ValueError, match="metric names must be unique"):
+        BenchmarkMetadataRef(
+            schema_version=1,
+            task="gsm8k",
+            primary_metric="accuracy",
+            metric_kind=MetricKind.BINARY,
+            metrics=(metric, metric.model_copy(update={"source_name": "exact_match"})),
+            n_benchmark=100,
+            n_attempted=100,
+        )
+
 
 _RECORD = EvalRunRecord(
     run_id="20260719-091431-qwen3-8b-gsm8k-7565",
@@ -108,6 +132,7 @@ def test_record_json_uses_eval_alias_and_plain_string_enum(tmp_path):
                 "generation": False,
                 "unsafe_code": False,
                 "completion_only": False,
+                "benchmark": None,
             }
         ],
         "evalchemy": None,
@@ -141,7 +166,13 @@ def test_serving_round_trips_and_defaults_to_none(tmp_path):
     served = _RECORD.model_copy(
         update={
             "serving": ServingParams(
-                tensor_parallel_size=8, max_model_len=4096, max_gen_tokens=2048, extra={"temperature": "0.0"}
+                tensor_parallel_size=8,
+                pipeline_parallel_size=2,
+                task_count=2,
+                effective=True,
+                max_model_len=4096,
+                max_gen_tokens=2048,
+                extra={"temperature": "0.0"},
             )
         }
     )
@@ -151,6 +182,9 @@ def test_serving_round_trips_and_defaults_to_none(tmp_path):
     assert raw["serving"] == {
         "tensor_parallel_size": 8,
         "data_parallel_size": None,
+        "pipeline_parallel_size": 2,
+        "task_count": 2,
+        "effective": True,
         "max_model_len": 4096,
         "max_gen_tokens": 2048,
         "extra": {"temperature": "0.0"},
@@ -393,7 +427,7 @@ def test_a_serve_field_the_schema_has_not_learned_does_not_discard_the_run(tmp_p
     )
     path = Path(write_record(configured, str(tmp_path)))
     raw = json.loads(path.read_text())
-    raw["model"]["config"]["serve"]["pipeline_parallel_size"] = 2
+    raw["model"]["config"]["serve"]["future_serve_option"] = 2
     path.write_text(json.dumps(raw))
 
     record = read_record(str(path))
@@ -402,4 +436,4 @@ def test_a_serve_field_the_schema_has_not_learned_does_not_discard_the_run(tmp_p
     assert record.metrics == _RECORD.metrics
     assert record.model.config is not None
     assert record.model.config.serve.tensor_parallel_size is None
-    assert not hasattr(record.model.config.serve, "pipeline_parallel_size")
+    assert not hasattr(record.model.config.serve, "future_serve_option")

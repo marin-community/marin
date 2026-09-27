@@ -45,7 +45,7 @@ from iris.cluster.types import (
     tpu_device,
 )
 from iris.cluster.types import Entrypoint as IrisEntrypoint
-from iris.hooks.multigpu import build_multigpu_hook
+from iris.jax.multigpu import build_multigpu_hook
 from iris.resources.state import JobState as IrisJobState
 from iris.resources.state import is_job_finished
 from iris.rpc import actor_pb2, job_pb2
@@ -698,6 +698,7 @@ class FrayIrisClient:
                 existing_job_policy=policy,
                 task_image=request.resources.image,
                 priority_band=request.priority,
+                timeout=request.timeout,
             )
         except IrisJobAlreadyExists as e:
             raise FrayJobAlreadyExists(request.name) from e

@@ -4,9 +4,9 @@
  *
  * There is no headline cross-benchmark mean. A mean over benchmarks has no interpretation without a
  * declared panel, a per-benchmark metric, and a rule for the benchmarks a model never ran, so it is
- * opt-in and renders those three things with it. Per-benchmark comparison is the primary surface,
- * and every ordering uses the interval's lower bound: a run that lost items should not outrank one
- * that graded them.
+ * opt-in and renders those three things with it. Per-benchmark comparison is the primary surface.
+ * A benchmark column sorts on the score, and the fleet-best marker and delta-best pick the leader
+ * by the same rule. The interval under each score stays visible, and Compare ranks on it.
  */
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -14,7 +14,7 @@ import { apiPost, useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
 import { formatCoverage, formatDelta, formatInterval, formatScore, formatTimestamp } from '@/utils/formatting'
 import { scoreTint } from '@/utils/score'
-import { cellsByModel, fleetBest, isPartialCoverage, withVariant } from '@/utils/panel'
+import { cellsByModel, compareCells, fleetBest, isPartialCoverage, withVariant } from '@/utils/panel'
 import { MAX_COMPARE, isSmokeEval } from '@/constants'
 import {
   FLAG_NOTES,
@@ -247,7 +247,7 @@ const visibleTasks = computed(() => data.value?.panel ?? [])
 // --- Fleet best per benchmark (the rail caret and the column marker) ---
 const best = computed(() => fleetBest(data.value?.rows ?? [], visibleTasks.value))
 
-// --- Ordering. Benchmark columns use the interval lower bound. ---
+// --- Ordering. Benchmark columns use compareCells: the score, then the lower bound. ---
 const MODEL_SORT = 'model'
 const COVERAGE_SORT = 'coverage'
 const UPDATED_SORT = 'last_updated'
@@ -275,11 +275,21 @@ function headerClass(key: string): string {
   return sortKey.value === key ? 'text-accent' : 'text-text-secondary'
 }
 
-function sortValue(row: PanelRow): string | number | null {
-  if (sortKey.value === MODEL_SORT) return row.model
-  if (sortKey.value === COVERAGE_SORT) return row.covered
-  if (sortKey.value === UPDATED_SORT) return row.last_updated
-  return row.cells[sortKey.value]?.low ?? null
+// A benchmark column orders its cells by compareCells, the rule the fleet-best marker uses. The model,
+// coverage and last-updated keys order on that field alone. Missing values sort last in both directions.
+function compareRows(a: PanelRow, b: PanelRow, direction: number): number {
+  if (sortKey.value === MODEL_SORT) return a.model.localeCompare(b.model) * direction
+  if (sortKey.value === COVERAGE_SORT) return (a.covered - b.covered) * direction
+  if (sortKey.value === UPDATED_SORT) {
+    if (a.last_updated === null || b.last_updated === null) {
+      return Number(a.last_updated === null) - Number(b.last_updated === null)
+    }
+    return a.last_updated.localeCompare(b.last_updated) * direction
+  }
+  const cellA = a.cells[sortKey.value]
+  const cellB = b.cells[sortKey.value]
+  if (!cellA || !cellB) return Number(!cellA) - Number(!cellB)
+  return -compareCells(cellA, cellB) * direction
 }
 
 const rows = computed<PanelRow[]>(() => {
@@ -287,15 +297,7 @@ const rows = computed<PanelRow[]>(() => {
   const direction = sortDirection.value === 'asc' ? 1 : -1
   return all.sort((a, b) => {
     if (a.archived !== b.archived) return Number(a.archived) - Number(b.archived)
-    const av = sortValue(a)
-    const bv = sortValue(b)
-    // Missing values sort last in both directions.
-    if (av === null || bv === null) {
-      if (av !== bv) return av === null ? 1 : -1
-      return a.model.localeCompare(b.model)
-    }
-    const ordered = typeof av === 'string' ? av.localeCompare(bv as string) : av - (bv as number)
-    return ordered * direction || a.model.localeCompare(b.model)
+    return compareRows(a, b, direction) || a.model.localeCompare(b.model)
   })
 })
 
@@ -375,6 +377,10 @@ function cellFor(row: PanelRow, task: string): PanelCell | undefined {
 function gapFor(row: PanelRow, task: string): MissingCell | undefined {
   return row.missing[task]
 }
+function protocolLabel(task: string): string {
+  const protocol = data.value?.protocols[task]
+  return protocol ? `${protocol.metric} · ${protocol.kind}` : 'legacy metric'
+}
 // A cell names the run behind it, the cohort it came from, and the harness that defined the
 // benchmark. Cells in one column can come from different cohorts -- that is the point of merging the
 // newest valid result per benchmark -- so the row heading cannot carry this and the cell must.
@@ -386,6 +392,9 @@ function cellTitle(cell: PanelCell): string {
   const shotSetting = cell.num_fewshot === null ? 'default shots' : `${cell.num_fewshot}-shot`
   return [
     `${cell.metric} · ${shotSetting} · ${cell.n_scored} items graded`,
+    cell.n_benchmark === null
+      ? 'benchmark size unreported'
+      : `${cell.n_attempted ?? 'unknown'} of ${cell.n_benchmark} benchmark items attempted`,
     `95% ${formatInterval(cell.low, cell.high)} · ${scope}`,
     ...cell.flags.filter((flag) => flag in FLAG_NOTES).map((flag) => FLAG_NOTES[flag]),
     `run ${cell.run_id} · ${formatTimestamp(cell.created_at)}`,
@@ -398,7 +407,7 @@ function isSuspect(cell: PanelCell): boolean {
   return cell.flags.includes(RESULT_FLAG.NO_ANSWERS)
 }
 function gapLabel(gap: MissingCell): string {
-  if (gap.reason.startsWith('coverage')) return 'under-covered'
+  if (gap.reason.includes('coverage')) return 'under-covered'
   if (gap.reason.startsWith('flagged')) return 'flagged'
   return 'no result'
 }
@@ -423,7 +432,7 @@ function goToModel(model: string) {
       <p class="text-xs text-text-muted mt-0.5">
         One row per model, one column per benchmark, each cell the newest valid result. A score is the rate over the
         items a run graded; its 95% interval covers sampling error and widens by whatever share of the attempted items
-        the run never graded. Ordering everywhere uses the interval's lower bound.
+        the run never graded. A benchmark column sorts on the score; Compare ranks on the interval.
       </p>
     </div>
 
@@ -700,8 +709,8 @@ function goToModel(model: string) {
           <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary">
             Per-benchmark
             <span class="font-normal normal-case text-text-muted">
-              ({{ rows.length }} models × {{ columns.length }} benchmark families · benchmarks sort on interval lower
-              bound · click a cell for history)
+              ({{ rows.length }} models × {{ columns.length }} benchmark families · benchmarks sort on score · click a
+              cell for history)
             </span>
           </h3>
         </div>
@@ -735,6 +744,9 @@ function goToModel(model: string) {
                   >
                     <option v-for="variant in column.variants" :key="variant" :value="variant">{{ variant }}</option>
                   </select>
+                  <span class="block font-normal normal-case font-mono text-[10px] text-text-muted">
+                    {{ protocolLabel(column.task) }}
+                  </span>
                   <span
                     v-if="best[column.task]"
                     class="block font-normal normal-case font-mono text-[10px]"

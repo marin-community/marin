@@ -14,6 +14,7 @@ from rigging.timing import RateLimiter
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import (
     TOP_TOKEN_COUNT,
     Completion,
+    PromptCompletions,
     SamplingSpec,
     StopReason,
     TokenProbability,
@@ -77,30 +78,32 @@ def score_expected(
     prompt_ids: Sequence[Sequence[int]],
     expected_ids: Sequence[Sequence[int]],
     *,
+    batch_size: int,
     eos_token_id: int,
     logprobs: Callable[[np.ndarray, np.ndarray, np.ndarray], BatchLogprobs[np.ndarray]],
     decode: Callable[[list[int]], str],
 ) -> tuple[tuple[TokenScore, ...], ...]:
-    """Score references with their own prefixes, including the first expected token.
+    """Score references and a final EOS token with their own prefixes.
 
     The backend receives full causal input rows, prediction positions, and target IDs.
     It returns target log probabilities, top token IDs, and top log probabilities.
-    Expected text has no added EOS and must fit in the context without truncation.
+    The prompt, expected text, and added EOS must fit in the context without truncation.
     """
     if len(prompt_ids) != len(spec.prompts) or len(expected_ids) != len(prompt_ids):
         raise ValueError("Expected completion count differs from the prompt bank")
     for prompt, expected in zip(prompt_ids, expected_ids, strict=True):
-        if not prompt or not expected or len(prompt) + len(expected) > spec.context_length:
-            raise ValueError("Each prompt and expected completion must be nonempty and fit in the context")
+        if not prompt or not expected or len(prompt) + len(expected) + 1 > spec.context_length:
+            raise ValueError("Each prompt and expected completion must be nonempty and fit in the context with EOS")
+    expected_ids = [(*ids, eos_token_id) for ids in expected_ids]
     results = []
-    for start in range(0, len(prompt_ids), spec.batch_size):
-        prompts = prompt_ids[start : start + spec.batch_size]
-        expected = expected_ids[start : start + spec.batch_size]
+    for start in range(0, len(prompt_ids), batch_size):
+        prompts = prompt_ids[start : start + batch_size]
+        expected = expected_ids[start : start + batch_size]
         width = max(map(len, expected))
-        tokens = np.full((spec.batch_size, spec.context_length), eos_token_id, dtype=np.int32)
-        positions = np.zeros((spec.batch_size, width), dtype=np.int32)
-        targets = np.full((spec.batch_size, width), eos_token_id, dtype=np.int32)
-        for row in range(spec.batch_size):
+        tokens = np.full((batch_size, spec.context_length), eos_token_id, dtype=np.int32)
+        positions = np.zeros((batch_size, width), dtype=np.int32)
+        targets = np.full((batch_size, width), eos_token_id, dtype=np.int32)
+        for row in range(batch_size):
             prompt, continuation = prompts[row % len(prompts)], expected[row % len(expected)]
             full = [*prompt, *continuation]
             tokens[row, : len(full)] = full
@@ -148,57 +151,68 @@ def generate(
     spec: SamplingSpec,
     prompt_ids: Sequence[Sequence[int]],
     *,
+    batch_size: int,
     eos_token_id: int,
     logits: Callable[[np.ndarray, np.ndarray], np.ndarray],
     decode: Callable[[list[int]], str],
-) -> tuple[Completion, ...]:
+) -> tuple[PromptCompletions, ...]:
     """Generate a fixed prompt bank, preserving text and token boundaries.
 
     ``logits`` receives padded token rows and the index of each row's last input token.
-    The model backend must be dropless so filler rows cannot change prompt routing.
+    The model backend must be dropless so filler rows cannot change prompt routing. Each row
+    keeps its own random stream, so ``batch_size`` changes the pass count but not the output.
     """
     if len(prompt_ids) != len(spec.prompts):
         raise ValueError("Tokenized prompt count differs from the prompt bank")
     if any(not ids or len(ids) > spec.context_length for ids in prompt_ids):
         raise ValueError("Each prompt must contain 1..context_length tokens")
-    results = []
-    for start in range(0, len(prompt_ids), spec.batch_size):
-        batch = slice(start, start + spec.batch_size)
-        logger.info(
-            "Generation: prompts %d-%d/%d, limit=%d new tokens per prompt",
-            start + 1,
-            min(start + spec.batch_size, len(prompt_ids)),
-            len(prompt_ids),
-            spec.max_new_tokens,
-        )
-        results.extend(
-            _generate_batch(
+    samples: list[list[Completion]] = [[] for _ in prompt_ids]
+    for sample_index in range(spec.completions_per_prompt):
+        for start in range(0, len(prompt_ids), batch_size):
+            batch = slice(start, start + batch_size)
+            logger.info(
+                "Generation: sample %d/%d, prompts %d-%d/%d, limit=%d new tokens per prompt",
+                sample_index + 1,
+                spec.completions_per_prompt,
+                start + 1,
+                min(start + batch_size, len(prompt_ids)),
+                len(prompt_ids),
+                spec.max_new_tokens,
+            )
+            completed = _generate_batch(
                 spec.model_copy(update={"prompts": spec.prompts[batch]}),
                 prompt_ids[batch],
+                batch_size=batch_size,
+                sample_index=sample_index,
                 eos_token_id=eos_token_id,
                 logits=logits,
                 decode=decode,
             )
-        )
-    return tuple(results)
+            for row, completion in enumerate(completed, start):
+                samples[row].append(completion)
+    return tuple(
+        PromptCompletions(prompt_id=prompt.id, prompt_token_ids=tuple(ids), samples=tuple(completions))
+        for prompt, ids, completions in zip(spec.prompts, prompt_ids, samples, strict=True)
+    )
 
 
 def _generate_batch(
     spec: SamplingSpec,
     prompt_ids: Sequence[Sequence[int]],
     *,
+    batch_size: int,
+    sample_index: int,
     eos_token_id: int,
     logits: Callable[[np.ndarray, np.ndarray], np.ndarray],
     decode: Callable[[list[int]], str],
 ) -> tuple[Completion, ...]:
-    batch_size = spec.batch_size
     tokens = np.full((batch_size, spec.context_length), eos_token_id, dtype=np.int32)
     positions = np.zeros(batch_size, dtype=np.int32)
     for row in range(batch_size):
         ids = prompt_ids[row % len(prompt_ids)]
         tokens[row, : len(ids)] = ids
         positions[row] = len(ids) - 1
-    random = [np.random.default_rng(prompt.seed) for prompt in spec.prompts]
+    random = [np.random.default_rng(prompt.seed + sample_index) for prompt in spec.prompts]
     generated: list[list[int]] = [[] for _ in prompt_ids]
     token_scores: list[list[TokenScore]] = [[] for _ in prompt_ids]
     stops: list[StopReason | None] = [
@@ -258,8 +272,9 @@ def _generate_batch(
                 stops[row] = StopReason.MAX_NEW_TOKENS
             if stops[row] is not None:
                 logger.info(
-                    "Prompt finished: %s, tokens=%d, stop=%s",
+                    "Prompt finished: %s, sample=%d, tokens=%d, stop=%s",
                     spec.prompts[row].id,
+                    sample_index + 1,
                     len(generated[row]),
                     stops[row],
                 )
@@ -269,8 +284,10 @@ def _generate_batch(
             elapsed = perf_counter() - started
             token_count = sum(map(len, generated))
             logger.info(
-                "Generation: step %d/%d, prompts finished=%d/%d, generated tokens=%d, "
+                "Generation: sample %d/%d, step %d/%d, prompts finished=%d/%d, generated tokens=%d, "
                 "elapsed=%.1f seconds, tokens/sec=%.2f, model=%.1f seconds, token selection/decoding=%.1f seconds",
+                sample_index + 1,
+                spec.completions_per_prompt,
                 step + 1,
                 spec.max_new_tokens,
                 finished,
@@ -290,8 +307,8 @@ def _generate_batch(
         assert stops[row] is not None
         results.append(
             Completion(
-                prompt_id=prompt.id,
-                prompt_token_ids=tuple(prompt_ids[row]),
+                sample_index=sample_index,
+                seed=prompt.seed + sample_index,
                 token_ids=tuple(generated[row]),
                 text=decode(generated[row]),
                 stop_reason=stops[row],
@@ -299,10 +316,11 @@ def _generate_batch(
             )
         )
         logger.info(
-            "Completion finalized: %d/%d, prompt=%s, tokens=%d, stop=%s, decoding=%.1f seconds",
+            "Completion finalized: %d/%d, prompt=%s, sample=%d, tokens=%d, stop=%s, decoding=%.1f seconds",
             row + 1,
             len(spec.prompts),
             prompt.id,
+            sample_index + 1,
             len(generated[row]),
             stops[row],
             perf_counter() - decode_started,

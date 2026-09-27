@@ -46,13 +46,17 @@
       "source": "url",
       "format": "timeseries",
       "parser": "backend",
-      "url": "/query",
+      "url": "/v1/jobs/overview",
       "url_options": {
         "method": "GET",
         "params": [
           {
-            "key": "sql",
-            "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, reason AS series, SUM(count) AS value FROM \"iris.task_event\" WHERE type = 'Warning' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2 ORDER BY 1"
+            "key": "clusters",
+            "value": "${cluster:csv}"
+          },
+          {
+            "key": "jobs",
+            "value": "${job:csv}"
           },
           {
             "key": "from",
@@ -61,6 +65,14 @@
           {
             "key": "to",
             "value": "${__to}"
+          },
+          {
+            "key": "bucket_ms",
+            "value": "${__interval_ms}"
+          },
+          {
+            "key": "view",
+            "value": "warning_reasons"
           }
         ]
       },

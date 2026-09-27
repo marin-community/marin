@@ -254,6 +254,34 @@ fn training_metrics_batch(
     .unwrap()
 }
 
+fn session_discovery_batch(
+    batch_id: &str,
+    job_id: &str,
+    name: &str,
+    metric_source: &str,
+) -> Vec<u8> {
+    let records = vec![json!({
+        "timestamp_ms": 1_700_000_000_001_i64,
+        "kind": "gauge",
+        "name": name,
+        "value": 1.0,
+        "attributes": {"metric_source": metric_source}
+    })];
+    serde_json::to_vec(&json!({
+        "version": 1,
+        "batch_id": batch_id,
+        "resource": {
+            "service": "marinskyrl",
+            "run_id": format!("run-{job_id}"),
+            "job_id": job_id,
+            "execution_uid": format!("execution-{job_id}"),
+            "attributes": {}
+        },
+        "records": records
+    }))
+    .unwrap()
+}
+
 async fn query(store: &Store, sql: &str) -> Vec<arrow::array::RecordBatch> {
     let _guard = store.query_visibility().read().await;
     let providers = store.query_providers().unwrap();
@@ -377,6 +405,7 @@ async fn router_registers_index_policy_before_first_telemetry_request() {
             "node_memory_used_bytes",
             "node_network_receive_bytes",
             "node_network_transmit_bytes",
+            "num_requests_running",
             "phase",
             "progress_time_seconds",
             "step",
@@ -402,6 +431,7 @@ async fn router_registers_index_policy_before_first_telemetry_request() {
             "accelerator-utilization",
             "node-host-network",
             "node-host-utilization",
+            "session-discovery",
             "training-process-zero",
             "training-run-attribution",
             "training-status",
@@ -554,6 +584,91 @@ async fn process_zero_training_query_uses_projection_without_changing_results() 
     }
     assert!(
         explain.contains(".fidx.training-process-zero.parquet"),
+        "{explain}"
+    );
+}
+
+#[tokio::test]
+async fn session_discovery_query_uses_inference_projection() {
+    let store = Arc::new(
+        Store::new(
+            Some(unique_dir("telemetry-session-discovery-projection")),
+            String::new(),
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            crate::store::ServeMode::Shadow,
+        )
+        .unwrap(),
+    );
+    let (addr, _) = serve(Arc::clone(&store), AuthPolicy::allow_localhost()).await;
+    let client = http_client();
+
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while get_text(&client, addr, "/health").await != HEALTH_OK {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("telemetry registration did not complete");
+
+    for (batch_id, job_id, name, metric_source) in [
+        (
+            "52fb9d3d-e8a8-4d2c-b0e2-413545945a02",
+            "/train",
+            "num_requests_running",
+            "vllm",
+        ),
+        (
+            "8b74a3d8-5f51-4aa6-b147-2c0e53d2c355",
+            "/foreign",
+            "num_requests_running",
+            "ray",
+        ),
+        (
+            "937ca4c1-03e8-475a-b9ed-22a139566209",
+            "/metric-only",
+            "generation_tokens_total",
+            "vllm",
+        ),
+    ] {
+        let response = post(
+            &client,
+            addr,
+            session_discovery_batch(batch_id, job_id, name, metric_source),
+            Some(batch_id),
+            Some("application/json"),
+            None,
+        )
+        .await;
+        assert_eq!(response.status, StatusCode::OK);
+    }
+    store
+        .maintain_namespace("telemetry_v1.marinskyrl", true)
+        .await
+        .unwrap();
+
+    const SELECTOR_SQL: &str = "SELECT DISTINCT job_id AS value \
+        FROM \"telemetry_v1.marinskyrl\" \
+        WHERE service = 'marinskyrl' \
+          AND name = 'num_requests_running' \
+          AND json_get(attributes_json, 'metric_source') = 'vllm' \
+          AND timestamp_ms >= 1700000000000 \
+          AND timestamp_ms < 1700000001000 \
+          AND job_id IS NOT NULL \
+        ORDER BY 1";
+    let rows = query(&store, SELECTOR_SQL).await;
+    assert_eq!(rows.iter().map(|batch| batch.num_rows()).sum::<usize>(), 1);
+    assert_eq!(rows[0].column(0).as_string::<i32>().value(0), "/train");
+
+    let explain_batches = query(&store, &format!("EXPLAIN {SELECTOR_SQL}")).await;
+    let mut explain = String::new();
+    for batch in &explain_batches {
+        let plans = batch.column(1).as_string::<i32>();
+        for row in 0..batch.num_rows() {
+            explain.push_str(plans.value(row));
+        }
+    }
+    assert!(
+        explain.contains(".fidx.session-discovery.parquet"),
         "{explain}"
     );
 }

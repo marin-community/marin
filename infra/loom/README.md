@@ -68,6 +68,13 @@ startup unit stores Docker state on the persistent root disk, reads one numbered
 `docker compose up -d`, applies the configured Loom deployment policy, and
 checks readiness. It does not clone a repository or build images on the VM.
 
+The host applies the deployment manifest with a request from inside the Loom
+container to its loopback listener. Loom accepts that local request only for
+`deployment.reconcile`, even when shared-deployment mode disables general
+loopback trust. Caddy marks every forwarded request with `X-Loom-Forwarded`,
+and session containers reach Loom through Docker networking rather than that
+loopback listener. The request uses no deployment token or secret version.
+
 ## Update secrets
 
 Do not put secret values in Pulumi configuration or state. Upload a reviewed
@@ -123,6 +130,17 @@ and pull-request write access. The App key remains in `LOOM_DOTENV`; the profile
 does not store a GitHub token or grant Actions access. The GitHub Pulumi stack
 reads the mapping's profile from this stack's `githubFederationProfiles` output
 and publishes it as the workflow's `LOOM_FORK_FERRY_PROFILE` repository variable.
+The `agentic-lint` mapping authorizes the dedicated PR lint profile, and the
+`agent-prose-cleanup` mapping authorizes the low-effort `prose-cleanup` profile
+with a 16-session concurrency cap and a 40-turn budget, so description rewrites never
+consume the shared automation pool. The remaining GitHub agent workflows have
+individual federation mappings to the `github-automation` profile. Each mapping binds an exact workflow path on
+`main`; the shared profile does not make other workflows eligible. Deploy the
+Loom stack before the GitHub Pulumi stack so the latter can publish
+`LOOM_AGENTIC_LINT_PROFILE`, `LOOM_GITHUB_AUTOMATION_PROFILE`, and
+`LOOM_PROSE_CLEANUP_PROFILE`. Apply the
+Loom stack before the GitHub Pulumi stack whenever these federations or profile
+variables change.
 
 Organization prompt policy lives beside the runtime profiles in
 `profiles/<name>/AGENTS.md`. A profile's `instructionsFile` is resolved below
@@ -133,6 +151,9 @@ runtime, and the effective text remains inspectable in Settings. The production
 ordinary sessions use the deployment-managed `default` profile, while workload
 and future GitHub Actions callers select the automation profile authorized by
 their federation mapping.
+
+The PR review workflow launches on open, ready-for-review, and reopen events.
+Reopen a PR to retry its latest head if a push invalidates an in-progress review.
 
 The `remoteMcps` declaration registers Marina's authenticated Streamable HTTP
 endpoints as the full `/marina/api` capability and the read-only

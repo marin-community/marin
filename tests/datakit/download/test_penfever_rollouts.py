@@ -4,7 +4,8 @@
 import json
 
 import pytest
-from marin.datakit.chat_normalize import validate_chat_messages
+from marin.datakit.chat_normalize import _normalize_chat_record, validate_chat_messages
+from marin.datakit.chat_render import render_chat_record
 from marin.datakit.download.opencode import opencode_conversation, opencode_protocol_messages
 from marin.datakit.download.penfever_rollouts import PenfeverRollout, row_to_chat_doc
 from marin.datakit.download.rollout_transforms import openai_chat_document, openai_chat_messages
@@ -31,13 +32,19 @@ def test_opencode_filters_rows_without_recorded_initial_prompt(prompts):
     assert transform(row) == []
 
 
-@pytest.mark.parametrize("cohort", ["minimax-m27-131k", "qwen35-122b-32k"])
-def test_terminal_protocol_becomes_reasoning_call_and_observation(cohort):
+@pytest.mark.parametrize("cohort", ["glm52-terminus2", "minimax-m27-131k", "qwen35-122b-32k"])
+def test_terminal_protocol_keeps_json_responses_and_observations(cohort):
     transform = row_to_chat_doc(_dataset(cohort))
     [document] = transform(
         {
             "conversations": [
-                {"role": "user", "content": "old protocol\n\nTask Description:\nFix the code."},
+                {
+                    "role": "user",
+                    "content": (
+                        "Respond with JSON containing analysis, plan, commands, and task_complete.\n\n"
+                        "Task Description:\nFix the code."
+                    ),
+                },
                 {
                     "role": "assistant",
                     "content": (
@@ -56,21 +63,30 @@ def test_terminal_protocol_becomes_reasoning_call_and_observation(cohort):
     )
 
     messages = document["messages"]
-    assert messages[0]["content"][0]["text"].startswith("Task Description:")
-    assert messages[1]["channel"] == "analysis"
-    assert messages[1]["content"] == [{"type": "text", "text": "Inspect first."}]
-    assert messages[2]["recipient"] == "functions.terminal"
-    assert json.loads(messages[2]["content"][0]["text"])["commands"][0]["keystrokes"] == "ls\n"
-    assert messages[3] == {
-        "role": "tool",
-        "name": "functions.terminal",
-        "channel": "commentary",
-        "recipient": "assistant",
-        "content": [{"type": "text", "text": "New Terminal Output:\nfile.py"}],
+    assert messages[0]["content"][0]["text"] == (
+        "Respond with JSON containing analysis, plan, commands, and task_complete.\n\n"
+        "Task Description:\nFix the code."
+    )
+    assert [message["role"] for message in messages] == ["user", "assistant", "user", "assistant"]
+    assert all(message.get("channel") == "final" for message in messages if message["role"] == "assistant")
+    assert json.loads(messages[1]["content"][0]["text"]) == {
+        "analysis": "duplicate",
+        "plan": "duplicate",
+        "commands": [{"keystrokes": "ls\n", "duration": 0.1}],
     }
-    assert messages[-1]["channel"] == "final"
-    assert messages[-1]["content"] == [{"type": "text", "text": "Task complete."}]
-    assert json.loads(document["chat_template_kwargs"])["tools"][0]["name"] == "terminal"
+    assert messages[2]["content"] == [{"type": "text", "text": "New Terminal Output:\nfile.py"}]
+    assert json.loads(messages[-1]["content"][0]["text"]) == {
+        "analysis": "Done.",
+        "plan": "Stop.",
+        "commands": [],
+        "task_complete": True,
+    }
+    assert "chat_template_kwargs" not in document
+    rendered = render_chat_record(_normalize_chat_record(document, "messages", "id"))["text"]
+    assert "Respond with JSON containing analysis, plan, commands, and task_complete." in rendered
+    assert '"task_complete": true' in rendered
+    assert "<tool_call>" not in rendered
+    assert "<tool_response" not in rendered
 
 
 def test_opencode_protocol_matches_parallel_calls_to_separate_observations():
@@ -177,7 +193,10 @@ def test_opencode_recovers_task_and_declared_tools_from_served_prompt():
 
 
 @pytest.mark.parametrize("cohort", ["minimax-m27-131k", "qwen35-122b-32k"])
-@pytest.mark.parametrize("observation", ["<|start_think|>assistant", "<tool_response>contents</tool_response>"])
+@pytest.mark.parametrize(
+    "observation",
+    ["<|start_think|>assistant", "<|eot_id|>assistant", "<tool_response>contents</tool_response>"],
+)
 def test_terminal_cohorts_quarantine_malformed_observations(cohort, observation):
     transform = row_to_chat_doc(_dataset(cohort))
     assert (
@@ -269,5 +288,9 @@ def test_qwen_handoff_merges_user_requests_after_terminal_protocol_parsing():
             "text": "Are you sure you want to mark the task as complete?\n\nSummarize your work for the next agent.",
         }
     ]
-    assert messages[-1]["content"] == [{"type": "text", "text": "Task complete."}]
-    assert any("The workflow is ready." in part["text"] for message in messages for part in message["content"])
+    assert json.loads(messages[-1]["content"][0]["text"]) == {
+        "analysis": "The workflow is ready.",
+        "plan": "Stop.",
+        "commands": [],
+        "task_complete": True,
+    }

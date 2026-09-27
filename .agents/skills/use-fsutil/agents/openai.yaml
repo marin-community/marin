@@ -1,0 +1,4 @@
+interface:
+  display_name: "Use fsutil"
+  short_description: "Access Marin object storage from a checkout"
+  default_prompt: "Use $use-fsutil to inspect or transfer files in Marin object storage from this checkout."

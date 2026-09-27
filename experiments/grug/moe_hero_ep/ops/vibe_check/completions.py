@@ -30,13 +30,19 @@ class Prompt(Record):
 
 
 class SamplingSpec(Record):
+    """Everything that decides what a sample set contains.
+
+    This is the identity of a sample set, so it holds no execution detail. The model
+    architecture and the batch shape belong to the job that runs the request, not to
+    the work it produces.
+    """
+
     # Bump the release when sampler behavior changes. Unrelated commits do not trigger backfills.
     release: str
     prompts: tuple[Prompt, ...] = Field(min_length=1)
-    batch_size: int = Field(gt=0)
+    completions_per_prompt: int = Field(gt=0)
     tokenizer: str
     tokenizer_revision: str = Field(pattern=r"^[0-9a-f]{40}$")
-    model: dict
     temperature: float = Field(ge=0, allow_inf_nan=False)
     max_new_tokens: int = Field(gt=0)
     context_length: int = Field(gt=0)
@@ -63,6 +69,11 @@ def digest(value: object) -> str:
 class SampleRequest(Record):
     checkpoint: Checkpoint
     spec: SamplingSpec
+    # The architecture that restores the checkpoint weights, pinned with the request so every
+    # attempt reads the same layout. It stays out of ``sample_id``: a training-side change, such
+    # as a renamed attention kernel, must not discard completed results. The checkpoint already
+    # pins the layout through ``metadata_digest``, and ``spec.release`` remains the backfill knob.
+    model: dict
     source_revision: str = Field(pattern=r"^[0-9a-f]{40}$")
     target_cluster: str
 
@@ -92,18 +103,24 @@ class TokenScore(Record):
 
 
 class Completion(Record):
-    prompt_id: str
-    prompt_token_ids: tuple[int, ...] = Field(min_length=1)
+    sample_index: int = Field(ge=0)
+    seed: int = Field(ge=0)
     token_ids: tuple[int, ...]
     text: str
     stop_reason: StopReason
     token_scores: tuple[TokenScore, ...] | None = None
+
+
+class PromptCompletions(Record):
+    prompt_id: str
+    prompt_token_ids: tuple[int, ...] = Field(min_length=1)
+    samples: tuple[Completion, ...]
     expected_scores: tuple[TokenScore, ...] | None = None
 
 
 class SampleResult(Record):
     request: SampleRequest
-    completions: tuple[Completion, ...]
+    completions: tuple[PromptCompletions, ...]
     completed_at: str
     eos_token_id: int = Field(ge=0)
 
@@ -113,26 +130,36 @@ class SampleResult(Record):
         if [row.prompt_id for row in self.completions] != [prompt.id for prompt in spec.prompts]:
             raise ValueError("Results must contain each requested prompt exactly once, in order")
         for prompt, row in zip(spec.prompts, self.completions, strict=True):
-            total = len(row.prompt_token_ids) + len(row.token_ids)
-            if any(token < 0 for token in (*row.prompt_token_ids, *row.token_ids)):
-                raise ValueError("Token IDs must be non-negative")
-            ended_with_eos = bool(row.token_ids) and row.token_ids[-1] == self.eos_token_id
-            if (row.stop_reason == StopReason.EOS) != ended_with_eos or self.eos_token_id in row.token_ids[:-1]:
-                raise ValueError("EOS tokens and stop reason disagree")
-            if total > spec.context_length or len(row.token_ids) > spec.max_new_tokens:
-                raise ValueError(f"Generation exceeds the request limits: {row.prompt_id}")
-            if row.stop_reason == StopReason.CONTEXT_LIMIT and total != spec.context_length:
-                raise ValueError("Context-limit result does not fill the context")
-            if row.stop_reason == StopReason.MAX_NEW_TOKENS and len(row.token_ids) != spec.max_new_tokens:
-                raise ValueError("Token-limit result does not reach the limit")
-            if row.token_scores is not None:
-                if tuple(token.token_id for token in row.token_scores) != row.token_ids:
-                    raise ValueError("Token scores do not match the generated token IDs")
-                if "".join(token.text for token in row.token_scores) != row.text:
-                    raise ValueError("Token text does not match the completion")
+            if [sample.sample_index for sample in row.samples] != list(range(spec.completions_per_prompt)):
+                raise ValueError("Results must contain every sample index exactly once, in order")
+            for sample in row.samples:
+                if sample.seed != prompt.seed + sample.sample_index:
+                    raise ValueError("Completion seed does not match the prompt and sample index")
+                total = len(row.prompt_token_ids) + len(sample.token_ids)
+                if any(token < 0 for token in (*row.prompt_token_ids, *sample.token_ids)):
+                    raise ValueError("Token IDs must be non-negative")
+                ended_with_eos = bool(sample.token_ids) and sample.token_ids[-1] == self.eos_token_id
+                if (sample.stop_reason == StopReason.EOS) != ended_with_eos or self.eos_token_id in sample.token_ids[
+                    :-1
+                ]:
+                    raise ValueError("EOS tokens and stop reason disagree")
+                if total > spec.context_length or len(sample.token_ids) > spec.max_new_tokens:
+                    raise ValueError(f"Generation exceeds the request limits: {row.prompt_id}")
+                if sample.stop_reason == StopReason.CONTEXT_LIMIT and total != spec.context_length:
+                    raise ValueError("Context-limit result does not fill the context")
+                if sample.stop_reason == StopReason.MAX_NEW_TOKENS and len(sample.token_ids) != spec.max_new_tokens:
+                    raise ValueError("Token-limit result does not reach the limit")
+                if sample.token_scores is not None:
+                    if tuple(token.token_id for token in sample.token_scores) != sample.token_ids:
+                        raise ValueError("Token scores do not match the generated token IDs")
+                    if "".join(token.text for token in sample.token_scores) != sample.text:
+                        raise ValueError("Token text does not match the completion")
             if row.expected_scores is not None:
                 if prompt.expected is None:
                     raise ValueError("Expected token scores have no reference completion")
+                expected_ids = [token.token_id for token in row.expected_scores]
+                if not expected_ids or expected_ids[-1] != self.eos_token_id or self.eos_token_id in expected_ids[:-1]:
+                    raise ValueError("Expected token scores must end with exactly one EOS token")
                 if "".join(token.text for token in row.expected_scores) != prompt.expected:
                     raise ValueError("Expected token text does not match the reference completion")
                 if len(row.prompt_token_ids) + len(row.expected_scores) > spec.context_length:
@@ -151,11 +178,19 @@ class SampleStore:
         if target.version() is None:
             target.write(request.model_dump_json().encode(), expected_version=None)
 
-    def requests(self) -> list[SampleRequest]:
-        return [SampleRequest.model_validate_json(path.read_bytes()) for path in (self.root / "requests/*.json").glob()]
-
-    def results(self) -> list[SampleResult]:
-        return [self.result(sample_id) for sample_id in self.completed_ids()]
+    def requests(self, spec: SamplingSpec) -> list[SampleRequest]:
+        """Read only requests with the current specification, before schema validation."""
+        current = spec.model_dump(mode="json")
+        requests = []
+        for path in (self.root / "requests/*.json").glob():
+            data = json.loads(path.read_bytes())
+            if data["spec"] != current:
+                continue
+            request = SampleRequest.model_validate(data)
+            if request.sample_id != path.name.removesuffix(".json"):
+                raise ValueError(f"Request provenance does not match filename {path.name}")
+            requests.append(request)
+        return requests
 
     def completed_ids(self) -> set[str]:
         return {path.name.removesuffix(".json") for path in (self.root / "results/*.json").glob()}

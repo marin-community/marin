@@ -3,6 +3,7 @@
 
 """Tests for inference serving and the dashboard reverse proxy."""
 
+import argparse
 import dataclasses
 import json
 import os
@@ -27,13 +28,17 @@ from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2
 from iris.time_proto import timestamp_to_proto
-from marin.external_dependencies import VLLM_GPU_RELEASE
-from marin.inference.backend import ModelSpec
+from marin.external_dependencies import CUDA_TOOLCHAIN_VERSION_BY_BACKEND, VLLM_GPU_RELEASE
+from marin.inference import iris_vllm
 from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
     IrisConfig,
     LevanterEngineConfig,
+    ResolvedModelLocator,
     ServedModelConfig,
+    ServingGeometry,
+    SpeculativeMethod,
+    SpeculativeServingConfig,
     VllmEngineConfig,
     VllmLauncherType,
     VllmSource,
@@ -45,7 +50,7 @@ from marin.inference.dashboard_server import (
     build_dashboard_app,
     serve_app_background,
 )
-from marin.inference.iris import IrisServiceConfig, _resolved_model, run_iris_service
+from marin.inference.iris import IrisServiceConfig, _resolved_engine, _resolved_model, run_iris_service
 from marin.inference.iris_cli import (
     _checkout_free_setup_script,
     _mint_and_print_capability_url,
@@ -59,9 +64,10 @@ from marin.inference.levanter_backend import (
     validate_levanter_dtype,
 )
 from marin.inference.model_preparation import resolve_model_path, select_tensor_parallel_size
+from marin.inference.serve import local_inference
 from marin.inference.serve_cli import main as serve_main
 from marin.inference.types import OpenAIEndpoint, RunningModel
-from marin.inference.vllm_backend import VllmBackend, vllm_launcher
+from marin.inference.vllm_backend import vllm_launcher
 from marin.inference.vllm_release import (
     vllm_gpu_wheel_for_architecture,
     vllm_gpu_wheel_provenance,
@@ -136,7 +142,81 @@ def test_resolve_model_path_returns_filesystem_path_for_local_cache(monkeypatch,
     assert resolve_model_path("Qwen/Qwen3-0.6B", 14, revision) == "/models/cached model"
 
 
-def test_vllm_backend_serves_the_pinned_revision(monkeypatch):
+@pytest.mark.parametrize(
+    ("tokenizer", "tokenizer_revision", "expected_tokenizer", "expected_tokenizer_revision"),
+    [
+        ("org/tokenizer", "tokenizer-sha", "org/tokenizer", "tokenizer-sha"),
+        ("org/tokenizer", None, "org/tokenizer", None),
+        (None, None, "org/model", "model-sha"),
+    ],
+    ids=("separate-pinned-tokenizer", "separate-unpinned-tokenizer", "default-tokenizer"),
+)
+def test_mirrored_model_keeps_tokenizer_revision_independent(
+    monkeypatch,
+    tokenizer,
+    tokenizer_revision,
+    expected_tokenizer,
+    expected_tokenizer_revision,
+):
+    observed: dict[str, object] = {}
+    template_source: list[tuple[str, str | None]] = []
+
+    @contextmanager
+    def environment(**kwargs):
+        observed.update(kwargs)
+        yield SimpleNamespace(
+            model_id="public-model",
+            server_url="http://127.0.0.1:8000/v1",
+            wait_until_ready=lambda: None,
+        )
+
+    monkeypatch.setattr("marin.inference.vllm_backend.VllmEnvironment", environment)
+    monkeypatch.setattr("marin.inference.vllm_backend.vllm_launcher", lambda _config: object())
+
+    def read_template(model: str, revision: str | None) -> str:
+        template_source.append((model, revision))
+        return "{{ messages }}"
+
+    monkeypatch.setattr("marin.inference.vllm_backend.read_tool_chat_template", read_template)
+    monkeypatch.setattr(
+        "marin.inference.model_preparation.resolve_model_path",
+        lambda _model, _cache_ttl_days, _revision=None: "gs://cache/pinned-model",
+    )
+    iris = IrisConfig(
+        worker_resources=ResourceConfig.with_tpu("v6e-4"),
+        worker_environment=create_environment(extras=["tpu"]),
+    )
+    model, num_chips = _resolved_model(
+        ServedModelConfig(
+            weights="org/model",
+            revision="model-sha",
+            tokenizer=tokenizer,
+            tokenizer_revision=tokenizer_revision,
+            tensor_parallel_size=1,
+        ),
+        iris,
+    )
+
+    assert model.weights == "gs://cache/pinned-model"
+    assert model.revision is None
+    assert model.tokenizer == expected_tokenizer
+    assert model.tokenizer_revision == expected_tokenizer_revision
+
+    with local_inference(model, VllmEngineConfig(), num_chips=num_chips):
+        pass
+
+    extra_args = observed["extra_args"]
+    assert isinstance(extra_args, list)
+    assert "--revision" not in extra_args
+    assert extra_args[extra_args.index("--tokenizer") + 1] == expected_tokenizer
+    if expected_tokenizer_revision is None:
+        assert "--tokenizer-revision" not in extra_args
+    else:
+        assert extra_args[extra_args.index("--tokenizer-revision") + 1] == expected_tokenizer_revision
+    assert template_source == [(expected_tokenizer, expected_tokenizer_revision)]
+
+
+def test_vllm_backend_serves_model_and_tokenizer_revisions_independently(monkeypatch):
     observed: dict[str, object] = {}
 
     @contextmanager
@@ -149,24 +229,26 @@ def test_vllm_backend_serves_the_pinned_revision(monkeypatch):
         )
 
     monkeypatch.setattr("marin.inference.vllm_backend.VllmEnvironment", environment)
-    monkeypatch.setattr("marin.inference.vllm_backend.vllm_launcher", lambda config: object())
-    spec = ModelSpec(
+    monkeypatch.setattr("marin.inference.vllm_backend.vllm_launcher", lambda _config: object())
+    monkeypatch.setattr("marin.inference.vllm_backend.read_tool_chat_template", lambda *_args: "{{ messages }}")
+    model = ServedModelConfig(
         weights="org/model",
-        revision="abc123",
+        tokenizer="org/tokenizer",
+        revision="model-sha",
+        tokenizer_revision="tokenizer-sha",
         api_model="public-model",
-        num_chips=1,
         tensor_parallel_size=1,
-        dtype="bfloat16",
         max_model_len=1024,
-        chat_template_content=None,
     )
 
-    with VllmBackend(VllmEngineConfig()).serve(spec):
+    with local_inference(model, VllmEngineConfig(), num_chips=1):
         pass
 
     extra_args = observed["extra_args"]
     assert isinstance(extra_args, list)
-    assert extra_args[extra_args.index("--revision") + 1] == "abc123"
+    assert extra_args[extra_args.index("--revision") + 1] == "model-sha"
+    assert extra_args[extra_args.index("--tokenizer") + 1] == "org/tokenizer"
+    assert extra_args[extra_args.index("--tokenizer-revision") + 1] == "tokenizer-sha"
 
 
 def test_resolved_model_keeps_requested_id_as_served_name(monkeypatch):
@@ -188,6 +270,53 @@ def test_resolved_model_keeps_requested_id_as_served_name(monkeypatch):
 
     assert resolved.weights == "gs://cache/quick-serve/qwen3-0.6b"
     assert resolved.model_id == "Qwen/Qwen3-0.6B"
+
+
+def test_speculative_model_uses_resolved_uri_in_vllm_launch(monkeypatch):
+    observed: dict[str, object] = {}
+
+    @contextmanager
+    def environment(**kwargs):
+        observed.update(kwargs)
+        yield SimpleNamespace(
+            model_id="target",
+            server_url="http://127.0.0.1:8000/v1",
+            wait_until_ready=lambda: None,
+        )
+
+    monkeypatch.setattr("marin.inference.vllm_backend.VllmEnvironment", environment)
+    monkeypatch.setattr("marin.inference.vllm_backend.vllm_launcher", lambda _config: object())
+    monkeypatch.setattr("marin.inference.vllm_backend.read_tool_chat_template", lambda *_args: None)
+    monkeypatch.setattr(
+        "marin.inference.model_preparation.resolve_model_path",
+        lambda model, _cache_ttl_days, _revision=None: f"/cache/{model.rsplit('/', 1)[-1]}",
+    )
+    iris = IrisConfig(
+        worker_resources=ResourceConfig.with_gpu("H100", count=1),
+        worker_environment=create_environment(extras=["gpu"]),
+    )
+    engine = VllmEngineConfig(
+        speculative=SpeculativeServingConfig(
+            method=SpeculativeMethod.EAGLE3,
+            model=ResolvedModelLocator(
+                uri="s3://models/eagle-draft",
+                identity="models/eagle@2026.09.23:abc123",
+            ),
+            num_speculative_tokens=3,
+        )
+    )
+
+    resolved = _resolved_engine(engine, iris)
+
+    with local_inference(ServedModelConfig(weights="org/target", api_model="target"), resolved, num_chips=1):
+        pass
+
+    extra_args = observed["extra_args"]
+    assert json.loads(extra_args[extra_args.index("--speculative-config") + 1]) == {
+        "method": "eagle3",
+        "model": "/cache/eagle-draft",
+        "num_speculative_tokens": 3,
+    }
 
 
 def test_checkout_free_setup_script_pins_marin_core_with_extras():
@@ -214,7 +343,22 @@ def test_isolated_cuda_vllm_marin_fork_uses_verified_wheel(monkeypatch, machine)
     assert separator
     assert urlunsplit(parsed_url._replace(fragment="")) == wheel.url
     assert parse_qs(parsed_url.fragment) == {"sha256": [wheel.sha256]}
-    assert cmd[cmd.index("--torch-backend") + 1] == VLLM_GPU_RELEASE.torch_backend
+    indexes = [cmd[index + 1] for index, value in enumerate(cmd) if value == "--index"]
+    assert indexes == [
+        f"https://download.pytorch.org/whl/{VLLM_GPU_RELEASE.torch_backend}",
+        "https://download.pytorch.org/whl/cpu",
+    ]
+    assert cmd[cmd.index("--index-strategy") + 1] == "unsafe-best-match"
+    assert "--torch-backend" not in cmd
+    requirements = [cmd[index + 1] for index, value in enumerate(cmd) if value == "--with"]
+    assert f"torch=={VLLM_GPU_RELEASE.torch_version}" in requirements
+    toolchain = {requirement.partition("==")[0]: requirement.partition("==")[2] for requirement in requirements}
+    toolchain_packages = {"nvidia-cuda-nvcc", "nvidia-cuda-crt", "nvidia-nvvm"}
+    assert set(toolchain) >= toolchain_packages
+    assert "nvidia-cuda-nvrtc" not in toolchain
+    assert {toolchain[package] for package in toolchain_packages} == {
+        CUDA_TOOLCHAIN_VERSION_BY_BACKEND[VLLM_GPU_RELEASE.torch_backend]
+    }
     bootstrap_index = cmd.index("-c")
     wrapped_command = cmd[bootstrap_index + 2 :]
     assert wrapped_command[0] == "python"
@@ -227,6 +371,7 @@ def test_isolated_cuda_vllm_marin_fork_uses_verified_wheel(monkeypatch, machine)
     assert "VLLM_USE_FLASHINFER_SAMPLER" not in env
     assert "addressing_style = virtual" in Path(env["AWS_CONFIG_FILE"]).read_text()
     assert requirement in launcher.cache_identity()
+    assert VLLM_GPU_RELEASE.torch_version in launcher.cache_identity()
 
 
 def test_isolated_cuda_vllm_marin_fork_rejects_unpublished_architecture(monkeypatch):
@@ -246,6 +391,8 @@ def test_isolated_cuda_vllm_bootstrap_exposes_wheel_nvcc(tmp_path):
     cuda_lib.mkdir()
     cudart = cuda_lib / "libcudart.so.13"
     cudart.touch()
+    nvrtc = cuda_lib / "libnvrtc.so.13"
+    nvrtc.touch()
     dist_info = site_packages / "nvidia_cuda_nvcc-13.0.88.dist-info"
     dist_info.mkdir()
     (dist_info / "METADATA").write_text("Metadata-Version: 2.4\nName: nvidia-cuda-nvcc\nVersion: 13.0.88\n")
@@ -271,6 +418,7 @@ def test_isolated_cuda_vllm_bootstrap_exposes_wheel_nvcc(tmp_path):
         "nvidia-cuda-crt==13.0.88",
         "nvidia-nvvm==13.0.88",
     }
+    assert not any(requirement.startswith("nvidia-cuda-nvrtc==") for requirement in requirements)
     assert "addressing_style = virtual" in Path(launcher.env()["AWS_CONFIG_FILE"]).read_text()
     bootstrap_index = command.index("-c")
     bootstrap = command[bootstrap_index + 1]
@@ -289,6 +437,7 @@ def test_isolated_cuda_vllm_bootstrap_exposes_wheel_nvcc(tmp_path):
     assert observed["path"].split(os.pathsep)[0] == str(nvcc.parent.resolve())
     assert (nvcc.parent.parent / "lib64").resolve() == cuda_lib.resolve()
     assert (cuda_lib / "libcudart.so").resolve() == cudart.resolve()
+    assert (cuda_lib / "libnvrtc.so").resolve() == nvrtc.resolve()
 
 
 def test_isolated_cuda_vllm_upstream_requires_version():
@@ -474,6 +623,7 @@ def test_run_iris_service_registers_without_worker_placement_metadata(monkeypatc
             model=RunningModel(OpenAIEndpoint("http://127.0.0.1:1/v1", model_id)),
             backend_name="vllm",
             tensor_parallel_size=1,
+            chat_template_content="{{ messages }}",
             check_alive=lambda: None,
         )
 
@@ -515,6 +665,127 @@ def test_run_iris_service_registers_without_worker_placement_metadata(monkeypatc
         set_job_info(None)
 
     assert "accelerator" not in registered_metadata
+    assert float(registered_metadata["proxy_timeout_seconds"]) == 43_200
+
+
+@pytest.mark.parametrize("task_index", [0, 1])
+@pytest.mark.parametrize("fail", [False, True])
+@pytest.mark.parametrize("tensor_parallel_size,data_parallel_size", [(8, 1), (1, 8)])
+def test_pipeline_service_endpoint_and_shutdown_lifecycle(
+    monkeypatch, task_index, fail, tensor_parallel_size, data_parallel_size
+):
+    events = []
+    endpoints = []
+    argv = []
+    coordinator = iris_vllm.VllmCoordinatorActor("127.0.0.1")
+    if task_index == 0:
+        coordinator.follower_stopped(1)
+    elif not fail:
+        coordinator.request_shutdown()
+
+    def acknowledge(index):
+        events.append("acknowledged")
+        coordinator.follower_stopped(index)
+
+    rpc = SimpleNamespace(
+        vllm_primary_address=coordinator.vllm_primary_address,
+        shutdown_requested=coordinator.shutdown_requested,
+        request_shutdown=coordinator.request_shutdown,
+        followers_stopped=coordinator.followers_stopped,
+        follower_stopped=acknowledge,
+    )
+    monkeypatch.setattr(iris_vllm, "_coordinator_client", lambda _: rpc)
+
+    @contextmanager
+    def registered(name, address, metadata=None, **kwargs):
+        if metadata is not None:
+            endpoints.append(metadata)
+            events.append("registered")
+        yield
+
+    context = SimpleNamespace(registry=SimpleNamespace(registered=registered))
+    monkeypatch.setattr(iris_vllm, "iris_ctx", lambda: context)
+    monkeypatch.setattr("marin.inference.iris.iris_ctx", lambda: context)
+
+    def check_alive():
+        if fail:
+            raise RuntimeError("vLLM died")
+
+    def ready():
+        check_alive()
+        events.append("ready")
+
+    @contextmanager
+    def process(**kwargs):
+        argv.extend(kwargs["extra_args"])
+        events.append("started")
+        try:
+            yield SimpleNamespace(
+                wait_until_ready=ready,
+                check_alive=check_alive,
+                server_url="http://127.0.0.1:1/v1",
+            )
+        finally:
+            events.append("stopped")
+
+    monkeypatch.setattr("marin.inference.vllm_backend.VllmEnvironment", process)
+    service = IrisServiceConfig(
+        model=ServedModelConfig(
+            weights="org/model",
+            tensor_parallel_size=tensor_parallel_size,
+            max_model_len=4096,
+            chat_template_content="{{ messages }}",
+        ),
+        engine=VllmEngineConfig(extra_args=("--enable-prefix-caching",)),
+        iris=IrisConfig(
+            worker_resources=ResourceConfig.with_gpu("H100", count=8, replicas=2),
+            worker_environment=create_environment(docker_image="test"),
+            serving_geometry=ServingGeometry(tensor_parallel_size, data_parallel_size, 2, 8),
+            cache_ttl_days=0,
+        ),
+        endpoint_name="/serve/pipeline",
+        timeout_hours=0,
+        port_name=None,
+    )
+    set_job_info(JobInfo(task_id=JobName.from_wire(f"/alice/pipeline/{task_index}"), num_tasks=2))
+    try:
+        if fail:
+            with pytest.raises(RuntimeError, match="vLLM died"):
+                run_iris_service(service)
+        else:
+            run_iris_service(service)
+    finally:
+        set_job_info(None)
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--tensor-parallel-size", type=int)
+    parser.add_argument("--data-parallel-size", type=int)
+    parser.add_argument("--pipeline-parallel-size", type=int)
+    parser.add_argument("--device-ids")
+    parser.add_argument("--node-rank", type=int)
+    parser.add_argument("--data-parallel-start-rank", type=int)
+    parser.add_argument("--headless", action="store_true")
+    options, _ = parser.parse_known_args(argv)
+    assert options.tensor_parallel_size == tensor_parallel_size
+    assert options.data_parallel_size == data_parallel_size
+    assert options.pipeline_parallel_size == 2
+    assert options.device_ids == "0,1,2,3,4,5,6,7"
+    assert options.node_rank == task_index
+    assert options.data_parallel_start_rank == (0 if data_parallel_size > 1 else None)
+    assert options.headless == (task_index == 1)
+    if fail:
+        assert events == ["started", "stopped"]
+        assert not coordinator.shutdown_requested()
+        assert endpoints == []
+    elif task_index == 0:
+        assert events == ["started", "ready", "registered", "stopped"]
+        assert len(endpoints) == 1
+        assert endpoints[0]["pipeline_parallel_size"] == "2"
+        assert endpoints[0]["tensor_parallel_size"] == str(tensor_parallel_size)
+        assert coordinator.shutdown_requested()
+    else:
+        assert events == ["started", "stopped", "acknowledged"]
+        assert endpoints == []
 
 
 def test_resolve_serving_plan_rejects_incompatible_tpu_alternatives():
@@ -591,6 +862,23 @@ def test_iris_serve_no_wait_is_an_explicit_opt_out_of_minting(monkeypatch):
     assert result.exit_code == 0, result.output
     mint.assert_not_called()
     assert "Submitted" in result.output
+
+
+def test_iris_serve_proxy_timeout_covers_broker_worker_and_lease(monkeypatch):
+    result, _client, services, _mint = _invoke_iris_serve(
+        monkeypatch,
+        "--instances",
+        "4",
+        "--proxy-timeout",
+        "3600",
+        "--no-wait",
+    )
+
+    assert result.exit_code == 0, result.output
+    broker = services[0].broker
+    assert broker.proxy.request_timeout_seconds == 3600
+    assert broker.worker.request_timeout_seconds == 3240
+    assert broker.request_lease_timeout_seconds == 3420
 
 
 def test_iris_serve_resolves_additive_metric_families_before_submission(monkeypatch, tmp_path):
@@ -695,12 +983,16 @@ def _fake_vllm_app() -> Starlette:
     async def completions(_request):
         return _sse([{"choices": [{"text": tok}]} for tok in ("123", "456")])
 
+    async def metrics(_request):
+        return PlainTextResponse("# TYPE vllm:generation_tokens_total counter\nvllm:generation_tokens_total 42\n")
+
     return Starlette(
         routes=[
             Route("/health", health),
             Route("/v1/models", models),
             Route("/v1/chat/completions", chat, methods=["POST"]),
             Route("/v1/completions", completions, methods=["POST"]),
+            Route("/metrics", metrics),
         ]
     )
 
@@ -759,6 +1051,7 @@ def test_dashboard_serves_ui_and_reverse_proxies_streaming():
             assert requests.get(f"{base}/info", timeout=10).json() == dataclasses.asdict(info)
             assert requests.get(f"{base}/health", timeout=10).json() == {"status": "ok", "model": "fake-model"}
             assert requests.get(f"{base}/v1/models", timeout=10).json()["data"][0]["id"] == "fake-model"
+            assert "vllm:generation_tokens_total 42" in requests.get(f"{base}/metrics", timeout=10).text
 
             chat = requests.post(
                 f"{base}/v1/chat/completions",

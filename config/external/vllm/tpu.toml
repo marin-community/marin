@@ -5,7 +5,7 @@
 
 [vllm]
 repository = "https://github.com/marin-community/vllm.git"
-commit = "4c1c798a7b6072aab4f435b0fe0eb9e3ae9e5e19"
+commit = "70ea9ae8f2601f06d820ee9d70e3afbdc52683b1"
 upstream_base = "9d88ceb02694c6e3df182ec3c87201284f50e2c6"
 
 [tpu-inference]

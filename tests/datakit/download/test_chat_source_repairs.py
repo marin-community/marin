@@ -24,7 +24,10 @@ from marin.datakit.download.swe_zero_12m import row_to_chat_doc as swe_zero_row_
 def test_terminal_empty_commands_preserve_wait_and_observation(adapter, completion) -> None:
     row = {
         "conversations": [
-            {"role": "user", "content": "Task Description:\nWait for the process to finish."},
+            {
+                "role": "user",
+                "content": "Return a JSON command object.\n\n" "Task Description:\nWait for the process to finish.",
+            },
             {
                 "role": "assistant",
                 "content": json.dumps({"analysis": "The process is still running.", "commands": [], **completion}),
@@ -36,13 +39,17 @@ def test_terminal_empty_commands_preserve_wait_and_observation(adapter, completi
     [document] = adapter(row)
     normalized = _normalize_chat_record(document, "messages", "id")
     messages = normalized["messages"]
-    assert [message["role"] for message in messages] == ["user", "assistant", "assistant", "tool", "assistant"]
-    assert messages[1]["channel"] == "analysis"
-    assert messages[1]["content"] == [{"type": "text", "text": "The process is still running."}]
-    assert messages[2]["recipient"] == "functions.terminal"
-    assert messages[2]["content"] == [{"type": "text", "text": '{"commands":[]}'}]
-    assert messages[3]["content"] == [{"type": "text", "text": "New Terminal Output:\nProcess finished."}]
-    assert messages[4]["content"] == [{"type": "text", "text": "Task complete."}]
+    assert [message["role"] for message in messages] == ["user", "assistant", "user", "assistant"]
+    assert messages[0]["content"] == [
+        {"type": "text", "text": "Return a JSON command object.\n\nTask Description:\nWait for the process to finish."}
+    ]
+    assert json.loads(messages[1]["content"][0]["text"]) == {
+        "analysis": "The process is still running.",
+        "commands": [],
+        **completion,
+    }
+    assert messages[2]["content"] == [{"type": "text", "text": "New Terminal Output:\nProcess finished."}]
+    assert json.loads(messages[3]["content"][0]["text"]) == {"commands": [], "task_complete": True}
 
 
 @pytest.mark.parametrize("adapter", [agenttrove_row_to_chat_doc, nemotron_terminal_row_to_chat_doc])
@@ -74,7 +81,7 @@ def test_agenttrove_merges_completion_and_handoff_prompts() -> None:
     ]
 
 
-def test_agenttrove_preserves_tool_observation_before_user_followup() -> None:
+def test_agenttrove_merges_terminal_output_with_user_followup() -> None:
     row = {
         "conversations": [
             {"role": "user", "content": "Task Description:\nInspect the repository."},
@@ -93,9 +100,24 @@ def test_agenttrove_preserves_tool_observation_before_user_followup() -> None:
     ]
     assert turns == [
         ("user", "Task Description:\nInspect the repository."),
-        ("tool", "New Terminal Output:\nREADME.md"),
-        ("user", "Summarize the work for the next agent."),
+        ("user", "New Terminal Output:\nREADME.md\n\nSummarize the work for the next agent."),
     ]
+
+
+@pytest.mark.parametrize(
+    "source",
+    ["freelancer", "Inferred Bugs", "MagiCoder Evol Instruct", "exp_rpt", "exp_rle", "unknown"],
+)
+def test_agenttrove_excludes_low_quality_task_source_from_chat_output(source) -> None:
+    row = {
+        "original_source": source,
+        "original_teacher": "GLM-4.6",
+        "conversations": [
+            {"role": "user", "content": "Task Description:\nFix the test."},
+            {"role": "assistant", "content": '{"commands":[],"task_complete":true}'},
+        ],
+    }
+    assert agenttrove_row_to_chat_doc(row) == []
 
 
 def test_davinci_filters_source_control_tokens() -> None:

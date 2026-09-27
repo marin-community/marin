@@ -34,6 +34,7 @@ from levanter.models.snowball import (
     SnowballLMHeadModel,
     validate_single_name_config,
 )
+from levanter.testing.cpu_devices import run_on_cpu_devices
 
 
 def _tiny_config(**overrides) -> SnowballConfig:
@@ -334,15 +335,17 @@ def test_snowball_load_path_multidevice_sharding():
     assert "OK" in result.stdout
 
 
-def test_snowball_fresh_process_hf_discovery(tmp_path):
-    """grug_moe must resolve via ``from_hf`` in a fresh interpreter with nothing pre-imported."""
+def test_snowball_hf_config_loading_allows_distributed_initialization(tmp_path):
+    """HF config loading must leave the JAX backend uninitialized for distributed setup."""
     cfg = _tiny_config()
     hf = cfg.to_hf_config(cfg.vocab_size)
     (tmp_path / "config.json").write_text(__import__("json").dumps(hf.to_dict()))
 
     script = textwrap.dedent(
         """
+        import socket
         import sys
+        import jax
         # Deliberately do NOT import levanter.models.snowball.
         from transformers import AutoConfig
         from levanter.models.lm_model import LmConfig
@@ -353,6 +356,14 @@ def test_snowball_fresh_process_hf_discovery(tmp_path):
         cfg = AutoConfig.from_pretrained(sys.argv[1])
         assert type(cfg).__name__ == "GrugMoeHfConfig", type(cfg).__name__
         assert cfg.model_type == "grug_moe"
+        from levanter.models.snowball import SnowballConfig
+        SnowballConfig.from_hf_config(cfg)
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            port = listener.getsockname()[1]
+        jax.distributed.initialize(coordinator_address=f"127.0.0.1:{port}", num_processes=1, process_id=0)
+        assert jax.distributed.is_initialized()
+        jax.distributed.shutdown()
         print("OK")
         """
     )
@@ -363,3 +374,58 @@ def test_snowball_fresh_process_hf_discovery(tmp_path):
     )
     assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
     assert "OK" in result.stdout
+
+
+@pytest.mark.timeout(120)
+def test_snowball_context_parallel_values_and_gradients_match_data_parallel():
+    run_on_cpu_devices(
+        """
+        import equinox as eqx
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        import haliax as hax
+        from haliax import Axis
+        from jax.sharding import AxisType, Mesh
+        from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
+
+        cfg = SnowballConfig(
+            vocab_size=32, hidden_dim=16, intermediate_dim=16,
+            shared_expert_intermediate_dim=16, num_experts=4,
+            num_experts_per_token=2, num_layers=2, num_heads=2,
+            num_kv_heads=1, head_dim=8, max_seq_len=8, sliding_window=4,
+            attention_implementation="reference", moe_implementation="ring",
+        )
+        ids = hax.named(
+            jnp.arange(32, dtype=jnp.int32).reshape(4, 8),
+            (Axis("batch", 4), Axis("position", 8)),
+        )
+        axes = ("replica_dcn", "data", "context", "expert", "model")
+
+        def run(shape):
+            mesh = Mesh(
+                np.asarray(jax.devices()).reshape(shape), axes,
+                axis_types=(AxisType.Explicit,) * len(axes),
+            )
+            with jax.set_mesh(mesh):
+                model = SnowballLMHeadModel.init(Axis("vocab", 32), cfg, key=jax.random.key(0))
+                activations = eqx.filter_jit(lambda m: m.activations(ids).array)(model)
+                value, grad = eqx.filter_jit(
+                    eqx.filter_value_and_grad(lambda m: jnp.mean(m(ids).array))
+                )(model)
+            block = grad.transformer.blocks[0]
+            return activations.sharding.spec[1], (
+                np.asarray(value), np.asarray(grad.transformer.token_embed),
+                np.asarray(block.attn.w_q), np.asarray(block.mlp.expert_mlp.w_gate),
+                np.asarray(block.shared.w_gate), np.asarray(grad.transformer.output_proj),
+            )
+
+        data_axis, reference = run((1, 2, 1, 2, 1))
+        context_axis, sharded = run((1, 1, 2, 2, 1))
+        assert data_axis is None
+        assert context_axis == "context"
+        for expected, actual in zip(reference, sharded, strict=True):
+            np.testing.assert_allclose(actual, expected, rtol=2e-4, atol=2e-4)
+        """,
+        device_count=4,
+    )

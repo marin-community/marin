@@ -16,13 +16,14 @@ from iris.client.client import IrisClient
 from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_value
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
-from experiments.grug.moe_hero_ep.hero_recipe import HERO_PROCESSES_PER_TASK
+from experiments.grug.moe_hero_ep.checkpoints import hero_checkpoint_paths
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import SampleStore
 from experiments.grug.moe_hero_ep.ops.vibe_check.config import (
-    CHECKPOINT_RUNS,
+    SAMPLING_GPUS_PER_NODE,
     STORE_ROOT,
     TARGET_CLUSTER,
     discover_requests,
+    sampling_model,
     sampling_resources,
     sampling_spec,
 )
@@ -59,25 +60,28 @@ def main(action: str, store_root: str, priority: str | None, submission: str) ->
     logging.basicConfig(level=logging.INFO)
     configure_coreweave_s3()
     store = SampleStore(store_root)
+    spec = sampling_spec()
     now = datetime.now(UTC)
     if action == "report":
         # The report day starts at 08:00 UTC.
         report_day = (now - timedelta(hours=8)).date()
-        url = publish_reports(store, report_day, partial(update_issue_comment, token=os.environ["GH_TOKEN"]))
+        url = publish_reports(store, report_day, partial(update_issue_comment, token=os.environ["GH_TOKEN"]), spec=spec)
         logger.info("Current report: %s", url)
         return
     if action == "status":
         with connect_controller(cluster_name=CONTROLLER_CLUSTER) as endpoint:
             with IrisClient.remote(endpoint.url, credentials=endpoint.credentials) as client:
                 jobs = client.list_jobs(prefix=f"/{JOB_USER}/")
-        summary = render_sampling_summary(store.requests(), store.completed_ids(), jobs, endpoint.url)
+        summary = render_sampling_summary(store.requests(spec), store.completed_ids(), jobs, endpoint.url)
         click.echo(summary)
         if summary_path := os.environ.get("GITHUB_STEP_SUMMARY"):
             with Path(summary_path).open("a") as handle:
                 handle.write(summary)
         return
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-    requests = discover_requests(CHECKPOINT_RUNS, sampling_spec(), revision, target_cluster=TARGET_CLUSTER)
+    requests = discover_requests(
+        hero_checkpoint_paths(), spec, sampling_model(), revision, target_cluster=TARGET_CLUSTER
+    )
     if action == "inventory":
         for request in sorted(requests, key=lambda value: value.checkpoint.step):
             logger.info("%s step=%d %s", request.sample_id, request.checkpoint.step, request.checkpoint.uri)
@@ -92,13 +96,14 @@ def main(action: str, store_root: str, priority: str | None, submission: str) ->
                 Path.cwd(),
                 store_root,
                 sampling_resources(),
-                HERO_PROCESSES_PER_TASK,
+                SAMPLING_GPUS_PER_NODE,
                 sampler_module="experiments.grug.moe_hero_ep.ops.vibe_check.sample",
             )
             submit_pending(
                 store,
                 jobs,
                 requests,
+                spec=spec,
                 priority_band=priority_band_value(priority) if priority is not None else None,
                 submission=submission_mode,
             )

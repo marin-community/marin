@@ -91,6 +91,7 @@ def test_diagnostic_run_matches_the_d6144_rack_local_recipe():
         num_steps=1,
         schedule_steps=390_251,
         version="dev",
+        gc_interval=100,
     )
     ladder = build_ladder_run(run_id="test-ladder", size="d6144", version="dev")
     diagnostic_config = diagnostic.build_config(
@@ -157,7 +158,7 @@ def test_scaling_ladder_searches_permanent_and_cluster_temp_roots(monkeypatch):
     trainer = step.build_config(ctx).trainer.trainer
     assert trainer.checkpoint_search_paths("test-d6144") == [
         f"{output_path}/checkpoints",
-        "s3://hero-checkpoints/tmp/ttl=14d/checkpoints-temp/marin-us-east-02a/marin/grug/test-d6144/v/checkpoints",
+        "s3://hero-checkpoints/tmp/ttl=3d/checkpoints-temp/marin-us-east-02a/marin/grug/test-d6144/v/checkpoints",
     ]
 
 

@@ -52,13 +52,19 @@ def uncheatable_dataset(
     subset: str,
     *,
     tokenizer: str = llama3_tokenizer,
+    tag: str = "llama3",
     raw: ArtifactStep[TokenizedCache] | None = None,
     resources: ResourceConfig | None = None,
 ) -> ArtifactStep[TokenizedCache]:
-    """One Uncheatable Eval subset as a validation handle."""
+    """One Uncheatable Eval subset as a validation handle.
+
+    ``tag`` names the tokenizer in the cache path; a non-default ``tokenizer`` MUST pass a distinct
+    ``tag`` (the cache is addressed by name+version, not tokenizer) or it resolves to the existing
+    ``llama3`` cache and evals the model on the wrong vocab.
+    """
     raw = raw if raw is not None else uncheatable_raw()
     return tokenized(
-        f"uncheatable_eval/{subset}-llama3",
+        f"uncheatable_eval/{subset}-{tag}",
         tokenizer=tokenizer,
         version="2026.06.28",
         raw=raw,
@@ -69,12 +75,12 @@ def uncheatable_dataset(
 
 
 def uncheatable_datasets(
-    *, tokenizer: str = llama3_tokenizer, resources: ResourceConfig | None = None
+    *, tokenizer: str = llama3_tokenizer, tag: str = "llama3", resources: ResourceConfig | None = None
 ) -> dict[str, ArtifactStep[TokenizedCache]]:
     """All Uncheatable Eval subsets, keyed by subset name; one shared raw download."""
     raw = uncheatable_raw(resources=resources)
     return {
-        subset: uncheatable_dataset(subset, tokenizer=tokenizer, raw=raw, resources=resources)
+        subset: uncheatable_dataset(subset, tokenizer=tokenizer, tag=tag, raw=raw, resources=resources)
         for subset in UNCHEATABLE_SUBSETS
     }
 

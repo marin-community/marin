@@ -22,12 +22,17 @@ from iris.rpc.proto_display import priority_band_rank
 from marin.training.training import resolve_training_env
 from rigging.timing import Duration
 
-from experiments.grug.moe_hero_ep.ops.vibe_check.completions import SampleRequest, SampleStore
+from experiments.grug.moe_hero_ep.ops.vibe_check.completions import SampleRequest, SampleStore, SamplingSpec
 
 logger = logging.getLogger(__name__)
 
 JOB_USER = "hero-completions"
 MAX_ATTEMPTS = 3
+# One pass per sample over the prompt bank runs the full decode limit and takes about 40 minutes.
+# A rack-wide batch covers the bank in one pass, so three samples need about two hours plus the
+# checkpoint restore. Keep enough margin that a slow node does not discard a finished attempt:
+# the job holds no partial result, and a timeout consumes one of MAX_ATTEMPTS.
+SAMPLING_TIMEOUT = Duration.from_hours(6)
 
 
 class SubmissionMode(StrEnum):
@@ -52,6 +57,7 @@ def submit_pending(
     jobs: Jobs,
     requests: list[SampleRequest],
     *,
+    spec: SamplingSpec,
     priority_band: int | None = None,
     submission: SubmissionMode = SubmissionMode.NEXT,
 ) -> None:
@@ -64,14 +70,15 @@ def submit_pending(
         store.set_priorities([request.sample_id for request in requests], priority_band)
     # Read job states before results. Process zero can save a result during this RPC.
     states = jobs.states()
-    active = {name for name, state in states.items() if state not in TERMINAL_JOB_STATES}
+    saved_requests = store.requests(spec)
+    current_names = {name for request in saved_requests for name in sample_job_names(request)}
+    active = {name for name, state in states.items() if name in current_names and state not in TERMINAL_JOB_STATES}
     if active and submission == SubmissionMode.NEXT:
         logger.info("Waiting for active jobs: %s", active)
         return  # Wait for teardown even if the active job already wrote its result.
     completed = store.completed_ids()
     attempts = store.attempt_names()
     priorities = store.priorities()
-    saved_requests = store.requests()
     if submission == SubmissionMode.ALL:
         discovered_ids = {request.sample_id for request in requests}
         saved_requests = [request for request in saved_requests if request.sample_id in discovered_ids]
@@ -137,8 +144,6 @@ class IrisSamplingJobs:
         resources = replace(self.resources, target_cluster=request.target_cluster)
         if not isinstance(resources.device, GpuConfig):
             raise ValueError("Native sampling requires GPU resources")
-        if resources.device.count * resources.replicas != request.spec.batch_size:
-            raise ValueError("Sampling batch size must match the GPU count")
         native_resources = convert_resources(resources)
         command = Entrypoint(
             command=[
@@ -188,9 +193,9 @@ class IrisSamplingJobs:
                             coscheduling=resolve_coscheduling(resources, resources.replicas),
                             ports=["jax"],
                             scheduling_timeout=Duration.from_hours(24),
-                            timeout=Duration.from_hours(4),
+                            timeout=SAMPLING_TIMEOUT,
                             max_retries_failure=0,
-                            max_retries_preemption=0,
+                            max_retries_preemption=1000,
                             max_task_failures=0,
                             priority_band=priority_band,
                             existing_job_policy=job_pb2.EXISTING_JOB_POLICY_ERROR,

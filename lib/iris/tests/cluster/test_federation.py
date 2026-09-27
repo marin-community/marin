@@ -15,13 +15,30 @@ import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.cluster.backends.rpc.backend import EXEC_IN_CONTAINER_MAX_TIMEOUT
-from iris.cluster.config import PeerConfig, config_to_dict, parse_config, user_admitted
-from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute
+from iris.cluster.config import (
+    IrisClusterConfig,
+    PeerConfig,
+    ScaleGroupConfig,
+    ScaleGroupResources,
+    backend_attribute_sets,
+    config_to_dict,
+    parse_config,
+    user_admitted,
+)
+from iris.cluster.constraints import (
+    Constraint,
+    ConstraintOp,
+    WellKnownAttribute,
+    availability_constraint,
+    peer_availability_gate,
+    preemptible_constraint,
+)
 from iris.cluster.federation import peer as peer_module
-from iris.cluster.federation.availability import AVAILABILITY_METRIC_VERSION
+from iris.cluster.federation.availability import AVAILABILITY_METRIC_VERSION, QueuedCandidate
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import FederationPeer, build_peers
 from iris.cluster.federation.router import PeerRouter, RoutingRequest, SubmitDisposition
+from iris.cluster.types import AcceleratorType, CapacityType, JobName
 from iris.managed_thread import get_thread_container, thread_container_scope
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Duration, ExponentialBackoff
@@ -437,6 +454,64 @@ def test_router_queues_a_gpu_job_to_a_peer_advertising_the_matching_variant():
     plan = PeerRouter([peer]).classify(request)
     assert plan.disposition == SubmitDisposition.QUEUE
     assert plan.pinned_peer_id == ""
+
+
+@pytest.mark.parametrize(
+    "variant, capacity_type, disposition",
+    [
+        (" H100 ", CapacityType.ON_DEMAND, SubmitDisposition.QUEUE),
+        ("A100", CapacityType.ON_DEMAND, SubmitDisposition.REJECT),
+        ("H100", CapacityType.PREEMPTIBLE, SubmitDisposition.REJECT),
+    ],
+)
+def test_cpu_reserve_routes_only_to_a_compatible_peer(variant, capacity_type, disposition):
+    config = IrisClusterConfig(
+        scale_groups={
+            "workers": ScaleGroupConfig(
+                name="workers",
+                num_vms=1,
+                resources=ScaleGroupResources(
+                    device_type=AcceleratorType.GPU, device_variant=variant, capacity_type=capacity_type
+                ),
+            )
+        }
+    )
+    backend = _backend(
+        "fleet",
+        advertised_attributes={
+            key: controller_pb2.StringList(values=sorted(values))
+            for key, values in backend_attribute_sets(config).items()
+        },
+        # A CPU reservation can use a peer with no free GPUs.
+        availability=controller_pb2.Controller.ResourceAvailability(
+            version=AVAILABILITY_METRIC_VERSION, observation_epoch_ms=1000, amounts={"h100": 0}
+        ),
+    )
+    peer = _peer("cw", _StubConnection((backend,)))
+    peer.probe()
+    constraints = [availability_constraint("H100"), preemptible_constraint(False)]
+    candidate = QueuedCandidate(
+        job_id=JobName.from_string("/u/cpu-reserve"),
+        pinned_peer_id="",
+        priority_band=job_pb2.PRIORITY_BAND_BATCH,
+        submitted_at_ms=0,
+        shape_constraints=constraints,
+        availability_gate=peer_availability_gate(job_pb2.DeviceConfig(cpu=job_pb2.CpuDevice()), replicas=1),
+    )
+
+    with thread_container_scope() as threads:
+        manager = FederationManager([peer], threads=threads)
+        plan = manager.classify_submit(RoutingRequest(constraints=constraints, local_feasible=False))
+        assert plan.disposition == disposition
+        promotions = manager.plan_federation([candidate])
+
+    if disposition == SubmitDisposition.QUEUE:
+        assert plan.pinned_peer_id == ""
+        assert [(p.job_id, p.peer_id, p.backend_id, p.reserved) for p in promotions] == [
+            (candidate.job_id, "cw", "fleet", {})
+        ]
+    else:
+        assert promotions == []
 
 
 def test_router_rejects_a_gpu_job_when_a_peer_advertises_no_device_attributes():

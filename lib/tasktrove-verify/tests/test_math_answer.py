@@ -33,6 +33,9 @@ def _answer(workspace: Path, text: str) -> None:
         ("42", "First I add the parts.\nThe answer is 41\n", 0.0),
         # The last box wins, as a model that revises itself boxes twice.
         ("42", "\\boxed{7}\nthat was wrong, actually \\boxed{42}\n", 1.0),
+        # A malformed final box cannot expose an earlier answer to the parser.
+        ("42", "\\boxed{42}\nthat was wrong, actually \\boxed{\n", 0.0),
+        ("42", "\\boxed{42}\nthat was wrong, actually \\boxed{}\n", 0.0),
         ("42", "$\\boxed{42}$", 1.0),
         # An unreadable candidate is a scored wrong answer.
         ("42", "\\boxed{???}", 0.0),
@@ -56,6 +59,8 @@ def test_math_scalar_answers_are_compared_symbolically(tmp_path, expected, text,
         ("(2,\\infty)", MathType.INTERVAL, "\\boxed{x < 2}", 0.0),
         ("y = 2x + 1", MathType.EQUATION, "\\boxed{y=2x+1}", 1.0),
         ("y = 2x + 1", MathType.EQUATION, "\\boxed{y=2x+2}", 0.0),
+        ("(1, 2)", MathType.TUPLE, "\\boxed{(1,2)}", 1.0),
+        ("(1, 2)", MathType.TUPLE, "\\boxed{(2,1)}", 0.0),
         ("[1, 2, 3]", MathType.LIST, "\\boxed{[1,2,3]}", 1.0),
         # A list is ordered, and the brackets around it are optional.
         ("[1, 2, 3]", MathType.LIST, "\\boxed{3, 2, 1}", 0.0),

@@ -155,6 +155,44 @@ def test_wandb_config_skips_oversized_automatic_source_capture(tmp_path):
     assert WandbConfig(save_code=str(source_path))._git_settings() == {}
 
 
+def test_wandb_config_fork_initializes_child_without_resume(monkeypatch):
+    initialized = {}
+
+    class FakeRun:
+        step = 0
+
+    def fake_init(**kwargs):
+        initialized.update(kwargs)
+        return FakeRun()
+
+    monkeypatch.setattr(wandb_tracker_mod.jax, "process_index", lambda: 1)
+    monkeypatch.setattr(wandb_tracker_mod.jax, "process_count", lambda: 1)
+    monkeypatch.setattr(wandb_tracker_mod.wandb, "init", fake_init)
+
+    WandbConfig(
+        id="hero-ragged-a2a-ep-step54k",
+        fork_from="hero-12d8b6f0-dee637?_step=54000",
+        save_code=False,
+        background=False,
+    ).init(None)
+
+    assert initialized["id"] == "hero-ragged-a2a-ep-step54k"
+    assert initialized["fork_from"] == "hero-12d8b6f0-dee637?_step=54000"
+    assert "resume" not in initialized
+
+
+@pytest.mark.parametrize(
+    ("fork_from", "child_run_id"),
+    [
+        ("hero-12d8b6f0-dee637", "hero-ragged-a2a-ep-step54k"),
+        ("hero-12d8b6f0-dee637?_step=54000", "hero-12d8b6f0-dee637"),
+    ],
+)
+def test_wandb_config_rejects_invalid_fork_lineage(fork_from, child_run_id):
+    with pytest.raises(ValueError):
+        WandbConfig(id=child_run_id, fork_from=fork_from).init(None)
+
+
 def test_wandb_tracker_suppressed_logging_materializes_after_resume_step(monkeypatch):
     monkeypatch.setenv("WANDB_ERROR_REPORTING", "false")
 

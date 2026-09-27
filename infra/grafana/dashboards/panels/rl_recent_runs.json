@@ -1,7 +1,7 @@
 {
   "type": "table",
   "title": "Recent RL runs",
-  "description": "Reinforcement-learning runs that reported a policy step in the selected window, most recently active first. A row opens that run on the RL Post-training view, with its own start and end as the window, so the charts are already framed on the run rather than on whatever window Home was showing.\n\nRuns appear here once their trainer emits telemetry; a run that trained but exported none is absent, which is itself the signal. Attempts counts the distinct task attempts that reported, so more than one means the run restarted.",
+  "description": "Reinforcement-learning runs that reported a policy step in the selected window, most recently active first. A row opens that run on the RL Post-training view for its own training loop — asynchronous runs on RL Post-training (async), every other run on RL Post-training (sync) — with its own start and end as the window, so the charts are already framed on the run rather than on whatever window Home was showing.\n\nRuns appear here once their trainer emits telemetry; a run that trained but exported none is absent, which is itself the signal. Attempts counts the distinct task attempts that reported, so more than one means the run restarted.",
   "datasource": {
     "type": "yesoreyeram-infinity-datasource",
     "uid": "finelog-marin"
@@ -32,7 +32,7 @@
               {
                 "targetBlank": false,
                 "title": "Open the RL Post-training view",
-                "url": "/d/marin-rl-runs?var-run=${__data.fields.run}&var-cluster=${__data.fields.cluster}&from=${__data.fields.window_from_ms}&to=${__data.fields.window_to_ms}"
+                "url": "/d/${__data.fields.dashboard}?var-run=${__data.fields.run}&var-cluster=${__data.fields.cluster}&from=${__data.fields.window_from_ms}&to=${__data.fields.window_to_ms}"
               }
             ]
           }
@@ -73,6 +73,18 @@
             "value": true
           }
         ]
+      },
+      {
+        "matcher": {
+          "id": "byName",
+          "options": "dashboard"
+        },
+        "properties": [
+          {
+            "id": "custom.hidden",
+            "value": true
+          }
+        ]
       }
     ]
   },
@@ -87,14 +99,10 @@
       "source": "url",
       "format": "table",
       "parser": "backend",
-      "url": "/query",
+      "url": "/v1/rl/recent",
       "url_options": {
         "method": "GET",
         "params": [
-          {
-            "key": "sql",
-            "value": "SELECT run_id AS run, COALESCE(NULLIF(\"cluster\", ''), 'marin') AS cluster, MAX(value) AS step, COUNT(DISTINCT execution_uid) AS attempts, MIN(timestamp_ms) - 60000 AS window_from_ms, MAX(timestamp_ms) + 60000 AS window_to_ms, MAX(timestamp_ms) AS \"last seen\" FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name = 'policy_step' AND run_id IS NOT NULL AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY MAX(timestamp_ms) DESC LIMIT 20"
-          },
           {
             "key": "from",
             "value": "${__from}"
@@ -140,6 +148,11 @@
           "selector": "last seen",
           "text": "last seen",
           "type": "number"
+        },
+        {
+          "selector": "dashboard",
+          "text": "dashboard",
+          "type": "string"
         }
       ]
     }

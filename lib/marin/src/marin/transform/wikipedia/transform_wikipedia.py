@@ -54,12 +54,10 @@ class WikiExtractionConfig:
     special_char_threshold: int = 50
 
 
-def remove_and_append_infobox(html: str) -> str:
+def remove_and_append_infobox(soup: BeautifulSoup) -> None:
     """
     Wraps the infobox in a new section with heading 'InfoBox' and appends it to the end of the article.
     """
-    soup = BeautifulSoup(html, "html.parser")
-
     infobox = soup.find("table", {"class": "infobox"})
     if infobox:
         # Remove the infobox from its current position
@@ -82,15 +80,11 @@ def remove_and_append_infobox(html: str) -> str:
         else:
             soup.append(notes_section)
 
-    return str(soup)
 
-
-def remove_references_from_html(html: str) -> str:
+def remove_references(soup: BeautifulSoup) -> None:
     """
     Removes the references list and heading from the article.
     """
-    soup = BeautifulSoup(html, "html.parser")
-
     reflist = soup.find("div", {"class": "reflist"})
     if reflist:
         reflist.extract()
@@ -99,13 +93,10 @@ def remove_references_from_html(html: str) -> str:
     if ref_heading:
         ref_heading.extract()
 
-    return str(soup)
 
-
-def unwrap_eqn(html: str):
+def unwrap_eqn(soup: BeautifulSoup) -> None:
     """Extract equations from math elements and convert to LaTeX inline/block quotes,
     wrapping display math in <p> tags."""
-    soup = BeautifulSoup(html, "html.parser")
     # Find all annotations containing equations
     annotations = soup.find_all("annotation", {"encoding": "application/x-tex"})
 
@@ -170,8 +161,6 @@ def unwrap_eqn(html: str):
             formatted_latex = f"{left_space}${latex}$"
             span_element.replace_with(formatted_latex)
 
-    return str(soup)
-
 
 def postprocess_content(
     content: str, digit_threshold: int, word_threshold: int, special_char_threshold: float
@@ -201,13 +190,15 @@ def clean_wiki_html(html: str, remove_reference_section: bool = True) -> str:
     """
     Cleans the HTML by removing unwanted elements.
     """
-    html = unwrap_eqn(html)
-    html = remove_and_append_infobox(html)
+    soup = BeautifulSoup(html, "html.parser")
+
+    unwrap_eqn(soup)
+    remove_and_append_infobox(soup)
 
     if remove_reference_section:
-        html = remove_references_from_html(html)
+        remove_references(soup)
 
-    return html
+    return str(soup)
 
 
 def process_record(

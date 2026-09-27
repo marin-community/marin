@@ -90,6 +90,12 @@ row-group pruning worked and file metadata is the remaining cost. The
 tasks, not CPU time, so they overlap and do not sum to wall clock — treat a large
 one as a place to look, not as a measured cost.
 
+`EXPLAIN` itself can be slow when planning reads large trigram sections. If
+`EXPLAIN ANALYZE` reports little scan time and few scanned bytes, compare its
+wall time with plain `EXPLAIN` before tuning Parquet reads. For predicates on
+several indexed columns, Finelog checks range-constrained columns first and
+stops reading a segment's other index sections once its span mask is empty.
+
 An unbounded substring query (`col LIKE '%…%'`) prunes only when that column
 carries a trigram index; otherwise it decodes the column for every row in the
 namespace. `ListNamespaces` reports which columns are indexed. How much it prunes
@@ -143,6 +149,17 @@ definition they were written with (each `.fidx` section carries its own
 coverage), and the backfill rebuilds them a few per tick and deletes the
 superseded Parquet files. A widened copy under a second name leaves both being
 built for every new segment forever.
+
+The `session-discovery` projection contains `num_requests_running` telemetry
+with the structured `job_id`, `run_id`, and `execution_uid` columns plus the
+metric attributes and timestamp. Standalone vLLM and embedded SkyRL scrapes
+emit this current-snapshot gauge while they are observable. Inference dashboard
+selectors filter by this exact name and, for SkyRL, by
+`json_get(attributes_json, 'metric_source') = 'vllm'`. Keeping the time bound on
+these rows makes the picker mean “observed in the selected window,” including
+long-lived sessions whose start predates that window. The exact name posting
+accelerates uncovered segments while the projection backfills through normal
+index maintenance.
 
 For broad low-cardinality summaries, set `ColumnIndex.value_counts`.
 Unfiltered `SELECT col, count(*) FROM table GROUP BY col` and `count(col)` then

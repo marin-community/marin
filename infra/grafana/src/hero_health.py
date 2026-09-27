@@ -27,6 +27,7 @@ from hero_runs import (
     as_number,
     as_utc,
     hero_run_id,
+    phase_root_key,
     root_job_for,
     run_id_predicate,
     sql_epoch_ms,
@@ -149,18 +150,25 @@ def signal_query(now: datetime, runs: tuple[WatchedRun, ...]) -> str:
     liveness_since = sql_epoch_ms(now - _LIVENESS_LOOKBACK)
     health_since = sql_epoch_ms(now - HEALTH_WINDOW)
     end = sql_epoch_ms(now)
-    metric_names = ", ".join(f"'{name}'" for name in _SIGNAL_METRICS)
+    liveness_metric_names = f"'{PHASE_METRIC}', '{_EVAL_LOSS}'"
+    health_metric_names = ", ".join(f"'{name}'" for name in _SIGNAL_METRICS if name not in (PHASE_METRIC, _EVAL_LOSS))
+    common_predicate = f"{run_predicate} AND ({execution_predicate}) AND process_index = 0"
     below_floor = " OR ".join(f"(name = '{name}' AND value < {floor})" for name, floor in _FLOORS.items())
     return (
         "WITH samples AS ("
         "SELECT COALESCE(NULLIF(cluster,''),'unknown') AS origin_cluster, run_id, execution_uid, "
         "name, value, timestamp_ms, seq "
         f"FROM {LEVANTER_METRICS_TABLE} "
-        f"WHERE {run_predicate} AND ({execution_predicate}) AND process_index = 0 "
-        f"AND name IN ({metric_names}) "
+        f"WHERE {common_predicate} "
+        f"AND name IN ({liveness_metric_names}) "
         f"AND timestamp_ms >= {liveness_since} AND timestamp_ms < {end} "
-        f"AND (name IN ('{PHASE_METRIC}', '{_EVAL_LOSS}') "
-        f"OR timestamp_ms >= {signal_since})"
+        "UNION ALL "
+        "SELECT COALESCE(NULLIF(cluster,''),'unknown') AS origin_cluster, run_id, execution_uid, "
+        "name, value, timestamp_ms, seq "
+        f"FROM {LEVANTER_METRICS_TABLE} "
+        f"WHERE {common_predicate} "
+        f"AND name IN ({health_metric_names}) "
+        f"AND timestamp_ms >= {signal_since} AND timestamp_ms < {end}"
         "), ranked AS ("
         "SELECT origin_cluster, run_id, execution_uid, name, value, timestamp_ms, "
         "ROW_NUMBER() OVER ("
@@ -225,10 +233,9 @@ def watched_runs(task_states: pa.Table, phase_runs: pa.Table, now: datetime) -> 
     enrolled = [key for key, (age, running) in states.items() if running and age <= TASK_STATE_FRESHNESS]
     executions: dict[tuple[str, str], str] = {}
     for row in phase_runs.to_pylist():
-        root_job = root_job_for(str(row["telemetry_job"]))
-        if root_job is None:
+        key = phase_root_key(row)
+        if key is None:
             continue
-        key = (str(row["cluster"]), root_job)
         executions[key] = str(row["execution_uid"])
         if key not in enrolled and now - as_utc(row["phase_at"]) <= PHASE_ENROLLMENT_LOOKBACK:
             enrolled.append(key)

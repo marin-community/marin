@@ -196,6 +196,16 @@ Update the same applet with optimistic concurrency:
 uv run marina publish my-applet --update <uuid> --base-version <current>
 ```
 
+Applets are private by default. Use `--mode public` on a publish or update when
+the frontend and its GET backend routes may be disclosed without
+authentication. An update without `--mode` preserves the current mode. Change
+only the mode with `marina applets mode <uuid> public|private`.
+
+Public mode is limited to GET and HEAD requests, but Marina cannot prove that a
+GET backend is side-effect-free. Use it only for trusted applet code and data
+that may be disclosed to the unrestricted internet. Do not use public mode for
+untrusted publishers, sensitive data, SQL `query` access, or mutation routes.
+
 Inspect before mutating lifecycle state:
 
 ```bash
