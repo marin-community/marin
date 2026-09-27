@@ -56,6 +56,7 @@ from iris.cluster.types import (
     EnvironmentSpec,
     is_job_finished,
 )
+from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_value
 from rigging.config_discovery import find_project_root
 from rigging.connect import capability_path, proxy_path
 from rigging.timing import Duration
@@ -364,6 +365,12 @@ def _mint_and_print_capability_url(
 @click.option("--max-retries-preemption", type=int, default=10)
 @click.option("--instances", type=click.IntRange(min=1), default=1, help="Number of Iris inference instances.")
 @click.option(
+    "--priority",
+    type=click.Choice(PRIORITY_BAND_NAMES),
+    default=None,
+    help="Iris priority band for the service and its child inference workers.",
+)
+@click.option(
     "--broker",
     is_flag=True,
     default=False,
@@ -439,6 +446,7 @@ def main(
     disk: str,
     max_retries_preemption: int,
     instances: int,
+    priority: str | None,
     broker: bool,
     vllm_args: tuple[str, ...],
     vllm_metrics_config: Path | None,
@@ -611,6 +619,7 @@ def main(
                 max_retries_failure=0,
                 max_retries_preemption=max_retries_preemption,
                 task_image=None if brokered else task_image,
+                priority_band=priority_band_value(priority or "inherit"),
             )
             proxy_url = client.resolve_endpoint(endpoint)
             click.echo("")
