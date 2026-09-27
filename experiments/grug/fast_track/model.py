@@ -481,6 +481,9 @@ class GrugModelConfig:
     shared_ungated_relu2: bool = False
     """Shared experts are ``relu(x @ W_up)^2 @ W_down`` with no gate projection (truly ungated: the gate
     GEMM is dropped from the fused projection). Parameter-match with 1.5x ``shared_expert_intermediate_dim``."""
+    moe_expert_waves: int = 1
+    """Static dispatch waves in the pooled-wave EP backend. Waves are independent, so the scheduler can overlap
+    one wave's all-to-all with another's expert compute (the all-to-all was ~13% exposed at d512)."""
     moe_bank2_experts: int = 0
     """Heterogeneous experts: the last ``moe_bank2_experts`` of ``num_experts`` form a second expert bank with its
     own width (``moe_bank2_intermediate_dim``) and activation (``moe_bank2_activation``). One router scores all
@@ -1991,7 +1994,7 @@ def _expert_mlp_init(cfg: "GrugModelConfig", expert_width: int, key: PRNGKeyArra
         capacity_factor=cfg.capacity_factor,
         pooled_transport_capacity_factor=cfg.pooled_transport_capacity_factor,
         expert_chunks=1,
-        num_expert_waves=1,
+        num_expert_waves=cfg.moe_expert_waves,
     )
     return eqx.tree_at(lambda m: m.w_gate, mlp, None, is_leaf=lambda x: x is None) if cfg.moe_ungated_relu2 else mlp
 
