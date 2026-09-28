@@ -47,6 +47,8 @@ EXPERIMENT_NAME = "cat-count-canary"
 CLUSTER = "cw-us-east-02a"
 GPU_VARIANT = "H100"
 GPUS_PER_NODE = 2
+# Each task exceeds half of the east H100 host's 128 CPUs.
+CPUS_PER_NODE = 65
 TRAIN_NS = DEFAULT_TRAIN_NS
 TRAIN_BATCH_SIZE = 32
 GROUP_SIZE = 8
@@ -353,7 +355,7 @@ def build_run(
         IrisSkyRLExecution(
             cluster=CLUSTER,
             cluster_config=f"lib/iris/config/{CLUSTER}.yaml",
-            cpu=16,
+            cpu=CPUS_PER_NODE,
             memory="512GB",
             disk="1TB",
             priority="interactive",
