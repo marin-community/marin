@@ -70,12 +70,14 @@ sample only while it is under 15 minutes old.
 
 `eval_regressed` reads W&B, not finelog. Levanter's finelog tracker publishes metrics other than the
 training loss only on steps divisible by ten, and hero evaluations land on steps such as 149999, so
-finelog never holds them. The bridge reads each watched run's three newest evaluations from W&B, in
-step order. A hero relaunch is a W&B fork, and a fork's history carries its parent's evaluations up
-to the branch, so the first evaluation after a relaunch is compared with the parent's last two. W&B
-drops a step logged below the run's high point, so a restore that redoes steps keeps the first
+finelog never holds them. For watched runs with fresh training telemetry, the bridge reads the three
+newest evaluations from W&B, in step order. A hero relaunch is a W&B fork, and a fork's history carries
+its parent's evaluations up to the branch, so the first evaluation after a relaunch is compared with
+the parent's last two. W&B drops a step logged below the run's high point, so a restore that redoes steps keeps the first
 evaluation at each step. The newest evaluation stays fresh for 30 minutes. If W&B is unavailable,
-the bridge skips the evaluation check and logs a warning, and the other checks still run.
+the bridge skips the evaluation check and logs a warning, and the other checks still run. A transport
+failure stops further W&B lookups for that request, avoiding one timeout per run. Run-specific errors
+skip only the affected run.
 
 The throughput checks count how much of the window sat below the floor rather than averaging it —
 the median comparison the Pushover monitor makes, which keeps one restart step at zero from reading

@@ -370,6 +370,11 @@ def _is_training(metrics: dict[str, MetricSignal], now: datetime) -> bool:
     return phase is not None and int(phase.latest) == TRAINING_PHASE
 
 
+def training_runs(runs: tuple[WatchedRun, ...], signals: Signals, now: datetime) -> tuple[WatchedRun, ...]:
+    """Return watched runs whose current telemetry reports active training."""
+    return tuple(run for run in runs if _is_training(_metrics(signals, run), now))
+
+
 def optimizer_alert_rows(
     runs: tuple[WatchedRun, ...], signals: Signals, loss_windows: pa.Table, now: datetime
 ) -> list[dict]:

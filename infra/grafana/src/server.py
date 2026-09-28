@@ -129,6 +129,7 @@ from hero_health import (
     signal_query,
     signals_by_run,
     telemetry_alert_rows,
+    training_runs,
     watched_runs,
 )
 from hero_runs import (
@@ -1005,8 +1006,8 @@ def create_app(
     def hero_evaluations(runs: tuple[WatchedRun, ...]) -> dict[str, EvalHistory]:
         """Each watched run's recent evaluation history from W&B, keyed by run ID.
 
-        A W&B failure skips the evaluation check for that run rather than failing
-        every other health check with it.
+        Run-specific failures skip that run. Transport failures stop further
+        lookups so a W&B outage does not cost one timeout per run.
         """
         evaluations = {}
         for run_id in sorted({run.run_id for run in runs}):
@@ -1019,6 +1020,8 @@ def create_app(
                 )
             except UpstreamError as err:
                 logger.warning("W&B evaluation history for %s unavailable: %s", run_id, err)
+                if err.status_code == 504:
+                    break
                 continue
             history = eval_history(points)
             if history is not None:
@@ -1099,7 +1102,9 @@ def create_app(
             retry_events = (
                 hero_query("hero_retry_events", now, target, lambda: retry_event_query(now)) if runs else pa.table({})
             )
-            return health_alert_rows(runs, hero_signals(target, now, runs), retry_events, hero_evaluations(runs), now)
+            signals = hero_signals(target, now, runs)
+            evaluations = hero_evaluations(training_runs(runs, signals, now))
+            return health_alert_rows(runs, signals, retry_events, evaluations, now)
 
         return finelog_alert_endpoint(
             "training_health",
