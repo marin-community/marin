@@ -183,6 +183,55 @@ class TransformerLayer(eqx.Module):
         return x
 
 
+class DocSuperToken(eqx.Module):
+    """A gated extra super-token carrying the document vector, which the real tokens attend to."""
+
+    type_embed: Array  # [D], marks the appended super-token
+    gate: Array  # scalar, zero-init so the token starts silent
+
+    def __init__(self, dim: int, *, key: PRNGKeyArray):
+        self.type_embed = jax.random.normal(key, (dim,)) * 0.02
+        self.gate = jnp.zeros(())
+
+    def __call__(self, doc_vec: Array) -> Array:
+        return self.gate * (doc_vec + self.type_embed)
+
+
+class DocFusion(eqx.Module):
+    """The document-embedding side input of a fusion scorer.
+
+    Projects and layer-norms one embedding per row to ``hidden_dim``, optionally
+    appends it as a :class:`DocSuperToken`, and adds it to the logit through a
+    zero-initialized head skip. Field order is the serialized leaf order of the
+    deployed checkpoints; keep it.
+    """
+
+    proj_w: Array  # [doc_embed_dim, D]
+    proj_b: Array  # [D]
+    ln_g: Array  # [D]
+    ln_b: Array  # [D]
+    head_w: Array  # [D, 1], zero-init so training starts as the base model
+    super_token: DocSuperToken | None
+
+    def __init__(self, doc_embed_dim: int, dim: int, super_token: bool, *, key: PRNGKeyArray):
+        kproj, ktype = jax.random.split(key)
+        self.proj_w = _glorot(kproj, (doc_embed_dim, dim))
+        self.proj_b = jnp.zeros(dim)
+        self.ln_g = jnp.ones(dim)
+        self.ln_b = jnp.zeros(dim)
+        # Zero-init head skip and super-token gate: the forward is exactly the
+        # base model at step 0, and the doc-embedding path fades in by gradient.
+        self.head_w = jnp.zeros((dim, 1))
+        self.super_token = DocSuperToken(dim, key=ktype) if super_token else None
+
+    def vector(self, doc_embed: Array) -> Array:
+        """The projected, layer-normed document vector, ``[b, D]``."""
+        return _layer_norm(_matmul(doc_embed, self.proj_w) + self.proj_b, self.ln_g, self.ln_b)
+
+    def head_logit(self, doc_vec: Array) -> Array:
+        return _matmul(doc_vec, self.head_w)[:, 0]
+
+
 class FastTransformer(eqx.Module):
     config: FastTransformerConfig = eqx.field(static=True)
     embed: Array  # [vocab, E]
@@ -196,19 +245,10 @@ class FastTransformer(eqx.Module):
     head_b: Array
     head_w: Array  # [D, 1]
     # Per-document embedding side input (None unless config.doc_embed_dim > 0).
-    doc_proj_w: Array | None  # [doc_embed_dim, D]
-    doc_proj_b: Array | None  # [D]
-    doc_ln_g: Array | None  # [D]
-    doc_ln_b: Array | None  # [D]
-    doc_head_w: Array | None  # [D, 1], zero-init so training starts as the base model
-    doc_type_embed: Array | None  # [D], marks the appended super-token
-    doc_gate: Array | None  # scalar, zero-init gate on the appended super-token
+    doc_fusion: DocFusion | None
 
     def __init__(self, config: FastTransformerConfig, *, key: PRNGKeyArray):
         ke, kpq, kpr, kpos, klayers, kfq, khead = jax.random.split(key, 7)
-        # Folded rather than added to the split so the base weight stream (and thus
-        # any retrain of an existing arm) is unchanged when doc embeddings are off.
-        kdoc_proj, kdoc_type = jax.random.split(jax.random.fold_in(key, 7))
         self.config = config
         self.embed = jax.random.normal(ke, (config.vocab_size, config.embed_dim)) * 0.02
         self.pool_query = jax.random.normal(kpq, (config.embed_dim,)) * 0.02
@@ -224,26 +264,15 @@ class FastTransformer(eqx.Module):
         self.head_g = jnp.ones(config.hidden_dim)
         self.head_b = jnp.zeros(config.hidden_dim)
         self.head_w = _glorot(khead, (config.hidden_dim, 1))
-        if config.doc_embed_dim:
-            self.doc_proj_w = _glorot(kdoc_proj, (config.doc_embed_dim, config.hidden_dim))
-            self.doc_proj_b = jnp.zeros(config.hidden_dim)
-            self.doc_ln_g = jnp.ones(config.hidden_dim)
-            self.doc_ln_b = jnp.zeros(config.hidden_dim)
-            # Zero-init head skip and super-token gate: the forward is exactly the
-            # base model at step 0, and the doc-embedding path fades in by gradient.
-            self.doc_head_w = jnp.zeros((config.hidden_dim, 1))
-            self.doc_type_embed = (
-                jax.random.normal(kdoc_type, (config.hidden_dim,)) * 0.02 if config.doc_embed_super_token else None
+        # Folded rather than added to the split so the base weight stream (and thus
+        # any retrain of an existing arm) is unchanged when doc embeddings are off.
+        self.doc_fusion = (
+            DocFusion(
+                config.doc_embed_dim, config.hidden_dim, config.doc_embed_super_token, key=jax.random.fold_in(key, 7)
             )
-            self.doc_gate = jnp.zeros(()) if config.doc_embed_super_token else None
-        else:
-            self.doc_proj_w = None
-            self.doc_proj_b = None
-            self.doc_ln_g = None
-            self.doc_ln_b = None
-            self.doc_head_w = None
-            self.doc_type_embed = None
-            self.doc_gate = None
+            if config.doc_embed_dim
+            else None
+        )
 
     def _pool_windows(self, emb: Array, mask: Array) -> tuple[Array, Array]:
         """Collapse windows of ``pool_window`` tokens. Returns (pooled, valid)."""
@@ -296,11 +325,10 @@ class FastTransformer(eqx.Module):
         h = _matmul(pooled, self.proj_w) + self.proj_b + self.pos_embed  # [b, s, d]
 
         doc_vec = None
-        if doc_embed is not None:
-            projected = _matmul(doc_embed, self.doc_proj_w) + self.doc_proj_b
-            doc_vec = _layer_norm(projected, self.doc_ln_g, self.doc_ln_b)
-            if cfg.doc_embed_super_token:
-                token = self.doc_gate * (doc_vec + self.doc_type_embed)  # [b, d]
+        if self.doc_fusion is not None and doc_embed is not None:  # agreement checked above
+            doc_vec = self.doc_fusion.vector(doc_embed)
+            if self.doc_fusion.super_token is not None:
+                token = self.doc_fusion.super_token(doc_vec)  # [b, d]
                 h = jnp.concatenate([h, token[:, None, :]], axis=1)  # [b, s+1, d]
                 valid = jnp.concatenate([valid, jnp.ones((valid.shape[0], 1))], axis=1)
 
@@ -309,7 +337,7 @@ class FastTransformer(eqx.Module):
         for layer, lk in zip(self.layers, layer_keys, strict=True):
             h = layer(h, valid, key=lk, inference=inference)
 
-        if doc_vec is not None and cfg.doc_embed_super_token:
+        if self.doc_fusion is not None and self.doc_fusion.super_token is not None:
             # The doc token is a conditioning input the real tokens attend to, not
             # document content: keep it out of the final pool so the head-side skip
             # stays the only direct readout of the embedding.
@@ -325,11 +353,11 @@ class FastTransformer(eqx.Module):
 
         normed = _layer_norm(pooled_doc, self.head_g, self.head_b)
         logit = _matmul(normed, self.head_w)[:, 0]  # [b]
-        if doc_vec is not None:
+        if self.doc_fusion is not None and doc_vec is not None:
             # Head-side skip: the concat([pooled_doc, doc_vec]) head, decomposed into
             # a sum of two linears so the base head (and its zero-init identity to
             # the no-embedding model) is untouched.
-            logit = logit + _matmul(doc_vec, self.doc_head_w)[:, 0]
+            logit = logit + self.doc_fusion.head_logit(doc_vec)
         return logit
 
 
