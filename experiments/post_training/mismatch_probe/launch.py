@@ -63,6 +63,24 @@ ARMS = {
 }
 
 
+def mismatch_probe_config(settings: ProbeSettings, *, marin_commit: str, skyrl_commit: str, replay_modes: bool) -> dict:
+    """Configure frozen-token scoring shared by the fixture and model launchers."""
+    return {
+        "enabled": True,
+        "prompts": {"count": settings.prompt_count, "samples_per_prompt": settings.samples_per_prompt},
+        "seed": settings.seed,
+        "archive_uri": None,
+        "reuse_probe": settings.reuse_probe,
+        "score_after_updates": list(settings.updates),
+        "extra_trainer_modes": ["router_replay", "router_replay_filtered"] if replay_modes else [],
+        "filtered_replay": {"keep_fraction": settings.keep_fraction},
+        "rescore_prefix_cache": settings.cache_mode,
+        "layer_tokens": 0,
+        "marin_commit": marin_commit,
+        "skyrl_commit": skyrl_commit,
+    }
+
+
 def probe_recipe(
     arm: ArmSpec,
     settings: ProbeSettings,
@@ -104,18 +122,10 @@ def probe_recipe(
                 },
             },
             "mismatch_probe": {
+                **mismatch_probe_config(
+                    settings, marin_commit=marin_commit, skyrl_commit=skyrl_commit, replay_modes=True
+                ),
                 "enabled": not warmup,
-                "prompts": {"count": settings.prompt_count, "samples_per_prompt": settings.samples_per_prompt},
-                "seed": settings.seed,
-                "archive_uri": None,
-                "reuse_probe": settings.reuse_probe,
-                "score_after_updates": list(settings.updates),
-                "extra_trainer_modes": ["router_replay", "router_replay_filtered"],
-                "filtered_replay": {"keep_fraction": settings.keep_fraction},
-                "rescore_prefix_cache": settings.cache_mode,
-                "layer_tokens": 0,
-                "marin_commit": marin_commit,
-                "skyrl_commit": skyrl_commit,
             },
         },
         "generator": {
