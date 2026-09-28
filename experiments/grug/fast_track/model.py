@@ -79,6 +79,7 @@ _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
 _AUX_HIDDEN = "aux_lm_hidden"
 # Folded into the per-step route key for the ERC proxy-token noise, so it is independent of the Gumbel noise.
 _ERC_KEY_SALT = 0xE2C
+_NITP_TARGET = "nitp_target"
 # Per-layer product-key memory diagnostics, lifted out of the layer stats into ``train/attn_res/knob_mem_*``.
 _MEMORY_STAT_PREFIX = "attn_res_knob_mem_"
 # Bound on one chunk's gathered ``[tokens, rows, dim]`` memory rows in the product-key EmbeddingBag.
@@ -353,6 +354,12 @@ class GrugModelConfig:
     mtp_weight: float = 0.0
     """Weight of a depth-1 multi-token-prediction loss (0 disables it): predict token t+2 from
     ``h_t + W_mtp rms_norm(embed(token_{t+1}))`` through a parameter-free RMS norm and the shared lm_head."""
+    nitp_weight: float = 0.0
+    """Next Implicit Token Prediction (arXiv 2605.24956; 0 disables it): an MLP head ``P = W_2 gelu(W_1 h_t)``
+    on the final hidden state predicts the stop-gradient residual stream of token t+1 after layer ``nitp_layer``,
+    with loss ``1 - cos(P(h_t), z_{t+1})`` (pairs crossing a packed-document boundary are masked). Training-only."""
+    nitp_layer: int = 1
+    """0-indexed layer whose output stream (the plain sum of the AttnRes sources) is the NITP target (~20% depth)."""
     kda_push_buckets: int = 0
     """'Push' decay for KDA (0 disables it): M delta-rule states, each decaying at its own learned,
     reader-independent per-channel rate; the writing token splits its write across them
@@ -3298,6 +3305,9 @@ class Transformer(eqx.Module):
     attn_res_query_blend_proj: Float[Array, "G 2 D"] | None
     w_mtp: Float[Array, "D D"] | None
     """Next-token-embedding projection of the MTP head (``mtp_weight``)."""
+    nitp_w1: Float[Array, "D D"] | None
+    nitp_w2: Float[Array, "D D"] | None
+    """The NITP predictor head's two matrices (``nitp_weight``), random init (MuonH)."""
     attn_res_query_loop: Float[Array, "P G D"] | None
     """AttnRes pseudo-queries of the extra loop passes (``loop_passes - 1`` of them), zero-init."""
     loop_inject_scale: Float[Array, " P"] | None
@@ -3573,6 +3583,22 @@ class Transformer(eqx.Module):
                 if cfg.mtp_weight > 0
                 else None
             ),
+            nitp_w1=(
+                reshard(
+                    _init_weight(random.fold_in(key, 4), (cfg.hidden_dim, cfg.hidden_dim), cfg.initializer_std),
+                    P(_FSDP_AXES, None),
+                )
+                if cfg.nitp_weight > 0
+                else None
+            ),
+            nitp_w2=(
+                reshard(
+                    _init_weight(random.fold_in(key, 5), (cfg.hidden_dim, cfg.hidden_dim), cfg.initializer_std),
+                    P(_FSDP_AXES, None),
+                )
+                if cfg.nitp_weight > 0
+                else None
+            ),
             attn_res_query_loop=(
                 reshard(jnp.zeros((cfg.loop_passes - 1, 2 * cfg.num_layers, cfg.hidden_dim), jnp.float32), P())
                 if cfg.loop_passes > 1
@@ -3769,6 +3795,8 @@ class Transformer(eqx.Module):
                 ple_rows,
             )
         else:
+            if cfg.nitp_weight > 0:
+                raise ValueError("nitp_weight needs attn_res (the NITP target is read from the AttnRes sources)")
             if cfg.moe_hash_layers or cfg.moe_gumbel_tau > 0:
                 raise ValueError(
                     "moe_hash_layers / moe_gumbel_tau need attn_res (the scanned stack has no router extras)"
@@ -3932,6 +3960,9 @@ class Transformer(eqx.Module):
 
         weight_logs: dict[int, tuple[jax.Array, bool]] = {}
         memory_logs: dict[str, jax.Array] = {}
+        nitp_logs: dict[str, jax.Array] = {}
+        if cfg.nitp_weight > 0 and not 0 <= cfg.nitp_layer < num_layers:
+            raise ValueError(f"nitp_layer must be in 0..{num_layers - 1}, got {cfg.nitp_layer}")
 
         def run_pass(state, pass_index):
             """One pass over the physical layers, extending the history; returns the new state, the
@@ -3981,6 +4012,9 @@ class Transformer(eqx.Module):
                 else:
                     partial, blocks, block_logits, stats = _attn_res_layer_passthrough(*layer_args, kv_share)
                 z_out.append(stats.pop(_ATTN_RES_Z))
+                if cfg.nitp_weight > 0 and pass_index == 0 and i == cfg.nitp_layer:
+                    # The plain residual stream after this layer: embedding plus every sublayer output so far.
+                    nitp_logs[_NITP_TARGET] = _stream_sum((*blocks[len(extra_sources) :], partial))
                 for name in [k for k in stats if k.startswith(_MEMORY_STAT_PREFIX)]:
                     memory_logs[f"{name}_L{eff}"] = stats.pop(name)
                 has_partial_attn = partial_before is not None
@@ -4090,6 +4124,7 @@ class Transformer(eqx.Module):
         hidden = reshard(mixed.astype(hidden.dtype), _batch_spec())
         if aux_hidden is not None:
             final_stats[_AUX_HIDDEN] = aux_hidden
+        final_stats.update(nitp_logs)
         final_stats["attn_res_z"] = jax.lax.stop_gradient(z_total)
         if cfg.attn_res_z_loss > 0:
             final_stats[_ATTN_RES_Z] = z_total
@@ -4138,6 +4173,7 @@ class Transformer(eqx.Module):
         score the plain next-token loss."""
         hidden, router_metrics = self(token_ids, mask=mask, loop_active=loop_active, route_key=route_key)
         aux_hidden = router_metrics.pop(_AUX_HIDDEN, None)
+        nitp_target = router_metrics.pop(_NITP_TARGET, None)
         attn_res_z = router_metrics.pop(_ATTN_RES_Z, None)
         labels = jnp.pad(token_ids[:, 1:], ((0, 0), (0, 1))).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
@@ -4209,6 +4245,12 @@ class Transformer(eqx.Module):
                 block_sizes=_CE_BLOCK_SIZES,
             )
             loss = loss + self.config.mtp_weight * mtp_loss
+        nitp_loss = nitp_cos = None
+        if self.nitp_w1 is not None and self.nitp_w2 is not None and nitp_target is not None and train_terms:
+            nitp_loss, nitp_cos = _nitp_loss(
+                hidden, nitp_target, self.nitp_w1, self.nitp_w2, loss_weight, _sconv_segment_ids(mask)
+            )
+            loss = loss + self.config.nitp_weight * nitp_loss.astype(loss_dtype)
         if replay_loss is not None and head_replay is not None:
             loss = loss + head_replay.scale.astype(loss_dtype) * replay_loss
         byte_loss = None
@@ -4274,6 +4316,9 @@ class Transformer(eqx.Module):
             if erc_loss is not None:
                 summarized_metrics["train/aux/erc_loss"] = erc_loss
                 summarized_metrics.update(erc_ratios)
+            if nitp_loss is not None:
+                summarized_metrics["train/aux/nitp_loss"] = nitp_loss
+                summarized_metrics["train/aux/nitp_cos"] = nitp_cos
             num_moe_layers = router_metrics["router_z_loss_per_layer"].shape[0]
             summarized_metrics["train/router/z_loss_logging_only"] = (
                 jnp.sum(router_metrics["router_z_loss_per_layer"]) / num_moe_layers
@@ -4289,6 +4334,35 @@ class Transformer(eqx.Module):
 
 
 FINAL_HIDDEN_KEY = "_final_hidden"
+
+
+def _nitp_loss(
+    hidden: Float[Array, "B S D"],
+    target: Float[Array, "B S D"],
+    w1: Float[Array, "D D"],
+    w2: Float[Array, "D D"],
+    loss_weight: Float[Array, "B S"],
+    segment_ids: Int[Array, "B S"] | None,
+) -> tuple[jax.Array, jax.Array]:
+    """NITP (arXiv 2605.24956): ``1 - cos(P(h_t), sg(z_{t+1}))`` averaged over positions whose next token is
+    trained and in the same document. Returns ``(loss, mean cos over the next-token pairs)``."""
+    pred = jnp.einsum(
+        "bsd,de->bse", jax.nn.gelu(jnp.einsum("bsd,de->bse", hidden, w1.astype(hidden.dtype))), w2.astype(hidden.dtype)
+    )
+    next_target = jax.lax.stop_gradient(jnp.pad(target[:, 1:], ((0, 0), (0, 1), (0, 0))))
+    next_target = reshard(next_target, _batch_spec())
+    pred32, next32 = pred.astype(jnp.float32), next_target.astype(jnp.float32)
+    eps = 1e-6
+    cos = jnp.sum(pred32 * next32, axis=-1) * jax.lax.rsqrt(
+        jnp.maximum(jnp.sum(jnp.square(pred32), axis=-1) * jnp.sum(jnp.square(next32), axis=-1), eps)
+    )
+    seq_len = hidden.shape[1]
+    valid = jnp.broadcast_to(jnp.arange(seq_len) < seq_len - 1, loss_weight.shape)
+    if segment_ids is not None:
+        valid = valid & jnp.pad(segment_ids[:, 1:] == segment_ids[:, :-1], ((0, 0), (0, 1)))
+    weight = loss_weight.astype(jnp.float32) * valid.astype(jnp.float32)
+    mean_cos = jnp.sum(cos * weight) / jnp.maximum(jnp.sum(weight), 1.0)
+    return 1.0 - mean_cos, mean_cos
 
 
 def _null_slot_metrics(cfg: GrugModelConfig, routing_counts: Float[Array, "L N"]) -> dict[str, jax.Array]:
