@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Resolve a launch separately from a task-owned Harbor binding."""
+"""Resolve a launch separately from a task-owned Harbor environment configuration."""
 
 from pathlib import Path
 from typing import Any
@@ -12,14 +12,14 @@ from harbor.trial.trial import Trial
 from pydantic import BaseModel, ConfigDict, Field
 
 from taskcompendium.lowering import (
-    BINDING_FILE,
+    ENVIRONMENT_CONFIG_FILE,
     SPECIFICATION_FILE,
     SUBMISSION_CONVENTION_FILE,
-    HarborTaskBinding,
-    read_binding,
+    HarborEnvironmentConfig,
+    read_environment_config,
     read_specification,
     read_submission_convention,
-    validate_binding,
+    validate_environment_config,
 )
 from taskcompendium.submission import AnswerFormat
 
@@ -55,16 +55,16 @@ class ChatLaunch(BaseModel):
 
 async def run_trial(
     task_dir: Path,
-    binding: HarborTaskBinding,
+    environment_config: HarborEnvironmentConfig,
     launch: ReplayLaunch | ActionReplayLaunch | ChatLaunch,
     trials_dir: Path,
     trial_name: str,
 ) -> TrialResult:
     """Run a lowered task and return Harbor's trial result."""
-    if binding != read_binding(task_dir / BINDING_FILE):
-        raise ValueError("Launch binding differs from the exported task binding")
+    if environment_config != read_environment_config(task_dir / ENVIRONMENT_CONFIG_FILE):
+        raise ValueError("Launch environment configuration differs from the exported task")
     specification = read_specification(task_dir / SPECIFICATION_FILE)
-    validate_binding(specification, binding)
+    validate_environment_config(specification, environment_config)
     try:
         convention = read_submission_convention(task_dir / SUBMISSION_CONVENTION_FILE)
     except ValueError:

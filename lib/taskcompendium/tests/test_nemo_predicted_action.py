@@ -13,7 +13,7 @@ import pytest
 
 from taskcompendium.harbor.runner import ActionReplayLaunch, ChatLaunch, ReplayLaunch, run_trial
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256, import_row
-from taskcompendium.lowering import HarborTaskBinding, compatible_lowerings, lower_to_harbor, read_specification
+from taskcompendium.lowering import HarborEnvironmentConfig, compatible_lowerings, lower_to_harbor, read_specification
 from taskcompendium.models import AnswerType, FunctionCall, ToolCallComparatorConfig
 from taskcompendium.predicted_action import compare, decode_action
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
@@ -44,7 +44,7 @@ def test_pinned_nemo_row_keeps_expected_action_private(tmp_path):
     assert [message.role for message in request.messages] == ["system", "user", "assistant", "user"]
     assert request.messages[0].content == row["responses_create_params"]["input"][0]["content"]
     assert request.messages[-1].content == row["responses_create_params"]["input"][-1]["content"]
-    task = lower_to_harbor(specification, convention, HarborTaskBinding(), tmp_path / "task")
+    task = lower_to_harbor(specification, convention, HarborEnvironmentConfig(), tmp_path / "task")
     public = (task / "instruction.md").read_text() + (task / "submission_convention.json").read_text()
     assert row["expected_action"]["arguments"] not in public
     convention_data = json.loads((task / "submission_convention.json").read_text())
@@ -58,7 +58,7 @@ def test_pinned_nemo_row_keeps_expected_action_private(tmp_path):
 def test_exported_nemo_verifier_grades_in_fresh_process(tmp_path):
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
     specification, convention = import_row(row, canonical_sha256(row))
-    task = lower_to_harbor(specification, convention, HarborTaskBinding(), tmp_path / "task")
+    task = lower_to_harbor(specification, convention, HarborEnvironmentConfig(), tmp_path / "task")
     script = (
         "import json, sys; from pathlib import Path; "
         "from taskcompendium.grading import grade_answer; "
@@ -105,7 +105,7 @@ def test_predicted_action_rejects_invalid_expected_arguments(arguments):
 def test_predicted_action_rejects_crafted_message_target_on_private_read(tmp_path):
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
     specification, convention = import_row(row, canonical_sha256(row))
-    task = lower_to_harbor(specification, convention, HarborTaskBinding(), tmp_path / "task")
+    task = lower_to_harbor(specification, convention, HarborEnvironmentConfig(), tmp_path / "task")
     data = json.loads((task / "specification.json").read_text())
     data["verifier"]["parameters"] = {"expected_message": "Any response"}
     (task / "specification.json").write_text(json.dumps(data))
@@ -117,7 +117,7 @@ def test_predicted_action_rejects_crafted_message_target_on_private_read(tmp_pat
 def test_predicted_action_rejects_boolean_numeric_tolerance_on_private_read(tmp_path):
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
     specification, convention = import_row(row, canonical_sha256(row))
-    task = lower_to_harbor(specification, convention, HarborTaskBinding(), tmp_path / "task")
+    task = lower_to_harbor(specification, convention, HarborEnvironmentConfig(), tmp_path / "task")
     data = json.loads((task / "specification.json").read_text())
     data["verifier"]["parameters"]["numeric_tolerance"] = True
     (task / "specification.json").write_text(json.dumps(data))
@@ -131,13 +131,13 @@ def test_predicted_action_rejects_instruction_message_drift(tmp_path):
     specification, convention = import_row(row, canonical_sha256(row))
     changed = specification.model_copy(update={"instructions": "Changed instruction"})
 
-    assert compatible_lowerings(changed, (convention,), (HarborTaskBinding(),)) == ()
+    assert compatible_lowerings(changed, (convention,), (HarborEnvironmentConfig(),)) == ()
 
     with pytest.raises(ValueError, match="differ from source messages"):
         lower_to_harbor(
             changed,
             convention,
-            HarborTaskBinding(),
+            HarborEnvironmentConfig(),
             tmp_path / "task",
         )
     assert not (tmp_path / "task").exists()
@@ -147,10 +147,10 @@ def test_predicted_action_reuses_final_action_convention_without_changing_source
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
     specification, _ = import_row(row, canonical_sha256(row))
     convention = SubmissionConvention(id="generic-final-action", answer_format=AnswerFormat.FINAL_ACTION)
-    candidates = compatible_lowerings(specification, (convention,), (HarborTaskBinding(),))
+    candidates = compatible_lowerings(specification, (convention,), (HarborEnvironmentConfig(),))
 
     assert len(candidates) == 1
-    task = lower_to_harbor(specification, convention, HarborTaskBinding(), tmp_path / "task")
+    task = lower_to_harbor(specification, convention, HarborEnvironmentConfig(), tmp_path / "task")
     exported = read_specification(task / "specification.json")
     assert exported.native_action_request == specification.native_action_request
 
@@ -188,10 +188,10 @@ def test_predicted_action_reuses_final_action_convention_without_changing_source
 async def test_predicted_action_harbor_replay_outcomes(tmp_path, response, reward, status):
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
     specification, convention = import_row(row, canonical_sha256(row))
-    binding = HarborTaskBinding()
-    task = lower_to_harbor(specification, convention, binding, tmp_path / "task")
+    environment_config = HarborEnvironmentConfig()
+    task = lower_to_harbor(specification, convention, environment_config, tmp_path / "task")
 
-    result = await run_trial(task, binding, ActionReplayLaunch(response=response), tmp_path / "trials", "run")
+    result = await run_trial(task, environment_config, ActionReplayLaunch(response=response), tmp_path / "trials", "run")
 
     outcome = json.loads((tmp_path / "trials/run/verifier/taskcompendium-result.json").read_text())
     assert (outcome["status"], outcome["reward"]) == (status, reward)
@@ -206,11 +206,11 @@ async def test_predicted_action_harbor_replay_outcomes(tmp_path, response, rewar
 async def test_predicted_action_rejects_text_replay_before_trial(tmp_path):
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
     specification, convention = import_row(row, canonical_sha256(row))
-    binding = HarborTaskBinding()
-    task = lower_to_harbor(specification, convention, binding, tmp_path / "task")
+    environment_config = HarborEnvironmentConfig()
+    task = lower_to_harbor(specification, convention, environment_config, tmp_path / "task")
 
     with pytest.raises(ValueError, match="Text replay requires a plain or JSON task"):
-        await run_trial(task, binding, ReplayLaunch(response="text"), tmp_path / "trials", "run")
+        await run_trial(task, environment_config, ReplayLaunch(response="text"), tmp_path / "trials", "run")
     assert not (tmp_path / "trials").exists()
 
 
@@ -218,8 +218,8 @@ async def test_predicted_action_chat_requests_native_output_without_dispatch(tmp
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
     specification, _ = import_row(row, canonical_sha256(row))
     convention = SubmissionConvention(id="generic-final-action", answer_format=AnswerFormat.FINAL_ACTION)
-    binding = HarborTaskBinding()
-    task = lower_to_harbor(specification, convention, binding, tmp_path / "task")
+    environment_config = HarborEnvironmentConfig()
+    task = lower_to_harbor(specification, convention, environment_config, tmp_path / "task")
     requests = []
     monkeypatch.setenv("NEMO_TEST_API_KEY", "test-token")
 
@@ -231,7 +231,7 @@ async def test_predicted_action_chat_requests_native_output_without_dispatch(tmp
     monkeypatch.setattr("taskcompendium.harbor.adapter.urllib.request.urlopen", respond)
     result = await run_trial(
         task,
-        binding,
+        environment_config,
         ChatLaunch(model="model", api_base="https://example.invalid", api_key_env="NEMO_TEST_API_KEY"),
         tmp_path / "trials",
         "run",
