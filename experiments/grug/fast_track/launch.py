@@ -559,7 +559,7 @@ def build_h100_ladder_run(
 _WANDB_PROJECT = "marin_moe"
 
 
-def _submit_to_cluster(run_id: str, target_cluster: str | None, priority: str) -> None:
+def _submit_to_cluster(run_id: str, target_cluster: str | None, priority: str, job_env: tuple[str, ...]) -> None:
     """Re-exec this launcher as an Iris H100 job: wrap the same launcher args in ``iris job run ... --
     python -m ...launch <args> --run``. Replaces the old ``irun`` shell wrapper. Never returns."""
     launch_args = [a for a in sys.argv[1:] if a != "--submit"]
@@ -590,6 +590,7 @@ def _submit_to_cluster(run_id: str, target_cluster: str | None, priority: str) -
         "-e",
         "WANDB_PROJECT",
         _WANDB_PROJECT,
+        *_job_env_args(job_env),
         "--",
         "python",
         "-m",
@@ -599,6 +600,18 @@ def _submit_to_cluster(run_id: str, target_cluster: str | None, priority: str) -
     printable = " ".join(shlex.quote("$WANDB_API_KEY" if c == wandb_key else c) for c in cmd)
     click.echo(f"submitting: {printable}", err=True)
     os.execvp(cmd[0], cmd)
+
+
+def _job_env_args(job_env: tuple[str, ...]) -> list[str]:
+    """``iris job run -e KEY VALUE`` pairs for ``--job-env KEY=VALUE`` (the dispatcher forwards ``XLA_*`` and friends
+    from the coordinator to the train child)."""
+    args = []
+    for item in job_env:
+        key, sep, value = item.partition("=")
+        if not sep or not key:
+            raise click.BadParameter(f"--job-env needs KEY=VALUE, got {item!r}")
+        args += ["-e", key, value]
+    return args
 
 
 @click.command()
@@ -746,6 +759,11 @@ def _submit_to_cluster(run_id: str, target_cluster: str | None, priority: str) -
     help="Iris scheduling priority for --submit.",
 )
 @click.option(
+    "--job-env",
+    multiple=True,
+    help="Environment variable for the submitted job, KEY=VALUE (repeatable; e.g. XLA_PYTHON_CLIENT_MEM_FRACTION=0.9).",
+)
+@click.option(
     "--submit",
     is_flag=True,
     help="Submit as an Iris H100 job (wraps this launcher in `iris job run`); without it the "
@@ -787,11 +805,12 @@ def main(
     model_set: tuple[str, ...],
     opt_set: tuple[str, ...],
     priority: str,
+    job_env: tuple[str, ...],
     submit: bool,
     target_cluster: str | None,
 ) -> ArtifactStep[ThroughputResult]:
     if submit:
-        _submit_to_cluster(run_id, target_cluster, priority)  # re-execs iris; never returns
+        _submit_to_cluster(run_id, target_cluster, priority, job_env)  # re-execs iris; never returns
     return build_h100_ladder_run(
         run_id=run_id,
         size=size,
