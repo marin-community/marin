@@ -8,11 +8,9 @@ import json
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from taskcompendium.grading import GradeResult, GradingAttempt, Outcome, Verifier
-from taskcompendium.models import FunctionCall, ToolCallComparatorConfig, VerifierSpec
+from taskcompendium.models import FunctionCall, ToolCallComparatorConfig, VerifierKind, VerifierSpec
 from taskcompendium.predicted_action import compare, decode_action, parse_arguments
 from taskcompendium.submission import AnswerFormat
-
-KIND = "nemo_predicted_action"
 
 
 class FunctionCallPayload(BaseModel):
@@ -71,4 +69,4 @@ def predicted_action_verifier(expected_calls: tuple[FunctionCall, ...]) -> Verif
     verifier = PredictedActionVerifier(
         expected_calls=tuple(FunctionCallPayload(name=call.name, arguments=call.arguments) for call in expected_calls)
     )
-    return VerifierSpec(kind=KIND, parameters_json=verifier.model_dump_json())
+    return VerifierSpec(kind=VerifierKind.NEMO_PREDICTED_ACTION, parameters_json=verifier.model_dump_json())
