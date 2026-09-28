@@ -314,6 +314,11 @@ async def test_chat_trial_resolves_key_at_runtime_without_persisting_it(
     assert all(secret not in path.read_text() for path in artifacts)
 
 
+def test_chat_launch_rejects_raw_key():
+    with pytest.raises(ValueError, match="api_key"):
+        ChatLaunch(model="fixture-model", api_base="https://example.com/v1", api_key="secret")
+
+
 async def test_chat_http_error_preserves_server_diagnostic(tmp_path, specification, chat_endpoint):
     chat_endpoint.status = 400
     chat_endpoint.body = b'{"error":"model unavailable"}'
