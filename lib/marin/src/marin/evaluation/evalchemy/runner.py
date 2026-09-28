@@ -28,8 +28,14 @@ from marin.evaluation.evalchemy.runtime import (
 )
 from marin.evaluation.evaluation_config import EvalTaskConfig, eval_task_directory
 from marin.evaluation.lm_eval_samples import rebuild_lm_eval_samples, summarize_native_eval_samples
-from marin.evaluation.metric_selection import declared_metric
-from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, EvalTaskRef, RunStatus, TaskCoverage
+from marin.evaluation.metric_selection import REPEAT_MEAN_SUFFIX, declared_metric
+from marin.evaluation.records import (
+    EVALCHEMY_INFRASTRUCTURE_ERROR,
+    BenchmarkMetadataRef,
+    EvalTaskRef,
+    RunStatus,
+    TaskCoverage,
+)
 from marin.evaluation.rollouts import normalize_rollouts
 from marin.evaluation.runner import EvaluationError, EvaluationOutcome
 from marin.inference.iris import RemoteInferenceSession
@@ -179,15 +185,26 @@ def _apply_recovered_canonical_metrics(
     tasks: tuple[EvalTaskRef, ...],
 ) -> None:
     """Project recovered source metrics through the evaluator-recorded vocabulary."""
-    benchmarks = {task.benchmark.task: task.benchmark for task in tasks if task.benchmark is not None}
+    benchmarks: dict[str, BenchmarkMetadataRef] = {}
+    by_directory: dict[str, list[BenchmarkMetadataRef]] = {}
+    for task in tasks:
+        if task.benchmark is None:
+            continue
+        directory = eval_task_directory(task.name, task.num_fewshot, task.task_alias)
+        benchmarks[f"{directory}/{task.benchmark.task}"] = task.benchmark
+        by_directory.setdefault(directory, []).append(task.benchmark)
     for task_key, recovered in recovered_metrics.items():
-        benchmark = benchmarks.get(task_key.rsplit("/", 1)[-1])
+        benchmark = benchmarks.get(task_key)
+        if benchmark is None and len(by_directory.get(task_key, ())) == 1:
+            benchmark = by_directory[task_key][0]
         if benchmark is None:
             canonical_metrics.pop(task_key, None)
             continue
         normalized: dict[str, float] = {}
         for metric in benchmark.metrics:
             picked = declared_metric(recovered, metric.source_name)
+            if picked is None and metric.source_name.endswith(REPEAT_MEAN_SUFFIX):
+                picked = declared_metric(recovered, metric.source_name.removesuffix(REPEAT_MEAN_SUFFIX))
             if picked is not None:
                 normalized[metric.name] = picked[1]
         if normalized:

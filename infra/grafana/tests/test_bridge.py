@@ -8,6 +8,7 @@ import threading
 from datetime import UTC, datetime, timedelta
 
 import duckdb
+import httpx
 import pyarrow as pa
 import pytest
 from cache import TtlCache
@@ -27,9 +28,11 @@ from finelog.errors import QueryResultTooLargeError, StatsError
 from finelog_health import FinelogHealth, FinelogRole
 from github_source import GithubSource
 from hero_health import (
+    EvalHistory,
     MetricSignal,
     RunSignals,
     WatchedRun,
+    eval_history,
     health_alert_rows,
     optimizer_alert_rows,
     signal_query,
@@ -52,7 +55,7 @@ from rl_producers import RL_PRODUCER_NAMESPACES
 from server import create_app, workload_overview
 from starlette.testclient import TestClient
 from training_stalls import telemetry_query, training_stall_alert_rows
-from wandb_source import WandbSource
+from wandb_source import LoggedPoint, WandbSource
 from zephyr_stalls import zephyr_progress_query, zephyr_stall_alert_rows
 
 # 2026-07-17T03:00:00Z and +1h, as Grafana sends them.
@@ -883,8 +886,6 @@ def _signals(now: datetime, metrics: dict[str, dict], run_id: str = "hero-a") ->
         name: MetricSignal(
             latest=values["latest"],
             observed_at=values.get("observed_at", now - timedelta(seconds=30)),
-            previous=values.get("previous"),
-            two_samples_ago=values.get("two_samples_ago"),
             recent_samples=values.get("recent_samples", 0),
             recent_total=values.get("recent_total", 0.0),
             recent_below_floor=values.get("recent_below_floor", 0),
@@ -922,7 +923,7 @@ def test_run_health_watches_a_run_whose_iris_state_row_went_stale():
     assert [(run.run_id, run.iris_running) for run in runs] == [("hero-a", False)]
 
     signals = _signals(now, {"phase": {"latest": 1.0}})
-    assert "iris_state_stale" in _reasons(health_alert_rows(runs, signals, pa.table({}), now))
+    assert "iris_state_stale" in _reasons(health_alert_rows(runs, signals, pa.table({}), {}, now))
 
 
 def test_watched_run_keeps_an_old_phase_execution_without_phase_only_enrollment():
@@ -1099,17 +1100,75 @@ def test_health_alert_reads_routing_throughput_and_evaluation():
             "train_router_bias_max": {"latest": 120.0},
             "throughput_tokens_per_second": {"latest": 1.4e6, "recent_samples": 100, "recent_below_floor": 62},
             "throughput_mfu": {"latest": 31.0, "recent_samples": 100, "recent_below_floor": 4},
-            "eval_dropless_paloma_macro_loss": {"latest": 2.31, "previous": 2.17},
         },
     )
+    evaluations = {"hero-a": EvalHistory(losses=(2.17, 2.31), latest_at=now - timedelta(minutes=10))}
 
-    assert _reasons(health_alert_rows((_watched(),), signals, pa.table({}), now)) == {
+    assert _reasons(health_alert_rows((_watched(),), signals, pa.table({}), evaluations, now)) == {
         "token_drops",
         "router_entropy",
         "router_bias",
         "throughput_low",
         "eval_regressed",
     }
+
+
+@pytest.mark.parametrize("failure", ["timeout", "run-error"])
+def test_health_endpoint_limits_wandb_failures_to_eligible_runs(monkeypatch, failure):
+    now = datetime.now(UTC)
+    phases = {
+        "hero-a-initializing": (0.0, now),
+        "hero-b-silent": (1.0, now - timedelta(minutes=20)),
+        "hero-c-training": (1.0, now),
+        "hero-d-training": (1.0, now),
+    }
+
+    class HealthSource(FakeSource):
+        def query(self, sql: str, *, max_rows: int) -> pa.Table:
+            if '"iris.task_state"' in sql or '"iris.task_event"' in sql:
+                return pa.table({})
+            run_fields = dict(cluster="cw-a", execution_uid="attempt-1")
+            if "newest.latest_value" in sql:
+                return pa.Table.from_pylist(
+                    [
+                        dict(
+                            run_fields,
+                            run_id=run_id,
+                            name=metric,
+                            latest_value=value,
+                            observed_at=stamp,
+                            recent_samples=1,
+                            recent_total=value,
+                            recent_below_floor=0,
+                        )
+                        for run_id, (phase, stamp) in phases.items()
+                        for metric, value in [("phase", phase), ("train_router_routing_entropy_mean", 0.0)]
+                    ]
+                )
+            return pa.Table.from_pylist(
+                [
+                    dict(run_fields, run_id=run_id, telemetry_job=f"/u/{run_id}-coord/train", phase_at=stamp)
+                    for run_id, (_, stamp) in phases.items()
+                ]
+            )
+
+    requested_runs = []
+
+    def post(client, url, *, json):
+        requested_runs.append(json["variables"]["run"])
+        if failure == "timeout":
+            raise httpx.ReadTimeout("W&B timed out")
+        return httpx.Response(200, json={"errors": [{"message": "run inaccessible"}]})
+
+    monkeypatch.setattr(httpx.Client, "post", post)
+    response = _client(HealthSource()).get("/finelog/marin/alerts/training_health")
+
+    assert response.status_code == 200
+    assert {(row["run"], row["reason"]) for row in response.json() if row["value"]} == {
+        ("hero-c-training", "router_entropy"),
+        ("hero-d-training", "router_entropy"),
+    }
+    assert requested_runs == (["hero-c-training", "hero-d-training"] if failure == "run-error" else ["hero-c-training"])
 
 
 @pytest.mark.parametrize(
@@ -1125,15 +1184,34 @@ def test_eval_regression_uses_two_eval_history_and_two_percent_jump(
     latest: float, previous: float, two_samples_ago: float, should_alert: bool
 ):
     now = datetime(2026, 8, 21, 12, tzinfo=UTC)
-    evaluation = {
-        "latest": latest,
-        "previous": previous,
-        "two_samples_ago": two_samples_ago,
+    evaluations = {
+        "hero-a": EvalHistory(losses=(two_samples_ago, previous, latest), latest_at=now - timedelta(minutes=10))
     }
-    signals = _signals(now, {"eval_dropless_paloma_macro_loss": evaluation})
 
-    reasons = _reasons(health_alert_rows((_watched(),), signals, pa.table({}), now))
+    reasons = _reasons(health_alert_rows((_watched(),), _signals(now, {}), pa.table({}), evaluations, now))
     assert ("eval_regressed" in reasons) is should_alert
+
+
+def test_eval_regression_compares_a_forks_first_evaluation_with_its_parents():
+    # W&B gives a forked run its parent's evaluations up to the branch, so the first
+    # evaluation after a hero relaunch has a history to regress against.
+    now = datetime(2026, 8, 21, 12, tzinfo=UTC)
+    stamp = (now - timedelta(minutes=10)).timestamp()
+    parent_then_fork = [
+        LoggedPoint(step=140_999, value=2.19, timestamp=stamp - 90_000),
+        LoggedPoint(step=143_999, value=2.19, timestamp=stamp - 45_000),
+        LoggedPoint(step=146_999, value=2.26, timestamp=stamp),
+    ]
+    evaluations = {"hero-a": eval_history(parent_then_fork)}
+
+    reasons = _reasons(health_alert_rows((_watched(),), _signals(now, {}), pa.table({}), evaluations, now))
+    assert "eval_regressed" in reasons
+
+    # An evaluation older than the freshness window no longer describes the run.
+    stale = {"hero-a": EvalHistory(losses=(2.19, 2.19, 2.26), latest_at=now - timedelta(hours=1))}
+    assert "eval_regressed" not in _reasons(
+        health_alert_rows((_watched(),), _signals(now, {}), pa.table({}), stale, now)
+    )
 
 
 def test_throughput_floor_needs_most_of_the_window_below_it():
@@ -1145,7 +1223,7 @@ def test_throughput_floor_needs_most_of_the_window_below_it():
 
     for tokens_per_second in (one_slow_step, barely_sampled):
         signals = _signals(now, {"throughput_tokens_per_second": tokens_per_second})
-        assert _reasons(health_alert_rows((_watched(),), signals, pa.table({}), now)) == set()
+        assert _reasons(health_alert_rows((_watched(),), signals, pa.table({}), {}, now)) == set()
 
 
 def test_health_alert_announces_a_controller_retry_on_the_run_that_owns_the_task():
@@ -1156,7 +1234,7 @@ def test_health_alert_announces_a_controller_retry_on_the_run_that_owns_the_task
     )
     signals = _signals(now, {"phase": {"latest": 1.0}})
 
-    assert _reasons(health_alert_rows((_watched(),), signals, retries, now)) == {"task_retried"}
+    assert _reasons(health_alert_rows((_watched(),), signals, retries, {}, now)) == {"task_retried"}
 
 
 def test_run_health_alerts_stay_quiet_for_a_run_that_is_not_training():
@@ -1172,7 +1250,7 @@ def test_run_health_alerts_stay_quiet_for_a_run_that_is_not_training():
 
     for phase in phases:
         signals = _signals(now, {**phase, **drops})
-        assert _reasons(health_alert_rows((_watched(),), signals, pa.table({}), now)) == set()
+        assert _reasons(health_alert_rows((_watched(),), signals, pa.table({}), {}, now)) == set()
 
 
 def test_iris_state_stale_needs_a_state_row_that_went_stale():
@@ -1182,7 +1260,7 @@ def test_iris_state_stale_needs_a_state_row_that_went_stale():
     signals = _signals(now, {})
 
     never_published = _watched(iris_running=False, iris_state_age=None)
-    assert _reasons(health_alert_rows((never_published,), signals, pa.table({}), now)) == set()
+    assert _reasons(health_alert_rows((never_published,), signals, pa.table({}), {}, now)) == set()
 
 
 def test_run_health_alerts_return_an_explicit_zero_without_a_watched_run():
@@ -1192,7 +1270,7 @@ def test_run_health_alerts_return_an_explicit_zero_without_a_watched_run():
 
     assert telemetry_alert_rows((), {}, now) == [fleet]
     assert optimizer_alert_rows((), {}, pa.table({}), now) == [fleet]
-    assert health_alert_rows((), {}, pa.table({}), now) == [fleet]
+    assert health_alert_rows((), {}, pa.table({}), {}, now) == [fleet]
 
 
 def _signal_database(samples: list[tuple[str, str, float, datetime, int]]) -> duckdb.DuckDBPyConnection:
@@ -1234,10 +1312,6 @@ def test_signal_query_reduces_the_newest_sample_and_the_health_window():
             ("attempt-1", "throughput_tokens_per_second", 0.1e6, now - timedelta(minutes=40), 0),
             ("attempt-1", "optim_skipped_step", 1.0, now - timedelta(minutes=9), 4),
             ("attempt-1", "optim_skipped_step", 1.0, now - timedelta(minutes=2), 5),
-            # Hours apart, so only the eval lookback keeps the comparison history.
-            ("attempt-1", "eval_dropless_paloma_macro_loss", 2.19, now - timedelta(hours=12), 9),
-            ("attempt-1", "eval_dropless_paloma_macro_loss", 2.17, now - timedelta(hours=6), 6),
-            ("attempt-1", "eval_dropless_paloma_macro_loss", 2.31, now - timedelta(minutes=12), 7),
         ]
     )
 
@@ -1248,8 +1322,6 @@ def test_signal_query_reduces_the_newest_sample_and_the_health_window():
     throughput = signals["throughput_tokens_per_second"]
     assert (throughput.latest, throughput.recent_samples, throughput.recent_below_floor) == (2.6e6, 3, 2)
     assert signals["optim_skipped_step"].recent_total == 2.0
-    evaluation = signals["eval_dropless_paloma_macro_loss"]
-    assert (evaluation.latest, evaluation.previous, evaluation.two_samples_ago) == (2.31, 2.17, 2.19)
 
 
 def test_signal_query_reduces_one_task_attempt_at_a_time():

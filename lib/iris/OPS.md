@@ -388,7 +388,7 @@ Iris compares JAX compile keys across participating GPU processes before a multi
 
 GPU environments set `NCCL_RAS_ENABLE=1`, `NCCL_DEBUG=INFO`, and `NCCL_DEBUG_SUBSYS=INIT,BOOTSTRAP,ENV,NET,GRAPH,TUNING,RAS`. The default timestamp is `[%F %T.%3f]`. Short debug-smoke jobs may additionally select `COLL,PROXY,NVLS,REG`; do not use `TRACE` or `CALL` for normal runs.
 
-GPU Levanter runs persist NCCL's job-global communicator view from JAX process 0 every two minutes. The probe is bounded and records unavailable, failed, and timed-out polls explicitly. See [`docs/ops/training-stall-alert-contract.md`](../../docs/ops/training-stall-alert-contract.md#nccl-ras-snapshots) for metric semantics and a bounded Finelog query.
+GPU Levanter runs persist NCCL's job-global communicator view from JAX process 0 every ten minutes. The probe is bounded and records unavailable, failed, and timed-out polls explicitly. See [`docs/ops/training-stall-alert-contract.md`](../../docs/ops/training-stall-alert-contract.md#nccl-ras-snapshots) for metric semantics and a bounded Finelog query.
 
 For a read-only one-shot check, first confirm the target task is `RUNNING`; a `BUILDING` task has no NCCL listener. Query from the task's own container and network namespace:
 

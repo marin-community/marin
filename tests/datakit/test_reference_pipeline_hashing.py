@@ -14,8 +14,10 @@ import json
 
 import pytest
 from marin.execution.step_spec import StepSpec
+from marin.processing.classification.deduplication.cluster_text import ClusterTextParams
 from marin.processing.classification.deduplication.fuzzy_dups import compute_fuzzy_dups_attrs_step
 from marin.processing.classification.deduplication.fuzzy_minhash import compute_minhash_attrs_step
+from marin.processing.classification.deduplication.large_clusters import LargeClusterParams
 
 from experiments.datakit import reference_pipeline
 from experiments.datakit.reference_pipeline import (
@@ -183,6 +185,17 @@ def test_external_path_requires_version_tag():
         )
 
 
+def test_fuzzy_plan_threshold_cannot_exceed_text_cap():
+    fuzzy = dataclasses.replace(
+        SMOKE_SCALE.fuzzy,
+        plan=LargeClusterParams(minimum_size=11),
+        text=ClusterTextParams(max_cluster_size=10),
+    )
+
+    with pytest.raises(ValueError, match=r"minimum_size \(11\).*max_cluster_size \(10\)"):
+        _build(scale=dataclasses.replace(SMOKE_SCALE, fuzzy=fuzzy))
+
+
 def test_quality_model_version_not_path_drives_identity():
     # Same model bytes staged at two region paths, same version tag -> one output path.
     def quality_hash(model_dir: str) -> str:
@@ -232,3 +245,38 @@ def test_dedup_step_builders_match_the_datakit_graph_identity():
         name: step.hash_id for name, step in graph.minhash.items()
     }
     assert dedup.hash_id == graph.fuzzy_dedup.hash_id
+
+
+@pytest.mark.parametrize("parameter", ["plan", "text", "rule", "limits"])
+def test_cluster_parameters_rekey_verification_and_store(parameter):
+    base = _steps_by_name(_build())
+    fuzzy = SMOKE_SCALE.fuzzy
+    updates = {
+        "plan": {"stride": 128},
+        "text": {"split_subdivisions": 8},
+        "rule": {"minimum_containment": 0.8},
+        "limits": {"maximum_document_chars": 1024},
+    }
+    changed_params = getattr(fuzzy, parameter).model_copy(update=updates[parameter])
+    changed_scale = dataclasses.replace(SMOKE_SCALE, fuzzy=dataclasses.replace(fuzzy, **{parameter: changed_params}))
+    changed = _steps_by_name(_build(scale=changed_scale))
+
+    assert changed["datakit/dedup"].hash_id == base["datakit/dedup"].hash_id
+    assert changed["datakit/verify_fuzzy_clusters"].hash_id != base["datakit/verify_fuzzy_clusters"].hash_id
+    assert changed["datakit/store"].hash_id != base["datakit/store"].hash_id
+
+
+def test_fuzzy_source_exemptions_rekey_only_the_store():
+    base = _steps_by_name(_build())
+    store = dataclasses.replace(SMOKE_SCALE.store, fuzzy_exempt_sources=("a",))
+    changed = _steps_by_name(_build(scale=dataclasses.replace(SMOKE_SCALE, store=store)))
+
+    assert changed["datakit/store"].hash_id != base["datakit/store"].hash_id
+    assert changed["datakit/verify_fuzzy_clusters"].hash_id == base["datakit/verify_fuzzy_clusters"].hash_id
+
+
+def test_unknown_fuzzy_exemption_fails_before_building_the_pipeline():
+    store = dataclasses.replace(SMOKE_SCALE.store, fuzzy_exempt_sources=("misspelled-source",))
+
+    with pytest.raises(ValueError, match=r"Unknown fuzzy-exempt sources.*misspelled-source"):
+        _build(scale=dataclasses.replace(SMOKE_SCALE, store=store))

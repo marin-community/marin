@@ -89,6 +89,7 @@ from collections.abc import Callable, Hashable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
+from http import HTTPStatus
 
 import pyarrow as pa
 import uvicorn
@@ -116,8 +117,11 @@ from finelog_source import FinelogSource, MetricSource
 from github_app import GithubAppAuth
 from github_source import GithubSource
 from hero_health import (
+    EVAL_HISTORY_LENGTH,
+    EvalHistory,
     Signals,
     WatchedRun,
+    eval_history,
     health_alert_rows,
     optimizer_alert_rows,
     retry_event_query,
@@ -125,6 +129,7 @@ from hero_health import (
     signal_query,
     signals_by_run,
     telemetry_alert_rows,
+    training_runs,
     watched_runs,
 )
 from hero_runs import (
@@ -171,7 +176,7 @@ from vllm_observability import (
     vllm_run_summary_samples_query,
     vllm_run_summary_table,
 )
-from wandb_source import WandbSource
+from wandb_source import EVAL_LOSS_METRIC, WandbSource
 from zephyr_observability import zephyr_overview_dataset
 from zephyr_stalls import zephyr_progress_query, zephyr_stall_alert_rows
 
@@ -998,6 +1003,31 @@ def create_app(
             lambda: source.query(loss_window_query(now, runs, executions), max_rows=config.max_rows),
         )
 
+    def hero_evaluations(runs: tuple[WatchedRun, ...]) -> dict[str, EvalHistory]:
+        """Each watched run's recent evaluation history from W&B, keyed by run ID.
+
+        Run-specific failures skip that run. Transport failures stop further
+        lookups so a W&B outage does not cost one timeout per run.
+        """
+        evaluations = {}
+        for run_id in sorted({run.run_id for run in runs}):
+            try:
+                points = wandb_cache.get_or_compute(
+                    ("hero_evaluations", run_id),
+                    lambda run_id=run_id: wandb_source.recent_points(
+                        run_id, metric=EVAL_LOSS_METRIC, count=EVAL_HISTORY_LENGTH
+                    ),
+                )
+            except UpstreamError as err:
+                logger.warning("W&B evaluation history for %s unavailable: %s", run_id, err)
+                if err.status_code == HTTPStatus.GATEWAY_TIMEOUT:
+                    break
+                continue
+            history = eval_history(points)
+            if history is not None:
+                evaluations[run_id] = history
+        return evaluations
+
     def finelog_alert_endpoint(name: str, project, unavailable_rows) -> JSONResponse:
         """Serve one finelog-backed alert projection under the hub's cache and error contract."""
         now = datetime.now(UTC)
@@ -1072,12 +1102,14 @@ def create_app(
             retry_events = (
                 hero_query("hero_retry_events", now, target, lambda: retry_event_query(now)) if runs else pa.table({})
             )
-            return health_alert_rows(runs, hero_signals(target, now, runs), retry_events, now)
+            signals = hero_signals(target, now, runs)
+            evaluations = hero_evaluations(training_runs(runs, signals, now))
+            return health_alert_rows(runs, signals, retry_events, evaluations, now)
 
         return finelog_alert_endpoint(
             "training_health",
             project,
-            lambda now: health_alert_rows((), {}, pa.table({}), now),
+            lambda now: health_alert_rows((), {}, pa.table({}), {}, now),
         )
 
     def finelog_alerts_zephyr_stalls(_: Request) -> JSONResponse:
