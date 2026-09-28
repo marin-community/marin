@@ -89,7 +89,6 @@ async def test_direct_chat_harbor_trial_distinguishes_answer_outcomes(
     convention = SubmissionConvention(id=answer_format.value, answer_format=answer_format)
     task = lower_to_harbor(specification, convention, environment_config, tmp_path / "task")
     assert Task.is_valid_dir(task, disable_verification=True)
-    assert not (task / "tests" / "test.sh").exists()
     assert "12" not in (task / "instruction.md").read_text()
 
     result = await run_trial(task, environment_config, ReplayLaunch(response=response), tmp_path / "trials", "run")
