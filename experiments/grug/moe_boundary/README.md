@@ -224,8 +224,20 @@ median is the stable estimate:
 | d512 α=0.707 | 3.5459 | 434,647 | — | [moe_boundary_compute_opt_d512_ep1_alpha0.707_matched](https://wandb.ai/marin-community/marin_moe/runs/moe_boundary_compute_opt_d512_ep1_alpha0.707_matched) |
 | d768 α=1.0 | **3.2186** | 292,513 | 1.050 | [moe_boundary_compute_opt_d768_ep1_alpha1_matched](https://wandb.ai/marin-community/marin_moe/runs/moe_boundary_compute_opt_d768_ep1_alpha1_matched) |
 | d1024 α=1.0 | **3.0129** | 222,003 | 1.061 | [moe_boundary_compute_opt_d1024_ep1_alpha1_matched](https://wandb.ai/marin-community/marin_moe/runs/moe_boundary_compute_opt_d1024_ep1_alpha1_matched) |
-| d1280 α=1.0 | **2.8792** | 160,661 | 0.987 | [moe_boundary_compute_opt_d1280_ep1_alpha1_matched](https://wandb.ai/marin-community/marin_moe/runs/moe_boundary_compute_opt_d1280_ep1_alpha1_matched) |
-| README baselines | 3.5422 / 3.2273 / 3.0195 / 2.8857 | 434,807 / 294,843 / 219,744 / 171,910 | — | — |
+| d1280 α=1.0 | **2.8792** | 160,661 | 1.054* | [moe_boundary_compute_opt_d1280_ep1_alpha1_matched](https://wandb.ai/marin-community/marin_moe/runs/moe_boundary_compute_opt_d1280_ep1_alpha1_matched) |
+| README baselines | 3.5422 / 3.2273 / 3.0195 / 2.8857 | 434,807 / 294,843 / 219,744 / 160,924* | — | — |
+
+*The d1280 baseline throughput is from a same-stack probe, not the June
+README run: a 64-step boundary-off rerun of the d1280 cell
+([moe_baseline_probe_d1280_ep1](https://wandb.ai/marin-community/marin_moe/runs/moe_baseline_probe_d1280_ep1),
+September 28, `launch_baseline_probe.py`) measured 160,924 tok/s median,
+vs 171,910 for the June README run. The June baseline ran jax 0.9.2 /
+libtpu 0.0.39; September runs use jax 0.11.1 / libtpu 0.0.46, and that
+stack is ~6.4% slower for this cell. Same-stack, the variant is at parity
+with the baseline (160,661 vs 160,924, −0.16%) and the effective speedup
+is 1.054. The d512–d1024 rows compare September variants to June baselines
+across the same stack boundary; there the variants beat the June baselines
+outright, so those speedups are not inflated by the drift.
 
 Matched-pair training curves (d1280): [W&B report — variant vs baseline](https://wandb.ai/marin-community/marin_moe/reports/moe_boundary-d1280-matched-pair:-variant-vs-baseline--VmlldzoxODAyMDY5MQ==).
 
@@ -237,30 +249,31 @@ Reading:
   variant's loss curve is ahead of the baseline's at every eval point from
   step 2000 onward at d1280. α=1.0 stays the representative (α=0.707 loses
   at d512).
-- **Gate 1 passes (d512 1.005, d768 1.050).** With median-based throughput
-  the earlier "d512 fails on throughput" reading was a tail-contamination
-  artifact: the operator costs ~0% at d512–d1024 (+0.2%/−0.8%/+1.0%), not
-  the −9.4% the last-200 averages suggested.
-- **Gate 2 fails, on both criteria, but narrowly.** (a) d1280 effective
-  speedup is 0.987: the variant wins loss (−0.0065) but pays −6.5%
-  steady-state throughput at 3.46e19 FLOPs — the only scale with a real
-  throughput gap; see the d1280 anomaly note below. (b) The 4-point refit
-  `1.6 + 83.40·C^−0.0929` (α SE 0.0007) extrapolates to +0.0026 worse at
-  1e21 and +0.0052 worse at 1e23 vs the baseline law `1.6 + 88.32·C^−0.0941`,
-  despite the variant beating the baseline law at all four measured points
-  (−0.0155/−0.0033/−0.0065/−0.0015). Cell residuals (±0.004) are the same
-  order as the projection deltas, so the extrapolation flip is not
-  resolved by this data.
-- **d1280 throughput anomaly (−6.5%).** Real and compute-bound: step duration
-  6.53 vs 6.10 s, identical logged FLOPs/token (3.29), loading/hook times
-  negligible, flat across two independent TPU slices, MFU 12.0% vs 12.9%.
-  Not remat (baseline predates the `remat_mode` knob; effective remat is
-  `recompute_all` for both), not era (September d1024 variant beat its June
-  baseline), not eval interference. Leading hypothesis: the variant d1280
-  compiles at the HBM edge (restore OOM'd with 131 MB free of 32.9 GB), so
-  the operator's extra activations push XLA over a memory threshold and
-  into worse fusion/spill choices. Natural follow-up: `save_moe` remat or
-  jmp-policy A/B at d1280.
+- **Effective speedup passes at all four scales (1.005 / 1.050 / 1.061 /
+  1.054).** With median-based throughput the earlier "d512 fails on
+  throughput" reading was a tail-contamination artifact: the operator costs
+  ~0% at every scale (+0.2%/−0.8%/+1.0% at d512–d1024, −0.16% same-stack at
+  d1280), not the −9.4% the last-200 averages suggested.
+- **Gate 2 fails on the projection criterion only, and narrowly.** The
+  d1280 speedup above uses the same-stack baseline throughput (see the
+  probe note above) — against the June README run it would read 0.987, but
+  that compares across a jax 0.9.2 → 0.11.1 stack boundary. The 4-point
+  refit `1.6 + 83.40·C^−0.0929` (α SE 0.0007) extrapolates to +0.0026 worse
+  at 1e21 and +0.0052 worse at 1e23 vs the baseline law
+  `1.6 + 88.32·C^−0.0941`, despite the variant beating the baseline law at
+  all four measured points (−0.0155/−0.0033/−0.0065/−0.0015). Cell
+  residuals (±0.004) are the same order as the projection deltas, so the
+  extrapolation flip is not resolved by this data.
+- **d1280 stack drift (June → September).** The June README baseline
+  (171,910 tok/s, jax 0.9.2 / libtpu 0.0.39) is not comparable to
+  September runs: a same-stack 64-step boundary-off probe measured 160,924
+  tok/s (jax 0.11.1 / libtpu 0.0.46), a −6.4% stack regression specific to
+  this cell — the d1024 baseline crossed the same boundary with no
+  penalty, so the regression interacts with the d1280/batch-256 (HBM-edge)
+  config. The boundary operator itself costs ~0% at every scale: same-stack
+  variant vs baseline is 160,661 vs 160,924 (−0.16%). The variant's
+  restore OOM (131 MB free of 32.9 GB) reflects the same tight memory
+  budget both models share on the current stack.
 - The pre-fix d512/d768 runs (no `_matched` suffix) are exploratory: they
   used the heuristic-derived optimizer batch (d768: 128 vs the cell's 64)
   and a 5% LR floor, so their comparisons against the baseline table are
@@ -277,6 +290,9 @@ Reading:
   come from the parent template's registered `grug_moe_muonh_v1`).
 - [`launch.py`](./launch.py) — `GrugMoeLaunchConfig` and trial wiring; copied
   from the parent.
+- [`launch_baseline_probe.py`](./launch_baseline_probe.py) — same-stack
+  boundary-off throughput probe for a baseline cell (used to separate the
+  June→September stack drift from operator cost at d1280).
 - [`launch_compute_opt.py`](./launch_compute_opt.py) — boundary-operator
   compute-optimal cells at the four May Recipe baseline points, with the
   legacy measurement conditions pinned (seq 4096, PKO on, long RoPE on,
