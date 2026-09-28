@@ -423,6 +423,7 @@ class MoEExpertMlp(eqx.Module):
         mesh: jax.sharding.AbstractMesh | None = None,
         report_capacity_overflow: bool = False,
         overlap: MoeOverlapWork | None = None,
+        report_assignment_keep: bool = False,
     ) -> Float[Array, "T O"] | tuple[Any, ...]:
         w_gate_up = jnp.concatenate([self.w_gate, self.w_up], axis=-1)
         return moe_mlp(
@@ -438,6 +439,7 @@ class MoEExpertMlp(eqx.Module):
             capacity_factor=self.capacity_factor,
             pooled_transport_capacity_factor=self.pooled_transport_capacity_factor,
             report_capacity_overflow=report_capacity_overflow,
+            report_assignment_keep=report_assignment_keep,
             expert_chunks=self.expert_chunks,
             num_expert_waves=self.num_expert_waves,
             fp8_dispatch=self.fp8_dispatch,
@@ -461,6 +463,7 @@ def moe_mlp(
     capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
     pooled_transport_capacity_factor: float | None = None,
     report_capacity_overflow: bool = False,
+    report_assignment_keep: bool = False,
     expert_chunks: int = 1,
     num_expert_waves: int = 1,
     fp8_dispatch: bool = False,
@@ -478,6 +481,10 @@ def moe_mlp(
 
     Set `report_capacity_overflow=True` to also return sender and receiver
     capacity drops plus padding-skipped assignment counts.
+    `report_assignment_keep=True` (with `report_capacity_overflow`) also fills
+    `MoeDispatchCounts.assignment_keep`, the `[T, K]` mask of the assignments
+    that reached their expert. Only the fixed pooled-wave EP backend drops
+    assignments per slot observably; the unchunked local paths are dropless.
 
     `expert_chunks` applies only to the local `sonic_cute` FSDP path. Values
     greater than one split the expert bank into equal, statically sized chunks.
@@ -495,6 +502,10 @@ def moe_mlp(
     path just computes it.
     """
     resolved_implementation = resolve_moe_implementation(implementation)
+    if report_assignment_keep and not report_capacity_overflow:
+        raise ValueError("report_assignment_keep requires report_capacity_overflow")
+    if report_assignment_keep and expert_chunks != 1:
+        raise ValueError("report_assignment_keep does not support chunked (capacity-dropping) local experts")
     if fp8_dispatch and resolved_implementation != "fixed_pooled_wave_all_to_all":
         raise ValueError(f"fp8_dispatch requires fixed_pooled_wave_all_to_all, got {resolved_implementation!r}")
 
@@ -530,10 +541,15 @@ def moe_mlp(
     padding_skipped = padding_skipped_assignments(token_valid, topk=selected_experts.shape[1])
 
     def dispatch_counts(drops: CapacityDrops) -> MoeDispatchCounts:
+        keep = drops.assignment_keep
+        if report_assignment_keep and keep is None:
+            # Dropless local path: every valid assignment reaches its expert.
+            keep = jnp.broadcast_to(token_valid[:, None], selected_experts.shape)
         return MoeDispatchCounts(
             sender_dropped=drops.sender_dropped,
             receiver_dropped=drops.receiver_dropped,
             padding_skipped=padding_skipped,
+            assignment_keep=keep,
         )
 
     num_experts = int(w_up_gate.shape[0])
@@ -575,6 +591,7 @@ def moe_mlp(
             capacity_factor=capacity_factor,
             pooled_transport_capacity_factor=pooled_transport_capacity_factor,
             report_capacity_overflow=report_capacity_overflow,
+            report_assignment_keep=report_assignment_keep,
             expert_chunks=expert_chunks,
             num_expert_waves=num_expert_waves,
             fp8_dispatch=fp8_dispatch,
@@ -624,6 +641,10 @@ def moe_mlp(
         if num_experts % expert_axis_size != 0:
             raise ValueError(f"num_experts={num_experts} must be divisible by expert axis size={expert_axis_size}")
 
+        if report_assignment_keep and resolved_implementation != "fixed_pooled_wave_all_to_all":
+            raise ValueError(
+                f"report_assignment_keep requires fixed_pooled_wave_all_to_all, got {resolved_implementation!r}"
+            )
         if resolved_implementation == "ring":
             shard_local_fn = _moe_mlp_ep_ring_local
         elif resolved_implementation == "ragged_all_to_all":
@@ -639,6 +660,7 @@ def moe_mlp(
                 num_expert_waves=num_expert_waves,
                 fp8_dispatch=fp8_dispatch,
                 expert_remat=expert_remat,
+                report_assignment_keep=report_assignment_keep,
             )
         elif resolved_implementation == "deepep":
             shard_local_fn = _moe_mlp_ep_deepep_local
@@ -655,7 +677,14 @@ def moe_mlp(
         w_up_gate = _reshard_for_shard_map(w_up_gate, mesh, w_up_gate_spec)
         w_down = _reshard_for_shard_map(w_down, mesh, w_down_spec)
         in_specs = (token_spec, token_spec, token_spec, token_spec, w_up_gate_spec, w_down_spec)
-        out_specs = (token_spec, CapacityDrops(sender_dropped=P(), receiver_dropped=P()))
+        out_specs = (
+            token_spec,
+            CapacityDrops(
+                sender_dropped=P(),
+                receiver_dropped=P(),
+                assignment_keep=token_spec if report_assignment_keep else None,
+            ),
+        )
         args = (x, selected_experts, combine_weights, token_valid, w_up_gate, w_down)
         if overlap is not None:
             shard_local_fn = partial(shard_local_fn, overlap_fn=overlap.fn)

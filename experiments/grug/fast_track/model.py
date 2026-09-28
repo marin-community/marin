@@ -34,7 +34,7 @@ try:
     from jax.shard_map import shard_map
 except ModuleNotFoundError:
     from jax.experimental.shard_map import shard_map
-from jaxtyping import Array, Float, Int, PRNGKeyArray
+from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray
 from levanter.grug.attention import (
     AttentionMask,
     RotaryConfig,
@@ -764,6 +764,24 @@ class GrugModelConfig:
     moe_hash_layers: tuple[int, ...] = ()
     """Physical layers whose routed experts are picked by a fixed token-id hash (Hash Layers, Roller et
     al. 2021): each vocab id maps to K distinct random experts; combine weights still come from the router."""
+    moe_drop_renorm: bool = False
+    """Renormalize each token's combine weights over the slots that survived the capacity-limited EP dispatch,
+    so they keep their pre-drop total (``routing_renorm_sum`` under the renormalized combines). Without it a
+    dropped (token, expert) assignment just loses its weight: the token's routed output shrinks. Tokens with
+    no drop are unchanged. Costs one int8 all-to-all per expert wave (the receiver keep mask back to the
+    senders)."""
+    router_token_bias_rank: int = 0
+    """Rank ``r`` of a learned token-identity bias on the router logits, ``A[token_id] @ B_l``: ``A`` is one
+    shared ``[vocab, r]`` table (random, like an embedding) and ``B_l`` a zero-init ``[r, E]`` per layer, so
+    the model is unchanged at init. Added before QB, which then balances it. 0: off."""
+    router_logit_soft_cap: float | None = None
+    """Tanh soft-cap ``c * tanh(z / c)`` on the router logits (after ``router_token_bias_rank``), before the
+    QB-biased top-K selection and the combine weights; QB estimates its thresholds on the capped logits.
+    None: off."""
+    attn_res_logit_soft_cap: float | None = None
+    """Tanh soft-cap ``c * tanh(z / c)`` on every AttnRes gate's source logits (after the ``_gate_extras``
+    biases, before the softmax and the z term); the ``attn_res_dual_query`` second mix is not capped.
+    None: off."""
     moe_gumbel_tau: float = 0.0
     """Training-only Gumbel noise (scale tau) added to the biased router logits before top-K: samples K
     experts without replacement from softmax(logits / tau) instead of taking the top K. Evals use top-K."""
@@ -952,6 +970,14 @@ class GrugModelConfig:
                 raise ValueError("kda_dd_rope rotates channel pairs and needs an even head_dim")
             if self.kda_push_buckets:
                 raise ValueError("kda_dd_rope needs pair-tied decays; kda_push_buckets' per-channel decays are not")
+        if self.moe_drop_renorm and self.moe_implementation != "fixed_pooled_wave_all_to_all":
+            raise ValueError("moe_drop_renorm needs moe_implementation=fixed_pooled_wave_all_to_all")
+        if self.router_token_bias_rank and not self.attn_res:
+            raise ValueError("router_token_bias_rank needs attn_res (the scanned stack has no router extras)")
+        for name in ("router_logit_soft_cap", "attn_res_logit_soft_cap"):
+            cap = getattr(self, name)
+            if cap is not None and cap <= 0:
+                raise ValueError(f"{name} must be positive, got {cap}")
         if self.num_null_experts:
             if self.moe_bank2_experts or self.moe_hash_layers or self.moe_dense_router_grad:
                 raise ValueError("zero-computation experts do not support moe_bank2, hash layers or dense router grad")
@@ -1597,6 +1623,11 @@ def _learned_knob_stats(layer: "Block", i: int) -> dict[str, jax.Array]:
         # LR-AttnRes: norms of this layer's r-wide pseudo-queries (0 at init = uniform routing).
         for name, query in (("attn", layer.attn_res_query_attn), ("mlp", layer.attn_res_query_mlp)):
             stats[f"attn_res_knob_lrkey_qnorm_{name}_L{i}"] = jnp.linalg.norm(jax.lax.stop_gradient(query))
+    router_tok_b = getattr(layer.mlp, "router_tok_b", None)
+    if router_tok_b is not None:
+        stats[f"attn_res_knob_router_tok_b_norm_L{i}"] = jnp.linalg.norm(
+            jax.lax.stop_gradient(router_tok_b).astype(jnp.float32)
+        )
     vres = getattr(layer.attn, "vres_lambda", None)
     if vres is not None:
         stats[f"attn_res_knob_vres_l1_L{i}"], stats[f"attn_res_knob_vres_l2_L{i}"] = jax.lax.stop_gradient(vres)
@@ -2341,6 +2372,8 @@ class MoEMLP(eqx.Module):
     router_up: jax.Array | None
     router_norm: "LearnedRMSNorm | None"
     router_bias: jax.Array
+    router_tok_b: Float[Array, "r E"] | None
+    """Per-layer zero-init up-projection of the shared token-identity router bias (``router_token_bias_rank``)."""
     expert_mlp: MoEExpertMlp
     expert_mlp_b: MoEExpertMlp | None
     bank_scale: Float[Array, " 2"] | None
@@ -2401,6 +2434,7 @@ class MoEMLP(eqx.Module):
                 else None
             ),
             router_bias=jnp.zeros((e,)),
+            router_tok_b=jnp.zeros((cfg.router_token_bias_rank, e)) if cfg.router_token_bias_rank else None,
             w_latent_down=(
                 None
                 if latent is None or (selects and not cfg.latent_select_plus_proj)
@@ -2640,12 +2674,14 @@ class MoEMLP(eqx.Module):
         hash_token_ids: Int[Array, "B S"] | None = None,
         noise_key: jax.Array | None = None,
         overlap: MoeOverlapWork | None = None,
+        router_tok_rows: Float[Array, "B S r"] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         """``projected`` holds ``x_flat @ w`` for each of ``input_projection_weights`` when the caller
         computed them already (fused with other projections of the same input). ``hash_token_ids`` picks
         the experts by token-id hash (``moe_hash_layers``); ``noise_key`` adds the training-only Gumbel
-        noise of ``moe_gumbel_tau`` to the expert selection. ``overlap`` is ``[T, D]`` token-local work run
-        under the first bank's dispatch all-to-all (``moe_shared_overlap``) and added to the output."""
+        noise of ``moe_gumbel_tau`` to the expert selection; ``router_tok_rows`` are the tokens' rows of the
+        shared ``router_token_bias_rank`` table. ``overlap`` is ``[T, D]`` token-local work run under the
+        first bank's dispatch all-to-all (``moe_shared_overlap``) and added to the output."""
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
         if projected is None:
@@ -2662,6 +2698,18 @@ class MoEMLP(eqx.Module):
             router_logits = projected[0].astype(jnp.float32)
         if self.router_logit_scale is not None:
             router_logits = router_logits * self.router_logit_scale.astype(jnp.float32)
+        if self.router_tok_b is not None:
+            assert router_tok_rows is not None
+            rows = rearrange(router_tok_rows, "b s r -> (b s) r").astype(jnp.float32)
+            router_logits = router_logits + jnp.einsum(
+                "tr,re->te",
+                reshard(rows, _partition_spec_of(router_logits)),
+                self.router_tok_b.astype(jnp.float32),
+                out_sharding=_partition_spec_of(router_logits),
+            )
+        cap = self.cfg.router_logit_soft_cap
+        if cap is not None:
+            router_logits = cap * jnp.tanh(router_logits / cap)
         biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
         router_probs = jax.nn.softmax(router_logits, axis=-1)
         k = self.cfg.num_experts_per_token
@@ -2778,7 +2826,7 @@ class MoEMLP(eqx.Module):
             real_selected, real_weights, null_out = self._split_null_slots(
                 routed_input, selected_experts, combine_weights
             )
-        outputs, overflows, col = [], [], 0
+        outputs, overflows, bank_keeps, col = [], [], [], 0
         overlap_out = None
         for (start, _, bank_k), em, bank_index in zip(banks, bank_mlps, (1, 2), strict=False):
             out, overflow, *bank_overlap_out = _run_expert_bank(
@@ -2791,6 +2839,9 @@ class MoEMLP(eqx.Module):
             )
             if bank_overlap_out:
                 overlap_out = bank_overlap_out[0]
+            if overflow.assignment_keep is not None:
+                bank_keeps.append(overflow.assignment_keep)
+                overflow = overflow._replace(assignment_keep=None)
             if self.bank_scale is not None:
                 out = out * self.bank_scale[bank_index - 1].astype(out.dtype)
             outputs.append(out)
@@ -2799,6 +2850,13 @@ class MoEMLP(eqx.Module):
         routed_flat = functools.reduce(jnp.add, outputs)
         if null_out is not None:
             routed_flat = routed_flat + null_out.astype(routed_flat.dtype)
+        if bank_keeps:
+            # moe_drop_renorm: the null slots never leave the device, so only real slots can be dropped.
+            kept = reshard(jnp.concatenate(bank_keeps, axis=-1), _partition_spec_of(combine_weights_f))
+            kept = kept | (selected_experts >= num_real)
+            factor, drop_stats = _drop_renorm_factor(combine_weights_f, kept)
+            routed_flat = routed_flat * factor[:, None].astype(routed_flat.dtype)
+            router_stats.update(drop_stats)
         capacity_overflow = overflows[0]
         if len(overflows) > 1:
             capacity_overflow = jax.tree.map(lambda *xs: functools.reduce(jnp.add, xs), *overflows)
@@ -2888,6 +2946,7 @@ def moe_and_shared_fused(
     hash_token_ids: Int[Array, "B S"] | None = None,
     noise_key: jax.Array | None = None,
     shared_gate: Float[Array, " D"] | None = None,
+    router_tok_rows: Float[Array, "B S r"] | None = None,
 ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
     """Routed MoE plus the shared SwiGLU experts with every projection of ``x`` in one GEMM.
 
@@ -2939,6 +2998,7 @@ def moe_and_shared_fused(
         projected=parts[: len(moe_weights)],
         hash_token_ids=hash_token_ids,
         noise_key=noise_key,
+        router_tok_rows=router_tok_rows,
         overlap=overlap,
     )
     if overlap is not None:
@@ -3333,9 +3393,11 @@ class Block(eqx.Module):
         sum_parts: tuple[str, ...] = (),
         hash_token_ids: Int[Array, "B S"] | None = None,
         noise_key: jax.Array | None = None,
+        router_tok_rows: Float[Array, "B S r"] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         """``sum_stream`` feeds ``sum_parts`` (``router`` / ``latent`` / ``shared``) instead of ``h``;
-        ``hash_token_ids`` / ``noise_key`` go to the router (``moe_hash_layers``, ``moe_gumbel_tau``)."""
+        ``hash_token_ids`` / ``noise_key`` / ``router_tok_rows`` go to the router (``moe_hash_layers``,
+        ``moe_gumbel_tau``, ``router_token_bias_rank``)."""
         normed = self.mlp_gated_norm(self.rms_mlp(_laurel(h, self.laurel_a_mlp, self.laurel_b_mlp)))
         if self.sconv_mlp_in is not None:
             normed = self.sconv_mlp_in(normed, _sconv_segment_ids(mask))
@@ -3350,10 +3412,12 @@ class Block(eqx.Module):
             out = self.mlp(mlp_in, moe_output_reshard=False)
         elif self.shared is not None:
             out, stats = moe_and_shared_fused(
-                self.mlp, self.shared, mlp_in, part_inputs, hash_token_ids, noise_key, self.shared_gate
+                self.mlp, self.shared, mlp_in, part_inputs, hash_token_ids, noise_key, self.shared_gate, router_tok_rows
             )
         else:
-            out, stats = self.mlp(mlp_in, hash_token_ids=hash_token_ids, noise_key=noise_key)
+            out, stats = self.mlp(
+                mlp_in, hash_token_ids=hash_token_ids, noise_key=noise_key, router_tok_rows=router_tok_rows
+            )
         if self.moe_out_gate_w is not None and self.moe_out_gate_b is not None:
             gate_logit = jnp.einsum(
                 "bsg,g->bs", normed[..., :_MOE_OUT_GATE_DIMS].astype(jnp.float32), self.moe_out_gate_w
@@ -3504,7 +3568,8 @@ def _run_expert_bank(
 ):
     """Dispatch one expert bank: ungated ReLU^2 through the EP backends' ungated path (or the tied gate on the
     dropless local backends), gated experts through ``MoEExpertMlp``. Returns ``(out, overflow)``, plus the
-    ``overlap`` output when given."""
+    ``overlap`` output when given. ``moe_drop_renorm`` also asks the backend for the per-slot keep mask
+    (``MoeDispatchCounts.assignment_keep``)."""
     if em.w_gate is None:
         ungated = em.implementation in MOE_IMPLEMENTATIONS and cfg.moe_ungated_kernel
         return moe_mlp(
@@ -3519,6 +3584,7 @@ def _run_expert_bank(
             capacity_factor=em.capacity_factor,
             pooled_transport_capacity_factor=em.pooled_transport_capacity_factor,
             report_capacity_overflow=True,
+            report_assignment_keep=cfg.moe_drop_renorm,
             expert_chunks=em.expert_chunks,
             num_expert_waves=em.num_expert_waves,
             fp8_dispatch=em.fp8_dispatch,
@@ -3532,7 +3598,33 @@ def _run_expert_bank(
         mesh=get_abstract_mesh(),
         report_capacity_overflow=True,
         overlap=overlap,
+        report_assignment_keep=cfg.moe_drop_renorm,
     )
+
+
+def _drop_renorm_factor(
+    combine_weights: Float[Array, "T K"], kept: Bool[Array, "T K"]
+) -> tuple[Float[Array, " T"], dict[str, jax.Array]]:
+    """Per-token scale that renormalizes the combine weights over the surviving slots (``moe_drop_renorm``).
+
+    The routed output is linear in the combine weights, so rescaling it by ``sum(w) / sum(w * kept)`` is the
+    same as renormalizing the kept weights to the pre-drop total. Exactly 1 for tokens with no drop (and for
+    tokens that lost every slot, whose output is zero anyway). Also returns the fraction of tokens with a
+    drop and their mean factor, for logging.
+    """
+    w = combine_weights.astype(jnp.float32)
+    kept_total = jnp.sum(jnp.where(kept, w, 0.0), axis=-1)
+    any_drop = jnp.any(~kept, axis=-1)
+    dropped = any_drop & (kept_total > 0)
+    factor = jnp.where(dropped, jnp.sum(w, axis=-1) / jnp.where(dropped, kept_total, 1.0), 1.0)
+    num_dropped = jnp.sum(dropped.astype(jnp.float32))
+    stats = {
+        f"{_LAYER_KNOB_PREFIX}moe_drop_token_frac": jax.lax.stop_gradient(jnp.mean(any_drop.astype(jnp.float32))),
+        f"{_LAYER_KNOB_PREFIX}moe_drop_renorm_factor": jax.lax.stop_gradient(
+            jnp.sum(jnp.where(dropped, factor, 0.0)) / jnp.maximum(num_dropped, 1.0)
+        ),
+    }
+    return factor, stats
 
 
 def _ungated_expert_activation(cfg: "GrugModelConfig"):
@@ -3670,11 +3762,13 @@ def _attn_res_mix(
     additive: bool = False,
     stream_source: bool = False,
     source_delta: bool = False,
+    soft_cap: float | None = None,
 ) -> tuple[Float[Array, "B S D"], jax.Array]:
     """One AttnRes gate: softmax over the completed blocks (+ the running partial) and their weighted sum.
 
     ``additive`` (Delta AttnRes) adds the plain sum of the sources to the mix; ``head_norm`` scores
-    each head's channel slice with its own RMS (``attn_res_head_norm``).
+    each head's channel slice with its own RMS (``attn_res_head_norm``); ``soft_cap`` tanh-caps the final
+    logits (``attn_res_logit_soft_cap``).
 
     ``extras`` (``_gate_extras``) optionally adds per-(gate, source) biases and masks, pull keys and a
     pull embedding logit; column ``n`` is block ``n`` and the last column is the partial.
@@ -3700,6 +3794,7 @@ def _attn_res_mix(
         stream = _stream_sum(tuple(sources))
         sources.append(stream)
         logits.append(_attn_res_source_logits(stream, queries[gate_index][None], eps, head_norm)[0])
+    logits = _soft_cap_logits(logits, soft_cap)
     weights, mixed = _softmax_mix(logits, sources)
     mixed = _gate_variants(mixed, sources, extras, gate_index, eps, has_partial=partial is not None)
     if extras is not None and extras.get("embed2") is not None:
@@ -3754,6 +3849,13 @@ def _bias_gate_logits(
             row = table[gate_index]
             logits = [logit + row[c] for logit, c in zip(logits, columns, strict=True)]
     return logits
+
+
+def _soft_cap_logits(logits: list[jax.Array], cap: float | None) -> list[jax.Array]:
+    """``cap * tanh(logit / cap)`` on each source logit (``attn_res_logit_soft_cap``); unchanged when None."""
+    if cap is None:
+        return logits
+    return [cap * jnp.tanh(logit / cap) for logit in logits]
 
 
 def _gate_variants(
@@ -3816,6 +3918,7 @@ def _attn_res_layer(
         "additive": cfg.attn_res_additive,
         "stream_source": cfg.attn_res_stream_source,
         "source_delta": cfg.attn_res_source_delta,
+        "soft_cap": cfg.attn_res_logit_soft_cap,
     }
     h, z_attn, w_attn = _attn_res_mix(blocks, block_logits, partial, queries, 2 * layer_index, eps, logit_bias, **opts)
     h = _ple_inject(layer, h, logit_bias)
@@ -3851,7 +3954,7 @@ def _attn_res_layer(
     h, z_mlp, w_mlp = _attn_res_mix(
         blocks, block_logits, mlp_partial, queries, 2 * layer_index + 1, eps, logit_bias, **opts
     )
-    mlp_out, router_stats = layer.mlp_branch(h, mask, **_route_kwargs(cfg, physical, token_ids, noise_key))
+    mlp_out, router_stats = layer.mlp_branch(h, mask, **_route_kwargs(cfg, physical, token_ids, noise_key, logit_bias))
     mem_out, mem_stats = _memory_branch(h, logit_bias)
     if mem_out is not None:
         mlp_out = mlp_out + mem_out
@@ -3879,6 +3982,7 @@ def _attn_res_layer_full(diff_args, mask, token_ids, use_long, layer_index, eps,
         "additive": cfg.attn_res_additive,
         "stream_source": cfg.attn_res_stream_source,
         "source_delta": cfg.attn_res_source_delta,
+        "soft_cap": cfg.attn_res_logit_soft_cap,
     }
     sum_components = cfg.attn_res_sum_inputs
     h, z_attn, w_attn = _attn_res_mix(blocks, block_logits, None, queries, 2 * layer_index, eps, logit_bias, **opts)
@@ -3934,7 +4038,7 @@ def _attn_res_layer_full(diff_args, mask, token_ids, use_long, layer_index, eps,
         mask,
         _stream_sum(mlp_blocks) if sum_parts else None,
         sum_parts,
-        **_route_kwargs(cfg, layer_index % cfg.num_layers, token_ids, noise_key),
+        **_route_kwargs(cfg, layer_index % cfg.num_layers, token_ids, noise_key, logit_bias),
     )
     mem_out, mem_stats = _memory_branch(h, logit_bias)
     if mem_out is not None:
@@ -3953,12 +4057,18 @@ def _attn_res_layer_full(diff_args, mask, token_ids, use_long, layer_index, eps,
 
 
 def _route_kwargs(
-    cfg: GrugModelConfig, physical_layer: int, token_ids: jax.Array, noise_key: jax.Array | None
+    cfg: GrugModelConfig,
+    physical_layer: int,
+    token_ids: jax.Array,
+    noise_key: jax.Array | None,
+    extras: dict[str, jax.Array | None] | None,
 ) -> dict[str, jax.Array | None]:
-    """Router extras for one layer: token ids on ``moe_hash_layers``, the per-layer noise key otherwise."""
+    """Router extras for one layer: token ids on ``moe_hash_layers``, the per-layer noise key otherwise, and
+    the tokens' ``router_token_bias_rank`` rows (``extras["router_tok"]``)."""
     return {
         "hash_token_ids": token_ids if physical_layer in cfg.moe_hash_layers else None,
         "noise_key": noise_key,
+        "router_tok_rows": None if extras is None else extras.get("router_tok"),
     }
 
 
@@ -4107,6 +4217,8 @@ class Transformer(eqx.Module):
     embed2_up: jax.Array | None
     token_embed_ple: jax.Array | None
     """Per-layer-embedding table ``[vocab, num_layers * ple_dim]`` (``ple_dim``)."""
+    router_tok_a: Float[Array, "V r"] | None
+    """Shared token table of the router token-identity bias (``router_token_bias_rank``), ``N(0, 1/r)``."""
     memory: tuple[ProductKeyMemory, ...] | None
     """Product-key memories of ``memory_layers``, in that order."""
     embed2_lambda: Float[Array, " G"] | None
@@ -4229,6 +4341,18 @@ class Transformer(eqx.Module):
                     P(_FSDP_AXES, None) if cfg.embed2_fsdp else P(None, None),
                 )
                 if cfg.ple_dim
+                else None
+            ),
+            router_tok_a=(
+                reshard(
+                    _init_weight(
+                        random.fold_in(embed2_key, 19),
+                        (cfg.vocab_size, cfg.router_token_bias_rank),
+                        1.0 / math.sqrt(cfg.router_token_bias_rank),
+                    ),
+                    P(None, None),
+                )
+                if cfg.router_token_bias_rank
                 else None
             ),
             memory=(
@@ -4828,6 +4952,9 @@ class Transformer(eqx.Module):
                 assert self.attn_res_query_sub is not None
                 queries = queries_flat[:, None, :] + _full_width_sub_queries(self.attn_res_query_sub, cfg)
         logit_bias = _gate_extras(self, queries.shape[0])
+        if self.router_tok_a is not None:
+            # router_token_bias_rank: every MoE layer reads the tokens' rows of the shared table.
+            logit_bias = {**(logit_bias or {}), "router_tok": _embedding_gather(self.router_tok_a, token_ids)}
         if input_embed2 is not None:
             assert self.embed2_lambda is not None
             logit_bias = {**(logit_bias or {}), "embed2": input_embed2, "embed2_lambda": self.embed2_lambda}
@@ -4948,6 +5075,7 @@ class Transformer(eqx.Module):
             logits = _bias_gate_logits(logits, logit_bias, final_index, [*blocks, partial], eps, has_partial=True)
             if cfg.attn_res_final_mode == "uniform":
                 logits = [jnp.zeros_like(logit) for logit in logits]
+            logits = _soft_cap_logits(logits, cfg.attn_res_logit_soft_cap)
             weights, mixed = _softmax_mix(logits, [*blocks, partial])
             if cfg.attn_res_final_mode == "attn":
                 mixed = _gate_variants(mixed, [*blocks, partial], logit_bias, final_index, eps, has_partial=True)
@@ -5030,6 +5158,10 @@ class Transformer(eqx.Module):
                 final_stats[f"attn_res_scale_mlp_L{i}"] = jax.lax.stop_gradient(layer.mlp_out_scale)
             final_stats.update(_learned_knob_stats(layer, i))
         final_stats.update(layer_logs)
+        if self.router_tok_a is not None:
+            final_stats["attn_res_knob_router_tok_a_rms"] = jnp.sqrt(
+                jnp.mean(jnp.square(jax.lax.stop_gradient(self.router_tok_a).astype(jnp.float32)))
+            )
         if cfg.attn_res_key_rank is not None:
             final_stats["attn_res_knob_lrkey_qnorm_final"] = jnp.linalg.norm(
                 jax.lax.stop_gradient(self.attn_res_query_final)

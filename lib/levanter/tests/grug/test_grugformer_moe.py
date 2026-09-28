@@ -1195,13 +1195,14 @@ def test_fixed_pooled_wave_all_to_all_reports_sender_and_receiver_drops():
             transport_capacity_factor=0.75,
             num_expert_waves=3,
             fp8_dispatch=False,
+            report_assignment_keep=True,
         )
 
     sharded_pooled_output = jax.shard_map(
         pooled_output,
         mesh=mesh,
         in_specs=(P(), P(), P(), P()),
-        out_specs=(P(), CapacityDrops(sender_dropped=P(), receiver_dropped=P())),
+        out_specs=(P(), CapacityDrops(sender_dropped=P(), receiver_dropped=P(), assignment_keep=P())),
         check_vma=False,
     )
     with jax.set_mesh(mesh):
@@ -1213,6 +1214,7 @@ def test_fixed_pooled_wave_all_to_all_reports_sender_and_receiver_drops():
     np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-5, atol=1e-5)
     assert int(overflow.sender_dropped) == 3
     assert int(overflow.receiver_dropped) == 3
+    np.testing.assert_array_equal(np.asarray(overflow.assignment_keep), np.broadcast_to(keep, (tokens, topk)))
 
 
 def test_fp8_dispatch_rows_roundtrip_within_e4m3_rounding():
@@ -1232,6 +1234,81 @@ def test_fp8_dispatch_rows_roundtrip_within_e4m3_rounding():
     error = np.abs(np.asarray(roundtrip).reshape(blocks.shape) - blocks)
     assert np.all(error <= 2**-4 * np.abs(blocks) + 2**-10 * block_scale)
     np.testing.assert_array_equal(np.asarray(roundtrip)[-1, FP8_DISPATCH_BLOCK:], 0)
+
+
+@pytest.mark.timeout(180)
+def test_fixed_pooled_wave_assignment_keep_matches_output_across_shards():
+    """The returned keep mask names exactly the dropped assignments: the output equals the dropless output
+    with the dropped combine weights zeroed, and the mask's misses equal the reported drop counts."""
+    env = os.environ.copy()
+    env["JAX_PLATFORMS"] = "cpu"
+    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
+    script = """
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+
+        from levanter.grug.grug_moe import moe_mlp
+
+        mesh = Mesh(
+            np.asarray(jax.devices()).reshape(1, 4, 1),
+            axis_names=("data", "expert", "model"),
+            axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+        )
+        tokens, hidden_dim, intermediate_dim, num_experts, topk = 64, 16, 8, 8, 2
+        keys = jax.random.split(jax.random.key(0), 4)
+        x = jax.random.normal(keys[0], (tokens, hidden_dim))
+        # Skewed routing so both the sender pools and the receiver capacity overflow.
+        logits = jax.random.normal(keys[1], (tokens, num_experts)) + jnp.linspace(2.0, 0.0, num_experts)
+        combine_weights, selected_experts = jax.lax.top_k(logits, topk)
+        combine_weights = jax.nn.softmax(combine_weights, axis=-1)
+        w_up_gate = jax.random.normal(keys[2], (num_experts, hidden_dim, 2 * intermediate_dim)) / 4
+        w_down = jax.random.normal(keys[3], (num_experts, intermediate_dim, hidden_dim)) / 3
+
+        batch_sharding = NamedSharding(mesh, P(("data", "expert"), None))
+        expert_sharding = NamedSharding(mesh, P("expert", None, None))
+        x, selected_experts, combine_weights = (
+            jax.device_put(a, batch_sharding) for a in (x, selected_experts, combine_weights)
+        )
+        w_up_gate, w_down = (jax.device_put(a, expert_sharding) for a in (w_up_gate, w_down))
+
+        def run(weights, capacity_factor, transport_capacity_factor):
+            return moe_mlp(
+                x,
+                selected_experts,
+                weights,
+                w_up_gate,
+                w_down,
+                activation=jax.nn.silu,
+                implementation="fixed_pooled_wave_all_to_all",
+                mesh=mesh,
+                capacity_factor=capacity_factor,
+                pooled_transport_capacity_factor=transport_capacity_factor,
+                num_expert_waves=2,
+                report_capacity_overflow=True,
+                report_assignment_keep=True,
+            )
+
+        with jax.set_mesh(mesh), jax.default_matmul_precision("highest"):
+            out, counts = jax.jit(run, static_argnums=(1, 2))(combine_weights, 0.9, 1.0)
+            keep = counts.assignment_keep
+            masked = jnp.where(keep, combine_weights, 0.0)
+            expected, dropless = jax.jit(run, static_argnums=(1, 2))(masked, 8.0, 8.0)
+
+        assert int(dropless.dropped) == 0 and bool(jnp.all(dropless.assignment_keep))
+        assert int(counts.sender_dropped) > 0 and int(counts.receiver_dropped) > 0, counts
+        assert int(jnp.sum(~keep)) == int(counts.dropped)
+        np.testing.assert_allclose(np.asarray(out), np.asarray(expected), rtol=1e-5, atol=1e-5)
+    """
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(script)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 @pytest.mark.timeout(180)

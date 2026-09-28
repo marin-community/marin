@@ -628,6 +628,30 @@ def _combine_pooled(
         )
 
 
+def _receiver_kept_at_sender(
+    dispatch: _PooledDispatch,
+    wave_sender_keep: Array,
+    *,
+    expert_shards: int,
+    pool_capacity: int,
+) -> Bool[Array, " assignments"]:
+    """Which local assignments of one wave survived both sender and receiver capacity.
+
+    The receiver-side keep mask lives on the destination shard in the source-major layout the combine
+    all-to-all sends back, so one int8 all-to-all of it (1/``hidden_dim`` of the dispatch bytes) returns
+    it to the senders, where it is read at each assignment's send slot like the combine gather.
+    """
+    send_size = expert_shards * pool_capacity
+    returned = jax.lax.all_to_all(
+        dispatch.receiver_keep.reshape(expert_shards, pool_capacity).astype(jnp.int8),
+        "expert",
+        split_axis=0,
+        concat_axis=0,
+        tiled=True,
+    ).reshape(send_size)
+    return wave_sender_keep & (returned[jnp.minimum(dispatch.sender_linear_indices, send_size - 1)] > 0)
+
+
 def _moe_mlp_ep_fixed_pooled_wave_a2a_local(
     x_local: Float[Array, "Tlocal H"],
     selected_experts_local: Int[Array, "Tlocal K"],
@@ -647,8 +671,12 @@ def _moe_mlp_ep_fixed_pooled_wave_a2a_local(
     fp8_dispatch: bool,
     expert_remat: bool = True,
     overlap_fn: Callable[[tuple[jax.Array, ...], Any], jax.Array] | None = None,
+    report_assignment_keep: bool = False,
 ) -> tuple[Float[Array, "Tlocal H"], CapacityDrops] | tuple[Float[Array, "Tlocal H"], CapacityDrops, jax.Array]:
     """Stripe each destination pool over fixed waves and report drops at each transport stage.
+
+    ``report_assignment_keep`` also returns the local ``[Tlocal, K]`` mask of the assignments that
+    reached their expert (``CapacityDrops.assignment_keep``), at one extra int8 all-to-all per wave.
 
     ``fp8_dispatch`` sends the dispatched activations as block-scaled e4m3 (see
     ``_fp8_dispatch_all_to_all``); the combine and all backward collectives stay in the input dtype.
@@ -733,6 +761,7 @@ def _moe_mlp_ep_fixed_pooled_wave_a2a_local(
         assert overlap_tokens is not None
         overlap = MoeOverlapWork(overlap_fn, overlap_tokens, overlap_params)
     overlap_out = None
+    assignment_keep = jnp.zeros((assignments_per_shard,), dtype=jnp.bool_) if report_assignment_keep else None
     for wave_index in range(num_waves):
         wave_sender_keep = sender_keep & (assignment_waves == wave_index)
         dispatch = partial(
@@ -770,11 +799,22 @@ def _moe_mlp_ep_fixed_pooled_wave_a2a_local(
         pooled_output = remat(compute)(pooled_dispatch)
         out_local = out_local + remat(combine)(pooled_output)
         receiver_dropped = receiver_dropped + pooled_dispatch.receiver_dropped
+        if assignment_keep is not None:
+            assignment_keep = assignment_keep | _receiver_kept_at_sender(
+                pooled_dispatch,
+                wave_sender_keep,
+                expert_shards=expert_shards,
+                pool_capacity=physical_pool_capacity,
+            )
 
     sender_dropped = valid_assignments - jnp.sum(sender_keep, dtype=jnp.int32)
     dropped_by_stage_local = jnp.stack((sender_dropped, receiver_dropped))
     dropped_by_stage = jax.lax.psum(dropped_by_stage_local, token_sharding_axes)
-    drops = CapacityDrops(sender_dropped=dropped_by_stage[0], receiver_dropped=dropped_by_stage[1])
+    drops = CapacityDrops(
+        sender_dropped=dropped_by_stage[0],
+        receiver_dropped=dropped_by_stage[1],
+        assignment_keep=None if assignment_keep is None else assignment_keep.reshape(tokens_per_shard, topk),
+    )
     if overlap_out is not None:
         return out_local.astype(x_local.dtype), drops, overlap_out
     return out_local.astype(x_local.dtype), drops

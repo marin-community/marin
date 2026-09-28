@@ -128,10 +128,15 @@ MOE_REMAT_SAVE_NAMES = (
 
 
 class CapacityDrops(NamedTuple):
-    """Valid assignments a backend dropped before and after transport."""
+    """Valid assignments a backend dropped before and after transport.
+
+    ``assignment_keep`` is the per-(token, slot) survival mask ``[T, K]`` when the caller asked for it
+    (``report_assignment_keep``), else None.
+    """
 
     sender_dropped: Int[Array, ""]
     receiver_dropped: Int[Array, ""]
+    assignment_keep: Bool[Array, "T K"] | None = None
 
     @property
     def dropped(self) -> Int[Array, ""]:
@@ -139,11 +144,13 @@ class CapacityDrops(NamedTuple):
 
 
 class MoeDispatchCounts(NamedTuple):
-    """Assignment counts omitted from expert dispatch."""
+    """Assignment counts omitted from expert dispatch, plus the optional per-(token, slot) survival mask
+    (see ``CapacityDrops.assignment_keep``)."""
 
     sender_dropped: Int[Array, ""]
     receiver_dropped: Int[Array, ""]
     padding_skipped: Int[Array, ""]
+    assignment_keep: Bool[Array, "T K"] | None = None
 
     @property
     def dropped(self) -> Int[Array, ""]:
