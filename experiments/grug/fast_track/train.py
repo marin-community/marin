@@ -62,6 +62,7 @@ from experiments.grug.fast_track.model import (
     GrugModelConfig,
     HeadReplay,
     Transformer,
+    write_ngram_stats,
 )
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
@@ -223,6 +224,10 @@ class GrugTrainerConfig:
     head_replay_scale: float = 0.1
     ema_group_sweep: bool = False
     ema_group_base_blend: float = 0.5
+    # Before step 0, fill the model's n-gram statistic table (``ngram_stat_rows``) from this many batches of the
+    # training stream taken *after* the run's last step, i.e. tokens the run never trains on. Untimed: it runs
+    # before the loop. 0: the table starts empty and fills online from the batches the run trains on.
+    ngram_stat_prefill_batches: int = 0
 
     # Grug builds its own compact (replica_dcn, data, expert, model) mesh instead of using
     # the Trainer's logical axis mapping; `data` absorbs whatever these two leave free.
@@ -385,6 +390,15 @@ def _to_dropless_local(
     return eqx.tree_at(stack_expert_mlps, model, dropless)
 
 
+def _cast_to_compute(mp: jmp.Policy, model: Transformer) -> Transformer:
+    """``mp.cast_to_compute``, except the n-gram statistic table stays float32: it is only gathered from, and a bf16
+    copy would round its counts and cost a table-sized cast every step."""
+    compute = mp.cast_to_compute(model)
+    if model.ngram_stat_table is None:
+        return compute
+    return eqx.tree_at(lambda m: m.ngram_stat_table, compute, model.ngram_stat_table)
+
+
 def build_tagged_evaluator(
     *,
     data_config: LmDataConfig,
@@ -413,7 +427,7 @@ def build_tagged_evaluator(
         # Parameters are stored float32, and `gpu_fa4_cute` accepts only bf16/fp16, so without this
         # every eval raises `TypeError: ... supports only bf16/fp16, got float32` on Blackwell. The
         # reference attention path takes float32, which hid this on H100.
-        model = mp.cast_to_compute(model)
+        model = _cast_to_compute(mp, model)
         if model_transform is not None:
             model = model_transform(model)
         if isinstance(batch, LmExample):
@@ -842,7 +856,7 @@ def _loss_and_grads(
         route_key = jax.random.fold_in(jax.random.PRNGKey(ROUTE_NOISE_SEED), step)
 
     def loss_fn(model):
-        compute_params = mp.cast_to_compute(model)
+        compute_params = _cast_to_compute(mp, model)
         return compute_params.next_token_loss(
             batch.tokens,
             batch.loss_weight,
@@ -969,6 +983,9 @@ def _make_train_step(
             updates, opt_state = optimizer.update(opt_grads, opt_state_in, qb_params)
             params = optax.apply_updates(qb_params, updates)
             master_params = None
+        if params.ngram_stat_table is not None:
+            # Write after read: this batch's targets enter the statistic table only once its step is done.
+            params = write_ngram_stats(params, batch.tokens, batch.loss_weight, _segment_ids(batch))
 
         if ema_beta is None:
             ema_params = None
@@ -981,6 +998,9 @@ def _make_train_step(
                 qb_ema_params,
                 params,
             )
+            if params.ngram_stat_table is not None:
+                # The statistic table is a running sum, not a trained weight: the EMA keeps the live table.
+                ema_params = eqx.tree_at(lambda m: m.ngram_stat_table, ema_params, params.ngram_stat_table)
 
         watch_stats = None
         if watch_config is not None:
@@ -1014,6 +1034,38 @@ def _make_train_step(
         return next_state, metrics, watch_stats
 
     return train_step
+
+
+def _segment_ids(batch) -> jax.Array | None:
+    segment_ids = batch.attn_mask.segment_ids
+    return None if segment_ids is None else segment_ids[0]
+
+
+def _prefill_ngram_stats(state: GrugTrainState, train_loader, *, start_step: int, num_batches: int) -> GrugTrainState:
+    """Write ``num_batches`` training batches from ``start_step`` on into the n-gram statistic table (see
+    ``GrugTrainerConfig.ngram_stat_prefill_batches``)."""
+
+    @functools.partial(jax.jit, donate_argnums=(0,))
+    def write(state: GrugTrainState, batch) -> GrugTrainState:
+        params = write_ngram_stats(state.params, batch.tokens, batch.loss_weight, _segment_ids(batch))
+        return dataclasses.replace(state, params=params, ema_params=params if state.ema_params is not None else None)
+
+    started = time.time()
+    batches = train_loader.iter_from_step(start_step)
+    for i in range(num_batches):
+        state = write(state, next(batches))
+        if (i + 1) % 500 == 0:
+            logger.info("ngram stat prefill: %d / %d batches (%.0fs)", i + 1, num_batches, time.time() - started)
+    table = state.params.ngram_stat_table
+    filled = float(jnp.mean((table[:, -1] > 0).astype(jnp.float32)))
+    logger.info(
+        "ngram stat prefill done: %d batches in %.0fs, %.1f%% rows filled",
+        num_batches,
+        time.time() - started,
+        100 * filled,
+    )
+    levanter.tracker.log_summary({"ngram_stat/prefill_batches": num_batches, "ngram_stat/prefill_rows_filled": filled})
+    return state
 
 
 def _run_grug_local(config: GrugRunConfig) -> None:
@@ -1190,6 +1242,15 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         profiler_enabled = profiler_cfg.is_enabled and profiler_num_steps > 0
 
         log_every = max(1, config.trainer.log_every)
+        if config.trainer.ngram_stat_prefill_batches and int(state.step) == 0:
+            if state.params.ngram_stat_table is None:
+                raise ValueError("ngram_stat_prefill_batches needs a model with ngram_stat_rows > 0")
+            state = _prefill_ngram_stats(
+                state,
+                train_loader,
+                start_step=trainer.num_train_steps,
+                num_batches=config.trainer.ngram_stat_prefill_batches,
+            )
         batch_source = train_loader.iter_from_step(int(state.step))
         iterator = LoadingTimeTrackerIterator(batch_source)
 

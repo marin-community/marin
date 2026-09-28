@@ -332,6 +332,7 @@ def build_h100_ladder_run(
     ema_blend_sweep: tuple[float, ...] = (),
     ema_group_sweep: bool = False,
     head_replay: tuple[int, int, float] = (0, 100, 0.1),
+    ngram_stat_prefill_batches: int = 0,
     max_retries_failure: int = MAX_RETRIES_FAILURE,
     model_settings: Mapping[str, str] | None = None,
     optimizer_settings: Mapping[str, str] | None = None,
@@ -426,6 +427,7 @@ def build_h100_ladder_run(
         head_replay_slots=head_replay[0],
         head_replay_period=head_replay[1],
         head_replay_scale=head_replay[2],
+        ngram_stat_prefill_batches=ngram_stat_prefill_batches,
     )
     train_resources = ResourceConfig.with_gpu(
         "H100",
@@ -655,6 +657,14 @@ def _submit_to_cluster(run_id: str, target_cluster: str | None, priority: str) -
     help="lm_head replay of stored final hidden states: SLOTS PERIOD SCALE (0 slots: off).",
 )
 @click.option(
+    "--ngram-stat-prefill-batches",
+    type=click.IntRange(min=0),
+    default=0,
+    show_default=True,
+    help="Untimed: fill the n-gram statistic table (--model-set ngram_stat_rows=N) from this many batches the "
+    "run never trains on (the stream after its last step) before step 0.",
+)
+@click.option(
     "--max-retries",
     type=click.IntRange(min=0),
     default=MAX_RETRIES_FAILURE,
@@ -729,6 +739,7 @@ def main(
     ema_blend: tuple[float, ...],
     ema_group_sweep: bool,
     head_replay: tuple[int, int, float],
+    ngram_stat_prefill_batches: int,
     max_retries: int,
     z_loss_weight: float,
     ragged_transport: str,
@@ -761,6 +772,7 @@ def main(
         ema_blend_sweep=tuple(ema_blend),
         ema_group_sweep=ema_group_sweep,
         head_replay=head_replay,
+        ngram_stat_prefill_batches=ngram_stat_prefill_batches,
         max_retries_failure=max_retries,
         model_settings=_parse_settings(model_set),
         optimizer_settings=_parse_settings(opt_set),

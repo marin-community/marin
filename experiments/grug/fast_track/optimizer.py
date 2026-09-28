@@ -389,6 +389,8 @@ def _sinkhorn_hyperball(momentum: float, iters: int, nesterov: bool, learning_ra
     return optax.GradientTransformation(sinkhorn.init, update_fn)
 
 
+# Leaves the trainer writes as data statistics (never trained): the fixed-encoder n-gram table and its code.
+_FROZEN_LEAVES = re.compile(r"(?:^|\.)ngram_stat_(table|code)$")
 _HYPERBALL_GROUPS = frozenset({"muonh", "adamh", "kda_beta", "muonh_attn", "muonh_routed", "sinkhornh"})
 
 
@@ -859,6 +861,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                     learning_rate * self.sinkhorn_lr_mult,
                 ),
                 "embed2": plain_adam_at(adam_lr * self.embed2_lr_mult),
+                # The n-gram statistic table and its code are data statistics written by the trainer, not trained.
+                "frozen": optax.set_to_zero(),
                 "ple": plain_adam_at(adam_lr * self.ple_lr_mult),
                 "value_embed": plain_adam_at(adam_lr * self.value_embed_lr_mult),
                 "memory": plain_adam_at(adam_lr * self.memory_lr_mult),
@@ -913,6 +917,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
         def _base_group(param, path):
             path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
             path_lower = path_str.lower()
+            if _FROZEN_LEAVES.search(path_lower):
+                return "frozen"
             kda_leaf = _kda_leaf(path_lower)
             if kda_leaf == _KDA_BETA_LEAF:
                 return "kda_beta"
@@ -927,7 +933,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             if path_lower.endswith(".value_embed") and self.value_embed_lr_mult != 1.0:
                 return "value_embed"
             if ".rel_pos." in path_lower or re.search(
-                r"(?:^|\.)(value_embed|ve_lambda|ve_gate|xsa_scale|xsa_gate|head_mix|ssmax_scale|shared_gate|laurel_[ab]_\w+|ple_up|moe_out_gate_[wb]|bigram_gate_[wb]|bigram_gate_[ab]_lr|trigram_gate_[wb]|trigram_gate_[ab]_lr|bank_scale|bias_\w+|dyt_alpha|dyt_beta|qk_mult|diff_lambda|diff_lambda_init|vres_lambda|rot_scale|null_const_[vw]|comba_d|v_filter_[wb]|gamma)$",
+                r"(?:^|\.)(value_embed|ve_lambda|ve_gate|xsa_scale|xsa_gate|head_mix|ssmax_scale|shared_gate|laurel_[ab]_\w+|ple_up|moe_out_gate_[wb]|bigram_gate_[wb]|bigram_gate_[ab]_lr|trigram_gate_[wb]|trigram_gate_[ab]_lr|bank_scale|bias_\w+|dyt_alpha|dyt_beta|qk_mult|diff_lambda|diff_lambda_init|vres_lambda|rot_scale|null_const_[vw]|comba_d|v_filter_[wb]|gamma|ngram_stat_gate_[wb])$",
                 path_lower,
             ):
                 return "adam"

@@ -236,6 +236,9 @@ _MURMUR_C1 = 0x85EBCA6B
 _MURMUR_C2 = 0xC2B2AE35
 # Per-head salt step for the multi-head n-gram hash (salt 0 is the single-head hash).
 _HASH_SALT_STEP = 0x27D4EB2D
+# Hash salt of the statistic table (distinct from the trained bigram table's salt 0) and its code's seed.
+_NGRAM_STAT_SALT = 7
+_NGRAM_STAT_CODE_SEED = 20260927
 
 
 def _bigram_hash_ids(
@@ -775,6 +778,21 @@ class GrugModelConfig:
     embed2_fsdp: bool = False
     """Store the second table (and so its optimizer / EMA state) row-sharded over the FSDP axes, all-gathering
     a replicated copy for the lookup. Same math; for rungs where the replicated table's state doesn't fit."""
+    ngram_stat_rows: int = 0
+    """Rows per n-gram order of a fixed-encoder *statistic* table, its own AttnRes source (0: off). Row h holds
+    ``[sum of code(y), count]`` over every occurrence of an n-gram hashing to h followed by next token y, where
+    ``code`` is a fixed random ``[vocab, ngram_stat_dim]`` matrix. The table is never trained: the trainer adds
+    each batch after its step (``write_ngram_stats``), so a row means the same thing at every step. The model
+    reads ``[sum / count, log1p(count)]`` of every order through a learned reader (see
+    .agents/projects/stable-compressor-memory.md)."""
+    ngram_stat_dim: int = 64
+    """Width of the fixed next-token code of the statistic table (the table stores this plus a count column)."""
+    ngram_stat_orders: tuple[int, ...] = (2,)
+    """n-gram orders of the statistic table, ``ngram_stat_rows`` rows each (2: the (previous, current) bigram)."""
+    ngram_stat_mlp_dim: int = 0
+    """Width of a GELU layer in the statistic reader (0: a linear reader straight to ``hidden_dim``)."""
+    ngram_stat_gate: bool = True
+    """Scalar Engram content gate on the statistic source (w = 0, c = +2 at init), like ``bigram_gate``."""
     embed2_grad_fp32: bool = True
     """Second table's backward through the fp32 local scatter + psum (True), or JAX's default bf16
     scatter-add (False). Hashed rows see few adds each, so the bf16 path's atomic contention and rounding
@@ -3558,6 +3576,16 @@ class Transformer(eqx.Module):
     trigram_gate_b_lr: Float[Array, "R D"] | None
     token_embed3: jax.Array | None
     embed3_norm: LearnedRMSNorm | None
+    ngram_stat_table: jax.Array | None
+    """``[len(ngram_stat_orders) * ngram_stat_rows, ngram_stat_dim + 1]`` fp32 sums and counts, one block of rows
+    per order; frozen for the optimizer."""
+    ngram_stat_code: jax.Array | None
+    """``[vocab, ngram_stat_dim]`` fixed random next-token code; frozen for the optimizer."""
+    ngram_stat_hidden: jax.Array | None
+    ngram_stat_up: jax.Array | None
+    ngram_stat_norm: RMSNorm | None
+    ngram_stat_gate_w: Float[Array, " D"] | None
+    ngram_stat_gate_b: Float[Array, ""] | None
     token_embed_window: jax.Array | None
     byte_head: jax.Array | None
     window_proj: jax.Array | None
@@ -3743,6 +3771,54 @@ class Transformer(eqx.Module):
                 else None
             ),
             embed3_norm=_learned_rms_norm(cfg, cfg.hidden_dim, cfg.layer_norm_eps) if cfg.embed3_rows else None,
+            ngram_stat_table=(
+                reshard(
+                    jnp.zeros((len(cfg.ngram_stat_orders) * cfg.ngram_stat_rows, cfg.ngram_stat_dim + 1), jnp.float32),
+                    P(None, None),
+                )
+                if cfg.ngram_stat_rows
+                else None
+            ),
+            ngram_stat_code=(
+                reshard(
+                    random.normal(
+                        random.PRNGKey(_NGRAM_STAT_CODE_SEED), (cfg.vocab_size, cfg.ngram_stat_dim), jnp.float32
+                    )
+                    / math.sqrt(cfg.ngram_stat_dim),
+                    P(None, None),
+                )
+                if cfg.ngram_stat_rows
+                else None
+            ),
+            ngram_stat_hidden=(
+                reshard(
+                    _init_weight(
+                        random.fold_in(embed2_key, 22),
+                        (_ngram_stat_feature_dim(cfg), cfg.ngram_stat_mlp_dim),
+                        1.0 / math.sqrt(_ngram_stat_feature_dim(cfg)),
+                    ),
+                    P(None, None),
+                )
+                if cfg.ngram_stat_rows and cfg.ngram_stat_mlp_dim
+                else None
+            ),
+            ngram_stat_up=(
+                reshard(
+                    _init_weight(
+                        random.fold_in(embed2_key, 21),
+                        (cfg.ngram_stat_mlp_dim or _ngram_stat_feature_dim(cfg), cfg.hidden_dim),
+                        1.0 / math.sqrt(cfg.ngram_stat_mlp_dim or _ngram_stat_feature_dim(cfg)),
+                    ),
+                    P(None, None),
+                )
+                if cfg.ngram_stat_rows
+                else None
+            ),
+            ngram_stat_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps) if cfg.ngram_stat_rows else None,
+            ngram_stat_gate_w=(
+                jnp.zeros((cfg.hidden_dim,), jnp.float32) if cfg.ngram_stat_rows and cfg.ngram_stat_gate else None
+            ),
+            ngram_stat_gate_b=(jnp.full((), 2.0, jnp.float32) if cfg.ngram_stat_rows and cfg.ngram_stat_gate else None),
             token_embed_window=(
                 reshard(
                     _init_weight(random.fold_in(embed2_key, 5), (cfg.vocab_size, cfg.window_embed_dim), 1.0),
@@ -4068,6 +4144,9 @@ class Transformer(eqx.Module):
                     bigram_gate_stats["attn_res_trigram_gate_mean"] = jax.lax.stop_gradient(jnp.mean(gate3))
                     bigram_gate_stats["attn_res_trigram_gate_std"] = jax.lax.stop_gradient(jnp.std(gate3))
                 extra_sources = (*extra_sources, embed3)
+            if self.ngram_stat_table is not None:
+                doc_start = None if segment_ids is None else segment_ids[0]
+                extra_sources = (*extra_sources, self._ngram_stat_source(hidden, token_ids, doc_start))
             ple_rows = None
             if self.token_embed_ple is not None:
                 gather_ple = _embedding_gather if cfg.embed2_grad_fp32 else _embedding_gather_autodiff
@@ -4446,6 +4525,33 @@ class Transformer(eqx.Module):
         hidden, _ = self(token_ids, mask=mask)
         return jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=batch_spec)
 
+    def _ngram_stat_source(
+        self, hidden: Float[Array, "B S D"], token_ids: Int[Array, "B S"], segment_ids: Int[Array, "B S"] | None
+    ) -> Float[Array, "B S D"]:
+        """The statistic table's AttnRes source: gather each position's row of every order (no gradient into the
+        table), read ``[mean code, log count]`` of all orders through the reader, RMS-norm, and content-gate it."""
+        cfg = self.config
+        assert self.ngram_stat_table is not None and self.ngram_stat_up is not None and self.ngram_stat_norm is not None
+        ids = _ngram_stat_ids(cfg, token_ids, segment_ids)
+        b, s, k = ids.shape
+        flat_ids = jax.lax.reshape(ids, (b, s * k), out_sharding=P(_BATCH_AXES, None))
+        rows = _embedding_gather_autodiff(jax.lax.stop_gradient(self.ngram_stat_table), flat_ids).astype(jnp.float32)
+        features = _ngram_stat_features(rows)
+        features = jax.lax.reshape(
+            features, (b, s, k * features.shape[-1]), out_sharding=P(_BATCH_AXES, None, None)
+        ).astype(hidden.dtype)
+        if self.ngram_stat_hidden is not None:
+            features = jax.nn.gelu(
+                jnp.einsum(
+                    "bsf,fm->bsm", features, self.ngram_stat_hidden.astype(hidden.dtype), out_sharding=_batch_spec()
+                )
+            )
+        read = jnp.einsum("bsf,fd->bsd", features, self.ngram_stat_up.astype(hidden.dtype), out_sharding=_batch_spec())
+        source = self.ngram_stat_norm(read)
+        if self.ngram_stat_gate_w is not None and self.ngram_stat_gate_b is not None:
+            source, _ = _content_gate(hidden, source, self.ngram_stat_gate_w, self.ngram_stat_gate_b, None, None)
+        return source
+
     def next_token_loss(
         self,
         token_ids: Int[Array, "B S"],
@@ -4820,10 +4926,75 @@ def _content_gate(
     return source * gate[..., None], gate
 
 
+def _ngram_stat_feature_dim(cfg: GrugModelConfig) -> int:
+    return len(cfg.ngram_stat_orders) * (cfg.ngram_stat_dim + 1)
+
+
+def _ngram_stat_ids(
+    cfg: GrugModelConfig, token_ids: Int[Array, "B S"], segment_ids: Int[Array, "B S"] | None
+) -> Int[Array, "B S K"]:
+    """Each position's statistic-table row for every order k, offset into that order's block of rows."""
+    rows = cfg.ngram_stat_rows
+    return jnp.stack(
+        [
+            _bigram_hash_ids(token_ids, segment_ids, rows, order, salt=_NGRAM_STAT_SALT + k) + k * rows
+            for k, order in enumerate(cfg.ngram_stat_orders)
+        ],
+        axis=-1,
+    )
+
+
+def _ngram_stat_features(rows: jax.Array) -> jax.Array:
+    """``[sum, count]`` rows to the reader's input ``[sum / max(count, 1), log1p(count) / 4]``."""
+    sums, counts = rows[..., :-1], rows[..., -1:]
+    return jnp.concatenate([sums / jnp.maximum(counts, 1.0), jnp.log1p(counts) / 4.0], axis=-1)
+
+
+def write_ngram_stats(
+    model: "Transformer",
+    token_ids: Int[Array, "B S"],
+    loss_weight: Float[Array, "B S"],
+    segment_ids: Int[Array, "B S"] | None,
+) -> "Transformer":
+    """Add a batch to the fixed-encoder statistic table: each position's n-gram row gains ``[code(next), 1]``
+    times its loss weight (0 on the last position and on masked targets). Every device all-gathers the batch's
+    row ids, next tokens and weights (a few MB) and scatter-adds the whole batch into its replicated table, so
+    no table-sized collective runs. Called after the optimizer step, so a batch never reads its own targets."""
+    cfg = model.config
+    assert model.ngram_stat_table is not None and model.ngram_stat_code is not None
+    ids = _ngram_stat_ids(cfg, token_ids, segment_ids)
+    next_ids = jnp.roll(token_ids, -1, axis=1)
+    orders = len(cfg.ngram_stat_orders)
+
+    def _local_write(table, code, ids, next_ids, weight):
+        ids, next_ids, weight = (jax.lax.all_gather(x, _BATCH_AXES, tiled=True) for x in (ids, next_ids, weight))
+        weight = weight.astype(jnp.float32).reshape(-1, 1)
+        values = jnp.concatenate([code[next_ids.reshape(-1)] * weight, weight], axis=-1)
+        # Every order's row of a position gets the same value.
+        values = jnp.broadcast_to(values[:, None, :], (values.shape[0], orders, values.shape[1]))
+        return table.at[ids.reshape(-1)].add(values.reshape(-1, values.shape[-1]))
+
+    # The gathered batch is identical on every device, so the written table is replicated (check_vma can't see it).
+    table = jax.shard_map(
+        _local_write,
+        mesh=get_abstract_mesh(),
+        in_specs=(P(None, None), P(None, None), P(_BATCH_AXES, None, None), P(_BATCH_AXES, None), P(_BATCH_AXES, None)),
+        out_specs=P(None, None),
+        check_vma=False,
+    )(
+        model.ngram_stat_table,
+        model.ngram_stat_code,
+        reshard(ids, P(_BATCH_AXES, None, None)),
+        reshard(next_ids, P(_BATCH_AXES, None)),
+        reshard(loss_weight, P(_BATCH_AXES, None)),
+    )
+    return eqx.tree_at(lambda m: m.ngram_stat_table, model, table)
+
+
 def _num_extra_embeds(cfg: GrugModelConfig) -> int:
     """Extra embedding tables ahead of the token embedding in the AttnRes source list."""
     window_source = cfg.window_embed_dim > 0 and cfg.window_embed_mode == "source"
-    return int(cfg.second_embed) + int(cfg.embed3_rows > 0) + int(window_source)
+    return int(cfg.second_embed) + int(cfg.embed3_rows > 0) + int(window_source) + int(cfg.ngram_stat_rows > 0)
 
 
 def _token_window(
