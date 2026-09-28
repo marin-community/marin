@@ -356,6 +356,31 @@ def test_moe_mlp_default_matches_explicit_ring_without_ep_axis():
     np.testing.assert_allclose(np.asarray(y_default), np.asarray(y_ring), rtol=1e-5, atol=1e-5)
 
 
+def test_local_moe_mlp_writes_a_different_width_than_it_reads():
+    """Experts reading ``D`` channels and writing ``O != D`` (``w_down`` is ``[E, I, O]``) match the dense reference."""
+    x, selected_experts, combine_weights, w_up_gate, _ = _make_inputs(
+        key=jax.random.key(9), tokens=16, hidden_dim=8, intermediate_dim=12, num_experts=4, topk=2
+    )
+    w_down = jax.random.normal(jax.random.key(10), (4, 12, 16), dtype=jnp.float32)
+    cotangent = jax.random.normal(jax.random.key(11), (16, 16))
+
+    def value_and_grads(fn):
+        grads = jax.grad(lambda *args: jnp.sum(fn(*args) * cotangent), argnums=(0, 1, 2))(x, w_up_gate, w_down)
+        return [fn(x, w_up_gate, w_down), *grads]
+
+    with jax.default_matmul_precision("highest"):
+        actual = value_and_grads(
+            lambda x, w13, w2: moe_mlp(
+                x, selected_experts, combine_weights, w13, w2, implementation="scatter", mesh=None
+            )
+        )
+        expected = value_and_grads(lambda x, w13, w2: _dense_moe_output(x, selected_experts, combine_weights, w13, w2))
+
+    assert actual[0].shape == (16, 16)
+    for a, e in zip(actual, expected, strict=True):
+        np.testing.assert_allclose(np.asarray(a), np.asarray(e), rtol=1e-5, atol=1e-5)
+
+
 def test_moe_mlp_padding_matches_compact_value_and_gradients():
     x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
         key=jax.random.key(52),
@@ -656,6 +681,7 @@ def test_moe_expert_mlp_init_matches_across_backends():
     scatter_mlp = MoEExpertMlp.init(
         num_experts=num_experts,
         hidden_dim=hidden_dim,
+        output_dim=hidden_dim,
         intermediate_dim=intermediate_dim,
         initializer_std=0.02,
         key=k_mlp,
@@ -664,6 +690,7 @@ def test_moe_expert_mlp_init_matches_across_backends():
     sonic_mlp = MoEExpertMlp.init(
         num_experts=num_experts,
         hidden_dim=hidden_dim,
+        output_dim=hidden_dim,
         intermediate_dim=intermediate_dim,
         initializer_std=0.02,
         key=k_mlp,
@@ -805,6 +832,7 @@ def test_moe_expert_mlp_init_uses_logical_weight_pspecs():
         mlp = MoEExpertMlp.init(
             num_experts=4,
             hidden_dim=16,
+            output_dim=16,
             intermediate_dim=24,
             initializer_std=0.02,
             key=jax.random.key(27),
@@ -1445,8 +1473,10 @@ jax.lax.ragged_all_to_all = emulated_ragged_all_to_all
 
 @pytest.mark.parametrize("activation", ["relu2", "fused_relu2"])
 @pytest.mark.parametrize("padded", [False, True], ids=["all_valid", "padded"])
-def test_ragged_all_to_all_matches_pooled_wave_for_ungated_relu2_experts(activation: str, padded: bool):
-    """Ragged EP on ungated ReLU^2 experts (``w13`` is ``W_up`` alone) agrees with pooled-wave and dense."""
+@pytest.mark.parametrize("out_dim", [8, 16], ids=["square", "wider_write"])
+def test_ragged_all_to_all_matches_pooled_wave_for_ungated_relu2_experts(activation: str, padded: bool, out_dim: int):
+    """Ragged EP on ungated ReLU^2 experts (``w13`` is ``W_up`` alone) agrees with pooled-wave and dense, also
+    when the experts write ``out_dim`` channels instead of the ``hidden`` they read."""
     env = os.environ.copy()
     env["JAX_PLATFORMS"] = "cpu"
     env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=8"
@@ -1476,8 +1506,9 @@ def test_ragged_all_to_all_matches_pooled_wave_for_ungated_relu2_experts(activat
         combine_weights = jax.nn.softmax(jax.random.normal(jax.random.key(2), (tokens, topk)), axis=-1)
         token_valid = (jnp.arange(tokens) % 5 != 3) if __PADDED__ else jnp.ones((tokens,), dtype=jnp.bool_)
         w_up = jax.random.normal(jax.random.key(3), (num_experts, hidden, intermediate)) / np.sqrt(hidden)
-        w_down = jax.random.normal(jax.random.key(4), (num_experts, intermediate, hidden)) / np.sqrt(intermediate)
-        cotangent = jax.random.normal(jax.random.key(5), (tokens, hidden))
+        out_dim = __OUT_DIM__
+        w_down = jax.random.normal(jax.random.key(4), (num_experts, intermediate, out_dim)) / np.sqrt(intermediate)
+        cotangent = jax.random.normal(jax.random.key(5), (tokens, out_dim))
         activation = fused_relu2 if "__ACTIVATION__" == "fused_relu2" else ActivationFunctionEnum.relu2
 
         def dense_output(x, w_up, w_down):
@@ -1536,7 +1567,11 @@ def test_ragged_all_to_all_matches_pooled_wave_for_ungated_relu2_experts(activat
             np.testing.assert_allclose(r, e, rtol=1e-5, atol=1e-5, err_msg=f"ragged vs dense {name}")
         """
     )
-    script = script.replace("__ACTIVATION__", activation).replace("__PADDED__", repr(padded))
+    script = (
+        script.replace("__ACTIVATION__", activation)
+        .replace("__PADDED__", repr(padded))
+        .replace("__OUT_DIM__", repr(out_dim))
+    )
     result = subprocess.run(
         [sys.executable, "-c", textwrap.dedent(script)],
         env=env,

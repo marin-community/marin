@@ -31,6 +31,7 @@ from jaxtyping import Array, Bool, Float, Int
 from levanter.grug._moe.common import (
     _DEFAULT_EP_CAPACITY_FACTOR,
     _EP_MOE_IMPLEMENTATIONS,
+    _LOCAL_MOE_IMPLEMENTATIONS,
     _init_weight,
     MOE_REMAT_SAVE_NAMES as MOE_REMAT_SAVE_NAMES,
     CapacityDrops,
@@ -71,6 +72,8 @@ MOE_SENDER_DROPPED_ASSIGNMENTS_METRIC = "moe/sender_dropped_assignments"
 MOE_RECEIVER_DROPPED_ASSIGNMENTS_METRIC = "moe/receiver_dropped_assignments"
 MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC = "moe/skipped_padding_assignments"
 MOE_VALID_ASSIGNMENTS_METRIC = "moe/valid_assignments"
+# EP backends whose return trip is sized by the expert output, so ``w_down`` may write a different width.
+_RECTANGULAR_EP_MOE_IMPLEMENTATIONS = ("fixed_pooled_wave_all_to_all", "ragged_all_to_all")
 
 
 def moe_routing_stats(
@@ -364,6 +367,7 @@ class MoEExpertMlp(eqx.Module):
         *,
         num_experts: int,
         hidden_dim: int,
+        output_dim: int,
         intermediate_dim: int,
         initializer_std: float,
         key: jax.Array,
@@ -378,6 +382,8 @@ class MoEExpertMlp(eqx.Module):
         expert_remat: bool = True,
         pspecs: MoEExpertMlpPspecs = MoEExpertMlpPspecs(),
     ) -> "MoEExpertMlp":
+        """``hidden_dim`` is the experts' input width (``w_gate``/``w_up`` rows) and ``output_dim`` their output
+        width (``w_down`` columns); they differ when the experts read and write different spaces."""
         resolved_implementation = resolve_moe_implementation(implementation)
         k_gate, k_up, k_down = jax.random.split(key, 3)
         # `w_gate`/`w_up` contract over `hidden_dim`, so their fan-in moves when the experts run
@@ -386,7 +392,7 @@ class MoEExpertMlp(eqx.Module):
         w_gate = _init_weight(k_gate, (num_experts, hidden_dim, intermediate_dim), gate_up_std)
         w_up = _init_weight(k_up, (num_experts, hidden_dim, intermediate_dim), gate_up_std)
         w_down = _reshard_for_init(
-            _init_weight(k_down, (num_experts, intermediate_dim, hidden_dim), initializer_std),
+            _init_weight(k_down, (num_experts, intermediate_dim, output_dim), initializer_std),
             pspecs.w_down,
         )
         return MoEExpertMlp(
@@ -413,7 +419,7 @@ class MoEExpertMlp(eqx.Module):
         token_valid: Bool[Array, "T"] | None = None,
         mesh: jax.sharding.AbstractMesh | None = None,
         report_capacity_overflow: bool = False,
-    ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], MoeDispatchCounts]:
+    ) -> Float[Array, "T O"] | tuple[Float[Array, "T O"], MoeDispatchCounts]:
         w_gate_up = jnp.concatenate([self.w_gate, self.w_up], axis=-1)
         return moe_mlp(
             x,
@@ -441,7 +447,7 @@ def moe_mlp(
     selected_experts: Int[Array, "T K"],
     combine_weights: Float[Array, "T K"],
     w_up_gate: Float[Array, "E D I2"],
-    w_down: Float[Array, "E I D"],
+    w_down: Float[Array, "E I O"],
     *,
     token_valid: Bool[Array, "T"] | None = None,
     activation: MoeActivation = ActivationFunctionEnum.silu,
@@ -454,7 +460,7 @@ def moe_mlp(
     num_expert_waves: int = 1,
     fp8_dispatch: bool = False,
     expert_remat: bool = True,
-) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], MoeDispatchCounts]:
+) -> Float[Array, "T O"] | tuple[Float[Array, "T O"], MoeDispatchCounts]:
     """Functional routed MoE MLP core used by Grug modules and benchmarks.
 
     This helper handles dispatch/permute/unpermute (+EP collectives) from
@@ -474,6 +480,9 @@ def moe_mlp(
     destination pool. `num_expert_waves` sets the static wave count for the
     fixed pooled-wave implementation. `fp8_dispatch` sends that implementation's
     dispatched activations as block-scaled FP8 (combine and backward stay bf16).
+
+    The output width ``O`` (``w_down``'s last dim) may differ from the input width ``D`` only on the
+    ``scatter`` local path and the ``fixed_pooled_wave_all_to_all`` / ``ragged_all_to_all`` EP paths.
     """
     resolved_implementation = resolve_moe_implementation(implementation)
     if fp8_dispatch and resolved_implementation != "fixed_pooled_wave_all_to_all":
@@ -525,6 +534,18 @@ def moe_mlp(
 
     has_expert_axis = _mesh_has_axis(mesh, "expert")
     expert_axis_size = _mesh_axis_size(mesh, "expert")
+    if w_down.shape[-1] != x.shape[-1]:
+        ep_active = mesh is not None and not mesh.empty and has_expert_axis and expert_axis_size > 1
+        rectangular_ok = (
+            resolved_implementation in _RECTANGULAR_EP_MOE_IMPLEMENTATIONS
+            if ep_active
+            else resolved_implementation not in _LOCAL_MOE_IMPLEMENTATIONS or resolved_implementation == "scatter"
+        )
+        if not rectangular_ok:
+            raise ValueError(
+                f"implementation={resolved_implementation!r} needs w_down output dim ({w_down.shape[-1]}) equal to "
+                f"the input dim ({x.shape[-1]})"
+            )
 
     if mesh is None or mesh.empty:
         out, dropped = _moe_mlp_local(

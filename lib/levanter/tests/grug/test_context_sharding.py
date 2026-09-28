@@ -83,7 +83,7 @@ def test_drop_totals_count_each_assignment_once_when_tokens_skip_the_context_axi
         def dropped(mesh):
             with set_mesh(mesh):
                 experts = MoEExpertMlp.init(
-                    num_experts=num_experts, hidden_dim=hidden_dim, intermediate_dim=8,
+                    num_experts=num_experts, hidden_dim=hidden_dim, output_dim=hidden_dim, intermediate_dim=8,
                     initializer_std=0.1, key=jax.random.key(0),
                     implementation="fixed_all_to_all", capacity_factor=0.5,
                 )

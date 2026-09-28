@@ -59,5 +59,5 @@ def _moe_mlp_local_scatter(
 
     with jax.named_scope("scatter"):
         weighted = _zero_inactive_grouped_rows(out_dispatch * w_dispatch[:, None], cumulative_group_sizes)
-        out = jnp.zeros_like(x).at[token_dispatch].add(weighted, mode="drop")
+        out = jnp.zeros((x.shape[0], moe_w2.shape[-1]), x.dtype).at[token_dispatch].add(weighted, mode="drop")
     return out, _zero_dropped_assignments()

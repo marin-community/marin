@@ -313,6 +313,10 @@ class GrugModelConfig:
     num_experts_per_token: int = 8
     # LatentMoE (arXiv 2601.18089); latent RMSNorm per issue #6822.
     latent_dim: int | None = 256
+    latent_out_dim: int | None = None
+    """Width the routed experts write (``w_down``'s output dim); None: their input width (``latent_dim``, or
+    ``hidden_dim`` without a latent). ``w_latent_up`` maps it to ``hidden_dim`` and is dropped when it equals
+    ``hidden_dim`` (the experts write the stream directly). Splits LatentMoE's read and write compression."""
     num_layers: int = 6
     num_heads: int = 4
     num_kv_heads: int = 1
@@ -923,6 +927,12 @@ class GrugModelConfig:
             raise ValueError(f"qb_bias_damping must be in (0, 1], got {self.qb_bias_damping}")
         if self.simbal_loss_weight > 0 and (self.dense_mlp or self.router_rank):
             raise ValueError("simbal_loss_weight needs a MoE with a full-rank router")
+        if self.latent_out_dim is not None and (
+            self.dense_mlp or self.latent_write_select or self.moe_bank2_experts or self.num_null_experts
+        ):
+            raise ValueError(
+                "latent_out_dim needs routed experts and no latent_write_select, moe_bank2 or zero-computation experts"
+            )
         if self.erc_loss_weight > 0 and (self.dense_mlp or self.router_rank or self.moe_bank2_experts):
             raise ValueError("erc_loss_weight needs a MoE with a full-rank router and one expert bank")
 
@@ -939,6 +949,23 @@ class GrugModelConfig:
                 raise ValueError(f"memory_layers must be distinct layers in 0..{self.num_layers - 1}")
             if self.memory_key_dim % 2 or self.memory_topk > self.memory_keys:
                 raise ValueError("memory_key_dim must be even and memory_topk <= memory_keys")
+
+    @property
+    def expert_in_dim(self) -> int:
+        """Width the routed experts read."""
+        return self.latent_dim if self.latent_dim is not None else self.hidden_dim
+
+    @property
+    def expert_out_dim(self) -> int:
+        """Width the routed experts write (``latent_out_dim``)."""
+        return self.latent_out_dim if self.latent_out_dim is not None else self.expert_in_dim
+
+    @property
+    def has_latent_up(self) -> bool:
+        """The MoE maps the experts' output to ``hidden_dim`` with ``w_latent_up``."""
+        if self.latent_out_dim is not None:
+            return self.latent_out_dim != self.hidden_dim
+        return self.latent_dim is not None and not self.latent_write_select
 
     @property
     def num_null_experts(self) -> int:
@@ -1482,6 +1509,11 @@ def _learned_knob_stats(layer: "Block", i: int) -> dict[str, jax.Array]:
         stats[f"attn_res_knob_comba_d_L{i}"] = jnp.mean(comba_d)
         stats[f"attn_res_knob_comba_d_min_L{i}"] = jnp.min(comba_d)
         stats[f"attn_res_knob_comba_d_max_L{i}"] = jnp.max(comba_d)
+    if isinstance(layer.mlp, MoEMLP) and layer.mlp.cfg.latent_out_dim is not None:
+        em = layer.mlp.expert_mlp
+        read = [em.w_up] if em.w_gate is None else [em.w_gate, em.w_up]
+        stats[f"attn_res_knob_expert_read_pr_L{i}"] = _participation_ratio(read, "eri,esi->rs")
+        stats[f"attn_res_knob_expert_write_pr_L{i}"] = _participation_ratio([em.w_down], "eir,eis->rs")
     # Mean |gamma| of the zero-centered gains: the attention / MLP pre-norms, and every norm inside the mixer
     # and MoE (KV latent, KDA output, latent / router norms) plus the Peri-LN output norms.
     groups = {
@@ -1519,6 +1551,19 @@ def _router_knob_stats(mlp: "MoEMLP", i: int) -> dict[str, jax.Array]:
         stats[f"attn_res_knob_router_norm_L{i}"] = jnp.sqrt(jnp.sum(jnp.square(norms)))
         stats[f"attn_res_knob_router_col_cos_abs_L{i}"] = (jnp.sum(jnp.abs(cos)) - n) / (n * (n - 1))
     return stats
+
+
+def _participation_ratio(weights: list[jax.Array], gram_spec: str) -> jax.Array:
+    """``tr(G)^2 / tr(G^2)`` of the summed Gram ``G`` of the expert banks over one side (``gram_spec`` contracts
+    the experts and the other side): the number of input (read) or output (write) channels the experts use."""
+    gram = functools.reduce(
+        jnp.add,
+        [
+            jnp.einsum(gram_spec, w, w, out_sharding=P(None, None))
+            for w in (jax.lax.stop_gradient(w).astype(jnp.float32) for w in weights)
+        ],
+    )
+    return jnp.trace(gram) ** 2 / jnp.sum(jnp.square(gram))
 
 
 _LATENT_SELECT_SALT = 0x5E1EC7
@@ -2162,7 +2207,7 @@ class MoEMLP(eqx.Module):
         d, e = cfg.hidden_dim, cfg.num_experts + cfg.num_null_experts
         # Routed experts live in the latent space; the router reads the full-width token, so its
         # own projection keeps `hidden_dim`.
-        expert_width = cfg.latent_dim if cfg.latent_dim is not None else d
+        expert_width, out_width = cfg.expert_in_dim, cfg.expert_out_dim
         latent = cfg.latent_dim
         selects = cfg.latent_select and (
             cfg.latent_select_layers == "all" or (cfg.latent_select_layers == "kda") == use_kda
@@ -2197,19 +2242,19 @@ class MoEMLP(eqx.Module):
             ),
             latent_norm=None if latent is None else _learned_rms_norm(cfg, latent, cfg.layer_norm_eps),
             w_latent_up=(
-                None
-                if latent is None or cfg.latent_write_select
-                else reshard(_init_weight(k_up, (latent, d), cfg.initializer_std), P("model", _FSDP_AXES))
+                reshard(_init_weight(k_up, (out_width, d), cfg.initializer_std), P("model", _FSDP_AXES))
+                if cfg.has_latent_up
+                else None
             ),
             latent_out_norm=(
-                _learned_rms_norm(cfg, latent, cfg.layer_norm_eps)
-                if latent is not None and cfg.latent_out_norm
+                _learned_rms_norm(cfg, out_width, cfg.layer_norm_eps)
+                if cfg.latent_out_norm and (latent is not None or cfg.latent_out_dim is not None)
                 else None
             ),
             latent_select_mask=_latent_select_mask(cfg, layer_index) if selects else None,
-            expert_mlp=_expert_mlp_init(_bank_config(cfg, 1), expert_width, k_expert),
+            expert_mlp=_expert_mlp_init(_bank_config(cfg, 1), expert_width, out_width, k_expert),
             expert_mlp_b=(
-                _expert_mlp_init(_bank_config(cfg, 2), expert_width, random.fold_in(k_expert, 2))
+                _expert_mlp_init(_bank_config(cfg, 2), expert_width, out_width, random.fold_in(k_expert, 2))
                 if cfg.moe_bank2_experts
                 else None
             ),
@@ -2322,7 +2367,7 @@ class MoEMLP(eqx.Module):
         router_logits: Float[Array, "T E"],
         selected_experts: Int[Array, "T K"],
         unbiased_topk: Float[Array, "T K"],
-    ) -> Float[Array, "T L"]:
+    ) -> Float[Array, "T O"]:
         """Zero-valued term carrying the dense router gradient of ``moe_dense_router_grad``."""
         if self.cfg.router_combine != RouterCombine.SIGMOID_RENORM:
             raise ValueError("moe_dense_router_grad supports only the renormalized-sigmoid combine")
@@ -2344,13 +2389,13 @@ class MoEMLP(eqx.Module):
         hidden = em.activation.to_jax_fn()(gate) * up
         down_spec = _padded_spec(em.w_down)
         expert_out = jnp.einsum(
-            "ei,eil->el", hidden, sg(em.w_down).astype(jnp.float32), out_sharding=P(down_spec[0], down_spec[2])
+            "ei,eio->eo", hidden, sg(em.w_down).astype(jnp.float32), out_sharding=P(down_spec[0], down_spec[2])
         )
         expert_out = reshard(expert_out, P(None, None))
         denom = sg(jnp.sum(jax.nn.sigmoid(unbiased_topk), axis=-1, keepdims=True))
         weights = jax.nn.sigmoid(router_logits) * (self.cfg.routing_renorm_sum / (denom + 1e-9))
         delta = (weights - sg(weights)) * (1.0 - selected)
-        return jnp.einsum("te,el->tl", delta, expert_out, out_sharding=_partition_spec_of(routed_input))
+        return jnp.einsum("te,eo->to", delta, expert_out, out_sharding=_partition_spec_of(routed_input))
 
     def _null_qb_stats(
         self, margins: Float[Array, "T N"], selected_experts: Int[Array, "T K"], mesh: jax.sharding.AbstractMesh
@@ -3135,11 +3180,12 @@ def _batch_shards() -> int:
     return math.prod(mesh.shape[a] for a in axes)
 
 
-def _expert_mlp_init(cfg: "GrugModelConfig", expert_width: int, key: PRNGKeyArray) -> MoEExpertMlp:
+def _expert_mlp_init(cfg: "GrugModelConfig", in_width: int, out_width: int, key: PRNGKeyArray) -> MoEExpertMlp:
     """The routed expert bank; ``moe_ungated_relu2`` drops the gate (``w_gate=None``) and uses ReLU."""
     mlp = MoEExpertMlp.init(
         num_experts=cfg.num_experts,
-        hidden_dim=expert_width,
+        hidden_dim=in_width,
+        output_dim=out_width,
         intermediate_dim=cfg.intermediate_dim,
         initializer_std=cfg.initializer_std,
         key=key,

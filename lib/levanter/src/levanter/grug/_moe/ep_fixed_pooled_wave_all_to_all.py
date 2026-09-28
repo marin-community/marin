@@ -642,7 +642,7 @@ def _moe_mlp_ep_fixed_pooled_wave_a2a_local(
     if fp8_dispatch and local_experts > jnp.iinfo(jnp.uint8).max:
         raise ValueError(f"fp8_dispatch sends expert ids as bytes; local expert count={local_experts} exceeds 255")
 
-    tokens_per_shard, hidden_dim = x_local.shape
+    tokens_per_shard = x_local.shape[0]
     expert_shards = num_experts // local_experts
     topk = selected_experts_local.shape[1]
     assignments_per_shard = tokens_per_shard * topk
@@ -693,7 +693,7 @@ def _moe_mlp_ep_fixed_pooled_wave_a2a_local(
         if expert_remat
         else lambda fn: fn
     )
-    out_local = jnp.zeros((tokens_per_shard, hidden_dim), dtype=jnp.float32)
+    out_local = jnp.zeros((tokens_per_shard, moe_w2_local.shape[-1]), dtype=jnp.float32)
     receiver_dropped = jnp.array(0, dtype=jnp.int32)
     for wave_index in range(num_waves):
         wave_sender_keep = sender_keep & (assignment_waves == wave_index)

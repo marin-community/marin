@@ -258,9 +258,9 @@ def _active_params(cfg: GrugModelConfig) -> int:
     attn = 2 * d * cfg.num_heads * cfg.head_dim + 2 * d * cfg.num_kv_heads * cfg.head_dim
     if cfg.dense_mlp:
         return cfg.num_layers * (attn + 3 * d * cfg.intermediate_dim)
-    expert_width = cfg.latent_dim if cfg.latent_dim is not None else d
-    routed = cfg.num_experts_per_token * 3 * expert_width * cfg.intermediate_dim
-    latent_proj = 0 if cfg.latent_dim is None else 2 * d * cfg.latent_dim
+    routed = cfg.num_experts_per_token * (2 * cfg.expert_in_dim + cfg.expert_out_dim) * cfg.intermediate_dim
+    latent_down = 0 if cfg.latent_dim is None else d * cfg.latent_dim
+    latent_proj = latent_down + (d * cfg.expert_out_dim if cfg.has_latent_up else 0)
     shared = cfg.num_shared_experts * 3 * d * cfg.shared_expert_intermediate_dim
     router = d * (cfg.num_experts + cfg.num_null_experts)
     return cfg.num_layers * (attn + router + routed + latent_proj + shared)

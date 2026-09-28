@@ -529,14 +529,22 @@ def _compute_flops(
             global_kv_heads=model_config.global_kv_heads,
         )
         # `lm_flops_per_token` prices every matmul at `hidden_dim`. Under LatentMoE the routed experts
-        # live at `latent_dim` instead, and two projections are added per layer, so correct both terms
-        # or MFU is overstated by roughly the compression ratio.
-        if model_config.latent_dim is not None:
-            latent, hidden = model_config.latent_dim, model_config.hidden_dim
-            # Matches the routed term in `lm_flops_per_token`: 2 * 3 * width * intermediate * top_k.
-            routed_delta = 2 * 3 * model_config.intermediate_dim * model_config.num_experts_per_token * (latent - hidden)
-            # W_down (hidden -> latent) and W_up (latent -> hidden), once per token each.
-            projection = 2 * 2 * hidden * latent
+        # read `expert_in_dim` and write `expert_out_dim` instead, plus the latent projections, so correct
+        # both terms or MFU is overstated by roughly the compression ratio.
+        if model_config.latent_dim is not None or model_config.latent_out_dim is not None:
+            hidden = model_config.hidden_dim
+            read, write = model_config.expert_in_dim, model_config.expert_out_dim
+            # Matches the routed term in `lm_flops_per_token`: 2 * (gate + up + down) * intermediate * top_k.
+            routed_delta = (
+                2
+                * model_config.intermediate_dim
+                * model_config.num_experts_per_token
+                * (2 * (read - hidden) + (write - hidden))
+            )
+            # W_latent_down (hidden -> read) and W_latent_up (write -> hidden), once per token each.
+            down = read if model_config.latent_dim is not None else 0
+            up = write if model_config.has_latent_up else 0
+            projection = 2 * hidden * (down + up)
             flops_per_token += model_config.num_layers * (routed_delta + projection)
 
     # The last layer is forced global even when depth is not a multiple of `global_every`; add the one

@@ -410,10 +410,16 @@ def _moe_mlp_ep_ragged_a2a_local(
         )
 
     expert_mlp = _select_expert_mlp(activation_fn, ungated=_is_ungated(moe_w13_local, moe_w2_local))
+    if expert_mlp is _cute_expert_mlp and moe_w2_local.shape[-1] != hidden_dim:
+        raise ValueError("the QuACK grouped-GEMM expert MLP needs w_down output dim equal to the input dim")
     chunk_of_expert = (jnp.arange(num_experts, dtype=jnp.int32) % local_experts) // chunk_experts  # [E]
     # Unwritten rows remain zero for the final combine.
     returned = _loop_local_zeros(
-        assignments_per_shard, hidden_dim, x_local.dtype, group_sizes, site=_LoopLocalZeroSite.RETURN_OUTPUT
+        assignments_per_shard,
+        moe_w2_local.shape[-1],
+        x_local.dtype,
+        group_sizes,
+        site=_LoopLocalZeroSite.RETURN_OUTPUT,
     )  # [TK, H]
     accepted_local = jnp.zeros((), dtype=jnp.int32)
     for chunk_index in range(chunks):
