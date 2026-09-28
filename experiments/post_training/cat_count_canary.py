@@ -44,7 +44,7 @@ from experiments.post_training.cat_count_data import (
 )
 
 EXPERIMENT_NAME = "cat-count-canary"
-CLUSTER = "cw-rno2a"
+CLUSTER = "cw-us-east-02a"
 GPU_VARIANT = "H100"
 GPUS_PER_NODE = 2
 TRAIN_NS = DEFAULT_TRAIN_NS
