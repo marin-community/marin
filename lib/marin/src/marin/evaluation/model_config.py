@@ -13,7 +13,12 @@ from pathlib import Path
 import draccus
 from rigging.filesystem.storage_path import StoragePath
 
-from marin.inference.config import SpeculativeServingConfig, resolve_tokenizer_revision, validate_pipeline_args
+from marin.inference.config import (
+    ObjectStoreLoadMode,
+    SpeculativeServingConfig,
+    resolve_tokenizer_revision,
+    validate_pipeline_args,
+)
 
 
 class ServeBackend(StrEnum):
@@ -94,6 +99,7 @@ class ServeConfig:
     vllm_use_flashinfer_sampler: bool | None = None
     runai_streamer_concurrency: int | None = None
     runai_streamer_s3_request_timeout_ms: int | None = None
+    object_store_load_mode: ObjectStoreLoadMode = ObjectStoreLoadMode.STREAM
     vllm_extra_args: tuple[str, ...] = ()
     speculative: SpeculativeServingConfig | None = None
     chat_template: str | None = None

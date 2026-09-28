@@ -35,6 +35,7 @@ from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
     IrisConfig,
     LevanterEngineConfig,
+    ObjectStoreLoadMode,
     ResolvedModelLocator,
     ServedModelConfig,
     ServingGeometry,
@@ -51,7 +52,7 @@ from marin.inference.dashboard_server import (
     build_dashboard_app,
     serve_app_background,
 )
-from marin.inference.iris import IrisServiceConfig, _resolved_engine, _resolved_model, run_iris_service
+from marin.inference.iris import IrisServiceConfig, _resolved_engine, _resolved_model, _staged_model, run_iris_service
 from marin.inference.iris_cli import (
     _checkout_free_setup_script,
     _mint_and_print_capability_url,
@@ -79,6 +80,7 @@ from marin.inference.vllm_server import (
     PreinstalledVllm,
     VllmType,
 )
+from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Timestamp
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse, PlainTextResponse, StreamingResponse
@@ -341,6 +343,42 @@ def test_resolved_model_keeps_requested_id_as_served_name(monkeypatch):
 
     assert resolved.weights == "gs://cache/quick-serve/qwen3-0.6b"
     assert resolved.model_id == "Qwen/Qwen3-0.6B"
+
+
+def test_staged_model_downloads_remote_weights_to_temporary_directory(monkeypatch):
+    observed: dict[str, object] = {}
+
+    def download_to(self, local_path, *, recursive=False, callback=None, batch_size=None):
+        observed.update(source=str(self), local_path=local_path, recursive=recursive, batch_size=batch_size)
+        destination = Path(local_path)
+        destination.mkdir()
+        (destination / "config.json").write_text("{}")
+
+    monkeypatch.setattr(StoragePath, "download_to", download_to)
+    model = ServedModelConfig(
+        weights="s3://models/large",
+        object_store_load_mode=ObjectStoreLoadMode.STAGE_LOCAL,
+    )
+
+    with _staged_model(model) as staged:
+        assert staged.weights != model.weights
+        assert Path(staged.weights, "config.json").is_file()
+        staged_path = Path(staged.weights)
+
+    assert observed["source"] == "s3://models/large"
+    assert observed["recursive"] is True
+    assert observed["batch_size"] == 16
+    assert not staged_path.exists()
+
+
+def test_staged_model_leaves_local_weights_unchanged(tmp_path):
+    model = ServedModelConfig(
+        weights=str(tmp_path),
+        object_store_load_mode=ObjectStoreLoadMode.STAGE_LOCAL,
+    )
+
+    with _staged_model(model) as staged:
+        assert staged is model
 
 
 def test_speculative_model_uses_resolved_uri_in_vllm_launch(monkeypatch):
