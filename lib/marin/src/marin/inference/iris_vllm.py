@@ -7,6 +7,7 @@ import contextlib
 import logging
 import os
 import threading
+import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 
@@ -68,6 +69,8 @@ class IrisVllmLaunch:
     host_ip: str
     gloo_interface: str
     coordinator_name: str
+    tensor_parallel_size: int
+    data_parallel_size: int
 
     @property
     def is_leader(self) -> bool:
@@ -85,6 +88,7 @@ class IrisVllmLaunch:
 def iris_vllm_launch(
     *,
     pipeline_parallel_size: int,
+    tensor_parallel_size: int,
     data_parallel_size: int,
 ) -> Iterator[IrisVllmLaunch]:
     """Bootstrap a stage-striped native-vLLM task from Iris metadata."""
@@ -128,6 +132,7 @@ def iris_vllm_launch(
         yield _build_task_launch(
             job_info,
             pipeline_parallel_size=pipeline_parallel_size,
+            tensor_parallel_size=tensor_parallel_size,
             data_parallel_size=data_parallel_size,
             master_addr=master_addr,
             coordinator_name=coordinator_name,
@@ -143,16 +148,19 @@ def wait_for_iris_vllm_shutdown(
         raise RuntimeError("The vLLM leader does not wait for follower shutdown")
     client = _coordinator_client(launch.coordinator_name)
 
-    def shutdown_requested() -> bool:
-        if client.shutdown_requested():
-            return True
-        check_alive()
-        return False
+    stopped = False
 
-    _wait_until(
-        shutdown_requested,
-        error_message="Timed out waiting for the vLLM leader to finish",
-    )
+    def coordinator_available() -> bool:
+        nonlocal stopped
+        check_alive()
+        stopped = client.shutdown_requested()
+        return True
+
+    polling = ExponentialBackoff(initial=_POLL_SECONDS, maximum=30.0)
+    while not stopped:
+        _wait_until(coordinator_available, error_message="Timed out contacting the vLLM leader")
+        if not stopped:
+            time.sleep(polling.next_interval())
     logger.info("vLLM follower %d received shutdown", launch.task_index)
 
 
@@ -203,21 +211,20 @@ def _build_task_launch(
     job_info: JobInfo,
     *,
     pipeline_parallel_size: int,
+    tensor_parallel_size: int,
     data_parallel_size: int,
     master_addr: str,
     coordinator_name: str,
 ) -> IrisVllmLaunch:
     args = (
         "--tensor-parallel-size",
-        "1",
+        str(tensor_parallel_size),
         "--pipeline-parallel-size",
         str(pipeline_parallel_size),
         "--data-parallel-size",
         str(data_parallel_size),
         "--data-parallel-size-local",
         str(data_parallel_size),
-        "--data-parallel-start-rank",
-        "0",
         "--nnodes",
         str(pipeline_parallel_size),
         "--node-rank",
@@ -227,8 +234,10 @@ def _build_task_launch(
         "--master-port",
         str(_MASTER_PORT),
         "--device-ids",
-        ",".join(str(index) for index in range(data_parallel_size)),
+        ",".join(str(index) for index in range(tensor_parallel_size * data_parallel_size)),
     )
+    if data_parallel_size > 1:
+        args = (*args, "--data-parallel-start-rank", "0")
     if job_info.task_index != 0:
         args = (*args, "--headless")
     host_ip, gloo_interface = _node_network(job_info)
@@ -239,6 +248,8 @@ def _build_task_launch(
         host_ip=host_ip,
         gloo_interface=gloo_interface,
         coordinator_name=coordinator_name,
+        tensor_parallel_size=tensor_parallel_size,
+        data_parallel_size=data_parallel_size,
     )
 
 

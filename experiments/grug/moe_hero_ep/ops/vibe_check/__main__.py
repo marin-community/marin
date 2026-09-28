@@ -16,13 +16,14 @@ from iris.client.client import IrisClient
 from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_value
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
+from experiments.grug.moe_hero_ep.checkpoints import hero_checkpoint_paths
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import SampleStore
 from experiments.grug.moe_hero_ep.ops.vibe_check.config import (
-    CHECKPOINT_RUNS,
     SAMPLING_GPUS_PER_NODE,
     STORE_ROOT,
     TARGET_CLUSTER,
     discover_requests,
+    sampling_model,
     sampling_resources,
     sampling_spec,
 )
@@ -78,7 +79,9 @@ def main(action: str, store_root: str, priority: str | None, submission: str) ->
                 handle.write(summary)
         return
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-    requests = discover_requests(CHECKPOINT_RUNS, spec, revision, target_cluster=TARGET_CLUSTER)
+    requests = discover_requests(
+        hero_checkpoint_paths(), spec, sampling_model(), revision, target_cluster=TARGET_CLUSTER
+    )
     if action == "inventory":
         for request in sorted(requests, key=lambda value: value.checkpoint.step):
             logger.info("%s step=%d %s", request.sample_id, request.checkpoint.step, request.checkpoint.uri)

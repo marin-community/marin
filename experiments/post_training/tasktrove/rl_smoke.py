@@ -12,14 +12,8 @@ Plan or run::
     python -m experiments.post_training.tasktrove.rl_smoke --version 2026.09.10.2
     python -m experiments.post_training.tasktrove.rl_smoke --version 2026.09.10.2 --run
 
-Submit from a CPU coordinator on the GPU cluster. Coordinator pods carry no cloud credentials,
-so the Daytona key is resolved on the submit host and forwarded::
-
-    uv run iris --config lib/iris/config/marin.yaml job run --no-wait --target-cluster cw-rno2a \\
-      --enable-extra-resources --cpu 4 --memory 16GB --disk 64GB --timeout 43200 --extra cpu \\
-      -e HF_TOKEN "$HF_TOKEN" \\
-      -e DAYTONA_API_KEY "$(gcloud secrets versions access 1 --secret=DAYTONA_RL_API_KEY --project=hai-gcp-models)" \\
-      -- python -m experiments.post_training.tasktrove.rl_smoke --version 2026.09.10.2 --run
+``--run`` validates the graph and submits a CPU coordinator to Iris. Set ``DAYTONA_API_KEY`` and
+``HF_TOKEN`` on the submit host; the coordinator forwards both without embedding them in its command.
 """
 
 from __future__ import annotations
@@ -27,14 +21,15 @@ from __future__ import annotations
 import click
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep
-from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_owned_name
+from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import (
+    IRIS_HUB_CLUSTER_CONFIG,
     ArtifactHfModel,
     IrisSkyRLExecution,
-    SkyRLModel,
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
+    SkyRLRun,
     SkyRLRuntime,
     SkyRLRuntimeProfile,
     SkyRLSpec,
@@ -72,14 +67,14 @@ ROLE_PLAN = SkyRLRolePlan(
     policy_num_gpus_per_node=GPUS_PER_NODE,
     num_inference_engines=GPUS_PER_NODE,
     inference_engine_tensor_parallel_size=1,
+    inference_engine_pipeline_parallel_size=1,
+    inference_engine_data_parallel_size=1,
+    inference_engine_expert_parallel_size=1,
     train_batch_size=SELECTED_TASKS,
     policy_mini_batch_size=SELECTED_TASKS,
     micro_train_batch_size_per_gpu=1,
     n_samples_per_prompt=2,
 )
-
-# The launcher defaults trainer.hf_hub_repo_id to an org repo the export job cannot create.
-OVERRIDES = ("++trainer.hf_hub_repo_id=null",)
 
 
 def rl_config_yaml(plan: SkyRLRolePlan) -> str:
@@ -156,11 +151,8 @@ trainer:
   epochs: 1
   max_steps: {MAX_STEPS}
   update_epochs_per_batch: 1
-  train_batch_size: {plan.train_batch_size}
-  policy_mini_batch_size: {plan.policy_mini_batch_size}
   eval_batch_size: {plan.train_batch_size}
   micro_forward_batch_size_per_gpu: 8
-  micro_train_batch_size_per_gpu: {plan.micro_train_batch_size_per_gpu}
   eval_before_train: false
   eval_interval: -1
   ckpt_interval: {MAX_STEPS}
@@ -168,6 +160,7 @@ trainer:
   enable_db_registration: false
   logger: console
   project_name: {WANDB_PROJECT}
+  hf_hub_repo_id: null
   policy:
     optimizer_config:
       lr: 2.0e-6
@@ -175,16 +168,10 @@ trainer:
     fsdp_config:
       cpu_offload: false
       reshard_after_forward: true
-  placement:
-    colocate_all: {str(plan.colocate_all).lower()}
-
 generator:
   backend: vllm
   model_dtype: bfloat16
   vllm_attention_backend: FLASH_ATTN
-  inference_engine_tensor_parallel_size: {plan.inference_engine_tensor_parallel_size}
-  num_inference_engines: {plan.num_inference_engines}
-  n_samples_per_prompt: {plan.n_samples_per_prompt}
   gpu_memory_utilization: 0.75
   enforce_eager: false
   run_engines_locally: true
@@ -208,7 +195,7 @@ trajectory_runner:
 """
 
 
-def smoke_step(release: ArtifactStep) -> ArtifactStep[SkyRLModel]:
+def smoke_step(release: ArtifactStep) -> ArtifactStep[SkyRLRun]:
     name = user_owned_name(RL_ARTIFACT_NAME)
     return skyrl_step(
         SkyRLSpec(
@@ -243,7 +230,6 @@ def smoke_step(release: ArtifactStep) -> ArtifactStep[SkyRLModel]:
             ),
             retention=SkyRLRetentionPolicy(resume_checkpoint_count=1, temporary_storage_ttl_days=1),
             seed=SEED,
-            overrides=OVERRIDES,
         ),
         IrisSkyRLExecution(
             cluster=CLUSTER,
@@ -253,13 +239,16 @@ def smoke_step(release: ArtifactStep) -> ArtifactStep[SkyRLModel]:
             disk="1TB",
             priority="interactive",
             max_retries=1,
+            target_cluster=CLUSTER,
+            parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
+            coordinator_timeout_hours=12,
             wandb_entity=None,
         ),
     )
 
 
 @click.command(help=__doc__)
-@build_options
+@rl_build_options
 def main() -> ArtifactStep:
     release = build_workflow(launch_commit()).release
     return smoke_step(release)

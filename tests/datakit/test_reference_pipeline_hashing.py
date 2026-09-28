@@ -21,6 +21,7 @@ from experiments.datakit import reference_pipeline
 from experiments.datakit.reference_pipeline import (
     SMOKE_SCALE,
     PoolConfig,
+    decontamination_steps,
     reference_datakit_steps,
     zephyr_datakit_steps,
 )
@@ -77,7 +78,7 @@ def test_benchmark_routes_every_stage_under_one_prefix():
 def test_no_region_path_in_hash_attrs_except_known_bloom_gap():
     # A region-specific gs:// path in a hash means byte-identical data gets a
     # different output path per region. The only remaining leak is the decontam
-    # bloom's EVAL_ROOT (tracked follow-up); everything else must be clean.
+    # bloom's eval root (tracked follow-up); everything else must be clean.
     for step in _build().all_steps:
         if step.name == "datakit/bloom/_combined_fixed":
             continue
@@ -128,6 +129,26 @@ def test_decon_drop_set_tracks_normalized_source_identity():
         scale=SMOKE_SCALE,
     )
     assert _steps_by_name(changed)["datakit/decon_drop/_combined"].hash_id != base
+
+
+def test_decontamination_mark_subset_preserves_full_graph_identity():
+    sources = _sources()
+    full = decontamination_steps(sources, scale=SMOKE_SCALE)
+    subset = decontamination_steps(sources, scale=SMOKE_SCALE, mark_source_names=["a"])
+
+    assert list(subset.marks) == ["a"]
+    assert subset.bloom.hash_id == full.bloom.hash_id
+    assert subset.drop_sets.hash_id == full.drop_sets.hash_id
+    assert subset.marks["a"].hash_id == full.marks["a"].hash_id
+
+
+def test_decontamination_eval_root_rekeys_bloom(monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", "gs://first-region")
+    first = decontamination_steps(_sources(), scale=SMOKE_SCALE)
+    monkeypatch.setenv("MARIN_PREFIX", "gs://second-region")
+    second = decontamination_steps(_sources(), scale=SMOKE_SCALE)
+
+    assert first.bloom.hash_id != second.bloom.hash_id
 
 
 def test_centroid_seed_rekeys_training():

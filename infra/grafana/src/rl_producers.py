@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The table behind the RL Post-training view's "Producers reporting this run" panel.
+"""The table behind the RL Post-training view's "Services reporting this run" panel.
 
 A run reports through several namespaces and the panel shows which of them did. Which namespaces
 exist is a property of the deployment, and naming an absent one fails the statement at plan time,

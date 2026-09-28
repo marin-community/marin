@@ -1,7 +1,6 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 import functools
-import inspect
 import math
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -27,13 +26,11 @@ from levanter.kernels.pallas.splash_attention import (
     splash_partition_spec_shard_factor,
 )
 
-_SHARD_MAP_CHECK_KWARG = "check_vma" if "check_vma" in inspect.signature(shard_map).parameters else "check_rep"
-_SHARD_MAP_CHECK_KWARGS = {_SHARD_MAP_CHECK_KWARG: False}
 GrugAttentionImplementation = Literal[
     "reference",
     "tpu_splash",
     "gpu_fa4_cute",
-    "gpu_fa4_cute_wide",  # 128x64 forward tile. Measured faster only at the hero shape.
+    "gpu_fa4_cute_sm100",  # Native forward, one-block backward; opt-in SM100 D128 GQA.
 ]
 
 
@@ -416,7 +413,7 @@ def _tpu_splash_attention(
         mesh=mesh,
         in_specs=(q_pspec, k_pspec, v_pspec, segment_id_lowering.segment_ids_axes, None),
         out_specs=q_pspec,
-        **_SHARD_MAP_CHECK_KWARGS,
+        check_vma=False,
     )
     def wrap(q_bhsd, k_bhsd, v_bhsd, seg_ids, kernel):
         return jax.vmap(kernel, in_axes=(0, 0, 0, segment_id_lowering.segment_batch_axis))(
@@ -445,10 +442,10 @@ def attention(
         from levanter.grug.attention._fa4_cute import gpu_fa4_cute_attention  # noqa: PLC0415
 
         return gpu_fa4_cute_attention(q, k, v, mask)
-    if implementation == "gpu_fa4_cute_wide":
-        from levanter.grug.attention._fa4_cute import gpu_fa4_cute_wide_attention  # noqa: PLC0415
+    if implementation == "gpu_fa4_cute_sm100":
+        from levanter.grug.attention._fa4_cute import gpu_fa4_cute_sm100_attention  # noqa: PLC0415
 
-        return gpu_fa4_cute_wide_attention(q, k, v, mask)
+        return gpu_fa4_cute_sm100_attention(q, k, v, mask)
     if implementation == "tpu_splash":
         if isinstance(mask, jax.Array):
             raise NotImplementedError("Dense masks are not supported for splash attention.")

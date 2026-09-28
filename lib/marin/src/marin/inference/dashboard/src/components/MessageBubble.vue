@@ -8,6 +8,7 @@ const props = defineProps<{
   message: ChatMessage
   /** True while this message is the one currently being streamed. */
   streaming: boolean
+  showVllmDebug: boolean
 }>()
 
 const rendered = computed(() =>
@@ -27,6 +28,10 @@ const empty = computed(
 )
 
 const copied = ref(false)
+
+function formatMetric(value: number | null | undefined, unit: string): string {
+  return value == null ? '—' : `${value.toFixed(1)} ${unit}`
+}
 
 async function copy() {
   if (props.message.role !== 'assistant') return
@@ -65,6 +70,21 @@ async function copy() {
         :active="thinkingActive"
         :seconds="message.thinkingSeconds"
       />
+      <details v-if="showVllmDebug && message.requestDebug" class="mb-2 rounded-lg border border-surface-border bg-surface-sunken px-3 py-2 text-xs text-text-secondary">
+        <summary class="cursor-pointer font-medium text-text-muted">Request stats</summary>
+        <p v-if="!message.requestDebug.metrics" class="mt-2 text-text-muted">
+          The server did not return timings. Start vLLM with --enable-per-request-metrics to show them.
+        </p>
+        <div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 font-mono">
+          <span title="Time to first token">TTFT {{ formatMetric(message.requestDebug.metrics?.time_to_first_token_ms, 'ms') }}</span>
+          <span>Queue {{ formatMetric(message.requestDebug.metrics?.queue_time_ms, 'ms') }}</span>
+          <span>Generation {{ formatMetric(message.requestDebug.metrics?.generation_time_ms, 'ms') }}</span>
+          <span>Mean inter-token {{ formatMetric(message.requestDebug.metrics?.mean_itl_ms, 'ms') }}</span>
+          <span>Output {{ formatMetric(message.requestDebug.metrics?.tokens_per_second, 'tokens/s') }}</span>
+          <span>Prompt tokens {{ message.requestDebug.usage?.prompt_tokens.toLocaleString() ?? '—' }}</span>
+          <span>Output tokens {{ message.requestDebug.usage?.completion_tokens.toLocaleString() ?? '—' }}</span>
+        </div>
+      </details>
       <div v-if="message.content" class="markdown-body text-[0.925rem] leading-relaxed" v-html="rendered"></div>
       <div v-if="message.toolCalls?.length" class="mt-2 space-y-1.5">
         <details

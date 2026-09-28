@@ -1,7 +1,7 @@
 # Harbor evaluation
 
-Marin runs Harbor benchmarks through the shared evaluation launcher. The launcher starts one model
-server, gives Harbor its Iris capability URL, normalizes completed trials into v2
+Marin runs Harbor benchmarks through the shared evaluation launcher. The launcher starts the model
+server and, when requested, a second shared judge server; gives Harbor their Iris capability URLs; and normalizes completed trials into v2
 `EvalRunRecord`/`EvalSample` artifacts, and tears inference down after the selected evaluations
 finish.
 
@@ -38,6 +38,24 @@ uv run python -m experiments.evaluation.cli launch \
 
 Use `--limit N` to cap the number of trials and `--no-wait` to return after submission.
 
+For a Harbor verifier that uses the OpenAI API, add a hosted judge to the same launch:
+
+```bash
+uv run python -m experiments.evaluation.cli launch \
+  --model qwen3-8b \
+  --platform gpu \
+  --judge-model qwen3.5-122b-a10b-fp8 \
+  --judge-accelerator H100x8 \
+  --harbor-config experiments/evaluation/configs/harbor/simpleqa-hosted-judge.yaml \
+  --federated_cluster cw-rno2a \
+  --limit 2
+```
+
+The launcher keeps one judge session alive and shares it across every evaluation in the batch. It
+overrides only the verifier's `OPENAI_BASE_URL`, `OPENAI_API_KEY`, and `MODEL_NAME`; the evaluated
+agent continues to use the candidate endpoint. Candidate and judge placement must resolve to the
+same cluster or region. The durable run record pins the judge model configuration and hardware.
+
 Launch a Harbor `JobConfig` without adding it to the catalog:
 
 ```bash
@@ -71,7 +89,8 @@ Do not put resolved credentials in model YAMLs, runner configs, or evaluation ar
 
 ## Endpoint lifecycle
 
-Harbor receives a `RunningModel` whose base URL is an Iris link endpoint. The inference runner
+Harbor receives a candidate `RunningModel` whose base URL is an Iris link endpoint. A hosted judge
+uses a separate capability URL injected into the verifier environment. The inference runner
 chooses the opaque endpoint name, registers either the direct server or broker proxy with Iris, and
 mints the capability URL. Daytona never receives a worker address.
 
@@ -152,6 +171,9 @@ The agent's `model_info.max_input_tokens` comes from the model's resolved `serve
 `model_info.max_output_tokens` from `generation.max_gen_toks`, so the agent compacts against the
 window the server actually offers. With `auto_overrides`, explicit context limits are clamped to the
 checkpoint's native window before Harbor preflight; the batch retains that resolved serving configuration.
+A Terminus-2 policy also receives the resolved output limit as `llm_call_kwargs.max_tokens`, which applies
+the budget to ordinary chat-completion requests. An explicit lower request limit in the policy wins; a
+request limit above `model_info.max_output_tokens` fails preflight.
 A policy may state a lower limit to keep headroom under that window, and the lower limit wins:
 `grug-opencode-id.yaml` asks for 64512 input tokens against a
 model serving 65536. A policy limit above the served one fails preflight, before Iris opens, with

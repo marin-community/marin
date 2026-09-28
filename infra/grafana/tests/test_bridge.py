@@ -593,6 +593,46 @@ def test_training_stall_alert_selects_named_hero_run_and_resolves_on_progress():
     ]
 
 
+def test_training_telemetry_query_keeps_phase_history_and_bounds_progress():
+    now = datetime(2026, 7, 28, 12, tzinfo=UTC)
+    database = duckdb.connect()
+    database.execute(
+        """
+        CREATE TABLE telemetry_v1(
+            cluster VARCHAR,
+            run_id VARCHAR,
+            job_id VARCHAR,
+            execution_uid VARCHAR,
+            process_index INTEGER,
+            name VARCHAR,
+            value DOUBLE,
+            step BIGINT,
+            timestamp_ms BIGINT,
+            seq BIGINT
+        )
+        """
+    )
+    database.execute('CREATE VIEW "levanter.metrics" AS SELECT * FROM telemetry_v1')
+    database.execute("CREATE MACRO to_timestamp_millis(value) AS to_timestamp(value / 1000.0)")
+    run = HeroRun("cw-a", "/hero/job", "hero-a", now - timedelta(hours=3))
+    rows = [
+        ("phase", 1.0, None, now - timedelta(hours=2), 1),
+        ("progress_time_seconds", 10.0, 10, now - timedelta(minutes=45), 2),
+        ("progress_time_seconds", 20.0, 20, now - timedelta(minutes=5), 3),
+    ]
+    database.executemany(
+        "INSERT INTO telemetry_v1 VALUES ('cw-a', 'hero-a', '/hero/job/train', " "'execution-a', 0, ?, ?, ?, ?, ?)",
+        [(name, value, step, int(at.timestamp() * 1000), seq) for name, value, step, at, seq in rows],
+    )
+
+    result = database.execute(telemetry_query(now, (run,))).fetch_arrow_table().to_pylist()
+    by_name = {row["name"]: row for row in result}
+
+    assert set(by_name) == {"phase", "progress_time_seconds", "step"}
+    assert by_name["progress_time_seconds"]["value"] == 20.0
+    assert by_name["step"]["value"] == 20.0
+
+
 def test_training_stall_alert_gives_a_new_execution_its_own_initialization_window():
     now = datetime(2026, 7, 28, 12, tzinfo=UTC)
     task_states = finelog_result(

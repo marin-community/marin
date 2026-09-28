@@ -1,4 +1,4 @@
 interface:
   display_name: "Consult Echo"
-  short_description: "Search and capture shared Marin knowledge"
-  default_prompt: "Use $consult-echo to find prior Marin context and capture reusable knowledge."
+  short_description: "Search or reuse shared Marin knowledge"
+  default_prompt: "Use $consult-echo to find prior Marin context once per logical investigation and reuse relevant results in follow-up turns."

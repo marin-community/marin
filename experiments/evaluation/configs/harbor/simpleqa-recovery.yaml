@@ -16,7 +16,8 @@ agents:
   - name: terminus-2
 datasets:
   - name: simpleqa
-    version: "1.0"
+    version: "1.1"
+    registry_url: "https://raw.githubusercontent.com/marin-community/harbor/ec23913e0b92bad6ec2db3fcac037bfee7dba591/registry.json"
 verifier:
   env:
     OPENAI_API_KEY: "${TOGETHER_API_KEY}"

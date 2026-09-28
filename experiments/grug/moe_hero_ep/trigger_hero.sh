@@ -11,11 +11,11 @@ fi
 mode=$1
 cd "$(dirname "${BASH_SOURCE[0]}")/../../.."
 
-# Checkpoint 121638 resumes at global_step 121638; parent W&B _step 121637
-# was verified to record global_step 121637 before the replayed window.
-RUN_ID=hero-main-step121638
-HANDOFF_CHECKPOINT=s3://hero-checkpoints/tmp/ttl=14d/checkpoints-temp/marin-us-east-02a/marin/grug/hero-nopdl-step108k/2026.08.19.2/checkpoints/step-121638
-WANDB_FORK_FROM='hero-nopdl-step108k?_step=121637'
+# Checkpoint 146139 was forced on hero-main-step121638 and copied out of the temporary tree to a
+# durable prefix; it resumes at global_step 146139. Parent W&B _step 146138 records global_step 146138.
+RUN_ID=$(uv run python -m experiments.grug.moe_hero_ep.current_run)
+HANDOFF_CHECKPOINT=s3://hero-checkpoints/marin/grug/hero-main-step121638/2026.08.19.2/checkpoints/step-146139
+WANDB_FORK_FROM='hero-main-step121638?_step=146138'
 WANDB_PROJECT=marin_moe
 IRIS_CONFIG=lib/iris/config/marin.yaml
 HERO_ISSUE=https://github.com/marin-community/marin/issues/8506

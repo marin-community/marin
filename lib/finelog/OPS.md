@@ -90,6 +90,12 @@ row-group pruning worked and file metadata is the remaining cost. The
 tasks, not CPU time, so they overlap and do not sum to wall clock — treat a large
 one as a place to look, not as a measured cost.
 
+`EXPLAIN` itself can be slow when planning reads large trigram sections. If
+`EXPLAIN ANALYZE` reports little scan time and few scanned bytes, compare its
+wall time with plain `EXPLAIN` before tuning Parquet reads. For predicates on
+several indexed columns, Finelog checks range-constrained columns first and
+stops reading a segment's other index sections once its span mask is empty.
+
 An unbounded substring query (`col LIKE '%…%'`) prunes only when that column
 carries a trigram index; otherwise it decodes the column for every row in the
 namespace. `ListNamespaces` reports which columns are indexed. How much it prunes

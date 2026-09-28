@@ -3,49 +3,42 @@ name: "Ops - Nightshift CI Tests"
 on:
   schedule:
     - cron: '0 12 * * *'
-  workflow_dispatch: {}
+  workflow_dispatch:
 
 concurrency:
   group: nightshift-ci-tests
   cancel-in-progress: false
 
+permissions:
+  contents: read
+  id-token: write
+
 jobs:
   ci-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
-    permissions:
-      contents: write
-      pull-requests: write
-      issues: write
-      actions: read
-      id-token: write
+    timeout-minutes: 5
     steps:
-      - name: Generate app token
-        id: app-token
-        uses: actions/create-github-app-token@v3
+      - name: Checkout trusted workflow action
+        uses: actions/checkout@v6
         with:
-          app-id: ${{ secrets.NIGHTSHIFT_APP_ID }}
-          private-key: ${{ secrets.NIGHTSHIFT_APP_PRIVATE_KEY }}
-
-      - name: Checkout repository
-        uses: actions/checkout@v5
+          ref: main
+          persist-credentials: false
+          sparse-checkout: .github/actions/launch-loom-run
+          sparse-checkout-cone-mode: false
+      - name: Launch CI test audit
+        uses: ./.github/actions/launch-loom-run
         with:
-          fetch-depth: 0
-          token: ${{ steps.app-token.outputs.token }}
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-
-      - name: Install Claude Code
-        run: npm install -g @anthropic-ai/claude-code
-
-      - name: Audit recent CI tests
-        env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: python -m infra.cron.nightshift_ci_tests
+          profile: ${{ vars.LOOM_GITHUB_AUTOMATION_PROFILE }}
+          idempotency-key: nightshift-ci-tests:${{ github.run_id }}:${{ github.run_attempt }}
+          title: "Nightshift CI audit ${{ github.run_id }}"
+          goal: >-
+            Audit the last five completed main-branch runs of Marin - Unit and
+            Marin - Integration in ${{ github.repository }}. Use test logs to
+            find tests failing in at least two runs or taking at least 60
+            seconds in at least two runs. Treat instability as a hypothesis;
+            verify the test's purpose and failure cause before changing it.
+            Choose one high-value test or a coherent pair. Preserve useful
+            coverage and assertions. Follow AGENTS.md, TESTING.md, and the
+            commit skill; open a PR with agent-generated and nightshift labels
+            only for a supported fix. Publish a typed result either way.
+          base: ${{ github.sha }}

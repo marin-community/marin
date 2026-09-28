@@ -23,22 +23,13 @@ it is correct, and that you can explain why it matters.
 
 ## Setup
 
-1. Clone the repository
-2. Create and activate a virtual environment
-3. Install dependencies
-4. Set up the Git hook that runs `infra/pre-commit.py`
+Complete the [installation guide](../tutorials/installation.md), then install
+the development dependencies and the Git hook that runs `infra/pre-commit.py`:
 
 ```bash
-git clone https://github.com/marin-community/marin.git
-cd marin
-uv venv --python 3.12
-source .venv/bin/activate
 uv sync --package marin-core --group dev
 make setup_pre_commit
 ```
-
-Alternatively, you can install all the core dependencies and build the `marin-core`
-package with `make init`.
 
 ### Linting
 
