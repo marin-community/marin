@@ -218,9 +218,6 @@ class AsyncPreset:
     first_token_admission: bool = True
     # Export the telemetry the async RL dashboard reads.
     telemetry: bool = True
-    # Track the cosine between successive gradients; costs one fp32 gradient copy per rank and one
-    # all-reduce per update.
-    grad_cosine: bool = False
 
 
 # An evaluation pauses generation for 256 prompts, about 13 minutes against a 55 to 97 second
@@ -431,8 +428,6 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
             # Symmetric PPO clip.
             "eps_clip_low": 0.2,
             "eps_clip_high": 0.2,
-            "ratio_diagnostics": {"pooled": preset.telemetry},
-            "grad_cosine": {"enabled": preset.grad_cosine},
         },
         "policy": {
             "optimizer_config": {

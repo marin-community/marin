@@ -229,7 +229,7 @@ def test_priority_dashboards_use_only_bounded_panel_endpoints() -> None:
         "training.json": {"/v1/training/overview": (16, sections["training"])},
         "runs.json": {"/v1/runs/overview": (8, sections["runs"])},
         "rl_runs.json": {"/v1/rl/overview": (13, sections["rl"])},
-        "async_rl.json": {"/v1/async-rl/overview": (48, sections["async_rl"])},
+        "async_rl.json": {"/v1/async-rl/overview": (47, sections["async_rl"])},
         "jobs.json": {"/v1/jobs/overview": (17, sections["jobs"])},
         "accelerators.json": {"/v1/accelerator/overview": (18, sections["accelerator"])},
         "home.json": {

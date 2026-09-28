@@ -41,7 +41,7 @@ from marin.datakit.decon import DeconAttributes
 from marin.datakit.source_key import DatakitArtifactPath
 from marin.execution.artifact import write_artifact
 from marin.processing.classification.deduplication.verify_fuzzy_dups import (
-    VerifiedFuzzyDupsAttrData,
+    VerifiedFuzzyDupsArtifact,
     VerifiedFuzzyDupsPerSource,
 )
 from marin.processing.tokenize._core import CHUNK_INDEX_FIELD
@@ -87,6 +87,7 @@ class ClusteredStoreData(BaseModel):
     split: str
     buckets: list[BucketCacheStats]
     source_names: list[str]
+    fuzzy_exempt_sources: list[str] = []
     tokenizer: str
     counters: dict[str, int | float]
 
@@ -122,7 +123,7 @@ def _per_source_shard_tuples(
             "cluster": f"{cluster_dir}/{os.path.basename(tok_path)}",
             "quality": f"{quality_dir}/{os.path.basename(tok_path)}",
             "exact_dedup": f"{exact_dedup_dir}/{os.path.basename(tok_path)}",
-            "dedup": f"{dedup_dir}/{os.path.basename(tok_path)}",
+            "dedup": f"{dedup_dir}/{os.path.basename(tok_path)}" if dedup_dir else "",
             "source_name": source_name,
             "basename": os.path.basename(tok_path),
         }
@@ -371,7 +372,7 @@ def _iter_surviving_docs(
     expected_ids = decon_ids.to_pylist()
     del decon_ids, cluster_ids, quality_ids
     exact_duplicates = _load_exact_duplicates(spec["exact_dedup"])
-    verified_duplicates = _load_verified_duplicates(spec["dedup"])
+    verified_duplicates = _load_verified_duplicates(spec["dedup"]) if spec["dedup"] else set()
 
     doc_idx = 0
     for doc_id, ids in _iter_tokenized_documents(spec["tokenize"]):
@@ -629,10 +630,11 @@ def build_clustered_store(
     cluster_assign: dict[str, AssignmentAttrData],
     quality: dict[str, QualityScores],
     exact_dedup: GlobalExactDedupData,
-    dedup: VerifiedFuzzyDupsAttrData,
+    dedup: VerifiedFuzzyDupsArtifact,
     output_path: str,
     cluster_view: int = 40,
     split: str = "train",
+    fuzzy_exempt_sources: frozenset[str] = frozenset(),
     worker_resources: ResourceConfig | None = None,
     max_workers: int = 4096,
     task_count: int | None = None,
@@ -642,6 +644,8 @@ def build_clustered_store(
     """Build materialized caches for each populated ``(cluster, quality)`` bucket.
 
     Args:
+        fuzzy_exempt_sources: Registry source names that keep fuzzy matches.
+            Exact duplicate and decontamination filters still apply.
         task_count: Split input shards round-robin across this many tasks. When
             omitted, each input shard becomes one task.
         max_parallel_bucket_writes: Bucket caches finalized concurrently per
@@ -651,6 +655,8 @@ def build_clustered_store(
     """
     if not tokenize:
         raise ValueError("build_clustered_store: tokenize is empty")
+    if unknown := fuzzy_exempt_sources - tokenize.keys():
+        raise ValueError(f"Unknown fuzzy-exempt sources: {sorted(unknown)!r}")
     for label, d in (("decontam", decontam), ("cluster_assign", cluster_assign), ("quality", quality)):
         if set(d) != set(tokenize):
             missing = sorted(set(tokenize) - set(d))
@@ -716,7 +722,7 @@ def build_clustered_store(
             cluster_assign=cluster_assign[source_name],
             quality=quality[source_name],
             exact_dedup_attr_dir=exact_dedup_attr_dir,
-            dedup_attr_dir=dedup_attr_dir,
+            dedup_attr_dir="" if source_name in fuzzy_exempt_sources else dedup_attr_dir,
             split=split,
         )
 
@@ -796,6 +802,7 @@ def build_clustered_store(
         split=split,
         buckets=buckets,
         source_names=sorted(tokenize),
+        fuzzy_exempt_sources=sorted(fuzzy_exempt_sources),
         tokenizer=tokenizer,
         counters=artifact_counters,
     )
