@@ -43,18 +43,37 @@ records. Only source shards with duplicates get an attribute file; a missing
 file means that the source shard has no exact duplicates. The step does not copy
 normalized text.
 
-Fuzzy dedup first writes all members of each non-singleton candidate cluster.
-The next job joins these sparse attributes to normalized text and saved MinHash
-buckets. It selects the longest document from a bounded cluster head as the
-primary anchor. After a rejection, it ranks retained local representatives by
-their shared LSH buckets. The reference configuration permits two comparisons
-per member and 32 representatives per cluster. It limits local representative
-text to 2,000,000 characters per cluster. A local match needs an equal
-case-folded token sequence after whitespace normalization. Its line-count ratio
-must be at least 0.8. Low-diversity text needs exact normalized token-sequence
-containment when its distinct 3-gram ratio is less than 0.9. The job writes
-`dup_doc=true` only after a direct full-text match. The final store removes
-exact duplicates and verified fuzzy duplicates.
+Fuzzy dedup first writes every member of each non-singleton candidate cluster.
+The next three steps follow the `v11-c075-restored` run from
+[PR #8405](https://github.com/marin-community/marin/pull/8405):
+
+1. `large_fuzzy_clusters` samples every 256th candidate row within each shard.
+   It estimates component sizes and records components with at least 100,000 members.
+2. `fuzzy_cluster_text` joins candidates to normalized text. Components estimated
+   above 100,000 members use MinHash over 5-word shingles, then an ID-hash split
+   into 16 subdivisions. Each document retains at most 64 Mi characters.
+   The 8192 reduce tasks write up to 8 groups each, sorted by cluster key and ID.
+3. `verify_fuzzy_clusters` processes longer documents first. It removes a member
+   when a retained representative contains at least 75% of the member's distinct
+   word 3-grams. Groups of at most 256 members use an exact scan. Larger groups
+   use 32 probes, a posting threshold of 512, and at most 32 candidates.
+   The output records the representative, containment, Jaccard similarity,
+   distinct novel words, and comparison count.
+
+Verification retains at most 8 Mi characters per document and uses a 256 Mi-character
+cluster buffer. These limits, the split policy, and the indexed search can change
+removal decisions. Equal-length processing ties follow input order. Indexed
+candidate ties follow NumPy's selection order, as in the reference run.
+
+`FuzzyClusterConfig` exposes the content parameters and task resources. All content
+parameters enter the StepSpec identities. The source inputs and candidate plan
+are explicit dependencies. The CLI wrappers call the same library functions.
+
+The final store removes exact and verified fuzzy duplicates. Its default
+`StoreConfig.fuzzy_exempt_sources` preserves fuzzy matches for the 16 registry
+sources listed in #8405, including DNA and selected synthetic corpora. Exact
+deduplication and decontamination still apply to those sources. The exemption
+list is recorded in the store artifact and included in its identity.
 
 Global exact, fuzzy candidate, and fuzzy verification outputs write
 `.source_manifest.json` at the output root. The file maps each `source_NNN`
@@ -97,7 +116,9 @@ flowchart TD
     DF["eval n-gram DF (cross-source)<br/>datakit/decon_drop/_combined"]
     EXACT["global exact dedup by record ID<br/>datakit/global_exact_dedup"]
     DEDUP["fuzzy candidate clusters (cross-source)<br/>datakit/dedup"]
-    VERIFY["direct full-text verification<br/>datakit/verify_fuzzy_dups"]
+    PLAN["sample component sizes<br/>datakit/large_fuzzy_clusters"]
+    TEXT["group candidate text<br/>datakit/fuzzy_cluster_text"]
+    VERIFY["cluster containment verification<br/>datakit/verify_fuzzy_clusters"]
     STORE["store: shuffle attribute join, apply filters,<br/>group by (cluster_&lt;view&gt;, quality_bucket, subshard)<br/>datakit/store → cluster=C/quality=Q Levanter caches"]
 
     SRC --> EXACT
@@ -113,9 +134,10 @@ flowchart TD
     EMB --> SAMP --> KM --> ASG
     EMB --> ASG
     MH --> DEDUP
-    MH --> VERIFY
-    SRC --> VERIFY
-    DEDUP --> VERIFY
+    DEDUP --> PLAN --> TEXT
+    SRC --> TEXT
+    DEDUP --> TEXT
+    TEXT --> VERIFY
     TOK --> STORE
     ASG --> STORE
     QUAL --> STORE
