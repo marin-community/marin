@@ -68,9 +68,10 @@ class ServeConfig:
 
     ``backend`` selects vLLM or Levanter. Parallelism, context, and engine limits become first-class
     inference settings. The remaining typed vLLM fields map onto command-line flags or process
-    settings. The two ``vllm_*`` boolean process settings apply to GPU workers. ``vllm_extra_args``
-    is the escape hatch for flags without a typed field. Multi-node topology flags are owned by
-    the launcher; a typed GPU memory limit cannot also appear in the escape hatch.
+    settings. The two ``vllm_*`` boolean process settings and the RunAI S3 request timeout apply to
+    GPU workers. ``vllm_extra_args`` is the escape hatch for flags without a typed field. Multi-node
+    topology flags are owned by the launcher; a typed GPU memory limit cannot also appear in the
+    escape hatch.
 
     When ``auto_overrides`` is true, the lowering path inspects the Hugging Face ``config.json`` to
     fill portable architecture-specific vLLM flags and clamp an explicit context length to the
@@ -91,6 +92,7 @@ class ServeConfig:
     reasoning_parser: str | None = None
     vllm_batch_invariant: bool | None = None
     vllm_use_flashinfer_sampler: bool | None = None
+    runai_streamer_s3_request_timeout_ms: int | None = None
     vllm_extra_args: tuple[str, ...] = ()
     speculative: SpeculativeServingConfig | None = None
     chat_template: str | None = None
@@ -121,6 +123,11 @@ class ServeConfig:
                 raise ValueError("speculative serving requires the vLLM backend")
             if has_vllm_option(self.vllm_extra_args, "--speculative-config"):
                 raise ValueError("speculative serving conflicts with --speculative-config in extra args")
+        if self.runai_streamer_s3_request_timeout_ms is not None:
+            if self.runai_streamer_s3_request_timeout_ms <= 0:
+                raise ValueError("runai_streamer_s3_request_timeout_ms must be positive")
+            if self.backend is not ServeBackend.VLLM:
+                raise ValueError("runai_streamer_s3_request_timeout_ms requires the vLLM backend")
 
 
 @dataclass(frozen=True)

@@ -42,6 +42,7 @@ DEFAULT_SERVE_DISK = "100g"
 _QUIET_VLLM_ARGS = ("--uvicorn-log-level", "warning")
 _VLLM_BATCH_INVARIANT_ENV = "VLLM_BATCH_INVARIANT"
 _VLLM_FLASHINFER_SAMPLER_ENV = "VLLM_USE_FLASHINFER_SAMPLER"
+_RUNAI_STREAMER_S3_REQUEST_TIMEOUT_ENV = "RUNAI_STREAMER_S3_REQUEST_TIMEOUT_MS"
 _SPECULATIVE_METRIC_FAMILIES = frozenset(
     {
         "vllm:spec_decode_num_accepted_tokens",
@@ -217,7 +218,14 @@ def _vllm_engine_config(
 
 def _vllm_environment_variables(serve: ServeConfig, platform: Platform) -> dict[str, str]:
     """Validate and render catalog-owned vLLM process settings."""
-    has_process_setting = serve.vllm_batch_invariant is not None or serve.vllm_use_flashinfer_sampler is not None
+    has_process_setting = any(
+        setting is not None
+        for setting in (
+            serve.vllm_batch_invariant,
+            serve.vllm_use_flashinfer_sampler,
+            serve.runai_streamer_s3_request_timeout_ms,
+        )
+    )
     if has_process_setting and (serve.backend is not ServeBackend.VLLM or platform is not Platform.GPU):
         raise ValueError("vLLM process settings require the vLLM backend on GPU")
 
@@ -226,6 +234,8 @@ def _vllm_environment_variables(serve: ServeConfig, platform: Platform) -> dict[
         environment[_VLLM_BATCH_INVARIANT_ENV] = str(int(serve.vllm_batch_invariant))
     if serve.vllm_use_flashinfer_sampler is not None:
         environment[_VLLM_FLASHINFER_SAMPLER_ENV] = str(int(serve.vllm_use_flashinfer_sampler))
+    if serve.runai_streamer_s3_request_timeout_ms is not None:
+        environment[_RUNAI_STREAMER_S3_REQUEST_TIMEOUT_ENV] = str(serve.runai_streamer_s3_request_timeout_ms)
     return environment
 
 

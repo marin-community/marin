@@ -14,6 +14,9 @@ serve:
   max_num_seqs: 16
   limit_mm_per_prompt: '{"image":0,"video":0}'
   reasoning_parser: minimax_m3
+  # RunAI 0.16.1 does not retry a ranged GET after the AWS CRT low-throughput
+  # monitor aborts it. MiniMax's 413 GiB load needs more than the 10s default.
+  runai_streamer_s3_request_timeout_ms: 60000
   vllm_extra_args:
     - --block-size
     - '128'
