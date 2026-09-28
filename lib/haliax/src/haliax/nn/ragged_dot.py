@@ -127,15 +127,18 @@ def _triton_ragged_dot_kernel(
         acc = jnp.zeros((block_m, out_ref.shape[1]), dtype=jnp.float32)
         k = a_ref.shape[1]
 
+        # The group's last row tile can run past the end of ``a``, so rows are masked on load as well as store.
+        row_mask = (start_m + jnp.arange(block_m) < hi)[:, None]
+
         def body(i, acc):
             start_k = i * block_k
             span_k = pl.ds(start_k, block_k)
             if k % block_k:
                 contraction_mask = start_k + jnp.arange(block_k) < k
-                a = plgpu.load(a_ref.at[span_m, span_k], mask=contraction_mask[None, :], other=0.0)
+                a = plgpu.load(a_ref.at[span_m, span_k], mask=row_mask & contraction_mask[None, :], other=0.0)
                 b = plgpu.load(b_ref.at[span_k, pl.ds(0, b_ref.shape[1])], mask=contraction_mask[:, None], other=0.0)
             else:
-                a = plgpu.load(a_ref.at[span_m, span_k])
+                a = plgpu.load(a_ref.at[span_m, span_k], mask=row_mask, other=0.0)
                 b = plgpu.load(b_ref.at[span_k, pl.ds(0, b_ref.shape[1])])
             dtype = jnp.result_type(a, b)
             return acc + pl.dot(a.astype(dtype), b.astype(dtype))
@@ -143,7 +146,7 @@ def _triton_ragged_dot_kernel(
         num_k_blocks = pl.cdiv(k, block_k)
         acc = jax.lax.fori_loop(0, num_k_blocks, body, acc)
         # Tokamax's BlockRef masks logical output edges; raw Pallas refs do not.
-        store_mask = (start_m + jnp.arange(block_m) < hi)[:, None]
+        store_mask = row_mask
         if n % out_ref.shape[1]:
             store_mask &= (start_n + jnp.arange(out_ref.shape[1]) < n)[None, :]
         plgpu.store(
@@ -162,7 +165,9 @@ def _triton_default_block_sizes(m: int, k: int, n: int) -> tuple[int, int, int]:
 
 
 @functools.lru_cache(maxsize=None)
-def _triton_default_matmul(m: int, k: int, n: int, num_groups: int, dtype) -> Callable[..., jax.Array]:
+def _triton_default_matmul(
+    m: int, k: int, n: int, num_groups: int, dtype, interpret: bool = False
+) -> Callable[..., jax.Array]:
     """Build the default-layout kernel for one static shape.
 
     ``pl.pallas_call`` returns a fresh ``jax.jit`` wrapper per call and JAX's
@@ -191,6 +196,7 @@ def _triton_default_matmul(m: int, k: int, n: int, num_groups: int, dtype) -> Ca
         out_specs=pl.BlockSpec((m, block_n), lambda _, j, __: (0, j)),
         grid=(pl.cdiv(m, block_m), pl.cdiv(n, block_n), num_groups),
         compiler_params=plgpu.CompilerParams(num_warps=4, num_stages=4),
+        interpret=interpret,
     )
 
 

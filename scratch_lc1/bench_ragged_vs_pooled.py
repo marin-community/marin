@@ -4,9 +4,11 @@
 """Time one d512 fast_track MoE layer (forward + backward) on 8 GPUs: pooled-wave vs ragged all-to-all.
 
 Shapes follow the d512 recipe: 65536 tokens per GPU, LatentMoE width 256, 384 experts (48 per GPU) with top-8,
-ungated ReLU^2 experts of width 384, capacity 1.15. Every variant runs in its own child process because the
-ragged transport kernel is an XLA flag fixed at backend start. The runtime XLA flags are fast_track's own
-(``experiments.grug.fast_track.train._apply_runtime_defaults`` with the inline watch on, as the ladder runs).
+ungated ReLU^2 experts of width 384, capacity 1.15. ``ragged-*`` variants run the generic ``ragged_dot`` expert
+MLP with elementwise ReLU^2; ``ragged-*-fused`` run the fused ``relu2_ragged_mlp`` kernels. Every variant runs
+in its own child process because the ragged transport kernel is an XLA flag fixed at backend start. The runtime
+XLA flags are fast_track's own (``experiments.grug.fast_track.train._apply_runtime_defaults`` with the inline
+watch on, as the ladder runs).
 
 Run from the repo root in ONE process that owns all 8 GPUs (the device and one-shot kernels need peer access):
 
@@ -45,13 +47,15 @@ CAPACITY_FACTOR = 1.15
 RESULT_PREFIX = "BENCH_RESULT "
 MODULE = "scratch_lc1.bench_ragged_vs_pooled"
 
-# variant -> (moe implementation, ragged transport or None, pooled-wave waves)
+# variant -> (moe implementation, ragged transport or None, pooled-wave waves, fused ReLU^2 or None for --fused-relu2)
 VARIANTS = {
-    "pooled": ("fixed_pooled_wave_all_to_all", None, 1),
-    "pooled-w3": ("fixed_pooled_wave_all_to_all", None, 3),
-    "ragged-device": ("ragged_all_to_all", "device", 1),
-    "ragged-one_shot": ("ragged_all_to_all", "one_shot", 1),
-    "ragged-nccl": ("ragged_all_to_all", "nccl", 1),
+    "pooled": ("fixed_pooled_wave_all_to_all", None, 1, None),
+    "pooled-w3": ("fixed_pooled_wave_all_to_all", None, 3, None),
+    "ragged-device": ("ragged_all_to_all", "device", 1, False),
+    "ragged-device-fused": ("ragged_all_to_all", "device", 1, True),
+    "ragged-one_shot": ("ragged_all_to_all", "one_shot", 1, False),
+    "ragged-one_shot-fused": ("ragged_all_to_all", "one_shot", 1, True),
+    "ragged-nccl": ("ragged_all_to_all", "nccl", 1, False),
 }
 
 
@@ -69,7 +73,7 @@ def _child_env(transport: str | None) -> dict[str, str]:
 
 
 def run_child(args: argparse.Namespace) -> None:
-    implementation, _, waves = VARIANTS[args.child]
+    implementation, _, waves, fused = VARIANTS[args.child]
     devices = jax.devices()
     num_devices = len(devices)
     if jax.process_count() != 1:
@@ -104,7 +108,7 @@ def run_child(args: argparse.Namespace) -> None:
             expert_sharding,
         )
         cotangent = jax.device_put(jax.random.normal(keys[5], (tokens, HIDDEN), jnp.bfloat16), token_sharding)
-        activation = fused_relu2 if args.fused_relu2 else ActivationFunctionEnum.relu2
+        activation = fused_relu2 if (args.fused_relu2 if fused is None else fused) else ActivationFunctionEnum.relu2
 
         def layer(x, w_up, w_down):
             return moe_mlp(
@@ -223,7 +227,7 @@ def _forwarded(args: argparse.Namespace) -> list[str]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--variants", default="pooled,ragged-device,ragged-one_shot,ragged-nccl")
+    parser.add_argument("--variants", default="pooled,ragged-device,ragged-device-fused,ragged-one_shot-fused")
     parser.add_argument("--iters", type=int, default=30)
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--seed", type=int, default=0)
@@ -235,7 +239,7 @@ def main() -> None:
         "--fused-relu2",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Pass fused_relu2 (pooled-wave runs its fused Pallas kernel; ragged applies it elementwise).",
+        help="Pooled-wave variants pass fused_relu2 (its fused Pallas kernel); ragged variants fix it by name.",
     )
     parser.add_argument("--ragged-dot-impl", default=None, help="RAGGED_DOT_IMPL for haliax ragged_dot (triton/xla).")
     parser.add_argument("--profile-dir", default=None, help="Also capture a 3-step jax profile per variant here.")

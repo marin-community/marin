@@ -140,3 +140,20 @@ def test_triton_custom_vjp_routes_backward_through_triton_layouts(monkeypatch):
         ragged_dot_module._DLHS_DIM_NUMS,
         ragged_dot_module._DRHS_DIM_NUMS,
     ]
+
+
+def test_triton_default_layout_matches_xla_when_last_row_tile_runs_past_the_buffer():
+    if not ragged_dot_module._has_pallas_triton:
+        pytest.skip("Pallas Triton backend is not available")
+
+    # 200 rows use 128-row tiles; the last group starts at row 150, so its tile covers rows 150..277.
+    rows, contraction_dim, output_dim = 200, 32, 16
+    group_sizes = jnp.array([7, 0, 143, 50], dtype=jnp.int32)
+    lhs = jax.random.normal(jax.random.key(0), (rows, contraction_dim))
+    rhs = jax.random.normal(jax.random.key(1), (4, contraction_dim, output_dim))
+    cum_rows = jnp.cumulative_sum(group_sizes, include_initial=True)
+
+    matmul = ragged_dot_module._triton_default_matmul(rows, contraction_dim, output_dim, 4, lhs.dtype, interpret=True)
+    actual = matmul(lhs, rhs, cum_rows[:-1], cum_rows[1:])
+
+    assert jnp.allclose(actual, jax.lax.ragged_dot(lhs, rhs, group_sizes), rtol=1e-5, atol=1e-5)

@@ -629,8 +629,8 @@ class GrugModelConfig:
     block's whole MoE output (routed + shared)."""
     moe_fused_relu2: bool = False
     """With ``moe_ungated_kernel``, run the ungated ReLU^2 expert MLP through the fused-epilogue kernels
-    (``levanter.kernels.pallas.relu2_mlp``): ``pre`` and ``d post`` never reach HBM. Pooled-wave only; the ragged
-    backend's grouped ``ragged_dot`` experts apply it as a plain elementwise ReLU^2."""
+    (``levanter.kernels.pallas.relu2_mlp`` for pooled-wave, ``relu2_ragged_mlp`` for ragged all-to-all): ``pre``
+    and ``d post`` never reach HBM."""
     moe_ungated_kernel: bool = False
     """With ``moe_ungated_relu2``, run the EP (pooled-wave or ragged) experts truly ungated (one ``W_up`` GEMM)
     instead of tying the gate to ``W_up``. Same math; skips the duplicated GEMM."""

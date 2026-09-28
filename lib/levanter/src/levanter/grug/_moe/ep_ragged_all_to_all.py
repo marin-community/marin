@@ -45,6 +45,8 @@ from levanter.grug._moe.ep_common import (
     _expert_granular_a2a_params,
     _sort_activations,
 )
+from levanter.kernels.pallas.relu2_mlp import fused_relu2
+from levanter.kernels.pallas.relu2_ragged_mlp import relu2_ragged_mlp
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +117,24 @@ def _ragged_dot_expert_mlp(
     return ragged_dot(activated, moe_w2_local, physical_group_sizes)
 
 
+def _fused_relu2_expert_mlp(
+    x_dispatch: Float[Array, "C H"],
+    moe_w13_local: Float[Array, "Echunk H I"],
+    moe_w2_local: Float[Array, "Echunk I H"],
+    physical_group_sizes: Int[Array, "Echunk"],
+    active_group_sizes: Int[Array, "Echunk"],
+    activation_fn: Callable[[jax.Array], jax.Array],
+) -> Float[Array, "C H"]:
+    """Ungated ReLU^2 experts on ``relu2_ragged_mlp``'s fused-epilogue grouped GEMMs (Pallas Triton on GPU,
+    the same math on ``jax.lax.ragged_dot`` elsewhere).
+
+    Takes the active sizes: the kernel writes zeros to the trailing capacity rows without computing them.
+    """
+    del physical_group_sizes, activation_fn
+    implementation = "pallas_gpu" if jax.default_backend() == "gpu" else "reference"
+    return relu2_ragged_mlp(x_dispatch, moe_w13_local, moe_w2_local, active_group_sizes, implementation=implementation)
+
+
 def _is_ungated(moe_w13_local: Float[Array, "E H I2"], moe_w2_local: Float[Array, "E I H"]) -> bool:
     return moe_w13_local.shape[-1] == moe_w2_local.shape[1]
 
@@ -169,10 +189,13 @@ def _quack_grouped_gemm_available() -> bool:
 def _select_expert_mlp(activation_fn: Callable[[jax.Array], jax.Array], *, ungated: bool) -> _ExpertMlp:
     """Pick the fastest expert-MLP kernel this process can actually run.
 
-    QuACK's kernel fuses SwiGLU, so it only applies to gated SiLU. Everything else -- ungated
-    experts, another activation, a non-SM100 GPU, a TPU or CPU, or a build without the GPU
-    extra -- runs the portable `ragged_dot` path, which computes the same function.
+    QuACK's kernel fuses SwiGLU, so it only applies to gated SiLU; ``fused_relu2`` on ungated
+    experts selects the fused ReLU^2 grouped GEMMs. Everything else -- another activation, a
+    non-SM100 GPU, a TPU or CPU, or a build without the GPU extra -- runs the portable
+    `ragged_dot` path, which computes the same function.
     """
+    if ungated and activation_fn is fused_relu2:
+        return _fused_relu2_expert_mlp
     if not ungated and activation_fn is jax.nn.silu and _quack_grouped_gemm_available():
         return _cute_expert_mlp
     return _ragged_dot_expert_mlp
