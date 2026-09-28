@@ -183,7 +183,9 @@ EVIDENCE_PROMPT = (
     "In reasoning_content, use two or three complete sentences explaining how the selected visible statements "
     "support an extraction answer and where the supplied text leaves uncertainty. Do not narrate a "
     "paragraph-by-paragraph review, add equations, calculate results, or describe dataset creation. "
-    "Do not reconstruct missing notation or introduce external knowledge."
+    "Do not reconstruct missing notation or introduce external knowledge. "
+    "When notation is incomplete, say that it is incomplete without writing or naming its usual replacement. "
+    "Write reasoning as ordinary English prose without mathematical notation."
 )
 
 
