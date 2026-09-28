@@ -37,12 +37,12 @@ flowchart LR
 | `source` | Dataset, revision, row, and importer revision used to reproduce the spec. |
 | `requirements` | Capabilities or named action interfaces the execution environment must provide. |
 | `answer_type` | The semantic result: `text`, `number`, `file`, `workspace_state`, or `native_action`. It does not prescribe a wrapper such as JSON. |
-| `verifier` | A private verifier kind and validated parameters. The built-in `exact_answer` kind holds the expected answer and text-normalization rules. |
+| `verifier` | A private verifier kind and serialized JSON configuration. The built-in `exact_answer` verifier holds the expected answer and text-normalization rules. |
 | `schema_version` | Version of the serialized spec, checked when the record is loaded. |
 
 For example, a task asking “What is 7 + 5?” can have `answer_type=number` and a private expected answer of `12`. That answer type can be submitted as plain text or as `{"answer":"12"}`. The verifier and expected answer are never added to the model-visible instruction. Importers must make source output instructions neutral to the supported conventions, or reject rows they cannot safely rewrite. A raw-output requirement left in `instructions` would conflict with a JSON convention; `answer_type=text` alone cannot detect that conflict in prose.
 
-The TaskTrove MCQA importer is one concrete source adapter for the [Nemotron knowledge MCQA corpus](https://huggingface.co/datasets/open-thoughts/TaskTrove/blob/0292300/laion__nemotron-gym-knowledge-mcqa-v2/tasks.parquet). Its caller resolves a cleaned release artifact and passes the archive bytes and release provenance to `read_archive`. The spec records the release revision and original archive identity. The importer checks the source answer-line template before replacing it with a one-letter instruction. Its text answer works with plain and JSON submission conventions; the expected letter and option count stay in the private `tasktrove_mcqa` verifier payload.
+The TaskTrove MCQA importer is one concrete source adapter for the [Nemotron knowledge MCQA corpus](https://huggingface.co/datasets/open-thoughts/TaskTrove/blob/0292300/laion__nemotron-gym-knowledge-mcqa-v2/tasks.parquet). Its caller resolves a cleaned release artifact and passes the archive bytes and release provenance to `read_archive`. The spec records the release revision and original archive identity. The importer checks the source answer-line template before replacing it with a one-letter instruction. Its text answer works with plain and JSON submission conventions; the expected letter and option count stay in the private `tasktrove_mcqa` verifier configuration.
 
 ## What is a lowering?
 
@@ -114,7 +114,7 @@ from taskcompendium.harbor.runner import ChatLaunch
 launch = ChatLaunch(model="model-id", api_base="https://example.com/v1", api_key_env="MODEL_API_KEY")
 ```
 
-Harbor runs the agent in the direct-chat environment, which exposes no filesystem or shell tools. The custom verifier reads the final response and resolves the private verifier kind to a registered handler. The handler receives its validated Pydantic parameters, the response and convention, and Harbor's verifier-side environment. The built-in exact-answer handler extracts and compares the answer directly, without a temporary answer file. A wrong answer receives reward `0.0`; a malformed submission has no reward; a verifier infrastructure failure has no reward and is recorded separately in `taskcompendium-result.json`. The package requires Harbor's [custom-verifier task loading](https://github.com/marin-community/harbor/pull/155) and does not use `tests/test.sh`.
+Harbor runs the agent in the direct-chat environment, which exposes no filesystem or shell tools. The custom verifier reads the final response and resolves the private verifier kind through an explicit map. The selected verifier validates its JSON configuration and receives the response, convention, and Harbor's verifier-side environment. The built-in exact-answer verifier extracts and compares the answer directly, without a temporary answer file. A wrong answer receives reward `0.0`; a malformed submission has no reward; a verifier infrastructure failure has no reward and is recorded separately in `taskcompendium-result.json`. The package requires Harbor's [custom-verifier task loading](https://github.com/marin-community/harbor/pull/155) and does not use `tests/test.sh`.
 
 Run the package tests from the repository root:
 

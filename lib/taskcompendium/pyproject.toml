@@ -9,10 +9,6 @@ description = "Semantic answer tasks and Harbor direct-chat lowerings"
 requires-python = ">=3.12"
 dependencies = ["pydantic>=2.0", "tasktrove-verify"]
 
-[project.entry-points."taskcompendium.verifiers"]
-exact_answer = "taskcompendium.grading:exact_answer_handler"
-tasktrove_mcqa = "taskcompendium.verifiers.tasktrove_mcqa:tasktrove_mcqa_handler"
-
 [project.optional-dependencies]
 harbor = ["harbor"]
 

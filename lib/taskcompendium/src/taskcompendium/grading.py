@@ -1,23 +1,20 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Resolve private verifier kinds to typed grading handlers."""
+"""Grade submissions with typed private verifiers."""
 
-from collections.abc import Callable
+import re
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import StrEnum
-from importlib.metadata import entry_points
-from typing import Generic, TypeVar, cast
 
-from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
-from tasktrove_verify.modes.extract import collapse_whitespace
+from pydantic import BaseModel, ConfigDict, field_validator
 
-from taskcompendium.models import TaskSpec, VerifierSpec
+from taskcompendium.models import VerifierSpec
 from taskcompendium.submission import SubmissionConvention, extract_answer
 
-ENTRY_POINT_GROUP = "taskcompendium.verifiers"
 EXACT_ANSWER_KIND = "exact_answer"
-PayloadT = TypeVar("PayloadT", bound=BaseModel)
+WHITESPACE = re.compile(r"\s+")
 
 
 class Outcome(StrEnum):
@@ -35,49 +32,25 @@ class GradeResult:
 
 @dataclass(frozen=True)
 class GradingAttempt:
-    """Submission evidence available to a registered verifier."""
+    """Submission evidence available to a verifier."""
 
     convention: SubmissionConvention
     response: str | None
     environment: object
 
 
-@dataclass(frozen=True)
-class VerifierHandler(Generic[PayloadT]):
-    payload_type: type[PayloadT]
-    grade: Callable[[PayloadT, GradingAttempt], GradeResult]
+class Verifier(BaseModel, ABC):
+    """Validated private configuration that grades one submission."""
 
-
-def _handler(kind: str) -> VerifierHandler[BaseModel]:
-    matches = [entry for entry in entry_points(group=ENTRY_POINT_GROUP) if entry.name == kind]
-    if len(matches) != 1:
-        raise ValueError(f"Unknown or ambiguous verifier kind: {kind!r}")
-    factory = cast(Callable[[], VerifierHandler[BaseModel]], matches[0].load())
-    return factory()
-
-
-def _resolved(verifier: VerifierSpec) -> tuple[VerifierHandler[BaseModel], BaseModel]:
-    handler = _handler(verifier.kind)
-    try:
-        payload = handler.payload_type.model_validate(verifier.parameters)
-    except ValidationError as error:
-        raise ValueError(f"Invalid {verifier.kind!r} verifier parameters: {error}") from error
-    return handler, payload
-
-
-def validate_verifier(verifier: VerifierSpec) -> None:
-    _resolved(verifier)
-
-
-def grade_answer(
-    specification: TaskSpec, convention: SubmissionConvention, response: str | None, environment: object
-) -> GradeResult:
-    handler, payload = _resolved(specification.verifier)
-    return handler.grade(payload, GradingAttempt(convention, response, environment))
-
-
-class ExactAnswerPayload(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    @abstractmethod
+    def grade(self, attempt: GradingAttempt) -> GradeResult:
+        """Grade a submission using this verifier's configuration."""
+
+
+class ExactAnswerVerifier(Verifier):
+    """Compare a text answer using pinned normalization rules."""
 
     expected: str
     ignore_case: bool = True
@@ -90,26 +63,21 @@ class ExactAnswerPayload(BaseModel):
             raise ValueError("An exact answer is required")
         return value
 
+    def grade(self, attempt: GradingAttempt) -> GradeResult:
+        try:
+            candidate = extract_answer(attempt.response, attempt.convention)
+        except (ValueError, TypeError) as error:
+            return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
+        match = _normalize_exact(candidate, self) == _normalize_exact(self.expected, self)
+        return GradeResult(Outcome.GRADED, float(match))
+
 
 def exact_answer(expected: str, ignore_case: bool = True, collapse_whitespace: bool = True) -> VerifierSpec:
     """Construct a pinned exact-answer verifier descriptor."""
-    payload = ExactAnswerPayload(expected=expected, ignore_case=ignore_case, collapse_whitespace=collapse_whitespace)
-    return VerifierSpec(kind=EXACT_ANSWER_KIND, parameters=payload.model_dump())
+    verifier = ExactAnswerVerifier(expected=expected, ignore_case=ignore_case, collapse_whitespace=collapse_whitespace)
+    return VerifierSpec(kind=EXACT_ANSWER_KIND, parameters_json=verifier.model_dump_json())
 
 
-def _normalize_exact(value: str, payload: ExactAnswerPayload) -> str:
-    value = collapse_whitespace(value) if payload.collapse_whitespace else value.strip()
-    return value.casefold() if payload.ignore_case else value
-
-
-def _grade_exact(payload: ExactAnswerPayload, attempt: GradingAttempt) -> GradeResult:
-    try:
-        candidate = extract_answer(attempt.response, attempt.convention)
-    except (ValueError, TypeError) as error:
-        return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
-    match = _normalize_exact(candidate, payload) == _normalize_exact(payload.expected, payload)
-    return GradeResult(Outcome.GRADED, float(match))
-
-
-def exact_answer_handler() -> VerifierHandler[ExactAnswerPayload]:
-    return VerifierHandler(ExactAnswerPayload, _grade_exact)
+def _normalize_exact(value: str, verifier: ExactAnswerVerifier) -> str:
+    value = WHITESPACE.sub(" ", value).strip() if verifier.collapse_whitespace else value.strip()
+    return value.casefold() if verifier.ignore_case else value

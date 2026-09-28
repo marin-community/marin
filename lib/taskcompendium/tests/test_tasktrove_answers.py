@@ -14,13 +14,14 @@ import pytest
 from tasktrove_verify.grade import grade as source_grade
 from tasktrove_verify.spec import McqSpec
 
-from taskcompendium.grading import Outcome, grade_answer
+from taskcompendium.grading import Outcome
 from taskcompendium.harbor.runner import ReplayLaunch, run_trial
 from taskcompendium.importers.tasktrove import MAX_ARCHIVE_MEMBERS, read_archive
 from taskcompendium.importers.tasktrove_mcqa import import_task
 from taskcompendium.lowering import HarborEnvironmentConfig, lower_to_harbor
 from taskcompendium.models import AnswerType
 from taskcompendium.submission import AnswerFormat, SubmissionConvention, render_instruction
+from taskcompendium.verifier_registry import grade_answer
 
 FIXTURE = Path(__file__).parent / "fixtures/tasktrove/mcq-1961bdb52b5a.tar.gz"
 TASKTROVE_SOURCE = "laion__nemotron-gym-knowledge-mcqa-v2"
@@ -152,7 +153,7 @@ def test_imported_mcqa_resolves_verifier_in_fresh_process(tmp_path):
     )
     script = (
         "import json, sys; from pathlib import Path; "
-        "from taskcompendium.grading import grade_answer; "
+        "from taskcompendium.verifier_registry import grade_answer; "
         "from taskcompendium.lowering import read_submission_convention, read_specification; "
         "root = Path(sys.argv[1]); "
         "result = grade_answer(read_specification(root / 'specification.json'), "

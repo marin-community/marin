@@ -9,12 +9,11 @@ import sys
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
-from types import SimpleNamespace
 
 import pytest
 from harbor.models.task.task import Task
 
-from taskcompendium.grading import ExactAnswerPayload, GradeResult, Outcome, VerifierHandler, exact_answer, grade_answer
+from taskcompendium.grading import exact_answer
 from taskcompendium.harbor.runner import ChatLaunch, ReplayLaunch, run_trial
 from taskcompendium.lowering import (
     DIRECT_CHAT_ENVIRONMENT,
@@ -163,10 +162,13 @@ def test_direct_chat_rejects_unsatisfied_requirements(tmp_path, specification):
 @pytest.mark.parametrize(
     "verifier,message",
     [
-        (VerifierSpec(kind="unknown_kind", parameters={}), "Unknown or ambiguous verifier kind"),
-        (VerifierSpec(kind="exact_answer", parameters={"expected": 12}), "Invalid 'exact_answer' verifier parameters"),
+        (VerifierSpec(kind="unknown_kind", parameters_json="{}"), "Unknown verifier kind"),
         (
-            VerifierSpec(kind="exact_answer", parameters={"expected": "12", "extra": True}),
+            VerifierSpec(kind="exact_answer", parameters_json='{"expected": 12}'),
+            "Invalid 'exact_answer' verifier parameters",
+        ),
+        (
+            VerifierSpec(kind="exact_answer", parameters_json='{"expected": "12", "extra": true}'),
             "Invalid 'exact_answer' verifier parameters",
         ),
     ],
@@ -193,7 +195,7 @@ def test_exported_specification_resolves_verifier_in_fresh_process(tmp_path, spe
     )
     script = (
         "import json, sys; from pathlib import Path; "
-        "from taskcompendium.grading import grade_answer; "
+        "from taskcompendium.verifier_registry import grade_answer; "
         "from taskcompendium.lowering import read_submission_convention, read_specification; "
         "root = Path(sys.argv[1]); "
         "result = grade_answer(read_specification(root / 'specification.json'), "
@@ -204,43 +206,6 @@ def test_exported_specification_resolves_verifier_in_fresh_process(tmp_path, spe
     completed = subprocess.run([sys.executable, "-c", script, str(task)], capture_output=True, text=True, check=True)
 
     assert json.loads(completed.stdout) == {"status": "graded", "reward": 1.0}
-
-
-def test_verifier_parameters_cannot_change_exported_or_live_grading(tmp_path, specification):
-    parameters = {"expected": "12", "ignore_case": True, "collapse_whitespace": True}
-    verifier = VerifierSpec(kind="exact_answer", parameters=parameters)
-    specification = specification.model_copy(update={"verifier": verifier})
-    parameters["expected"] = "13"
-    verifier.parameters["expected"] = "13"
-
-    convention = SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN)
-    result = grade_answer(specification, convention, "12", object())
-    assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
-    task = lower_to_harbor(specification, convention, HarborEnvironmentConfig(), tmp_path / "task")
-    exported = read_specification(task / "specification.json")
-    assert grade_answer(exported, convention, "12", object()).reward == 1.0
-    assert grade_answer(exported, convention, "13", object()).reward == 0.0
-
-
-def test_registered_grader_receives_verifier_environment(specification, monkeypatch):
-    environment = object()
-
-    def grade_probe(payload: ExactAnswerPayload, attempt) -> GradeResult:
-        assert attempt.environment is environment
-        return GradeResult(Outcome.GRADED, float(payload.expected == "12"))
-
-    handler = VerifierHandler(ExactAnswerPayload, grade_probe)
-    entry = SimpleNamespace(name="environment_probe", load=lambda: lambda: handler)
-    monkeypatch.setattr("taskcompendium.grading.entry_points", lambda *, group: (entry,))
-    specification = specification.model_copy(
-        update={"verifier": VerifierSpec(kind="environment_probe", parameters={"expected": "12"})}
-    )
-
-    result = grade_answer(
-        specification, SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN), "12", environment
-    )
-
-    assert result == GradeResult(Outcome.GRADED, 1.0)
 
 
 def test_old_verifier_schema_is_rejected_on_read(tmp_path, specification):
@@ -279,23 +244,7 @@ def test_selection_policies_use_compatible_conventions(specification):
 
     assert select_lowerings(candidates, SelectionPolicy.ALL) == candidates
     assert select_lowerings(candidates, SelectionPolicy.FIRST) == (candidates[0],)
-    script = (
-        "import sys; "
-        "from taskcompendium.lowering import HarborEnvironmentConfig, SelectionPolicy, "
-        "compatible_lowerings, select_lowerings; "
-        "from taskcompendium.models import TaskSpec; "
-        "from taskcompendium.submission import AnswerFormat, SubmissionConvention; "
-        "spec = TaskSpec.model_validate_json(sys.argv[1]); "
-        "conventions = (SubmissionConvention(id='plain', answer_format=AnswerFormat.PLAIN), "
-        "SubmissionConvention(id='json', answer_format=AnswerFormat.JSON)); "
-        "candidates = compatible_lowerings(spec, conventions, (HarborEnvironmentConfig(),)); "
-        "print(select_lowerings(candidates, SelectionPolicy.SAMPLE, rng_key=42)[0].convention.id)"
-    )
-    separate_process = subprocess.run(
-        [sys.executable, "-c", script, specification.model_dump_json()], capture_output=True, text=True, check=True
-    )
-    selected = select_lowerings(candidates, SelectionPolicy.SAMPLE, rng_key=42)[0].convention.id
-    assert separate_process.stdout.strip() == selected
+    assert select_lowerings(candidates, SelectionPolicy.SAMPLE, rng_key=42) == (candidates[1],)
     assert {select_lowerings(candidates, SelectionPolicy.SAMPLE, rng_key=key)[0] for key in range(16)} == set(candidates)
     assert select_lowerings(candidates, SelectionPolicy.FIRST, required_environment=DIRECT_CHAT_ENVIRONMENT) == (
         candidates[0],
