@@ -15,7 +15,7 @@ from tasktrove_verify.grade import grade as source_grade
 from tasktrove_verify.spec import McqSpec
 
 from taskcompendium.grading import Outcome, grade_answer
-from taskcompendium.harbor.runner import HarborLaunch, run_trial
+from taskcompendium.harbor.runner import ReplayLaunch, run_trial
 from taskcompendium.importers.tasktrove import MAX_ARCHIVE_MEMBERS, read_archive
 from taskcompendium.importers.tasktrove_mcqa import import_task
 from taskcompendium.lowering import HarborTaskBinding, lower_to_harbor
@@ -130,7 +130,7 @@ async def test_imported_mcqa_runs_through_direct_chat_harbor(tmp_path):
     result = await run_trial(
         task,
         binding,
-        HarborLaunch("replay", agent_kwargs={"response": "C"}),
+        ReplayLaunch(response="C"),
         tmp_path / "trials",
         "mcqa",
     )

@@ -3,12 +3,13 @@
 
 """Resolve a launch separately from a task-owned Harbor binding."""
 
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from harbor.models.trial.config import TrialConfig
+from harbor.models.trial.result import TrialResult
 from harbor.trial.trial import Trial
+from pydantic import BaseModel, ConfigDict
 
 from taskcompendium.lowering import (
     BINDING_FILE,
@@ -19,34 +20,50 @@ from taskcompendium.lowering import (
     validate_binding,
 )
 
-
-@dataclass(frozen=True)
-class HarborLaunch:
-    """Agent and model choices made when a lowered task is run."""
-
-    agent: str
-    model: str | None = None
-    agent_kwargs: dict[str, Any] = field(default_factory=dict)
+DEFAULT_CHAT_TIMEOUT = 120
 
 
-async def run_trial(task_dir: Path, binding: HarborTaskBinding, launch: HarborLaunch, trials_dir: Path, trial_name: str):
-    """Run a lowered task through Harbor's agent, environment, and custom verifier."""
+class ReplayLaunch(BaseModel):
+    """A fixed response for exercising the Harbor trial path."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    response: str
+
+
+class ChatLaunch(BaseModel):
+    """A model and endpoint selected when a lowered task is run."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    model: str
+    api_base: str
+    api_key_env: str | None = None
+    request_timeout: float = DEFAULT_CHAT_TIMEOUT
+
+
+async def run_trial(
+    task_dir: Path,
+    binding: HarborTaskBinding,
+    launch: ReplayLaunch | ChatLaunch,
+    trials_dir: Path,
+    trial_name: str,
+) -> TrialResult:
+    """Run a lowered task and return Harbor's trial result."""
     if binding != read_binding(task_dir / BINDING_FILE):
         raise ValueError("Launch binding differs from the exported task binding")
     validate_binding(read_specification(task_dir / SPECIFICATION_FILE), binding)
-    agents = {
-        "replay": "taskcompendium.harbor.adapter:ReplayAgent",
-        "chat": "taskcompendium.harbor.adapter:DirectChatAgent",
-    }
-    if launch.agent not in agents:
-        raise ValueError(f"Unsupported launch agent: {launch.agent}")
-    if launch.agent == "chat" and launch.model is None:
-        raise ValueError("Chat launch requires a model")
-    if "api_key" in launch.agent_kwargs:
-        raise ValueError("Use api_key_env so credentials stay out of Harbor trial artifacts")
-    agent: dict[str, Any] = {"import_path": agents[launch.agent], "kwargs": launch.agent_kwargs}
-    if launch.model is not None:
-        agent["model_name"] = launch.model
+    if isinstance(launch, ReplayLaunch):
+        agent: dict[str, Any] = {
+            "import_path": "taskcompendium.harbor.adapter:ReplayAgent",
+            "kwargs": launch.model_dump(),
+        }
+    else:
+        agent = {
+            "import_path": "taskcompendium.harbor.adapter:DirectChatAgent",
+            "model_name": launch.model,
+            "kwargs": launch.model_dump(exclude={"model"}),
+        }
     config = TrialConfig.model_validate(
         {
             "task": {"path": str(task_dir.resolve())},
