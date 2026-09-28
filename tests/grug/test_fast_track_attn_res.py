@@ -148,7 +148,7 @@ def _reference_hidden(model: Transformer, tokens: jax.Array) -> jax.Array:
             partial = None
         use_long = (i + 1) % cfg.global_every == 0 or i == cfg.num_layers - 1
         live = blocks if partial is None else [*blocks, partial]
-        attn_out = layer.attn_branch(_depth_attention(live, layer.attn_res_query_attn, eps), mask, use_long, use_long)
+        attn_out, _ = layer.attn_branch(_depth_attention(live, layer.attn_res_query_attn, eps), mask, use_long, use_long)
         partial = attn_out if partial is None else partial + attn_out
         mlp_out, _ = layer.mlp_branch(_depth_attention([*blocks, partial], layer.attn_res_query_mlp, eps), mask)
         partial = partial + mlp_out

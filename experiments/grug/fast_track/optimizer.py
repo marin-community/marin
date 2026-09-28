@@ -138,16 +138,26 @@ def _is_gate_or_router_weight(path_lower: str) -> bool:
     return path_lower.endswith((".attn_gate", ".router", ".router_down", ".router_up"))
 
 
-def _gate_router_decay_mask(params):
-    """Boolean pytree that is True on the ``attn_gate`` and ``router`` weight leaves -- the ones that
-    receive decoupled weight decay -- and False everywhere else."""
+def _is_zero_centered_gain(path_lower: str) -> bool:
+    """True for the ``gamma`` leaves of zero-centered RMSNorms (``zero_centered_gains``)."""
+    return path_lower.endswith(".gamma")
+
+
+def _adam_decay_coefficients(params, gate_router_weight_decay: float, gain_weight_decay: float):
+    """Per-leaf decoupled weight decay of the ``adam`` group: ``gate_router_weight_decay`` on the
+    ``attn_gate`` and ``router`` weight leaves, ``gain_weight_decay`` on the zero-centered norm gains
+    (decaying ``gamma`` pulls the gain ``1 + gamma`` toward 1), 0 everywhere else."""
     paths = leaf_key_paths(params)
 
-    def is_target(_, path):
-        path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
-        return _is_gate_or_router_weight(path_str.lower())
+    def coefficient(_, path):
+        path_lower = (".".join(path) if isinstance(path, (list, tuple)) else str(path)).lower()
+        if _is_gate_or_router_weight(path_lower):
+            return gate_router_weight_decay
+        if _is_zero_centered_gain(path_lower):
+            return gain_weight_decay
+        return 0.0
 
-    return jax.tree.map(is_target, params, paths)
+    return jax.tree.map(coefficient, params, paths)
 
 
 def _ademamix_beta3_schedule(beta1: float, beta3: float, total_steps: int):
@@ -179,25 +189,25 @@ def scale_by_grokfast_ema(alpha: float, lamb: float) -> optax.GradientTransforma
     return optax.GradientTransformation(init_fn, update_fn)
 
 
-def _scale_by_adam_gate_router_decay(
-    adam: optax.GradientTransformation, weight_decay: float, total_steps: int
+def _scale_by_adam_decoupled_decay(
+    adam: optax.GradientTransformation, weight_decay: float, gain_weight_decay: float, total_steps: int
 ) -> optax.GradientTransformation:
-    """``scale_by_adam`` plus decoupled weight decay on ``attn_gate`` and the ``router`` weight,
-    annealed linearly to 0 over ``total_steps``. The coefficient reads the Adam ``count`` and the
-    state stays ``ScaleByAdamState``, so a checkpoint written without decay resumes at the right step
-    with its moments intact."""
+    """``scale_by_adam`` plus decoupled weight decay on ``attn_gate`` and the ``router`` weight (and
+    ``gain_weight_decay`` on the zero-centered norm gains), annealed linearly to 0 over ``total_steps``.
+    The coefficient reads the Adam ``count`` and the state stays ``ScaleByAdamState``, so a checkpoint
+    written without decay resumes at the right step with its moments intact."""
 
     def init_fn(params):
         return adam.init(params)
 
     def update_fn(updates, state, params=None):
         if params is None:
-            raise ValueError("_scale_by_adam_gate_router_decay requires params for decoupled decay")
+            raise ValueError("_scale_by_adam_decoupled_decay requires params for decoupled decay")
         step = optax.tree_utils.tree_get(state, "count")
         updates, next_state = adam.update(updates, state, params)
-        wd = weight_decay * jnp.clip(1.0 - step / total_steps, 0.0, None)
-        mask = _gate_router_decay_mask(params)
-        updates = jax.tree.map(lambda u, p, keep: u + wd * p if keep else u, updates, params, mask)
+        anneal = jnp.clip(1.0 - step / total_steps, 0.0, None)
+        coefficients = _adam_decay_coefficients(params, weight_decay, gain_weight_decay)
+        updates = jax.tree.map(lambda u, p, c: u + anneal * c * p if c else u, updates, params, coefficients)
         return updates, next_state
 
     return optax.GradientTransformation(init_fn, update_fn)
@@ -592,6 +602,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     max_grad_norm: float | None = None
     coefficient_type: CoefficientType = "quintic"
     gate_router_weight_decay: float = 0.02
+    gain_weight_decay: float = 0.0
+    """Decoupled weight decay (annealed like ``gate_router_weight_decay``) on the zero-centered norm gains'
+    ``gamma`` (``zero_centered_gains``), pulling each gain toward 1."""
     attn_res_query_lr_scale: float = 0.1
     kda_beta_lr_mult: float = 2.0
     muon_head_dim: int | None = None
@@ -778,8 +791,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 if self.max_grad_norm:
                     components.append(optax.clip_by_global_norm(self.max_grad_norm))
                 adam = adam_core(self.beta1, self.beta2)
-                if self.gate_router_weight_decay > 0.0:
-                    adam = _scale_by_adam_gate_router_decay(adam, self.gate_router_weight_decay, num_train_steps)
+                if self.gate_router_weight_decay > 0.0 or self.gain_weight_decay > 0.0:
+                    adam = _scale_by_adam_decoupled_decay(
+                        adam, self.gate_router_weight_decay, self.gain_weight_decay, num_train_steps
+                    )
                 components.append(cautious(adam) if self.adam_cautious else adam)
                 components.append(optax.scale(-lr))
                 return optax.chain(*components)
@@ -912,7 +927,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             if path_lower.endswith(".value_embed") and self.value_embed_lr_mult != 1.0:
                 return "value_embed"
             if ".rel_pos." in path_lower or re.search(
-                r"(?:^|\.)(value_embed|ve_lambda|ve_gate|xsa_scale|xsa_gate|head_mix|ssmax_scale|shared_gate|laurel_[ab]_\w+|ple_up|moe_out_gate_[wb]|bigram_gate_[wb]|bigram_gate_[ab]_lr|trigram_gate_[wb]|trigram_gate_[ab]_lr|bank_scale|bias_\w+|dyt_alpha|dyt_beta|qk_mult|diff_lambda|diff_lambda_init|vres_lambda|rot_scale|null_const_[vw])$",
+                r"(?:^|\.)(value_embed|ve_lambda|ve_gate|xsa_scale|xsa_gate|head_mix|ssmax_scale|shared_gate|laurel_[ab]_\w+|ple_up|moe_out_gate_[wb]|bigram_gate_[wb]|bigram_gate_[ab]_lr|trigram_gate_[wb]|trigram_gate_[ab]_lr|bank_scale|bias_\w+|dyt_alpha|dyt_beta|qk_mult|diff_lambda|diff_lambda_init|vres_lambda|rot_scale|null_const_[vw]|comba_d|v_filter_[wb]|gamma)$",
                 path_lower,
             ):
                 return "adam"

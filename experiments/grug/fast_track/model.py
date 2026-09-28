@@ -421,6 +421,12 @@ class GrugModelConfig:
     eigenvalue that commutes with the rotation; otherwise the trick is not the rotated recurrence."""
     kda_dd_rope_rank: int = 16
     """Hidden width of the low-rank angle projection ``W_rot_down W_rot_up`` (``kda_dd_rope``)."""
+    kda_out_correction: bool = False
+    """Comba output correction (arXiv 2506.02475, eq. 5): KDA reads its state with ``q - d_h k`` (q and k
+    L2-normalized first; the kernel re-normalizes the corrected query, as in the FLA Comba reference) with a
+    learnable per-head scalar ``d_h`` (Adam), init ``kda_out_correction_init``."""
+    kda_out_correction_init: float = 0.02
+    """Initial ``d_h`` of ``kda_out_correction`` (the paper: 0.02 for its small models, 1 from 1.3B)."""
     loop_passes: int = 1
     """Apply the whole layer stack this many times per forward (tied weights). Every pass keeps
     extending the AttnRes history and has its own gate queries; each extra pass starts its running
@@ -504,6 +510,16 @@ class GrugModelConfig:
     mla_k_norm_split: bool = False
     """With ``mla_k_norm``, RMS-normalize the two key halves separately, i.e. the previous-token half from
     ``mla_key_offset`` and the current-token half, so neither dominates the logit by magnitude."""
+    mla_v_filter: bool = False
+    """Noise-filtering value gate (arXiv 2609.22005, projection gate) on the MLA layers: every value read is
+    scaled by ``sigmoid(w_h . v_j + b_h)`` per head (``w`` [N, H] zero-init, ``b`` [N] init
+    ``mla_v_filter_bias_init``; both Adam). Applied to the final values (after value embeds / residual)."""
+    mla_v_filter_bias_init: float = 4.0
+    """Initial ``b_h`` of ``mla_v_filter`` (the paper's +4: every gate starts at ~0.982)."""
+    zero_centered_gains: bool = False
+    """Zero-centered norm gains (Qwen3-Next; arXiv 2608.30320 sec. 2.1.1): every learned-gain RMSNorm scales by
+    ``1 + gamma`` with ``gamma`` zero-init (identical at init), so the optimizer's ``gain_weight_decay`` pulls
+    gains toward 1 rather than 0. DyT gains are unchanged."""
     mla_ssmax: bool = False
     """Scalable-softmax (SSMax, arXiv 2501.19399) on the MLA layers: each query is scaled by
     ``1 + s_h * log(n)``, with ``n`` the number of keys it can see in its document and ``s_h`` a
@@ -934,7 +950,7 @@ class CausalSelfAttention(eqx.Module):
     sconv_q: "ShortConv | None"  # MLA only: SConv after the q projection ("q" in cfg.sconv_sites)
     rel_pos: "InklingRelPos | None"  # Inkling relative-position bias (replaces RoPE when set)
     w_dkv: Float[Array, "D L"] | None
-    kv_latent_norm: "RMSNorm | None"
+    kv_latent_norm: "LearnedRMSNorm | None"
     w_uk: Float[Array, "L NH"] | None
     w_uv: Float[Array, "L NH"] | None
     value_embed: Float[Array, "V NH"] | None
@@ -952,6 +968,8 @@ class CausalSelfAttention(eqx.Module):
     vres_lambda: Float[Array, " 2"] | None  # (l1 on v, l2 on the first layer's v): cfg.value_residual_layers
     bias_q: Float[Array, " NH"] | None
     bias_dkv: Float[Array, " L"] | None
+    v_filter_w: Float[Array, "N H"] | None  # noise-filter value gate direction (cfg.mla_v_filter), zero-init
+    v_filter_b: Float[Array, " N"] | None  # noise-filter value gate bias (cfg.mla_v_filter)
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -982,7 +1000,7 @@ class CausalSelfAttention(eqx.Module):
                 # Without Inkling the MLA layers are NoPE (they are global, so RoPE is disabled there).
                 rel_pos=InklingRelPos.init(cfg, key=k_rel) if cfg.inkling_relpos else None,
                 w_dkv=reshard(_init_weight(k_dkv, (d, kvl), std), P(_FSDP_AXES, None)),
-                kv_latent_norm=RMSNorm.init(kvl, cfg.layer_norm_eps),
+                kv_latent_norm=_learned_rms_norm(cfg, kvl, cfg.layer_norm_eps),
                 w_uk=reshard(_init_weight(k_uk, (kvl, n * h), std), P(None, "model")),
                 w_uv=reshard(_init_weight(k_uv, (kvl, n * h), std), P(None, "model")),
                 value_embed=(
@@ -1006,6 +1024,8 @@ class CausalSelfAttention(eqx.Module):
                 vres_lambda=_vres_lambda_init(cfg),
                 bias_q=jnp.zeros((n * h,)) if "qkv" in cfg.proj_biases else None,
                 bias_dkv=jnp.zeros((kvl,)) if "qkv" in cfg.proj_biases else None,
+                v_filter_w=jnp.zeros((n, h), jnp.float32) if cfg.mla_v_filter else None,
+                v_filter_b=jnp.full((n,), cfg.mla_v_filter_bias_init, jnp.float32) if cfg.mla_v_filter else None,
                 cfg=cfg,
             )
         if "qkv" in cfg.proj_biases:
@@ -1014,6 +1034,8 @@ class CausalSelfAttention(eqx.Module):
             raise ValueError("mla_diff_attn needs mla")
         if cfg.value_residual_layers:
             raise ValueError("value_residual_layers is implemented for MLA and KDA only")
+        if cfg.mla_v_filter:
+            raise ValueError("mla_v_filter needs mla")
         k_q, k_k, k_v, k_o, k_rel = random.split(key, 5)
         return CausalSelfAttention(
             w_q=reshard(_init_weight(k_q, (d, n * h), std), P(_FSDP_AXES, "model")),
@@ -1047,6 +1069,8 @@ class CausalSelfAttention(eqx.Module):
             vres_lambda=None,
             bias_q=None,
             bias_dkv=None,
+            v_filter_w=None,
+            v_filter_b=None,
             cfg=cfg,
         )
 
@@ -1177,10 +1201,11 @@ class CausalSelfAttention(eqx.Module):
         kv_share: dict[str, jax.Array] | None = None,
         proj_inputs: dict[str, jax.Array] | None = None,
         value_residual: bool = False,
-    ) -> Float[Array, "B S D"]:
+    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         """``kv_share`` (MLA only) is a per-forward mailbox for ``mla_share_kv_latent`` and
         ``value_residual_layers``; ``proj_inputs`` optionally replaces the input of the ``q`` / ``k`` / ``v``
-        projections; ``value_residual`` (static) mixes the first layer's values into this layer's."""
+        projections; ``value_residual`` (static) mixes the first layer's values into this layer's.
+        Returns the output and logging-only stats (``mla_v_filter``)."""
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
         batch_spec = _batch_spec()
@@ -1195,6 +1220,17 @@ class CausalSelfAttention(eqx.Module):
                 v = _value_residual(v, self.vres_lambda, kv_share, value_residual)
         else:
             q, k, v = self._gqa_qkv(x, sconv_segment_ids, is_global)
+        stats: dict[str, jax.Array] = {}
+        if self.v_filter_w is not None and self.v_filter_b is not None:
+            # Noise filter: each value read is kept by sigmoid(w_h . v_j + b_h).
+            head_axis = _padded_spec(v)[2]
+            w = reshard(self.v_filter_w, P(head_axis, None))
+            gate_logits = jnp.einsum("bsnd,nd->bsn", v.astype(jnp.float32), w) + reshard(self.v_filter_b, P(head_axis))
+            v_gate = jax.nn.sigmoid(gate_logits)
+            v = v * v_gate[..., None].astype(v.dtype)
+            v_gate = jax.lax.stop_gradient(v_gate)
+            stats[f"{_LAYER_KNOB_PREFIX}vfilter_gate_mean"] = jnp.mean(v_gate)
+            stats[f"{_LAYER_KNOB_PREFIX}vfilter_frac_lt0p1"] = jnp.mean((v_gate < 0.1).astype(jnp.float32))
 
         # Half-RoPE: rotate only the first half of Q/K head_dim; disable_rope skips RoPE on long/global layers.
         def _rope(qh: jax.Array, kh: jax.Array) -> tuple[jax.Array, jax.Array]:
@@ -1301,7 +1337,7 @@ class CausalSelfAttention(eqx.Module):
             (*attn_out.shape[:-2], attn_out.shape[-2] * attn_out.shape[-1]),
             out_sharding=P(_BATCH_AXES, None, "model"),
         )
-        return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec)
+        return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec), stats
 
 
 def _learned_knob_stats(layer: "Block", i: int) -> dict[str, jax.Array]:
@@ -1329,6 +1365,23 @@ def _learned_knob_stats(layer: "Block", i: int) -> dict[str, jax.Array]:
         stats[f"attn_res_knob_ple_up_norm_L{i}"] = jnp.linalg.norm(
             jax.lax.stop_gradient(layer.ple_up).astype(jnp.float32)
         )
+    if isinstance(layer.attn, KimiDeltaAttention) and layer.attn.comba_d is not None:
+        comba_d = jax.lax.stop_gradient(layer.attn.comba_d)
+        stats[f"attn_res_knob_comba_d_L{i}"] = jnp.mean(comba_d)
+        stats[f"attn_res_knob_comba_d_min_L{i}"] = jnp.min(comba_d)
+        stats[f"attn_res_knob_comba_d_max_L{i}"] = jnp.max(comba_d)
+    # Mean |gamma| of the zero-centered gains: the attention / MLP pre-norms, and every norm inside the mixer
+    # and MoE (KV latent, KDA output, latent / router norms) plus the Peri-LN output norms.
+    groups = {
+        "attn": [layer.rms_attn],
+        "mlp": [layer.rms_mlp],
+        "inner": [layer.attn, layer.mlp, layer.out_norm_attn, layer.out_norm_mlp],
+    }
+    for name, modules in groups.items():
+        gammas = [g for m in modules for g in _zero_centered_gammas(m)]
+        if gammas:
+            flat = jnp.concatenate([jax.lax.stop_gradient(g).reshape(-1) for g in gammas])
+            stats[f"attn_res_knob_gain_abs_{name}_L{i}"] = jnp.mean(jnp.abs(flat))
     return stats
 
 
@@ -1464,7 +1517,7 @@ class KimiDeltaAttention(eqx.Module):
     w_beta: Float[Array, "D N"] | None
     w_beta_down: Float[Array, "D R"] | None
     w_beta_up: Float[Array, "R N"] | None
-    o_norm: "RMSNorm"
+    o_norm: "LearnedRMSNorm"
     bias_qkv: Float[Array, "3 NH"] | None
     sconv_q: ShortConv
     sconv_k: ShortConv
@@ -1479,6 +1532,8 @@ class KimiDeltaAttention(eqx.Module):
     w_rot_up: Float[Array, "R NP"] | None
     rot_scale: Float[Array, "N P"] | None
     """``kda_dd_rope`` per-pair angle amplitude ``gamma`` (zero-init: no rotation at init)."""
+    comba_d: Float[Array, " N"] | None
+    """Per-head Comba output-correction scalar ``d`` (``kda_out_correction``)."""
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -1528,7 +1583,7 @@ class KimiDeltaAttention(eqx.Module):
                     P(None, None),
                 )
             ),
-            o_norm=RMSNorm.init(h, 1e-6),
+            o_norm=_learned_rms_norm(cfg, h, 1e-6),
             bias_qkv=jnp.zeros((3, n * h)) if "qkv" in cfg.proj_biases else None,
             sconv_q=ShortConv.init(n * h, cfg.sconv_kernel),
             sconv_k=ShortConv.init(n * h, cfg.sconv_kernel),
@@ -1551,6 +1606,7 @@ class KimiDeltaAttention(eqx.Module):
                 else None
             ),
             rot_scale=jnp.zeros((n, h // 2)) if cfg.kda_dd_rope else None,
+            comba_d=jnp.full((n,), cfg.kda_out_correction_init, jnp.float32) if cfg.kda_out_correction else None,
             cfg=cfg,
         )
 
@@ -1585,6 +1641,12 @@ class KimiDeltaAttention(eqx.Module):
         q = project(self.w_q, self.sconv_q, 0, "q")
         k = project(self.w_k, self.sconv_k, 1, "k")
         v = project(self.w_v, self.sconv_v, 2, "v")
+        if self.comba_d is not None:
+            # Comba output correction on the L2-normalized q / k; the kernel re-normalizes q - d k.
+            def unit(t: jax.Array) -> jax.Array:
+                return rms_norm(t.astype(jnp.float32)) * head_dim**-0.5
+
+            q = (unit(q) - self.comba_d[:, None] * unit(k)).astype(q.dtype)
         if self.vres_lambda is not None:
             assert kv_share is not None
             v = _value_residual(v, self.vres_lambda, kv_share, value_residual)
@@ -1699,6 +1761,40 @@ class RMSNorm(eqx.Module):
         variance = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
         normed = x * jax.lax.rsqrt(variance + self.eps)
         return (normed * weight).astype(dtype)
+
+
+class ZeroCenteredRMSNorm(eqx.Module):
+    """RMSNorm with a zero-centered gain ``1 + gamma`` (``cfg.zero_centered_gains``)."""
+
+    gamma: jax.Array
+    eps: float = eqx.field(static=True)
+
+    @staticmethod
+    def init(dim: int, eps: float) -> "ZeroCenteredRMSNorm":
+        return ZeroCenteredRMSNorm(gamma=jnp.zeros((dim,), dtype=jnp.float32), eps=eps)
+
+    @named_call
+    def __call__(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
+        gain = 1.0 + unshard(self.gamma)
+        dtype = x.dtype
+        x = x.astype(jnp.float32)
+        variance = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
+        normed = x * jax.lax.rsqrt(variance + self.eps)
+        return (normed * gain).astype(dtype)
+
+
+LearnedRMSNorm = RMSNorm | ZeroCenteredRMSNorm
+
+
+def _learned_rms_norm(cfg: GrugModelConfig, dim: int, eps: float) -> LearnedRMSNorm:
+    """A learned-gain RMSNorm, zero-centered under ``cfg.zero_centered_gains``."""
+    return ZeroCenteredRMSNorm.init(dim, eps) if cfg.zero_centered_gains else RMSNorm.init(dim, eps)
+
+
+def _zero_centered_gammas(module: eqx.Module | None) -> list[jax.Array]:
+    """The ``gamma`` leaves of every ZeroCenteredRMSNorm inside ``module``."""
+    is_norm = lambda x: isinstance(x, ZeroCenteredRMSNorm)  # noqa: E731
+    return [n.gamma for n in jax.tree.leaves(module, is_leaf=is_norm) if is_norm(n)]
 
 
 class DyT(eqx.Module):
@@ -1879,7 +1975,7 @@ class MoEMLP(eqx.Module):
     router: jax.Array | None
     router_down: jax.Array | None
     router_up: jax.Array | None
-    router_norm: "RMSNorm | None"
+    router_norm: "LearnedRMSNorm | None"
     router_bias: jax.Array
     expert_mlp: MoEExpertMlp
     expert_mlp_b: MoEExpertMlp | None
@@ -1887,9 +1983,9 @@ class MoEMLP(eqx.Module):
     null_const_v: Float[Array, "C L"] | None
     null_const_w: Float[Array, "C L 2"] | None
     w_latent_down: jax.Array | None
-    latent_norm: RMSNorm | None
+    latent_norm: LearnedRMSNorm | None
     w_latent_up: jax.Array | None
-    latent_out_norm: RMSNorm | None
+    latent_out_norm: LearnedRMSNorm | None
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -1924,7 +2020,7 @@ class MoEMLP(eqx.Module):
                 else None
             ),
             router_norm=(
-                RMSNorm.init(cfg.router_rank, cfg.layer_norm_eps)
+                _learned_rms_norm(cfg, cfg.router_rank, cfg.layer_norm_eps)
                 if cfg.router_rank and cfg.router_rank_act == "norm"
                 else None
             ),
@@ -1934,14 +2030,16 @@ class MoEMLP(eqx.Module):
                 if latent is None
                 else reshard(_init_weight(k_down, (d, latent), cfg.initializer_std), P(_FSDP_AXES, "model"))
             ),
-            latent_norm=None if latent is None else RMSNorm.init(latent, cfg.layer_norm_eps),
+            latent_norm=None if latent is None else _learned_rms_norm(cfg, latent, cfg.layer_norm_eps),
             w_latent_up=(
                 None
                 if latent is None
                 else reshard(_init_weight(k_up, (latent, d), cfg.initializer_std), P("model", _FSDP_AXES))
             ),
             latent_out_norm=(
-                RMSNorm.init(latent, cfg.layer_norm_eps) if latent is not None and cfg.latent_out_norm else None
+                _learned_rms_norm(cfg, latent, cfg.layer_norm_eps)
+                if latent is not None and cfg.latent_out_norm
+                else None
             ),
             expert_mlp=_expert_mlp_init(_bank_config(cfg, 1), expert_width, k_expert),
             expert_mlp_b=(
@@ -2532,10 +2630,10 @@ def _memory_branch(
 
 
 class Block(eqx.Module):
-    rms_attn: RMSNorm | DyT
+    rms_attn: LearnedRMSNorm | DyT
     attn_gated_norm: GatedNorm
     attn: CausalSelfAttention | KimiDeltaAttention
-    rms_mlp: RMSNorm | DyT
+    rms_mlp: LearnedRMSNorm | DyT
     mlp_gated_norm: GatedNorm
     mlp: "MoEMLP | DenseMLP"
     shared: tuple[DenseMLP, ...] | None
@@ -2552,8 +2650,8 @@ class Block(eqx.Module):
     # Learnable sublayer output scalars (None without cfg.sublayer_scales).
     attn_out_scale: Float[Array, ""] | None
     mlp_out_scale: Float[Array, ""] | None
-    out_norm_attn: "RMSNorm | None"
-    out_norm_mlp: "RMSNorm | None"
+    out_norm_attn: "LearnedRMSNorm | None"
+    out_norm_mlp: "LearnedRMSNorm | None"
     laurel_a_attn: Float[Array, "D R"] | None
     laurel_b_attn: Float[Array, "R D"] | None
     laurel_a_mlp: Float[Array, "D R"] | None
@@ -2599,14 +2697,14 @@ class Block(eqx.Module):
             rms_attn=(
                 DyT.init(cfg.hidden_dim, cfg.dyt_alpha_attn)
                 if cfg.dyt_norm
-                else RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps)
+                else _learned_rms_norm(cfg, cfg.hidden_dim, cfg.layer_norm_eps)
             ),
             attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
             attn=attn,
             rms_mlp=(
                 DyT.init(cfg.hidden_dim, cfg.dyt_alpha_mlp)
                 if cfg.dyt_norm
-                else RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps)
+                else _learned_rms_norm(cfg, cfg.hidden_dim, cfg.layer_norm_eps)
             ),
             mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
             mlp=mlp,
@@ -2626,8 +2724,8 @@ class Block(eqx.Module):
             attn_res_query_v=attn_res_query if cfg.attn_res_v_gate else None,
             attn_out_scale=jnp.ones((), dtype=jnp.float32) if cfg.sublayer_scales else None,
             mlp_out_scale=jnp.ones((), dtype=jnp.float32) if cfg.sublayer_scales else None,
-            out_norm_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps) if cfg.sublayer_out_norm else None,
-            out_norm_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps) if cfg.sublayer_out_norm else None,
+            out_norm_attn=_learned_rms_norm(cfg, cfg.hidden_dim, cfg.layer_norm_eps) if cfg.sublayer_out_norm else None,
+            out_norm_mlp=_learned_rms_norm(cfg, cfg.hidden_dim, cfg.layer_norm_eps) if cfg.sublayer_out_norm else None,
             laurel_a_attn=_laurel_a(cfg, random.fold_in(key, 91)),
             laurel_b_attn=_laurel_b(cfg),
             laurel_a_mlp=_laurel_a(cfg, random.fold_in(key, 92)),
@@ -2683,7 +2781,7 @@ class Block(eqx.Module):
                 value_residual=value_residual,
             )
         else:
-            out = self.attn(
+            out, stats = self.attn(
                 attn_in,
                 mask,
                 disable_rope=disable_rope,
@@ -3423,7 +3521,7 @@ def _unstack_layers(stacked: ArrayStacked[Block]) -> list[Block]:
 
 class Transformer(eqx.Module):
     token_embed: jax.Array
-    embed_norm: RMSNorm
+    embed_norm: LearnedRMSNorm
     embed_gated_norm: GatedNorm | None
     output_proj: jax.Array
     stacked_blocks: ArrayStacked[Block]
@@ -3431,12 +3529,12 @@ class Transformer(eqx.Module):
     kda_blocks: ArrayStacked[Block] | None
     """The KDA (local) layers. The AttnRes loop splits each stack whole into its layers (never slices
     it), so the hybrid keeps one stack per mixer kind: fewer, larger optimizer leaves."""
-    final_norm: RMSNorm
+    final_norm: LearnedRMSNorm
     final_gated_norm: GatedNorm | None
     attn_res_query_final: Float[Array, " D"] | None
     """Pseudo-query of the final AttnRes gate, whose mix feeds the final norms and the lm_head."""
     token_embed2: jax.Array | None
-    embed2_norm: RMSNorm | None
+    embed2_norm: LearnedRMSNorm | None
     bigram_gate_w: Float[Array, " D"] | None
     bigram_gate_b: Float[Array, ""] | None
     bigram_gate_a_lr: Float[Array, "D R"] | None
@@ -3446,11 +3544,11 @@ class Transformer(eqx.Module):
     trigram_gate_a_lr: Float[Array, "D R"] | None
     trigram_gate_b_lr: Float[Array, "R D"] | None
     token_embed3: jax.Array | None
-    embed3_norm: RMSNorm | None
+    embed3_norm: LearnedRMSNorm | None
     token_embed_window: jax.Array | None
     byte_head: jax.Array | None
     window_proj: jax.Array | None
-    window_norm: RMSNorm | None
+    window_norm: LearnedRMSNorm | None
     embed2_up: jax.Array | None
     token_embed_ple: jax.Array | None
     """Per-layer-embedding table ``[vocab, num_layers * ple_dim]`` (``ple_dim``)."""
@@ -3532,14 +3630,14 @@ class Transformer(eqx.Module):
         softmax_layers, kda_layers = _stack_layer_indices(cfg)
         return Transformer(
             token_embed=token_embed,
-            embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            embed_norm=_learned_rms_norm(cfg, cfg.hidden_dim, cfg.layer_norm_eps),
             embed_gated_norm=(
                 GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=embed_gn_key) if cfg.embed_gated_norm else None
             ),
             output_proj=output_proj,
             stacked_blocks=stack(softmax_layers, False),
             kda_blocks=stack(kda_layers, True) if kda_layers else None,
-            final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            final_norm=_learned_rms_norm(cfg, cfg.hidden_dim, cfg.layer_norm_eps),
             final_gated_norm=(
                 GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key) if cfg.final_gated_norm else None
             ),
@@ -3590,7 +3688,7 @@ class Transformer(eqx.Module):
                 if cfg.second_embed and cfg.second_embed_mode == "input"
                 else None
             ),
-            embed2_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps) if cfg.second_embed else None,
+            embed2_norm=_learned_rms_norm(cfg, cfg.hidden_dim, cfg.layer_norm_eps) if cfg.second_embed else None,
             bigram_gate_w=jnp.zeros((cfg.hidden_dim,), jnp.float32) if cfg.bigram_gate else None,
             bigram_gate_b=jnp.full((), 2.0, jnp.float32) if cfg.bigram_gate else None,
             trigram_gate_w=jnp.zeros((cfg.hidden_dim,), jnp.float32) if cfg.trigram_gate else None,
@@ -3631,7 +3729,7 @@ class Transformer(eqx.Module):
                 if cfg.embed3_rows
                 else None
             ),
-            embed3_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps) if cfg.embed3_rows else None,
+            embed3_norm=_learned_rms_norm(cfg, cfg.hidden_dim, cfg.layer_norm_eps) if cfg.embed3_rows else None,
             token_embed_window=(
                 reshard(
                     _init_weight(random.fold_in(embed2_key, 5), (cfg.vocab_size, cfg.window_embed_dim), 1.0),
@@ -3648,7 +3746,7 @@ class Transformer(eqx.Module):
                 if cfg.window_embed_dim
                 else None
             ),
-            window_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps) if cfg.window_embed_dim else None,
+            window_norm=_learned_rms_norm(cfg, cfg.hidden_dim, cfg.layer_norm_eps) if cfg.window_embed_dim else None,
             byte_head=(
                 reshard(
                     _init_weight(
@@ -4300,6 +4398,9 @@ class Transformer(eqx.Module):
                 final_stats[f"attn_res_scale_mlp_L{i}"] = jax.lax.stop_gradient(layer.mlp_out_scale)
             final_stats.update(_learned_knob_stats(layer, i))
         final_stats.update(layer_logs)
+        for name, norm in (("embed", self.embed_norm), ("final", self.final_norm)):
+            if isinstance(norm, ZeroCenteredRMSNorm):
+                final_stats[f"attn_res_knob_gain_abs_{name}"] = jnp.mean(jnp.abs(jax.lax.stop_gradient(norm.gamma)))
         for i, memory in zip(cfg.memory_layers, self.memory or (), strict=True):
             w_out = jax.lax.stop_gradient(memory.w_out).astype(jnp.float32)
             final_stats[f"{_MEMORY_STAT_PREFIX}out_norm_L{i}"] = jnp.linalg.norm(w_out)
@@ -4767,6 +4868,7 @@ __all__ = [
     "RMSNorm",
     "ShortConv",
     "Transformer",
+    "ZeroCenteredRMSNorm",
     "debug_mesh_and_token_pspec",
     "moe_and_shared_fused",
 ]
