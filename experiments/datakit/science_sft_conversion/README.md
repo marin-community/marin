@@ -158,8 +158,8 @@ The product of these two degrees must equal eight GPUs per worker. Compare the
 same sampled workload against the default topology, measuring output tokens per
 second and validation rejection counts, before changing the production topology.
 
-The commands below request 23 replicas at a maximum of 64 running sequences
-per replica, with the broker admitting up to 64 in-flight requests per worker.
+The commands below request 23 replicas at a maximum of 128 running sequences
+per replica, with the broker admitting up to 128 in-flight requests per worker.
 Seventeen clients at concurrency 44 offer 748 simultaneous
 requests, about 32 per replica when all 23 are serving. Adjust client concurrency
 using measured completion throughput and queue latency. Stop the old conversion
@@ -167,11 +167,11 @@ job before submitting its replacement against the same output directory.
 
 ```bash
 uv run iris --cluster=cw-rno2a job run --priority interactive --enable-extra-resources \
-  --job-name minimax-m3-science-sft-scaled-20260927 --cpu 4 --memory 16GB \
+  --job-name minimax-m3-science-sft-scaled-r2-20260927 --cpu 4 --memory 16GB \
   --disk 20GB --extra cpu --no-wait \
   -- python -m experiments.datakit.science_sft_conversion.serve \
     --endpoint /benfeuer/minimax-m3-science-sft-scaled --instances 23 \
-    --max-sequences 64 --timeout-hours 2880 \
+    --max-sequences 128 --timeout-hours 2880 --startup-timeout-seconds 3600 \
     --model-cache-path s3://marin-us-east-02a/marin/users/benfeuer/science-sft-models/MiniMaxAI_MiniMax-M3-MXFP8_c5454eb03678d8710e54a4e0fc681b9f3b4a3dba
 
 uv run iris --cluster=cw-rno2a job run --priority interactive --enable-extra-resources \
@@ -180,3 +180,42 @@ uv run iris --cluster=cw-rno2a job run --priority interactive --enable-extra-res
   -- python -m experiments.datakit.science_sft_conversion.conversion \
     --endpoint /benfeuer/minimax-m3-science-sft-scaled --concurrency 44
 ```
+
+## Full-conversion handoff
+
+The handoff waits for the named conversion job to succeed, then audits every
+expected output batch for coverage, schema, and minimum record count. It writes
+`audit/final-coverage.json`, stops the dedicated conversion serving pool, builds
+the packed token store with loss on assistant reasoning and final answers
+only, checks that its conversation count matches the
+audited output, and launches one epoch of [Step38 SFT](../../grug/science_sft/README.md)
+from `open-athena/Snowball-67B-A2B-5.7T-Mixed-RLVR-Step38`. Overlength conversations
+fail preparation. These checks verify structural completeness; they do not
+verify the factual correctness of generated answers.
+
+Print the handoff plan with the following command. Add `--run` to execute it
+as an Iris CPU job. Pass the key explicitly with Iris
+`-e WANDB_API_KEY "$WANDB_API_KEY"`; `--run` does not copy shell variables
+into the task environment. Submit it only after
+the named producer exists. Use no automatic retries: inspect a failure before
+resubmitting, especially if the SFT child job was already launched.
+
+```bash
+uv run python -m experiments.datakit.science_sft_conversion.finish \
+  --producer-job /benfeuer/science-sft-conversion-v3-stratified-20260927 \
+  --serving-job /benfeuer/minimax-m3-science-sft-scaled-r2-20260927 \
+  --store-path s3://marin-us-east-02a/marin/users/benfeuer/science-sft-converted-store/2026.09.27-v3 \
+  --num-shards 1024 --max-workers 32 --timeout-hours 2880 --version 2026.09.27-v3
+```
+
+The `codex/science-sft-conversion` worktree includes the concurrency settings from
+[PR #8891](https://github.com/marin-community/marin/pull/8891): the proxy sizes
+its thread limiter to its pending-request budget, the dashboard permits up to
+4,096 upstream connections, and each worker sizes its HTTP pool to its in-flight
+limit. Conversion and benchmark HTTP pools match their client concurrency.
+The 64-request admission and overload regression test in
+`tests/evals/test_inference_proxy.py` verifies the corrected proxy. The larger
+pool command above creates the `scaled-r2` serving job; its endpoint must match
+the producer's `--endpoint`. These settings must ship with the jobs; raising
+vLLM's sequence limit alone
+does not remove the shared proxy's default 40-request limit.
