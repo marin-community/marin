@@ -25,7 +25,7 @@ the Marin checkout so it can read current project instructions.
 
 ## Access you will need
 
-Ask a Marin infrastructure maintainer for the access your work requires:
+Request the access your work requires:
 
 - Write access to `marin-community/marin` on GitHub.
 - The `Marin Dev` role in the `hai-gcp-models` GCP project.
@@ -39,8 +39,24 @@ datasets you need. Keep API keys and tokens in environment variables or a
 gitignored `.env` file. Do not commit them.
 
 GCP project access, Iris IAP access, GitHub access, and external-service access
-are separate grants. The onboarding agent can identify a missing grant. Ask
-your manager or a Marin infrastructure maintainer to route the request.
+are separate grants. The onboarding agent can identify missing access.
+
+### Request your GCP and Weights & Biases access
+
+Initiate your own `Marin Dev` access request. Send your Google account email and
+a one-line reason to your buddy or a Marin infrastructure maintainer privately.
+Ask them to prepare a grant PR through the
+[Pulumi user-grant workflow](https://github.com/marin-community/marin/blob/main/infra/pulumi/README.md#user-grants).
+Creating the encrypted grant requires KMS access, which a new developer does
+not yet have. An authorized contributor runs `add-grant`; a separate reviewer
+checks the account and role with `review-grant`, merges the PR, and runs
+`pulumi up` on the `infra/pulumi` `marin` stack. The grant is live after that
+update succeeds. Do not put your email in a public issue or PR.
+
+DM your buddy: “Add me to the `marin-community` Weights & Biases entity. My
+Weights & Biases handle is `<your-handle>`.” Replace the placeholder with your
+own handle. Ask your buddy or a Marin infrastructure maintainer to route other
+missing grants.
 
 ### Pulumi operators
 
@@ -51,12 +67,9 @@ ordinary developer onboarding. An operator needs both project custom roles:
 - `projects/hai-gcp-models/roles/marinPulumiAdmin`
 
 `marinPulumiAdmin` can change resource-scoped IAM policy. Grant it only to
-trusted operators of the `marin` stack. A maintainer adds an operator through
-the [Pulumi user-grant workflow](https://github.com/marin-community/marin/blob/main/infra/pulumi/README.md#user-grants):
-`add-grant` creates a PR with the encrypted principal and role bindings. A
-separate reviewer runs `review-grant`, confirms the decrypted grant, merges the
-PR, and applies the `marin` stack. Do not store a plaintext email in the public
-repository or change the managed IAM bindings with `gcloud`.
+trusted operators of the `marin` stack. Request it separately through the
+Pulumi user-grant workflow above. Do not change the managed IAM bindings with
+`gcloud`.
 
 The onboarding agent should verify both live role bindings, local Pulumi
 tooling, and read access to the Pulumi state. It must not run `pulumi up` as an
