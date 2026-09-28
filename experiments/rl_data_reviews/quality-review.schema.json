@@ -1,0 +1,780 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RL data quality review collection (proposal)",
+  "description": "Versioned review observations with explicit subjects, evidence, and separate tag assignments.",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": "0.3.0"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "subjects": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/subject"
+      }
+    },
+    "reviews": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/review"
+      }
+    },
+    "tag_assignments": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/tagAssignment"
+      }
+    },
+    "source_mappings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/sourceMapping"
+      }
+    },
+    "execution_provenance": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "marinskyrl_commit": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$"
+        },
+        "marinskyrl_dirty": {
+          "type": "boolean"
+        },
+        "marinskyrl_python_tree_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "harbor_commit": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[a-f0-9]{40}$"
+        }
+      },
+      "required": [
+        "marinskyrl_commit",
+        "marinskyrl_dirty",
+        "marinskyrl_python_tree_sha256",
+        "harbor_commit"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "schema_version",
+    "created_at",
+    "subjects",
+    "reviews",
+    "tag_assignments",
+    "source_mappings",
+    "execution_provenance"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "actor": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "enum": [
+            "human",
+            "model",
+            "organization",
+            "unknown"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "kind"
+      ],
+      "additionalProperties": false
+    },
+    "evidence": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "snapshot_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "retrieved_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "locator": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "enum": [
+                "json_pointer",
+                "line_range"
+              ]
+            },
+            "value": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "additionalProperties": false
+        },
+        "artifact_revision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "url",
+        "snapshot_path",
+        "sha256",
+        "retrieved_at",
+        "locator",
+        "artifact_revision"
+      ],
+      "additionalProperties": false
+    },
+    "subject": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "level": {
+          "enum": [
+            "source",
+            "task"
+          ]
+        },
+        "repository": {
+          "type": "string",
+          "minLength": 1
+        },
+        "dataset_revision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "task_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "task_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "row_index": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        }
+      },
+      "required": [
+        "id",
+        "level",
+        "repository",
+        "dataset_revision",
+        "source_id",
+        "task_id",
+        "task_path",
+        "row_index"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "level": {
+                "const": "task"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "task_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "task_path": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "level": {
+                "const": "source"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "task_id": {
+                "type": "null"
+              },
+              "task_path": {
+                "type": "null"
+              },
+              "row_index": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "scale": {
+      "type": "object",
+      "properties": {
+        "minimum": {
+          "type": "number"
+        },
+        "maximum": {
+          "type": "number"
+        },
+        "higher_means": {
+          "enum": [
+            "better",
+            "worse",
+            "neither"
+          ]
+        },
+        "rubric_url": {
+          "type": "string",
+          "format": "uri"
+        }
+      },
+      "required": [
+        "minimum",
+        "maximum",
+        "higher_means",
+        "rubric_url"
+      ],
+      "additionalProperties": false
+    },
+    "metric": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "value": {
+          "type": [
+            "number",
+            "string",
+            "boolean",
+            "null"
+          ]
+        },
+        "scale": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/scale"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "key",
+        "value",
+        "scale"
+      ],
+      "additionalProperties": false
+    },
+    "finding": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "dimension": {
+          "type": "string",
+          "minLength": 1
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "severity": {
+          "enum": [
+            "info",
+            "low",
+            "medium",
+            "high",
+            "critical",
+            null
+          ],
+          "description": "Severity of a defect, never confidence or importance. Positive observations use info or null."
+        },
+        "kind": {
+          "enum": [
+            "issue",
+            "observation",
+            "unknown"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "dimension",
+        "text",
+        "severity",
+        "kind"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "observation"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "severity": {
+                "enum": [
+                  "info",
+                  null
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "sample": {
+      "type": "object",
+      "properties": {
+        "task_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "row_index": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        }
+      },
+      "required": [
+        "task_path",
+        "row_index"
+      ],
+      "additionalProperties": false
+    },
+    "coverage": {
+      "type": "object",
+      "properties": {
+        "scope": {
+          "enum": [
+            "single_task",
+            "source_sample",
+            "full_source",
+            "unknown"
+          ]
+        },
+        "sample_count": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "population_count": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "sampling_method": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "seed": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "samples": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/sample"
+          }
+        }
+      },
+      "required": [
+        "scope",
+        "sample_count",
+        "population_count",
+        "sampling_method",
+        "seed",
+        "samples"
+      ],
+      "additionalProperties": false
+    },
+    "review": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "subject_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reviewer": {
+          "$ref": "#/$defs/actor"
+        },
+        "publisher": {
+          "$ref": "#/$defs/actor"
+        },
+        "reviewed_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "imported_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "method": {
+          "enum": [
+            "static_inspection",
+            "runtime_execution",
+            "model_judgment",
+            "human_judgment",
+            "synthesis",
+            "unknown"
+          ]
+        },
+        "tests_executed": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "coverage": {
+          "$ref": "#/$defs/coverage"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "verdict": {
+          "enum": [
+            "keep",
+            "reject",
+            "conditional",
+            "inconclusive",
+            "unrated"
+          ]
+        },
+        "metrics": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/metric"
+          }
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/finding"
+          }
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evidence"
+          },
+          "minItems": 1
+        },
+        "derived_from_review_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "supersedes_review_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "attributes": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "subject_id",
+        "reviewer",
+        "publisher",
+        "reviewed_at",
+        "imported_at",
+        "method",
+        "tests_executed",
+        "coverage",
+        "summary",
+        "verdict",
+        "metrics",
+        "findings",
+        "evidence",
+        "derived_from_review_ids",
+        "supersedes_review_id",
+        "attributes"
+      ],
+      "additionalProperties": false
+    },
+    "tagAssignment": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "target": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "enum": [
+                "subject",
+                "review",
+                "finding"
+              ]
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "additionalProperties": false
+        },
+        "namespace": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]*$"
+        },
+        "value": {
+          "type": "string",
+          "minLength": 1
+        },
+        "origin": {
+          "enum": [
+            "upstream",
+            "derived",
+            "curated"
+          ]
+        },
+        "assigned_by": {
+          "$ref": "#/$defs/actor"
+        },
+        "assigned_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "evidence_review_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "supersedes_assignment_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "enum": [
+            "active",
+            "retracted"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "target",
+        "namespace",
+        "value",
+        "origin",
+        "assigned_by",
+        "assigned_at",
+        "evidence_review_ids",
+        "note",
+        "supersedes_assignment_id",
+        "state"
+      ],
+      "additionalProperties": false
+    },
+    "sourceMapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "subject_id",
+        "atlas_source_ids",
+        "status",
+        "applicability",
+        "evidence",
+        "note"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "subject_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "atlas_source_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "status": {
+          "enum": [
+            "confirmed",
+            "ambiguous",
+            "unresolved"
+          ]
+        },
+        "applicability": {
+          "enum": [
+            "exact_revision",
+            "historical",
+            "unknown"
+          ]
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evidence"
+          }
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "confirmed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "atlas_source_ids": {
+                "minItems": 1,
+                "maxItems": 1
+              },
+              "evidence": {
+                "minItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "unresolved"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "atlas_source_ids": {
+                "maxItems": 0
+              },
+              "applicability": {
+                "const": "unknown"
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

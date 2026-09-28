@@ -4,6 +4,7 @@
 import base64
 import hashlib
 import json
+import logging
 import uuid
 from collections.abc import Iterator
 
@@ -221,7 +222,9 @@ def test_hf_auth_keeps_token_off_github_and_redirect_targets() -> None:
     }
 
 
-def test_hf_rate_limit_retries_with_runtime_readonly_secret(monkeypatch) -> None:
+def test_hf_rate_limit_retries_with_runtime_readonly_secret(monkeypatch, caplog) -> None:
+    # Explicit configuration prevents google-auth from changing global log propagation.
+    caplog.set_level(logging.WARNING, logger="google")
     monkeypatch.setattr(hf_auth.google.auth, "default", lambda scopes: (AnonymousCredentials(), "hai-gcp-models"))
     secret_requests = []
 
@@ -803,3 +806,11 @@ def test_mopd_audit_keeps_unlabeled_swe_and_multiturn_preference_records(tmp_pat
     assert sum(row["task_count"] for row in children) == 3
     assert all(row["count_precision"] == "exact" and row["turns"] == "Multi-turn" for row in children)
     assert [(row["task_count"], row["type"]) for row in children] == [(1, "Agentic"), (1, "Agentic"), (1, "Alignment")]
+
+
+def test_unavailable_nemotron_metadata_keeps_the_canonical_population() -> None:
+    parent = source_row("MarinSkyRL", "nemotron_ultra_mopd", "registry", "2026-09-28")
+    parent.update(
+        dataset_id=composition.NEMOTRON, dataset_revision=None, task_count=None, metadata_error="HF metadata unavailable"
+    )
+    assert component_rows(parent, {"metadata_error": "HF metadata unavailable"}) == [parent]

@@ -103,6 +103,8 @@ def nemotron_components(parent: dict[str, Any], info: dict[str, Any]) -> list[di
     blend = parent["name"].removeprefix("nemotron_ultra_")
     if parent.get("dataset_revision") == NEMOTRON_COUNTS["revision"] and blend in NEMOTRON_COUNTS["blends"]:
         return counted_nemotron_components(parent, NEMOTRON_COUNTS["blends"][blend])
+    if info.get("metadata_error"):
+        return [parent]
     section = re.search(rf"^### {re.escape(blend)}\s*\n(.*?)(?=^##|\Z)", info["card_text"], re.MULTILINE | re.DOTALL)
     if section is None:
         raise ValueError(f"Nemotron card has no composition for {blend}")

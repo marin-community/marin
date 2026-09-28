@@ -4,8 +4,7 @@
 to browse the latest MarinSkyRL sources and the Task Trove release manifest. The applet requires Marina authentication.
 Task Trove packages converted datasets as tasks for the Harbor execution
 environment. The two catalogs are independent and can share original datasets.
-Its UUID is `fb11c931-5861-4878-8bb5-a964d652b45f`; the current release is
-[revision 11](https://applets.marina.oa.dev/a/fb11c931-5861-4878-8bb5-a964d652b45f/v/11/).
+Its UUID is `fb11c931-5861-4878-8bb5-a964d652b45f`; the stable link always opens the current release.
 
 Search and filter the table, including its Environment column, click column
 headings to sort, and use the information button beside a source name to inspect
@@ -147,11 +146,38 @@ sampling scope, checkpoint revisions, and uncertainty. These curated columns are
 stored separately and survive refreshes. Changed source data or verifier revisions
 hide stale Quality and Difficulty values while retaining the historical review link.
 
-The review tooling and schema live in
-`/Users/benfeuer/Documents/experiments/active/rl-data-browser/`;
-`MAKE_REVIEW.md` documents native Gym and Harbor execution, artifact persistence,
-resume checks, and publication. Static imported reviews remain distinct from
-fresh runtime audits.
+The review tooling, example configuration, and JSON schema are checked in under
+`experiments/rl_data_reviews/`. Copy `review-config.example.json` to a local file,
+then set the model endpoint and the solver checkpoint commit in `model.revision`, native checkout and
+Python paths, source identity, and local task path. Gym execution requires the
+MarinSkyRL runtime dependencies; Harbor execution also requires Harbor and its
+configured environment provider, such as local Docker. API keys belong in the
+environment variable named by `model.api_key_env`.
+
+From the repository root, create and publish a review with:
+
+```bash
+uv run experiments/rl_data_reviews/make_review.py \
+  --config /path/to/review-config.json --n 3 --seed 42 --output /path/to/review
+uv run experiments/rl_data_reviews/publish_review.py \
+  --run-dir /path/to/review --atlas-id 'MarinSkyRL:svamp'
+```
+
+Set `source.source_id` to the Atlas population named by `--atlas-id` and
+`source.revision` to that dataset's HF commit. `source.tasks_path` points to the
+local inputs. Use `source.format: skyrl_prepared` for Parquet or JSON rows with
+MarinSkyRL's `prompt`, `env_class`, and verifier arguments; use `harbor_directory`
+for native Harbor task directories. `task_manifest` accepts JSON or JSONL records
+matching the `Task` dataclass in `make_review.py`, including the source ID and
+dataset revision for each record. Preserve the native verifier arguments and
+selected subset when preparing these inputs.
+The script samples local tasks, runs native Gym or Harbor verifiers, saves solver
+and verifier traces, obtains three fresh review sessions from the solver model, each without the other judges' opinions,
+and synthesizes the opinions. Each Harbor attempt uses a distinct session name.
+Add `--resume` to the first command to reuse completed task outcomes, judge outputs, and syntheses with matching inputs,
+configuration, and native code. The publisher validates the collection and
+uploads its cited evidence into the applet schema using Marina authentication.
+Imported Task Trove dashboard notes and task audits remain separate historical collections; this publisher creates new collections from actual task attempts.
 
 Opening the page checks the MarinSkyRL registry repository and Task Trove release
 repository heads and always refreshes MarinSkyRL upstream dataset metadata, including
@@ -176,9 +202,10 @@ Validate and update the same applet from the repository root:
 
 ```bash
 uv run marina validate infra/marina/applets/rl_data_catalog
-uv run marina applets versions fb11c931-5861-4878-8bb5-a964d652b45f --json
+atlas_revision=$(uv run marina applets versions fb11c931-5861-4878-8bb5-a964d652b45f --json |
+  python -c 'import json, sys; print(json.load(sys.stdin)["current_version"])')
 uv run marina publish infra/marina/applets/rl_data_catalog \
-  --update fb11c931-5861-4878-8bb5-a964d652b45f --base-version 11
+  --update fb11c931-5861-4878-8bb5-a964d652b45f --base-version "$atlas_revision"
 ```
 
 Use the actual current revision reported by `versions` as `--base-version`.
