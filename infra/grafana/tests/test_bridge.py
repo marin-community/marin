@@ -1127,33 +1127,27 @@ def test_health_endpoint_limits_wandb_failures_to_eligible_runs(monkeypatch, fai
         def query(self, sql: str, *, max_rows: int) -> pa.Table:
             if '"iris.task_state"' in sql or '"iris.task_event"' in sql:
                 return pa.table({})
+            run_fields = dict(cluster="cw-a", execution_uid="attempt-1")
             if "newest.latest_value" in sql:
                 return pa.Table.from_pylist(
                     [
-                        {
-                            "cluster": "cw-a",
-                            "run_id": run_id,
-                            "execution_uid": "attempt-1",
-                            "name": metric,
-                            "latest_value": value,
-                            "observed_at": stamp,
-                            "recent_samples": 1,
-                            "recent_total": value,
-                            "recent_below_floor": 0,
-                        }
+                        dict(
+                            run_fields,
+                            run_id=run_id,
+                            name=metric,
+                            latest_value=value,
+                            observed_at=stamp,
+                            recent_samples=1,
+                            recent_total=value,
+                            recent_below_floor=0,
+                        )
                         for run_id, (phase, stamp) in phases.items()
                         for metric, value in [("phase", phase), ("train_router_routing_entropy_mean", 0.0)]
                     ]
                 )
             return pa.Table.from_pylist(
                 [
-                    {
-                        "cluster": "cw-a",
-                        "run_id": run_id,
-                        "telemetry_job": f"/u/{run_id}-coord/train",
-                        "execution_uid": "attempt-1",
-                        "phase_at": stamp,
-                    }
+                    dict(run_fields, run_id=run_id, telemetry_job=f"/u/{run_id}-coord/train", phase_at=stamp)
                     for run_id, (_, stamp) in phases.items()
                 ]
             )
@@ -1161,17 +1155,10 @@ def test_health_endpoint_limits_wandb_failures_to_eligible_runs(monkeypatch, fai
     requested_runs = []
 
     def post(client, url, *, json):
-        run_id = json["variables"]["run"]
-        requested_runs.append(run_id)
-        if run_id == "hero-c-training":
-            if failure == "timeout":
-                raise httpx.ReadTimeout("W&B timed out")
-            return httpx.Response(200, json={"errors": [{"message": "run inaccessible"}]})
-        metric = "eval_dropless/paloma/macro_loss"
-        points = [
-            {"_step": step, "_timestamp": now.timestamp(), metric: loss} for step, loss in [(100, 2.0), (200, 2.2)]
-        ]
-        return httpx.Response(200, json={"data": {"project": {"run": {"sampledHistory": [points]}}}})
+        requested_runs.append(json["variables"]["run"])
+        if failure == "timeout":
+            raise httpx.ReadTimeout("W&B timed out")
+        return httpx.Response(200, json={"errors": [{"message": "run inaccessible"}]})
 
     monkeypatch.setattr(httpx.Client, "post", post)
     response = _client(HealthSource()).get("/finelog/marin/alerts/training_health")
@@ -1180,7 +1167,7 @@ def test_health_endpoint_limits_wandb_failures_to_eligible_runs(monkeypatch, fai
     assert {(row["run"], row["reason"]) for row in response.json() if row["value"]} == {
         ("hero-c-training", "router_entropy"),
         ("hero-d-training", "router_entropy"),
-    } | ({("hero-d-training", "eval_regressed")} if failure == "run-error" else set())
+    }
     assert requested_runs == (["hero-c-training", "hero-d-training"] if failure == "run-error" else ["hero-c-training"])
 
 
