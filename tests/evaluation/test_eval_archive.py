@@ -390,9 +390,10 @@ def test_repeated_evalchemy_samples_keep_each_trial_and_score(tmp_path):
         row["source_id"] = 2
         row["sample_ordinal"] = 0
         rows.append(row)
-    _write_jsonl(results, rows)
+    source = _write_jsonl(results, rows)
 
     assert export_lm_eval_samples(str(results)).samples == 3
+    source.unlink()
     assert rebuild_lm_eval_samples(str(results)) == 3
 
     stored = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
@@ -443,24 +444,6 @@ def test_sample_metrics_exclude_evalchemy_provenance_indices(tmp_path):
     assert coverage == {
         "gsm8k_5shot": TaskCoverage(n_attempted=1, n_scored=0, n_correct=None, n_unanswered=0, errors={"ungraded": 1})
     }
-
-
-def test_repeated_evalchemy_samples_keep_distinct_trial_ids_after_rebuild(tmp_path):
-    results = tmp_path / "run" / "results"
-    first = _lm_eval_row(0, "none", 0.0, "4")
-    second = _lm_eval_row(0, "none", 1.0, "5")
-    first["sample_repeat"] = 0
-    second["sample_repeat"] = 1
-    source = _write_jsonl(results, [first, second])
-
-    assert export_lm_eval_samples(str(results)).samples == 2
-    rows = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
-    assert {(row["doc_id"], row["trial_id"]) for row in rows} == {("0", "0"), ("0", "1")}
-
-    source.unlink()
-    assert rebuild_lm_eval_samples(str(results)) == 2
-    rebuilt = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
-    assert {(row["doc_id"], row["trial_id"]) for row in rebuilt} == {("0", "0"), ("0", "1")}
 
 
 def test_export_preserves_its_sources_and_rebuilds_from_them(tmp_path):
