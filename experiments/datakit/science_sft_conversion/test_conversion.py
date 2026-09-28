@@ -307,7 +307,7 @@ async def test_later_batch_persists_while_first_response_waits(tmp_path) -> None
         "bullets": "- Add the numbers.\nConclusion: 2.",
         "short_then_detail": "Short answer: 2.\nAdd the numbers.",
         "table": "| Item | Value |\n| --- | --- |\n| Answer | 2 |",
-        "json": json.dumps({"answer": 2, "evidence": "Addition", "caveats": []}),
+        "json": {"answer": "2", "evidence": ['Addition: \\alpha + \\alpha\nA quoted "symbol".'], "caveats": []},
     }
 
     async def response(request: httpx.Request) -> httpx.Response:
@@ -375,6 +375,13 @@ async def test_later_batch_persists_while_first_response_waits(tmp_path) -> None
     assert {row["source_id"] for row in pq.read_table(first_output).to_pylist()} == {
         f"{source.name}:row-{index}:0" for index in range(4)
     }
+    records = pq.read_table(first_output).to_pylist() + pq.read_table(second_output).to_pylist()
+    json_records = [
+        record for record in records if format_for(source.name, record["source_id"].split(":")[-2], 0).name == "json"
+    ]
+    assert json_records
+    for record in json_records:
+        assert json.loads(record["messages"][2]["content"][0]["text"]) == answers["json"]
 
 
 @pytest.mark.asyncio

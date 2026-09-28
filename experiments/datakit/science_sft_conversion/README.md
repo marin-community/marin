@@ -11,6 +11,12 @@ gets one of six answer formats chosen from a stable source ID hash. MiniMax
 generates a user request, an assistant `reasoning_content` span, and a final
 answer. The worker validates the three fields, the requested final format, and
 Datakit's Harmony message structure before writing `CHAT_SCHEMA` Parquet.
+For the JSON answer format, the response schema requires a nested `answer`
+object with an `answer` string and `evidence` and `caveats` arrays of strings.
+The worker supplies this schema to vLLM for constrained generation, then
+serializes the answer object into the Harmony final message. The constraints
+cover JSON syntax and string escaping, including backslashes and quotes.
+Other formats use an answer string in the response schema.
 Grounded tasks extract reported facts and reuse supplied worked steps. Supplied
 annotations are reported as reference information; the generated reasoning must not
 invent how those labels were derived. The request repeats these requirements

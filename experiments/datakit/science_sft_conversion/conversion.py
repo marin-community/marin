@@ -123,7 +123,7 @@ FORMATS = (
 
 SYSTEM_PROMPT = (
     "Convert the supplied source passage into one faithful instruction-following training conversation. "
-    "Return only a JSON object with exactly three string fields: user, reasoning_content, answer. "
+    "Return only the JSON object described by the response schema, with user, reasoning_content, and answer fields. "
     "The user field must ask a substantive question or task grounded in the passage. Do not put the answer format "
     "instruction in the user field; the conversion pipeline appends it. "
     "When asked for a standalone exercise, include all needed inputs and starting equations in the user field, "
@@ -250,6 +250,20 @@ def stratified_batches(items: list[WorkItem], seed: int, max_batches: int | None
 def _row_request(
     source: Source, chunk: str, chunk_index: int, chunk_count: int, selected: Format, mode: ConversionMode
 ) -> dict:
+    answer_schema = (
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["answer", "evidence", "caveats"],
+            "properties": {
+                "answer": {"type": "string"},
+                "evidence": {"type": "array", "items": {"type": "string"}},
+                "caveats": {"type": "array", "items": {"type": "string"}},
+            },
+        }
+        if selected.name == "json"
+        else {"type": "string"}
+    )
     response_format = {
         "type": "json_schema",
         "json_schema": {
@@ -262,7 +276,7 @@ def _row_request(
                 "properties": {
                     "user": {"type": "string"},
                     "reasoning_content": {"type": "string"},
-                    "answer": {"type": "string"},
+                    "answer": answer_schema,
                 },
             },
         },
@@ -415,7 +429,10 @@ async def _convert_chunk(
                         if choice["finish_reason"] != "stop":
                             raise ValueError(f"Generation ended with {choice['finish_reason']}")
                         content = choice["message"]["content"]
-                        record = _document(source, source_id, chunk, chunk_index, json.loads(content), selected, mode)
+                        completion = json.loads(content)
+                        if selected.name == "json":
+                            completion["answer"] = json.dumps(completion["answer"], ensure_ascii=False)
+                        record = _document(source, source_id, chunk, chunk_index, completion, selected, mode)
                         return ConvertedChunk(record, selected)
                     except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as error:
                         logger.warning(
