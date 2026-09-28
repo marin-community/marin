@@ -41,12 +41,12 @@ def _health_server(status: int):
             thread.join()
 
 
-def test_probe_accepts_redirect_status_without_following_it():
+def test_probe_rejects_redirect_status_without_following_it():
     with _health_server(302) as port:
         result = health_probe.probe_http_health(port, timeout=1)
 
-    assert result.healthy
-    assert result.detail == "HTTP 302"
+    assert not result.healthy
+    assert result.detail == "health endpoint returned HTTP 302"
     assert not _HealthHandler.redirected
 
 

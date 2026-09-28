@@ -35,7 +35,7 @@ def _read_port() -> int:
 
 
 def probe_health(timeout: float) -> ProbeResult:
-    """Send one health request without following redirects."""
+    """Send one health request."""
     try:
         port = _read_port()
     except (FileNotFoundError, OSError, ValueError) as error:
@@ -56,7 +56,7 @@ def probe_http_health(port: int, timeout: float) -> ProbeResult:
     finally:
         connection.close()
 
-    if 200 <= response.status < 400:
+    if 200 <= response.status < 300:
         return ProbeResult(True, f"HTTP {response.status}")
     detail = f"health endpoint returned HTTP {response.status}"
     if body:
