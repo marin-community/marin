@@ -580,6 +580,16 @@ class GrugModelConfig:
     ``mla_v_filter_bias_init``; both Adam). Applied to the final values (after value embeds / residual)."""
     mla_v_filter_bias_init: float = 4.0
     """Initial ``b_h`` of ``mla_v_filter`` (the paper's +4: every gate starts at ~0.982)."""
+    mla_forget_gate: bool = False
+    """Forgetting Transformer forget gate (FoX, arXiv 2503.02130) on the MLA layers: per head a scalar
+    ``f_t = sigmoid(w_h . x_t + b_h)`` (``w`` [D, N] zero-init, ``b`` [N] init ``mla_forget_gate_bias_init``;
+    both Adam) adds ``sum_{k=j+1..i} log f_k = c_i - c_j`` to logit (i, j), ``c`` the per-document cumsum of
+    ``log f``. The row term ``c_i`` cancels in the softmax; the kernel takes no per-key bias, so ``-c_j`` rides
+    in extra q/k channels (q: 1, k: a bf16 hi/mid/lo split of ``-c_j``) and q/k/v are zero-padded to the
+    kernel's 32-channel granule (head_dim 128 -> 160, ~1.25x attention FLOPs on these layers)."""
+    mla_forget_gate_bias_init: float = 0.0
+    """Initial ``b_h`` of ``mla_forget_gate``. The paper uses 0 (f = 0.5: a strongly local start); larger
+    values start closer to plain attention (+4: f ~0.982)."""
     zero_centered_gains: bool = False
     """Zero-centered norm gains (Qwen3-Next; arXiv 2608.30320 sec. 2.1.1): every learned-gain RMSNorm scales by
     ``1 + gamma`` with ``gamma`` zero-init (identical at init), so the optimizer's ``gain_weight_decay`` pulls
@@ -1109,6 +1119,8 @@ class CausalSelfAttention(eqx.Module):
     bias_dkv: Float[Array, " L"] | None
     v_filter_w: Float[Array, "N H"] | None  # noise-filter value gate direction (cfg.mla_v_filter), zero-init
     v_filter_b: Float[Array, " N"] | None  # noise-filter value gate bias (cfg.mla_v_filter)
+    forget_gate_w: Float[Array, "D N"] | None  # FoX forget gate direction (cfg.mla_forget_gate), zero-init
+    forget_gate_b: Float[Array, " N"] | None  # FoX forget gate bias (cfg.mla_forget_gate)
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -1165,6 +1177,10 @@ class CausalSelfAttention(eqx.Module):
                 bias_dkv=jnp.zeros((kvl,)) if "qkv" in cfg.proj_biases else None,
                 v_filter_w=jnp.zeros((n, h), jnp.float32) if cfg.mla_v_filter else None,
                 v_filter_b=jnp.full((n,), cfg.mla_v_filter_bias_init, jnp.float32) if cfg.mla_v_filter else None,
+                forget_gate_w=reshard(jnp.zeros((d, n)), P(None, None)) if cfg.mla_forget_gate else None,
+                forget_gate_b=(
+                    jnp.full((n,), cfg.mla_forget_gate_bias_init, jnp.float32) if cfg.mla_forget_gate else None
+                ),
                 cfg=cfg,
             )
         if "qkv" in cfg.proj_biases:
@@ -1175,6 +1191,8 @@ class CausalSelfAttention(eqx.Module):
             raise ValueError("value_residual_layers is implemented for MLA and KDA only")
         if cfg.mla_v_filter:
             raise ValueError("mla_v_filter needs mla")
+        if cfg.mla_forget_gate:
+            raise ValueError("mla_forget_gate needs mla")
         k_q, k_k, k_v, k_o, k_rel = random.split(key, 5)
         return CausalSelfAttention(
             w_q=reshard(_init_weight(k_q, (d, n * h), std), P(_FSDP_AXES, "model")),
@@ -1210,6 +1228,8 @@ class CausalSelfAttention(eqx.Module):
             bias_dkv=None,
             v_filter_w=None,
             v_filter_b=None,
+            forget_gate_w=None,
+            forget_gate_b=None,
             cfg=cfg,
         )
 
@@ -1370,6 +1390,20 @@ class CausalSelfAttention(eqx.Module):
             v_gate = jax.lax.stop_gradient(v_gate)
             stats[f"{_LAYER_KNOB_PREFIX}vfilter_gate_mean"] = jnp.mean(v_gate)
             stats[f"{_LAYER_KNOB_PREFIX}vfilter_frac_lt0p1"] = jnp.mean((v_gate < 0.1).astype(jnp.float32))
+        fox_key_bias = None
+        # The FoX key channels reach the kernel's 1/sqrt(padded head_dim) scale; q is rescaled to keep q.k exact.
+        fox_q_scale = 1.0
+        if self.forget_gate_w is not None and self.forget_gate_b is not None:
+            # FoX: logit (i, j) += c_i - c_j, c the per-document cumsum of log f; only -c_j survives the softmax
+            # (the kernel applies no soft-cap or other nonlinearity to the logits).
+            gate_logits = jnp.einsum("bsd,dn->bsn", x.astype(jnp.float32), self.forget_gate_w.astype(jnp.float32))
+            log_forget = jax.nn.log_sigmoid(gate_logits + self.forget_gate_b)
+            fox_key_bias = -_segment_cumsum(log_forget, sconv_segment_ids)
+            fox_q_scale = math.sqrt(_fox_head_dim(head_dim) / head_dim)
+            log_forget = jax.lax.stop_gradient(log_forget)
+            stats[f"{_LAYER_KNOB_PREFIX}fox_gate_mean"] = jnp.mean(jnp.exp(log_forget))
+            stats[f"{_LAYER_KNOB_PREFIX}fox_neg_log_gate_mean"] = -jnp.mean(log_forget)
+            stats[f"{_LAYER_KNOB_PREFIX}fox_gate_min_head"] = jnp.min(jnp.mean(jnp.exp(log_forget), axis=(0, 1)))
 
         # Half-RoPE: rotate only the first half of Q/K head_dim; disable_rope skips RoPE on long/global layers.
         def _rope(qh: jax.Array, kh: jax.Array) -> tuple[jax.Array, jax.Array]:
@@ -1417,9 +1451,9 @@ class CausalSelfAttention(eqx.Module):
                     q = jnp.where(keep, q_roped, q)
                     k = jnp.where(keep, k_roped, k)
             if self.qk_mult is None:
-                q = q * self.cfg.qk_mult
+                q = q * (self.cfg.qk_mult * fox_q_scale)
             else:
-                qk_mult = self.qk_mult.astype(q.dtype)
+                qk_mult = (self.qk_mult * fox_q_scale).astype(q.dtype)
                 q = q * (qk_mult[:, None] if qk_mult.ndim else qk_mult)
             if self.ssmax_scale is not None:
                 log_keys = jnp.log1p(_positions_in_document(sconv_segment_ids, seq_len).astype(jnp.float32))
@@ -1432,13 +1466,19 @@ class CausalSelfAttention(eqx.Module):
         # The fa4-cute kernel is GPU-only; fall back to auto-select off-GPU so the model still lowers
         # on CPU (e.g. the grug variant-contract tests).
         attn_impl = "gpu_fa4_cute" if jax.default_backend() == "gpu" else None
-        attn_out = attention(q, k, v, mask, implementation=attn_impl, rel_bias=rel_bias)
+
+        def _attend(qh: jax.Array, kh: jax.Array) -> jax.Array:
+            if fox_key_bias is None:
+                return attention(qh, kh, v, mask, implementation=attn_impl, rel_bias=rel_bias)
+            qh, kh, vh = _fox_augment(qh, kh, v, fox_key_bias)
+            return attention(qh, kh, vh, mask, implementation=attn_impl, rel_bias=rel_bias)[..., :head_dim]
+
+        attn_out = _attend(q, k)
         if second_qk is not None:
             # Differential attention: subtract lambda times a second softmax map over the same values, then
             # RMS-normalize each head and scale by (1 - lambda_init).
             assert self.diff_lambda is not None and self.diff_lambda_init is not None
-            q2, k2 = _transform_qk(*second_qk)
-            attn_out2 = attention(q2, k2, v, mask, implementation=attn_impl, rel_bias=rel_bias)
+            attn_out2 = _attend(*_transform_qk(*second_qk))
             lq1, lk1, lq2, lk2 = self.diff_lambda
             lambda_init = jax.lax.stop_gradient(self.diff_lambda_init)
             lam = jnp.exp(jnp.sum(lq1 * lk1)) - jnp.exp(jnp.sum(lq2 * lk2)) + lambda_init
@@ -1479,6 +1519,41 @@ class CausalSelfAttention(eqx.Module):
         return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec), stats
 
 
+# FoX key bias channels: a bf16 hi/mid/lo split of -c_j (bf16 alone is off by ~|c| * 2^-9 logits; with three
+# parts the fp32 kernel accumulator, ~|c| * 2^-24, is the floor).
+_FOX_BIAS_CHANNELS = 3
+# FA4/CuTe pads head_dim to a multiple of 32 internally, so padding to it costs no extra kernel FLOPs.
+_FOX_HEAD_DIM_GRANULE = 32
+
+
+def _fox_head_dim(head_dim: int) -> int:
+    """Kernel head_dim with the FoX bias channels appended, rounded up to the kernel's 32-channel granule."""
+    return -(-(head_dim + _FOX_BIAS_CHANNELS) // _FOX_HEAD_DIM_GRANULE) * _FOX_HEAD_DIM_GRANULE
+
+
+def _fox_augment(
+    q: Float[Array, "B S N H"], k: Float[Array, "B S N H"], v: Float[Array, "B S N H"], key_bias: jax.Array
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    """Zero-pad q/k/v to ``_fox_head_dim`` with q carrying 1s and k carrying ``key_bias * sqrt(padded)`` split into
+    bf16 parts in the first ``_FOX_BIAS_CHANNELS`` extra channels, so the kernel's ``q'.k' / sqrt(padded)`` adds
+    ``key_bias`` [B, S, N] per key. ``q`` must already carry the ``sqrt(padded / H)`` rescale."""
+    head_dim = q.shape[-1]
+    padded = _fox_head_dim(head_dim)
+    extra = padded - head_dim
+    head_spec = _padded_spec(k)[:3]
+    rest = reshard(key_bias.astype(jnp.float32), P(*head_spec)) * math.sqrt(padded)
+    parts = []
+    for _ in range(_FOX_BIAS_CHANNELS):
+        part = rest.astype(k.dtype)
+        parts.append(part)
+        rest = rest - part.astype(jnp.float32)
+    k_tail = jnp.pad(jnp.stack(parts, axis=-1), ((0, 0), (0, 0), (0, 0), (0, extra - _FOX_BIAS_CHANNELS)))
+    q_tail_values = jnp.asarray([1.0] * _FOX_BIAS_CHANNELS + [0.0] * (extra - _FOX_BIAS_CHANNELS), q.dtype)
+    q_tail = reshard(jnp.broadcast_to(q_tail_values, (*q.shape[:-1], extra)), P(*_padded_spec(q)[:3], None))
+    pad_last = ((0, 0), (0, 0), (0, 0), (0, extra))
+    return jnp.concatenate([q, q_tail], axis=-1), jnp.concatenate([k, k_tail], axis=-1), jnp.pad(v, pad_last)
+
+
 def _learned_knob_stats(layer: "Block", i: int) -> dict[str, jax.Array]:
     """Values of the small learned knobs of layer ``i`` (value residual mix, DIFF lambda, DyT alpha, PLE
     up-projection norm), exported as ``train/attn_res/knob_*`` to diagnose how each feature is used."""
@@ -1499,6 +1574,13 @@ def _learned_knob_stats(layer: "Block", i: int) -> dict[str, jax.Array]:
         norm = getattr(layer, name)
         if isinstance(norm, DyT):
             stats[f"attn_res_knob_dyt_alpha_{name.removeprefix('rms_')}_L{i}"] = jax.lax.stop_gradient(norm.dyt_alpha)
+    if isinstance(layer.attn, CausalSelfAttention) and layer.attn.forget_gate_b is not None:
+        stats[f"attn_res_knob_fox_bias_gate_mean_L{i}"] = jnp.mean(
+            jax.nn.sigmoid(jax.lax.stop_gradient(layer.attn.forget_gate_b))
+        )
+        stats[f"attn_res_knob_fox_w_norm_L{i}"] = jnp.linalg.norm(
+            jax.lax.stop_gradient(layer.attn.forget_gate_w).astype(jnp.float32)
+        )
     rot_scale = getattr(layer.attn, "rot_scale", None)
     if rot_scale is not None:
         freq = jnp.abs(jax.lax.stop_gradient(rot_scale).astype(jnp.float32)) * _kda_rot_omega(2 * rot_scale.shape[-1])
@@ -3155,7 +3237,6 @@ class Block(eqx.Module):
                 proj_inputs=proj_inputs,
                 value_residual=value_residual,
             )
-            stats = {}
         if self.bias_attn_out is not None:
             out = out + unshard(self.bias_attn_out).astype(out.dtype)
         if self.sconv_attn is not None:
