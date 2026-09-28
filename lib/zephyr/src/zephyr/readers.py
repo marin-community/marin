@@ -388,7 +388,7 @@ def load_vortex(source: str | InputFileSpec) -> Iterator[dict]:
 
     if spec.row_start is not None or spec.row_end is not None:
         start = 0 if spec.row_start is None else spec.row_start
-        end = num_rows if spec.row_end is None else spec.row_end
+        end = num_rows if spec.row_end is None else min(spec.row_end, num_rows)
         indices = pa.array(np.arange(start, end, dtype=np.uint64))
         table = dataset.take(indices, columns=columns, filter=pa_filter)
     else:

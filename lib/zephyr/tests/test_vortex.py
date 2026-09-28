@@ -52,7 +52,7 @@ class TestVortexReader:
 
     @pytest.mark.parametrize(
         "row_start,row_end",
-        [(10, 20), (10, None), (None, 20)],
+        [(10, 20), (10, None), (None, 20), (None, 150)],
     )
     def test_load_vortex_row_range(self, vortex_file, row_start, row_end):
         spec = InputFileSpec(path=str(vortex_file), row_start=row_start, row_end=row_end)
