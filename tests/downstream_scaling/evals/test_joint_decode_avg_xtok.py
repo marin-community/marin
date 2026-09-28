@@ -5,14 +5,17 @@ import gzip
 import json
 import math
 import random
+from contextlib import contextmanager
 from dataclasses import replace
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 from fray.cluster import ResourceConfig
 from thalas.execution.context import executor_context
 from thalas.execution.executor import compute_output_path
 
+from experiments.downstream_scaling.evals import algorithms
 from experiments.downstream_scaling.evals.algorithms import joint_decode_avg_v2, xtok_selection
 from experiments.downstream_scaling.evals.algorithms.joint_decode_avg_xtok import (
     JointDecodeConfig,
@@ -34,6 +37,7 @@ from experiments.downstream_scaling.evals.algorithms.joint_decode_avg_xtok impor
     sweep_chunk_specs,
     write_sweep_chunk,
 )
+from experiments.downstream_scaling.evals.framework.xregion import ledger
 from experiments.downstream_scaling.evals.framework.xregion.pool import EnginePlacement, WorkerPoolConfig
 
 PATH_CONTRACT_PREFIX = "/xregion-tp-path-contract"
@@ -241,8 +245,11 @@ def test_child_config_json_round_trip(tmp_path):
     ("rule", "advisor_weights", "temperature"),
     [
         (joint_decode_avg_v2.XtokSelectionRule.BYTES_UNION, (0.5,), 0.0),
+        (joint_decode_avg_v2.XtokSelectionRule.UNNORMALIZED_ADD_BYTES_UNION, (0.0, 1.4, 16.0), 0.4),
         (joint_decode_avg_v2.XtokSelectionRule.PROB_CAP, (0.0, 1.0, 3.0), 0.4),
         (joint_decode_avg_v2.XtokSelectionRule.HARMONIC_AVG, (0.0, 0.5, 1.0), 0.4),
+        (joint_decode_avg_v2.XtokSelectionRule("power_avg=-0.5"), (0.0, 0.5, 1.0), 0.4),
+        (joint_decode_avg_v2.XtokSelectionRule("grad_step_size=0.5"), (0.0, 1.0, 64.0), 0.4),
     ],
 )
 def test_v2_child_config_json_round_trip_preserves_advisor_prompts_path(tmp_path, rule, advisor_weights, temperature):
@@ -278,6 +285,216 @@ def test_v2_child_config_json_round_trip_preserves_advisor_prompts_path(tmp_path
     path = joint_decode_avg_v2._write_child_config(tmp_path, config)
 
     assert joint_decode_avg_v2._child_config_from_file(str(path)) == config
+
+
+@pytest.mark.parametrize("alpha", [0.0, 0.5, 1.0, 2.0, 16.0])
+@pytest.mark.parametrize("student_weight", [0.0, 0.25, 0.5, 1.0, 2.0, 4.0])
+def test_v2_unnormalized_add_bytes_union_matches_floor_filled_probabilities(alpha, student_weight):
+    sampling = joint_decode_avg_v2.JointDecodeSamplingConfig(
+        n_samples=1,
+        max_tokens=8,
+        advisor_max_tokens=8,
+        top_k_a=2,
+        top_k_b=2,
+        seed=0,
+        selection_rule=joint_decode_avg_v2.XtokSelectionRule.UNNORMALIZED_ADD_BYTES_UNION,
+        advisor_weights=(alpha,),
+        temperature=0.4,
+    )
+    vocab_a = make_vocab({1: b"a", 2: b"b", 3: b"c"}, eos_id=9)
+    vocab_b = make_vocab({11: b"a", 12: b"b", 13: b"c"}, eos_id=8)
+    state = joint_decode_avg_v2._SweepState(advisor_weight=alpha, student_weight=student_weight, token_paths={})
+    select_token = joint_decode_avg_v2._make_select_token(sampling, vocab_a, vocab_b, state)
+    rng = ScriptedRandom([b"a"])
+
+    tokens_a, tokens_b = select_token(
+        [entry(1, 0.4 * math.log(2)), entry(2, 0.0)],
+        [entry(12, 0.4 * math.log(3) - 1.0), entry(13, -1.0)],
+        rng=rng,
+        request_index=5,
+    )
+
+    # Floor-filled exp((beta * s + alpha * t) / 0.4) is proportional to (2**beta, 3**alpha, 1).
+    total = 2.0**student_weight + 3.0**alpha + 1.0
+    assert rng.probabilities[0] == pytest.approx(
+        {b"a": 2.0**student_weight / total, b"b": 3.0**alpha / total, b"c": 1.0 / total}, rel=1e-12, abs=1e-12
+    )
+    assert (tokens_a, tokens_b) == ([1], [11])
+    assert state.token_paths == {
+        5: [joint_decode_avg_v2.XtokPathStep(bytes_hex=b"a".hex(), tokens_a=[1], tokens_b=[11])]
+    }
+
+
+@pytest.mark.parametrize(
+    ("student_weight", "alpha", "temperature"),
+    [(1.0, 2.0, 0.0), (1.0, 2.0, 0.4), (0.0, 2.0, 0.4), (2.0, 0.0, 0.4), (0.0, 0.0, 0.4)],
+)
+def test_v2_unnormalized_add_bytes_union_records_distinct_eos(student_weight, alpha, temperature):
+    sampling = joint_decode_avg_v2.JointDecodeSamplingConfig(
+        n_samples=1,
+        max_tokens=8,
+        advisor_max_tokens=8,
+        top_k_a=2,
+        top_k_b=1,
+        seed=0,
+        selection_rule=joint_decode_avg_v2.XtokSelectionRule.UNNORMALIZED_ADD_BYTES_UNION,
+        advisor_weights=(alpha,),
+        temperature=temperature,
+    )
+    vocab_a = make_vocab({1: b"a"}, eos_id=9)
+    vocab_b = make_vocab({11: b"a"}, eos_id=8)
+    state = joint_decode_avg_v2._SweepState(advisor_weight=alpha, student_weight=student_weight, token_paths={})
+    select_token = joint_decode_avg_v2._make_select_token(sampling, vocab_a, vocab_b, state)
+
+    tokens_a, tokens_b = select_token(
+        [entry(9, 5.0), entry(1, 0.0)],
+        [entry(8, 1.0)],
+        rng=ScriptedRandom([xtok_selection.EOS_KEY]),
+        request_index=0,
+    )
+
+    assert (tokens_a, tokens_b) == ([9], [8])
+    assert state.token_paths == {0: [joint_decode_avg_v2.XtokPathStep(bytes_hex="", tokens_a=[9], tokens_b=[8])]}
+
+
+@pytest.mark.parametrize("step_size", [0.5, 1.5])
+@pytest.mark.parametrize("temperature", [0.4, 1.0])
+def test_v2_grad_steps_matches_reference_and_records_paths(step_size, temperature):
+    sampling = joint_decode_avg_v2.JointDecodeSamplingConfig(
+        n_samples=1,
+        max_tokens=8,
+        advisor_max_tokens=8,
+        top_k_a=2,
+        top_k_b=2,
+        seed=0,
+        selection_rule=joint_decode_avg_v2.XtokSelectionRule(f"grad_step_size={step_size}"),
+        advisor_weights=(0.0, 1.0, 4.0),
+        temperature=temperature,
+    )
+    vocab_a = make_vocab({1: b"a", 2: b"b", 3: b"c"}, eos_id=9)
+    vocab_b = make_vocab({11: b"a", 12: b"b", 13: b"c"}, eos_id=8)
+    state = joint_decode_avg_v2._SweepState(advisor_weight=0.0, token_paths={})
+    select_token = joint_decode_avg_v2._make_select_token(sampling, vocab_a, vocab_b, state)
+    a_topk = [entry(1, math.log(2)), entry(2, 0.0)]
+    b_topk = [entry(12, math.log(3) - 1.0), entry(13, -1.0)]
+
+    for request_index, steps in enumerate(sampling.advisor_weights):
+        state.advisor_weight = steps
+        # Floor-filled logits on (a, b, c); the advisor's raw-logit softmax is (1, 3, 1) / 5.
+        logits = np.array([math.log(2), 0.0, 0.0])
+        advisor_probs = np.array([1.0, 3.0, 1.0]) / 5.0
+        for _ in range(int(steps)):
+            student_probs = np.exp(logits) / np.exp(logits).sum()
+            logits -= step_size * (student_probs - advisor_probs)
+        expected = np.exp(logits / temperature)
+        expected /= expected.sum()
+        rng = ScriptedRandom([b"a", b"c"])
+        for token_a, token_b in ((1, 11), (3, 13)):
+            assert select_token(a_topk, b_topk, rng=rng, request_index=request_index) == ([token_a], [token_b])
+            assert rng.probabilities[-1] == pytest.approx(
+                dict(zip((b"a", b"b", b"c"), expected, strict=True)), rel=1e-12, abs=1e-12
+            )
+        assert state.token_paths[request_index] == [
+            joint_decode_avg_v2.XtokPathStep(bytes_hex=b"a".hex(), tokens_a=[1], tokens_b=[11]),
+            joint_decode_avg_v2.XtokPathStep(bytes_hex=b"c".hex(), tokens_a=[3], tokens_b=[13]),
+        ]
+
+
+@pytest.mark.parametrize("temperature", [0.0, 0.4])
+def test_v2_grad_steps_records_distinct_eos(temperature):
+    sampling = joint_decode_avg_v2.JointDecodeSamplingConfig(
+        n_samples=1,
+        max_tokens=8,
+        advisor_max_tokens=8,
+        top_k_a=2,
+        top_k_b=1,
+        seed=0,
+        selection_rule=joint_decode_avg_v2.XtokSelectionRule("grad_step_size=0.5"),
+        advisor_weights=(4.0,),
+        temperature=temperature,
+    )
+    vocab_a = make_vocab({1: b"a"}, eos_id=9)
+    vocab_b = make_vocab({11: b"a"}, eos_id=8)
+    state = joint_decode_avg_v2._SweepState(advisor_weight=4.0, token_paths={})
+    select_token = joint_decode_avg_v2._make_select_token(sampling, vocab_a, vocab_b, state)
+
+    tokens_a, tokens_b = select_token(
+        [entry(9, 5.0), entry(1, 0.0)],
+        [entry(8, 1.0)],
+        rng=ScriptedRandom([xtok_selection.EOS_KEY]),
+        request_index=0,
+    )
+
+    assert (tokens_a, tokens_b) == ([9], [8])
+    assert state.token_paths == {0: [joint_decode_avg_v2.XtokPathStep(bytes_hex="", tokens_a=[9], tokens_b=[8])]}
+
+
+@pytest.mark.parametrize(("steps", "reference_weight"), [(0.0, 0.0), (1024.0, 1.0)])
+def test_v2_grad_steps_matches_student_and_converges_to_advisor(steps, reference_weight):
+    sampling = joint_decode_avg_v2.JointDecodeSamplingConfig(
+        n_samples=1,
+        max_tokens=8,
+        advisor_max_tokens=8,
+        top_k_a=2,
+        top_k_b=2,
+        seed=0,
+        selection_rule=joint_decode_avg_v2.XtokSelectionRule("grad_step_size=0.5"),
+        advisor_weights=(steps,),
+        temperature=0.4,
+    )
+    vocab_a = make_vocab({1: b"a", 2: b"b", 3: b"c"}, eos_id=9)
+    vocab_b = make_vocab({11: b"a", 12: b"b", 13: b"c"}, eos_id=8)
+    state = joint_decode_avg_v2._SweepState(advisor_weight=steps, token_paths={})
+    select_token = joint_decode_avg_v2._make_select_token(sampling, vocab_a, vocab_b, state)
+    a_topk = [entry(1, math.log(2)), entry(2, 0.0)]
+    b_topk = [entry(12, math.log(3) - 1.0), entry(13, -1.0)]
+    rng = ScriptedRandom([b"a"])
+    reference_rng = ScriptedRandom([b"a"])
+
+    actual = select_token(a_topk, b_topk, rng=rng, request_index=0)
+    expected = xtok_selection.select_avg_bytes_union(
+        a_topk,
+        b_topk,
+        advisor_weight=reference_weight,
+        temperature=sampling.temperature,
+        rng=reference_rng,
+        vocab_a=vocab_a,
+        vocab_b=vocab_b,
+    )
+
+    assert actual == expected
+    assert rng.probabilities[0] == pytest.approx(reference_rng.probabilities[0], rel=1e-12, abs=1e-12)
+
+
+def test_grad_steps_rule_normalizes_numeric_spelling():
+    rule = joint_decode_avg_v2.XtokSelectionRule("grad_step_size=5e-1")
+    assert rule is joint_decode_avg_v2.XtokSelectionRule("grad_step_size=0.5")
+    assert rule.value == "grad_step_size=0.5"
+    assert rule.grad_step_size == 0.5
+    assert rule.power is None
+    assert joint_decode_avg_v2.XtokSelectionRule.BYTES_UNION.grad_step_size is None
+
+
+@pytest.mark.parametrize("value", ["", "nan", "inf", "-inf", "0", "-0.5"])
+def test_grad_steps_rule_rejects_invalid_step_size(value):
+    with pytest.raises(ValueError):
+        joint_decode_avg_v2.XtokSelectionRule(f"grad_step_size={value}")
+
+
+@pytest.mark.parametrize("steps", [-1.0, 0.5, math.inf, math.nan])
+def test_grad_steps_rejects_invalid_step_count(steps):
+    with pytest.raises(ValueError, match="step counts"):
+        joint_decode_avg_v2.JointDecodeSamplingConfig(
+            n_samples=1,
+            max_tokens=8,
+            advisor_max_tokens=8,
+            top_k_a=2,
+            top_k_b=2,
+            seed=0,
+            selection_rule=joint_decode_avg_v2.XtokSelectionRule("grad_step_size=0.5"),
+            advisor_weights=(steps,),
+            temperature=0.4,
+        )
 
 
 @pytest.mark.parametrize(
@@ -433,6 +650,138 @@ def test_probability_caps_reject_invalid_sampling_parameters(rule, alpha, temper
             seed=0,
             selection_rule=rule,
             advisor_weights=(alpha,),
+            temperature=temperature,
+        )
+
+
+@pytest.mark.parametrize("power", [-2.0, -1.0, -0.5, 0.0, 1.0, 2.0])
+@pytest.mark.parametrize("shifts", [(0.0, 0.0), (1000.0, -1000.0)])
+def test_power_avg_selector_matches_direct_mean_and_records_paths(power, shifts):
+    sampling = joint_decode_avg_v2.JointDecodeSamplingConfig(
+        n_samples=1,
+        max_tokens=8,
+        advisor_max_tokens=8,
+        top_k_a=2,
+        top_k_b=2,
+        seed=0,
+        selection_rule=joint_decode_avg_v2.XtokSelectionRule(f"power_avg={power}"),
+        advisor_weights=(0.0, 0.0001, 0.4, 1.0),
+        temperature=0.4,
+    )
+    vocab = make_vocab({1: b"a", 2: b"b"}, eos_id=9)
+    state = joint_decode_avg_v2._SweepState(advisor_weight=0.0, token_paths={})
+    select_token = joint_decode_avg_v2._make_select_token(sampling, vocab, vocab, state)
+    a_topk = [entry(1, 0.4 * math.log(2) + shifts[0]), entry(2, shifts[0])]
+    b_topk = [entry(2, 0.4 * math.log(3) - 1.0 + shifts[1]), entry(9, -1.0 + shifts[1])]
+    # These are the normalized, floor-filled union probabilities at T=0.4.
+    student = {1: 0.5, 2: 0.25, 9: 0.25}
+    teacher = {1: 0.2, 2: 0.6, 9: 0.2}
+
+    for request_index, weight in enumerate(sampling.advisor_weights):
+        state.advisor_weight = weight
+        expected = {
+            token: (
+                student[token] ** (1.0 - weight) * teacher[token] ** weight
+                if power == 0.0
+                else ((1.0 - weight) * student[token] ** power + weight * teacher[token] ** power) ** (1.0 / power)
+            )
+            for token in student
+        }
+        total = sum(expected.values())
+        expected = {token: value / total for token, value in expected.items()}
+        rng = ScriptedRandom([1, 9])
+        for token in (1, 9):
+            assert select_token(a_topk, b_topk, rng=rng, request_index=request_index) == ([token], [token])
+            assert rng.probabilities[-1] == pytest.approx(expected, rel=1e-12, abs=1e-12)
+        assert state.token_paths[request_index] == [
+            joint_decode_avg_v2.XtokPathStep(bytes_hex=b"a".hex(), tokens_a=[1], tokens_b=[1]),
+            joint_decode_avg_v2.XtokPathStep(bytes_hex="", tokens_a=[9], tokens_b=[9]),
+        ]
+
+
+@pytest.mark.parametrize(
+    ("power", "rule"),
+    [
+        (-1.0, joint_decode_avg_v2.XtokSelectionRule.HARMONIC_AVG),
+        (0.0, joint_decode_avg_v2.XtokSelectionRule.AVG_LOGITS),
+        (1.0, joint_decode_avg_v2.XtokSelectionRule.AVG_PROBS),
+    ],
+)
+@pytest.mark.parametrize("weight", [0.0, 0.4, 1.0])
+def test_power_avg_matches_existing_averaging_rules(power, rule, weight):
+    sampling = joint_decode_avg_v2.JointDecodeSamplingConfig(
+        n_samples=1,
+        max_tokens=8,
+        advisor_max_tokens=8,
+        top_k_a=2,
+        top_k_b=2,
+        seed=0,
+        selection_rule=rule,
+        advisor_weights=(weight,),
+        temperature=0.4,
+    )
+    vocab = make_vocab({1: b"a", 2: b"b", 3: b"c"}, eos_id=9)
+    state = joint_decode_avg_v2._SweepState(advisor_weight=weight, token_paths={})
+    a_topk = [entry(1, 0.4 * math.log(2)), entry(2, 0.0)]
+    b_topk = [entry(2, 0.4 * math.log(3) - 1.0), entry(3, -1.0)]
+    reference_rng = ScriptedRandom([1])
+    reference = joint_decode_avg_v2._make_select_token(sampling, vocab, vocab, state)
+    reference(a_topk, b_topk, rng=reference_rng, request_index=0)
+
+    power_sampling = replace(sampling, selection_rule=joint_decode_avg_v2.XtokSelectionRule(f"power_avg={power}"))
+    select_token = joint_decode_avg_v2._make_select_token(power_sampling, vocab, vocab, state)
+    rng = ScriptedRandom([1])
+    select_token(a_topk, b_topk, rng=rng, request_index=1)
+
+    assert rng.probabilities[0] == pytest.approx(reference_rng.probabilities[0], rel=1e-12, abs=1e-12)
+
+
+@pytest.mark.parametrize("power", [-1e308, -2.0, -0.5, 0.0, 2.0, 1e308])
+def test_power_avg_large_logit_gaps_and_powers_remain_normalizable(power):
+    tokens, weights = joint_decode_avg_v2._power_avg_weights(
+        [entry(1, 0.0), entry(2, -1000.0), entry(3, -1000.0)],
+        [entry(1, -1000.0), entry(2, 0.0), entry(3, -1000.0)],
+        advisor_weight=0.5,
+        temperature=0.4,
+        power=power,
+    )
+    total = sum(weights)
+    probabilities = {token: weight / total for token, weight in zip(tokens, weights, strict=True)}
+    if power < 0.0:
+        # For the first two tokens, the smaller probability dominates the mean.
+        ratio = 0.5 ** (1.0 / power)
+        expected = {1: ratio / (2 * ratio + 1), 2: ratio / (2 * ratio + 1), 3: 1 / (2 * ratio + 1)}
+    else:
+        expected = {1: 0.5, 2: 0.5, 3: 0.0}
+    assert probabilities == pytest.approx(expected, rel=1e-12, abs=1e-12)
+
+
+def test_power_avg_rule_normalizes_numeric_spelling():
+    rule = joint_decode_avg_v2.XtokSelectionRule("power_avg=-2")
+    assert rule is joint_decode_avg_v2.XtokSelectionRule("power_avg=-2.0")
+    assert rule.value == "power_avg=-2.0"
+    assert rule.power == -2.0
+    assert joint_decode_avg_v2.XtokSelectionRule.HARMONIC_AVG.power is None
+
+
+@pytest.mark.parametrize("value", ["power_avg", "power_avg=", "power_avg=nan", "power_avg=inf", "unknown"])
+def test_power_avg_rule_rejects_missing_nonfinite_or_unknown_values(value):
+    with pytest.raises(ValueError):
+        joint_decode_avg_v2.XtokSelectionRule(value)
+
+
+@pytest.mark.parametrize("temperature", [0.0, math.inf, math.nan])
+def test_power_avg_rejects_nonpositive_or_nonfinite_temperature(temperature):
+    with pytest.raises(ValueError):
+        joint_decode_avg_v2.JointDecodeSamplingConfig(
+            n_samples=1,
+            max_tokens=8,
+            advisor_max_tokens=8,
+            top_k_a=2,
+            top_k_b=2,
+            seed=0,
+            selection_rule=joint_decode_avg_v2.XtokSelectionRule("power_avg=-0.5"),
+            advisor_weights=(0.5,),
             temperature=temperature,
         )
 
@@ -786,6 +1135,153 @@ def test_v2_write_sweep_chunk_routes_decoder_and_advisor_prompts(
     )
 
     assert decoder.batches == [(["q1", "q1", "q2", "q2"], expected_advisor_batch)]
+
+
+def test_v2_student_sweep_reuses_engines_and_records_each_pair(tmp_path, monkeypatch):
+    prompts_path = tmp_path / "prompts.jsonl.gz"
+    with gzip.open(prompts_path, "wt") as f:
+        for i in range(3):
+            f.write(json.dumps({"id": f"p{i}", "prompt": f"q{i}"}) + "\n")
+    chunks_dir = tmp_path / "chunks"
+    chunks_dir.mkdir()
+    student_weights = (0.0, 0.25, 0.5, 1.0, 2.0, 4.0)
+    sampling = joint_decode_avg_v2.JointDecodeSamplingConfig(
+        n_samples=2,
+        max_tokens=8,
+        advisor_max_tokens=8,
+        top_k_a=2,
+        top_k_b=2,
+        seed=0,
+        selection_rule=joint_decode_avg_v2.XtokSelectionRule.UNNORMALIZED_ADD_BYTES_UNION,
+        advisor_weights=(0.0, 2.0),
+        temperature=0.4,
+    )
+    config = joint_decode_avg_v2.JointDecodeLocalWorkerConfig(
+        decoder_model_path="/student",
+        advisor_model_path="/advisor",
+        prompts_path=str(prompts_path),
+        advisor_prompts_path=None,
+        sampling=sampling,
+        decoder_model=joint_decode_avg_v2.JointDecodeModelConfig(),
+        advisor_model=joint_decode_avg_v2.JointDecodeModelConfig(),
+        ledger_path=str(tmp_path / "ledger"),
+        poll_backoff=0.0,
+        microbatch_size=4,
+        barrier_timeout_s=60,
+        owner="test-worker",
+        placement=joint_decode_avg_v2.JointDecodePlacement(
+            decoder=EnginePlacement((0,), (1, 1, 1), 1),
+            advisor=EnginePlacement((1,), (1, 1, 1), 1),
+        ),
+        student_weights=student_weights,
+    )
+    config_path = joint_decode_avg_v2._write_child_config(tmp_path, config)
+    loaded_config = joint_decode_avg_v2._child_config_from_file(str(config_path))
+    assert loaded_config == config
+    chunks = joint_decode_avg_v2.sweep_chunk_specs(
+        str(chunks_dir), 3, sampling.n_samples, sampling.advisor_weights, 4, student_weights=student_weights
+    )
+    ledger.ensure_manifest(config.ledger_path, chunks)
+
+    probabilities = []
+    engine_events = []
+
+    @contextmanager
+    def open_joint_decoder(**kwargs):
+        engine_events.append("open")
+
+        def generate(prompts_a, prompts_b):
+            assert prompts_a == prompts_b
+            rng = ScriptedRandom([b"a"] * len(prompts_a))
+            for request_index in range(len(prompts_a)):
+                kwargs["select_token"](
+                    [entry(1, 0.4 * math.log(2)), entry(2, 0.0)],
+                    [entry(12, 0.4 * math.log(3) - 1.0), entry(13, -1.0)],
+                    rng=rng,
+                    request_index=request_index,
+                )
+            probabilities.extend(rng.probabilities)
+            return [SimpleNamespace(text="a", finish_reason="stop") for _ in prompts_a]
+
+        yield SimpleNamespace(generate=generate)
+        engine_events.append("close")
+
+    # Replace model/tokenizer I/O; retain the real worker, selector, ledger, and record writing.
+    monkeypatch.setattr(
+        algorithms,
+        "joint_decode_backend",
+        SimpleNamespace(EngineModelParams=SimpleNamespace, open_joint_decoder=open_joint_decoder),
+        raising=False,
+    )
+    vocabs = {
+        "/student": make_vocab({1: b"a", 2: b"b", 3: b"c"}, eos_id=9),
+        "/advisor": make_vocab({11: b"a", 12: b"b", 13: b"c"}, eos_id=8),
+    }
+    monkeypatch.setattr(joint_decode_avg_v2, "_load_vocab", vocabs.__getitem__)
+    monkeypatch.setenv("TPU_VISIBLE_CHIPS", "0,1")
+    joint_decode_avg_v2._run_joint_decode_local_worker(loaded_config)
+
+    assert engine_events == ["open", "close"]
+    assert ledger.done_chunk_ids(config.ledger_path) == list(range(len(chunks)))
+    pairs = [(alpha, beta) for alpha in sampling.advisor_weights for beta in student_weights]
+    records = [record for chunk in chunks for record in read_jsonl_gz(chunk.output_path)]
+    paths = [record for chunk in chunks for record in read_jsonl_gz(chunk.token_paths_path)]
+    assert len(records) == 3 * sampling.n_samples * len(pairs)
+    for problem_id in ("p0", "p1", "p2"):
+        assert [row["completion_index"] for row in records if row["id"] == problem_id] == list(
+            range(sampling.n_samples * len(pairs))
+        )
+    for record, path, observed in zip(records, paths, probabilities, strict=True):
+        pair_index = record["completion_index"] // sampling.n_samples
+        alpha, beta = pairs[pair_index]
+        assert record["completion"]["metadata"] == {
+            "finish_reason": "stop",
+            "advisor_weight": alpha,
+            "student_weight": beta,
+        }
+        assert path == {
+            "id": record["id"],
+            "completion_index": record["completion_index"],
+            "advisor_weight": alpha,
+            "student_weight": beta,
+            "weight_index": pair_index,
+            "steps": [{"bytes_hex": b"a".hex(), "tokens_a": [1], "tokens_b": [11]}],
+        }
+        total = 2.0**beta + 3.0**alpha + 1.0
+        assert observed == pytest.approx(
+            {b"a": 2.0**beta / total, b"b": 3.0**alpha / total, b"c": 1.0 / total}, rel=1e-12, abs=1e-12
+        )
+
+
+def test_v2_student_grid_changes_step_identity():
+    config = joint_decode_avg_v2.JointDecodeConfig(
+        sampling=joint_decode_avg_v2.JointDecodeSamplingConfig(
+            n_samples=2,
+            max_tokens=8,
+            advisor_max_tokens=8,
+            top_k_a=2,
+            top_k_b=2,
+            seed=0,
+            selection_rule=joint_decode_avg_v2.XtokSelectionRule.UNNORMALIZED_ADD_BYTES_UNION,
+            advisor_weights=(0.0, 1.0),
+            temperature=0.4,
+        ),
+        advisor_model_path="/advisor",
+        decoder_model=joint_decode_avg_v2.JointDecodeModelConfig(),
+        advisor_model=joint_decode_avg_v2.JointDecodeModelConfig(),
+        execution=joint_decode_avg_v2.JointDecodeExecutionConfig(worker_pools=()),
+    )
+    paths = []
+    for grid in (None, (1.0,), (0.0, 1.0), (1.0, 0.0)):
+        with executor_context():
+            step = joint_decode_avg_v2.make_joint_decode_completion_step(
+                name="student-sweep",
+                model_path="/student",
+                prompts_path="/prompts",
+                config=replace(config, student_weights=grid),
+            )
+        paths.append(compute_output_path(step.name, step.config, prefix=PATH_CONTRACT_PREFIX))
+    assert len(set(paths)) == len(paths)
 
 
 def test_write_sweep_chunk_missing_trace_for_nonempty_text_raises(tmp_path):

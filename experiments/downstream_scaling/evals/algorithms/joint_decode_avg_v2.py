@@ -20,6 +20,10 @@ selector live in ``xtok_selection``:
   average the resulting probabilities — same-tokenizer pairs only.
 - ``unnormalized_add``: ``logit_a + alpha * logit_b`` on raw token ids for
   same-tokenizer pairs.
+- ``unnormalized_add_bytes_union``: the same sum over the byte-keyed union,
+  preserving each side's EOS mapping.
+- ``grad_step_size=<step_size>``: update student logits toward the advisor's
+  raw-logit softmax over the byte-keyed union; advisor weight counts the updates.
 - ``one_sided_logprob_avg``: penalize student probabilities where the advisor
   assigns lower probability, normalized over the raw-token union for
   same-tokenizer pairs.
@@ -27,6 +31,8 @@ selector live in ``xtok_selection``:
 - ``harmonic_avg``: take a weighted harmonic average of student and advisor probabilities.
   Both rules temperature-scale each side over the raw-token union and
   require same-tokenizer pairs.
+- ``power_avg=<power>``: take a weighted power mean of the temperature-normalized
+  student and advisor probabilities over the raw-token union; same-tokenizer only.
 - ``token_dropout``: retain an advisor-sampled token, independently drop other
   candidates, then sample from the student over the survivors; same-tokenizer only.
 - ``tau_filter_student`` / ``tau_filter_advisor``: multiply the selected base
@@ -46,6 +52,11 @@ one completions file — per prompt, ``len(advisor_weights) * n_samples``
 completions with ``completion_index = weight_index * n_samples + sample``
 and ``advisor_weight`` in each completion's metadata. The unchanged grade
 step scores every completion; analysis groups by the metadata weight.
+
+An optional ``student_weights`` grid extends byte-union unnormalized add to
+an advisor-major Cartesian sweep. ``weight_index`` then identifies a weight
+pair, and both coefficients are recorded per completion. The same engines
+remain loaded across all pairs.
 
 Each chunk also writes a token-path sidecar (aggregated to
 ``token_paths.jsonl.gz``): per completion, the step-aligned committed byte
@@ -78,7 +89,7 @@ from collections.abc import Callable, Iterator, Mapping
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import fsspec
 from fray.cluster import ResourceConfig
@@ -133,12 +144,48 @@ class XtokSelectionRule(StrEnum):
     AVG_LOGITS = "avg_logits"
     AVG_PROBS = "avg_probs"
     UNNORMALIZED_ADD = "unnormalized_add"
+    UNNORMALIZED_ADD_BYTES_UNION = "unnormalized_add_bytes_union"
     ONE_SIDED_LOGPROB_AVG = "one_sided_logprob_avg"
     PROB_CAP = "prob_cap"
     HARMONIC_AVG = "harmonic_avg"
     TOKEN_DROPOUT = "token_dropout"
     TAU_FILTER_STUDENT = "tau_filter_student"
     TAU_FILTER_ADVISOR = "tau_filter_advisor"
+
+    @classmethod
+    def _missing_(cls, value: object) -> XtokSelectionRule | None:
+        if not isinstance(value, str):
+            return None
+        if value.startswith("power_avg="):
+            power = float(value.removeprefix("power_avg="))
+            if not math.isfinite(power):
+                raise ValueError(f"power must be finite (got {power})")
+            normalized = f"power_avg={power}"
+            name = "POWER_AVG"
+        elif value.startswith("grad_step_size="):
+            step_size = float(value.removeprefix("grad_step_size="))
+            if not math.isfinite(step_size) or step_size <= 0.0:
+                raise ValueError(f"step_size must be finite and positive (got {step_size})")
+            normalized = f"grad_step_size={step_size}"
+            name = "GRAD_STEPS"
+        else:
+            return None
+        member = str.__new__(cls, normalized)
+        member._name_ = name
+        member._value_ = normalized
+        return cast(XtokSelectionRule, cls._value2member_map_.setdefault(normalized, member))
+
+    @property
+    def power(self) -> float | None:
+        if self.value.startswith("power_avg="):
+            return float(self.value.removeprefix("power_avg="))
+        return None
+
+    @property
+    def grad_step_size(self) -> float | None:
+        if self.value.startswith("grad_step_size="):
+            return float(self.value.removeprefix("grad_step_size="))
+        return None
 
 
 @dataclass(frozen=True)
@@ -174,7 +221,10 @@ class JointDecodeSamplingConfig:
         if self.selection_rule in (XtokSelectionRule.AVG_LOGITS, XtokSelectionRule.BYTES_UNION):
             if any(not math.isfinite(weight) for weight in self.advisor_weights):
                 raise ValueError(f"advisor_weights must all be finite (got {self.advisor_weights})")
-        elif self.selection_rule is XtokSelectionRule.UNNORMALIZED_ADD:
+        elif self.selection_rule in (
+            XtokSelectionRule.UNNORMALIZED_ADD,
+            XtokSelectionRule.UNNORMALIZED_ADD_BYTES_UNION,
+        ):
             if any(not math.isfinite(alpha) or alpha < 0.0 for alpha in self.advisor_weights):
                 raise ValueError(
                     f"unnormalized-add alphas must all be finite and nonnegative (got {self.advisor_weights})"
@@ -194,14 +244,23 @@ class JointDecodeSamplingConfig:
                 raise ValueError(
                     f"{self.selection_rule.value} taus must all be finite and nonnegative (got {self.advisor_weights})"
                 )
+        elif self.selection_rule.grad_step_size is not None:
+            if any(not math.isfinite(steps) or steps < 0.0 or steps != int(steps) for steps in self.advisor_weights):
+                raise ValueError(
+                    f"gradient step counts must all be finite nonnegative integers (got {self.advisor_weights})"
+                )
         elif any(not 0.0 <= weight <= 1.0 for weight in self.advisor_weights):
             raise ValueError(f"advisor_weights must all be in [0, 1] (got {self.advisor_weights})")
-        if self.selection_rule in (
-            XtokSelectionRule.PROB_CAP,
-            XtokSelectionRule.HARMONIC_AVG,
-            XtokSelectionRule.TOKEN_DROPOUT,
-            XtokSelectionRule.TAU_FILTER_STUDENT,
-            XtokSelectionRule.TAU_FILTER_ADVISOR,
+        if (
+            self.selection_rule.power is not None
+            or self.selection_rule
+            in (
+                XtokSelectionRule.PROB_CAP,
+                XtokSelectionRule.HARMONIC_AVG,
+                XtokSelectionRule.TOKEN_DROPOUT,
+                XtokSelectionRule.TAU_FILTER_STUDENT,
+                XtokSelectionRule.TAU_FILTER_ADVISOR,
+            )
         ) and (not math.isfinite(self.temperature) or self.temperature <= 0.0):
             raise ValueError(
                 f"{self.selection_rule.value} temperature must be finite and positive (got {self.temperature})"
@@ -274,6 +333,19 @@ class JointDecodeConfig:
     # Prompts for side B, keyed by the same ids as the decoder task.
     # None feeds B the decoder's prompts.
     advisor_task: EvalTask | None = None
+    student_weights: tuple[float, ...] | None = None
+
+    def __post_init__(self) -> None:
+        if self.student_weights is None:
+            return
+        if self.sampling.selection_rule is not XtokSelectionRule.UNNORMALIZED_ADD_BYTES_UNION:
+            raise ValueError("student_weights requires unnormalized_add_bytes_union")
+        if not self.student_weights or any(not math.isfinite(weight) or weight < 0.0 for weight in self.student_weights):
+            raise ValueError("student_weights must be nonempty, finite, and nonnegative")
+        if len(set(self.student_weights)) != len(self.student_weights):
+            raise ValueError("student_weights must be distinct")
+        if not math.isfinite(self.sampling.temperature) or self.sampling.temperature <= 0.0:
+            raise ValueError("student_weights requires a finite, positive temperature")
 
 
 @dataclass(frozen=True)
@@ -295,6 +367,7 @@ class JointDecodeCompletionStepConfig:
     barrier_timeout_s: float
     aggregate_workers: int
     max_num_batched_tokens: int | None = None
+    student_weights: tuple[float, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -330,6 +403,7 @@ class JointDecodeLocalWorkerConfig:
     owner: str
     placement: JointDecodePlacement
     max_num_batched_tokens: int | None = None
+    student_weights: tuple[float, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -394,6 +468,8 @@ def make_joint_decode_completion_step(
             barrier_timeout_s=config.execution.barrier_timeout_s,
             aggregate_workers=config.execution.aggregate_workers,
             max_num_batched_tokens=config.execution.max_num_batched_tokens,
+            # Keep the hash-frozen sampling payload and old step paths unchanged.
+            student_weights=None if config.student_weights is None else versioned(config.student_weights),  # type: ignore[arg-type]
         ),
     )
 
@@ -404,23 +480,28 @@ def sweep_chunk_specs(
     n_samples: int,
     advisor_weights: tuple[float, ...],
     chunk_size: int,
+    *,
+    student_weights: tuple[float, ...] | None = None,
 ) -> list[XtokChunkSpec]:
     total_requests = num_prompts * n_samples
+    student_count = 1 if student_weights is None else len(student_weights)
     specs: list[XtokChunkSpec] = []
-    for weight_index, advisor_weight in enumerate(advisor_weights):
-        for start in range(0, total_requests, chunk_size):
-            chunk_id = len(specs)
-            specs.append(
-                XtokChunkSpec(
-                    chunk_id=chunk_id,
-                    advisor_weight=advisor_weight,
-                    weight_index=weight_index,
-                    chunk_start=start,
-                    chunk_end=min(start + chunk_size, total_requests),
-                    output_path=os.path.join(chunks_dir, f"chunk-{chunk_id:06d}.jsonl.gz"),
-                    token_paths_path=os.path.join(chunks_dir, f"token-paths-{chunk_id:06d}.jsonl.gz"),
+    for advisor_index, advisor_weight in enumerate(advisor_weights):
+        for student_index in range(student_count):
+            weight_index = advisor_index * student_count + student_index
+            for start in range(0, total_requests, chunk_size):
+                chunk_id = len(specs)
+                specs.append(
+                    XtokChunkSpec(
+                        chunk_id=chunk_id,
+                        advisor_weight=advisor_weight,
+                        weight_index=weight_index,
+                        chunk_start=start,
+                        chunk_end=min(start + chunk_size, total_requests),
+                        output_path=os.path.join(chunks_dir, f"chunk-{chunk_id:06d}.jsonl.gz"),
+                        token_paths_path=os.path.join(chunks_dir, f"token-paths-{chunk_id:06d}.jsonl.gz"),
+                    )
                 )
-            )
     return specs
 
 
@@ -453,6 +534,7 @@ def write_sweep_chunk(
     advisor_prompts: list[str] | None,
     n_samples: int,
     token_paths: dict[int, list[XtokPathStep]],
+    student_weight: float | None = None,
 ) -> None:
     """Generate one chunk at its advisor weight (the caller has already set
     the weight on the selector state and reset token_paths, which the
@@ -475,6 +557,9 @@ def write_sweep_chunk(
 
     records = []
     path_records = []
+    weight_metadata = {"advisor_weight": chunk.advisor_weight}
+    if student_weight is not None:
+        weight_metadata["student_weight"] = student_weight
     rows = zip(chunk_prompt_ids, completion_indices, outputs, strict=True)
     for batch_index, (prompt_id, completion_index, output) in enumerate(rows):
         steps = token_paths.pop(batch_index, None)
@@ -492,7 +577,7 @@ def write_sweep_chunk(
                     "text": output.text,
                     "metadata": {
                         "finish_reason": output.finish_reason,
-                        "advisor_weight": chunk.advisor_weight,
+                        **weight_metadata,
                     },
                 },
             }
@@ -501,7 +586,7 @@ def write_sweep_chunk(
             {
                 "id": prompt_id,
                 "completion_index": completion_index,
-                "advisor_weight": chunk.advisor_weight,
+                **weight_metadata,
                 "weight_index": chunk.weight_index,
                 "steps": [asdict(step) for step in steps],
             }
@@ -539,6 +624,7 @@ def _child_config_from_file(path: str) -> JointDecodeLocalWorkerConfig:
     sampling_data = dict(data["sampling"])
     sampling_data["selection_rule"] = XtokSelectionRule(sampling_data["selection_rule"])
     sampling_data["advisor_weights"] = tuple(sampling_data["advisor_weights"])
+    student_weights = data["student_weights"]
     placement_data = data["placement"]
     return JointDecodeLocalWorkerConfig(
         decoder_model_path=data["decoder_model_path"],
@@ -558,6 +644,7 @@ def _child_config_from_file(path: str) -> JointDecodeLocalWorkerConfig:
             advisor=_engine_placement_from_dict(placement_data["advisor"]),
         ),
         max_num_batched_tokens=data["max_num_batched_tokens"],
+        student_weights=None if student_weights is None else tuple(student_weights),
     )
 
 
@@ -575,6 +662,7 @@ class _SweepState:
 
     advisor_weight: float
     token_paths: dict[int, list[XtokPathStep]]  # request_index -> steps
+    student_weight: float = 1.0
 
 
 def _one_sided_logprob_weights(
@@ -658,6 +746,55 @@ def _capped_logprob_weights(
     return union, [math.exp(score - maximum) for score in scores]
 
 
+def _power_avg_weights(
+    a_topk: list[dict[str, Any]],
+    b_topk: list[dict[str, Any]],
+    *,
+    advisor_weight: float,
+    temperature: float,
+    power: float,
+) -> tuple[list[int], list[float]]:
+    """Return the raw-token union and proportional weighted power-mean probabilities."""
+    a_logits = {int(item["token_id"]): float(item["logit"]) for item in a_topk}
+    b_logits = {int(item["token_id"]): float(item["logit"]) for item in b_topk}
+    if not a_logits or not b_logits:
+        raise ValueError("both sides must provide at least one top-k logit")
+
+    union = list(set(a_logits) | set(b_logits))
+
+    def logprobs(logits: dict[int, float]) -> list[float]:
+        floor = min(logits.values())
+        maximum = max(logits.values())
+        shifted = [(logits.get(token_id, floor) - maximum) / temperature for token_id in union]
+        log_total = math.log(sum(math.exp(value) for value in shifted))
+        return [value - log_total for value in shifted]
+
+    a_logprobs = logprobs(a_logits)
+    b_logprobs = logprobs(b_logits)
+    if advisor_weight == 0.0:
+        scores = a_logprobs
+    elif advisor_weight == 1.0:
+        scores = b_logprobs
+    elif power == 0.0:
+        scores = [
+            (1.0 - advisor_weight) * log_p + advisor_weight * log_a
+            for log_p, log_a in zip(a_logprobs, b_logprobs, strict=True)
+        ]
+    else:
+        log_student_weight = math.log1p(-advisor_weight)
+        log_advisor_weight = math.log(advisor_weight)
+        scores = []
+        for log_p, log_a in zip(a_logprobs, b_logprobs, strict=True):
+            # Rebase before multiplying by power: both exponents are nonpositive.
+            base = max(log_p, log_a) if power > 0.0 else min(log_p, log_a)
+            student_term = log_student_weight + power * (log_p - base)
+            advisor_term = log_advisor_weight + power * (log_a - base)
+            log_total = max(student_term, advisor_term) + math.log1p(math.exp(-abs(student_term - advisor_term)))
+            scores.append(base + log_total / power)
+    maximum = max(scores)
+    return union, [math.exp(score - maximum) for score in scores]
+
+
 def _tau_filter_weights(
     a_topk: list[dict[str, Any]],
     b_topk: list[dict[str, Any]],
@@ -706,6 +843,24 @@ def _make_select_token(
     vocab_b: xtok_selection.Vocab,
     state: _SweepState,
 ) -> Callable[..., tuple[list[int], list[int]]]:
+    if (power := sampling.selection_rule.power) is not None:
+
+        def select_token(a_topk, b_topk, *, rng, request_index: int):
+            union, weights = _power_avg_weights(
+                a_topk,
+                b_topk,
+                advisor_weight=state.advisor_weight,
+                temperature=sampling.temperature,
+                power=power,
+            )
+            token = rng.choices(union, weights=weights, k=1)[0]
+            tokens_a = [token]
+            tokens_b = [token]
+            state.token_paths.setdefault(request_index, []).append(_path_step(vocab_a, tokens_a, tokens_b))
+            return tokens_a, tokens_b
+
+        return select_token
+
     if sampling.selection_rule is XtokSelectionRule.ONE_SIDED_LOGPROB_AVG:
 
         def select_token(a_topk, b_topk, *, rng, request_index: int):
@@ -855,6 +1010,33 @@ def _make_select_token(
 
         return select_token
 
+    if sampling.selection_rule is XtokSelectionRule.UNNORMALIZED_ADD_BYTES_UNION:
+
+        def select_token(a_topk, b_topk, *, rng, request_index: int):
+            alpha = state.advisor_weight
+            scale = state.student_weight + alpha
+            if scale == 0.0:
+                a = xtok_selection.candidates(vocab_a, a_topk)
+                b = xtok_selection.candidates(vocab_b, b_topk)
+                keys = list(set(a) | set(b))
+                key = rng.choices(keys, weights=[1.0] * len(keys), k=1)[0]
+                tokens_a = xtok_selection.force(vocab_a, key, a)
+                tokens_b = xtok_selection.force(vocab_b, key, b)
+            else:
+                tokens_a, tokens_b = xtok_selection.select_avg_bytes_union(
+                    a_topk,
+                    b_topk,
+                    advisor_weight=alpha / scale,
+                    temperature=sampling.temperature / scale,
+                    rng=rng,
+                    vocab_a=vocab_a,
+                    vocab_b=vocab_b,
+                )
+            state.token_paths.setdefault(request_index, []).append(_path_step(vocab_a, tokens_a, tokens_b))
+            return tokens_a, tokens_b
+
+        return select_token
+
     if sampling.selection_rule is XtokSelectionRule.AVG_LOGITS:
 
         def select_token(a_topk, b_topk, *, rng, request_index: int):
@@ -877,6 +1059,9 @@ def _make_select_token(
     elif sampling.selection_rule is XtokSelectionRule.ANCHORED_PREFIX_MASS:
         rule = xtok_selection.select_avg_anchored
         rule_kwargs = {"prefix_credit": sampling.prefix_credit}
+    elif (step_size := sampling.selection_rule.grad_step_size) is not None:
+        rule = xtok_selection.select_grad_steps_bytes_union
+        rule_kwargs = {"step_size": step_size}
     else:
         raise ValueError(f"unknown selection rule: {sampling.selection_rule!r}")
 
@@ -971,6 +1156,12 @@ def _run_joint_decode_local_worker(config: JointDecodeLocalWorkerConfig) -> None
 
                 chunk = XtokChunkSpec(**claim.chunk)
                 state.advisor_weight = chunk.advisor_weight
+                student_weight = (
+                    None
+                    if config.student_weights is None
+                    else config.student_weights[chunk.weight_index % len(config.student_weights)]
+                )
+                state.student_weight = 1.0 if student_weight is None else student_weight
                 state.token_paths = {}
                 write_sweep_chunk(
                     chunk,
@@ -980,6 +1171,7 @@ def _run_joint_decode_local_worker(config: JointDecodeLocalWorkerConfig) -> None
                     advisor_prompts=advisor_prompts,
                     n_samples=config.sampling.n_samples,
                     token_paths=state.token_paths,
+                    student_weight=student_weight,
                 )
                 ledger.mark_done(claim)
 
@@ -1066,6 +1258,7 @@ def _spawn_child(
         owner=_child_owner(pool_id, shard_idx, placement),
         placement=placement,
         max_num_batched_tokens=config.max_num_batched_tokens,
+        student_weights=config.student_weights,
     )
     config_path = _write_child_config(tmpdir, child_config)
     chip_label = ",".join(str(chip) for chip in _placement_chips(placement))
@@ -1211,6 +1404,7 @@ def run_joint_decode_completion_chunks(config: JointDecodeCompletionStepConfig) 
         config.sampling.n_samples,
         config.sampling.advisor_weights,
         config.chunk_size,
+        student_weights=config.student_weights,
     )
     ledger_path = ledger.convert_mirror_path(
         ledger_prefix=config.ledger_prefix,

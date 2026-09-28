@@ -73,6 +73,21 @@ Rules:
 - Graders receive both `prompts_path` and `completions_path`. Completion
   algorithms are not responsible for copying task fields into completions.
 
+`tasks/gsm8k_two_solution.py` provides plain-text advisor prompts containing
+five train-set exemplars and the target question's reference solution, ending
+at `Solution 2:`. Its CPU prompt step dispatches one advisor worker per
+configured TPU pool through the cross-region pool dispatcher. Workers load
+the advisor before claiming the single prompt-generation work item. The
+claimant samples `N_SAMPLES` ordinary five-shot Llama completions for each
+exemplar, at the module's `TEMPERATURE` and `TOP_K`, and selects the first with
+a correct `####` answer and text distinct from that exemplar's reference after
+whitespace normalization, raising if none qualifies.
+The step returns when the prompts are written and marked done, without waiting
+for other pools.
+`run_delphi_gsm8k_joint_decode_avg_logits_two_solution_llama.py` uses this task
+only for the advisor; student prompts and grading remain unchanged. The prompt
+artifact is shared across the Delphi ladder.
+
 ## Completion Algorithm Contract
 
 A completion algorithm is an already-configured object with this shape:

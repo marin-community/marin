@@ -337,6 +337,29 @@ def select_avg_bytes_union(
     return force(vocab_a, key, a), force(vocab_b, key, b)
 
 
+def select_grad_steps_bytes_union(
+    a_topk: list[dict[str, Any]],
+    b_topk: list[dict[str, Any]],
+    *,
+    advisor_weight: float,
+    temperature: float,
+    step_size: float,
+    rng: random.Random,
+    vocab_a: Vocab,
+    vocab_b: Vocab,
+) -> tuple[list[int], list[int]]:
+    """Update student logits toward the advisor for ``advisor_weight`` steps, then sample."""
+    a = candidates(vocab_a, a_topk)
+    b = candidates(vocab_b, b_topk)
+    scores = avg_bytes_union_scores(a, b, 0.0)
+    advisor_probs = _softmax(avg_bytes_union_scores(a, b, 1.0))
+    for _ in range(int(advisor_weight)):
+        student_probs = _softmax(scores)
+        scores = {key: logit + step_size * (advisor_probs[key] - student_probs[key]) for key, logit in scores.items()}
+    key = _temperature_sample(list(scores), list(scores.values()), temperature, rng)
+    return force(vocab_a, key, a), force(vocab_b, key, b)
+
+
 def select_avg_anchored(
     a_topk: list[dict[str, Any]],
     b_topk: list[dict[str, Any]],

@@ -97,7 +97,7 @@ def _context_for_pool(pool: WorkerPoolConfig, heartbeat_timeout: float) -> Zephy
         coordinator_resources=ResourceConfig(cpu=0.1, ram="1g", preemptible=False),
         stage_runner_factory=InlineRunner,
         heartbeat_timeout=heartbeat_timeout,
-        max_execution_retries=0,
+        max_execution_retries=3,
     )
 
 
