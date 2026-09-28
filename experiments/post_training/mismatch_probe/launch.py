@@ -128,6 +128,7 @@ def probe_recipe(
             "gpu_memory_utilization": 0.35,
             "enable_prefix_caching": settings.cache_mode != "off",
             "require_exact_chat_transport": True,
+            "chat_template": {"source": "name", "name_or_path": "qwen2_5_with_generation_tag_simplified"},
             "engine_init_kwargs": {
                 "enable_return_routed_experts": True,
                 "logprobs_mode": "processed_logprobs",
