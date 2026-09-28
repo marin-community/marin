@@ -499,7 +499,8 @@ async def _convert_evidence_chunk(
                 type(index) is not int or not 0 <= index < len(paragraphs) for index in indices
             ):
                 raise ValueError("Evidence selection contains invalid paragraph indices")
-            indices = sorted(set(indices))
+            # Short passages require every paragraph, so there is no selection to delegate.
+            indices = list(range(len(paragraphs))) if minimum == len(paragraphs) else sorted(set(indices))
             if not minimum <= len(indices) <= maximum:
                 raise ValueError(f"Evidence selection needs {minimum}-{maximum} distinct paragraphs")
             completion = {

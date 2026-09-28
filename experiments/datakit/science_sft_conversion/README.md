@@ -54,7 +54,9 @@ source-grounded task with the complete source chunk attached to the user turn.
 After four source-grounded responses fail semantic or format validation, MiniMax
 selects source paragraph indices and generates a short reasoning trace. The
 formatter copies the selected paragraphs into the originally assigned answer
-format, preserving the supplied notation in the answer. The complete original
+format, preserving the supplied notation in the answer. If at most eight
+eligible paragraphs are available, the client includes them all even when the
+model repeats an index. The complete original
 chunk remains in the user turn. Generated reasoning follows the same validation
 as other responses; neither source claims nor reasoning are independently fact
 checked. This verbatim extraction fallback has four total attempts. Exhausting

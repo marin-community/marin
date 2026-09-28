@@ -302,6 +302,7 @@ def test_probe_samples_rows_beyond_first_parquet_batch(tmp_path, monkeypatch) ->
         ),
         ("# Amplitude (2E/k).", ["# Amplitude (2E/k)."]),
         ("\nAmplitude (2E/k).\n", ["\nAmplitude (2E/k).\n"]),
+        ("Amplitude (2E/k).\n\nEnergy is conserved.", ["Amplitude (2E/k).", "Energy is conserved."]),
     ],
 )
 async def test_rejected_math_persists_verbatim_evidence_in_every_answer_format(
@@ -332,6 +333,8 @@ async def test_rejected_math_persists_verbatim_evidence_in_every_answer_format(
         if schema["name"] == "source_evidence":
             paragraphs = json.loads(body["messages"][1]["content"])
             indices = [paragraph["index"] for paragraph in paragraphs if paragraph["paragraph"] in evidence]
+            if len(paragraphs) == 2:
+                indices = [0, 0]
             completion = {"paragraph_indices": indices, "reasoning_content": reasoning}
         else:
             answer = "Answer: √(2E/k)."
