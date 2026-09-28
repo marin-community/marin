@@ -11,8 +11,8 @@ uses, take the median raw score per oracle level (1..5), place a cutpoint at eac
 adjacent-level midpoint, and map those cutpoints onto ``[0, .2, .4, .6, .8, 1]``.
 
 The remap is monotonic, so it does not change document ranking -- it only makes the
-fixed-bucket quantization quality-coherent. Writes ``{"xk": [...], "yk": [...]}``
-consumed by ``np.interp`` in ``score.py``.
+fixed-bucket quantization quality-coherent. Writes the global ``{"xk", "yk"}``
+layout of :class:`Calibration`.
 
     python -m experiments.datakit.cluster.quality.fast_transformer.calibrate \\
         --labels    s3://marin-us-east-02a/marin/datakit/quality_labels_20260709.parquet \\
@@ -21,8 +21,10 @@ consumed by ``np.interp`` in ``score.py``.
 """
 
 import argparse
+import dataclasses
 import json
 import logging
+from dataclasses import dataclass, field
 
 import numpy as np
 import pyarrow.parquet as pq
@@ -30,6 +32,7 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.cluster.quality.fast_transformer.artifact import BUCKET_EDGES
+from experiments.datakit.cluster.quality.fast_transformer.quality_model import CALIBRATION_FILE
 from experiments.datakit.cluster.quality.fast_transformer.scorer import load_pooled_scorer, score_bme
 
 logger = logging.getLogger(__name__)
@@ -38,25 +41,62 @@ DEFAULT_LABELS = "s3://marin-us-east-02a/marin/datakit/quality_labels_20260709.p
 YK = [0.0, *BUCKET_EDGES, 1.0]  # the interior IS BUCKET_EDGES, so the two can't drift
 
 
-def apply_calibration(raw: np.ndarray, types: np.ndarray | None, knots: dict) -> np.ndarray:
-    """Remap raw scores through the calibration knots.
+@dataclass(frozen=True)
+class Curve:
+    """A monotonic piecewise-linear remap of the raw score, applied with ``np.interp``."""
 
-    A global ``{xk, yk}`` calibration applies to every document. A per-type
-    ``{default, types}`` calibration routes each document through its content
-    type's remap and falls back to the default for a type without one; ``types``
-    is then required, one label per row of ``raw``.
+    xk: list[float]
+    yk: list[float]
+
+    def __call__(self, raw: np.ndarray) -> np.ndarray:
+        return np.interp(raw, self.xk, self.yk)
+
+
+@dataclass(frozen=True)
+class Calibration:
+    """The remap from raw scorer output to the calibrated score.
+
+    A document routes through its content type's curve in ``types`` and through
+    ``default`` when its type has none. A global calibration has no ``types`` and
+    needs no content types to apply.
     """
-    if "types" not in knots:
-        return np.interp(raw, knots["xk"], knots["yk"])
-    if types is None:
-        raise ValueError("a per-type calibration needs one content type per document")
-    default = knots["default"]
-    out = np.empty(len(raw), dtype=np.float64)
-    for name in set(types.tolist()):
-        mask = types == name
-        curve = knots["types"].get(name, default)
-        out[mask] = np.interp(raw[mask], curve["xk"], curve["yk"])
-    return out
+
+    default: Curve
+    types: dict[str, Curve] = field(default_factory=dict)
+
+    @classmethod
+    def from_json(cls, data: dict) -> "Calibration":
+        """Parse a calibration file: the global ``{xk, yk}`` or the per-type ``{default, types}`` layout."""
+        if "types" not in data:
+            return cls(default=Curve(**data))
+        return cls(default=Curve(**data["default"]), types={name: Curve(**c) for name, c in data["types"].items()})
+
+    def to_json(self) -> dict:
+        """The layout :meth:`from_json` reads; a global calibration writes the bare curve."""
+        if not self.types:
+            return dataclasses.asdict(self.default)
+        return {
+            "default": dataclasses.asdict(self.default),
+            "types": {n: dataclasses.asdict(c) for n, c in self.types.items()},
+        }
+
+    def apply(self, raw: np.ndarray, types: np.ndarray | None) -> np.ndarray:
+        """Remap ``raw``; ``types`` holds one content type per row and is required when the calibration is per-type."""
+        if not self.types:
+            return self.default(raw)
+        if types is None:
+            raise ValueError("a per-type calibration needs one content type per document")
+        out = np.empty(len(raw), dtype=np.float64)
+        for name in set(types.tolist()):
+            mask = types == name
+            out[mask] = self.types.get(name, self.default)(raw[mask])
+        return out
+
+
+def load_calibration(model_dir: str, calib_file: str = CALIBRATION_FILE) -> Calibration:
+    """Read the calibration file under ``model_dir``."""
+    with (StoragePath(model_dir) / calib_file).open("r") as fh:
+        return Calibration.from_json(json.loads(fh.read()))
 
 
 def fit_cutpoints(raw: np.ndarray, levels: np.ndarray) -> tuple[dict[int, float], list[float]]:
@@ -73,10 +113,11 @@ def fit_cutpoints(raw: np.ndarray, levels: np.ndarray) -> tuple[dict[int, float]
     return med, [float(c) for c in np.maximum.accumulate(cuts)]
 
 
-def calibration_knots(raw: np.ndarray, levels: np.ndarray) -> dict:
+def fit_calibration(raw: np.ndarray, levels: np.ndarray) -> Calibration:
+    """A global calibration whose curve maps the per-level cutpoints onto :data:`BUCKET_EDGES`."""
     _, cuts = fit_cutpoints(raw, levels)
     xk = [float(raw.min()) - 1e-6, *cuts, float(raw.max()) + 1e-6]
-    return {"xk": xk, "yk": YK}
+    return Calibration(default=Curve(xk=xk, yk=YK))
 
 
 def main() -> None:
@@ -94,18 +135,18 @@ def main() -> None:
 
     scorer = load_pooled_scorer(args.model_dir)
     raw = score_bme(scorer, texts)
-    knots = calibration_knots(raw, levels)
+    calibration = fit_calibration(raw, levels)
 
-    cal = np.interp(raw, knots["xk"], knots["yk"])
+    cal = calibration.apply(raw, None)
     cb = np.digitize(cal, BUCKET_EDGES)
     ob = np.clip((levels - 1).astype(int), 0, 4)
-    logger.info("fit on %d labels; cutpoints %s", len(texts), [round(x, 3) for x in knots["xk"][1:-1]])
+    logger.info("fit on %d labels; cutpoints %s", len(texts), [round(x, 3) for x in calibration.default.xk[1:-1]])
     logger.info(
         "calibrated-bucket vs oracle-level: exact %.3f  within-1 %.3f", np.mean(cb == ob), np.mean(np.abs(cb - ob) <= 1)
     )
 
     with StoragePath(args.out).open("w") as fh:
-        json.dump(knots, fh)
+        json.dump(calibration.to_json(), fh)
     logger.info("wrote calibration -> %s", args.out)
 
 

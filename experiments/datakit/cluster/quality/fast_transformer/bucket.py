@@ -18,7 +18,7 @@ type leaf followed the score leaf. A document that finds no score or no type, a
 row that no document claims, and a row count that differs between the sides all
 fail the shard, since each means the leaves came from different normalize runs.
 
-Calibration is :func:`calibrate.apply_calibration`: a document routes through its
+Calibration is :meth:`calibrate.Calibration.apply`: a document routes through its
 content type's curve when the calibration carries one and through the default
 curve otherwise, and ``quality_bucket`` is the calibrated score digitized at
 :data:`BUCKET_EDGES`. Splitting bucketing from scoring keeps a refit of the
@@ -44,12 +44,11 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, ShardInfo
 
 from experiments.datakit.cluster.quality.fast_transformer.artifact import BUCKET_EDGES, QualityScores
-from experiments.datakit.cluster.quality.fast_transformer.calibrate import apply_calibration
+from experiments.datakit.cluster.quality.fast_transformer.calibrate import Calibration, load_calibration
 from experiments.datakit.cluster.quality.fast_transformer.keyed_rows import read_keyed_rows
 from experiments.datakit.cluster.quality.fast_transformer.quality_model import (
     CALIBRATION_FILE,
     QualityPin,
-    load_calibration,
     quality_model_dir,
     require_pinned_calibration,
 )
@@ -98,7 +97,7 @@ def quality_hash_attrs(pin: QualityPin) -> dict[str, str | int | list[float]]:
 
 
 @functools.cache
-def _pinned_calibration(model_dir: str, pin: QualityPin) -> dict:
+def _pinned_calibration(model_dir: str, pin: QualityPin) -> Calibration:
     require_pinned_calibration(pin, model_dir)
     return load_calibration(model_dir)
 
@@ -114,7 +113,7 @@ def _bucket_shard(
     pin: QualityPin,
 ) -> Iterator[pa.RecordBatch]:
     """Bucket one shard: walk the normalized ids, look up score and type by id."""
-    knots = _pinned_calibration(model_dir, pin)
+    calibration = _pinned_calibration(model_dir, pin)
     where = f"{source} shard {shard.shard_idx}"
     scores = read_keyed_rows(score_paths[shard.shard_idx], "score")
     types = read_keyed_rows(type_paths[shard.shard_idx], "content_type")
@@ -125,7 +124,7 @@ def _bucket_shard(
         ids = batch.column("id").to_numpy(zero_copy_only=False)
         raw = scores.values[scores.rows_for(ids, scores_claimed, f"{where} (scores)")].astype(np.float32)
         content_type = types.values[types.rows_for(ids, types_claimed, f"{where} (types)")]
-        calibrated = apply_calibration(raw, content_type, knots).astype(np.float32)
+        calibrated = calibration.apply(raw, content_type).astype(np.float32)
         bucket = np.digitize(calibrated, BUCKET_EDGES).astype(np.int32)
         documents += len(ids)
         yield pa.RecordBatch.from_arrays(

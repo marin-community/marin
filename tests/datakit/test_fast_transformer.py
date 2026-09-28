@@ -5,7 +5,7 @@
 
 - ``scorer.score_bme`` — whole-doc (begin/middle/end) window coverage + mean-pooling,
   the fix for scoring long docs on a truncated lead / prefix-degenerate sources.
-- ``calibrate.fit_cutpoints`` / ``calibration_knots`` — the monotonic cutpoint remap
+- ``calibrate.fit_cutpoints`` / ``fit_calibration`` — the monotonic cutpoint remap
   that makes the fixed 0.2-bucket quantization recover the oracle quality level.
 
 Both use a deterministic fake scorer / synthetic labels, so no model or I/O is needed.
@@ -19,8 +19,8 @@ import pytest
 
 from experiments.datakit.cluster.quality.fast_transformer.artifact import BUCKET_EDGES
 from experiments.datakit.cluster.quality.fast_transformer.calibrate import (
-    apply_calibration,
-    calibration_knots,
+    Calibration,
+    fit_calibration,
     fit_cutpoints,
 )
 from experiments.datakit.cluster.quality.fast_transformer.score import _systematic_take
@@ -113,8 +113,8 @@ def test_fit_cutpoints_enforced_non_decreasing():
 def test_calibration_knots_are_strictly_increasing_and_recover_levels():
     levels = np.repeat([1, 2, 3, 4, 5], 4).astype(float)
     raw = levels / 10.0
-    knots = calibration_knots(raw, levels)
-    xk, yk = knots["xk"], knots["yk"]
+    curve = fit_calibration(raw, levels).default
+    xk, yk = curve.xk, curve.yk
 
     assert yk == [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
     assert len(xk) == 6
@@ -138,27 +138,32 @@ def test_systematic_sample_is_deterministic_and_hits_target_fraction():
         assert abs(len(kept) / 1000 - pct) < 0.01
 
 
-# ---------- apply_calibration: global vs per-type routing ----------
+# ---------- Calibration: global vs per-type routing ----------
 
-FLAT = {"xk": [0.0, 0.5, 1.0], "yk": [0.0, 0.2, 1.0]}
-PER_TYPE = {"default": FLAT, "types": {"code": {"xk": [0.0, 0.5, 1.0], "yk": [0.0, 0.8, 1.0]}}}
+FLAT_JSON = {"xk": [0.0, 0.5, 1.0], "yk": [0.0, 0.2, 1.0]}
+PER_TYPE_JSON = {"default": FLAT_JSON, "types": {"code": {"xk": [0.0, 0.5, 1.0], "yk": [0.0, 0.8, 1.0]}}}
+FLAT = Calibration.from_json(FLAT_JSON)
+PER_TYPE = Calibration.from_json(PER_TYPE_JSON)
 
 
 def test_global_calibration_applies_one_remap_to_every_document():
     raw = np.array([0.0, 0.5, 1.0])
-    assert apply_calibration(raw, None, FLAT).tolist() == pytest.approx([0.0, 0.2, 1.0])
+    assert FLAT.apply(raw, None).tolist() == pytest.approx([0.0, 0.2, 1.0])
     # Types are ignored under a global calibration.
-    assert apply_calibration(raw, np.array(["code", "prose", "code"], dtype=object), FLAT).tolist() == pytest.approx(
-        [0.0, 0.2, 1.0]
-    )
+    assert FLAT.apply(raw, np.array(["code", "prose", "code"], dtype=object)).tolist() == pytest.approx([0.0, 0.2, 1.0])
 
 
 def test_per_type_calibration_routes_by_type_and_falls_back_to_default():
     raw = np.array([0.5, 0.5, 0.5])
     types = np.array(["code", "prose", "code"], dtype=object)
-    assert apply_calibration(raw, types, PER_TYPE).tolist() == pytest.approx([0.8, 0.2, 0.8])
+    assert PER_TYPE.apply(raw, types).tolist() == pytest.approx([0.8, 0.2, 0.8])
 
 
 def test_per_type_calibration_requires_types():
     with pytest.raises(ValueError, match="content type"):
-        apply_calibration(np.array([0.5]), None, PER_TYPE)
+        PER_TYPE.apply(np.array([0.5]), None)
+
+
+@pytest.mark.parametrize("data", [FLAT_JSON, PER_TYPE_JSON], ids=["global", "per-type"])
+def test_calibration_json_round_trips_both_layouts(data):
+    assert Calibration.from_json(data).to_json() == data

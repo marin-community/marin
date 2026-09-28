@@ -30,7 +30,6 @@ uses single-level ``*.parquet`` globs only: a recursive glob makes s3fs
 """
 
 import functools
-import json
 import logging
 import posixpath
 from collections.abc import Iterator
@@ -38,7 +37,6 @@ from collections.abc import Iterator
 import numpy as np
 from fray.cluster import ResourceConfig
 from marin.datakit.normalize import NormalizedData
-from rigging.filesystem.factory import open_url
 from rigging.filesystem.storage_path import StoragePath
 from zephyr import counters
 from zephyr.context import ZephyrContext
@@ -49,6 +47,7 @@ from zephyr.runners import InlineRunner
 from zephyr.writers import ThreadedBatchWriter, write_parquet_file
 
 from experiments.datakit.cluster.quality.fast_transformer.artifact import BUCKET_EDGES, QualityScores
+from experiments.datakit.cluster.quality.fast_transformer.calibrate import Calibration, load_calibration
 from experiments.datakit.cluster.quality.fast_transformer.quality_model import CALIBRATION_FILE
 from experiments.datakit.cluster.quality.fast_transformer.scorer import (
     PooledScorer,
@@ -70,21 +69,21 @@ _SHARD_FILE = "__shard_file"  # internal: input basename carried to the writer t
 
 
 @functools.cache
-def _load_scorer(model_dir: str, calib_file: str = CALIBRATION_FILE) -> tuple[PooledScorer, np.ndarray, np.ndarray]:
+def _load_scorer(model_dir: str, calib_file: str = CALIBRATION_FILE) -> tuple[PooledScorer, Calibration]:
     """Load the scorer + calibration once per worker process."""
     scorer = load_pooled_scorer(model_dir)
-    with open_url(f"{model_dir.rstrip('/')}/{calib_file}", "r") as fh:
-        calib = json.loads(fh.read())
+    calibration = load_calibration(model_dir, calib_file)
     logger.info("loaded FT scorer + calibration (%s) from %s", calib_file, model_dir)
-    return scorer, np.asarray(calib["xk"], dtype=np.float64), np.asarray(calib["yk"], dtype=np.float64)
+    return scorer, calibration
 
 
 def _predict_batch(records: list[dict], *, source: str, model_dir: str, calib_file: str) -> Iterator[dict]:
     """Score a batch of records with bme; carry source/id/score/quality_bucket + text.
     ``text`` is dropped for the lean main output and kept for the samples side
     output; ``_SHARD_FILE`` names the output file after the input file."""
-    scorer, xk, yk = _load_scorer(model_dir, calib_file)
-    cal = np.interp(score_bme(scorer, [r["text"] for r in records]), xk, yk)
+    scorer, calibration = _load_scorer(model_dir, calib_file)
+    # This scorer reads text only, so a per-type calibration is refused here.
+    cal = calibration.apply(score_bme(scorer, [r["text"] for r in records]), None)
     buckets = np.digitize(cal, BUCKET_EDGES)
     for r, c, b in zip(records, cal, buckets, strict=True):
         yield {

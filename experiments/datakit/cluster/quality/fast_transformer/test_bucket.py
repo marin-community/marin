@@ -16,7 +16,7 @@ from marin.datakit.normalize import NormalizedData
 
 from experiments.datakit.cluster.quality.fast_transformer.artifact import BUCKET_EDGES
 from experiments.datakit.cluster.quality.fast_transformer.bucket import bucket_quality_scores
-from experiments.datakit.cluster.quality.fast_transformer.calibrate import apply_calibration
+from experiments.datakit.cluster.quality.fast_transformer.calibrate import Calibration
 from experiments.datakit.cluster.quality.fast_transformer.quality_model import (
     CALIBRATION_FILE,
     QualityPin,
@@ -97,7 +97,9 @@ def test_bucket_writes_the_normalized_order_with_per_type_buckets(tmp_path):
     assert first["source"] == ["src"] * 3
     assert first["content_type"] == ["other", "code", "prose"]
     assert first["raw_score"] == pytest.approx([0.15, 0.5, 0.95])
-    expected = apply_calibration(np.array(first["raw_score"]), np.array(first["content_type"], dtype=object), KNOTS)
+    expected = Calibration.from_json(KNOTS).apply(
+        np.array(first["raw_score"]), np.array(first["content_type"], dtype=object)
+    )
     assert first["score"] == pytest.approx(expected.tolist())
     # ``other`` has no curve of its own and falls back to the default; code does not.
     assert first["quality_bucket"] == [0, 4, 4]

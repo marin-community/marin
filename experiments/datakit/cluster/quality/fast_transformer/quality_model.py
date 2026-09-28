@@ -12,7 +12,6 @@ without moving the raw scores it is computed from.
 """
 
 import hashlib
-import json
 from dataclasses import dataclass
 
 from rigging.filesystem.cluster_config import marin_prefix
@@ -115,9 +114,3 @@ def require_pinned_calibration(pin: QualityPin, model_dir: str) -> str:
             f"{pin.calibration_sha256}; the bucketed path claims a different calibration"
         )
     return digest
-
-
-def load_calibration(model_dir: str) -> dict:
-    """Read the calibration knots: ``{xk, yk}`` or the per-type ``{default, types}`` form."""
-    with (StoragePath(model_dir) / CALIBRATION_FILE).open("r") as fh:
-        return json.loads(fh.read())
