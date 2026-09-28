@@ -1122,7 +1122,7 @@ def _init_unigram_bias(state: GrugTrainState, train_loader, *, num_batches: int)
     @functools.partial(jax.jit, donate_argnums=(0,))
     def add(counts: jax.Array, tokens: jax.Array, loss_weight: jax.Array) -> jax.Array:
         weight = loss_weight.astype(jnp.float32).reshape(-1)
-        return counts + jnp.zeros((vocab,), jnp.float32).at[tokens.reshape(-1)].add(weight)
+        return counts + jnp.zeros((vocab,), jnp.float32).at[tokens.reshape(-1)].add(weight, out_sharding=P(None))
 
     started = time.time()
     counts = jnp.zeros((vocab,), jnp.float32)
