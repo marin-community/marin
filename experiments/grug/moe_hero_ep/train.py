@@ -54,6 +54,7 @@ from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
 from levanter.store.jagged_array import set_jagged_array_read_cache_bytes
+from levanter.tracker.telemetry import capture_stall_diagnostics
 from levanter.trainer import TrainerConfig
 from levanter.training_control import TrainingDashboard
 from levanter.utils.flop_utils import lm_flops_per_token
@@ -991,7 +992,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     # Armed before the state is built or restored. The watchdog's step and process deadlines only
     # arm once a step reports progress, so its startup deadline is the only thing bounding a stall
     # in initialization, checkpoint restore, cache construction or compilation.
-    progress_watchdog = trainer.progress_watchdog.create(process_index=jax.process_index())
+    progress_watchdog = trainer.progress_watchdog.create(
+        process_index=jax.process_index(), diagnostic=capture_stall_diagnostics
+    )
 
     checkpointer = trainer.checkpointer.create(run_id) if config.trainer.save_checkpoints else None
     dashboard = TrainingDashboard(
