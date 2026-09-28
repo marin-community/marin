@@ -244,7 +244,8 @@ def test_selection_policies_use_compatible_conventions(specification):
 
     assert select_lowerings(candidates, SelectionPolicy.ALL) == candidates
     assert select_lowerings(candidates, SelectionPolicy.FIRST) == (candidates[0],)
-    assert select_lowerings(candidates, SelectionPolicy.SAMPLE, rng_key=42) == (candidates[1],)
+    repeated = [select_lowerings(candidates, SelectionPolicy.SAMPLE, rng_key=42) for _ in range(10)]
+    assert all(selection == repeated[0] for selection in repeated)
     assert {select_lowerings(candidates, SelectionPolicy.SAMPLE, rng_key=key)[0] for key in range(16)} == set(candidates)
     assert select_lowerings(candidates, SelectionPolicy.FIRST, required_environment=DIRECT_CHAT_ENVIRONMENT) == (
         candidates[0],
