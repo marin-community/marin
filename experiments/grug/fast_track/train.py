@@ -55,6 +55,7 @@ from experiments.grug.checkpointing import (
 )
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.fast_track.byte_targets import token_byte_table
+from experiments.grug.fast_track.host_stall import HostStallSampler
 from experiments.grug.fast_track.model import (
     FINAL_HIDDEN_KEY,
     NEWTON_GRAM_KEY,
@@ -1384,108 +1385,115 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         # Main optimization loop.
         try:
-            while int(state.step) < stop_step:
-                with jax.profiler.TraceAnnotation("load_batch"):
-                    batch = next(iterator)
-                current_step = int(state.step)
-                watch_due = (
-                    watch_config.is_enabled and watch_config.interval > 0 and current_step % watch_config.interval == 0
-                )
-                if watch_due and diagnostic_watch_step is not None:
-                    watch_stats = diagnostic_watch_step(state.params, batch, state.pending_qb_betas)
-                    jax.block_until_ready(watch_stats)
-                else:
-                    watch_stats = None
-                step_start = time.perf_counter()
-                if host_gap_start is not None and step_start - host_gap_start > HOST_GAP_WARN:
-                    logger.warning(
-                        "host gap %.3f s before step %d on process %d (load %.3f s)",
-                        step_start - host_gap_start,
-                        current_step,
-                        jax.process_index(),
-                        iterator.this_load_time,
+            with HostStallSampler(HOST_STALL_SAMPLE_THRESHOLD) as stall_sampler:
+                while int(state.step) < stop_step:
+                    with jax.profiler.TraceAnnotation("load_batch"):
+                        batch = next(iterator)
+                    current_step = int(state.step)
+                    watch_due = (
+                        watch_config.is_enabled
+                        and watch_config.interval > 0
+                        and current_step % watch_config.interval == 0
                     )
-                state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_STARTED)
-                grow_step = config.model.loop_grow_step
-                # Looped growth compiles one program per pass count (a traced switch would keep both alive).
-                loop_active = None if grow_step is None else int(state.step) >= grow_step
-                state, metrics, inline_watch_stats = train_step(state, batch, loop_active=loop_active)
-                if inline_watch_stats is not None and watch_due:
-                    watch_stats = inline_watch_stats
-                step = int(state.step) - 1
+                    if watch_due and diagnostic_watch_step is not None:
+                        watch_stats = diagnostic_watch_step(state.params, batch, state.pending_qb_betas)
+                        jax.block_until_ready(watch_stats)
+                    else:
+                        watch_stats = None
+                    step_start = time.perf_counter()
+                    if host_gap_start is not None and step_start - host_gap_start > HOST_GAP_WARN:
+                        logger.warning(
+                            "host gap %.3f s before step %d on process %d (load %.3f s)",
+                            step_start - host_gap_start,
+                            current_step,
+                            jax.process_index(),
+                            iterator.this_load_time,
+                        )
+                    state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_STARTED)
+                    grow_step = config.model.loop_grow_step
+                    # Looped growth compiles one program per pass count (a traced switch would keep both alive).
+                    loop_active = None if grow_step is None else int(state.step) >= grow_step
+                    state, metrics, inline_watch_stats = train_step(state, batch, loop_active=loop_active)
+                    if inline_watch_stats is not None and watch_due:
+                        watch_stats = inline_watch_stats
+                    step = int(state.step) - 1
 
-                jax.block_until_ready(metrics["train/loss"])
-                ready_time = time.perf_counter()
-                if config.trainer.hlo_dump_path is not None and not hlo_written and jax.process_index() == 0:
-                    _write_train_step_hlo(train_step, state, batch, loop_active, config.trainer.hlo_dump_path)
-                hlo_written = True
-                state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_FINISHED)
+                    jax.block_until_ready(metrics["train/loss"])
+                    ready_time = time.perf_counter()
+                    stall_sampler.arm()
+                    if config.trainer.hlo_dump_path is not None and not hlo_written and jax.process_index() == 0:
+                        _write_train_step_hlo(train_step, state, batch, loop_active, config.trainer.hlo_dump_path)
+                    hlo_written = True
+                    state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_FINISHED)
 
-                if not jnp.isfinite(metrics["train/loss"]):
-                    raise RuntimeError(f"Non-finite loss ({float(metrics['train/loss'])}) at step {int(state.step)}.")
-                duration = time.perf_counter() - step_start
-                hook_start = time.perf_counter()
-                with jax.profiler.TraceAnnotation("callbacks"):
-                    state_callbacks.run(state, loss=metrics["train/loss"], step_duration=duration)
-                    last_loss = metrics["train/loss"]
-                    last_step_duration = duration
-                    levanter.tracker.log({"throughput/hook_time": time.perf_counter() - hook_start}, step=step)
-                    levanter.tracker.log({"throughput/loading_time": iterator.this_load_time}, step=step)
-                    router_metrics = {
-                        key: value
-                        for key, value in metrics.items()
-                        if key.startswith(
-                            (
-                                "train/router/",
-                                "moe_bias/",
-                                "train/attn_res/",
-                                "train/aux/",
-                                "train/newton_muon/",
-                                "train/optim/",
+                    if not jnp.isfinite(metrics["train/loss"]):
+                        raise RuntimeError(
+                            f"Non-finite loss ({float(metrics['train/loss'])}) at step {int(state.step)}."
+                        )
+                    duration = time.perf_counter() - step_start
+                    hook_start = time.perf_counter()
+                    with jax.profiler.TraceAnnotation("callbacks"):
+                        state_callbacks.run(state, loss=metrics["train/loss"], step_duration=duration)
+                        last_loss = metrics["train/loss"]
+                        last_step_duration = duration
+                        levanter.tracker.log({"throughput/hook_time": time.perf_counter() - hook_start}, step=step)
+                        levanter.tracker.log({"throughput/loading_time": iterator.this_load_time}, step=step)
+                        router_metrics = {
+                            key: value
+                            for key, value in metrics.items()
+                            if key.startswith(
+                                (
+                                    "train/router/",
+                                    "moe_bias/",
+                                    "train/attn_res/",
+                                    "train/aux/",
+                                    "train/newton_muon/",
+                                    "train/optim/",
+                                )
                             )
-                        )
-                        and key not in ("train/router/routing_counts_per_layer", "qb_beta_per_layer")
-                    }
-                    if router_metrics:
-                        levanter.tracker.log(router_metrics, step=step)
-                    if "train/cross_entropy_loss" in metrics:
-                        levanter.tracker.log(
-                            {"train/cross_entropy_loss": metrics["train/cross_entropy_loss"]},
-                            step=step,
-                        )
-                    if "moe/dropped_assignments" in metrics:
-                        drop_metrics = _drop_metrics(
-                            metrics["moe/dropped_assignments"],
-                            metrics["moe/sender_dropped_assignments"],
-                            metrics["moe/receiver_dropped_assignments"],
-                            batch_size=batch.tokens.shape[0],
-                            sequence_length=batch.tokens.shape[1],
-                            top_k=config.model.num_experts_per_token,
-                            num_layers=config.model.num_layers,
-                        )
-                        levanter.tracker.log(drop_metrics, step=step)
+                            and key not in ("train/router/routing_counts_per_layer", "qb_beta_per_layer")
+                        }
+                        if router_metrics:
+                            levanter.tracker.log(router_metrics, step=step)
+                        if "train/cross_entropy_loss" in metrics:
+                            levanter.tracker.log(
+                                {"train/cross_entropy_loss": metrics["train/cross_entropy_loss"]},
+                                step=step,
+                            )
+                        if "moe/dropped_assignments" in metrics:
+                            drop_metrics = _drop_metrics(
+                                metrics["moe/dropped_assignments"],
+                                metrics["moe/sender_dropped_assignments"],
+                                metrics["moe/receiver_dropped_assignments"],
+                                batch_size=batch.tokens.shape[0],
+                                sequence_length=batch.tokens.shape[1],
+                                top_k=config.model.num_experts_per_token,
+                                num_layers=config.model.num_layers,
+                            )
+                            levanter.tracker.log(drop_metrics, step=step)
 
-                    if watch_stats is not None:
-                        levanter.tracker.log(watch_stats, step=step)
+                        if watch_stats is not None:
+                            levanter.tracker.log(watch_stats, step=step)
 
-                if checkpointer is not None:
-                    with callbacks.progress_event_scope(
-                        state_callbacks.emit_event,
-                        callbacks.ProgressEvent.CHECKPOINT_STARTED,
-                        callbacks.ProgressEvent.CHECKPOINT_FINISHED,
-                    ):
-                        checkpointer.on_step(tree=state, step=int(state.step))
-                if current_step % GC_EVERY_STEPS == 0:
-                    gc.collect()
-                    gc.freeze()
-                host_gap_start = time.perf_counter()
-                if host_gap_start - ready_time > HOST_GAP_WARN:
-                    logger.warning(
-                        "post-step host work %.3f s after step %d on process %d",
-                        host_gap_start - ready_time,
-                        current_step,
-                        jax.process_index(),
-                    )
+                    if checkpointer is not None:
+                        with callbacks.progress_event_scope(
+                            state_callbacks.emit_event,
+                            callbacks.ProgressEvent.CHECKPOINT_STARTED,
+                            callbacks.ProgressEvent.CHECKPOINT_FINISHED,
+                        ):
+                            checkpointer.on_step(tree=state, step=int(state.step))
+                    if current_step % GC_EVERY_STEPS == 0:
+                        gc.collect()
+                        gc.freeze()
+                    host_gap_start = time.perf_counter()
+                    stall_sampler.disarm(current_step)
+                    if host_gap_start - ready_time > HOST_GAP_WARN:
+                        logger.warning(
+                            "post-step host work %.3f s after step %d on process %d",
+                            host_gap_start - ready_time,
+                            current_step,
+                            jax.process_index(),
+                        )
 
         except BaseException:
             logger.exception(
@@ -1541,6 +1549,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
 # Every rank logs host-side stalls longer than this: a late rank stalls every other rank's collectives.
 HOST_GAP_WARN = 0.1
+# Post-step host work above this is logged with the Python stacks that ran during it (see `host_stall`).
+HOST_STALL_SAMPLE_THRESHOLD = 0.3
 # Parameter groups of the per-group EMA blend probe (regex over the pytree key path); "other" is the rest.
 EMA_BLEND_GROUPS: dict[str, str] = {
     "lmhead": r"output_proj",
