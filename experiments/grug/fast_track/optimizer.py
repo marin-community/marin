@@ -88,6 +88,85 @@ def _scale_invariant_hyperball_updates(params, direction_updates, learning_rate:
     return jax.tree.map(scale_invariant_update, params, direction_updates, is_leaf=lambda x: x is None)
 
 
+MUONH_RETRACTIONS = ("frobenius", "spectral")
+# Power iterations per step for sigma_1 (warm-started from the previous step's vector), and at init (cold).
+_SPECTRAL_POWER_ITERS = 3
+_SPECTRAL_INIT_POWER_ITERS = 30
+
+
+class SpectralSphereState(NamedTuple):
+    """Per-matrix MuonSphere state: warm-start right singular vector ``v`` ``[..., 1, fan_out]``, target
+    spectral radius ``radius`` and the last pre-retraction sigma_1 estimate ``sigma`` (``[..., 1, 1]``)."""
+
+    v: optax.Updates
+    radius: optax.Updates
+    sigma: optax.Updates
+
+
+def _top_singular_pair(w32: jax.Array, v: jax.Array, iters: int) -> tuple[jax.Array, jax.Array]:
+    """``(sigma_1, v_1)`` of every matrix ``[..., in, out]`` by ``iters`` power iterations from ``v``.
+
+    Broadcast-multiply + sum rather than einsum, as in ``_shrink_top_direction``: a reduction over a
+    sharded axis lowers to a plain all-reduce under explicit sharding."""
+    sigma = jnp.ones((*v.shape[:-1], 1), jnp.float32)
+    for _ in range(iters):
+        u = jnp.sum(w32 * v, axis=-1, keepdims=True)
+        u = u / (jnp.sqrt(jnp.sum(jnp.square(u), axis=-2, keepdims=True)) + 1e-12)
+        v = jnp.sum(w32 * u, axis=-2, keepdims=True)
+        sigma = jnp.sqrt(jnp.sum(jnp.square(v), axis=-1, keepdims=True))
+        v = v / (sigma + 1e-12)
+    return sigma, v
+
+
+def _spectral_sphere_init(params, radius_c: float | None) -> SpectralSphereState:
+    """Cold-start power iteration on the initial weights. ``radius_c`` sets R = c sqrt(fan_out / fan_in)
+    (arXiv 2601.08393, spectral muP); None keeps each matrix's initial sigma_1 (MuonH's keep-the-init-norm
+    rule, in the spectral norm)."""
+
+    def leaf(p):
+        if not hasattr(p, "ndim") or p.ndim < 2:
+            return None, None, None
+        w32 = p.astype(jnp.float32)
+        v0 = jnp.ones((*p.shape[:-2], 1, p.shape[-1]), jnp.float32) / jnp.sqrt(p.shape[-1])
+        sigma, v = _top_singular_pair(w32, v0, _SPECTRAL_INIT_POWER_ITERS)
+        fan_in, fan_out = p.shape[-2:]
+        radius = sigma if radius_c is None else jnp.full_like(sigma, radius_c * (fan_out / fan_in) ** 0.5)
+        return v, radius, sigma
+
+    out = jax.tree.map(leaf, params)
+    pick = lambda i: jax.tree.map(lambda _, o: o[i], params, out)  # noqa: E731
+    return SpectralSphereState(pick(0), pick(1), pick(2))
+
+
+def _spectral_sphere_updates(params, direction_updates, learning_rate, state: SpectralSphereState):
+    """MuonSphere step (arXiv 2601.08393, SSO with lambda = 0): retract ``W <- W R / sigma_1(W)``, then
+    ``W <- W - lr R Phi``, with ``Phi`` the direction at msign scale (``||Phi||_F = sqrt(min(in, out))``,
+    unit spectral norm for an exactly orthogonal direction). The spectral norm of the step is ``lr R``, so
+    ``lr`` is the relative step in the spectral norm (MuonH: in the Frobenius norm). As in the paper the
+    retraction is applied before the step, sharing one warm-started power iteration per matrix per step;
+    the stored weights therefore sit ``O(lr)`` off the sphere. One sphere per matrix: per layer of a
+    ``[L, in, out]`` stack and per (layer, expert) of an ``[L, E, in, out]`` stack."""
+    direction_updates = _match_named_sharding_to_params(direction_updates, params)
+
+    def leaf(param, update, v, radius):
+        if param is None or v is None:
+            return update, None, None
+        w32 = param.astype(jnp.float32)
+        sigma, v = _top_singular_pair(w32, v, _SPECTRAL_POWER_ITERS)
+        fan_in, fan_out = param.shape[-2:]
+        u32 = update.astype(jnp.float32)
+        u_norm = jnp.sqrt(jnp.sum(jnp.square(u32), axis=(-2, -1), keepdims=True))
+        phi = u32 * (min(fan_in, fan_out) ** 0.5 / jnp.maximum(u_norm, 1e-10))
+        new_param = w32 * (radius / jnp.maximum(sigma, 1e-10)) - learning_rate * radius * phi
+        new_param = _pin_sharding(new_param, param)
+        return (new_param - w32).astype(update.dtype), v, sigma
+
+    none_leaf = lambda x: x is None  # noqa: E731
+    out = jax.tree.map(leaf, params, direction_updates, state.v, state.radius, is_leaf=none_leaf)
+    pick = lambda i: jax.tree.map(lambda _, o: o[i], params, out, is_leaf=none_leaf)  # noqa: E731
+    return pick(0), SpectralSphereState(pick(1), state.radius, pick(2))
+
+
 # KDA-layer leaves (``kda_blocks.stacked.attn.<leaf>``) and their update rules. The q/k/v/o and
 # output-gate matrices and the random-init ``kda_dd_rope`` angle projections (w_rot_down/w_rot_up) take the
 # MuonH catch-all, the ShortConv kernels and output-norm scale are ``.weight`` leaves (Adam), and the zero-init
@@ -232,13 +311,21 @@ def scale_with_grug_muonh(
     pre_norm: str = "none",
     top_shrink: float = 0.0,
     precond_beta2: float | None = None,
+    retraction: str = "frobenius",
+    spectral_radius_c: float | None = 2.0,
 ) -> optax.GradientTransformation:
     """MuonH transform for the stacked model: Newton-Schulz direction + Frobenius hyperball step.
 
     ``neuron_norm_beta2`` adds NorMuon's (arXiv 2510.05491) neuron-wise normalization between the two:
     each output column of the orthogonalized direction is divided by the root of an EMA of its mean
     square (over the input axis); the hyperball step then sets the overall magnitude.
+
+    ``retraction="spectral"`` replaces the Frobenius hyperball with MuonSphere's spectral sphere
+    (``_spectral_sphere_updates``, radius from ``spectral_radius_c``); the state then gains a trailing
+    ``SpectralSphereState``.
     """
+    if retraction not in MUONH_RETRACTIONS:
+        raise ValueError(f"retraction must be one of {MUONH_RETRACTIONS}, got {retraction!r}")
     muon_transform = _grug_scale_with_muon(
         momentum=momentum,
         nesterov=nesterov,
@@ -258,13 +345,17 @@ def scale_with_grug_muonh(
 
     def init_fn(params):
         muon_state = muon_transform.init(params)
-        if neuron_norm_beta2 is None:
-            return muon_state
-        return muon_state, jax.tree.map(_neuron_second_moment, params)
+        if neuron_norm_beta2 is not None:
+            muon_state = (muon_state, jax.tree.map(_neuron_second_moment, params))
+        if retraction == "spectral":
+            return muon_state, _spectral_sphere_init(params, spectral_radius_c)
+        return muon_state
 
     def update_fn(updates, state, params=None):
         if params is None:
             raise ValueError("scale_with_grug_muonh requires params for norm-preserving updates")
+        if retraction == "spectral":
+            state, sphere_state = state
         if neuron_norm_beta2 is None:
             muon_updates, next_state = muon_transform.update(updates, state, params)
         else:
@@ -286,6 +377,9 @@ def scale_with_grug_muonh(
             second_moment = jax.tree.map(second_moment_update, muon_updates, second_moment, is_leaf=none_leaf)
             muon_updates = jax.tree.map(normalize, muon_updates, second_moment, is_leaf=none_leaf)
             next_state = (muon_state, second_moment)
+        if retraction == "spectral":
+            muonh_updates, sphere_state = _spectral_sphere_updates(params, muon_updates, learning_rate, sphere_state)
+            return muonh_updates, (next_state, sphere_state)
         muonh_updates = _scale_invariant_hyperball_updates(params, muon_updates, learning_rate, hyperball_per_expert)
         return muonh_updates, next_state
 
@@ -397,7 +491,9 @@ def _sinkhorn_hyperball(momentum: float, iters: int, nesterov: bool, learning_ra
 
 # Leaves the trainer writes as data statistics (never trained): the fixed-encoder n-gram table and its code.
 _FROZEN_LEAVES = re.compile(r"(?:^|\.)(ngram_stat_(table|code)|latent_select_mask)$")
-_HYPERBALL_GROUPS = frozenset({"muonh", "adamh", "kda_beta", "muonh_attn", "muonh_routed", "muonh_router", "sinkhornh"})
+# The groups built by ``muonh_transform_at`` (the ones ``muonh_retraction`` applies to).
+_MUONH_GROUPS = frozenset({"muonh", "kda_beta", "muonh_attn", "muonh_routed", "muonh_router"})
+_HYPERBALL_GROUPS = _MUONH_GROUPS | {"adamh", "sinkhornh"}
 _ROUTER_GROUPS = ("adam", "muonh")
 
 
@@ -583,6 +679,107 @@ def snoo(
     return optax.GradientTransformation(init, update)
 
 
+class EmaNesterovState(NamedTuple):
+    count: jax.Array
+    scale: jax.Array
+    """Lookahead coefficient ``s_t`` of the displacement ``s_t e_t`` currently in the parameters."""
+    ema: optax.Updates
+    inner: optax.OptState
+
+
+def _matrix_norm(x: jax.Array) -> jax.Array:
+    """Frobenius norm of every trailing ``[in, out]`` matrix (the whole array if 1-D), in float32."""
+    axes = (-2, -1) if x.ndim >= 2 else (-1,)
+    return jnp.sqrt(jnp.sum(jnp.square(x.astype(jnp.float32)), axis=axes, keepdims=True))
+
+
+def ema_nesterov(
+    inner: optax.GradientTransformation,
+    labels_fn,
+    *,
+    scale,
+    decay: float,
+    start_step: int,
+    end_step: int,
+    frobenius_groups: frozenset[str],
+) -> optax.GradientTransformation:
+    """EMA-Nesterov lookahead (arXiv 2605.25395; modded-nanogpt track-3 records #39/#40) around ``inner``.
+
+    The record keeps an EMA ``e`` of the real weights' per-step displacement and evaluates the gradient at
+    the lookahead point ``y_t = x_t + s_t e_t``; the inner step is taken from there, ``x_{t+1} = y_t + u_t``,
+    so the displacement is ``x_{t+1} - x_t = s_t e_t + u_t`` and ``e_{t+1} = decay e_t + (1 - decay)
+    (s_t e_t + u_t)``. The parameters here hold ``y``, so the gradient is taken at the lookahead point with
+    no change to the train step, and each update is ``y_{t+1} - y_t = u_t + s_{t+1} e_{t+1}``. ``scale``
+    (the caller passes ``s * lr / lr_peak``) is the next step's ``s_{t+1}``, applied for
+    ``start_step <= t + 1 < end_step``; outside the window ``y = x``, so a run ending past ``end_step``
+    ends (and is evaluated) on the real weights.
+
+    Leaves labelled in ``frobenius_groups`` (the Frobenius hyperball groups) are rescaled so every matrix
+    keeps the Frobenius norm the inner step gave it; spectral-sphere leaves are retracted by their next
+    MuonSphere step. ``router_bias`` is QB controller state and passes through."""
+
+    def init(params):
+        return EmaNesterovState(
+            count=jnp.zeros([], jnp.int32),
+            scale=jnp.zeros([], jnp.float32),
+            ema=jax.tree.map(lambda p: jnp.zeros_like(p, dtype=jnp.float32), params),
+            inner=inner.init(params),
+        )
+
+    def update(updates, state, params):
+        inner_updates, inner_state = inner.update(updates, state.inner, params)
+        count = state.count + 1
+        next_scale = jnp.where((count >= start_step) & (count < end_step), scale, 0.0).astype(jnp.float32)
+        labels = labels_fn(params)
+        paths = leaf_key_paths(params)
+
+        def leaf(u, p, e, label, path):
+            if "router_bias" in str(path).lower():
+                return u, e
+            u32 = u.astype(jnp.float32)
+            e_new = decay * e + (1.0 - decay) * (state.scale * e + u32)
+            out = u32 + next_scale * e_new
+            if label in frobenius_groups:
+                p32 = p.astype(jnp.float32)
+                target = _matrix_norm(_pin_sharding(p32 + u32, p))
+                new_param = _pin_sharding(p32 + out, p)
+                out = new_param * (target / jnp.maximum(_matrix_norm(new_param), 1e-10)) - p32
+            return out.astype(u.dtype), e_new
+
+        res = jax.tree.map(leaf, inner_updates, params, state.ema, labels, paths)
+        pick = lambda i: jax.tree.map(lambda _, o: o[i], params, res)  # noqa: E731
+        return pick(0), EmaNesterovState(count=count, scale=next_scale, ema=pick(1), inner=inner_state)
+
+    return optax.GradientTransformation(init, update)
+
+
+def optimizer_diagnostics(opt_state) -> dict[str, jax.Array]:
+    """``train/optim/`` metrics of the EMA-Nesterov and MuonSphere states found in ``opt_state``."""
+    is_state = lambda x: isinstance(x, (EmaNesterovState, SpectralSphereState))  # noqa: E731
+    states = [x for x in jax.tree.leaves(opt_state, is_leaf=is_state) if is_state(x)]
+    metrics = {}
+    ema_states = [x for x in states if isinstance(x, EmaNesterovState)]
+    if ema_states:
+        ema = ema_states[0]
+        ema_norm = jnp.sqrt(sum(jnp.sum(jnp.square(e)) for e in jax.tree.leaves(ema.ema)))
+        metrics["train/optim/ema_nesterov_scale"] = ema.scale
+        metrics["train/optim/ema_nesterov_ema_norm"] = ema_norm
+        metrics["train/optim/ema_nesterov_lookahead_norm"] = ema.scale * ema_norm
+    sphere_states = [x for x in states if isinstance(x, SpectralSphereState)]
+    if sphere_states:
+        # sigma_1 / R before each step's retraction: the drift the retraction removes.
+        pairs = [
+            (s / r, r)
+            for st in sphere_states
+            for s, r in zip(jax.tree.leaves(st.sigma), jax.tree.leaves(st.radius), strict=True)
+        ]
+        count = sum(r.size for _, r in pairs)
+        metrics["train/optim/spectral_sigma_over_radius_mean"] = sum(jnp.sum(q) for q, _ in pairs) / count
+        metrics["train/optim/spectral_sigma_over_radius_max"] = jnp.max(jnp.stack([jnp.max(q) for q, _ in pairs]))
+        metrics["train/optim/spectral_radius_mean"] = sum(jnp.sum(r) for _, r in pairs) / count
+    return metrics
+
+
 @OptimizerConfig.register_subclass("grug_fast_track_muonh_v1")
 @dataclass(frozen=True)
 class GrugMoeMuonHConfig(OptimizerConfig):
@@ -726,6 +923,21 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     """SNOO outer step every this many inner steps (0: off)."""
     snoo_lr: float = 0.5
     snoo_momentum: float = 0.5
+    ema_nesterov: bool = False
+    """EMA-Nesterov lookahead (arXiv 2605.25395; modded-nanogpt track-3 #40) around the whole optimizer:
+    the gradient is taken at ``W + s e`` with ``e`` an EMA of the weight displacement (``ema_nesterov``)."""
+    ema_nesterov_scale: float = 0.3
+    """Peak lookahead ``s``, scheduled as ``s * lr / lr_peak`` (the MuonH LR); record #40 uses 0.3."""
+    ema_nesterov_decay: float = 0.99
+    ema_nesterov_start_frac: float = 300 / 2900
+    ema_nesterov_end_frac: float = 1950 / 2900
+    """Lookahead window as fractions of training (record #40: steps 300 to 1950 of 2900)."""
+    muonh_retraction: str = "frobenius"
+    """MuonH retraction: ``frobenius`` (hyperball) or ``spectral`` (MuonSphere, arXiv 2601.08393: spectral
+    sphere per matrix, ``lr`` the relative step in the spectral norm)."""
+    spectral_radius_c: float | None = 2.0
+    """MuonSphere radius ``R = c sqrt(fan_out / fan_in)`` (the paper's best c is 2); None keeps each matrix's
+    initial spectral norm."""
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
@@ -766,6 +978,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                         pre_norm=self.muon_pre_norm,
                         top_shrink=self.muon_top_shrink,
                         precond_beta2=self.muon_precond_beta2,
+                        retraction=self.muonh_retraction,
+                        spectral_radius_c=self.spectral_radius_c,
                     )
                 )
                 components.append(_match_named_update_sharding())
@@ -904,14 +1118,26 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             inner = optax.multi_transform(transforms, self.create_mask)
             if self.grokfast_lambda and not self.grokfast_adam_only:
                 inner = optax.chain(scale_by_grokfast_ema(self.grokfast_alpha, self.grokfast_lambda), inner)
-            if self.snoo_period <= 0:
+            if self.snoo_period > 0:
+                inner = snoo(
+                    inner,
+                    self.create_mask,
+                    period=self.snoo_period,
+                    outer_lr=self.snoo_lr,
+                    outer_momentum=self.snoo_momentum,
+                )
+            if not self.ema_nesterov:
                 return inner
-            return snoo(
+            spectral = _MUONH_GROUPS if self.muonh_retraction == "spectral" else frozenset()
+            okls = frozenset({"okls"}) if self.okls_hyperball else frozenset()
+            return ema_nesterov(
                 inner,
                 self.create_mask,
-                period=self.snoo_period,
-                outer_lr=self.snoo_lr,
-                outer_momentum=self.snoo_momentum,
+                scale=self.ema_nesterov_scale * learning_rate / self.learning_rate,
+                decay=self.ema_nesterov_decay,
+                start_step=round(self.ema_nesterov_start_frac * num_train_steps),
+                end_step=round(self.ema_nesterov_end_frac * num_train_steps),
+                frobenius_groups=(_HYPERBALL_GROUPS | okls) - spectral,
             )
 
         return optax.inject_hyperparams(optimizer)(
@@ -930,6 +1156,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             raise ValueError(f"router_group must be one of {_ROUTER_GROUPS}, got {self.router_group!r}")
         if self.router_group == "muonh" and self.router_weight_decay is not None:
             raise ValueError("router_weight_decay applies to the Adam router; MuonH keeps the router norm fixed")
+        if self.muonh_retraction not in MUONH_RETRACTIONS:
+            raise ValueError(f"muonh_retraction must be one of {MUONH_RETRACTIONS}, got {self.muonh_retraction!r}")
 
     def create_mask(self, params):
         paths = leaf_key_paths(params)
@@ -1015,5 +1243,6 @@ class GrugMoeMuonHConfig(OptimizerConfig):
 
 __all__ = [
     "GrugMoeMuonHConfig",
+    "optimizer_diagnostics",
     "scale_with_grug_muonh",
 ]

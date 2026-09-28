@@ -65,6 +65,7 @@ from experiments.grug.fast_track.model import (
     ngram_stat_table_add,
     write_ngram_stats,
 )
+from experiments.grug.fast_track.optimizer import optimizer_diagnostics
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
 # variant-specific model/loss/FLOP wiring, per the grug copy-first workflow in
@@ -996,6 +997,7 @@ def _make_train_step(
             master_params = state.master_params
         else:
             updates, opt_state = optimizer.update(opt_grads, opt_state_in, qb_params)
+            metrics.update(optimizer_diagnostics(opt_state))
             params = optax.apply_updates(qb_params, updates)
             master_params = None
         if params.ngram_stat_table is not None:
@@ -1430,7 +1432,14 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         key: value
                         for key, value in metrics.items()
                         if key.startswith(
-                            ("train/router/", "moe_bias/", "train/attn_res/", "train/aux/", "train/newton_muon/")
+                            (
+                                "train/router/",
+                                "moe_bias/",
+                                "train/attn_res/",
+                                "train/aux/",
+                                "train/newton_muon/",
+                                "train/optim/",
+                            )
                         )
                         and key not in ("train/router/routing_counts_per_layer", "qb_beta_per_layer")
                     }
