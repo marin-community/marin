@@ -3,7 +3,6 @@
 
 """Resolve private verifier kinds to typed grading handlers."""
 
-import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -11,6 +10,7 @@ from importlib.metadata import entry_points
 from typing import Generic, TypeVar, cast
 
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
+from tasktrove_verify.modes.extract import collapse_whitespace
 
 from taskcompendium.models import TaskSpec, VerifierSpec
 from taskcompendium.submission import SubmissionConvention, extract_answer
@@ -18,7 +18,6 @@ from taskcompendium.submission import SubmissionConvention, extract_answer
 ENTRY_POINT_GROUP = "taskcompendium.verifiers"
 EXACT_ANSWER_KIND = "exact_answer"
 PayloadT = TypeVar("PayloadT", bound=BaseModel)
-WHITESPACE = re.compile(r"\s+")
 
 
 class Outcome(StrEnum):
@@ -99,7 +98,7 @@ def exact_answer(expected: str, ignore_case: bool = True, collapse_whitespace: b
 
 
 def _normalize_exact(value: str, payload: ExactAnswerPayload) -> str:
-    value = WHITESPACE.sub(" ", value).strip() if payload.collapse_whitespace else value.strip()
+    value = collapse_whitespace(value) if payload.collapse_whitespace else value.strip()
     return value.casefold() if payload.ignore_case else value
 
 
