@@ -44,10 +44,10 @@ from experiments.post_training.cat_count_data import (
 )
 
 EXPERIMENT_NAME = "cat-count-canary"
-CLUSTER = "cw-us-east-02a"
+CLUSTER = "cw-rno2a"
 GPU_VARIANT = "H100"
 GPUS_PER_NODE = 2
-# Each task exceeds half of the east H100 host's 128 CPUs.
+# Each task exceeds half of the H100 host's 128 CPUs.
 CPUS_PER_NODE = 65
 TRAIN_NS = DEFAULT_TRAIN_NS
 TRAIN_BATCH_SIZE = 32
