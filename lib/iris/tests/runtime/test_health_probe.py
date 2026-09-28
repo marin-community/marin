@@ -56,24 +56,27 @@ def test_live_probe_writes_a_termination_reason_at_the_failure_threshold(monkeyp
     monkeypatch.setattr(health_probe, "HEALTH_PORT_FILE", str(port_file))
     monkeypatch.setattr(health_probe, "HEALTH_FAILURE_COUNT_FILE", str(failures_file))
     monkeypatch.setattr(health_probe, "HEALTH_TERMINATION_FILE", str(termination_file))
+    termination_file.touch()
 
-    with _health_server(503) as port:
+    # An open reader observes the same inode that Kubernetes mounts into the task.
+    with termination_file.open() as mounted_file, _health_server(503) as port:
         port_file.write_text(str(port))
         assert health_probe.main(["--phase", "live", "--timeout", "1", "--failure-threshold", "2"]) == 1
         assert failures_file.read_text().strip() == "1"
-        assert not termination_file.exists()
+        assert mounted_file.read() == ""
 
         assert health_probe.main(["--phase", "live", "--timeout", "1", "--failure-threshold", "2"]) == 1
+        assert "HTTP 503" in mounted_file.read()
 
     assert failures_file.read_text().strip() == "2"
-    assert "HTTP 503" in termination_file.read_text()
 
-    with _health_server(200) as port:
+    with termination_file.open() as mounted_file, _health_server(200) as port:
         port_file.write_text(str(port))
         assert health_probe.main(["--phase", "live", "--timeout", "1", "--failure-threshold", "2"]) == 0
+        assert mounted_file.read() == ""
 
     assert failures_file.read_text().strip() == "0"
-    assert not termination_file.exists()
+    assert termination_file.read_text() == ""
 
 
 def test_startup_probe_does_not_write_a_termination_reason(monkeypatch, tmp_path):

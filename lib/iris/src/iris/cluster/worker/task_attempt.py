@@ -1059,13 +1059,10 @@ class TaskAttempt:
                 and health_monitor.next_probe.expired()
             ):
                 health_error = health_monitor.error()
-                if handle.status().phase == ContainerPhase.STOPPED:
-                    continue
                 if health_error is not None:
-                    try:
-                        handle.stop(force=True)
-                    except RuntimeError:
-                        logger.warning("Task %s container stopped while handling a health failure", self.task_id)
+                    if handle.status().phase == ContainerPhase.STOPPED:
+                        continue
+                    handle.stop(force=True)
                     return _TaskOutcome(job_pb2.TASK_STATE_FAILED, error=health_error, exit_code=-1)
 
             # Stream logs incrementally

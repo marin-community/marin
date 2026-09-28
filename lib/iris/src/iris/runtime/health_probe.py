@@ -77,14 +77,17 @@ def _record_live_result(result: ProbeResult, failure_threshold: int) -> None:
     count_path = Path(HEALTH_FAILURE_COUNT_FILE)
     if result.healthy:
         write_health_state(count_path, "0\n")
-        Path(HEALTH_TERMINATION_FILE).unlink(missing_ok=True)
+        Path(HEALTH_TERMINATION_FILE).write_text("", encoding="utf-8")
         return
 
     count = _failure_count() + 1
     write_health_state(count_path, f"{count}\n")
     if count >= failure_threshold:
         termination_path = Path(HEALTH_TERMINATION_FILE)
-        write_health_state(termination_path, f"Task health check failed {count} consecutive times: {result.detail}\n")
+        # Kubernetes bind-mounts this file. Replace its contents, not its inode.
+        termination_path.write_text(
+            f"Task health check failed {count} consecutive times: {result.detail}\n", encoding="utf-8"
+        )
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -316,6 +316,27 @@ memory before its first optimizer update.
 Keep inspection read-only. Record the state, attempt, exit reason, and resource request
 before restarting or signalling anything.
 
+### Task health failures
+
+Jobs can supply `TaskHealthCheck` through Iris or Fray. The `healthz` port name is
+reserved when this policy is enabled. The application serves `GET /healthz` on
+the port in `IRIS_PORT_HEALTHZ`. A zero value lets the OS select the port, which
+the application publishes with `publish_task_health`.
+
+Use `iris task describe /user/job/0` and `iris task events /user/job/0` to inspect
+the failed attempt. A startup failure means that no healthy response arrived
+within the startup window. A liveness failure means that consecutive failed
+requests reached the configured threshold. The controller then applies the job's
+retry policy. The worker daemon preserves the original startup deadline during
+container adoption.
+
+On Kubernetes, inspect the task container's termination message and `Unhealthy`
+events. The probe writes its final failure reason to
+`/tmp/iris/health-termination-log` and clears that file after a healthy response.
+Kubernetes mounts this file into the container. The probe must update the file
+in place and must not delete or replace it. An empty file permits the normal container-log
+fallback. See [Kubernetes termination messages](https://kubernetes.io/docs/tasks/debug/debug-application/determine-reason-pod-failure/).
+
 ### Log filtering
 
 The Iris dashboard's full-log filter accepts a regular expression. For example,

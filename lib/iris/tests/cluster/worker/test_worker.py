@@ -1377,9 +1377,12 @@ def test_adopt_rejects_health_check_without_a_container_start_time(mock_worker, 
         mock_worker.adopt_running_containers()
 
 
-def test_adopted_health_check_preserves_the_remaining_startup_window(mock_worker, mock_runtime, monkeypatch):
+@pytest.mark.parametrize("elapsed, expected_state", [(20, job_pb2.TASK_STATE_RUNNING), (40, job_pb2.TASK_STATE_FAILED)])
+def test_adopted_health_check_uses_the_original_startup_deadline(
+    mock_worker, mock_runtime, monkeypatch, elapsed, expected_state
+):
     started_at = Timestamp.from_seconds(1_735_689_600)
-    now = started_at.add(Duration.from_seconds(20))
+    now = started_at.add(Duration.from_seconds(elapsed))
     monkeypatch.setattr(Timestamp, "now", classmethod(lambda _cls: now))
     health = job_pb2.TaskHealthCheck(failure_threshold=1)
     health.startup_timeout.milliseconds = 30_000
@@ -1408,7 +1411,8 @@ def test_adopted_health_check_preserves_the_remaining_startup_window(mock_worker
     assert probe_finished.wait(timeout=1)
     task = mock_worker.get_task(container.task_id, container.attempt_id)
     assert task is not None
-    assert task.status == job_pb2.TASK_STATE_RUNNING
+    wait_for_condition(lambda: task.status == expected_state, timeout=Duration.from_seconds(1))
+    assert task.status == expected_state
 
     mock_worker.stop()
 
