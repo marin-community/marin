@@ -207,35 +207,60 @@ inference latency / KV-cache size, serving compatibility, or interaction effects
 
 ## Phase 0 results (matched recipe)
 
-All three arms were rerun under the corrected (matched) recipe after the
+All four arms were rerun under the corrected (matched) recipe after the
 PR #9281 review found the original runs' optimizer was detuned (heuristic-
 derived batch instead of the pinned cell batch at d768, and a 5% LR floor
 vs the baseline's decay-to-zero). Gate decision and full detail are in
-issue #9280. Summary (Paloma macro loss / avg last-200-step tok/s / gate-1
-effective speedup):
+issue #9280. Summary (Paloma macro loss / median steady-state tok/s /
+effective speedup). Throughput is the per-step median over steps ≥500 from
+full-resolution W&B history: these runs show end-of-run degradation
+(final ~50 steps, e.g. d512 variant collapses from 435k to 150–400k) that
+contaminates last-200 averages, and scattered ~1%-impact slow steps — the
+median is the stable estimate:
 
-| arm | macro | tok/s | speedup | W&B |
+| arm | macro | tok/s (med) | speedup | W&B |
 |---|---|---|---|---|
-| d512 α=1.0 | **3.5415** | 393,000 | 0.909 | [moe_boundary_compute_opt_d512_ep1_alpha1_matched](https://wandb.ai/marin-community/marin_moe/runs/moe_boundary_compute_opt_d512_ep1_alpha1_matched) |
-| d512 α=0.707 | 3.5459 | 422,134 | — | [moe_boundary_compute_opt_d512_ep1_alpha0.707_matched](https://wandb.ai/marin-community/marin_moe/runs/moe_boundary_compute_opt_d512_ep1_alpha0.707_matched) |
-| d768 α=1.0 | **3.2186** | 285,558 | 1.026 | [moe_boundary_compute_opt_d768_ep1_alpha1_matched](https://wandb.ai/marin-community/marin_moe/runs/moe_boundary_compute_opt_d768_ep1_alpha1_matched) |
-| d1024 α=1.0 | **3.0129** | 218,728 | 1.046 | [moe_boundary_compute_opt_d1024_ep1_alpha1_matched](https://wandb.ai/marin-community/marin_moe/runs/moe_boundary_compute_opt_d1024_ep1_alpha1_matched) |
-| README baselines | 3.5422 / 3.2273 / 3.0195 | 433,986 / 294,726 / 219,720 | — | — |
+| d512 α=1.0 | **3.5415** | 435,550 | 1.005 | [moe_boundary_compute_opt_d512_ep1_alpha1_matched](https://wandb.ai/marin-community/marin_moe/runs/moe_boundary_compute_opt_d512_ep1_alpha1_matched) |
+| d512 α=0.707 | 3.5459 | 434,647 | — | [moe_boundary_compute_opt_d512_ep1_alpha0.707_matched](https://wandb.ai/marin-community/marin_moe/runs/moe_boundary_compute_opt_d512_ep1_alpha0.707_matched) |
+| d768 α=1.0 | **3.2186** | 292,513 | 1.050 | [moe_boundary_compute_opt_d768_ep1_alpha1_matched](https://wandb.ai/marin-community/marin_moe/runs/moe_boundary_compute_opt_d768_ep1_alpha1_matched) |
+| d1024 α=1.0 | **3.0129** | 222,003 | 1.061 | [moe_boundary_compute_opt_d1024_ep1_alpha1_matched](https://wandb.ai/marin-community/marin_moe/runs/moe_boundary_compute_opt_d1024_ep1_alpha1_matched) |
+| d1280 α=1.0 | **2.8792** | 160,661 | 0.987 | [moe_boundary_compute_opt_d1280_ep1_alpha1_matched](https://wandb.ai/marin-community/marin_moe/runs/moe_boundary_compute_opt_d1280_ep1_alpha1_matched) |
+| README baselines | 3.5422 / 3.2273 / 3.0195 / 2.8857 | 434,807 / 294,843 / 219,744 / 171,910 | — | — |
+
+Matched-pair training curves (d1280): [W&B report — variant vs baseline](https://wandb.ai/marin-community/marin_moe/reports/moe_boundary-d1280-matched-pair:-variant-vs-baseline--VmlldzoxODAyMDY5MQ==).
 
 Reading:
 
 - **The recipe, not the operator, caused the exploratory deficits.** Under
-  the matched recipe every α=1.0 arm ties-or-beats the baseline on loss
-  (d512 −0.0007, d768 −0.0087, d1024 −0.0066) where the exploratory runs
-  showed +0.0038/+0.0198 deficits. α=1.0 stays the representative (α=0.707
-  loses at d512).
-- **Gate 1 splits; the d768–d1024 trend is the paper's direction.** d512
-  fails on throughput (effective speedup 0.909: the boundary vector-adds
-  and the coda's `rms_norm` cost ~9% wall-clock at 3.82e17 FLOPs) while
-  d768 passes (1.026) and d1024 passes stronger (1.046, with the remaining
-  throughput cost down to −0.4% at 1.16e19 FLOPs). The boundary overhead
-  amortizes with scale (−9.4% → −3.1% → −0.4%) and the loss advantage holds
-  at every scale — the same direction the paper reports for Operator-1.
+  the matched recipe every α=1.0 arm beats the baseline on loss at every
+  scale (d512 −0.0007, d768 −0.0087, d1024 −0.0066, d1280 −0.0065) and the
+  variant's loss curve is ahead of the baseline's at every eval point from
+  step 2000 onward at d1280. α=1.0 stays the representative (α=0.707 loses
+  at d512).
+- **Gate 1 passes (d512 1.005, d768 1.050).** With median-based throughput
+  the earlier "d512 fails on throughput" reading was a tail-contamination
+  artifact: the operator costs ~0% at d512–d1024 (+0.2%/−0.8%/+1.0%), not
+  the −9.4% the last-200 averages suggested.
+- **Gate 2 fails, on both criteria, but narrowly.** (a) d1280 effective
+  speedup is 0.987: the variant wins loss (−0.0065) but pays −6.5%
+  steady-state throughput at 3.46e19 FLOPs — the only scale with a real
+  throughput gap; see the d1280 anomaly note below. (b) The 4-point refit
+  `1.6 + 83.40·C^−0.0929` (α SE 0.0007) extrapolates to +0.0026 worse at
+  1e21 and +0.0052 worse at 1e23 vs the baseline law `1.6 + 88.32·C^−0.0941`,
+  despite the variant beating the baseline law at all four measured points
+  (−0.0155/−0.0033/−0.0065/−0.0015). Cell residuals (±0.004) are the same
+  order as the projection deltas, so the extrapolation flip is not
+  resolved by this data.
+- **d1280 throughput anomaly (−6.5%).** Real and compute-bound: step duration
+  6.53 vs 6.10 s, identical logged FLOPs/token (3.29), loading/hook times
+  negligible, flat across two independent TPU slices, MFU 12.0% vs 12.9%.
+  Not remat (baseline predates the `remat_mode` knob; effective remat is
+  `recompute_all` for both), not era (September d1024 variant beat its June
+  baseline), not eval interference. Leading hypothesis: the variant d1280
+  compiles at the HBM edge (restore OOM'd with 131 MB free of 32.9 GB), so
+  the operator's extra activations push XLA over a memory threshold and
+  into worse fusion/spill choices. Natural follow-up: `save_moe` remat or
+  jmp-policy A/B at d1280.
 - The pre-fix d512/d768 runs (no `_matched` suffix) are exploratory: they
   used the heuristic-derived optimizer batch (d768: 128 vs the cell's 64)
   and a 5% LR floor, so their comparisons against the baseline table are
