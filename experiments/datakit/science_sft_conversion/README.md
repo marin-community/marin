@@ -160,8 +160,9 @@ second and validation rejection counts, before changing the production topology.
 
 The commands below request 23 replicas at a maximum of 128 running sequences
 per replica, with the broker admitting up to 128 in-flight requests per worker.
-Seventeen clients at concurrency 44 offer 748 simultaneous
-requests, about 32 per replica when all 23 are serving. Adjust client concurrency
+Seventeen clients at concurrency 112 offer 1,904 simultaneous
+requests, about 83 per replica when all 23 are serving. This stays below the
+proxy's 2,048-request budget. Adjust client concurrency
 using measured completion throughput and queue latency. Stop the old conversion
 job before submitting its replacement against the same output directory.
 
@@ -178,7 +179,7 @@ uv run iris --cluster=cw-rno2a job run --priority interactive --enable-extra-res
   --job-name science-sft-conversion-v3-stratified-20260927 --replicas 17 --max-retries 8 \
   --cpu 8 --memory 32GB --disk 20GB --extra cpu --no-wait \
   -- python -m experiments.datakit.science_sft_conversion.conversion \
-    --endpoint /benfeuer/minimax-m3-science-sft-scaled --concurrency 44
+    --endpoint /benfeuer/minimax-m3-science-sft-scaled --concurrency 112
 ```
 
 ## Full-conversion handoff
