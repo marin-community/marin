@@ -509,6 +509,11 @@ class GrugModelConfig:
     attn_res_head_norm: bool = False
     """Multi-head AttnRes: RMS-normalize each head's channel slice of a source for its logits, instead
     of one RMS over all channels."""
+    attn_res_key_rank: int | None = None
+    """Low-Rank AttnRes (LR-AttnRes, arXiv 2607.09694): every source's routing key is the parameter-free
+    RMS norm of its last ``r`` channels, ``rms_norm(source[..., -r:])``, and every pseudo-query (per-layer,
+    V-gate, loop and final) is ``r``-wide; the mix still sums the full-width sources. The paper's sliced
+    variant (its learned-projection keys cost ~10x the routing FLOPs for the same loss). None: full-width."""
     embed_norm_mode: str = "rms"
     """Token-embedding norm before it enters the stack (AttnRes mixes it raw against the layer outputs):
     ``rms`` (RMSNorm with a learned gain), ``rms_nogain`` (RMSNorm, no gain) or ``raw`` (the table row as is)."""
@@ -854,6 +859,11 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be < num_experts, because QB routing selects top-(k+1)")
         if self.local_mixer == LocalMixer.KDA and not self.attn_res:
             raise ValueError("local_mixer=kda requires attn_res (KDA layers run in the unrolled AttnRes loop)")
+        if self.attn_res_key_rank is not None:
+            if not self.attn_res or not 0 < self.attn_res_key_rank < self.hidden_dim:
+                raise ValueError("attn_res_key_rank needs attn_res and 0 < attn_res_key_rank < hidden_dim")
+            if self.attn_res_heads > 1 or self.attn_res_pull or self.attn_res_pull_embed or self.attn_res_dual_query:
+                raise ValueError("attn_res_key_rank needs single-head push AttnRes without attn_res_dual_query")
         if self.kda_dd_rope:
             if self.local_mixer != LocalMixer.KDA:
                 raise ValueError("kda_dd_rope requires local_mixer=kda")
@@ -1410,6 +1420,10 @@ def _learned_knob_stats(layer: "Block", i: int) -> dict[str, jax.Array]:
     """Values of the small learned knobs of layer ``i`` (value residual mix, DIFF lambda, DyT alpha, PLE
     up-projection norm), exported as ``train/attn_res/knob_*`` to diagnose how each feature is used."""
     stats = {}
+    if layer.attn.cfg.attn_res_key_rank is not None:
+        # LR-AttnRes: norms of this layer's r-wide pseudo-queries (0 at init = uniform routing).
+        for name, query in (("attn", layer.attn_res_query_attn), ("mlp", layer.attn_res_query_mlp)):
+            stats[f"attn_res_knob_lrkey_qnorm_{name}_L{i}"] = jnp.linalg.norm(jax.lax.stop_gradient(query))
     vres = getattr(layer.attn, "vres_lambda", None)
     if vres is not None:
         stats[f"attn_res_knob_vres_l1_L{i}"], stats[f"attn_res_knob_vres_l2_L{i}"] = jax.lax.stop_gradient(vres)
@@ -2784,7 +2798,7 @@ class Block(eqx.Module):
         # KDA blocks have no branch-output SConv (K3 has only the q/k/v convs).
         use_attn_sconv = cfg.sconv and "attn" in cfg.sconv_sites and not use_kda
         # Zero-init: every source scores 0, so each gate starts as a uniform average of its sources.
-        attn_res_query = reshard(jnp.zeros((cfg.hidden_dim,), dtype=jnp.float32), P(None)) if cfg.attn_res else None
+        attn_res_query = reshard(jnp.zeros((_attn_res_key_dim(cfg),), jnp.float32), P(None)) if cfg.attn_res else None
         if cfg.dense_mlp:
             # Dense block: one SwiGLU DenseMLP(hidden, intermediate_dim), no MoE and no shared experts.
             mlp = DenseMLP.init(cfg.hidden_dim, cfg.intermediate_dim, cfg.initializer_std, key=mlp_key)
@@ -3169,6 +3183,11 @@ def _spread_mlp_input(x: Float[Array, "B S D"], cfg: GrugModelConfig) -> Float[A
     return reshard(rearrange(flat, "(b s) d -> b s d", b=x.shape[0]).astype(x.dtype), _batch_spec())
 
 
+def _attn_res_key_dim(cfg: GrugModelConfig) -> int:
+    """Width of every AttnRes pseudo-query: ``attn_res_key_rank`` if set, else ``hidden_dim``."""
+    return cfg.hidden_dim if cfg.attn_res_key_rank is None else cfg.attn_res_key_rank
+
+
 @named_call
 def _attn_res_source_logits(
     source: Float[Array, "B S D"], queries: Float[Array, "G D"], eps: float, head_norm: bool = False
@@ -3178,7 +3197,10 @@ def _attn_res_source_logits(
     RMS normalization is a per-token scalar, so it is applied to the ``[G, B, S]`` dot products instead
     of materializing normalized keys; a completed block is read once for every gate that will ever see it.
     The key norm is parameter-free: a learnable gain would be redundant with the query.
+    Narrower single-head queries (``attn_res_key_rank``) score only the source's last ``r`` channels.
     """
+    if queries.ndim == 2 and queries.shape[-1] < source.shape[-1]:
+        source = source[..., -queries.shape[-1] :]
     inv_rms = jax.lax.rsqrt(jnp.mean(jnp.square(source.astype(jnp.float32)), axis=-1) + eps)
     if queries.ndim == 3 and queries.shape[-1] == source.shape[-1]:
         # Hierarchical multi-head AttnRes: full-width per-head queries [G, H, D] against the whole key.
@@ -3763,7 +3785,7 @@ class Transformer(eqx.Module):
                 GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key) if cfg.final_gated_norm else None
             ),
             attn_res_query_final=(
-                reshard(jnp.zeros((cfg.hidden_dim,), dtype=jnp.float32), P(None)) if cfg.attn_res else None
+                reshard(jnp.zeros((_attn_res_key_dim(cfg),), jnp.float32), P(None)) if cfg.attn_res else None
             ),
             token_embed2=(
                 reshard(
@@ -4051,7 +4073,7 @@ class Transformer(eqx.Module):
                 else None
             ),
             attn_res_query_loop=(
-                reshard(jnp.zeros((cfg.loop_passes - 1, 2 * cfg.num_layers, cfg.hidden_dim), jnp.float32), P())
+                reshard(jnp.zeros((cfg.loop_passes - 1, 2 * cfg.num_layers, _attn_res_key_dim(cfg)), jnp.float32), P())
                 if cfg.loop_passes > 1
                 else None
             ),
@@ -4580,6 +4602,10 @@ class Transformer(eqx.Module):
                 final_stats[f"attn_res_scale_mlp_L{i}"] = jax.lax.stop_gradient(layer.mlp_out_scale)
             final_stats.update(_learned_knob_stats(layer, i))
         final_stats.update(layer_logs)
+        if cfg.attn_res_key_rank is not None:
+            final_stats["attn_res_knob_lrkey_qnorm_final"] = jnp.linalg.norm(
+                jax.lax.stop_gradient(self.attn_res_query_final)
+            )
         for name, norm in (("embed", self.embed_norm), ("final", self.final_norm)):
             if isinstance(norm, ZeroCenteredRMSNorm):
                 final_stats[f"attn_res_knob_gain_abs_{name}"] = jnp.mean(jnp.abs(jax.lax.stop_gradient(norm.gamma)))
