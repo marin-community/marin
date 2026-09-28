@@ -719,6 +719,37 @@ def test_worker_region_env_uses_physical_metadata(mock_worker, mock_runtime, mon
     assert env["IRIS_WORKER_REGION"] == "us-east5"
 
 
+@pytest.mark.parametrize("tpu_host, expected_link_mode", [(True, "symlink"), (False, "copy")])
+def test_cpu_task_uses_worker_host_uv_link_mode(mock_bundle_store, mock_runtime, tmp_path, tpu_host, expected_link_mode):
+    metadata = job_pb2.WorkerMetadata()
+    if tpu_host:
+        metadata.device.tpu.CopyFrom(job_pb2.TpuDevice(variant="v4", count=4))
+    else:
+        metadata.device.cpu.CopyFrom(job_pb2.CpuDevice(variant="cpu"))
+
+    config = WorkerConfig(
+        port=0,
+        port_range=(50000, 50100),
+        poll_interval=Duration.from_seconds(0.1),
+        cache_dir=tmp_path / "cache",
+        default_task_image="mock-image",
+    )
+    worker = Worker(
+        config,
+        bundle_store=mock_bundle_store,
+        container_runtime=mock_runtime,
+        worker_metadata=metadata,
+    )
+
+    task_id = worker.submit_task(create_run_task_request())
+    task = worker.get_task(task_id)
+    task.thread.join(timeout=15.0)
+
+    assert task.status == job_pb2.TASK_STATE_SUCCEEDED, task.error
+    env = mock_runtime.create_container.call_args[0][0].env
+    assert env["UV_LINK_MODE"] == expected_link_mode
+
+
 def test_env_merge_precedence(mock_bundle_store, mock_runtime, tmp_path):
     """Job env wins over task defaults without replacing attempt identity.
 
