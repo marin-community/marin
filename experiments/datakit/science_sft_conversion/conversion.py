@@ -428,7 +428,10 @@ def _row_request(
             "For an underdetermined biological annotation, explain missing observations and label the "
             "reference as an annotation, not a derivation. For a textbook problem, use a supplied formula "
             "with explicitly hypothetical numerical inputs; do not assert that hypothetical parameters "
-            "constitute a physical state unless the source establishes its validity."
+            "constitute a physical state unless the source establishes its validity. Keep index bounds "
+            "consistent with the givens: an inclusive sum ending at H over rewards r_0, r_1, r_2 "
+            "requires H=2, not H=3. A three-step length convention instead requires an upper limit H-1. "
+            "Never leave an extra indexed term undefined."
         )
         if source.name == BIO_INSTRUCTION:
             reinforcement += (
