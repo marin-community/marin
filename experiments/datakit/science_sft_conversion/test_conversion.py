@@ -14,7 +14,7 @@ import pyarrow.parquet as pq
 import pytest
 from marin.datakit.chat_normalize import CHAT_SCHEMA, ChatChannel
 
-from experiments.datakit.science_sft_conversion import conversion
+from experiments.datakit.science_sft_conversion import conversion, probe
 from experiments.datakit.science_sft_conversion.audit import audit
 from experiments.datakit.science_sft_conversion.conversion import (
     ConversionMode,
@@ -205,6 +205,24 @@ def test_early_conversion_covers_every_source_without_losing_batches() -> None:
     assert {batch.batch_index for batch in scheduled if batch.item.source.name == "source-0"} == set(range(98))
     assert len([batch for batch in scheduled if batch.item.source.name == "source-1"]) == 1
     assert scheduled == stratified_batches(items, seed=20260927, max_batches=None)
+
+
+def test_probe_samples_rows_beyond_first_parquet_batch(tmp_path, monkeypatch) -> None:
+    source = Source("probe/physics", "", 1, 512)
+    input_path = tmp_path / "input.parquet"
+    pq.write_table(
+        pa.Table.from_pylist([{"id": str(index), "text": f"Passage {index}."} for index in range(512)]), input_path
+    )
+    # Replace object-store discovery with one real local Parquet shard.
+    monkeypatch.setattr(probe, "_source_files", lambda _: [str(input_path)])
+
+    samples = probe._source_samples(source, count=8, seed=20260927)
+    row_ids = [int(sample[1]) for sample in samples]
+
+    assert row_ids[0] == 0
+    assert len(set(row_ids)) == 8
+    assert any(row_id >= 128 for row_id in row_ids)
+    assert [sample[2] for sample in samples] == [f"Passage {row_id}." for row_id in row_ids]
 
 
 @pytest.mark.asyncio

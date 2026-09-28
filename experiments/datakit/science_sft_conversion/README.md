@@ -11,6 +11,11 @@ gets one of six answer formats chosen from a stable source ID hash. MiniMax
 generates a user request, an assistant `reasoning_content` span, and a final
 answer. The worker validates the three fields, the requested final format, and
 Datakit's Harmony message structure before writing `CHAT_SCHEMA` Parquet.
+Grounded tasks extract reported facts and reuse supplied worked steps. Supplied
+annotations are reported as reference information; the generated reasoning must not
+invent how those labels were derived. The request repeats these requirements
+after the quoted passage to distinguish the conversion task from instructions
+embedded in the source.
 For prose, code, and textbook passages, the worker appends the source chunk to
 the user turn so the assistant's answer has its evidence. For the Nemotron math
 textbooks and Swallow math QA sources, MiniMax extracts a standalone question
@@ -44,25 +49,10 @@ The pinned source pool contains 105,582,071 rows across 6,350 row groups.
 The worker checks these row counts before issuing requests. Every nonempty
 row requires at least one MiniMax completion; long rows require more than one.
 
-The conversion uses the shared `/benfeuer/minimax-m3-science-sft` Iris endpoint
-on `cw-rno2a`. Serve MiniMax M3 from the science SFT worktree. Three H100x8
-workers share one brokered endpoint at Iris's interactive priority. The
-65,536-token context exceeds the worker's 8,000-character source chunk size.
-CoreWeave's S3 cache needs lower RunAI reader concurrency and a longer read
-window while all workers load the 428B-parameter checkpoint:
-
-```bash
-uv run marin-serve iris MiniMaxAI/MiniMax-M3-MXFP8 --cluster cw-rno2a \
-  --gpu H100x8 --instances 3 --name minimax-m3-science-sft-20260927 \
-  --endpoint-name /benfeuer/minimax-m3-science-sft \
-  --max-model-len 65536 --max-num-batched-tokens 8192 \
-  --cpu 64 --memory 1024g --disk 800g --timeout-hours 168 \
-  --proxy-timeout 1800 --vllm-version 0.30.0 \
-  --streamer-concurrency 2 --streamer-s3-request-timeout-ms 30000 \
-  --vllm-arg=--max-num-seqs=8 --vllm-arg=--gpu-memory-utilization=0.97 \
-  --vllm-arg=--block-size=128 --vllm-arg=--reasoning-parser=minimax_m3 \
-  --vllm-arg=--kv-cache-dtype=fp8 --vllm-arg=--enable-expert-parallel --no-wait
-```
+The conversion uses the shared `/benfeuer/minimax-m3-science-sft-scaled` Iris
+endpoint on `cw-rno2a`. Launch the serving pool with the scaled configuration
+below. The 65,536-token context exceeds the worker's 8,000-character source
+chunk size. The conversion CLI requires an explicit endpoint.
 
 After the endpoint answers a structured completion, start one small batch
 before the full run:
@@ -72,7 +62,8 @@ uv run iris --cluster=cw-rno2a job run --priority interactive --enable-extra-res
   --job-name science-sft-conversion-smoke-20260927 \
   --cpu 8 --memory 32GB --disk 20GB --extra cpu --no-wait \
   -- python -m experiments.datakit.science_sft_conversion.conversion \
-    --max-items 1 --max-batches 1 --concurrent-batches 1
+    --max-items 1 --max-batches 1 --concurrent-batches 1 \
+    --endpoint /benfeuer/minimax-m3-science-sft-scaled --concurrency 112
 ```
 
 After checking the first generated records and model response, submit the
@@ -82,13 +73,17 @@ full resumable workload:
 uv run iris --cluster=cw-rno2a job run --priority interactive --enable-extra-resources \
   --job-name science-sft-conversion-v3-stratified-stage-20260927 --replicas 17 --max-retries 8 \
   --cpu 8 --memory 32GB --disk 20GB --extra cpu --no-wait \
-  -- python -m experiments.datakit.science_sft_conversion.conversion --concurrent-batches 2
+  -- python -m experiments.datakit.science_sft_conversion.conversion \
+    --concurrent-batches 2 --endpoint /benfeuer/minimax-m3-science-sft-scaled --concurrency 112
 ```
 
 To inspect the conversion across all 17 sources while the full run proceeds,
 write sampled source chunks and their validated conversations to a separate
-JSON file. The first sample is the first row used by the original probe; the
-remaining samples use reproducible random shards, row groups, and chunks:
+JSON file. The first sample is the first chunk of the first row in the first
+shard's first row group. The remaining samples use reproducible random shards,
+row groups, rows, and chunks.
+Rows are sampled from the entire selected row group. Shards and row groups are
+sampled uniformly within each source; this is not a corpus-wide row-weighted sample:
 
 ```bash
 uv run iris --cluster=cw-rno2a job run --priority interactive --enable-extra-resources \
@@ -96,6 +91,7 @@ uv run iris --cluster=cw-rno2a job run --priority interactive --enable-extra-res
   --disk 10GB --extra cpu --no-wait \
   -- python -m experiments.datakit.science_sft_conversion.probe \
     --samples-per-source 5 --seed 20260927 \
+    --endpoint /benfeuer/minimax-m3-science-sft-scaled --concurrency 16 \
     --output-path s3://marin-us-east-02a/marin/users/benfeuer/science-sft-converted/2026.09.27-v3/audit/probe-stratified-85-r3.json
 ```
 
