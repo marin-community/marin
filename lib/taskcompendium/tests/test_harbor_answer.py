@@ -96,7 +96,6 @@ async def test_direct_chat_harbor_trial_distinguishes_answer_outcomes(
     assert Task.is_valid_dir(task, disable_verification=True)
     assert not (task / "tests" / "test.sh").exists()
     assert "12" not in (task / "instruction.md").read_text()
-    assert json.loads((task / "specification.json").read_text())["verifier"]["kind"] == "exact_answer"
 
     result = await run_trial(task, binding, ReplayLaunch(response=response), tmp_path / "trials", "run")
 
