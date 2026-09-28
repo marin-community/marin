@@ -18,7 +18,7 @@ from taskcompendium.models import (
     TaskSpec,
     format_native_messages,
 )
-from taskcompendium.nemo_verifier import predicted_action_verifier
+from taskcompendium.predicted_action_verifier import predicted_action_verifier
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
 
 DATASET = "nvidia/Nemotron-RL-Agentic-Conversational-Tool-Use-Pivot-v1"

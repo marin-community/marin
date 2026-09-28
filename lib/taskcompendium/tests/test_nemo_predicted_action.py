@@ -110,7 +110,7 @@ def test_predicted_action_rejects_crafted_message_target_on_private_read(tmp_pat
     data["verifier"]["parameters_json"] = json.dumps({"expected_message": "Any response"})
     (task / "specification.json").write_text(json.dumps(data))
 
-    with pytest.raises(ValueError, match="Invalid 'nemo_predicted_action' verifier parameters"):
+    with pytest.raises(ValueError, match="Invalid 'predicted_action' verifier parameters"):
         read_specification(task / "specification.json")
 
 
@@ -124,7 +124,7 @@ def test_predicted_action_rejects_boolean_numeric_tolerance_on_private_read(tmp_
     data["verifier"]["parameters_json"] = json.dumps(parameters)
     (task / "specification.json").write_text(json.dumps(data))
 
-    with pytest.raises(ValueError, match="Invalid 'nemo_predicted_action' verifier parameters"):
+    with pytest.raises(ValueError, match="Invalid 'predicted_action' verifier parameters"):
         read_specification(task / "specification.json")
 
 

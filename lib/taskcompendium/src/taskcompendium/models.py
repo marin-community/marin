@@ -27,7 +27,7 @@ class VerifierKind(StrEnum):
     """The registered grader used to check a submission."""
 
     EXACT_ANSWER = "exact_answer"
-    NEMO_PREDICTED_ACTION = "nemo_predicted_action"
+    PREDICTED_ACTION = "predicted_action"
 
 
 class Source(BaseModel):

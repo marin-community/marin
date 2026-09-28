@@ -10,13 +10,13 @@ from pydantic import ValidationError
 
 from taskcompendium.grading import ExactAnswerVerifier, GradeResult, GradingAttempt, Verifier
 from taskcompendium.models import TaskSpec, VerifierKind, VerifierSpec
-from taskcompendium.nemo_verifier import PredictedActionVerifier
+from taskcompendium.predicted_action_verifier import PredictedActionVerifier
 from taskcompendium.submission import SubmissionConvention
 
 VERIFIERS: Mapping[VerifierKind, type[Verifier]] = MappingProxyType(
     {
         VerifierKind.EXACT_ANSWER: ExactAnswerVerifier,
-        VerifierKind.NEMO_PREDICTED_ACTION: PredictedActionVerifier,
+        VerifierKind.PREDICTED_ACTION: PredictedActionVerifier,
     }
 )
 
