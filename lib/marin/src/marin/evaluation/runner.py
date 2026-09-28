@@ -6,7 +6,8 @@
 import contextlib
 import logging
 from collections.abc import Iterator, Mapping
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
+from enum import StrEnum
 from typing import Protocol
 
 from fray.client import JobHandle
@@ -39,6 +40,7 @@ from marin.evaluation.records import (
     write_record,
 )
 from marin.evaluation.serving_config import inference_config_for_model
+from marin.inference.backend import OPENAI_API_SUFFIX
 from marin.inference.config import RemoteInferenceConfig
 from marin.inference.iris import RemoteInferenceSession, RemoteInferenceStartupError, remote_inference
 from marin.rollouts.catalog import RolloutRunKind, record_rollout_run, rollout_run_record
@@ -99,6 +101,11 @@ class EvalExecutor(Protocol):
     ) -> EvaluationOutcome: ...
 
 
+class EndpointRoute(StrEnum):
+    DIRECT = "direct"
+    CAPABILITY = "capability"
+
+
 @dataclass(frozen=True)
 class EvaluationIdentity:
     run_id: str
@@ -118,6 +125,7 @@ class LaunchProvenance:
 class Evaluation:
     identity: EvaluationIdentity
     executor: EvalExecutor
+    endpoint_route: EndpointRoute
     secret_env_keys: tuple[str, ...] = ()
 
 
@@ -341,10 +349,17 @@ def _run_one_evaluation(
         session.check_alive()
         if judge is not None:
             judge.check_alive()
+        if evaluation.endpoint_route is EndpointRoute.DIRECT:
+            execution_session = _local_endpoint_session(session)
+        else:
+            execution_session = session
         if session.metrics_url is not None:
             try:
+                metric_session = execution_session
+                if evaluation.endpoint_route is EndpointRoute.CAPABILITY:
+                    metric_session = _local_endpoint_session(session)
                 metric_window = InferenceMetricWindow.start(
-                    session,
+                    metric_session,
                     speculative=batch.model.serve.speculative is not None,
                 )
             except Exception:
@@ -356,7 +371,7 @@ def _run_one_evaluation(
         allowed_env_keys = (*EVAL_RUNTIME_ENV_KEYS, *evaluation.secret_env_keys)
         evaluation_env = {key: env_vars[key] for key in allowed_env_keys if key in env_vars}
         outcome = evaluation.executor(
-            session,
+            execution_session,
             evaluation.identity.output_dir,
             evaluation_env,
             judge=judge,
@@ -606,6 +621,17 @@ def run_evaluation_batch(batch: EvaluationBatch) -> list[str]:
     except RemoteInferenceStartupError as exc:
         _record_startup_failure(batch, orchestrator_job_id, exc, _INFERENCE_ROLE)
         raise RuntimeError(f"evaluation batch inference failed: {exc}") from exc
+
+
+def _local_endpoint_session(session: RemoteInferenceSession) -> RemoteInferenceSession:
+    """Return an eval session that reaches the serving endpoint directly."""
+    address = iris_ctx().client.resolve_endpoint(session.endpoint_name).rstrip("/")
+    endpoint = replace(session.model.endpoint, base_url=f"{address}{OPENAI_API_SUFFIX}")
+    return replace(
+        session,
+        model=replace(session.model, endpoint=endpoint),
+        metrics_url=f"{address}/metrics" if session.metrics_url is not None else None,
+    )
 
 
 def submit_evaluation_batch(batch: EvaluationBatch, client: IrisClient) -> SubmittedEvaluationBatch:

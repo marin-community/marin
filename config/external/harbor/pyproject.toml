@@ -16,5 +16,5 @@ package = false
 prerelease = "allow"
 
 [tool.uv.sources]
-# Keep this branch-based: uv.lock pins the runtime commit, and the external dependency updater advances it.
-harbor = { git = "https://github.com/marin-community/harbor.git", branch = "main" }
+# The exact campaign revision is retained in uv.lock and advanced deliberately.
+harbor = { git = "https://github.com/marin-community/harbor.git", rev = "82398c40136298183b6760be5509e12f50fe5991" }

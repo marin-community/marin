@@ -11,10 +11,11 @@ browser fetches use relative URLs (``new URL(path, location.href)``) — the pro
 does not rewrite HTML bodies, so an absolute path like ``/v1/chat/completions``
 would escape the prefix.
 
-``/v1/*`` and ``/tokenize`` requests are reverse-proxied to whichever serving
-backend runs on the slice (see :mod:`marin.inference.backend`). Direct sessions
-preserve server-sent events end to end; brokered sessions return buffered JSON
-and reject streaming.
+``/v1/*`` requests and the root ``/tokenize`` route are reverse-proxied to whichever
+serving backend runs on the slice (see :mod:`marin.inference.backend`). Harbor uses
+``/tokenize`` for context accounting with the live model's chat template.
+Direct sessions preserve server-sent events end to end; brokered sessions return
+buffered JSON and reject streaming.
 ``/tools`` returns model-facing JSON schemas for dashboard-authored Python,
 ``/tools/{name}`` validates and runs one function, and ``/shell`` executes a
 command in a reconstructed ShellSim agent workspace. ``/chat-shares`` stores

@@ -1,13 +1,13 @@
-tasks: [NUPA5K]
+tasks: [NUPA5K-Loose]
 task_options:
-  NUPA5K:
+  NUPA5K-Loose:
     num_fewshot: 0
     task_alias: nupa5k
     generation: true
 apply_chat_template: true
 batch_size: 1
 seed: 20222943
-# Evalchemy's pinned NUPA5K prompt measurement reserves its longest prompt and
+# Evalchemy's pinned NUPA5K-Loose prompt measurement reserves its longest prompt and
 # standard cushion, then assigns the rest of this context window to the response.
 max_length: 73664
-runtime_extras: [nupa5k]
+runtime_extras: [nupa5k-loose]

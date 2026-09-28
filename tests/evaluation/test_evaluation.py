@@ -7,6 +7,7 @@ import hashlib
 import json
 import logging
 from collections.abc import Mapping
+from contextlib import nullcontext
 from dataclasses import asdict, replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -48,6 +49,7 @@ from marin.evaluation.records import (
     read_record,
 )
 from marin.evaluation.runner import (
+    EndpointRoute,
     Evaluation,
     EvaluationBatch,
     EvaluationError,
@@ -203,7 +205,7 @@ def _failed_evaluation(
     )
 
 
-def _evaluation(root: Path, name: str, executor) -> Evaluation:
+def _evaluation(root: Path, name: str, executor, endpoint_route: EndpointRoute = EndpointRoute.CAPABILITY) -> Evaluation:
     return Evaluation(
         identity=EvaluationIdentity(
             run_id=f"run-{name}",
@@ -213,6 +215,7 @@ def _evaluation(root: Path, name: str, executor) -> Evaluation:
             eval_runtime="test-runtime",
         ),
         executor=executor,
+        endpoint_route=endpoint_route,
     )
 
 
@@ -234,7 +237,13 @@ def _remote_session(endpoint: str = "https://inference.example/v1") -> RemoteInf
 def _patch_inference_runtime(monkeypatch: pytest.MonkeyPatch, remote) -> None:
     """Point the batch runner at a fake inference runtime with ``remote`` as its session factory."""
     monkeypatch.setattr("marin.evaluation.runner.configure_coreweave_s3", lambda: None)
-    monkeypatch.setattr("marin.evaluation.runner.iris_ctx", lambda: SimpleNamespace(job_id="/orchestrator"))
+    monkeypatch.setattr(
+        "marin.evaluation.runner.iris_ctx",
+        lambda: SimpleNamespace(
+            job_id="/orchestrator",
+            client=SimpleNamespace(resolve_endpoint=lambda _name: "http://10.0.0.1:8000"),
+        ),
+    )
     monkeypatch.setattr("marin.evaluation.runner.remote_inference", remote)
     monkeypatch.setattr(
         "marin.evaluation.runner.inference_config_for_model",
@@ -269,6 +278,7 @@ def _hosted_judge_batch(tmp_path, evaluations: tuple[Evaluation, ...]) -> Evalua
 
 def test_run_evaluation_batch_shares_one_hosted_judge_across_evaluations(tmp_path, monkeypatch):
     opened_models: list[str] = []
+    observed_candidates: list[RemoteInferenceSession] = []
     observed_judges: list[RemoteInferenceSession | None] = []
 
     class InferenceContext:
@@ -287,12 +297,13 @@ def test_run_evaluation_batch_shares_one_hosted_judge_across_evaluations(tmp_pat
         return InferenceContext(_remote_session(f"https://{model}.example/v1"))
 
     def executor(
-        _session: RemoteInferenceSession,
+        session: RemoteInferenceSession,
         _output_dir: str,
         _env_vars: Mapping[str, str],
         *,
         judge: RemoteInferenceSession | None = None,
     ) -> EvaluationOutcome:
+        observed_candidates.append(session)
         observed_judges.append(judge)
         return EvaluationOutcome(metrics={"task": {"accuracy": 1.0}})
 
@@ -305,6 +316,7 @@ def test_run_evaluation_batch_shares_one_hosted_judge_across_evaluations(tmp_pat
     run_evaluation_batch(batch)
 
     assert opened_models == ["candidate", "judge"]
+    assert all(candidate.model.endpoint.base_url == "https://candidate.example/v1" for candidate in observed_candidates)
     assert len(observed_judges) == 2
     assert observed_judges[0] is observed_judges[1]
     assert observed_judges[0] is not None
@@ -313,6 +325,44 @@ def test_run_evaluation_batch_shares_one_hosted_judge_across_evaluations(tmp_pat
     assert record.judge is not None
     assert record.judge.model.name == "judge"
     assert record.judge.hardware.accelerator == "H100x1"
+
+
+def test_run_evaluation_batch_refreshes_direct_endpoint_between_evaluations(tmp_path, monkeypatch):
+    observed_urls: list[str] = []
+    addresses = iter(("http://10.0.0.1:8000", "http://10.0.0.2:8000"))
+
+    def executor(
+        session: RemoteInferenceSession,
+        _output_dir: str,
+        _env_vars: Mapping[str, str],
+        *,
+        judge: RemoteInferenceSession | None = None,
+    ) -> EvaluationOutcome:
+        observed_urls.append(session.model.endpoint.base_url)
+        return EvaluationOutcome(metrics={"task": {"accuracy": 1.0}})
+
+    _patch_inference_runtime(monkeypatch, lambda _config: nullcontext(_remote_session()))
+    monkeypatch.setattr(
+        "marin.evaluation.runner.iris_ctx",
+        lambda: SimpleNamespace(
+            job_id="/orchestrator",
+            client=SimpleNamespace(resolve_endpoint=lambda _name: next(addresses)),
+        ),
+    )
+    batch = replace(
+        _hosted_judge_batch(
+            tmp_path,
+            (
+                _evaluation(tmp_path, "one", executor, EndpointRoute.DIRECT),
+                _evaluation(tmp_path, "two", executor, EndpointRoute.DIRECT),
+            ),
+        ),
+        judge=None,
+    )
+
+    run_evaluation_batch(batch)
+
+    assert observed_urls == ["http://10.0.0.1:8000/v1", "http://10.0.0.2:8000/v1"]
 
 
 def test_run_evaluation_batch_records_every_eval_when_hosted_judge_fails_to_start(tmp_path, monkeypatch):
@@ -556,6 +606,10 @@ vllm:spec_decode_num_accepted_tokens_total {accepted}
     clock = iter((10.0, 12.0))
     monkeypatch.setattr("marin.evaluation.inference_metrics.time.monotonic", lambda: next(clock))
     monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", lambda _row: None)
+    monkeypatch.setattr(
+        "marin.evaluation.runner.iris_ctx",
+        lambda: SimpleNamespace(client=SimpleNamespace(resolve_endpoint=lambda _name: "http://10.0.0.1:8000")),
+    )
     speculative = SpeculativeServingConfig(
         method=SpeculativeMethod.EAGLE3,
         model=ResolvedModelLocator(uri="s3://models/draft", identity="draft@2026.09.23:abc123"),
@@ -880,6 +934,7 @@ def test_submit_evaluation_batch_resolves_declared_secrets_outside_the_pickled_b
             eval_runtime="test-runtime",
         ),
         executor=_successful_evaluation,
+        endpoint_route=EndpointRoute.CAPABILITY,
     )
     batch = EvaluationBatch(
         group_id="group",
@@ -1055,6 +1110,7 @@ def test_build_evaluation_batch_uses_submission_cluster_for_direct_endpoint(monk
     batch = build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester")
 
     assert batch.capability_origin == "https://custom-controller.example"
+    assert all(evaluation.endpoint_route is EndpointRoute.DIRECT for evaluation in batch.evaluations)
 
 
 def test_build_evaluation_batch_merges_the_shared_daytona_spec(monkeypatch):
@@ -1087,6 +1143,7 @@ def test_build_evaluation_batch_merges_the_shared_daytona_spec(monkeypatch):
         )
     }
     assert {evaluation.identity.eval_runtime for evaluation in batch.evaluations} == {HARBOR_RUNTIME}
+    assert all(evaluation.endpoint_route is EndpointRoute.CAPABILITY for evaluation in batch.evaluations)
     assert all(evaluation.identity.eval_ref.harbor.config_digest for evaluation in batch.evaluations)
     assert all(evaluation.identity.eval_ref.harbor.task_limit == 1 for evaluation in batch.evaluations)
 
