@@ -43,29 +43,16 @@ are separate grants. The onboarding agent can identify missing access.
 
 ### Request your GCP and Weights & Biases access
 
-Open your own PR to add your Google account to the `Marin Dev` role. Use a fork
-if you do not have repository write access. The PR changes
-[`iam_data.yaml`](https://github.com/marin-community/marin/blob/main/infra/pulumi/src/iac/gcp/iam_data.yaml)
-with an encrypted principal and a reference under the `marindev` grant. From
-the repository root, replace the example address with your Google account
-address and generate the edit:
+Ask your buddy or another Marin developer:
 
-```bash
-uv run --package marin-iac --extra deploy \
-  python infra/pulumi/iam_principal.py grant you@example.com \
-    --project-role projects/hai-gcp-models/roles/marindev
-```
+> Please check that I have the `Marin Dev` role in `hai-gcp-models` and Iris IAP
+> access. Please arrange any missing grants through Pulumi.
 
-The command requires KMS access. If you do not have it, ask a Pulumi operator
-to help prepare the encrypted edit for your branch. Open the PR against `main`
-without putting your email in its title, body, or comments. Send the PR link to
-your buddy and ask them to follow the
-[Pulumi user-grant workflow](https://github.com/marin-community/marin/blob/main/infra/pulumi/README.md#user-grants):
-decrypt the PR with `review-grant`, get explicit human confirmation of the
-account and role, merge it, then preview and run `pulumi up` on the
-`infra/pulumi` `marin` stack. Your buddy needs Pulumi operator access to apply
-the grant; otherwise they should hand that step to an operator. The grant is
-live after `pulumi up` succeeds.
+Pulumi is the tool Marin uses to manage GCP access. A developer prepares a
+[grant PR](https://github.com/marin-community/marin/blob/main/infra/pulumi/README.md#user-grants),
+a separate reviewer confirms the decrypted account and role with a human before
+merging it, and an operator runs `pulumi up` to apply it. You do not need to run
+Pulumi for onboarding.
 
 DM your buddy: “Add me to the `marin-community` Weights & Biases entity. My
 Weights & Biases handle is `<your-handle>`.” Replace the placeholder with your
