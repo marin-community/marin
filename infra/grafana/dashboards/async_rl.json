@@ -109,7 +109,7 @@
               "params": [
                 {
                   "key": "sql",
-                  "value": "SELECT run_id AS value FROM (SELECT * FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND name IN ('lifecycle','policy_step','rollout_call') AND json_get(resource_attributes_json,'training_loop')='async') GROUP BY run_id HAVING run_id IS NOT NULL ORDER BY MAX(timestamp_ms) DESC"
+                  "value": "SELECT run_id AS value FROM (SELECT * FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND name IN ('lifecycle','policy_step','rollout_call') AND json_get(resource_attributes_json,'training_type')='async') GROUP BY run_id HAVING run_id IS NOT NULL ORDER BY MAX(timestamp_ms) DESC"
                 },
                 {
                   "key": "from",
@@ -5352,7 +5352,7 @@
       "id": 57,
       "type": "timeseries",
       "title": "Position dependence of |log ρ|",
-      "description": "training_metric_value for policy/mismatch/pooled/pos_* and policy/log_ratio_pos_*: mean absolute log-ratio by response position (first/last 256 tokens, middle) for the rollout-mismatch and within-update-drift families. Computed by mismatch_ratio_metrics and LogRatioMonitor using trainer.algorithm.ratio_diagnostics.position_window. Empty without trainer.training_metrics.",
+      "description": "training_metric_value for policy/mismatch/pooled/pos_* and policy/log_ratio_pos_*: mean absolute log-ratio by response position (first/last 256 tokens, middle) for the rollout-mismatch and within-update-drift families. Computed by mismatch_ratio_metrics and LogRatioMonitor. Empty without trainer.training_metrics.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -5456,130 +5456,6 @@
       "interval": "1m"
     },
     {
-      "id": 58,
-      "type": "timeseries",
-      "title": "Gradient direction persistence",
-      "description": "training_metric_value for policy/grad_cosine, grad_cosine_min/max and grad_norm_reduced/raw_grad_norm: cosine similarity between successive gradients and their norms. Logged by the policy worker after each optimizer step. Empty without trainer.training_metrics; the cosine series also need trainer.algorithm.grad_cosine.enabled.",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "gridPos": {
-        "x": 18,
-        "y": 136,
-        "w": 6,
-        "h": 8
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "noValue": "No matching records in this window.",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 5,
-            "showPoints": "auto",
-            "spanNulls": false,
-            "stacking": {
-              "mode": "none",
-              "group": "A"
-            }
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": ".*grad_norm.*"
-            },
-            "properties": [
-              {
-                "id": "custom.axisPlacement",
-                "value": "right"
-              },
-              {
-                "id": "custom.axisLabel",
-                "value": "Gradient norm"
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "legend": {
-          "showLegend": true,
-          "displayMode": "list",
-          "placement": "bottom",
-          "calcs": []
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "type": "json",
-          "source": "url",
-          "format": "timeseries",
-          "parser": "backend",
-          "url": "/v1/async-rl/overview",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "clusters",
-                "value": "${cluster:csv}"
-              },
-              {
-                "key": "run",
-                "value": "${run}"
-              },
-              {
-                "key": "job",
-                "value": "${job}"
-              },
-              {
-                "key": "executions",
-                "value": "${execution:csv}"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              },
-              {
-                "key": "view",
-                "value": "gradient_direction"
-              }
-            ]
-          },
-          "columns": [
-            {
-              "selector": "t",
-              "text": "time",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "series",
-              "text": "series",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "interval": "1m"
-    },
-    {
       "id": 59,
       "type": "timeseries",
       "title": "Correction activity",
@@ -5589,8 +5465,8 @@
         "uid": "finelog-marin"
       },
       "gridPos": {
-        "x": 0,
-        "y": 144,
+        "x": 18,
+        "y": 136,
         "w": 6,
         "h": 8
       },
