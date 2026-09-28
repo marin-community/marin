@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import functools
 import re
 from dataclasses import dataclass
 from typing import NamedTuple
@@ -56,23 +57,30 @@ def _pin_sharding(x, ref):
     return jax.sharding.reshard(x, sharding) if sharding is not None else x
 
 
-def _scale_invariant_hyperball_updates(params, direction_updates, learning_rate: float, per_expert: bool = False):
+def _scale_invariant_hyperball_updates(
+    params, direction_updates, learning_rate, per_expert: bool = False, lr_mults=None
+):
     """MuonH hyperball step: move along the orthogonalized direction, then project back to the
     parameter's Frobenius sphere (scale-invariant update). Stacked leaves take one sphere per layer, and
-    with ``per_expert`` the 4-D expert stacks ``[L, E, in, out]`` take one sphere per (layer, expert)."""
+    with ``per_expert`` the 4-D expert stacks ``[L, E, in, out]`` take one sphere per (layer, expert).
+    ``lr_mults`` (a tree like ``params``, leaves broadcastable per sphere, or None) scales each step's
+    learning rate; a zero multiplier leaves that sphere where it is."""
     direction_updates = _match_named_sharding_to_params(direction_updates, params)
+    if lr_mults is None:
+        lr_mults = jax.tree.map(lambda _: None, params)
 
-    def scale_invariant_update(param, update):
+    def scale_invariant_update(param, update, lr_mult):
         if update is None:
             return None
         if not hasattr(param, "ndim"):
             return update
+        lr = learning_rate if lr_mult is None else learning_rate * lr_mult
         if param.ndim == 2:
             # jnp.linalg.norm over a sharded matrix mis-lowers under SPMD and over-counts (issue #8073);
             # sum-of-squares in float32 plus a same-layout reshard of the intermediate reduces correctly.
             param_norm = jnp.sqrt(jnp.sum(jnp.square(param.astype(jnp.float32))))
             update_norm = jnp.sqrt(jnp.sum(jnp.square(update.astype(jnp.float32))))
-            new_param = param - learning_rate * update * param_norm / jnp.maximum(update_norm, 1e-10)
+            new_param = param - lr * update * param_norm / jnp.maximum(update_norm, 1e-10)
             new_param = _pin_sharding(new_param, param)
             new_param_norm = jnp.sqrt(jnp.sum(jnp.square(new_param.astype(jnp.float32))))
             return new_param / jnp.maximum(new_param_norm, 1e-10) * param_norm - param
@@ -80,12 +88,12 @@ def _scale_invariant_hyperball_updates(params, direction_updates, learning_rate:
         axes = (2, 3) if per_expert and param.ndim == 4 else tuple(range(1, param.ndim))
         param_norm = jnp.sqrt(jnp.sum(jnp.square(param), axis=axes, keepdims=True))
         update_norm = jnp.sqrt(jnp.sum(jnp.square(update), axis=axes, keepdims=True))
-        new_param = param - learning_rate * update * param_norm / jnp.maximum(update_norm, 1e-10)
+        new_param = param - lr * update * param_norm / jnp.maximum(update_norm, 1e-10)
         new_param = _pin_sharding(new_param, param)  # correct the sharded norm reduction (issue #8073)
         new_param_norm = jnp.sqrt(jnp.sum(jnp.square(new_param), axis=axes, keepdims=True))
         return new_param / jnp.maximum(new_param_norm, 1e-10) * param_norm - param
 
-    return jax.tree.map(scale_invariant_update, params, direction_updates, is_leaf=lambda x: x is None)
+    return jax.tree.map(scale_invariant_update, params, direction_updates, lr_mults, is_leaf=lambda x: x is None)
 
 
 MUONH_RETRACTIONS = ("frobenius", "spectral")
@@ -138,31 +146,35 @@ def _spectral_sphere_init(params, radius_c: float | None) -> SpectralSphereState
     return SpectralSphereState(pick(0), pick(1), pick(2))
 
 
-def _spectral_sphere_updates(params, direction_updates, learning_rate, state: SpectralSphereState):
+def _spectral_sphere_updates(params, direction_updates, learning_rate, state: SpectralSphereState, lr_mults=None):
     """MuonSphere step (arXiv 2601.08393, SSO with lambda = 0): retract ``W <- W R / sigma_1(W)``, then
     ``W <- W - lr R Phi``, with ``Phi`` the direction at msign scale (``||Phi||_F = sqrt(min(in, out))``,
     unit spectral norm for an exactly orthogonal direction). The spectral norm of the step is ``lr R``, so
     ``lr`` is the relative step in the spectral norm (MuonH: in the Frobenius norm). As in the paper the
     retraction is applied before the step, sharing one warm-started power iteration per matrix per step;
     the stored weights therefore sit ``O(lr)`` off the sphere. One sphere per matrix: per layer of a
-    ``[L, in, out]`` stack and per (layer, expert) of an ``[L, E, in, out]`` stack."""
+    ``[L, in, out]`` stack and per (layer, expert) of an ``[L, E, in, out]`` stack. ``lr_mults`` scales each
+    matrix's step as in ``_scale_invariant_hyperball_updates`` (a zero multiplier still retracts)."""
     direction_updates = _match_named_sharding_to_params(direction_updates, params)
+    if lr_mults is None:
+        lr_mults = jax.tree.map(lambda _: None, params)
 
-    def leaf(param, update, v, radius):
+    def leaf(param, update, v, radius, lr_mult):
         if param is None or v is None:
             return update, None, None
+        lr = learning_rate if lr_mult is None else learning_rate * lr_mult
         w32 = param.astype(jnp.float32)
         sigma, v = _top_singular_pair(w32, v, _SPECTRAL_POWER_ITERS)
         fan_in, fan_out = param.shape[-2:]
         u32 = update.astype(jnp.float32)
         u_norm = jnp.sqrt(jnp.sum(jnp.square(u32), axis=(-2, -1), keepdims=True))
         phi = u32 * (min(fan_in, fan_out) ** 0.5 / jnp.maximum(u_norm, 1e-10))
-        new_param = w32 * (radius / jnp.maximum(sigma, 1e-10)) - learning_rate * radius * phi
+        new_param = w32 * (radius / jnp.maximum(sigma, 1e-10)) - lr * radius * phi
         new_param = _pin_sharding(new_param, param)
         return (new_param - w32).astype(update.dtype), v, sigma
 
     none_leaf = lambda x: x is None  # noqa: E731
-    out = jax.tree.map(leaf, params, direction_updates, state.v, state.radius, is_leaf=none_leaf)
+    out = jax.tree.map(leaf, params, direction_updates, state.v, state.radius, lr_mults, is_leaf=none_leaf)
     pick = lambda i: jax.tree.map(lambda _, o: o[i], params, out, is_leaf=none_leaf)  # noqa: E731
     return pick(0), SpectralSphereState(pick(1), state.radius, pick(2))
 
@@ -197,6 +209,9 @@ _OKLS_FAMILIES: dict[str, re.Pattern] = {
     # The softmax (MLA) layers' q and k: KDA L2-normalizes q and k, so their scale is inert there.
     "mla_qk": re.compile(r"stacked_blocks\.stacked\.attn\.w_(q|uk|q2|uk2)$"),
 }
+# Softmax-attention (``stacked_blocks``) query and key projections: GQA ``w_q``/``w_k``, MLA ``w_q``/``w_uk`` (and
+# the DIFF pair). MLA's ``w_dkv`` is left out: it feeds the values as well.
+_SOFTMAX_QK = re.compile(r"stacked_blocks\.stacked\.attn\.w_(q|k|uk|q2|uk2)$")
 
 
 _MEMORY_VALUES = re.compile(r"memory\.\d+\.values")
@@ -275,12 +290,20 @@ def scale_by_grokfast_ema(alpha: float, lamb: float) -> optax.GradientTransforma
 
 
 def _scale_by_adam_decoupled_decay(
-    adam: optax.GradientTransformation, weight_decay: float, gain_weight_decay: float, total_steps: int
+    adam: optax.GradientTransformation,
+    weight_decay: float,
+    gain_weight_decay: float,
+    total_steps: int,
+    cautious_decay: bool = False,
 ) -> optax.GradientTransformation:
     """``scale_by_adam`` plus decoupled weight decay on ``attn_gate`` and the ``router`` weight (and
     ``gain_weight_decay`` on the zero-centered norm gains), annealed linearly to 0 over ``total_steps``.
     The coefficient reads the Adam ``count`` and the state stays ``ScaleByAdamState``, so a checkpoint
-    written without decay resumes at the right step with its moments intact."""
+    written without decay resumes at the right step with its moments intact.
+
+    ``cautious_decay`` (arXiv 2510.12402, Algorithm 1): decay only the coordinates where the Adam update
+    ``u`` and the parameter agree in sign, ``u + lambda I(u x >= 0) x``, i.e. where the update already
+    shrinks the magnitude."""
 
     def init_fn(params):
         return adam.init(params)
@@ -292,96 +315,16 @@ def _scale_by_adam_decoupled_decay(
         updates, next_state = adam.update(updates, state, params)
         anneal = jnp.clip(1.0 - step / total_steps, 0.0, None)
         coefficients = _adam_decay_coefficients(params, weight_decay, gain_weight_decay)
-        updates = jax.tree.map(lambda u, p, c: u + anneal * c * p if c else u, updates, params, coefficients)
+
+        def decay(u, p, c):
+            if not c:
+                return u
+            if cautious_decay:
+                return u + anneal * c * p * (u * p >= 0).astype(p.dtype)
+            return u + anneal * c * p
+
+        updates = jax.tree.map(decay, updates, params, coefficients)
         return updates, next_state
-
-    return optax.GradientTransformation(init_fn, update_fn)
-
-
-def scale_with_grug_muonh(
-    momentum: float = 0.95,
-    nesterov: bool = True,
-    steps: int = 5,
-    muon_eps: float = 1e-8,
-    learning_rate: float = 0.02,
-    coefficient_type: CoefficientType = "quintic",
-    head_dim: int | None = None,
-    neuron_norm_beta2: float | None = None,
-    hyperball_per_expert: bool = False,
-    pre_norm: str = "none",
-    top_shrink: float = 0.0,
-    precond_beta2: float | None = None,
-    retraction: str = "frobenius",
-    spectral_radius_c: float | None = 2.0,
-) -> optax.GradientTransformation:
-    """MuonH transform for the stacked model: Newton-Schulz direction + Frobenius hyperball step.
-
-    ``neuron_norm_beta2`` adds NorMuon's (arXiv 2510.05491) neuron-wise normalization between the two:
-    each output column of the orthogonalized direction is divided by the root of an EMA of its mean
-    square (over the input axis); the hyperball step then sets the overall magnitude.
-
-    ``retraction="spectral"`` replaces the Frobenius hyperball with MuonSphere's spectral sphere
-    (``_spectral_sphere_updates``, radius from ``spectral_radius_c``); the state then gains a trailing
-    ``SpectralSphereState``.
-    """
-    if retraction not in MUONH_RETRACTIONS:
-        raise ValueError(f"retraction must be one of {MUONH_RETRACTIONS}, got {retraction!r}")
-    muon_transform = _grug_scale_with_muon(
-        momentum=momentum,
-        nesterov=nesterov,
-        steps=steps,
-        muon_eps=muon_eps,
-        coefficient_type=coefficient_type,
-        head_dim=head_dim,
-        pre_norm=pre_norm,
-        top_shrink=top_shrink,
-        precond_beta2=precond_beta2,
-    )
-
-    def _neuron_second_moment(x):
-        if x is None or not hasattr(x, "ndim") or x.ndim < 2:
-            return None
-        return jnp.zeros(x.shape[:-2] + x.shape[-1:], jnp.float32)
-
-    def init_fn(params):
-        muon_state = muon_transform.init(params)
-        if neuron_norm_beta2 is not None:
-            muon_state = (muon_state, jax.tree.map(_neuron_second_moment, params))
-        if retraction == "spectral":
-            return muon_state, _spectral_sphere_init(params, spectral_radius_c)
-        return muon_state
-
-    def update_fn(updates, state, params=None):
-        if params is None:
-            raise ValueError("scale_with_grug_muonh requires params for norm-preserving updates")
-        if retraction == "spectral":
-            state, sphere_state = state
-        if neuron_norm_beta2 is None:
-            muon_updates, next_state = muon_transform.update(updates, state, params)
-        else:
-            muon_state, second_moment = state
-            muon_updates, muon_state = muon_transform.update(updates, muon_state, params)
-
-            def second_moment_update(u, v):
-                if u is None or v is None:
-                    return v
-                mean_sq = jnp.mean(jnp.square(u.astype(jnp.float32)), axis=-2)
-                return neuron_norm_beta2 * v + (1 - neuron_norm_beta2) * mean_sq
-
-            def normalize(u, v):
-                if u is None or v is None:
-                    return u
-                return (u / (jnp.sqrt(v)[..., None, :] + 1e-10)).astype(u.dtype)
-
-            none_leaf = lambda x: x is None  # noqa: E731
-            second_moment = jax.tree.map(second_moment_update, muon_updates, second_moment, is_leaf=none_leaf)
-            muon_updates = jax.tree.map(normalize, muon_updates, second_moment, is_leaf=none_leaf)
-            next_state = (muon_state, second_moment)
-        if retraction == "spectral":
-            muonh_updates, sphere_state = _spectral_sphere_updates(params, muon_updates, learning_rate, sphere_state)
-            return muonh_updates, (next_state, sphere_state)
-        muonh_updates = _scale_invariant_hyperball_updates(params, muon_updates, learning_rate, hyperball_per_expert)
-        return muonh_updates, next_state
 
     return optax.GradientTransformation(init_fn, update_fn)
 
@@ -492,7 +435,7 @@ def _sinkhorn_hyperball(momentum: float, iters: int, nesterov: bool, learning_ra
 # Leaves the trainer writes as data statistics (never trained): the fixed-encoder n-gram table and its code.
 _FROZEN_LEAVES = re.compile(r"(?:^|\.)(ngram_stat_(table|code)|latent_select_mask)$")
 # The groups built by ``muonh_transform_at`` (the ones ``muonh_retraction`` applies to).
-_MUONH_GROUPS = frozenset({"muonh", "kda_beta", "muonh_attn", "muonh_routed", "muonh_router"})
+_MUONH_GROUPS = frozenset({"muonh", "kda_beta", "muonh_attn", "muonh_routed", "muonh_router", "upper_qk"})
 _HYPERBALL_GROUPS = _MUONH_GROUPS | {"adamh", "sinkhornh"}
 _ROUTER_GROUPS = ("adam", "muonh")
 
@@ -523,34 +466,69 @@ def _power_decay_schedule(peak: float, floor: float, warmup_steps: int, total_st
     return schedule
 
 
-class BiMaxwellState(NamedTuple):
+class MuonMomentumState(NamedTuple):
     count: jax.Array
     buf: optax.Updates
-    fast: optax.Updates
-    slow: optax.Updates
+    fast: optax.Updates | None
+    slow: optax.Updates | None
 
 
-def scale_by_bimaxwell_momentum(momentum: float, switch_step: int) -> optax.GradientTransformation:
-    """Bi-Maxwell momentum (modded-nanogpt #339) for Muon-family groups whose own momentum is 0.
+_BIMAXWELL_FAST, _BIMAXWELL_SLOW = 0.15, 0.02
+_BIMAXWELL_FAST_WEIGHT, _BIMAXWELL_SLOW_WEIGHT = 0.4385, 0.5615
 
-    Before ``switch_step`` it is Nesterov momentum (``buf = m buf + g``, out ``m buf + g``). From
-    ``switch_step`` on, a fast (0.15) and a slow (0.02) EMA of the gradient, both started from
-    ``(1 - m) buf``, mix as ``M = 0.4385 fast + 0.5615 slow`` (mean age about 30 steps) and the output
-    is ``g + m (M - g)``. Newton-Schulz is scale-invariant per matrix, so the two regimes' different
-    scales don't matter."""
+
+def _upper_qk_schedule(mult: float, release_step: int, ramp_steps: int):
+    """``mult`` until ``release_step``, then a linear ramp to 1 over ``ramp_steps`` (arXiv 2605.10504)."""
+
+    def schedule(step):
+        frac = jnp.clip((jnp.asarray(step, jnp.float32) - release_step) / ramp_steps, 0.0, 1.0)
+        return mult + (1.0 - mult) * frac
+
+    return schedule
+
+
+def _momentum_warmup_schedule(start: float, end: float, warmup_steps: int):
+    """Linear momentum warmup from ``start`` to ``end`` over the first ``warmup_steps`` steps (modded-nanogpt)."""
+
+    def schedule(step):
+        frac = jnp.clip(jnp.asarray(step, jnp.float32) / max(warmup_steps, 1), 0.0, 1.0)
+        return (1.0 - frac) * start + frac * end
+
+    return schedule
+
+
+def scale_by_muon_momentum(momentum_schedule, nesterov: bool, switch_step: int | None) -> optax.GradientTransformation:
+    """MuonH momentum outside Newton-Schulz, with a step-dependent coefficient ``momentum_schedule(step)``
+    (``step`` 0-based) and optionally Bi-Maxwell (modded-nanogpt #339) from ``switch_step`` on.
+
+    Before ``switch_step`` (or always, when it is None) it is (Nesterov) momentum: ``buf = m buf + g``, out
+    ``m buf + g`` (``buf`` without ``nesterov``). From ``switch_step`` on, a fast (0.15) and a slow (0.02) EMA
+    of the gradient, both started from ``(1 - m) buf``, mix as ``M = 0.4385 fast + 0.5615 slow`` (mean age
+    about 30 steps) and the output is ``g + m (M - g)``. Newton-Schulz is scale-invariant per matrix, so the
+    two regimes' different scales don't matter."""
 
     def init(params):
         zeros = lambda: jax.tree.map(jnp.zeros_like, params)  # noqa: E731
-        return BiMaxwellState(jnp.zeros([], jnp.int32), zeros(), zeros(), zeros())
+        bimaxwell = switch_step is not None
+        return MuonMomentumState(
+            jnp.zeros([], jnp.int32), zeros(), zeros() if bimaxwell else None, zeros() if bimaxwell else None
+        )
 
     def update(updates, state, params=None):
         count = state.count + 1
+        momentum = momentum_schedule(state.count)
 
         def early(args):
             g_tree, buf_tree, fast_tree, slow_tree = args
-            new_buf = jax.tree.map(lambda g, b: momentum * b + g, g_tree, buf_tree)
+            new_buf = jax.tree.map(lambda g, b: (momentum * b + g).astype(b.dtype), g_tree, buf_tree)
+            if not nesterov:
+                return new_buf, new_buf, fast_tree, slow_tree
             out = jax.tree.map(lambda g, b: momentum * b + g, g_tree, new_buf)
             return out, new_buf, fast_tree, slow_tree
+
+        if switch_step is None:
+            out, buf, _, _ = early((updates, state.buf, None, None))
+            return out, MuonMomentumState(count, buf, None, None)
 
         def late(args):
             g_tree, buf_tree, fast_tree, slow_tree = args
@@ -561,9 +539,10 @@ def scale_by_bimaxwell_momentum(momentum: float, switch_step: int) -> optax.Grad
                 start = (1.0 - momentum) * buf
                 fast = jnp.where(first, start, fast)
                 slow = jnp.where(first, start, slow)
-                fast = fast + 0.15 * (g - fast)
-                slow = slow + 0.02 * (g - slow)
-                return g + momentum * (0.4385 * fast + 0.5615 * slow - g), fast, slow
+                fast = fast + _BIMAXWELL_FAST * (g - fast)
+                slow = slow + _BIMAXWELL_SLOW * (g - slow)
+                mix = _BIMAXWELL_FAST_WEIGHT * fast + _BIMAXWELL_SLOW_WEIGHT * slow
+                return (g + momentum * (mix - g)).astype(g.dtype), fast.astype(buf.dtype), slow.astype(buf.dtype)
 
             res = jax.tree.map(leaf, g_tree, buf_tree, fast_tree, slow_tree)
 
@@ -575,9 +554,240 @@ def scale_by_bimaxwell_momentum(momentum: float, switch_step: int) -> optax.Grad
         out, buf, fast, slow = jax.lax.cond(
             count > switch_step, late, early, (updates, state.buf, state.fast, state.slow)
         )
-        return out, BiMaxwellState(count, buf, fast, slow)
+        return out, MuonMomentumState(count, buf, fast, slow)
 
     return optax.GradientTransformation(init, update)
+
+
+def _muon_first_moment(state: MuonMomentumState, switch_step: int | None) -> optax.Updates:
+    """The momentum stage's first-moment estimate after its update: ``buf`` (Nesterov phase) or the
+    Bi-Maxwell mix ``0.4385 fast + 0.5615 slow``. Only its direction matters (Magma's cosine)."""
+    if switch_step is None:
+        return state.buf
+    assert state.fast is not None and state.slow is not None
+    late = state.count > switch_step
+    return jax.tree.map(
+        lambda b, f, s: jnp.where(late, _BIMAXWELL_FAST_WEIGHT * f + _BIMAXWELL_SLOW_WEIGHT * s, b),
+        state.buf,
+        state.fast,
+        state.slow,
+    )
+
+
+class MagmaState(NamedTuple):
+    count: jax.Array
+    scale: optax.Updates
+    """Per-block EMA of the alignment score ``sigmoid(cos(mu, g) / tau)``."""
+
+
+_MAGMA_EMA = 0.9
+_MAGMA_TAU = 2.0
+
+
+def _magma_block_shape(x) -> tuple[int, ...] | None:
+    """One Magma block per matrix: the whole 2-D leaf, or each slice of a stacked leaf's leading axis."""
+    if x is None or not hasattr(x, "ndim") or x.ndim < 2:
+        return None
+    return () if x.ndim == 2 else (x.shape[0],) + (1,) * (x.ndim - 1)
+
+
+def _magma_init(params) -> MagmaState:
+    def zeros(p):
+        shape = _magma_block_shape(p)
+        return None if shape is None else jnp.zeros(shape, jnp.float32)
+
+    return MagmaState(jnp.zeros([], jnp.int32), jax.tree.map(zeros, params))
+
+
+def _magma_lr_mults(state: MagmaState, grads, first_moment, *, keep_prob: float, seed: int):
+    """Magma (arXiv 2602.15322, Algorithm 1): per block, ``s = 0.9 s + 0.1 sigmoid(cos(mu, g) / 2)`` and a
+    ``Bernoulli(keep_prob)`` keep mask; the block's step is ``s * mask`` x the base step (no ``1/p``
+    rescale: the paper's damping is deliberately biased). The EMA starts at its first sample (the paper
+    does not give ``s_0``). Masks come from ``fold_in(PRNGKey(seed), step)``, the same on every host.
+    Returns the per-block learning-rate multipliers and the next state."""
+    count = state.count + 1
+    step_key = jax.random.fold_in(jax.random.PRNGKey(seed), count)
+    none_leaf = lambda x: x is None  # noqa: E731
+    leaves, treedef = jax.tree.flatten(state.scale, is_leaf=none_leaf)
+    g_leaves = treedef.flatten_up_to(grads)
+    m_leaves = treedef.flatten_up_to(first_moment)
+    scales, mults = [], []
+    for i, (s, g, mu) in enumerate(zip(leaves, g_leaves, m_leaves, strict=True)):
+        if s is None:
+            scales.append(None)
+            mults.append(None)
+            continue
+        g32, mu32 = g.astype(jnp.float32), mu.astype(jnp.float32)
+        axes = tuple(range(g.ndim)) if g.ndim == 2 else tuple(range(1, g.ndim))
+        dot = jnp.sum(g32 * mu32, axis=axes, keepdims=g.ndim != 2)
+        norms = jnp.sqrt(jnp.sum(jnp.square(g32), axis=axes, keepdims=g.ndim != 2)) * jnp.sqrt(
+            jnp.sum(jnp.square(mu32), axis=axes, keepdims=g.ndim != 2)
+        )
+        score = jax.nn.sigmoid(dot / jnp.maximum(norms, 1e-30) / _MAGMA_TAU)
+        s = jnp.where(count == 1, score, _MAGMA_EMA * s + (1 - _MAGMA_EMA) * score)
+        keep = jax.random.bernoulli(jax.random.fold_in(step_key, i), keep_prob, s.shape).astype(jnp.float32)
+        scales.append(s)
+        mults.append(s * keep)
+    unflatten = functools.partial(jax.tree.unflatten, treedef)
+    return unflatten(mults), MagmaState(count, unflatten(scales))
+
+
+def magma_metrics(opt_state) -> dict[str, jax.Array]:
+    """Mean and min of the Magma alignment EMA over every MuonH block (empty without Magma)."""
+    states = [
+        x for x in jax.tree.leaves(opt_state, is_leaf=lambda x: isinstance(x, MagmaState)) if isinstance(x, MagmaState)
+    ]
+    scales = [s.reshape(-1) for state in states for s in jax.tree.leaves(state.scale)]
+    if not scales:
+        return {}
+    flat = jnp.concatenate(scales)
+    return {"train/magma_scale_mean": jnp.mean(flat), "train/magma_scale_min": jnp.min(flat)}
+
+
+class MuonHState(NamedTuple):
+    """MuonH state when the momentum runs outside Newton-Schulz (scheduled momentum, Bi-Maxwell or Magma)."""
+
+    momentum: MuonMomentumState
+    core: optax.OptState
+    magma: MagmaState | None
+    sphere: SpectralSphereState | None
+    """MuonSphere state (``retraction="spectral"``)."""
+
+
+def scale_with_grug_muonh(
+    momentum: float = 0.95,
+    nesterov: bool = True,
+    steps: int = 5,
+    muon_eps: float = 1e-8,
+    learning_rate=0.02,
+    coefficient_type: CoefficientType = "quintic",
+    head_dim: int | None = None,
+    neuron_norm_beta2: float | None = None,
+    hyperball_per_expert: bool = False,
+    pre_norm: str = "none",
+    top_shrink: float = 0.0,
+    precond_beta2: float | None = None,
+    momentum_schedule=None,
+    bimaxwell_switch_step: int | None = None,
+    magma_keep_prob: float | None = None,
+    magma_seed: int = 0,
+    retraction: str = "frobenius",
+    spectral_radius_c: float | None = 2.0,
+) -> optax.GradientTransformation:
+    """MuonH transform for the stacked model: Newton-Schulz direction + Frobenius hyperball step.
+
+    ``neuron_norm_beta2`` adds NorMuon's (arXiv 2510.05491) neuron-wise normalization between the two:
+    each output column of the orthogonalized direction is divided by the root of an EMA of its mean
+    square (over the input axis); the hyperball step then sets the overall magnitude.
+
+    ``momentum_schedule`` (step -> coefficient; warmup), ``bimaxwell_switch_step`` (Bi-Maxwell from that
+    step) or ``magma_keep_prob`` move the momentum to ``scale_by_muon_momentum`` ahead of Newton-Schulz
+    (Nesterov momentum there equals the in-Muon one). ``magma_keep_prob`` then applies Magma
+    (``_magma_lr_mults``, alignment of that first moment with the gradient) to each matrix's hyperball
+    step. ``learning_rate`` may broadcast per stacked slice (``[L, 1, 1]``).
+
+    ``retraction="spectral"`` replaces the Frobenius hyperball with MuonSphere's spectral sphere
+    (``_spectral_sphere_updates``, radius from ``spectral_radius_c``); Magma's multipliers then scale the
+    spectral step. Without the external momentum stage the state gains a trailing ``SpectralSphereState``
+    (``(core, sphere)``); with it the sphere state is ``MuonHState.sphere``.
+    """
+    if retraction not in MUONH_RETRACTIONS:
+        raise ValueError(f"retraction must be one of {MUONH_RETRACTIONS}, got {retraction!r}")
+    spectral = retraction == "spectral"
+    external_momentum = momentum_schedule is not None or bimaxwell_switch_step is not None or magma_keep_prob is not None
+    muon_transform = _grug_scale_with_muon(
+        momentum=0.0 if external_momentum else momentum,
+        nesterov=nesterov,
+        steps=steps,
+        muon_eps=muon_eps,
+        coefficient_type=coefficient_type,
+        head_dim=head_dim,
+        pre_norm=pre_norm,
+        top_shrink=top_shrink,
+        precond_beta2=precond_beta2,
+    )
+    momentum_stage = (
+        scale_by_muon_momentum(
+            momentum_schedule if momentum_schedule is not None else (lambda _: momentum),
+            nesterov,
+            bimaxwell_switch_step,
+        )
+        if external_momentum
+        else None
+    )
+
+    def _neuron_second_moment(x):
+        if x is None or not hasattr(x, "ndim") or x.ndim < 2:
+            return None
+        return jnp.zeros(x.shape[:-2] + x.shape[-1:], jnp.float32)
+
+    def core_init(params):
+        muon_state = muon_transform.init(params)
+        if neuron_norm_beta2 is None:
+            return muon_state
+        return muon_state, jax.tree.map(_neuron_second_moment, params)
+
+    def init_fn(params):
+        sphere = _spectral_sphere_init(params, spectral_radius_c) if spectral else None
+        if momentum_stage is None:
+            return core_init(params) if sphere is None else (core_init(params), sphere)
+        magma = _magma_init(params) if magma_keep_prob is not None else None
+        return MuonHState(momentum_stage.init(params), core_init(params), magma, sphere)
+
+    def retract(params, directions, lr_mults, sphere):
+        if sphere is None:
+            updates = _scale_invariant_hyperball_updates(
+                params, directions, learning_rate, hyperball_per_expert, lr_mults
+            )
+            return updates, None
+        return _spectral_sphere_updates(params, directions, learning_rate, sphere, lr_mults)
+
+    def core_direction(updates, state, params):
+        if neuron_norm_beta2 is None:
+            return muon_transform.update(updates, state, params)
+        muon_state, second_moment = state
+        muon_updates, muon_state = muon_transform.update(updates, muon_state, params)
+
+        def second_moment_update(u, v):
+            if u is None or v is None:
+                return v
+            mean_sq = jnp.mean(jnp.square(u.astype(jnp.float32)), axis=-2)
+            return neuron_norm_beta2 * v + (1 - neuron_norm_beta2) * mean_sq
+
+        def normalize(u, v):
+            if u is None or v is None:
+                return u
+            return (u / (jnp.sqrt(v)[..., None, :] + 1e-10)).astype(u.dtype)
+
+        none_leaf = lambda x: x is None  # noqa: E731
+        second_moment = jax.tree.map(second_moment_update, muon_updates, second_moment, is_leaf=none_leaf)
+        muon_updates = jax.tree.map(normalize, muon_updates, second_moment, is_leaf=none_leaf)
+        return muon_updates, (muon_state, second_moment)
+
+    def update_fn(updates, state, params=None):
+        if params is None:
+            raise ValueError("scale_with_grug_muonh requires params for norm-preserving updates")
+        if momentum_stage is None:
+            core_state, sphere = state if spectral else (state, None)
+            directions, core_state = core_direction(updates, core_state, params)
+            muonh_updates, sphere = retract(params, directions, None, sphere)
+            return muonh_updates, (core_state, sphere) if spectral else core_state
+        mixed, momentum_state = momentum_stage.update(updates, state.momentum, params)
+        directions, core_state = core_direction(mixed, state.core, params)
+        lr_mults, magma_state = None, None
+        if state.magma is not None:
+            assert magma_keep_prob is not None
+            lr_mults, magma_state = _magma_lr_mults(
+                state.magma,
+                updates,
+                _muon_first_moment(momentum_state, bimaxwell_switch_step),
+                keep_prob=magma_keep_prob,
+                seed=magma_seed,
+            )
+        muonh_updates, sphere = retract(params, directions, lr_mults, state.sphere)
+        return muonh_updates, MuonHState(momentum_state, core_state, magma_state, sphere)
+
+    return optax.GradientTransformation(init_fn, update_fn)
 
 
 def cautious(inner: optax.GradientTransformation) -> optax.GradientTransformation:
@@ -755,17 +965,21 @@ def ema_nesterov(
 
 def optimizer_diagnostics(opt_state) -> dict[str, jax.Array]:
     """``train/optim/`` metrics of the EMA-Nesterov and MuonSphere states found in ``opt_state``."""
-    is_state = lambda x: isinstance(x, (EmaNesterovState, SpectralSphereState))  # noqa: E731
-    states = [x for x in jax.tree.leaves(opt_state, is_leaf=is_state) if is_state(x)]
+
+    def find(state_type):
+        # Searched per type: an EmaNesterovState wraps the MuonSphere states inside its ``inner``.
+        is_state = lambda x: isinstance(x, state_type)  # noqa: E731
+        return [x for x in jax.tree.leaves(opt_state, is_leaf=is_state) if is_state(x)]
+
     metrics = {}
-    ema_states = [x for x in states if isinstance(x, EmaNesterovState)]
+    ema_states = find(EmaNesterovState)
     if ema_states:
         ema = ema_states[0]
         ema_norm = jnp.sqrt(sum(jnp.sum(jnp.square(e)) for e in jax.tree.leaves(ema.ema)))
         metrics["train/optim/ema_nesterov_scale"] = ema.scale
         metrics["train/optim/ema_nesterov_ema_norm"] = ema_norm
         metrics["train/optim/ema_nesterov_lookahead_norm"] = ema.scale * ema_norm
-    sphere_states = [x for x in states if isinstance(x, SpectralSphereState)]
+    sphere_states = find(SpectralSphereState)
     if sphere_states:
         # sigma_1 / R before each step's retraction: the drift the retraction removes.
         pairs = [
@@ -938,6 +1152,29 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     spectral_radius_c: float | None = 2.0
     """MuonSphere radius ``R = c sqrt(fan_out / fan_in)`` (the paper's best c is 2); None keeps each matrix's
     initial spectral norm."""
+    magma: bool = False
+    """Magma (arXiv 2602.15322) on every MuonH group: each matrix (stacked slice) keeps its hyperball step
+    with probability ``magma_keep_prob``, scaled by an EMA(0.9) of ``sigmoid(cos(momentum, grad) / 2)``.
+    The mean step shrinks to about ``0.3x``; the paper keeps the base LR."""
+    magma_keep_prob: float = 0.5
+    muon_momentum_warmup_steps: int = 0
+    """Ramp the MuonH momentum linearly from ``muon_momentum_warmup_start`` to ``momentum`` over this many
+    steps (modded-nanogpt; 0: off). Bi-Maxwell uses the ramped value too, so a warmup longer than
+    ``bimaxwell_start_frac`` of training carries into its mix."""
+    muon_momentum_warmup_start: float = 0.85
+    cautious_weight_decay: bool = False
+    """Cautious weight decay (arXiv 2510.12402) on the Adam group's decoupled decay (router / attn_gate, and
+    the gains with ``gain_weight_decay``): decay only where the update and the parameter agree in sign."""
+    upper_qk_lr_mult: float = 1.0
+    """Early-training LR multiplier on the upper-layer softmax-attention q/k projections (arXiv 2605.10504:
+    0.25; 1: off). Held until ``upper_qk_slow_frac`` of training, then ramped linearly to 1 over
+    ``upper_qk_ramp_frac``."""
+    upper_qk_slow_frac: float = 0.25
+    """Release point of ``upper_qk_lr_mult`` (the paper's maturity rule fires at 3-6%; fixed 3% keeps most of it)."""
+    upper_qk_ramp_frac: float = 0.01
+    upper_qk_slice_mask: tuple[bool, ...] = ()
+    """Per ``stacked_blocks`` slice, whether that softmax layer is in the upper half (``layer >= num_layers // 2``);
+    filled from the model config by the launcher (``upper_softmax_slice_mask``)."""
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
@@ -950,9 +1187,17 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 self.muonh_decay_power,
             )
         adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
+        slow_upper_qk = self.upper_qk_lr_mult != 1.0
+        if slow_upper_qk and not any(self.upper_qk_slice_mask):
+            raise ValueError("upper_qk_lr_mult needs upper_qk_slice_mask (no upper softmax layer given)")
+        momentum_schedule = (
+            _momentum_warmup_schedule(self.muon_momentum_warmup_start, self.momentum, self.muon_momentum_warmup_steps)
+            if self.muon_momentum_warmup_steps > 0
+            else None
+        )
 
-        def optimizer(learning_rate, adam_lr):
-            def muonh_transform_at(lr):
+        def optimizer(learning_rate, adam_lr, upper_qk_mult=None):
+            def muonh_transform_at(lr, magma_seed: int):
                 components = []
                 if self.max_grad_norm:
                     components.append(optax.clip_by_global_norm(self.max_grad_norm))
@@ -960,13 +1205,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                     components.append(scale_by_grad_power(self.muon_grad_power))
                 if self.muon_mars_gamma:
                     components.append(scale_by_mars_correction(self.muon_mars_gamma, self.momentum))
-                if self.muon_bimaxwell:
-                    components.append(
-                        scale_by_bimaxwell_momentum(self.momentum, int(self.bimaxwell_start_frac * num_train_steps))
-                    )
                 components.append(
                     scale_with_grug_muonh(
-                        momentum=0.0 if self.muon_bimaxwell else self.momentum,
+                        momentum=self.momentum,
                         nesterov=self.nesterov,
                         steps=self.backend_steps,
                         muon_eps=self.muon_epsilon,
@@ -980,6 +1221,12 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                         precond_beta2=self.muon_precond_beta2,
                         retraction=self.muonh_retraction,
                         spectral_radius_c=self.spectral_radius_c,
+                        momentum_schedule=momentum_schedule,
+                        bimaxwell_switch_step=(
+                            int(self.bimaxwell_start_frac * num_train_steps) if self.muon_bimaxwell else None
+                        ),
+                        magma_keep_prob=self.magma_keep_prob if self.magma else None,
+                        magma_seed=magma_seed,
                     )
                 )
                 components.append(_match_named_update_sharding())
@@ -1027,7 +1274,11 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 adam = adam_core(self.beta1, self.beta2)
                 if self.gate_router_weight_decay > 0.0 or self.gain_weight_decay > 0.0:
                     adam = _scale_by_adam_decoupled_decay(
-                        adam, self.gate_router_weight_decay, self.gain_weight_decay, num_train_steps
+                        adam,
+                        self.gate_router_weight_decay,
+                        self.gain_weight_decay,
+                        num_train_steps,
+                        cautious_decay=self.cautious_weight_decay,
                     )
                 components.append(cautious(adam) if self.adam_cautious else adam)
                 components.append(optax.scale(-lr))
@@ -1055,11 +1306,11 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 return optax.chain(*components)
 
             transforms = {
-                "muonh": muonh_transform_at(learning_rate),
+                "muonh": muonh_transform_at(learning_rate, 0),
                 "adamh": adamh_transform_at(learning_rate),
                 "adam": adam_transform_at(adam_lr),
                 "attn_res_query": plain_adam_at(adam_lr * self.attn_res_query_lr_scale),
-                "kda_beta": muonh_transform_at(learning_rate * self.kda_beta_lr_mult),
+                "kda_beta": muonh_transform_at(learning_rate * self.kda_beta_lr_mult, 1),
                 "okls": optax.chain(
                     scale_with_grug_okls(
                         beta1=self.okls_beta1,
@@ -1077,8 +1328,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                     ),
                     _match_named_update_sharding(),
                 ),
-                "muonh_attn": muonh_transform_at(learning_rate * self.muonh_attn_lr_mult),
-                "muonh_routed": muonh_transform_at(learning_rate * self.muonh_routed_lr_mult),
+                "muonh_attn": muonh_transform_at(learning_rate * self.muonh_attn_lr_mult, 2),
+                "muonh_routed": muonh_transform_at(learning_rate * self.muonh_routed_lr_mult, 3),
                 "muon_free": optax.chain(
                     scale_with_grug_muon_free(
                         momentum=self.momentum,
@@ -1113,8 +1364,13 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 "output_bigram": plain_adam_at(adam_lr * self.output_bigram_lr_mult),
                 "kda_decay": plain_adam_at(adam_lr * self.kda_decay_lr_mult, self.kda_decay_beta1, self.kda_decay_beta2),
                 "router": router_adam_at(adam_lr * self.router_lr_mult),
-                "muonh_router": muonh_transform_at(learning_rate * self.router_lr_mult),
+                "muonh_router": muonh_transform_at(learning_rate * self.router_lr_mult, 5),
             }
+            if slow_upper_qk:
+                # One LR per stacked slice: the upper softmax layers take the scheduled multiplier.
+                upper = jnp.asarray(self.upper_qk_slice_mask)
+                slice_lr = jnp.where(upper, upper_qk_mult, 1.0)[:, None, None]
+                transforms["upper_qk"] = muonh_transform_at(learning_rate * self.muonh_attn_lr_mult * slice_lr, 4)
             inner = optax.multi_transform(transforms, self.create_mask)
             if self.grokfast_lambda and not self.grokfast_adam_only:
                 inner = optax.chain(scale_by_grokfast_ema(self.grokfast_alpha, self.grokfast_lambda), inner)
@@ -1140,10 +1396,14 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 frobenius_groups=(_HYPERBALL_GROUPS | okls) - spectral,
             )
 
-        return optax.inject_hyperparams(optimizer)(
-            learning_rate=learning_rate_schedule,
-            adam_lr=adam_lr_schedule,
-        )
+        schedules = {"learning_rate": learning_rate_schedule, "adam_lr": adam_lr_schedule}
+        if slow_upper_qk:
+            schedules["upper_qk_mult"] = _upper_qk_schedule(
+                self.upper_qk_lr_mult,
+                int(self.upper_qk_slow_frac * num_train_steps),
+                max(1, int(self.upper_qk_ramp_frac * num_train_steps)),
+            )
+        return optax.inject_hyperparams(optimizer)(**schedules)
 
     def __post_init__(self):
         if self.lm_head_group not in ("adamh", "muonh", "sinkhornh"):
@@ -1173,6 +1433,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                     return "okls"
                 if any(_OKLS_FAMILIES[f].search(path_lower) for f in self.muon_free_families):
                     return "muon_free"
+                if self.upper_qk_lr_mult != 1.0 and _SOFTMAX_QK.search(path_lower):
+                    return "upper_qk"
                 if self.muonh_attn_lr_mult != 1.0 and _OKLS_FAMILIES["attn"].search(path_lower):
                     return "muonh_attn"
                 if self.muonh_routed_lr_mult != 1.0 and _OKLS_FAMILIES["routed"].search(path_lower):
@@ -1198,7 +1460,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             if path_lower.endswith(".value_embed") and self.value_embed_lr_mult != 1.0:
                 return "value_embed"
             if ".rel_pos." in path_lower or re.search(
-                r"(?:^|\.)(value_embed|ve_lambda|ve_gate|xsa_scale|xsa_gate|head_mix|ssmax_scale|shared_gate|laurel_[ab]_\w+|ple_up|moe_out_gate_[wb]|bigram_gate_[wb]|bigram_gate_[ab]_lr|trigram_gate_[wb]|trigram_gate_[ab]_lr|bank_scale|router_logit_scale|expert_output_gain|bias_\w+|dyt_alpha|dyt_beta|qk_mult|diff_lambda|diff_lambda_init|vres_lambda|rot_scale|null_const_[vw]|comba_d|v_filter_[wb]|gamma|ngram_stat_gate_[wb]|ngram_stat_up|forget_gate_[wb])$",
+                r"(?:^|\.)(value_embed|ve_lambda|ve_gate|xsa_scale|xsa_gate|head_mix|ssmax_scale|shared_gate|laurel_[ab]_\w+|ple_up|moe_out_gate_[wb]|bigram_gate_[wb]|bigram_gate_[ab]_lr|trigram_gate_[wb]|trigram_gate_[ab]_lr|bank_scale|router_logit_scale|expert_output_gain|bias_\w+|dyt_alpha|dyt_beta|qk_mult|diff_lambda|diff_lambda_init|vres_lambda|rot_scale|null_const_[vw]|comba_d|v_filter_[wb]|gamma|ngram_stat_gate_[wb]|ngram_stat_up|forget_gate_[wb]|lm_head_bias)$",
                 path_lower,
             ):
                 return "adam"
@@ -1243,6 +1505,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
 
 __all__ = [
     "GrugMoeMuonHConfig",
+    "magma_metrics",
     "optimizer_diagnostics",
     "scale_with_grug_muonh",
 ]

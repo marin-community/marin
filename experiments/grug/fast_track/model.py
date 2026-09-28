@@ -76,6 +76,8 @@ _FSDP_AXES: tuple[str, ...] = ("data", "expert")
 _LM_HEAD_PARTITION_SPEC = P(_FSDP_AXES, "model")
 # Tokens of the first sequence whose output-bigram logit term is logged (a [64, V] matmul).
 _OUTPUT_BIGRAM_STAT_TOKENS = 64
+# Extra hidden columns carrying ``lm_head_bias`` into the fused CE (two used, padded to a multiple of 8).
+_LM_HEAD_BIAS_COLS = 8
 # Input channels the per-token MoE output gate reads (cfg.moe_out_gate).
 _MOE_OUT_GATE_DIMS = 12
 
@@ -653,6 +655,20 @@ class GrugModelConfig:
     low-rank ``P(x_{t+1} | x_t)`` table (n-gram interpolation in logit space). ``U`` [vocab, r] and ``W``
     [r, vocab] (zero-init, so the model is unchanged at init) ride the lm_head as ``r`` extra contraction
     columns of the one fused cross-entropy call, so the soft cap and the z-loss see the combined logits."""
+    lm_head_unigram_bias: bool = False
+    """A learnable ``[V]`` output bias (Adam) added to the logits inside the soft-cap. The trainer sets it to the
+    log unigram frequencies of the first training batches before step 0 (``lm_head_unigram_batches``); a model
+    built without the trainer starts at zero."""
+    init_std_mult_gates: float = 1.0
+    """Init-std multiplier of the MuonH-trained sigmoid gate matrices (KDA output gate ``w_g`` and write strength
+    ``w_beta``). MuonH pins each matrix's Frobenius norm at its init (Hyperball II, arXiv 2606.16899), so the
+    init std fixes that family's scale for the whole run. The zero-init Adam gates (``attn_gate``, ``ve_gate``)
+    move freely and are unaffected."""
+    init_std_mult_experts: float = 1.0
+    """Init-std multiplier of the routed experts' ``w_up`` / ``w_down`` (see ``init_std_mult_gates``)."""
+    init_std_mult_attn_out: float = 1.0
+    """Init-std multiplier of the attention output projections ``w_o`` (MLA / GQA and KDA; see
+    ``init_std_mult_gates``)."""
     kda_write_gate: bool = False
     """Gated DeltaNet-2 (arXiv 2605.22791) write gate: each KDA value channel is scaled by ``2 sigmoid(x W_w)``
     before the delta-rule update, a channel-wise write strength next to KDA's per-head beta. Runs through the
@@ -1163,7 +1179,7 @@ class CausalSelfAttention(eqx.Module):
                 w_q=reshard(_init_weight(k_q, (d, n * h), std), P(_FSDP_AXES, "model")),
                 w_k=None,
                 w_v=None,
-                w_o=reshard(_init_weight(k_o, (n * h, d), std), P("model", _FSDP_AXES)),
+                w_o=reshard(_init_weight(k_o, (n * h, d), std * cfg.init_std_mult_attn_out), P("model", _FSDP_AXES)),
                 attn_gate=attn_gate,
                 sconv_k=(ShortConv.init(n * h, cfg.sconv_kernel) if cfg.sconv and "k" in cfg.sconv_sites else None),
                 sconv_q=(ShortConv.init(n * h, cfg.sconv_kernel) if cfg.sconv and "q" in cfg.sconv_sites else None),
@@ -1217,7 +1233,7 @@ class CausalSelfAttention(eqx.Module):
             w_q=reshard(_init_weight(k_q, (d, n * h), std), P(_FSDP_AXES, "model")),
             w_k=reshard(_init_weight(k_k, (d, m * h), std), P(_FSDP_AXES, "model")),
             w_v=reshard(_init_weight(k_v, (d, m * h), std), P(_FSDP_AXES, "model")),
-            w_o=reshard(_init_weight(k_o, (n * h, d), std), P("model", _FSDP_AXES)),
+            w_o=reshard(_init_weight(k_o, (n * h, d), std * cfg.init_std_mult_attn_out), P("model", _FSDP_AXES)),
             attn_gate=attn_gate,
             sconv_k=(ShortConv.init(m * h, cfg.sconv_kernel) if cfg.sconv and "k" in cfg.sconv_sites else None),
             sconv_q=None,
@@ -1852,9 +1868,9 @@ class KimiDeltaAttention(eqx.Module):
             w_q=reshard(_init_weight(k_q, (d, n * h), std), P(_FSDP_AXES, "model")),
             w_k=reshard(_init_weight(k_k, (d, n * h), std), P(_FSDP_AXES, "model")),
             w_v=reshard(_init_weight(k_v, (d, n * h), std), P(_FSDP_AXES, "model")),
-            w_o=reshard(_init_weight(k_o, (n * h, d), std), P("model", _FSDP_AXES)),
+            w_o=reshard(_init_weight(k_o, (n * h, d), std * cfg.init_std_mult_attn_out), P("model", _FSDP_AXES)),
             w_g=reshard(
-                _init_weight(k_g, (d, n if cfg.kda_gate_per_head else n * h), std),
+                _init_weight(k_g, (d, n if cfg.kda_gate_per_head else n * h), std * cfg.init_std_mult_gates),
                 P(None, None) if cfg.kda_gate_per_head else P(_FSDP_AXES, "model"),
             ),
             w_write=(
@@ -1870,7 +1886,11 @@ class KimiDeltaAttention(eqx.Module):
             ),
             a_log=jnp.zeros((n,)),
             dt_bias=_kda_dt_bias_init(cfg, k_dt, (n, decay_cols)),
-            w_beta=None if cfg.kda_beta_rank else reshard(_init_weight(k_b, (d, n), std), P(None, None)),
+            w_beta=(
+                None
+                if cfg.kda_beta_rank
+                else reshard(_init_weight(k_b, (d, n), std * cfg.init_std_mult_gates), P(None, None))
+            ),
             w_beta_down=(
                 reshard(_init_weight(k_b, (d, cfg.kda_beta_rank), std), P(None, None)) if cfg.kda_beta_rank else None
             ),
@@ -3406,6 +3426,9 @@ def _expert_mlp_init(cfg: "GrugModelConfig", in_width: int, out_width: int, key:
         fp8_dispatch=cfg.moe_fp8_dispatch,
         expert_remat=cfg.moe_expert_remat,
     )
+    if cfg.init_std_mult_experts != 1.0:
+        mult = cfg.init_std_mult_experts
+        mlp = eqx.tree_at(lambda m: (m.w_up, m.w_down), mlp, (mlp.w_up * mult, mlp.w_down * mult))
     return eqx.tree_at(lambda m: m.w_gate, mlp, None, is_leaf=lambda x: x is None) if cfg.moe_ungated_relu2 else mlp
 
 
@@ -4124,6 +4147,8 @@ class Transformer(eqx.Module):
     output_bigram_u: Float[Array, "V R"] | None
     output_bigram_w: Float[Array, "R V"] | None
     """Output bigram prior (``output_bigram_rank``): current-token code table ``U`` and zero-init read-out ``W``."""
+    lm_head_bias: Float[Array, " V"] | None
+    """Output logit bias (``lm_head_unigram_bias``), float32 even in the compute copy."""
     config: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -4475,6 +4500,9 @@ class Transformer(eqx.Module):
                 reshard(jnp.zeros((cfg.output_bigram_rank, cfg.vocab_size), jnp.float32), P(None, "model"))
                 if cfg.output_bigram_rank
                 else None
+            ),
+            lm_head_bias=(
+                reshard(jnp.zeros((cfg.vocab_size,), jnp.float32), P(None)) if cfg.lm_head_unigram_bias else None
             ),
             config=cfg,
         )
@@ -5006,6 +5034,11 @@ class Transformer(eqx.Module):
             final_stats["attn_res_knob_lrkey_qnorm_final"] = jnp.linalg.norm(
                 jax.lax.stop_gradient(self.attn_res_query_final)
             )
+        if self.lm_head_bias is not None:
+            bias = jax.lax.stop_gradient(self.lm_head_bias).astype(jnp.float32)
+            final_stats["attn_res_knob_lm_head_bias_mean"] = jnp.mean(bias)
+            final_stats["attn_res_knob_lm_head_bias_std"] = jnp.std(bias)
+            final_stats["attn_res_knob_lm_head_bias_max"] = jnp.max(bias)
         for name, norm in (("embed", self.embed_norm), ("final", self.final_norm)):
             if isinstance(norm, ZeroCenteredRMSNorm):
                 final_stats[f"attn_res_knob_gain_abs_{name}"] = jnp.mean(jnp.abs(jax.lax.stop_gradient(norm.gamma)))
@@ -5047,22 +5080,39 @@ class Transformer(eqx.Module):
         return rms_norm(_embedding_gather(self.output_bigram_u, token_ids)).astype(dtype)
 
     def _lm_head_operands(
-        self, hidden: Float[Array, "B S D"], token_ids: Int[Array, "B S"]
-    ) -> tuple[Float[Array, "B S E"], Float[Array, "E V"]]:
-        """The lm_head's ``(input, weight)``: with ``output_bigram_rank`` the bigram prior's features and
-        read-out are appended to the contraction (``[h, rms(U[x])] @ [[W_out], [W]]``), else unchanged."""
-        if self.output_bigram_w is None:
+        self, hidden: Float[Array, "... D"], bigram_ids: Int[Array, "..."] | None
+    ) -> tuple[Float[Array, "... E"], Float[Array, "E V"]]:
+        """The lm_head's ``(input, weight)`` for the fused CE kernel, extended along the contraction:
+
+        - with ``output_bigram_rank`` and ``bigram_ids`` (the current tokens), the bigram prior's features and
+          read-out (``[h, rms(U[x])] @ [[W_out], [W]]``); ``bigram_ids=None`` leaves the prior out;
+        - with ``lm_head_bias``, extra rows read by constant-1 hidden columns, so the bias lands inside the
+          soft-cap. The float32 bias is split into a compute-dtype high part and its residual (two rows), padded
+          to ``_LM_HEAD_BIAS_COLS`` columns.
+        """
+        use_bigram = self.output_bigram_w is not None and bigram_ids is not None
+        if not use_bigram and self.lm_head_bias is None:
             return hidden, self.output_proj
-        features = self._output_bigram_features(token_ids, hidden.dtype)
-        hidden = reshard(jnp.concatenate([hidden, features], axis=-1), _batch_spec())
-        lm_head = jnp.concatenate(
-            [
-                reshard(self.output_proj, P(None, None)),
-                reshard(self.output_bigram_w.astype(self.output_proj.dtype), P(None, None)),
-            ],
-            axis=0,
-        )
-        return hidden, lm_head
+        dtype = self.output_proj.dtype
+        # The CE kernel replicates the head anyway; gathering it here keeps the concatenation's operands alike.
+        head_rows = [reshard(self.output_proj, P(None, None))]
+        hidden_cols = [hidden]
+        if use_bigram:
+            assert self.output_bigram_w is not None and bigram_ids is not None
+            hidden_cols.append(self._output_bigram_features(bigram_ids, hidden.dtype))
+            head_rows.append(reshard(self.output_bigram_w.astype(dtype), P(None, None)))
+        if self.lm_head_bias is not None:
+            high = self.lm_head_bias.astype(dtype)
+            low = (self.lm_head_bias - high.astype(jnp.float32)).astype(dtype)
+            pad = _LM_HEAD_BIAS_COLS - 2
+            rows = jnp.concatenate([high[None], low[None], jnp.zeros((pad, high.shape[0]), dtype)], axis=0)
+            head_rows.append(reshard(rows, P(None, None)))
+            # Sliced from ``hidden`` so the constant columns inherit its batch sharding.
+            hidden_cols.extend([jnp.ones_like(hidden[..., :2]), jnp.zeros_like(hidden[..., :pad])])
+        hidden = jnp.concatenate(hidden_cols, axis=-1)
+        if use_bigram:
+            hidden = reshard(hidden, _batch_spec())
+        return hidden, jnp.concatenate(head_rows, axis=0)
 
     def _output_bigram_stats(self) -> dict[str, jax.Array]:
         """Norms of ``U`` and ``W`` and the RMS of the prior's logit term over a fixed, evenly spaced set of probe
@@ -5162,9 +5212,12 @@ class Transformer(eqx.Module):
         if head_replay is not None:
             # Replay a stored (final hidden, label) batch through the lm_head only: the head's gradient is
             # exact at the current W_head; the stored hidden is a stale view of that data (stop-gradient).
+            replay_hidden, replay_head = self._lm_head_operands(
+                jax.lax.stop_gradient(head_replay.hidden).astype(hidden.dtype), None
+            )
             replay_loss = fused_linear_softmax_cross_entropy_loss(
-                jax.lax.stop_gradient(head_replay.hidden).astype(hidden.dtype),
-                self.output_proj,
+                replay_hidden,
+                replay_head,
                 head_replay.labels,
                 weight=head_replay.weight.astype(loss_dtype),
                 reduction=reduction,
@@ -5201,9 +5254,10 @@ class Transformer(eqx.Module):
                 _sconv_segment_ids(mask),
                 mtp_key,
             )
+            mtp_hidden, mtp_head = self._lm_head_operands(mtp_hidden, None)
             mtp_loss = fused_linear_softmax_cross_entropy_loss(
                 mtp_hidden,
-                self.output_proj,
+                mtp_head,
                 mtp_labels,
                 weight=mtp_weight,
                 reduction=reduction,
@@ -5438,6 +5492,12 @@ def _stack_layer_indices(cfg: GrugModelConfig) -> tuple[tuple[int, ...], tuple[i
     """``(softmax_layers, kda_layers)``: the layer indices of ``Transformer.stacked_blocks`` and ``kda_blocks``."""
     kda_layers = _kda_layer_indices(cfg)
     return tuple(i for i in range(cfg.num_layers) if i not in kda_layers), kda_layers
+
+
+def upper_softmax_slice_mask(cfg: GrugModelConfig) -> tuple[bool, ...]:
+    """Per ``Transformer.stacked_blocks`` slice, whether its layer is in the upper half (``>= num_layers // 2``)."""
+    softmax_layers, _ = _stack_layer_indices(cfg)
+    return tuple(i >= cfg.num_layers // 2 for i in softmax_layers)
 
 
 def _gate_extras(model: "Transformer", num_gates: int) -> dict[str, jax.Array | None] | None:

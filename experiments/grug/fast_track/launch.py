@@ -44,7 +44,12 @@ from experiments.datasets.paloma import _PALOMA_DETOK_RAW, paloma_datasets
 from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.grug.checkpointing import RESTORE_BARRIER_TIMEOUT
 from experiments.grug.fast_track.heuristic import MoeHeuristic
-from experiments.grug.fast_track.model import AttnResLayerBackward, GrugModelConfig, LocalMixer
+from experiments.grug.fast_track.model import (
+    AttnResLayerBackward,
+    GrugModelConfig,
+    LocalMixer,
+    upper_softmax_slice_mask,
+)
 from experiments.grug.fast_track.train import (
     GrugEvalConfig,
     GrugRunConfig,
@@ -411,6 +416,8 @@ def build_h100_ladder_run(
         seq_len=SEQ_LEN,
     )
     optimizer = _apply_settings(optimizer, optimizer_settings or {})
+    if optimizer.upper_qk_lr_mult != 1.0:
+        optimizer = dataclasses.replace(optimizer, upper_qk_slice_mask=upper_softmax_slice_mask(model))
     grug_trainer = GrugTrainerConfig(
         data_seed=None,
         log_every=1,

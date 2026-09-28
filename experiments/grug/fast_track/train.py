@@ -67,7 +67,7 @@ from experiments.grug.fast_track.model import (
     ngram_stat_table_add,
     write_ngram_stats,
 )
-from experiments.grug.fast_track.optimizer import optimizer_diagnostics
+from experiments.grug.fast_track.optimizer import magma_metrics, optimizer_diagnostics
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
 # variant-specific model/loss/FLOP wiring, per the grug copy-first workflow in
@@ -232,6 +232,9 @@ class GrugTrainerConfig:
     # training stream taken *after* the run's last step, i.e. tokens the run never trains on. Untimed: it runs
     # before the loop. 0: the table starts empty and fills online from the batches the run trains on.
     ngram_stat_prefill_batches: int = 0
+    # With ``lm_head_unigram_bias``: before step 0, set the lm_head bias to the log unigram frequencies of the
+    # first this many training batches (untimed, before the loop).
+    lm_head_unigram_batches: int = 64
 
     # Grug builds its own compact (replica_dcn, data, expert, model) mesh instead of using
     # the Trainer's logical axis mapping; `data` absorbs whatever these two leave free.
@@ -396,8 +399,11 @@ def _to_dropless_local(
 
 def _cast_to_compute(mp: jmp.Policy, model: Transformer) -> Transformer:
     """``mp.cast_to_compute``, except the n-gram statistic table stays float32: it is only gathered from, and a bf16
-    copy would round its counts and cost a table-sized cast every step."""
+    copy would round its counts and cost a table-sized cast every step. The lm_head bias also stays float32 (the
+    loss splits it into two compute-dtype parts)."""
     compute = mp.cast_to_compute(model)
+    if model.lm_head_bias is not None:
+        compute = eqx.tree_at(lambda m: m.lm_head_bias, compute, model.lm_head_bias)
     if model.ngram_stat_table is None:
         return compute
     return eqx.tree_at(lambda m: m.ngram_stat_table, compute, model.ngram_stat_table)
@@ -1002,6 +1008,7 @@ def _make_train_step(
         else:
             updates, opt_state = optimizer.update(opt_grads, opt_state_in, qb_params)
             metrics.update(optimizer_diagnostics(opt_state))
+            metrics.update(magma_metrics(opt_state))
             params = optax.apply_updates(qb_params, updates)
             master_params = None
         if params.ngram_stat_table is not None:
@@ -1102,6 +1109,33 @@ def _prefill_ngram_stats(state: GrugTrainState, train_loader, *, start_step: int
         None
         if state.ema_params is None
         else eqx.tree_at(lambda m: m.ngram_stat_table, state.ema_params, jnp.copy(table))
+    )
+    return dataclasses.replace(state, params=params, ema_params=ema_params)
+
+
+def _init_unigram_bias(state: GrugTrainState, train_loader, *, num_batches: int) -> GrugTrainState:
+    """Set ``lm_head_bias`` to ``log((count + 1) / (total + V))``, the add-one log unigram frequency of the
+    loss-weighted tokens of the first ``num_batches`` training batches (the EMA copy too). Adam's moments are
+    zeros either way, so the optimizer state needs no change."""
+    vocab = state.params.config.vocab_size
+
+    @functools.partial(jax.jit, donate_argnums=(0,))
+    def add(counts: jax.Array, tokens: jax.Array, loss_weight: jax.Array) -> jax.Array:
+        weight = loss_weight.astype(jnp.float32).reshape(-1)
+        return counts + jnp.zeros((vocab,), jnp.float32).at[tokens.reshape(-1)].add(weight)
+
+    started = time.time()
+    counts = jnp.zeros((vocab,), jnp.float32)
+    batches = train_loader.iter_from_step(0)
+    for _ in range(num_batches):
+        batch = next(batches)
+        counts = jax.block_until_ready(add(counts, batch.tokens, batch.loss_weight))
+    bias = jnp.log((counts + 1.0) / (jnp.sum(counts) + vocab))
+    bias = jax.device_put(bias, state.params.lm_head_bias.sharding)
+    logger.info("unigram lm_head bias from %d batches in %.0fs", num_batches, time.time() - started)
+    params = eqx.tree_at(lambda m: m.lm_head_bias, state.params, bias)
+    ema_params = (
+        None if state.ema_params is None else eqx.tree_at(lambda m: m.lm_head_bias, state.ema_params, jnp.copy(bias))
     )
     return dataclasses.replace(state, params=params, ema_params=ema_params)
 
@@ -1289,6 +1323,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 start_step=trainer.num_train_steps,
                 num_batches=config.trainer.ngram_stat_prefill_batches,
             )
+        if state.params.lm_head_bias is not None and int(state.step) == 0:
+            state = _init_unigram_bias(state, train_loader, num_batches=config.trainer.lm_head_unigram_batches)
         batch_source = train_loader.iter_from_step(int(state.step))
         iterator = LoadingTimeTrackerIterator(batch_source)
 
