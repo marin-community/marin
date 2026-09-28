@@ -122,6 +122,7 @@ _OKLS_FAMILIES: dict[str, re.Pattern] = {
 
 _MEMORY_VALUES = re.compile(r"memory\.\d+\.values")
 _MEMORY_ADAM = re.compile(r"memory\.\d+\.(keys|w_out)")
+_OUTPUT_BIGRAM = re.compile(r"(?:^|\.)output_bigram_[uw]$")
 
 
 def _kda_leaf(path_lower: str) -> str | None:
@@ -708,6 +709,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     """Adam LR multiplier of the per-layer embedding table (``ple_dim``)."""
     memory_lr_mult: float = 1.0
     """Adam LR multiplier of the product-key memory value tables (``memory_layers``)."""
+    output_bigram_lr_mult: float = 1.0
+    """Adam LR multiplier of the output bigram prior's ``U`` and ``W`` (``output_bigram_rank``)."""
     grokfast_adam_only: bool = False
     """Apply Grokfast to the plain-Adam groups only (on MuonH it acts as extra momentum)."""
     router_group: str = "adam"
@@ -893,6 +896,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 "ple": plain_adam_at(adam_lr * self.ple_lr_mult),
                 "value_embed": plain_adam_at(adam_lr * self.value_embed_lr_mult),
                 "memory": plain_adam_at(adam_lr * self.memory_lr_mult),
+                "output_bigram": plain_adam_at(adam_lr * self.output_bigram_lr_mult),
                 "kda_decay": plain_adam_at(adam_lr * self.kda_decay_lr_mult, self.kda_decay_beta1, self.kda_decay_beta2),
                 "router": router_adam_at(adam_lr * self.router_lr_mult),
                 "muonh_router": muonh_transform_at(learning_rate * self.router_lr_mult),
@@ -976,6 +980,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 return "memory"
             if _MEMORY_ADAM.fullmatch(path_lower):
                 return "adam"
+            # Output bigram prior: a sparse token table and a zero-init read-out (MuonH cannot move a zero matrix).
+            if _OUTPUT_BIGRAM.search(path_lower):
+                return "output_bigram"
             if "token_embed_ple" in path_lower:
                 return "ple"
             if re.search(r"token_embed(2|3)", path_lower) and self.embed2_lr_mult != 1.0:

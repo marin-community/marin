@@ -72,6 +72,8 @@ _CE_BLOCK_SIZES = BlockSizes(b_block_size=_CE_TOKENS_PER_RANK, v_block_size=8192
 # Axes the non-expert params FSDP-shard over.
 _FSDP_AXES: tuple[str, ...] = ("data", "expert")
 _LM_HEAD_PARTITION_SPEC = P(_FSDP_AXES, "model")
+# Tokens of the first sequence whose output-bigram logit term is logged (a [64, V] matmul).
+_OUTPUT_BIGRAM_STAT_TOKENS = 64
 # Input channels the per-token MoE output gate reads (cfg.moe_out_gate).
 _MOE_OUT_GATE_DIMS = 12
 
@@ -611,6 +613,11 @@ class GrugModelConfig:
     logit_soft_cap_asym: tuple[float, ...] = ()
     """Asymmetric logit cap ``A * sigmoid((z + B) / C)`` as ``(A, B, C)`` (modded-nanogpt record #54);
     overrides ``logit_soft_cap`` when set."""
+    output_bigram_rank: int = 0
+    """Output-side bigram logit prior of this rank (0: off): the pre-cap logits gain ``rms(U[x_t]) @ W``, a
+    low-rank ``P(x_{t+1} | x_t)`` table (n-gram interpolation in logit space). ``U`` [vocab, r] and ``W``
+    [r, vocab] (zero-init, so the model is unchanged at init) ride the lm_head as ``r`` extra contraction
+    columns of the one fused cross-entropy call, so the soft cap and the z-loss see the combined logits."""
     kda_write_gate: bool = False
     """Gated DeltaNet-2 (arXiv 2605.22791) write gate: each KDA value channel is scaled by ``2 sigmoid(x W_w)``
     before the delta-rule update, a channel-wise write strength next to KDA's per-head beta. Runs through the
@@ -3852,6 +3859,9 @@ class Transformer(eqx.Module):
     """AttnRes pseudo-queries of the extra loop passes (``loop_passes - 1`` of them), zero-init."""
     loop_inject_scale: Float[Array, " P"] | None
     """Input-injection scale per extra loop pass, init 1."""
+    output_bigram_u: Float[Array, "V R"] | None
+    output_bigram_w: Float[Array, "R V"] | None
+    """Output bigram prior (``output_bigram_rank``): current-token code table ``U`` and zero-init read-out ``W``."""
     config: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -4198,6 +4208,19 @@ class Transformer(eqx.Module):
                 else None
             ),
             loop_inject_scale=jnp.ones((cfg.loop_passes - 1,), jnp.float32) if cfg.loop_passes > 1 else None,
+            output_bigram_u=(
+                reshard(
+                    _init_weight(random.fold_in(key, 17), (cfg.vocab_size, cfg.output_bigram_rank), cfg.initializer_std),
+                    P(None, None),
+                )
+                if cfg.output_bigram_rank
+                else None
+            ),
+            output_bigram_w=(
+                reshard(jnp.zeros((cfg.output_bigram_rank, cfg.vocab_size), jnp.float32), P(None, "model"))
+                if cfg.output_bigram_rank
+                else None
+            ),
             config=cfg,
         )
 
@@ -4759,7 +4782,42 @@ class Transformer(eqx.Module):
     ) -> Float[Array, "B S V"]:
         batch_spec = _batch_spec()
         hidden, _ = self(token_ids, mask=mask)
-        return jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=batch_spec)
+        hidden, lm_head = self._lm_head_operands(hidden, token_ids)
+        return jnp.einsum("bsh,hd->bsd", hidden, lm_head, out_sharding=batch_spec)
+
+    def _output_bigram_features(self, token_ids: Int[Array, "B S"], dtype: jnp.dtype) -> Float[Array, "B S R"]:
+        assert self.output_bigram_u is not None
+        return rms_norm(_embedding_gather(self.output_bigram_u, token_ids)).astype(dtype)
+
+    def _lm_head_operands(
+        self, hidden: Float[Array, "B S D"], token_ids: Int[Array, "B S"]
+    ) -> tuple[Float[Array, "B S E"], Float[Array, "E V"]]:
+        """The lm_head's ``(input, weight)``: with ``output_bigram_rank`` the bigram prior's features and
+        read-out are appended to the contraction (``[h, rms(U[x])] @ [[W_out], [W]]``), else unchanged."""
+        if self.output_bigram_w is None:
+            return hidden, self.output_proj
+        features = self._output_bigram_features(token_ids, hidden.dtype)
+        hidden = reshard(jnp.concatenate([hidden, features], axis=-1), _batch_spec())
+        lm_head = jnp.concatenate(
+            [
+                reshard(self.output_proj, P(None, None)),
+                reshard(self.output_bigram_w.astype(self.output_proj.dtype), P(None, None)),
+            ],
+            axis=0,
+        )
+        return hidden, lm_head
+
+    def _output_bigram_stats(self, token_ids: Int[Array, "B S"]) -> dict[str, jax.Array]:
+        """Norms of ``U`` and ``W`` and the RMS of the prior's logit term on a small token slice."""
+        assert self.output_bigram_u is not None and self.output_bigram_w is not None
+        u = jax.lax.stop_gradient(self.output_bigram_u).astype(jnp.float32)
+        w = jax.lax.stop_gradient(self.output_bigram_w).astype(jnp.float32)
+        sample = rms_norm(u[token_ids[0, :_OUTPUT_BIGRAM_STAT_TOKENS]])
+        return {
+            "train/attn_res/knob_output_bigram_u_norm": jnp.linalg.norm(u),
+            "train/attn_res/knob_output_bigram_w_norm": jnp.linalg.norm(w),
+            "train/attn_res/knob_output_bigram_logit_rms": jnp.sqrt(jnp.mean(jnp.square(sample @ w))),
+        }
 
     def _ngram_stat_read(
         self, hidden: Float[Array, "B S D"], token_ids: Int[Array, "B S"], segment_ids: Int[Array, "B S"] | None
@@ -4821,11 +4879,14 @@ class Transformer(eqx.Module):
         attn_res_z = router_metrics.pop(_ATTN_RES_Z, None)
         labels = jnp.pad(token_ids[:, 1:], ((0, 0), (0, 1))).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
+        if head_replay is not None and self.output_bigram_w is not None:
+            raise ValueError("head_replay stores the final hidden only; it cannot replay output_bigram_rank's prior")
 
         def lm_loss(h: jax.Array) -> jax.Array:
+            head_in, lm_head = self._lm_head_operands(h, token_ids)
             return fused_linear_softmax_cross_entropy_loss(
-                h,
-                self.output_proj,
+                head_in,
+                lm_head,
                 labels,
                 weight=loss_weight,
                 reduction=reduction,
@@ -4945,6 +5006,8 @@ class Transformer(eqx.Module):
                 for name in list(router_metrics)
                 if name.startswith("attn_res_")
             }
+            if self.output_bigram_w is not None:
+                final_gate_metrics.update(self._output_bigram_stats(token_ids))
             if not router_metrics:
                 # Dense model: no router to summarize.
                 return loss, {"train/cross_entropy_loss": cross_entropy_loss, **final_gate_metrics}
