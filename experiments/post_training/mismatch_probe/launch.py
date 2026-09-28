@@ -5,9 +5,7 @@
 
 from __future__ import annotations
 
-import subprocess
 from dataclasses import dataclass
-from pathlib import Path
 
 import click
 import yaml
@@ -31,6 +29,7 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 from marin.training.training import LevanterCheckpoint
+from rigging.provenance import Provenance
 
 CLUSTER = "cw-rno2a"
 TOKENIZER = "Qwen/Qwen2.5-0.5B-Instruct"
@@ -197,9 +196,7 @@ def build_arms(
         wandb_entity="marin-community",
     )
     result = {}
-    marin_commit = subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], cwd=Path(__file__).resolve().parents[3], text=True
-    ).strip()
+    marin_commit = Provenance.capture().base_commit
     for arm in arms:
         name = user_owned_name(f"checkpoints/mismatch-probe/{arm.name}{'-warmup' if warmup else ''}")
         result[arm.name] = skyrl_step(
@@ -220,7 +217,7 @@ def build_arms(
                 train_data=(ArtifactDataSource(data, relative_path="train.parquet"),),
                 validation_data=(ArtifactDataSource(data, relative_path="validation.parquet"),),
                 topology=topology,
-                retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
+                retention=SkyRLRetentionPolicy(resume_checkpoint_count=2, temporary_storage_ttl_days=30),
                 seed=settings.seed,
             ),
             execution,
