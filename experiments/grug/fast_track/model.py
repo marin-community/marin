@@ -90,6 +90,10 @@ _AUX_HIDDEN = "aux_lm_hidden"
 # Folded into the per-step route key for the ERC proxy-token noise, so it is independent of the Gumbel noise.
 _ERC_KEY_SALT = 0xE2C
 _NITP_TARGET = "nitp_target"
+# Metrics-dict key that carries the raw (pre-norm) token embeddings from the forward to the MTP loss.
+_MTP_EMBED = "mtp_embed"
+# Folded into the per-step route key for the MTP position subsample (``mtp_position_frac``).
+_MTP_KEY_SALT = 0x3F7
 # Per-layer product-key memory diagnostics, lifted out of the layer stats into ``train/attn_res/knob_mem_*``.
 # Per-layer stats with this prefix returned by a layer are exported as ``<name>_L<layer>``.
 _LAYER_KNOB_PREFIX = "attn_res_knob_"
@@ -116,6 +120,14 @@ KDA_CHUNK_SIZE = 16
 _KDA_ROT_OMEGA_RANGE = (1.0 / 128, 1.0)
 # KDA per-layer activation diagnostics, lifted out of the layer stats into ``train/attn_res/knob_kda_*``.
 _KDA_STAT_PREFIX = "attn_res_knob_kda_"
+
+
+class MtpMode(StrEnum):
+    """Multi-token-prediction objective (training only; evals score the plain next-token loss)."""
+
+    OFF = "off"
+    DEEPSEEK = "deepseek"
+    """DeepSeek-V3 depth-1 MTP (arXiv 2412.19437 sec. 2.2) with an attention-free block (``MtpHead``)."""
 
 
 class NgramStatMode(StrEnum):
@@ -433,9 +445,16 @@ class GrugModelConfig:
     """GatedNorm after the embedding RMSNorm (else the RMSNorm alone)."""
     final_gated_norm: bool = True
     """GatedNorm after the final RMSNorm, before the lm_head (else the RMSNorm alone)."""
-    mtp_weight: float = 0.0
-    """Weight of a depth-1 multi-token-prediction loss (0 disables it): predict token t+2 from
-    ``h_t + W_mtp rms_norm(embed(token_{t+1}))`` through a parameter-free RMS norm and the shared lm_head."""
+    mtp_mode: MtpMode = MtpMode.OFF
+    """Depth-1 multi-token prediction (``MtpMode``): position t also predicts token t+2 of its document from
+    ``W_proj [rms(h_t); rms(Emb(x_{t+1}))]`` through one extra block and the shared embedding and lm_head."""
+    mtp_weight: float = 0.3
+    """Weight of the MTP loss (DeepSeek-V3: 0.3 for the first 10T tokens, then 0.1)."""
+    mtp_mlp_mult: int = 4
+    """Hidden width of the MTP block's ReLU^2 MLP, as a multiple of ``hidden_dim``."""
+    mtp_position_frac: float = 1.0
+    """Fraction of positions (a fresh random subset each step, shared by the batch rows) that the MTP block and
+    its lm_head pass run on; 0.5 halves the MTP cost. Needs the per-step route key."""
     nitp_weight: float = 0.0
     """Next Implicit Token Prediction (arXiv 2605.24956; 0 disables it): an MLP head ``P = W_2 gelu(W_1 h_t)``
     on the final hidden state predicts the stop-gradient residual stream of token t+1 after layer ``nitp_layer``,
@@ -2126,6 +2145,45 @@ class GatedNorm(eqx.Module):
         gate_hidden = jax.nn.silu(gate_hidden)
         gate = jax.nn.sigmoid(jnp.einsum("...r,rd->...d", gate_hidden, self.w_up))
         return x * gate.astype(x.dtype)
+
+
+class MtpHead(eqx.Module):
+    """Depth-1 DeepSeek-V3 MTP module (arXiv 2412.19437 sec. 2.2): ``x = W_proj [rms(h_t); rms(Emb(x_{t+1}))]``,
+    one block ``x + W_down relu(W_up rms(x))^2``, then its own learned RMSNorm into the shared lm_head.
+
+    DeepSeek's block is a full transformer layer. This one is attention-free: ``h_t`` already carries the causal
+    context, so the block only has to combine it with the next token's embedding, and at vocab 16k and d512 the
+    extra lm_head pass, not the block, is the cost. Being per-position, the whole module runs on just the
+    ``mtp_position_frac`` subset of positions. Matrices are random-init (MuonH)."""
+
+    w_proj: Float[Array, "C D"]
+    w_up: Float[Array, "D M"]
+    w_down: Float[Array, "M D"]
+    out_norm: LearnedRMSNorm
+
+    @staticmethod
+    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "MtpHead":
+        k_proj, k_up, k_down = random.split(key, 3)
+        d, m, std = cfg.hidden_dim, cfg.mtp_mlp_mult * cfg.hidden_dim, cfg.initializer_std
+        return MtpHead(
+            w_proj=reshard(_init_weight(k_proj, (2 * d, d), std), P(_FSDP_AXES, None)),
+            w_up=reshard(_init_weight(k_up, (d, m), std), P(_FSDP_AXES, "model")),
+            w_down=reshard(_init_weight(k_down, (m, d), std), P("model", _FSDP_AXES)),
+            out_norm=_learned_rms_norm(cfg, d, cfg.layer_norm_eps),
+        )
+
+    @named_call
+    def __call__(self, hidden: Float[Array, "B S D"], next_embed: Float[Array, "B S D"]) -> Float[Array, "B S D"]:
+        b, s, _ = hidden.shape
+        x = jnp.concatenate([rms_norm(hidden), rms_norm(next_embed.astype(hidden.dtype))], axis=-1)
+        x_flat = jnp.einsum(
+            "tc,cd->td", rearrange(x, "b s c -> (b s) c"), self.w_proj.astype(hidden.dtype), out_sharding=_batch_spec()
+        )
+        up = jnp.einsum("td,dm->tm", rms_norm(x_flat), self.w_up.astype(hidden.dtype))
+        x_flat = x_flat + jnp.einsum(
+            "tm,md->td", jnp.square(jax.nn.relu(up)), self.w_down.astype(hidden.dtype), out_sharding=_batch_spec()
+        )
+        return self.out_norm(_batch_reshard(rearrange(x_flat, "(b s) d -> b s d", b=b, s=s)))
 
 
 class DenseMLP(eqx.Module):
@@ -4054,8 +4112,8 @@ class Transformer(eqx.Module):
     attn_res_query_blend: Float[Array, "G 2"] | None
     """Per-gate ``(l1, l2)`` of ``attn_res_blend``."""
     attn_res_query_blend_proj: Float[Array, "G 2 D"] | None
-    w_mtp: Float[Array, "D D"] | None
-    """Next-token-embedding projection of the MTP head (``mtp_weight``)."""
+    mtp: "MtpHead | None"
+    """The DeepSeek-V3 MTP module (``mtp_mode``)."""
     nitp_w1: Float[Array, "D D"] | None
     nitp_w2: Float[Array, "D D"] | None
     """The NITP predictor head's two matrices (``nitp_weight``), random init (MuonH)."""
@@ -4382,14 +4440,7 @@ class Transformer(eqx.Module):
                 if cfg.attn_res_blend == "dynamic"
                 else None
             ),
-            w_mtp=(
-                reshard(
-                    _init_weight(random.fold_in(key, 3), (cfg.hidden_dim, cfg.hidden_dim), cfg.initializer_std),
-                    P(_FSDP_AXES, None),
-                )
-                if cfg.mtp_weight > 0
-                else None
-            ),
+            mtp=MtpHead.init(cfg, key=random.fold_in(key, 3)) if cfg.mtp_mode == MtpMode.DEEPSEEK else None,
             nitp_w1=(
                 reshard(
                     _init_weight(random.fold_in(key, 4), (cfg.hidden_dim, cfg.hidden_dim), cfg.initializer_std),
@@ -4464,7 +4515,7 @@ class Transformer(eqx.Module):
         if cfg.router_share_block > 1:
             self = _share_routers(self, cfg.router_share_block)
         gather = _embedding_gather if cfg.embed_grad_fp32 else _embedding_gather_autodiff
-        hidden = gather(self.token_embed, token_ids)
+        hidden = raw_embed = gather(self.token_embed, token_ids)
         if cfg.embed_norm_mode == "rms":
             hidden = self.embed_norm(hidden)
         elif cfg.embed_norm_mode == "rms_nogain":
@@ -4681,6 +4732,8 @@ class Transformer(eqx.Module):
         hidden = self.final_norm(hidden)
         if self.final_gated_norm is not None:
             hidden = self.final_gated_norm(hidden)
+        if self.mtp is not None:
+            router_metrics[_MTP_EMBED] = raw_embed
         return hidden, router_metrics
 
     def _attn_res_layers(
@@ -5081,6 +5134,7 @@ class Transformer(eqx.Module):
         aux_hidden = router_metrics.pop(_AUX_HIDDEN, None)
         nitp_target = router_metrics.pop(_NITP_TARGET, None)
         attn_res_z = router_metrics.pop(_ATTN_RES_Z, None)
+        mtp_embed = router_metrics.pop(_MTP_EMBED, None)
         labels = jnp.pad(token_ids[:, 1:], ((0, 0), (0, 1))).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
         if head_replay is not None and self.output_bigram_w is not None:
@@ -5133,25 +5187,30 @@ class Transformer(eqx.Module):
         if attn_res_z is not None and train_terms:
             loss = loss + self.config.attn_res_z_loss * attn_res_z.astype(loss_dtype)
         mtp_loss = None
-        # The MTP term is a training objective only; evals score plain next-token loss.
-        if self.w_mtp is not None and train_terms:
-            next_ids = jnp.pad(token_ids[:, 1:], ((0, 0), (0, 1)))
-            next_embed = rms_norm(_embedding_gather(self.token_embed, next_ids).astype(hidden.dtype))
-            mtp_hidden = hidden + jnp.einsum("bsd,de->bse", next_embed, self.w_mtp.astype(hidden.dtype))
-            mtp_hidden = reshard(rms_norm(mtp_hidden), _batch_spec())
-            labels2 = jnp.pad(token_ids[:, 2:], ((0, 0), (0, 2))).astype(jnp.int32)
-            # The last two positions have no t+2 target.
-            weight2 = loss_weight * (jnp.arange(token_ids.shape[1]) < token_ids.shape[1] - 2)[None, :].astype(loss_dtype)
+        if self.mtp is not None and mtp_embed is not None and train_terms:
+            mtp_key = None if route_key is None else jax.random.fold_in(route_key, _MTP_KEY_SALT)
+            mtp_hidden, mtp_labels, mtp_weight = _mtp_inputs(
+                self.config,
+                self.mtp,
+                hidden,
+                mtp_embed,
+                token_ids,
+                loss_weight,
+                _sconv_segment_ids(mask),
+                mtp_key,
+            )
             mtp_loss = fused_linear_softmax_cross_entropy_loss(
                 mtp_hidden,
                 self.output_proj,
-                labels2,
-                weight=weight2,
+                mtp_labels,
+                weight=mtp_weight,
                 reduction=reduction,
-                logsumexp_weight=logsumexp_weight,
+                # The final-logit z-loss regularizes the shared lm_head once, through the main head.
+                logsumexp_weight=None,
                 dtype=loss_dtype,
                 implementation="xla_fast_bwd",
                 block_sizes=_CE_BLOCK_SIZES,
+                logit_soft_cap=_logit_cap(self.config),
             )
             loss = loss + self.config.mtp_weight * mtp_loss
         nitp_loss = nitp_cos = None
@@ -5228,8 +5287,9 @@ class Transformer(eqx.Module):
                 summarized_metrics[FINAL_HIDDEN_KEY] = jax.lax.stop_gradient(hidden)
             if aux_loss is not None:
                 summarized_metrics["train/attn_res/aux_lm_loss"] = aux_loss
-            if mtp_loss is not None:
-                summarized_metrics["train/attn_res/mtp_loss"] = mtp_loss
+            if mtp_loss is not None and self.mtp is not None:
+                summarized_metrics["train/aux/mtp_loss"] = mtp_loss
+                summarized_metrics.update(_mtp_knob_stats(self.mtp))
             if byte_loss is not None:
                 summarized_metrics["train/aux/byte_loss"] = byte_loss
             if simbal_loss is not None:
@@ -5255,6 +5315,62 @@ class Transformer(eqx.Module):
 
 
 FINAL_HIDDEN_KEY = "_final_hidden"
+
+
+def _mtp_knob_stats(head: MtpHead) -> dict[str, jax.Array]:
+    """How the MTP projection splits between ``rms(h_t)`` and the next token's embedding (Frobenius norms of the
+    two halves of ``W_proj``; MuonH fixes only their sum of squares), and the MTP output-norm gain."""
+    w_proj = jax.lax.stop_gradient(head.w_proj).astype(jnp.float32)
+    d = w_proj.shape[1]
+    norm = head.out_norm
+    gain = norm.weight if isinstance(norm, RMSNorm) else 1.0 + norm.gamma
+    return {
+        "train/attn_res/knob_mtp_proj_h_norm": jnp.linalg.norm(w_proj[:d]),
+        "train/attn_res/knob_mtp_proj_e_norm": jnp.linalg.norm(w_proj[d:]),
+        "train/attn_res/knob_mtp_out_gain": jnp.mean(jax.lax.stop_gradient(gain)),
+    }
+
+
+def _mtp_targets(
+    token_ids: Int[Array, "B S"], loss_weight: Float[Array, "B S"], segment_ids: Int[Array, "B S"] | None
+) -> tuple[Int[Array, "B S"], Float[Array, "B S"]]:
+    """Depth-1 MTP targets: position t predicts token t+2. Its weight is the main loss's weight on token t+2
+    (``loss_weight[t+1]``), zeroed at the last two positions and where token t+2 is in another packed document."""
+    seq_len = token_ids.shape[1]
+    labels = jnp.pad(token_ids[:, 2:], ((0, 0), (0, 2))).astype(jnp.int32)
+    valid = jnp.broadcast_to(jnp.arange(seq_len) < seq_len - 2, loss_weight.shape)
+    if segment_ids is not None:
+        valid = valid & jnp.pad(segment_ids[:, 2:] == segment_ids[:, :-2], ((0, 0), (0, 2)))
+    weight = jnp.pad(loss_weight[:, 1:], ((0, 0), (0, 1))) * valid.astype(loss_weight.dtype)
+    return labels, weight
+
+
+def _mtp_inputs(
+    cfg: GrugModelConfig,
+    head: MtpHead,
+    hidden: Float[Array, "B S D"],
+    embed: Float[Array, "B S D"],
+    token_ids: Int[Array, "B S"],
+    loss_weight: Float[Array, "B S"],
+    segment_ids: Int[Array, "B S"] | None,
+    key: jax.Array | None,
+) -> tuple[Float[Array, "B K D"], Int[Array, "B K"], Float[Array, "B K"]]:
+    """The MTP head's lm_head inputs, labels and weights on the ``mtp_position_frac`` position subset (K of S)."""
+    labels, weight = _mtp_targets(token_ids, loss_weight, segment_ids)
+    next_embed = jnp.pad(embed[:, 1:], ((0, 0), (0, 1), (0, 0)))
+    seq_len = token_ids.shape[1]
+    if not 0.0 < cfg.mtp_position_frac <= 1.0:
+        raise ValueError(f"mtp_position_frac must be in (0, 1], got {cfg.mtp_position_frac}")
+    if cfg.mtp_position_frac < 1.0:
+        if key is None:
+            raise ValueError("mtp_position_frac < 1 needs route_key (the per-step position subsample)")
+        num_kept = max(1, round(seq_len * cfg.mtp_position_frac))
+        positions = jax.random.permutation(key, seq_len)[:num_kept]
+        hidden = _batch_reshard(jnp.take(hidden, positions, axis=1))
+        next_embed = _batch_reshard(jnp.take(next_embed, positions, axis=1))
+        labels = jnp.take(labels, positions, axis=1)
+        weight = jnp.take(weight, positions, axis=1)
+    return reshard(head(hidden, next_embed), _batch_spec()), labels, weight
 
 
 def _nitp_loss(

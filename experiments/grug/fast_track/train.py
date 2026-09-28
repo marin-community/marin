@@ -61,6 +61,7 @@ from experiments.grug.fast_track.model import (
     DenseMLP,
     GrugModelConfig,
     HeadReplay,
+    MtpMode,
     Transformer,
     ngram_stat_table_add,
     write_ngram_stats,
@@ -868,7 +869,9 @@ def _loss_and_grads(
     """``loop_active`` is a static pass selector for looped growth (see ``GrugModelConfig.loop_grow_step``)."""
     aux_weight = None if step is None else _aux_loss_weight(params.config, step)
     route_key = None
-    if step is not None and (params.config.moe_gumbel_tau > 0 or params.config.erc_loss_weight > 0):
+    cfg = params.config
+    mtp_subsample = cfg.mtp_mode != MtpMode.OFF and cfg.mtp_position_frac < 1.0
+    if step is not None and (cfg.moe_gumbel_tau > 0 or cfg.erc_loss_weight > 0 or mtp_subsample):
         route_key = jax.random.fold_in(jax.random.PRNGKey(ROUTE_NOISE_SEED), step)
 
     def loss_fn(model):
