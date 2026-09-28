@@ -102,7 +102,7 @@ def test_training_dashboard_registers_redacted_status_page(monkeypatch, tmp_path
     assert not registry.active
 
 
-def test_training_dashboard_requests_persist_temporary_checkpoints(monkeypatch, tmp_path):
+def test_training_dashboard_requests_checkpoints_with_requested_retention(monkeypatch, tmp_path):
     config = _TrainingConfig(trainer=TrainerConfig(id="config-run"))
     registry = _Registry()
     job_info = JobInfo(
@@ -146,6 +146,20 @@ def test_training_dashboard_requests_persist_temporary_checkpoints(monkeypatch, 
         assert programmatic_metadata["step"] == 2
         assert programmatic_metadata["is_temporary"] is True
 
+        permanent_request = Request(
+            registry.address + "/checkpoint",
+            data=b"",
+            headers={"X-Levanter-Training-Control": "request-permanent-checkpoint"},
+            method="POST",
+        )
+        with urlopen(permanent_request, timeout=2) as response:
+            assert response.status == 202
+        checkpointer.on_step(tree={"value": jnp.array(3)}, step=3)
+        checkpointer.wait_until_finished()
+        permanent_metadata = json.loads((tmp_path / "checkpoints" / "step-3" / "metadata.json").read_text())
+        assert permanent_metadata["step"] == 3
+        assert permanent_metadata["is_temporary"] is False
+
         with pytest.raises(HTTPError) as error:
             urlopen(Request(registry.address, data=b"token=invalid", method="POST"), timeout=2)
         assert error.value.code == 403
@@ -158,9 +172,9 @@ def test_training_dashboard_requests_persist_temporary_checkpoints(monkeypatch, 
                 timeout=2,
             )
         assert error.value.code == 404
-        checkpointer.on_step(tree={"value": jnp.array(3)}, step=3)
+        checkpointer.on_step(tree={"value": jnp.array(4)}, step=4)
         checkpointer.wait_until_finished()
-        assert not (tmp_path / "checkpoints" / "step-3").exists()
+        assert not (tmp_path / "checkpoints" / "step-4").exists()
     assert not registry.active
 
 

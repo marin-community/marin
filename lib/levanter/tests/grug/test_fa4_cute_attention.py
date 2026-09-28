@@ -20,6 +20,7 @@ from levanter.grug.attention import (
     reference_attention,
 )
 from levanter.grug.attention._fa4_cute import _segmented_kernel_config, _simple_causal_lower_bounds
+from levanter.grug.attention._fa4_cute_config import SM100_GQA_RATIOS, SM100_HEAD_DIM
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.testing.cpu_devices import run_on_cpu_devices
 
@@ -55,6 +56,8 @@ def test_packed_segment_backward_block_sparse_indices_split_full_blocks():
     sparse_metadata = fa4_cute_backend._packed_segment_backward_block_sparse_indices_with_full(
         lower_bounds,
         valid,
+        key_sequence_length=8,
+        q_offset=jnp.zeros((1,), dtype=jnp.int32),
         tile_m=2,
         tile_n=2,
     )
@@ -69,6 +72,63 @@ def test_packed_segment_backward_block_sparse_indices_split_full_blocks():
         sparse_metadata.full_block_idx,
         jnp.array([[[[1, 2, 3, 0], [2, 3, 0, 0], [3, 0, 0, 0], [0, 0, 0, 0]]]], dtype=jnp.int32),
     )
+
+
+@pytest.mark.parametrize("direction", ["forward", "backward"])
+@pytest.mark.parametrize("tile", [(2, 4), (4, 2), (4, 4)])
+@pytest.mark.parametrize("window", [None, 3])
+@pytest.mark.parametrize("query_slice", [(0, 11), (0, 5), (3, 8), (7, 11)])
+def test_packed_sparse_blocks_match_dense_mask(direction, tile, window, query_slice):
+    ids = np.array([[-1, 0, 0, 0, 0, 0, 1, 1, 1, 1, -1], [-1] * 11], dtype=np.int32)
+    lower, valid = fa4_cute._packed_segment_causal_lower_bounds(
+        jnp.asarray(ids), batch_size=2, seq_len=11, sliding_window=window
+    )
+    build = (
+        fa4_cute_backend._packed_segment_forward_block_sparse_indices_with_full
+        if direction == "forward"
+        else fa4_cute_backend._packed_segment_backward_block_sparse_indices_with_full
+    )
+    tile_m, tile_n = tile
+    start, stop = query_slice
+    sparse = build(
+        lower[:, start:stop],
+        valid[:, start:stop],
+        key_sequence_length=ids.shape[1],
+        q_offset=jnp.array([start], dtype=jnp.int32),
+        tile_m=tile_m,
+        tile_n=tile_n,
+    )
+    query = np.arange(ids.shape[1])[:, None]
+    key = np.arange(ids.shape[1])[None, :]
+    dense = (ids[:, :, None] == ids[:, None, :]) & (ids[:, :, None] >= 0) & (key <= query)
+    if window is not None:
+        dense &= key >= query - window + 1
+    dense = dense[:, start:stop, :]
+    query_blocks = (stop - start + tile_m - 1) // tile_m
+    key_blocks = (ids.shape[1] + tile_n - 1) // tile_n
+    partial = np.zeros((2, key_blocks, query_blocks), dtype=bool)
+    full = np.zeros_like(partial)
+    for batch in range(2):
+        for q_block in range(query_blocks):
+            for k_block in range(key_blocks):
+                block = dense[
+                    batch, q_block * tile_m : (q_block + 1) * tile_m, k_block * tile_n : (k_block + 1) * tile_n
+                ]
+                full[batch, k_block, q_block] = block.shape[0] == tile_m and block.all()
+                partial[batch, k_block, q_block] = block.any() and not full[batch, k_block, q_block]
+    if direction == "forward":
+        partial, full = partial.swapaxes(1, 2), full.swapaxes(1, 2)
+    for expected, counts, indices in (
+        (partial, sparse.partial_block_cnt, sparse.partial_block_idx),
+        (full, sparse.full_block_cnt, sparse.full_block_idx),
+    ):
+        counts, indices = np.asarray(counts), np.asarray(indices)
+        for batch in range(2):
+            for block in range(expected.shape[1]):
+                np.testing.assert_array_equal(
+                    indices[batch, 0, block, : counts[batch, 0, block]],
+                    np.flatnonzero(expected[batch, block]),
+                )
 
 
 def test_packed_segment_causal_lower_bounds_carry_next_valid_bound_through_padding():
@@ -274,16 +334,25 @@ def test_context_sharded_segment_ids_preserve_global_bounds():
     run_on_cpu_devices(_CONTEXT_METADATA_SCRIPT, device_count=8)
 
 
-def test_fa4_wide_attention_rejects_unsupported_hardware(monkeypatch):
-    q = jnp.zeros((1, 1, 2, 128), dtype=jnp.bfloat16)
-    k = jnp.zeros((1, 1, 1, 128), dtype=jnp.bfloat16)
-    v = jnp.zeros((1, 1, 1, 128), dtype=jnp.bfloat16)
+@pytest.mark.parametrize(
+    ("arch", "q_heads", "head_dim", "dtype"),
+    [
+        (90, 8, 128, jnp.bfloat16),
+        (103, 8, 128, jnp.bfloat16),
+        (100, 2, 128, jnp.bfloat16),
+        (100, 8, 64, jnp.bfloat16),
+        (100, 8, 128, jnp.float16),
+    ],
+)
+def test_fa4_sm100_attention_rejects_unsupported_layouts(monkeypatch, arch, q_heads, head_dim, dtype):
+    q = jnp.zeros((1, 1, q_heads, head_dim), dtype=dtype)
+    kv = jnp.zeros((1, 1, 1, head_dim), dtype=dtype)
     monkeypatch.setattr(jax, "default_backend", lambda: "gpu")
-    monkeypatch.setattr(fa4_cute, "gpu_compute_capability", lambda: 90)
+    monkeypatch.setattr(fa4_cute, "gpu_compute_capability", lambda: arch)
     monkeypatch.setattr(fa4_cute, "fa4_cute_attention_forward", lambda q, *_args, **_kwargs: q)
 
-    with pytest.raises(ValueError):
-        attention(q, k, v, AttentionMask.causal(), implementation="gpu_fa4_cute_wide")
+    with pytest.raises(ValueError, match="gpu_fa4_cute_sm100"):
+        attention(q, kv, kv, AttentionMask.causal(), implementation="gpu_fa4_cute_sm100")
 
 
 def _assert_real_gpu_fa4_cute_matches_reference(
@@ -321,11 +390,11 @@ def _assert_real_gpu_fa4_cute_matches_reference(
         np.testing.assert_allclose(actual_grad, expected_grad, atol=7e-2, rtol=7e-2)
 
 
-def test_real_gpu_fa4_cute_wide_attention_matches_reference():
+def test_real_gpu_fa4_cute_sm100_attention_matches_reference():
     if jax.default_backend() != "gpu":
         pytest.skip("FA4/CuTe correctness requires a GPU backend.")
-    if fa4_cute.gpu_compute_capability() // 10 != 10:
-        pytest.skip("The wide FA4 tile requires SM100.")
+    if fa4_cute.gpu_compute_capability() != 100:
+        pytest.skip("This FA4 backend requires SM100.")
     pytest.importorskip("cutlass")
     pytest.importorskip("cutlass.cute")
     pytest.importorskip("flash_attn.cute.flash_bwd_preprocess")
@@ -342,7 +411,7 @@ def test_real_gpu_fa4_cute_wide_attention_matches_reference():
         v,
         AttentionMask.causal(),
         cotangent,
-        implementation="gpu_fa4_cute_wide",
+        implementation="gpu_fa4_cute_sm100",
     )
 
 
@@ -391,7 +460,15 @@ def test_real_gpu_fa4_cute_attention_matches_reference_with_leading_padding(slid
     _assert_real_gpu_fa4_cute_matches_reference(q, k, v, mask, cotangent, valid_tokens=valid)
 
 
-@pytest.mark.parametrize("implementation", ["gpu_fa4_cute", "gpu_fa4_cute_wide"])
+_SEQUENCE_SHARDED_LAYOUTS = [(4, 1, 64), (8, 2, 128), (4, 4, 128), (6, 1, 128), (8, 1, 128)]
+_SEQUENCE_SHARDED_CASES = [("gpu_fa4_cute", *layout) for layout in _SEQUENCE_SHARDED_LAYOUTS] + [
+    ("gpu_fa4_cute_sm100", q_heads, kv_heads, head_dim)
+    for q_heads, kv_heads, head_dim in _SEQUENCE_SHARDED_LAYOUTS
+    if head_dim == SM100_HEAD_DIM and q_heads // kv_heads in SM100_GQA_RATIOS
+]
+
+
+@pytest.mark.parametrize(("implementation", "q_heads", "kv_heads", "head_dim"), _SEQUENCE_SHARDED_CASES)
 @pytest.mark.parametrize(
     ("context_size", "sequence_axes"),
     [
@@ -403,14 +480,14 @@ def test_real_gpu_fa4_cute_attention_matches_reference_with_leading_padding(slid
         (4, ("data", "context")),
     ],
 )
-@pytest.mark.parametrize(("q_heads", "kv_heads", "head_dim"), [(4, 1, 64), (8, 2, 128), (4, 4, 128)])
+@pytest.mark.parametrize("mask_kind", ["causal", "window", "packed"])
 def test_real_gpu_fa4_cute_attention_matches_reference_with_sequence_sharded_queries(
-    q_heads, kv_heads, head_dim, context_size, sequence_axes, implementation
+    q_heads, kv_heads, head_dim, context_size, sequence_axes, implementation, mask_kind
 ):
     if jax.default_backend() != "gpu":
         pytest.skip("FA4/CuTe correctness requires a GPU backend.")
-    if implementation == "gpu_fa4_cute_wide" and (head_dim != 128 or fa4_cute.gpu_compute_capability() != 100):
-        pytest.skip("Wide tiles require sm100 and head_dim=128.")
+    if implementation == "gpu_fa4_cute_sm100" and fa4_cute.gpu_compute_capability() != 100:
+        pytest.skip("Native SM100 requires SM100.")
     if jax.device_count() < context_size:
         pytest.skip(f"Context-parallel FA4/CuTe needs at least {context_size} devices.")
     pytest.importorskip("cutlass")
@@ -448,8 +525,10 @@ def test_real_gpu_fa4_cute_attention_matches_reference_with_sequence_sharded_que
     k = jax.random.normal(k_key, (batch, seq_len, kv_heads, head_dim), dtype=jnp.bfloat16)
     v = jax.random.normal(v_key, (batch, seq_len, kv_heads, head_dim), dtype=jnp.bfloat16)
     segment_ids = jnp.broadcast_to(jnp.array([[11] * 213 + [12] * 291 + [-1] * 8], dtype=jnp.int32), (batch, seq_len))
-    mask = AttentionMask.causal(sliding_window=129).with_segment_ids(segment_ids)
-    valid = segment_ids >= 0
+    mask = AttentionMask.causal(sliding_window=129 if mask_kind != "causal" else None)
+    if mask_kind == "packed":
+        mask = mask.with_segment_ids(segment_ids)
+    valid = segment_ids >= 0 if mask_kind == "packed" else jnp.ones_like(segment_ids, dtype=jnp.bool_)
     cotangent = jax.random.normal(cotangent_key, q.shape, dtype=jnp.bfloat16)
     cotangent = cotangent * valid[..., None, None].astype(jnp.bfloat16)
 
@@ -536,3 +615,61 @@ def test_real_gpu_fa4_cute_zeroes_padding_tiles_before_reusing_query_storage(sli
     expected_gradients = jax.jit(jax.grad(reference_loss, argnums=(0, 1, 2)))(*short_qkv)
     for actual, expected in zip(gradients, expected_gradients, strict=True):
         np.testing.assert_allclose(actual[:1, :40], expected, atol=7e-2, rtol=7e-2)
+
+
+@pytest.mark.parametrize(("query_heads", "kv_heads"), [(48, 6), (48, 12), (6, 1)])
+@pytest.mark.parametrize(("sequence_length", "sliding_window"), [(257, None), (257, 31), (2305, 2048)])
+@pytest.mark.timeout(300)
+@pytest.mark.parametrize("implementation", ["gpu_fa4_cute", "gpu_fa4_cute_sm100"])
+def test_real_gpu_fa4_cute_sm100_gradients_with_changing_packed_segments(
+    query_heads, kv_heads, sequence_length, sliding_window, implementation
+):
+    if jax.default_backend() != "gpu" or fa4_cute.gpu_compute_capability() != 100:
+        pytest.skip("Native SM100 backward correctness requires an SM100 GPU.")
+    pytest.importorskip("cutlass.cute")
+    pytest.importorskip("flash_attn.cute.flash_bwd_sm100")
+
+    def output_and_gradients(q, k, v, cotangent, ids, *, implementation):
+        mask = AttentionMask.causal(sliding_window=sliding_window).with_segment_ids(ids)
+
+        def loss(q, k, v):
+            output = attention(q, k, v, mask, implementation=implementation)
+            # Reference attention uses a finite softmax sentinel for fully masked
+            # rows. Zero those outputs to match the packed attention contract.
+            if implementation == "reference":
+                output = jnp.where((ids >= 0)[..., None, None], output, 0)
+            return jnp.sum(output.astype(jnp.float32) * cotangent.astype(jnp.float32)), output
+
+        (_, output), gradients = jax.value_and_grad(loss, argnums=(0, 1, 2), has_aux=True)(q, k, v)
+        return (output, *gradients)
+
+    actual_call = jax.jit(lambda *args: output_and_gradients(*args, implementation=implementation))
+    reference_call = jax.jit(lambda *args: output_and_gradients(*args, implementation="reference"))
+    batch = 2 if sequence_length == 257 else 1
+    for iteration in range(3):
+        positions = np.arange(sequence_length)
+        boundaries = np.array([101] if sequence_length > 2048 else [31, 129, 193])
+        ids = np.stack([np.searchsorted(boundaries + iteration + row * 7, positions) for row in range(batch)])
+        ids[:, : 19 + iteration] = -1
+        ids[:, -17:] = -1
+        if batch == 2 and iteration == 2:
+            ids[1, :] = -1
+        query_shape = (batch, sequence_length, query_heads, 128)
+        kv_shape = (batch, sequence_length, kv_heads, 128)
+        keys = jax.random.split(jax.random.key(20260916 + iteration), 4)
+        q, k, v, cotangent = (
+            jax.random.normal(key, shape, dtype=jnp.bfloat16)
+            for key, shape in zip(keys, (query_shape, kv_shape, kv_shape, query_shape), strict=True)
+        )
+        # Reuse each executable with changed masks and nonzero padded cotangents
+        # to expose stale accumulator contents between invocations.
+        args = (q, k, v, cotangent, jnp.asarray(ids, dtype=jnp.int32))
+        actual = actual_call(*args)
+        expected = reference_call(*args)
+        for name, got, want in zip(("out", "dq", "dk", "dv"), actual, expected, strict=True):
+            got = np.asarray(got, dtype=np.float32)
+            want = np.asarray(want, dtype=np.float32)
+            difference = np.abs(got - want)
+            error = f"{name}: max absolute error {difference.max()}, mean {difference.mean()}"
+            np.testing.assert_allclose(got, want, atol=7e-2, rtol=7e-2, err_msg=error)
+            np.testing.assert_array_equal(got[ids < 0], 0, err_msg=name)

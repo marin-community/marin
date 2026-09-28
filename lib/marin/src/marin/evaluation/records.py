@@ -116,6 +116,25 @@ class ModelResourceConfig(BaseModel):
     disk: str | None
 
 
+class ModelLocatorRef(BaseModel):
+    """The immutable URI and producer identity of a resolved model artifact."""
+
+    model_config = ConfigDict(frozen=True)
+
+    uri: str
+    identity: str
+
+
+class SpeculativeServingRef(BaseModel):
+    """The draft model and speculative-decoding policy used by vLLM."""
+
+    model_config = ConfigDict(frozen=True)
+
+    method: str
+    model: ModelLocatorRef
+    num_speculative_tokens: int
+
+
 class ModelServeConfig(BaseModel):
     """Normalized model-server configuration preserved in an evaluation record."""
 
@@ -136,6 +155,7 @@ class ModelServeConfig(BaseModel):
     vllm_batch_invariant: bool | None = None
     vllm_use_flashinfer_sampler: bool | None = None
     vllm_extra_args: tuple[str, ...]
+    speculative: SpeculativeServingRef | None = None
     chat_template: str | None
     auto_overrides: bool
 
@@ -168,9 +188,10 @@ class ModelConfigRef(BaseModel):
 
     name: str
     location: str
+    identity: str | None = None
     revision: str | None
     tokenizer: str | None
-    tokenizer_revision: str | None
+    tokenizer_revision: str | None = None
     apply_chat_template: bool
     resource_hint: ModelResourceConfig
     serve: ModelServeConfig
@@ -306,6 +327,15 @@ class HardwareRef(BaseModel):
     task_count: int = 1
 
 
+class HostedJudgeRef(BaseModel):
+    """The model and hardware used for verifier-only hosted inference."""
+
+    model_config = ConfigDict(frozen=True)
+
+    model: ModelRef
+    hardware: HardwareRef
+
+
 class Provenance(BaseModel):
     """Where the run came from: launch-time git SHA, eval runtime, and launch host.
 
@@ -341,6 +371,30 @@ class ServingParams(BaseModel):
     max_model_len: int | None = None
     max_gen_tokens: int | None = None
     extra: dict[str, str] = Field(default_factory=dict)
+
+
+class SpeculativeDecodingMetrics(BaseModel):
+    """Per-evaluation deltas of vLLM speculative counters and their ratios."""
+
+    model_config = ConfigDict(frozen=True)
+
+    drafts: int
+    draft_tokens: int
+    accepted_tokens: int
+    mean_acceptance_length: float | None
+    draft_acceptance_rate: float | None
+
+
+class InferenceMetrics(BaseModel):
+    """Inference work observed during one evaluation from counter deltas."""
+
+    model_config = ConfigDict(frozen=True)
+
+    prompt_tokens: int
+    generation_tokens: int
+    wall_time_seconds: float
+    generation_tokens_per_second: float
+    speculative_decoding: SpeculativeDecodingMetrics | None = None
 
 
 class RunTiming(BaseModel):
@@ -417,6 +471,7 @@ class EvalRunRecord(BaseModel):
     """A free-text note on why the launch was run (``--description``), e.g. ``Trying out a new sweep
     after fixing RL``. Shared by every record in a group and surfaced on the launch in the dashboard."""
     model: ModelRef
+    judge: HostedJudgeRef | None = None
     evaluation: EvalRef = Field(alias="eval")
     hardware: HardwareRef
     status: RunStatus
@@ -440,6 +495,8 @@ class EvalRunRecord(BaseModel):
     """The eval's wall-clock window when captured; ``None`` on records without recorded timing."""
     serving: ServingParams | None = None
     """The model-serving and generation settings the run evaluated under; ``None`` when not captured."""
+    inference_metrics: InferenceMetrics | None = None
+    """Inference work and rates from vLLM counter deltas over this evaluation's window."""
 
 
 def record_path(prefix: str, run_id: str) -> str:

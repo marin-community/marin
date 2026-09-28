@@ -4,10 +4,12 @@
 """Tests for how EnvironmentSpec resolves the user setup scripts onto the wire."""
 
 import os
+import shutil
 import subprocess
+from zipfile import ZipFile
 
 import pytest
-from iris.cluster.runtime.env import UV_CACHE_PATH, build_common_iris_env, render_setup_steps
+from iris.cluster.runtime.env import UV_CACHE_RECOVERY_SIGNAL_PREFIX, build_common_iris_env, render_setup_steps
 from iris.cluster.setup_scripts import default_setup_script
 from iris.cluster.types import EnvironmentSpec
 from iris.rpc import job_pb2
@@ -71,8 +73,69 @@ package = false
     assert (venv / "bin" / "python").is_file()
 
 
-@pytest.mark.parametrize("shared_cache_fails", [False, True])
-def test_retry_attempt_switches_uv_installs_to_local_cache_only_after_shared_failure(tmp_path, shared_cache_fails):
+@pytest.mark.parametrize("link_mode", ["copy", "symlink"])
+def test_default_setup_sync_uses_host_link_mode_for_cached_wheel(tmp_path, link_mode):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    wheel = tmp_path / "setup_payload-0.1.0-py3-none-any.whl"
+    with ZipFile(wheel, "w") as archive:
+        archive.writestr("setup_payload/__init__.py", "value = 1\n")
+        archive.writestr(
+            "setup_payload-0.1.0.dist-info/WHEEL",
+            "Wheel-Version: 1.0\nGenerator: iris-test\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+        )
+        archive.writestr(
+            "setup_payload-0.1.0.dist-info/METADATA",
+            "Metadata-Version: 2.1\nName: setup-payload\nVersion: 0.1.0\n",
+        )
+        archive.writestr(
+            "setup_payload-0.1.0.dist-info/RECORD",
+            "setup_payload/__init__.py,,\nsetup_payload-0.1.0.dist-info/WHEEL,,\n"
+            "setup_payload-0.1.0.dist-info/METADATA,,\nsetup_payload-0.1.0.dist-info/RECORD,,\n",
+        )
+    (workdir / "pyproject.toml").write_text(
+        '[project]\nname = "setup-test"\nversion = "0.1.0"\nrequires-python = ">=3.12"\n'
+        f'dependencies = ["setup-payload @ {wheel.as_uri()}"]\n'
+        "[tool.uv]\npackage = false\n"
+    )
+
+    venv = tmp_path / "venv"
+    cache = tmp_path / "uv-cache"
+    env = {
+        **os.environ,
+        "IRIS_VENV": str(venv),
+        "IRIS_WORKDIR": str(workdir),
+        "UV_CACHE_DIR": str(cache),
+        "UV_LINK_MODE": link_mode,
+        "UV_PROJECT_ENVIRONMENT": str(venv),
+    }
+    subprocess.run(
+        ["bash", "-c", default_setup_script()],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    installed = next((venv / "lib").glob("python*/site-packages/setup_payload/__init__.py"))
+    if link_mode == "symlink":
+        assert installed.is_symlink()
+        assert installed.resolve().is_relative_to(cache)
+    else:
+        assert not installed.is_symlink()
+        shutil.rmtree(cache)
+        subprocess.run(
+            [venv / "bin" / "python", "-c", "import setup_payload; assert setup_payload.value == 1"], check=True
+        )
+
+
+@pytest.mark.parametrize(
+    "shared_cache_fails, local_cache_fails, expected_status",
+    [(False, False, 0), (True, False, 0), (True, True, 2)],
+)
+def test_uv_install_records_only_successful_local_cache_recovery(
+    tmp_path, shared_cache_fails, local_cache_fails, expected_status
+):
     workdir = tmp_path / "workdir"
     workdir.mkdir()
     (workdir / "pyproject.toml").write_text("[tool.uv]\npackage = false\n")
@@ -86,12 +149,23 @@ set -e
 if [ "$UV_CACHE_DIR" = "$SHARED_UV_CACHE" ] && [ "$SHARED_CACHE_FAILS" = "1" ] && [ "$1 $2" = "pip install" ]; then
   exit 1
 fi
+if [ "$UV_CACHE_DIR" != "$SHARED_UV_CACHE" ] && [ "$LOCAL_CACHE_FAILS" = "1" ]; then
+  exit 2
+fi
+if [ "$1" = "sync" ]; then
+  case " $* " in
+    *" --link-mode copy "*) ;;
+    *) exit 3 ;;
+  esac
+fi
 mkdir -p "$IRIS_VENV"
-ln -sf "$UV_CACHE_DIR/wheels/package.whl" "$IRIS_VENV/package.whl"
+printf '%s\n' "$UV_CACHE_DIR" > "$IRIS_VENV/package-cache"
 """
     )
     uv.chmod(0o755)
     venv = tmp_path / "venv"
+    shared_cache = tmp_path / "shared-uv-cache"
+    shared_cache.mkdir()
     iris_env = build_common_iris_env(
         task_id="/setup-test/0",
         attempt_id=1,
@@ -110,8 +184,10 @@ ln -sf "$UV_CACHE_DIR/wheels/package.whl" "$IRIS_VENV/package.whl"
         "IRIS_VENV": str(venv),
         "IRIS_WORKDIR": str(workdir),
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "LOCAL_CACHE_FAILS": str(int(local_cache_fails)),
         "SHARED_CACHE_FAILS": str(int(shared_cache_fails)),
-        "SHARED_UV_CACHE": UV_CACHE_PATH,
+        "SHARED_UV_CACHE": str(shared_cache),
+        "UV_CACHE_DIR": str(shared_cache),
         "UV_PROJECT_ENVIRONMENT": str(venv),
     }
 
@@ -121,13 +197,17 @@ ln -sf "$UV_CACHE_DIR/wheels/package.whl" "$IRIS_VENV/package.whl"
             *render_setup_steps(["uv pip install package", default_setup_script(python_version="3.12")]),
         ]
     )
-    subprocess.run(
+    completed = subprocess.run(
         ["bash", "-c", setup],
         env=env,
         capture_output=True,
         text=True,
-        check=True,
+        check=False,
     )
 
-    expected_cache = str(workdir / ".uv-recovery-cache") if shared_cache_fails else UV_CACHE_PATH
-    assert os.readlink(venv / "package.whl") == f"{expected_cache}/wheels/package.whl"
+    assert completed.returncode == expected_status
+    if expected_status == 0:
+        expected_cache = str(workdir / ".uv-recovery-cache") if shared_cache_fails else str(shared_cache)
+        assert (venv / "package-cache").read_text().strip() == expected_cache
+    signals = list(shared_cache.glob(f"{UV_CACHE_RECOVERY_SIGNAL_PREFIX}*"))
+    assert len(signals) == int(shared_cache_fails and not local_cache_fails)
