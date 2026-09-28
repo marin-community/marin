@@ -357,6 +357,7 @@ class MoEExpertMlp(eqx.Module):
     expert_chunks: int = eqx.field(static=True, default=1)
     num_expert_waves: int = eqx.field(static=True, default=1)
     fp8_dispatch: bool = eqx.field(static=True, default=False)
+    expert_remat: bool = eqx.field(static=True, default=True)
 
     @staticmethod
     def init(
@@ -374,6 +375,7 @@ class MoEExpertMlp(eqx.Module):
         expert_chunks: int = 1,
         num_expert_waves: int = 1,
         fp8_dispatch: bool = False,
+        expert_remat: bool = True,
         pspecs: MoEExpertMlpPspecs = MoEExpertMlpPspecs(),
     ) -> "MoEExpertMlp":
         resolved_implementation = resolve_moe_implementation(implementation)
@@ -398,6 +400,7 @@ class MoEExpertMlp(eqx.Module):
             expert_chunks=expert_chunks,
             num_expert_waves=num_expert_waves,
             fp8_dispatch=fp8_dispatch,
+            expert_remat=expert_remat,
         )
 
     @named_call
@@ -428,6 +431,7 @@ class MoEExpertMlp(eqx.Module):
             expert_chunks=self.expert_chunks,
             num_expert_waves=self.num_expert_waves,
             fp8_dispatch=self.fp8_dispatch,
+            expert_remat=self.expert_remat,
         )
 
 
@@ -449,6 +453,7 @@ def moe_mlp(
     expert_chunks: int = 1,
     num_expert_waves: int = 1,
     fp8_dispatch: bool = False,
+    expert_remat: bool = True,
 ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], MoeDispatchCounts]:
     """Functional routed MoE MLP core used by Grug modules and benchmarks.
 
@@ -576,6 +581,7 @@ def moe_mlp(
                 transport_capacity_factor=pooled_transport_capacity_factor,
                 num_expert_waves=num_expert_waves,
                 fp8_dispatch=fp8_dispatch,
+                expert_remat=expert_remat,
             )
         elif resolved_implementation == "deepep":
             shard_local_fn = _moe_mlp_ep_deepep_local

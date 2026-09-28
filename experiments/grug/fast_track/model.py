@@ -504,6 +504,9 @@ class GrugModelConfig:
     moe_expert_waves: int = 1
     """Static dispatch waves in the pooled-wave EP backend. Waves are independent, so the scheduler can overlap
     one wave's all-to-all with another's expert compute (the all-to-all was ~13% exposed at d512)."""
+    moe_expert_remat: bool = True
+    """Recompute the pooled-wave expert MLP and combine all-to-all in the backward. Off trades activation
+    memory for one fewer expert forward and combine all-to-all per wave."""
     moe_fp8_dispatch: bool = False
     """DeepSeek-V3 FP8 dispatch: the EP dispatch all-to-all sends activations as e4m3 with one fp32 scale per
     128-channel block (~0.52x the bf16 bytes); combine and every backward collective stay bf16 (STE)."""
@@ -2347,6 +2350,7 @@ def _expert_mlp_init(cfg: "GrugModelConfig", expert_width: int, key: PRNGKeyArra
         expert_chunks=1,
         num_expert_waves=cfg.moe_expert_waves,
         fp8_dispatch=cfg.moe_fp8_dispatch,
+        expert_remat=cfg.moe_expert_remat,
     )
     return eqx.tree_at(lambda m: m.w_gate, mlp, None, is_leaf=lambda x: x is None) if cfg.moe_ungated_relu2 else mlp
 
@@ -2439,6 +2443,7 @@ def _run_expert_bank(
             expert_chunks=em.expert_chunks,
             num_expert_waves=em.num_expert_waves,
             fp8_dispatch=em.fp8_dispatch,
+            expert_remat=em.expert_remat,
         )
     return em(routed_input, selected, combine_weights, mesh=get_abstract_mesh(), report_capacity_overflow=True)
 

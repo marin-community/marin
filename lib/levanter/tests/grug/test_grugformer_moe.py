@@ -1047,7 +1047,8 @@ def test_fixed_all_to_all_padding_does_not_change_capacity_acceptance():
 
 
 @pytest.mark.timeout(180)
-def test_fixed_pooled_wave_all_to_all_matches_dense_value_and_gradients():
+@pytest.mark.parametrize("expert_remat", [True, False])
+def test_fixed_pooled_wave_all_to_all_matches_dense_value_and_gradients(expert_remat):
     mesh = _make_single_expert_mesh()
     tokens = 6
     hidden_dim = 4
@@ -1084,6 +1085,7 @@ def test_fixed_pooled_wave_all_to_all_matches_dense_value_and_gradients():
             transport_capacity_factor=4.0,
             num_expert_waves=num_expert_waves,
             fp8_dispatch=False,
+            expert_remat=expert_remat,
         )[0]
 
     sharded_pooled_output = jax.shard_map(

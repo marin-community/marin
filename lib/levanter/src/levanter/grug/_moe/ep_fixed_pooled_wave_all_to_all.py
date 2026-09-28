@@ -615,11 +615,14 @@ def _moe_mlp_ep_fixed_pooled_wave_a2a_local(
     transport_capacity_factor: float,
     num_expert_waves: int,
     fp8_dispatch: bool,
+    expert_remat: bool = True,
 ) -> tuple[Float[Array, "Tlocal H"], CapacityDrops]:
     """Stripe each destination pool over fixed waves and report drops at each transport stage.
 
     ``fp8_dispatch`` sends the dispatched activations as block-scaled e4m3 (see
     ``_fp8_dispatch_all_to_all``); the combine and all backward collectives stay in the input dtype.
+    ``expert_remat`` recomputes each wave's expert MLP and combine all-to-all in the backward (saving
+    activation memory); off, the backward reuses the forward's intermediates instead.
     """
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
@@ -685,10 +688,10 @@ def _moe_mlp_ep_fixed_pooled_wave_a2a_local(
     pool_ranks = destination_ranks // num_waves
     sender_keep = assignment_valid & (pool_ranks < logical_pool_capacity)
 
-    remat = partial(
-        jax.checkpoint,
-        prevent_cse=False,
-        policy=jax.checkpoint_policies.nothing_saveable,
+    remat = (
+        partial(jax.checkpoint, prevent_cse=False, policy=jax.checkpoint_policies.nothing_saveable)
+        if expert_remat
+        else lambda fn: fn
     )
     out_local = jnp.zeros((tokens_per_shard, hidden_dim), dtype=jnp.float32)
     receiver_dropped = jnp.array(0, dtype=jnp.int32)
