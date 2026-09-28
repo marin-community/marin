@@ -662,6 +662,8 @@ def render_markdown(report: dict) -> str:
             [
                 "Δ is target minus reference log probability on masked response tokens; p99 is the 99th "
                 "percentile of its absolute value.",
+                "Replay scores use expert IDs from the original generation, including when scoring updated "
+                "weights. Later replay comparisons with vLLM include changes in routing since generation.",
                 f"95% intervals resample whole prompts {report['bootstrap']['draws']} times "
                 f"with seed {report['bootstrap']['seed']}.",
                 "",
@@ -837,7 +839,17 @@ def render_markdown(report: dict) -> str:
                 )
         lines.append("")
     if report["timing"]:
-        lines.extend(["## Probe timing", "", "| Timer | seconds | ms per frozen token |", "|---|---:|---:|"])
+        lines.extend(
+            [
+                "## Probe timing",
+                "",
+                "Scoring times include worker dispatch and kernel compilation. Comparing these forward passes "
+                "does not measure the change in total RL training-step time from enabling replay.",
+                "",
+                "| Timer | seconds | ms per frozen token |",
+                "|---|---:|---:|",
+            ]
+        )
         token_count = report.get("step_metrics", {}).get("update@0", {}).get("token_count", 0)
         for name, seconds in sorted(report["timing"].items()):
             if isinstance(seconds, (int, float)):
