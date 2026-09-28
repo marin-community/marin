@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from taskcompendium.harbor.runner import HarborLaunch, run_trial
+from taskcompendium.harbor.runner import ActionReplayLaunch, ChatLaunch, ReplayLaunch, run_trial
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256, import_row
 from taskcompendium.lowering import HarborTaskBinding, compatible_lowerings, lower_to_harbor, read_specification
 from taskcompendium.models import AnswerType, FunctionCall, ToolCallComparatorConfig
@@ -191,9 +191,7 @@ async def test_predicted_action_harbor_replay_outcomes(tmp_path, response, rewar
     binding = HarborTaskBinding()
     task = lower_to_harbor(specification, convention, binding, tmp_path / "task")
 
-    result = await run_trial(
-        task, binding, HarborLaunch("action_replay", agent_kwargs={"response": response}), tmp_path / "trials", "run"
-    )
+    result = await run_trial(task, binding, ActionReplayLaunch(response=response), tmp_path / "trials", "run")
 
     outcome = json.loads((tmp_path / "trials/run/verifier/taskcompendium-result.json").read_text())
     assert (outcome["status"], outcome["reward"]) == (status, reward)
@@ -205,25 +203,14 @@ async def test_predicted_action_harbor_replay_outcomes(tmp_path, response, rewar
     assert not (tmp_path / "trials/run/agent/response.txt").exists()
 
 
-@pytest.mark.parametrize(
-    "launch,message",
-    [
-        (HarborLaunch("replay", agent_kwargs={"response": "text"}), "Text replay requires"),
-        (HarborLaunch("action_replay", agent_kwargs={"response": "text"}), "Action replay requires"),
-        (HarborLaunch("action_replay", model="model", agent_kwargs={"response": {}}), "cannot select a model"),
-        (HarborLaunch("action_replay"), "requires only a response"),
-        (HarborLaunch("chat", model="model"), "requires api_base"),
-        (HarborLaunch("chat", model="model", agent_kwargs={"api_base": "url", "response": {}}), "Unsupported chat"),
-    ],
-)
-async def test_predicted_action_rejects_incompatible_launch_before_trial(tmp_path, launch, message):
+async def test_predicted_action_rejects_text_replay_before_trial(tmp_path):
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
     specification, convention = import_row(row, canonical_sha256(row))
     binding = HarborTaskBinding()
     task = lower_to_harbor(specification, convention, binding, tmp_path / "task")
 
-    with pytest.raises(ValueError, match=message):
-        await run_trial(task, binding, launch, tmp_path / "trials", "run")
+    with pytest.raises(ValueError, match="Text replay requires a plain or JSON task"):
+        await run_trial(task, binding, ReplayLaunch(response="text"), tmp_path / "trials", "run")
     assert not (tmp_path / "trials").exists()
 
 
@@ -245,7 +232,7 @@ async def test_predicted_action_chat_requests_native_output_without_dispatch(tmp
     result = await run_trial(
         task,
         binding,
-        HarborLaunch("chat", "model", {"api_base": "https://example.invalid", "api_key_env": "NEMO_TEST_API_KEY"}),
+        ChatLaunch(model="model", api_base="https://example.invalid", api_key_env="NEMO_TEST_API_KEY"),
         tmp_path / "trials",
         "run",
     )

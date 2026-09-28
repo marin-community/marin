@@ -30,11 +30,12 @@ from taskcompendium.submission import AnswerFormat
 RESPONSE_FILE = "response.txt"
 ACTION_FILE = "action.json"
 CHAT_COMPLETIONS_PATH = "/chat/completions"
-DEFAULT_REQUEST_TIMEOUT = 120
 AGENT_LOGS_PATH = "/logs/agent"
 VERIFIER_LOGS_PATH = "/logs/verifier"
 ARTIFACTS_LOGS_PATH = "/logs/artifacts"
 TESTS_PATH = "/tests"
+HARBOR_DOWNLOAD_DIRS = frozenset({AGENT_LOGS_PATH, ARTIFACTS_LOGS_PATH})
+HARBOR_EMPTY_DIRS = HARBOR_DOWNLOAD_DIRS | {VERIFIER_LOGS_PATH, TESTS_PATH}
 
 
 def _record_answer(logs_dir: Path, instruction: str, answer: str, context: AgentContext) -> None:
@@ -110,7 +111,7 @@ class NoToolEnvironment(BaseEnvironment):
         raise ValueError("Direct chat has no shell")
 
     async def empty_dirs(self, dirs, *, chmod: bool = True) -> None:
-        if not set(map(str, dirs)).issubset({AGENT_LOGS_PATH, VERIFIER_LOGS_PATH, ARTIFACTS_LOGS_PATH, TESTS_PATH}):
+        if not set(map(str, dirs)).issubset(HARBOR_EMPTY_DIRS):
             raise ValueError("Direct chat has no filesystem")
 
     async def upload_file(self, source_path, target_path) -> None:
@@ -123,7 +124,7 @@ class NoToolEnvironment(BaseEnvironment):
         raise ValueError("Direct chat has no filesystem")
 
     async def download_dir(self, source_dir, target_dir) -> None:
-        if source_dir not in {AGENT_LOGS_PATH, ARTIFACTS_LOGS_PATH}:
+        if source_dir not in HARBOR_DOWNLOAD_DIRS:
             raise ValueError("Direct chat has no filesystem")
 
 
@@ -172,14 +173,7 @@ class ActionReplayAgent(BaseAgent):
 class DirectChatAgent(BaseAgent):
     """Send the rendered request to an OpenAI-compatible chat endpoint."""
 
-    def __init__(
-        self,
-        *args,
-        api_base: str,
-        api_key_env: str | None = None,
-        request_timeout: float = DEFAULT_REQUEST_TIMEOUT,
-        **kwargs,
-    ):
+    def __init__(self, *args, api_base: str, request_timeout: float, api_key_env: str | None = None, **kwargs):
         super().__init__(*args, **kwargs)
         if self.model_name is None:
             raise ValueError("Direct chat requires a model name")
