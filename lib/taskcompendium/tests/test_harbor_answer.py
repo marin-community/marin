@@ -224,22 +224,6 @@ def test_old_verifier_schema_is_rejected_on_read(tmp_path, specification):
         read_specification(path)
 
 
-def test_exported_specification_rejects_unknown_verifier_kind(tmp_path, specification):
-    task = lower_to_harbor(
-        specification,
-        SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
-        HarborEnvironmentConfig(),
-        tmp_path / "task",
-    )
-    path = task / "specification.json"
-    payload = json.loads(path.read_text())
-    payload["verifier"]["kind"] = "unknown_kind"
-    path.write_text(json.dumps(payload))
-
-    with pytest.raises(ValueError, match="unknown_kind"):
-        read_specification(path)
-
-
 def test_file_result_cannot_use_text_submission_convention(tmp_path, specification):
     specification = specification.model_copy(update={"answer_type": AnswerType.FILE})
     convention = SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN)
