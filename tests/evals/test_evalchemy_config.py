@@ -16,7 +16,7 @@ from types import SimpleNamespace
 
 import pytest
 from marin.evaluation.evalchemy.client import build_command, build_model_args, scored_results
-from marin.evaluation.evalchemy.config import EvalchemyConfig, EvalchemyJudgeConfig
+from marin.evaluation.evalchemy.config import ChatTokenizerBackend, EvalchemyConfig, EvalchemyJudgeConfig
 from marin.evaluation.evalchemy.runner import (
     EvalchemyRunConfig,
     _run_config_json,
@@ -55,6 +55,18 @@ def test_chat_route_carries_chat_template_kwargs_in_model_args():
     model_args = build_model_args(config, use_chat=True, max_length=None)
 
     assert 'chat_template_kwargs={"enable_thinking":false}' in model_args.split(",")
+
+
+def test_chat_route_can_load_the_served_tokenizer_for_context_preflight():
+    config = _payload(_config(chat_tokenizer_backend=ChatTokenizerBackend.HUGGING_FACE))
+
+    model_args = dict(
+        pair.split("=", 1) for pair in build_model_args(config, use_chat=True, max_length=73728).split(",")
+    )
+
+    assert model_args["tokenizer_backend"] == "huggingface"
+    assert model_args["tokenizer"] == _MODEL.tokenizer
+    assert model_args["trust_remote_code"] == "True"
 
 
 def test_completion_route_omits_chat_template_kwargs():

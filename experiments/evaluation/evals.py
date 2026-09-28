@@ -85,6 +85,7 @@ class EvalchemyDefinition:
             ),
             evalchemy=EvalchemyRef(
                 apply_chat_template=config.apply_chat_template,
+                chat_tokenizer_backend=config.chat_tokenizer_backend,
                 max_gen_toks=config.max_gen_toks,
                 max_eval_instances=config.max_eval_instances,
                 num_concurrent=config.num_concurrent,
@@ -260,6 +261,7 @@ def evalchemy_run_config(name: str, config: EvalchemyConfig) -> EvalchemyRunConf
         name=name,
         tasks=tuple(tasks),
         apply_chat_template=config.apply_chat_template or False,
+        chat_tokenizer_backend=config.chat_tokenizer_backend,
         max_gen_toks=config.max_tokens,
         max_eval_instances=config.limit,
         num_concurrent=num_concurrent,

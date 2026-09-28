@@ -130,10 +130,12 @@ def build_model_args(config: dict, use_chat: bool, max_length: int | None) -> st
     """lm-eval ``--model_args`` for the served OpenAI endpoint (comma-joined ``key=value`` list)."""
     endpoint_path = "chat/completions" if use_chat else "completions"
     if use_chat:
-        # The endpoint applies its own chat template, so the client needs no tokenizer. Loading one
-        # rejects checkpoints whose tokenizer ships custom code (Kimi-Linear) or metadata the
-        # client's Transformers cannot parse (Gemma 4). Mirrors marin-community/evalchemy#140.
-        tokenizer_args: dict[str, object] = {"tokenizer_backend": "none"}
+        tokenizer_backend = config["chat_tokenizer_backend"]
+        tokenizer_args: dict[str, object] = {"tokenizer_backend": tokenizer_backend}
+        if tokenizer_backend == "huggingface":
+            # The tokenizer is used only to preflight the fully rendered prompt; messages still go
+            # to the endpoint, which applies the canonical serving template.
+            tokenizer_args.update(tokenizer=config["tokenizer"], trust_remote_code=True)
     else:
         # Loglikelihood scoring needs local token IDs, so load the checkpoint tokenizer and allow
         # its custom code.

@@ -154,6 +154,9 @@ class ModelServeConfig(BaseModel):
     reasoning_parser: str | None
     vllm_batch_invariant: bool | None = None
     vllm_use_flashinfer_sampler: bool | None = None
+    runai_streamer_concurrency: int | None = None
+    runai_streamer_s3_request_timeout_ms: int | None = None
+    object_store_load_mode: str = "stream"
     vllm_extra_args: tuple[str, ...]
     speculative: SpeculativeServingRef | None = None
     chat_template: str | None
@@ -250,6 +253,7 @@ class EvalchemyRef(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     apply_chat_template: bool
+    chat_tokenizer_backend: str = "none"
     max_gen_toks: int | None
     max_eval_instances: int | None
     num_concurrent: int

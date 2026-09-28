@@ -1521,6 +1521,7 @@ def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(t
         ],
         "evalchemy": {
             "apply_chat_template": True,
+            "chat_tokenizer_backend": "none",
             "max_eval_instances": 2,
             "num_concurrent": 16,
             "batch_size": "1",
