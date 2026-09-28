@@ -122,6 +122,8 @@ KDA_CHUNK_SIZE = 16
 _KDA_ROT_OMEGA_RANGE = (1.0 / 128, 1.0)
 # KDA per-layer activation diagnostics, lifted out of the layer stats into ``train/attn_res/knob_kda_*``.
 _KDA_STAT_PREFIX = "attn_res_knob_kda_"
+# Folded off the root key for the KV side stream (kv_stream_dim), so it leaves every other init unchanged.
+_KV_STREAM_KEY_SALT = 0x4B5
 
 
 class MtpMode(StrEnum):
@@ -368,6 +370,19 @@ class GrugModelConfig:
     # full rank. No decoupled RoPE (requires ``inkling_relpos``); heads are ``head_dim`` wide.
     mla: bool = False
     mla_kv_latent_dim: int = 512
+    kv_stream_dim: int = 0
+    """KV side stream width ``w`` (0: off). A second residual stream, seeded by its own ``[vocab, w]`` token
+    embedding and advanced by one small pre-norm block (causal document-masked softmax attention + ReLU^2
+    MLP, see ``KvStreamBlock``) per main layer, is the only source of keys and values: main layer ``l``'s
+    K/V projections (KDA ``w_k`` / ``w_v``, MLA ``w_dkv``, GQA ``w_k`` / ``w_v``) read the normed side stream
+    leaving side block ``l`` (shape ``[w, ...]``) instead of the main stream, so "what am I" is built apart
+    from "who comes next". Queries, gates, beta, decay and the Inkling bias stay on the main stream. Needs
+    ``attn_res`` (the side-stream states reach the layers as AttnRes layer extras)."""
+    kv_stream_heads: int = 1
+    """Attention heads of the side-stream blocks (head dim ``kv_stream_dim / kv_stream_heads``; keep it 128
+    for the FA4 kernel)."""
+    kv_stream_mlp_mult: int = 4
+    """Side-stream MLP width as a multiple of ``kv_stream_dim``."""
     local_mixer: LocalMixer = LocalMixer.SLIDING_WINDOW
     kda_dt_range: tuple[float, float] = (0.02, 0.5)
     """KDA ``dt_bias`` init: the per-token log-decay ``|g|`` at zero gate input is log-uniform in this range."""
@@ -1032,6 +1047,20 @@ class GrugModelConfig:
         if self.newton_muon and (self.dense_mlp or self.newton_muon_every < 1):
             raise ValueError("newton_muon needs routed experts (dense_mlp=False) and newton_muon_every >= 1")
 
+        if self.kv_stream_dim:
+            if not self.attn_res or self.kv_stream_dim % self.kv_stream_heads:
+                raise ValueError("kv_stream_dim needs attn_res and a multiple of kv_stream_heads")
+            if (
+                self.mla_share_kv_latent
+                or self.attn_res_v_gate
+                or self.attn_res_source_delta
+                or self.mla_forget_gate
+                or {"k", "v"} & set(self.attn_res_sum_inputs)
+            ):
+                raise ValueError(
+                    "kv_stream_dim does not combine with mla_share_kv_latent, attn_res_v_gate, attn_res_source_delta, "
+                    "mla_forget_gate (a key-side main-stream bias) or k/v attn_res_sum_inputs"
+                )
         if self.moe_shortcut and not self.attn_res:
             raise ValueError("moe_shortcut requires attn_res (the MoE shortcut is an AttnRes gate)")
         if self.memory_layers:
@@ -1059,6 +1088,11 @@ class GrugModelConfig:
         if self.latent_out_dim is not None:
             return self.latent_out_dim != self.hidden_dim
         return self.latent_dim is not None and not self.latent_write_select
+
+    @property
+    def kv_in_dim(self) -> int:
+        """Input width of the attention K/V projections: the side stream (``kv_stream_dim``) or the main stream."""
+        return self.kv_stream_dim or self.hidden_dim
 
     @property
     def num_null_experts(self) -> int:
@@ -1227,7 +1261,7 @@ class CausalSelfAttention(eqx.Module):
                 sconv_q=(ShortConv.init(n * h, cfg.sconv_kernel) if cfg.sconv and "q" in cfg.sconv_sites else None),
                 # Without Inkling the MLA layers are NoPE (they are global, so RoPE is disabled there).
                 rel_pos=InklingRelPos.init(cfg, key=k_rel) if cfg.inkling_relpos else None,
-                w_dkv=reshard(_init_weight(k_dkv, (d, kvl), std), P(_FSDP_AXES, None)),
+                w_dkv=reshard(_init_weight(k_dkv, (cfg.kv_in_dim, kvl), std), P(_FSDP_AXES, None)),
                 kv_latent_norm=_learned_rms_norm(cfg, kvl, cfg.layer_norm_eps),
                 w_uk=reshard(_init_weight(k_uk, (kvl, n * h), std), P(None, "model")),
                 w_uv=reshard(_init_weight(k_uv, (kvl, n * h), std), P(None, "model")),
@@ -1273,8 +1307,8 @@ class CausalSelfAttention(eqx.Module):
         k_q, k_k, k_v, k_o, k_rel = random.split(key, 5)
         return CausalSelfAttention(
             w_q=reshard(_init_weight(k_q, (d, n * h), std), P(_FSDP_AXES, "model")),
-            w_k=reshard(_init_weight(k_k, (d, m * h), std), P(_FSDP_AXES, "model")),
-            w_v=reshard(_init_weight(k_v, (d, m * h), std), P(_FSDP_AXES, "model")),
+            w_k=reshard(_init_weight(k_k, (cfg.kv_in_dim, m * h), std), P(_FSDP_AXES, "model")),
+            w_v=reshard(_init_weight(k_v, (cfg.kv_in_dim, m * h), std), P(_FSDP_AXES, "model")),
             w_o=reshard(_init_weight(k_o, (n * h, d), std * cfg.init_std_mult_attn_out), P("model", _FSDP_AXES)),
             attn_gate=attn_gate,
             sconv_k=(ShortConv.init(m * h, cfg.sconv_kernel) if cfg.sconv and "k" in cfg.sconv_sites else None),
@@ -1317,14 +1351,16 @@ class CausalSelfAttention(eqx.Module):
         token_ids: Int[Array, "B S"] | None,
         kv_share: dict[str, jax.Array] | None = None,
         proj_inputs: dict[str, jax.Array] | None = None,
+        kv_input: Float[Array, "B S W"] | None = None,
     ) -> tuple[jax.Array, jax.Array, jax.Array, tuple[jax.Array, jax.Array] | None]:
-        """MLA with a compressed KV latent: full-rank q; k and v up-projected from one normed latent. The
-        last element is the second (q, k) pair of ``mla_diff_attn`` (same latent and SConvs), else None."""
+        """MLA with a compressed KV latent: full-rank q; k and v up-projected from one normed latent (of
+        ``kv_input``, the KV side stream, when given). The last element is the second (q, k) pair of
+        ``mla_diff_attn`` (same latent and SConvs), else None."""
         assert self.w_dkv is not None and self.kv_latent_norm is not None
         head_dim = self.cfg.inferred_head_dim
         proj_inputs = proj_inputs or {}
         q_in = proj_inputs.get("q", x)
-        latent = jnp.einsum("bsh,hl->bsl", x, self.w_dkv)
+        latent = jnp.einsum("bsh,hl->bsl", x if kv_input is None else kv_input, self.w_dkv)
         if self.bias_dkv is not None:
             latent = latent + unshard(self.bias_dkv).astype(x.dtype)
 
@@ -1385,12 +1421,14 @@ class CausalSelfAttention(eqx.Module):
         x: Float[Array, "B S D"],
         sconv_segment_ids: Int[Array, "B S"] | None,
         is_global: bool | jax.Array,
+        kv_input: Float[Array, "B S W"] | None = None,
     ) -> tuple[jax.Array, jax.Array, jax.Array]:
         assert self.w_k is not None and self.w_v is not None
         head_dim = self.cfg.inferred_head_dim
+        kv_in = x if kv_input is None else kv_input
         q_flat = jnp.einsum("bsh,hd->bsd", x, self.w_q)
-        k_flat = jnp.einsum("bsh,hd->bsd", x, self.w_k)
-        v_flat = jnp.einsum("bsh,hd->bsd", x, self.w_v)
+        k_flat = jnp.einsum("bsh,hd->bsd", kv_in, self.w_k)
+        v_flat = jnp.einsum("bsh,hd->bsd", kv_in, self.w_v)
         # SConv: depthwise causal conv after the K projection.
         if self.sconv_k is not None:
             k_flat = self.sconv_k(k_flat, sconv_segment_ids)
@@ -1437,10 +1475,12 @@ class CausalSelfAttention(eqx.Module):
         kv_share: dict[str, jax.Array] | None = None,
         proj_inputs: dict[str, jax.Array] | None = None,
         value_residual: bool = False,
+        kv_input: Float[Array, "B S W"] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         """``kv_share`` (MLA only) is a per-forward mailbox for ``mla_share_kv_latent`` and
         ``value_residual_layers``; ``proj_inputs`` optionally replaces the input of the ``q`` / ``k`` / ``v``
-        projections; ``value_residual`` (static) mixes the first layer's values into this layer's.
+        projections; ``value_residual`` (static) mixes the first layer's values into this layer's;
+        ``kv_input`` (``kv_stream_dim``) is the normed KV side stream the K/V projections read instead of ``x``.
         Returns the output and logging-only stats (``mla_v_filter``)."""
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
@@ -1450,12 +1490,12 @@ class CausalSelfAttention(eqx.Module):
         sconv_segment_ids = _sconv_segment_ids(mask)
         second_qk = None
         if self.cfg.mla:
-            q, k, v, second_qk = self._mla_qkv(x, sconv_segment_ids, token_ids, kv_share, proj_inputs)
+            q, k, v, second_qk = self._mla_qkv(x, sconv_segment_ids, token_ids, kv_share, proj_inputs, kv_input)
             if self.vres_lambda is not None:
                 assert kv_share is not None
                 v = _value_residual(v, self.vres_lambda, kv_share, value_residual)
         else:
-            q, k, v = self._gqa_qkv(x, sconv_segment_ids, is_global)
+            q, k, v = self._gqa_qkv(x, sconv_segment_ids, is_global, kv_input)
         stats: dict[str, jax.Array] = {}
         if self.v_filter_w is not None and self.v_filter_b is not None:
             # Noise filter: each value read is kept by sigmoid(w_h . v_j + b_h).
@@ -1639,6 +1679,12 @@ def _learned_knob_stats(layer: "Block", i: int) -> dict[str, jax.Array]:
         # LR-AttnRes: norms of this layer's r-wide pseudo-queries (0 at init = uniform routing).
         for name, query in (("attn", layer.attn_res_query_attn), ("mlp", layer.attn_res_query_mlp)):
             stats[f"attn_res_knob_lrkey_qnorm_{name}_L{i}"] = jnp.linalg.norm(jax.lax.stop_gradient(query))
+    if layer.attn.cfg.kv_stream_dim:
+        # The main layer's K/V projections, which read the KV side stream.
+        names = ("w_dkv",) if isinstance(layer.attn, CausalSelfAttention) and layer.attn.cfg.mla else ("w_k", "w_v")
+        for name in names:
+            weight = jax.lax.stop_gradient(getattr(layer.attn, name)).astype(jnp.float32)
+            stats[f"attn_res_knob_kv_proj_{name}_norm_L{i}"] = jnp.linalg.norm(weight)
     router_tok_b = getattr(layer.mlp, "router_tok_b", None)
     if router_tok_b is not None:
         stats[f"attn_res_knob_router_tok_b_norm_L{i}"] = jnp.linalg.norm(
@@ -1913,8 +1959,8 @@ class KimiDeltaAttention(eqx.Module):
         rot_rank = cfg.kda_dd_rope_rank
         return KimiDeltaAttention(
             w_q=reshard(_init_weight(k_q, (d, n * h), std), P(_FSDP_AXES, "model")),
-            w_k=reshard(_init_weight(k_k, (d, n * h), std), P(_FSDP_AXES, "model")),
-            w_v=reshard(_init_weight(k_v, (d, n * h), std), P(_FSDP_AXES, "model")),
+            w_k=reshard(_init_weight(k_k, (cfg.kv_in_dim, n * h), std), P(_FSDP_AXES, "model")),
+            w_v=reshard(_init_weight(k_v, (cfg.kv_in_dim, n * h), std), P(_FSDP_AXES, "model")),
             w_o=reshard(_init_weight(k_o, (n * h, d), std * cfg.init_std_mult_attn_out), P("model", _FSDP_AXES)),
             w_g=reshard(
                 _init_weight(k_g, (d, n if cfg.kda_gate_per_head else n * h), std * cfg.init_std_mult_gates),
@@ -1992,8 +2038,11 @@ class KimiDeltaAttention(eqx.Module):
         no_beta: bool = False,
         kv_share: dict[str, jax.Array] | None = None,
         value_residual: bool = False,
+        kv_input: Float[Array, "B S W"] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        """``proj_inputs`` optionally replaces the input of the ``q`` / ``k`` / ``v`` projections;
+        """``kv_input`` (``kv_stream_dim``) is the normed KV side stream that the ``k`` / ``v`` projections
+        (and their SConvs) read instead of ``x``; the erase / write gates, beta and decay stay on ``x``.
+        ``proj_inputs`` optionally replaces the input of the ``q`` / ``k`` / ``v`` projections;
         ``no_decay`` / ``no_beta`` (static, per layer) replace g with 0 / beta with 1; ``kv_share`` /
         ``value_residual`` as in ``CausalSelfAttention``. Also returns logging stats (``kda_dd_rope`` rates;
         the erase gate's mean and mean binary entropy with ``kda_erase_gate``)."""
@@ -2004,7 +2053,8 @@ class KimiDeltaAttention(eqx.Module):
         proj_inputs = proj_inputs or {}
 
         def project(w: jax.Array, conv: ShortConv, bias_row: int, name: str) -> jax.Array:
-            y = jnp.einsum("bsh,hd->bsd", proj_inputs.get(name, x), w)
+            source = kv_input if kv_input is not None and name in ("k", "v") else proj_inputs.get(name, x)
+            y = jnp.einsum("bsh,hd->bsd", source, w)
             if self.bias_qkv is not None:
                 y = y + unshard(self.bias_qkv[bias_row]).astype(x.dtype)
             y = jax.nn.silu(conv(y, segment_ids))
@@ -3359,10 +3409,12 @@ class Block(eqx.Module):
         sum_components: tuple[str, ...] = (),
         kda_ablation: tuple[bool, bool] = (False, False),
         value_residual: bool = False,
+        kv_input: Float[Array, "B S W"] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         """``sum_stream`` (with ``sum_components``) feeds those q/k/v projections from the straight-sum
-        stream, through the same RMSNorm and GatedNorm, instead of the AttnRes mix ``h``. Returns the
-        branch output and the mixer's logging stats."""
+        stream, through the same RMSNorm and GatedNorm, instead of the AttnRes mix ``h``; ``kv_input``
+        (``kv_stream_dim``) is the normed KV side stream the K/V projections read. Returns the branch output
+        and the mixer's logging stats."""
         attn_in = self.attn_gated_norm(self.rms_attn(_laurel(h, self.laurel_a_attn, self.laurel_b_attn)))
         proj_inputs = None
         attn_components = tuple(c for c in sum_components if c in ("q", "k", "v"))
@@ -3381,6 +3433,7 @@ class Block(eqx.Module):
                 no_beta=kda_ablation[1],
                 kv_share=kv_share,
                 value_residual=value_residual,
+                kv_input=kv_input,
             )
         else:
             out, stats = self.attn(
@@ -3392,6 +3445,7 @@ class Block(eqx.Module):
                 kv_share=kv_share,
                 proj_inputs=proj_inputs,
                 value_residual=value_residual,
+                kv_input=kv_input,
             )
         if self.bias_attn_out is not None:
             out = out + unshard(self.bias_attn_out).astype(out.dtype)
@@ -3994,6 +4048,7 @@ def _attn_res_layer(
         ("v",) if v_stream is not None else (),
         kda_ablation,
         physical in cfg.value_residual_layers,
+        _kv_stream_input(logit_bias),
     )
     # The MLP re-attends over the history including this layer's attention write, or without it
     # (moe_shortcut) so the MoE does not wait on the attention.
@@ -4058,6 +4113,7 @@ def _attn_res_layer_full(diff_args, mask, token_ids, use_long, layer_index, eps,
         attn_side_stream,
         sum_components,
         value_residual=layer_index % cfg.num_layers in cfg.value_residual_layers,
+        kv_input=_kv_stream_input(logit_bias),
     )
     sum_components = cfg.attn_res_sum_inputs
     # moe_shortcut: the MoE gate reads the history before this layer's attention write.
@@ -4103,6 +4159,11 @@ def _attn_res_layer_full(diff_args, mask, token_ids, use_long, layer_index, eps,
         _ATTN_RES_W_MLP: w_mlp,
     }
     return mlp_out, blocks, block_logits, stats
+
+
+def _kv_stream_input(extras: dict[str, jax.Array | None] | None) -> jax.Array | None:
+    """This layer's normed KV side-stream state ``extras["kv_stream"]`` (``kv_stream_dim``), or None."""
+    return None if extras is None else extras.get("kv_stream")
 
 
 def _route_kwargs(
@@ -4223,6 +4284,107 @@ def _unstack_layers(stacked: ArrayStacked[Block]) -> list[Block]:
     return [treedef.unflatten([parts[i][0] for parts in split_leaves]) for i in range(num_layers)]
 
 
+class KvStreamBlock(eqx.Module):
+    """One pre-norm block of the KV side stream (``kv_stream_dim`` = ``w``): ``s += attn(rms(s))`` then
+    ``s += mlp(rms(s))``. The attention is plain causal softmax attention within the side stream, masked
+    by the main model's full-causal document mask, with weightless per-head QK RMSNorm and full RoPE
+    (``cfg.rope``); the MLP is ungated ReLU^2 of width ``kv_stream_mlp_mult * w``. ``kv_norm`` is the learned
+    RMSNorm of the block's output that the paired main layer's K/V projections read. All matrices are
+    random-init at ``cfg.initializer_std`` (MuonH)."""
+
+    rms_attn: LearnedRMSNorm
+    w_q: Float[Array, "W W"]
+    w_k: Float[Array, "W W"]
+    w_v: Float[Array, "W W"]
+    w_o: Float[Array, "W W"]
+    rms_mlp: LearnedRMSNorm
+    w_up: Float[Array, "W M"]
+    w_down: Float[Array, "M W"]
+    kv_norm: LearnedRMSNorm
+    cfg: GrugModelConfig = eqx.field(static=True)
+
+    @staticmethod
+    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "KvStreamBlock":
+        w, std, eps = cfg.kv_stream_dim, cfg.initializer_std, cfg.layer_norm_eps
+        m = cfg.kv_stream_mlp_mult * w
+        k_q, k_k, k_v, k_o, k_up, k_down = random.split(key, 6)
+        return KvStreamBlock(
+            rms_attn=_learned_rms_norm(cfg, w, eps),
+            w_q=reshard(_init_weight(k_q, (w, w), std), P(_FSDP_AXES, None)),
+            w_k=reshard(_init_weight(k_k, (w, w), std), P(_FSDP_AXES, None)),
+            w_v=reshard(_init_weight(k_v, (w, w), std), P(_FSDP_AXES, None)),
+            w_o=reshard(_init_weight(k_o, (w, w), std), P(None, _FSDP_AXES)),
+            rms_mlp=_learned_rms_norm(cfg, w, eps),
+            w_up=reshard(_init_weight(k_up, (w, m), std), P(_FSDP_AXES, None)),
+            w_down=reshard(_init_weight(k_down, (m, w), std), P(None, _FSDP_AXES)),
+            kv_norm=_learned_rms_norm(cfg, w, eps),
+            cfg=cfg,
+        )
+
+    @named_call
+    def __call__(self, s: Float[Array, "B S W"], mask: AttentionMask) -> Float[Array, "B S W"]:
+        head_dim = self.cfg.kv_stream_dim // self.cfg.kv_stream_heads
+        x = self.rms_attn(s)
+
+        def heads(w: jax.Array) -> jax.Array:
+            return rearrange(jnp.einsum("bsw,wd->bsd", x, w), "... (n d) -> ... n d", d=head_dim)
+
+        q, k = apply_rotary_embedding(
+            rms_norm(heads(self.w_q)),
+            rms_norm(heads(self.w_k)),
+            seq_len=s.shape[1],
+            head_dim=head_dim,
+            rope=self.cfg.rope,
+        )
+        attn_impl = "gpu_fa4_cute" if jax.default_backend() == "gpu" else None
+        o = attention(q, k, heads(self.w_v), mask, implementation=attn_impl)
+        o = jnp.reshape(o, (*o.shape[:-2], o.shape[-2] * o.shape[-1]), out_sharding=P(_BATCH_AXES, None, None))
+        s = s + jnp.einsum("bsd,dw->bsw", o, self.w_o, out_sharding=_batch_spec())
+        hidden = jnp.square(jax.nn.relu(jnp.einsum("bsw,wm->bsm", self.rms_mlp(s), self.w_up)))
+        return s + jnp.einsum("bsm,mw->bsw", hidden, self.w_down, out_sharding=_batch_spec())
+
+
+class KvStream(eqx.Module):
+    """The KV side stream of ``kv_stream_dim``: its own token embedding (RMS-normed, no gain) advanced by
+    one ``KvStreamBlock`` per main layer. It reads only the token ids, so it runs once before the main
+    layers; main layer ``l`` reads ``blocks[l].kv_norm`` of the state leaving side block ``l`` (so layer 0's
+    K/V already had one side block). Under ``AttnResLayerBackward.RECOMPUTE`` each side block is
+    rematerialized in the backward (only its input is saved), like the main layers."""
+
+    token_embed: Float[Array, "V W"]
+    blocks: ArrayStacked[KvStreamBlock]
+
+    @staticmethod
+    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "KvStream":
+        k_embed, k_blocks = random.split(key)
+        return KvStream(
+            token_embed=reshard(
+                _init_weight(k_embed, (cfg.vocab_size, cfg.kv_stream_dim), cfg.initializer_std), P(None, None)
+            ),
+            blocks=ArrayStacked.init(cfg.num_layers, KvStreamBlock)(cfg, key=random.split(k_blocks, cfg.num_layers)),
+        )
+
+    def __call__(
+        self, token_ids: Int[Array, "B S"], mask: AttentionMask, gather
+    ) -> tuple[list[Float[Array, "B S W"]], dict[str, jax.Array]]:
+        """Per main layer, the normed side-stream state it reads; and each state's RMS for logging."""
+        s = rms_norm(gather(self.token_embed, token_ids))
+        kv_inputs, stats = [], {}
+        for i, block in enumerate(_unstack_layers(self.blocks)):
+            recompute = block.cfg.attn_res_layer_backward == AttnResLayerBackward.RECOMPUTE
+            s = (eqx.filter_checkpoint(block, policy=None) if recompute else block)(s, mask)
+            kv_inputs.append(block.kv_norm(s))
+            stats[f"{_LAYER_KNOB_PREFIX}kv_stream_rms_L{i}"] = jnp.sqrt(
+                jnp.mean(jnp.square(jax.lax.stop_gradient(s).astype(jnp.float32)))
+            )
+            for name in ("w_q", "w_k", "w_v", "w_o", "w_up", "w_down"):
+                weight = jax.lax.stop_gradient(getattr(block, name)).astype(jnp.float32)
+                stats[f"{_LAYER_KNOB_PREFIX}kv_stream_{name}_norm_L{i}"] = jnp.linalg.norm(weight)
+            gain = jnp.concatenate([jax.lax.stop_gradient(g).reshape(-1) for g in jax.tree.leaves(block.kv_norm)])
+            stats[f"{_LAYER_KNOB_PREFIX}kv_stream_kv_norm_gain_mean_L{i}"] = jnp.mean(gain)
+        return kv_inputs, stats
+
+
 class Transformer(eqx.Module):
     token_embed: jax.Array
     embed_norm: LearnedRMSNorm
@@ -4310,6 +4472,8 @@ class Transformer(eqx.Module):
     """Output bigram prior (``output_bigram_rank``): current-token code table ``U`` and zero-init read-out ``W``."""
     lm_head_bias: Float[Array, " V"] | None
     """Output logit bias (``lm_head_unigram_bias``), float32 even in the compute copy."""
+    kv_stream: KvStream | None
+    """The KV side stream (``kv_stream_dim``), the only source of the layers' keys and values."""
     config: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -4677,6 +4841,7 @@ class Transformer(eqx.Module):
             lm_head_bias=(
                 reshard(jnp.zeros((cfg.vocab_size,), jnp.float32), P(None)) if cfg.lm_head_unigram_bias else None
             ),
+            kv_stream=KvStream.init(cfg, key=random.fold_in(key, _KV_STREAM_KEY_SALT)) if cfg.kv_stream_dim else None,
             config=cfg,
         )
 
@@ -5048,6 +5213,11 @@ class Transformer(eqx.Module):
 
         weight_logs: dict[int, tuple[jax.Array, bool]] = {}
         layer_logs: dict[str, jax.Array] = {}
+        kv_inputs = None
+        if self.kv_stream is not None:
+            gather = _embedding_gather if cfg.embed_grad_fp32 else _embedding_gather_autodiff
+            kv_inputs, kv_stream_logs = self.kv_stream(token_ids, long_layer_mask, gather)
+            layer_logs.update(kv_stream_logs)
         nitp_logs: dict[str, jax.Array] = {}
         if cfg.nitp_weight > 0 and not 0 <= cfg.nitp_layer < num_layers:
             raise ValueError(f"nitp_layer must be in 0..{num_layers - 1}, got {cfg.nitp_layer}")
@@ -5081,6 +5251,8 @@ class Transformer(eqx.Module):
                 if ple_rows is not None:
                     ple_i = rms_norm(ple_rows[..., i * cfg.ple_dim : (i + 1) * cfg.ple_dim], eps)
                     layer_extras = {**(logit_bias or {}), "ple": ple_i}
+                if kv_inputs is not None:
+                    layer_extras = {**(layer_extras or {}), "kv_stream": kv_inputs[i]}
                 if i in cfg.memory_layers:
                     assert self.memory is not None
                     layer_extras = {**(layer_extras or {}), "memory": self.memory[cfg.memory_layers.index(i)]}
