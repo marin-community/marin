@@ -31,21 +31,25 @@ from jaxtyping import Array, Float, Int
 
 @dataclass(frozen=True, slots=True)
 class GmmBlockSizes:
-    bm: int = 64
-    bn: int = 64
+    """Defaults from an H100 sweep at the d512 ragged-EP chunk (M=301466, G=24, K=256, N=384, bf16)."""
+
+    bm: int = 128
+    bn: int = 128
     bk: int = 64
-    num_warps: int = 4
-    num_stages: int = 2
+    num_warps: int = 8
+    num_stages: int = 3
 
 
 @dataclass(frozen=True, slots=True)
 class TgmmBlockSizes:
-    bm: int = 64
+    """Defaults from the same H100 sweep (fused fwd+bwd 1.59 ms vs 2.69 ms for haliax ragged_dot + ReLU²)."""
+
+    bm: int = 128
     bn: int = 128
-    bk: int = 64
-    splits: int = 4
+    bk: int = 32
+    splits: int = 2
     num_warps: int = 4
-    num_stages: int = 2
+    num_stages: int = 3
 
 
 @dataclass(frozen=True, slots=True)
