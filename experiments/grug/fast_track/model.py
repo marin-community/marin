@@ -14,6 +14,7 @@ import dataclasses
 import functools
 import itertools
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -46,6 +47,7 @@ from levanter.grug.attention import (
 from levanter.grug.grug_moe import (
     MoeActivation,
     MoEExpertMlp,
+    MoeOverlapWork,
     moe_mlp,
 )
 from levanter.grug.loss import BlockSizes, fused_linear_softmax_cross_entropy_loss
@@ -643,6 +645,10 @@ class GrugModelConfig:
     moe_expert_waves: int = 1
     """Static dispatch waves in the pooled-wave EP backend. Waves are independent, so the scheduler can overlap
     one wave's all-to-all with another's expert compute (the all-to-all was ~13% exposed at d512)."""
+    moe_shared_overlap: bool = False
+    """Run the shared experts inside the pooled-wave EP shard under the first wave's dispatch all-to-all
+    (forward) and its reverse (backward), pinned there by optimization barriers; same math. Their gate/up
+    GEMM leaves the fused router/latent projection. Without EP (one expert shard) they just run in place."""
     moe_expert_remat: bool = True
     """Recompute the pooled-wave expert MLP and combine all-to-all in the backward. Off trades activation
     memory for one fewer expert forward and combine all-to-all per wave."""
@@ -2473,11 +2479,13 @@ class MoEMLP(eqx.Module):
         projected: list[jax.Array] | None = None,
         hash_token_ids: Int[Array, "B S"] | None = None,
         noise_key: jax.Array | None = None,
+        overlap: MoeOverlapWork | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         """``projected`` holds ``x_flat @ w`` for each of ``input_projection_weights`` when the caller
         computed them already (fused with other projections of the same input). ``hash_token_ids`` picks
         the experts by token-id hash (``moe_hash_layers``); ``noise_key`` adds the training-only Gumbel
-        noise of ``moe_gumbel_tau`` to the expert selection."""
+        noise of ``moe_gumbel_tau`` to the expert selection. ``overlap`` is ``[T, D]`` token-local work run
+        under the first bank's dispatch all-to-all (``moe_shared_overlap``) and added to the output."""
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
         if projected is None:
@@ -2611,14 +2619,18 @@ class MoEMLP(eqx.Module):
                 routed_input, selected_experts, combine_weights
             )
         outputs, overflows, col = [], [], 0
+        overlap_out = None
         for (start, _, bank_k), em, bank_index in zip(banks, bank_mlps, (1, 2), strict=False):
-            out, overflow = _run_expert_bank(
+            out, overflow, *bank_overlap_out = _run_expert_bank(
                 em,
                 _bank_config(self.cfg, bank_index),
                 routed_input,
                 (real_selected[:, col : col + bank_k] - start).astype(jnp.int32),
                 real_weights[:, col : col + bank_k],
+                overlap if bank_index == 1 else None,
             )
+            if bank_overlap_out:
+                overlap_out = bank_overlap_out[0]
             if self.bank_scale is not None:
                 out = out * self.bank_scale[bank_index - 1].astype(out.dtype)
             outputs.append(out)
@@ -2657,10 +2669,55 @@ class MoEMLP(eqx.Module):
             gain = self.cfg.initializer_std * math.sqrt(self.cfg.latent_dim)
             pad = self.cfg.hidden_dim - self.cfg.latent_dim
             routed_flat = jnp.pad(routed_flat * gain, ((0, 0), (0, pad)))
+        if overlap_out is not None:
+            routed_flat = routed_flat + reshard(overlap_out, _batch_spec()).astype(routed_flat.dtype)
 
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         routed = reshard(routed, _batch_spec())
         return routed, router_stats
+
+
+def _shared_experts_tail(
+    cfg: "GrugModelConfig",
+    parts: Sequence[jax.Array],
+    num_shared: int,
+    gated: bool,
+    w_down: jax.Array,
+    x_flat: jax.Array,
+    shared_gate: jax.Array | None,
+    out_sharding: P | None,
+) -> jax.Array:
+    """Shared-expert output from each expert's gate/up projections ``parts`` (gates first when ``gated``)."""
+    gates, ups = (parts[:num_shared], parts[num_shared:]) if gated else ((), parts)
+    if gated:
+        act = ActivationFunctionEnum(cfg.expert_activation).to_jax_fn()
+        hidden = jnp.concatenate([act(g) * u for g, u in zip(gates, ups, strict=True)], axis=1)
+    else:
+        slope = cfg.expert_leaky_slope
+        hidden = jnp.concatenate([jnp.square(jax.nn.leaky_relu(u, slope)) for u in ups], axis=1)
+    shared_out = jnp.einsum("tm,md->td", hidden, w_down, out_sharding=out_sharding)
+    if shared_gate is not None:
+        gate_logit = jnp.einsum("td,d->t", x_flat.astype(jnp.float32), shared_gate)
+        shared_out = shared_out * (2.0 * jax.nn.sigmoid(gate_logit))[:, None].astype(shared_out.dtype)
+    return shared_out
+
+
+def _shared_experts_local(
+    tokens: tuple[jax.Array, jax.Array],
+    params: tuple[jax.Array, jax.Array, jax.Array | None],
+    *,
+    cfg: "GrugModelConfig",
+    widths: tuple[int, ...],
+    gated: bool,
+) -> jax.Array:
+    """The shared experts on one EP shard's tokens (``moe_shared_overlap``): ``tokens`` is (shared-expert input,
+    MoE input), ``params`` the concatenated gate/up weights, the concatenated down weights and the gate."""
+    shared_in, x_flat = tokens
+    w_gate_up, w_down, shared_gate = params
+    proj = jnp.einsum("td,de->te", shared_in, w_gate_up)
+    parts = jnp.split(proj, list(itertools.accumulate(widths[:-1])), axis=1)
+    num_shared = len(widths) // 2 if gated else len(widths)
+    return _shared_experts_tail(cfg, parts, num_shared, gated, w_down, x_flat, shared_gate, None)
 
 
 def moe_and_shared_fused(
@@ -2678,7 +2735,8 @@ def moe_and_shared_fused(
     run as one ``[D, sum widths]`` GEMM; the shared experts' down-projections run as one GEMM over
     their concatenated hidden units (the sum over shared experts happens in its accumulator). Same
     math as ``mlp(x) + sum(expert(x) for expert in shared)`` (~3% faster at d512); parameters stay
-    separate leaves.
+    separate leaves. ``moe_shared_overlap`` instead runs the whole shared-expert MLP under the EP dispatch
+    all-to-all (``MoeOverlapWork``), so only the router and latent projections stay fused.
     """
     b, s, _ = x.shape
     x_flat = rearrange(x, "b s d -> (b s) d")
@@ -2688,13 +2746,29 @@ def moe_and_shared_fused(
     shared_weights = [reshard(e.w_gate, replicated) for e in shared if gated] + [
         reshard(e.w_up, replicated) for e in shared
     ]
-    weights = moe_weights + shared_weights
+    w_down = jnp.concatenate([reshard(e.w_down, replicated) for e in shared], axis=0)
+    gate = None if shared_gate is None else unshard(shared_gate)
+    overlap = None
+    weights = moe_weights
+    if mlp.cfg.moe_shared_overlap:
+        shared_in = x_flat
+        if part_inputs and "shared" in part_inputs:
+            shared_in = rearrange(part_inputs["shared"], "b s d -> (b s) d")
+        overlap = MoeOverlapWork(
+            functools.partial(
+                _shared_experts_local, cfg=mlp.cfg, widths=tuple(w.shape[1] for w in shared_weights), gated=gated
+            ),
+            (shared_in, x_flat),
+            (jnp.concatenate(shared_weights, axis=1), w_down, gate),
+        )
+    else:
+        weights = moe_weights + shared_weights
     if not part_inputs:
         fused = jnp.einsum("td,de->te", x_flat, jnp.concatenate(weights, axis=1), out_sharding=_batch_spec())
         parts = jnp.split(fused, list(itertools.accumulate(w.shape[1] for w in weights[:-1])), axis=1)
     else:
         # Some projections read another stream (attn_res_sum_inputs): one GEMM per projection.
-        names = ["router", "latent"][: len(moe_weights)] + ["shared"] * len(shared_weights)
+        names = ["router", "latent"][: len(moe_weights)] + ["shared"] * (len(weights) - len(moe_weights))
         flats = {k: rearrange(v, "b s d -> (b s) d") for k, v in part_inputs.items()}
         parts = [
             jnp.einsum("td,de->te", flats.get(n, x_flat), w, out_sharding=_batch_spec())
@@ -2705,20 +2779,13 @@ def moe_and_shared_fused(
         projected=parts[: len(moe_weights)],
         hash_token_ids=hash_token_ids,
         noise_key=noise_key,
+        overlap=overlap,
     )
-    n_gate = len(shared) if gated else 0
-    gates, ups = parts[len(moe_weights) : len(moe_weights) + n_gate], parts[len(moe_weights) + n_gate :]
-    if gated:
-        act = ActivationFunctionEnum(mlp.cfg.expert_activation).to_jax_fn()
-        hidden = jnp.concatenate([act(g) * u for g, u in zip(gates, ups, strict=True)], axis=1)
-    else:
-        slope = mlp.cfg.expert_leaky_slope
-        hidden = jnp.concatenate([jnp.square(jax.nn.leaky_relu(u, slope)) for u in ups], axis=1)
-    w_down = jnp.concatenate([reshard(e.w_down, replicated) for e in shared], axis=0)
-    shared_out = jnp.einsum("tm,md->td", hidden, w_down, out_sharding=_batch_spec())
-    if shared_gate is not None:
-        gate_logit = jnp.einsum("td,d->t", x_flat.astype(jnp.float32), unshard(shared_gate))
-        shared_out = shared_out * (2.0 * jax.nn.sigmoid(gate_logit))[:, None].astype(shared_out.dtype)
+    if overlap is not None:
+        return routed, stats
+    shared_out = _shared_experts_tail(
+        mlp.cfg, parts[len(moe_weights) :], len(shared), gated, w_down, x_flat, gate, _batch_spec()
+    )
     return routed + _batch_reshard(rearrange(shared_out, "(b s) d -> b s d", b=b, s=s)), stats
 
 
@@ -3271,9 +3338,11 @@ def _run_expert_bank(
     routed_input: jax.Array,
     selected: jax.Array,
     combine_weights: jax.Array,
+    overlap: MoeOverlapWork | None = None,
 ):
     """Dispatch one expert bank: ungated ReLU^2 through the EP backends' ungated path (or the tied gate on the
-    dropless local backends), gated experts through ``MoEExpertMlp``."""
+    dropless local backends), gated experts through ``MoEExpertMlp``. Returns ``(out, overflow)``, plus the
+    ``overlap`` output when given."""
     if em.w_gate is None:
         ungated = em.implementation in MOE_IMPLEMENTATIONS and cfg.moe_ungated_kernel
         return moe_mlp(
@@ -3292,8 +3361,16 @@ def _run_expert_bank(
             num_expert_waves=em.num_expert_waves,
             fp8_dispatch=em.fp8_dispatch,
             expert_remat=em.expert_remat,
+            overlap=overlap,
         )
-    return em(routed_input, selected, combine_weights, mesh=get_abstract_mesh(), report_capacity_overflow=True)
+    return em(
+        routed_input,
+        selected,
+        combine_weights,
+        mesh=get_abstract_mesh(),
+        report_capacity_overflow=True,
+        overlap=overlap,
+    )
 
 
 def _ungated_expert_activation(cfg: "GrugModelConfig"):

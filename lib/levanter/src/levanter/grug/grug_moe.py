@@ -16,7 +16,7 @@ Implementation overview:
 
 from collections.abc import Callable
 from functools import partial
-from typing import cast
+from typing import Any, cast
 
 import equinox as eqx
 import jax
@@ -50,7 +50,10 @@ from levanter.grug._moe.ep_common import (
 )
 from levanter.grug._moe.ep_deepep import _moe_mlp_ep_deepep_local
 from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
-from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import _moe_mlp_ep_fixed_pooled_wave_a2a_local
+from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import (
+    MoeOverlapWork,
+    _moe_mlp_ep_fixed_pooled_wave_a2a_local,
+)
 from levanter.grug._moe.ep_ragged_all_to_all import _moe_mlp_ep_ragged_a2a_local
 from levanter.grug._moe.ep_ring import _moe_mlp_ep_ring_local
 from levanter.grug._moe.local import _moe_mlp_local
@@ -419,7 +422,8 @@ class MoEExpertMlp(eqx.Module):
         token_valid: Bool[Array, "T"] | None = None,
         mesh: jax.sharding.AbstractMesh | None = None,
         report_capacity_overflow: bool = False,
-    ) -> Float[Array, "T O"] | tuple[Float[Array, "T O"], MoeDispatchCounts]:
+        overlap: MoeOverlapWork | None = None,
+    ) -> Float[Array, "T O"] | tuple[Any, ...]:
         w_gate_up = jnp.concatenate([self.w_gate, self.w_up], axis=-1)
         return moe_mlp(
             x,
@@ -438,6 +442,7 @@ class MoEExpertMlp(eqx.Module):
             num_expert_waves=self.num_expert_waves,
             fp8_dispatch=self.fp8_dispatch,
             expert_remat=self.expert_remat,
+            overlap=overlap,
         )
 
 
@@ -460,7 +465,8 @@ def moe_mlp(
     num_expert_waves: int = 1,
     fp8_dispatch: bool = False,
     expert_remat: bool = True,
-) -> Float[Array, "T O"] | tuple[Float[Array, "T O"], MoeDispatchCounts]:
+    overlap: MoeOverlapWork | None = None,
+) -> Float[Array, "T O"] | tuple[Any, ...]:
     """Functional routed MoE MLP core used by Grug modules and benchmarks.
 
     This helper handles dispatch/permute/unpermute (+EP collectives) from
@@ -483,6 +489,10 @@ def moe_mlp(
 
     The output width ``O`` (``w_down``'s last dim) may differ from the input width ``D`` only on the
     ``scatter`` local path and the ``fixed_pooled_wave_all_to_all`` / ``ragged_all_to_all`` EP paths.
+
+    `overlap` is independent token-local work (see `MoeOverlapWork`) whose output is appended as the last
+    return value. The expert-parallel pooled-wave path runs it under the dispatch all-to-all; every other
+    path just computes it.
     """
     resolved_implementation = resolve_moe_implementation(implementation)
     if fp8_dispatch and resolved_implementation != "fixed_pooled_wave_all_to_all":
@@ -547,6 +557,32 @@ def moe_mlp(
                 f"the input dim ({x.shape[-1]})"
             )
 
+    ep_active = has_expert_axis and expert_axis_size > 1
+    if overlap is not None and ep_active and resolved_implementation != "fixed_pooled_wave_all_to_all":
+        raise ValueError(f"overlap requires fixed_pooled_wave_all_to_all under EP, got {resolved_implementation!r}")
+    if overlap is not None and not ep_active:
+        # No EP all-to-all to hide under: run the work in place and append it to the result.
+        result = moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            token_valid=token_valid,
+            activation=activation,
+            implementation=implementation,
+            mesh=mesh,
+            capacity_factor=capacity_factor,
+            pooled_transport_capacity_factor=pooled_transport_capacity_factor,
+            report_capacity_overflow=report_capacity_overflow,
+            expert_chunks=expert_chunks,
+            num_expert_waves=num_expert_waves,
+            fp8_dispatch=fp8_dispatch,
+            expert_remat=expert_remat,
+        )
+        side = overlap.fn(overlap.tokens, overlap.params)
+        return (*result, side) if report_capacity_overflow else (result, side)
+
     if mesh is None or mesh.empty:
         out, dropped = _moe_mlp_local(
             x,
@@ -571,7 +607,7 @@ def moe_mlp(
     # axes only; other mesh axes carry replicas.
     token_sharding_axes = _axis_names(token_spec[0])
 
-    if has_expert_axis and expert_axis_size > 1:
+    if ep_active:
         if "expert" not in token_sharding_axes:
             # EP dispatch requires disjoint token shards across expert ranks to avoid duplicate dispatch.
             raise ValueError(
@@ -618,6 +654,25 @@ def moe_mlp(
         token_valid = _reshard_for_shard_map(token_valid, mesh, token_spec)
         w_up_gate = _reshard_for_shard_map(w_up_gate, mesh, w_up_gate_spec)
         w_down = _reshard_for_shard_map(w_down, mesh, w_down_spec)
+        in_specs = (token_spec, token_spec, token_spec, token_spec, w_up_gate_spec, w_down_spec)
+        out_specs = (token_spec, CapacityDrops(sender_dropped=P(), receiver_dropped=P()))
+        args = (x, selected_experts, combine_weights, token_valid, w_up_gate, w_down)
+        if overlap is not None:
+            shard_local_fn = partial(shard_local_fn, overlap_fn=overlap.fn)
+            overlap_token_specs = tuple(P(token_spec[0], *(None,) * (t.ndim - 1)) for t in overlap.tokens)
+            overlap_param_specs = jax.tree.map(lambda leaf: P(*(None,) * leaf.ndim), overlap.params)
+            in_specs = (*in_specs, overlap_token_specs, overlap_param_specs)
+            out_specs = (*out_specs, token_spec)
+            args = (
+                *args,
+                tuple(
+                    _reshard_for_shard_map(t, mesh, spec)
+                    for t, spec in zip(overlap.tokens, overlap_token_specs, strict=True)
+                ),
+                jax.tree.map(
+                    lambda leaf, spec: _reshard_for_shard_map(leaf, mesh, spec), overlap.params, overlap_param_specs
+                ),
+            )
 
         shard_fn = shard_map(
             partial(
@@ -628,21 +683,14 @@ def moe_mlp(
                 token_sharding_axes=token_sharding_axes,
             ),
             mesh=mesh,
-            in_specs=(
-                token_spec,
-                token_spec,
-                token_spec,
-                token_spec,
-                w_up_gate_spec,
-                w_down_spec,
-            ),
-            out_specs=(token_spec, CapacityDrops(sender_dropped=P(), receiver_dropped=P())),
+            in_specs=in_specs,
+            out_specs=out_specs,
             check_vma=False,
         )
-        out, drops = shard_fn(x, selected_experts, combine_weights, token_valid, w_up_gate, w_down)
-        if report_capacity_overflow:
-            return out, dispatch_counts(drops)
-        return out
+        out, drops, *side = shard_fn(*args)
+        result = (out, dispatch_counts(drops)) if report_capacity_overflow else (out,)
+        result = (*result, *side)
+        return result if len(result) > 1 else out
 
     # Fallback path for no expert axis (or expert axis size 1) keeps routing
     # semantics without EP collectives. JAX 0.9 requires shard_map in_specs to
@@ -726,6 +774,7 @@ __all__ = [
     "MoEExpertMlp",
     "MoEExpertMlpPspecs",
     "MoeImplementation",
+    "MoeOverlapWork",
     "PspecAxis",
     "QBRoutedMoE",
     "moe_mlp",

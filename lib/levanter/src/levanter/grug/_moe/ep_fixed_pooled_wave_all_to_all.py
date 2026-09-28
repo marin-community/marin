@@ -3,10 +3,11 @@
 
 """Fixed all-to-all with destination-pooled static waves."""
 
+import dataclasses
 import math
 from collections.abc import Callable
 from functools import partial
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -26,6 +27,22 @@ FP8_DISPATCH_BLOCK = 128
 _FP8_DISPATCH_DTYPE = jnp.float8_e4m3fn
 _FP8_DISPATCH_MAX = float(jnp.finfo(_FP8_DISPATCH_DTYPE).max)
 _FP32_BYTES = 4
+
+
+@dataclasses.dataclass(frozen=True)
+class MoeOverlapWork:
+    """Token-local work independent of the routed experts, scheduled under the first wave's dispatch all-to-all.
+
+    Inside the EP shard, ``fn(tokens_local, params)`` reads only the batch-sharded ``tokens`` (each ``[T, *]``, row
+    ``t`` giving output row ``t``) and the replicated ``params`` pytree, and returns ``[Tlocal, D_out]``.
+    Optimization barriers tie ``tokens`` to the dispatch payload and ``fn``'s output to the received payload, so
+    the work can only run while the all-to-all is in flight; the barriers' transposes pin the backward work
+    under the reverse all-to-all the same way. Values are unchanged.
+    """
+
+    fn: Callable[[tuple[jax.Array, ...], Any], jax.Array]
+    tokens: tuple[jax.Array, ...]
+    params: Any
 
 
 class _PooledDispatch(NamedTuple):
@@ -446,7 +463,9 @@ def _dispatch_pooled(
     assignments_per_shard: int,
     topk: int,
     fp8_dispatch: bool,
-) -> _PooledDispatch:
+    overlap: MoeOverlapWork | None = None,
+) -> tuple[_PooledDispatch, jax.Array | None]:
+    """``overlap`` (local tokens and params) runs under this dispatch's all-to-all; its output is returned."""
     tokens_per_shard, hidden_dim = x_local.shape
     send_size = expert_shards * pool_capacity
     sender_linear_indices = jnp.where(
@@ -481,6 +500,9 @@ def _dispatch_pooled(
             sender_linear_indices,
             sender_keep,
         )
+        overlap_tokens = None
+        if overlap is not None:
+            payload, overlap_tokens = jax.lax.optimization_barrier((payload, overlap.tokens))
         if fp8_dispatch:
             received_payload = _fp8_dispatch_all_to_all(payload, metadata_rows)
         else:
@@ -491,6 +513,11 @@ def _dispatch_pooled(
                 concat_axis=0,
                 tiled=True,
             )
+        overlap_out = None
+        if overlap is not None:
+            with jax.named_scope("overlap"):
+                overlap_out = overlap.fn(overlap_tokens, overlap.params)
+            received_payload, overlap_out = jax.lax.optimization_barrier((received_payload, overlap_out))
         received_payload = received_payload.reshape(expert_shards, metadata_rows + pool_capacity, hidden_dim)
         received_header = received_payload[:, :metadata_rows]
         received_x = received_payload[:, metadata_rows:].reshape(send_size, hidden_dim)
@@ -522,7 +549,7 @@ def _dispatch_pooled(
         )
 
     receiver_dropped = jnp.sum(receiver_valid & ~receiver_keep, dtype=jnp.int32)
-    return _PooledDispatch(
+    dispatch = _PooledDispatch(
         compacted_x,
         receiver_linear_indices,
         receiver_keep,
@@ -531,6 +558,7 @@ def _dispatch_pooled(
         assignment_sources,
         receiver_dropped,
     )
+    return dispatch, overlap_out
 
 
 def _compute_pooled(
@@ -607,6 +635,8 @@ def _moe_mlp_ep_fixed_pooled_wave_a2a_local(
     token_valid_local: Bool[Array, "Tlocal"],
     moe_w13_local: Float[Array, "Elocal H I2"],
     moe_w2_local: Float[Array, "Elocal I H"],
+    overlap_tokens: tuple[jax.Array, ...] | None = None,
+    overlap_params: Any = None,
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
@@ -616,13 +646,16 @@ def _moe_mlp_ep_fixed_pooled_wave_a2a_local(
     num_expert_waves: int,
     fp8_dispatch: bool,
     expert_remat: bool = True,
-) -> tuple[Float[Array, "Tlocal H"], CapacityDrops]:
+    overlap_fn: Callable[[tuple[jax.Array, ...], Any], jax.Array] | None = None,
+) -> tuple[Float[Array, "Tlocal H"], CapacityDrops] | tuple[Float[Array, "Tlocal H"], CapacityDrops, jax.Array]:
     """Stripe each destination pool over fixed waves and report drops at each transport stage.
 
     ``fp8_dispatch`` sends the dispatched activations as block-scaled e4m3 (see
     ``_fp8_dispatch_all_to_all``); the combine and all backward collectives stay in the input dtype.
     ``expert_remat`` recomputes each wave's expert MLP and combine all-to-all in the backward (saving
     activation memory); off, the backward reuses the forward's intermediates instead.
+    ``overlap_fn`` (with the local ``overlap_tokens`` and ``overlap_params``, see ``MoeOverlapWork``) runs under
+    the first wave's dispatch all-to-all, and its output is returned as a third value.
     """
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
@@ -695,6 +728,11 @@ def _moe_mlp_ep_fixed_pooled_wave_a2a_local(
     )
     out_local = jnp.zeros((tokens_per_shard, moe_w2_local.shape[-1]), dtype=jnp.float32)
     receiver_dropped = jnp.array(0, dtype=jnp.int32)
+    overlap = None
+    if overlap_fn is not None:
+        assert overlap_tokens is not None
+        overlap = MoeOverlapWork(overlap_fn, overlap_tokens, overlap_params)
+    overlap_out = None
     for wave_index in range(num_waves):
         wave_sender_keep = sender_keep & (assignment_waves == wave_index)
         dispatch = partial(
@@ -712,6 +750,7 @@ def _moe_mlp_ep_fixed_pooled_wave_a2a_local(
             assignments_per_shard=assignments_per_shard,
             topk=topk,
             fp8_dispatch=fp8_dispatch,
+            overlap=overlap if wave_index == 0 else None,
         )
         compute = partial(
             _compute_pooled,
@@ -725,7 +764,9 @@ def _moe_mlp_ep_fixed_pooled_wave_a2a_local(
             expert_shards=expert_shards,
             pool_capacity=physical_pool_capacity,
         )
-        pooled_dispatch = dispatch()
+        pooled_dispatch, wave_overlap_out = dispatch()
+        if wave_overlap_out is not None:
+            overlap_out = wave_overlap_out
         pooled_output = remat(compute)(pooled_dispatch)
         out_local = out_local + remat(combine)(pooled_output)
         receiver_dropped = receiver_dropped + pooled_dispatch.receiver_dropped
@@ -734,4 +775,6 @@ def _moe_mlp_ep_fixed_pooled_wave_a2a_local(
     dropped_by_stage_local = jnp.stack((sender_dropped, receiver_dropped))
     dropped_by_stage = jax.lax.psum(dropped_by_stage_local, token_sharding_axes)
     drops = CapacityDrops(sender_dropped=dropped_by_stage[0], receiver_dropped=dropped_by_stage[1])
+    if overlap_out is not None:
+        return out_local.astype(x_local.dtype), drops, overlap_out
     return out_local.astype(x_local.dtype), drops
