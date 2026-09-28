@@ -17,10 +17,10 @@ same tokenizer. Text is capped at :data:`TEXT_CHAR_CAP` characters first: the sc
 reads ``max_tokens`` tokens, and the cap changes them only for a document whose first
 65,536 characters tokenize to fewer.
 
-The embedding side is matched on ``id``, since one Harrier leaf is a repartition whose
-row order does not follow the normalized shard. A document without an embedding and an
-embedding no document claims both fail the shard: either means the two leaves did not
-come from one normalize run.
+The embedding side is read positionally: every leaf of a source holds the normalized
+shard's documents in its row order. :class:`AlignedColumn` checks each batch's ids
+against the embedding shard's as it takes them, so an embedding leaf from a different
+normalize run fails the shard instead of pairing documents with the wrong vectors.
 
 Every worker holds one scorer per process (``InlineRunner``) and runs
 :data:`TASK_RESOURCES`-sized tasks concurrently in threads. Tokenization and parquet
@@ -34,9 +34,11 @@ import logging
 import os
 import threading
 from collections.abc import Iterator
+from dataclasses import dataclass
 from functools import partial
 
 import numpy as np
+import polars as pl
 import pyarrow as pa
 from fray.types import ResourceConfig
 from levanter.data.text.formats import TextLmDatasetFormat
@@ -56,7 +58,6 @@ from zephyr.runners import InlineRunner
 
 from experiments.datakit.cluster.quality.fast_transformer.data import NUM_RESERVED, PAD_ID, UNK_ID
 from experiments.datakit.cluster.quality.fast_transformer.inference import predict
-from experiments.datakit.cluster.quality.fast_transformer.keyed_rows import KeyedRows, read_keyed_rows
 from experiments.datakit.cluster.quality.fast_transformer.quality_model import (
     QualityPin,
     quality_model_dir,
@@ -133,6 +134,50 @@ def paired_basenames(*dirs: str) -> list[str]:
                 f"(e.g. {missing}) and {len(other - first)} unexpected (e.g. {extra})"
             )
     return sorted(first)
+
+
+@dataclass
+class AlignedColumn:
+    """One co-partitioned shard's column, taken in step with the normalized shard's rows.
+
+    Each :meth:`take` checks the ids of the rows it returns against the documents they
+    are paired with, and :meth:`require_consumed` checks that no row was left over, so a
+    side written from a different normalize run fails the shard rather than misaligning it.
+    """
+
+    ids: np.ndarray
+    values: np.ndarray
+    where: str
+    consumed: int = 0
+
+    def take(self, doc_ids: np.ndarray) -> np.ndarray:
+        """Return the values of the next ``len(doc_ids)`` rows, which must carry ``doc_ids``."""
+        start, end = self.consumed, self.consumed + len(doc_ids)
+        if end > len(self.ids) or not np.array_equal(self.ids[start:end], doc_ids):
+            raise ValueError(
+                f"{self.where}: rows {start}..{end} do not carry the normalized shard's ids; "
+                f"the two sides did not come from one normalize run"
+            )
+        self.consumed = end
+        return self.values[start:end]
+
+    def require_consumed(self) -> None:
+        if self.consumed != len(self.ids):
+            raise ValueError(
+                f"{self.where}: {len(self.ids)} rows against {self.consumed} documents; "
+                f"the two sides did not come from one normalize run"
+            )
+
+
+def read_aligned_column(path: str, column: str, where: str) -> AlignedColumn:
+    """Read ``id`` and ``column`` from one co-partitioned parquet shard, whole."""
+    # polars types a fixed-width list column as an Array with no offsets buffer,
+    # so the int32 offset ceiling that fails a whole-column pyarrow read of the
+    # largest Harrier shards (2,682,446 documents x 1,024 values > 2^31-1) does
+    # not apply, and to_numpy hands back one contiguous [n, width] block.
+    with StoragePath(path).open("rb") as fh:
+        frame = pl.read_parquet(fh, columns=["id", column])
+    return AlignedColumn(frame.get_column("id").to_numpy(), frame.get_column(column).to_numpy(), where)
 
 
 def verify_remap(remap: dict[int, int]) -> int:
@@ -254,17 +299,16 @@ def _score_shard(
     vocab_size = scorer.model.config.vocab_size
     embedding_path = embedding_paths[shard.shard_idx]
     where = f"shard {shard.shard_idx} ({embedding_path})"
-    embeddings: KeyedRows = read_keyed_rows(embedding_path, "embedding")
-    claimed = np.zeros(len(embeddings), dtype=bool)
+    embeddings = read_aligned_column(embedding_path, "embedding", where)
     documents = 0
     for batch in rebatch(batches, batch_docs):
         ids = batch.column("id").to_numpy(zero_copy_only=False)
         tokens = pad_ids(first_chunk_ids(ids, batch.column("text").to_pylist()), scorer.max_tokens, vocab_size)
-        embedding = normalize_embeddings(embeddings.values[embeddings.rows_for(ids, claimed, where)])
+        embedding = normalize_embeddings(embeddings.take(ids))
         scores = predict(scorer.model, tokens, batch_size=batch_docs, doc_embed=embedding)
         documents += len(ids)
         yield pa.RecordBatch.from_arrays([batch.column("id"), pa.array(scores, type=pa.float32())], schema=SCORE_SCHEMA)
-    embeddings.require_all_claimed(claimed, documents, where)
+    embeddings.require_consumed()
     counters.pipeline.update_counter("fusion/docs_scored", documents)
     counters.pipeline.update_counter("fusion/shards", 1)
     logger.info("shard %d/%d: %d documents scored", shard.shard_idx, shard.total_shards, documents)

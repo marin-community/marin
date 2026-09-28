@@ -10,13 +10,11 @@ and the content-type leaf for the type that selects the calibration curve. It
 writes one output shard per basename with the store's columns, one row per
 normalized document, in the normalized shard's row order.
 
-Order comes from the normalized side because that is the order the store walks
-positionally against decon and tokenize. The score and type sides are matched on
-``id``: the fusion run wrote its rows sorted by id within each token batch, which
-equals the normalized order only for sources whose shards are id-sorted, and the
-type leaf followed the score leaf. A document that finds no score or no type, a
-row that no document claims, and a row count that differs between the sides all
-fail the shard, since each means the leaves came from different normalize runs.
+All three leaves hold the normalized shard's documents in its row order, which is
+the order the store walks positionally against decon and tokenize, so the score
+and type sides are read by position. Each batch's ids are checked against both
+sides' (:class:`score_fusion.AlignedColumn`), and a side with rows left over fails
+the shard, since either means the leaves came from different normalize runs.
 
 Calibration is :meth:`calibrate.Calibration.apply`: a document routes through its
 content type's curve when the calibration carries one and through the default
@@ -45,7 +43,6 @@ from zephyr.dataset import Dataset, ShardInfo
 
 from experiments.datakit.cluster.quality.fast_transformer.artifact import BUCKET_EDGES, QualityScores
 from experiments.datakit.cluster.quality.fast_transformer.calibrate import Calibration, load_calibration
-from experiments.datakit.cluster.quality.fast_transformer.keyed_rows import read_keyed_rows
 from experiments.datakit.cluster.quality.fast_transformer.quality_model import (
     CALIBRATION_FILE,
     QualityPin,
@@ -55,6 +52,7 @@ from experiments.datakit.cluster.quality.fast_transformer.quality_model import (
 from experiments.datakit.cluster.quality.fast_transformer.score_fusion import (
     COORDINATOR_RESOURCES,
     paired_basenames,
+    read_aligned_column,
     shard_output_pattern,
 )
 
@@ -112,18 +110,16 @@ def _bucket_shard(
     model_dir: str,
     pin: QualityPin,
 ) -> Iterator[pa.RecordBatch]:
-    """Bucket one shard: walk the normalized ids, look up score and type by id."""
+    """Bucket one shard: walk the normalized ids, taking score and type row for row."""
     calibration = _pinned_calibration(model_dir, pin)
     where = f"{source} shard {shard.shard_idx}"
-    scores = read_keyed_rows(score_paths[shard.shard_idx], "score")
-    types = read_keyed_rows(type_paths[shard.shard_idx], "content_type")
-    scores_claimed = np.zeros(len(scores), dtype=bool)
-    types_claimed = np.zeros(len(types), dtype=bool)
+    scores = read_aligned_column(score_paths[shard.shard_idx], "score", f"{where} (scores)")
+    types = read_aligned_column(type_paths[shard.shard_idx], "content_type", f"{where} (types)")
     documents = 0
     for batch in batches:
         ids = batch.column("id").to_numpy(zero_copy_only=False)
-        raw = scores.values[scores.rows_for(ids, scores_claimed, f"{where} (scores)")].astype(np.float32)
-        content_type = types.values[types.rows_for(ids, types_claimed, f"{where} (types)")]
+        raw = scores.take(ids).astype(np.float32)
+        content_type = types.take(ids)
         calibrated = calibration.apply(raw, content_type).astype(np.float32)
         bucket = np.digitize(calibrated, BUCKET_EDGES).astype(np.int32)
         documents += len(ids)
@@ -138,8 +134,8 @@ def _bucket_shard(
             ],
             schema=QUALITY_SCHEMA,
         )
-    scores.require_all_claimed(scores_claimed, documents, f"{where} (scores)")
-    types.require_all_claimed(types_claimed, documents, f"{where} (types)")
+    scores.require_consumed()
+    types.require_consumed()
     counters.pipeline.update_counter("quality/docs_bucketed", documents)
     counters.pipeline.update_counter("quality/shards", 1)
 

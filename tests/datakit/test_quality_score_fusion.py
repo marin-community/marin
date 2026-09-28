@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The fusion scoring step's pure pieces: shard pairing, id packing, and the pin checks."""
+"""The fusion scoring step's pure pieces: shard pairing, aligned reads, id packing, and the pin checks."""
 
 import hashlib
 from dataclasses import replace
@@ -21,6 +21,7 @@ from experiments.datakit.cluster.quality.fast_transformer.quality_model import (
     require_pinned_model,
 )
 from experiments.datakit.cluster.quality.fast_transformer.score_fusion import (
+    AlignedColumn,
     pad_ids,
     paired_basenames,
     rebatch,
@@ -48,6 +49,40 @@ def test_rebatch_yields_full_batches_and_one_tail():
 
     assert [b.num_rows for b in out] == [4, 4, 1]
     assert [i for b in out for i in b.column("id").to_pylist()] == [str(i) for i in range(9)]
+
+
+def aligned(ids: list[str]) -> AlignedColumn:
+    return AlignedColumn(np.array(ids, dtype=object), np.arange(len(ids), dtype=np.float32), "shard")
+
+
+def test_aligned_column_takes_rows_in_order_across_batches():
+    # A duplicate id is two documents at two positions, not one row to share.
+    side = aligned(["b", "a", "dup", "dup"])
+
+    first = side.take(np.array(["b", "a"], dtype=object))
+    second = side.take(np.array(["dup", "dup"], dtype=object))
+
+    assert first.tolist() == [0.0, 1.0] and second.tolist() == [2.0, 3.0]
+    side.require_consumed()
+
+
+def test_aligned_column_refuses_ids_out_of_step():
+    side = aligned(["a", "b"])
+    with pytest.raises(ValueError, match=r"rows 0\.\.2 do not carry"):
+        side.take(np.array(["b", "a"], dtype=object))
+
+
+def test_aligned_column_refuses_more_documents_than_rows():
+    side = aligned(["a"])
+    with pytest.raises(ValueError, match="do not carry"):
+        side.take(np.array(["a", "b"], dtype=object))
+
+
+def test_aligned_column_refuses_rows_left_over():
+    side = aligned(["a", "b"])
+    side.take(np.array(["a"], dtype=object))
+    with pytest.raises(ValueError, match="2 rows against 1 documents"):
+        side.require_consumed()
 
 
 def test_verify_remap_rejects_a_compacted_remap():

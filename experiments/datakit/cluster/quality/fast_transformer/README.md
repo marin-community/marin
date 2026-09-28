@@ -49,8 +49,11 @@ bucket.py        quality_step — fusion scores + content types + per-type calib
                  source/id/content_type/raw_score/score/quality_bucket, the QualityScores
                  dataset the store reads, in the normalized row order
 quality_model.py QualityPin — the model directory, its digests, and the calibration
-keyed_rows.py    the id-keyed match between co-partitioned shards both steps use
 ```
+
+Every input leaf of a source holds the normalized shard's documents in the same row
+order, so both steps read their side inputs by position and check each batch's ids
+against them.
 
 `hero_data.fusion_scores` is pinned to the completed run of the score stage, and
 `hero_data.quality` recomputes from the bucket step's identity. A refit calibration
@@ -104,7 +107,6 @@ Core:
 - [`score_fusion.py`](score_fusion.py) — `fusion_score_step`: raw fusion scores from normalized text and Harrier embeddings.
 - [`bucket.py`](bucket.py) — `quality_step`: the store-ready `QualityScores` dataset from fusion scores and content types.
 - [`quality_model.py`](quality_model.py) — `QualityPin` and the model and calibration digests a step checks before writing.
-- [`keyed_rows.py`](keyed_rows.py) — id-keyed matching between co-partitioned shards.
 - [`run.py`](run.py) — the hero fleet driver for the score and bucket stages.
 - [`metrics.py`](metrics.py) — rank-based AUC / Spearman used by the training holdout.
 - [`artifact.py`](artifact.py) — `QualityScores` step artifact + the fixed `BUCKET_EDGES`.

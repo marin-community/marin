@@ -10,8 +10,6 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from fray.current_client import set_current_client
-from fray.local_backend import LocalClient
 from marin.datakit.normalize import NormalizedData
 
 from experiments.datakit.cluster.quality.fast_transformer.artifact import BUCKET_EDGES
@@ -32,10 +30,8 @@ BASENAMES = ["part-00000-of-00002.parquet", "part-00001-of-00002.parquet"]
 
 
 @pytest.fixture(autouse=True)
-def local_pool(tmp_path, monkeypatch):
+def marin_prefix(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
-    with set_current_client(LocalClient()):
-        yield
 
 
 def write_shard(directory: Path, name: str, columns: dict) -> None:
@@ -81,19 +77,19 @@ def make_pin(root: Path, knots: dict = KNOTS) -> QualityPin:
 
 
 def test_bucket_writes_the_normalized_order_with_per_type_buckets(tmp_path):
-    """Scores and types are stored in other orders; the output follows the normalized shard."""
+    # The normalized shard is not id-sorted; every side follows its row order.
     normalized = make_source(tmp_path, {BASENAMES[0]: ["b", "a", "c"], BASENAMES[1]: ["z"]})
     scores = tmp_path / "scores"
-    write_shard(scores, BASENAMES[0], {"id": ["a", "c", "b"], "score": np.array([0.5, 0.95, 0.15], dtype=np.float32)})
+    write_shard(scores, BASENAMES[0], {"id": ["b", "a", "c"], "score": np.array([0.15, 0.5, 0.95], dtype=np.float32)})
     write_shard(scores, BASENAMES[1], {"id": ["z"], "score": np.array([0.5], dtype=np.float32)})
     types = tmp_path / "types"
-    write_shard(types, BASENAMES[0], {"id": ["c", "a", "b"], "content_type": ["prose", "code", "other"]})
+    write_shard(types, BASENAMES[0], {"id": ["b", "a", "c"], "content_type": ["other", "code", "prose"]})
     write_shard(types, BASENAMES[1], {"id": ["z"], "content_type": ["prose"]})
 
     artifact = run_bucket(tmp_path, normalized, make_pin(tmp_path))
 
     first = pq.read_table(tmp_path / "out" / BASENAMES[0]).to_pydict()
-    assert first["id"] == ["b", "a", "c"], "rows follow the normalized shard, not the score or type shard"
+    assert first["id"] == ["b", "a", "c"]
     assert first["source"] == ["src"] * 3
     assert first["content_type"] == ["other", "code", "prose"]
     assert first["raw_score"] == pytest.approx([0.15, 0.5, 0.95])
@@ -108,19 +104,30 @@ def test_bucket_writes_the_normalized_order_with_per_type_buckets(tmp_path):
     assert second["id"] == ["z"] and second["quality_bucket"] == [2]
 
     assert artifact.main_output_dir == str(tmp_path / "out")
-    assert artifact.samples_output_dir is None
     assert artifact.counters["quality/docs_bucketed"] == 4
     assert artifact.counters["quality/shards"] == 2
 
 
-def test_a_document_without_a_score_fails_the_source(tmp_path):
+def test_a_side_in_another_row_order_fails_the_source(tmp_path):
+    """Same documents, different order: a positional read would pair the wrong scores."""
     normalized = make_source(tmp_path, {BASENAMES[0]: ["a", "b"]})
     scores = tmp_path / "scores"
-    write_shard(scores, BASENAMES[0], {"id": ["a"], "score": np.array([0.5], dtype=np.float32)})
+    write_shard(scores, BASENAMES[0], {"id": ["b", "a"], "score": np.array([0.9, 0.1], dtype=np.float32)})
     types = tmp_path / "types"
     write_shard(types, BASENAMES[0], {"id": ["a", "b"], "content_type": ["prose", "prose"]})
 
-    with pytest.raises(Exception, match="have no row"):
+    with pytest.raises(Exception, match="do not carry the normalized shard's ids"):
+        run_bucket(tmp_path, normalized, make_pin(tmp_path), max_workers=1)
+
+
+def test_a_side_with_rows_left_over_fails_the_source(tmp_path):
+    normalized = make_source(tmp_path, {BASENAMES[0]: ["a"]})
+    scores = tmp_path / "scores"
+    write_shard(scores, BASENAMES[0], {"id": ["a", "b"], "score": np.array([0.5, 0.5], dtype=np.float32)})
+    types = tmp_path / "types"
+    write_shard(types, BASENAMES[0], {"id": ["a"], "content_type": ["prose"]})
+
+    with pytest.raises(Exception, match="2 rows against 1 documents"):
         run_bucket(tmp_path, normalized, make_pin(tmp_path), max_workers=1)
 
 
