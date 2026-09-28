@@ -9,11 +9,12 @@ from pathlib import Path
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from levanter.testing.cpu_devices import run_on_cpu_devices
 
-from experiments.grug.fast_track.grugmuon_stacked import _grug_scale_with_muon
+from experiments.grug.fast_track.grugmuon_stacked import _grug_scale_with_muon, _zeropower_via_newtonschulz_local
 
 
 def _updates_and_params(mesh: Mesh):
@@ -35,13 +36,13 @@ def _updates_and_params(mesh: Mesh):
     return updates, params
 
 
-def check_bucketed_newton_schulz_matches_per_leaf() -> None:
+def check_bucketed_newton_schulz_matches_per_leaf(coefficient_type: str, steps: int) -> None:
     mesh = Mesh(
         np.asarray(jax.devices()[:2]).reshape((1, 2, 1, 1)),
         ("replica_dcn", "data", "expert", "model"),
         axis_types=(AxisType.Explicit,) * 4,
     )
-    transform = _grug_scale_with_muon(momentum=0.95, nesterov=True, steps=5)
+    transform = _grug_scale_with_muon(momentum=0.95, nesterov=True, steps=steps, coefficient_type=coefficient_type)
     updates, params = _updates_and_params(mesh)
     with jax.set_mesh(mesh):
         state = transform.init(params)
@@ -57,9 +58,31 @@ def check_bucketed_newton_schulz_matches_per_leaf() -> None:
         np.testing.assert_allclose(got, want, rtol=0, atol=2e-3 * np.abs(want).max(), err_msg=name)
 
 
-def test_bucketed_newton_schulz_matches_per_leaf():
+@pytest.mark.parametrize(("coefficient_type", "steps"), [("quintic", 5), ("aol", 4)])
+def test_bucketed_newton_schulz_matches_per_leaf(coefficient_type, steps):
+    # bf16 Newton-Schulz amplifies single roundings; without this flag XLA:CPU may skip the per-leaf
+    # path's bf16 cast when fusing it into the first Gram matmul, which AOL feeds the raw input.
     run_on_cpu_devices(
+        "import os; os.environ['XLA_FLAGS'] += ' --xla_allow_excess_precision=false'; "
         f"import sys; sys.path.insert(0, {str(Path(__file__).parent)!r}); "
-        "import test_fast_track_muon_bucketing as t; t.check_bucketed_newton_schulz_matches_per_leaf()",
+        "import test_fast_track_muon_bucketing as t; "
+        f"t.check_bucketed_newton_schulz_matches_per_leaf({coefficient_type!r}, {steps})",
         device_count=2,
     )
+
+
+@pytest.mark.parametrize("shape", [(256, 384), (384, 256)])
+def test_aol_newton_schulz_approximates_polar_factor(shape):
+    """Turbo-Muon's four AOL-preconditioned steps land every singular value near 1, like five quintic steps."""
+    x = jax.random.normal(jax.random.key(0), shape)
+    u, _, vt = np.linalg.svd(np.asarray(x), full_matrices=False)
+    polar = u @ vt
+    result = np.asarray(_zeropower_via_newtonschulz_local(x, 4, 1e-8, "aol"), np.float32)
+    singular_values = np.linalg.svd(result, compute_uv=False)
+    assert singular_values.min() > 0.95 and singular_values.max() < 1.1
+    assert np.linalg.norm(result - polar) / np.linalg.norm(polar) < 0.05
+
+
+def test_aol_rejects_other_step_counts():
+    with pytest.raises(ValueError, match="exactly 4"):
+        _grug_scale_with_muon(steps=5, coefficient_type="aol")

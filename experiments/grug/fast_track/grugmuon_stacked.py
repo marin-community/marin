@@ -18,6 +18,9 @@ With a mesh, same-shaped matrices of different leaves are orthogonalized togethe
 per matrix shape computes exactly the per-leaf result with a fraction of the kernel launches and
 collectives -- which dominate the optimizer at small width.
 
+``coefficient_type="aol"`` is Turbo-Muon (arXiv 2512.04632): every path replaces the Frobenius
+normalization with AOL rescaling (``_newton_schulz_start``) and runs exactly the four AOL steps.
+
 The optimizer config (routing, LR groups, the MuonH hyperball step) lives in ``optimizer.py``.
 """
 
@@ -162,6 +165,7 @@ def _grug_scale_with_muon(
     each ``[D, head_dim]`` (or ``[head_dim, D]``) block of every layer is its own Newton-Schulz matrix.
     """
     steps = int(steps)
+    _newton_schulz_coefficients(coefficient_type, steps)
     if precond_beta2 is not None and head_dim is not None:
         raise ValueError("precond_beta2 does not support per-head orthogonalization (head_dim)")
 
@@ -367,6 +371,32 @@ def _bucketed_newton_schulz(updates, params, mesh, steps: int, eps: float, coeff
     return treedef.unflatten(out)
 
 
+def _newton_schulz_coefficients(coefficient_type: CoefficientType, steps: int) -> list[tuple[float, float, float]]:
+    """The per-step ``(a, b, c)``, cycling the table; ``"aol"`` must run its four steps exactly once."""
+    coeffs = NEWTON_SCHULZ_COEFFICIENTS[coefficient_type]
+    if coefficient_type == "aol" and steps != len(coeffs):
+        raise ValueError(f"coefficient_type='aol' runs exactly {len(coeffs)} Newton-Schulz steps, got steps={steps}")
+    return [coeffs[i % len(coeffs)] for i in range(steps)]
+
+
+def _newton_schulz_start(X, gram, eps: float, coefficient_type: CoefficientType):
+    """Scale wide matrices ``X`` (batched over leading axes) for Newton-Schulz; return them and their Gram.
+
+    The default divides by the Frobenius norm. ``"aol"`` (Turbo-Muon, arXiv 2512.04632) forms
+    ``A = X X^T`` first and rescales by ``D^{-1/2}`` with ``D_ii = sum_j |A_ij|`` (Prach & Lampert's AOL,
+    which bounds the spectral norm by 1 and moves the matrix toward orthogonal). The rescaled Gram
+    ``D^{-1/2} A D^{-1/2}`` feeds the first iteration, so the preconditioner costs no extra matmul.
+    """
+    if coefficient_type != "aol":
+        X = X / (jnp.linalg.norm(X, axis=(-2, -1), keepdims=True) + eps)
+        return X, gram(X)
+    A = gram(X)
+    row_sums = jnp.sum(jnp.abs(A.astype(jnp.float32)), axis=-1)
+    s = jax.lax.rsqrt(jnp.maximum(row_sums, eps)).astype(X.dtype)
+    # The outer product first keeps the rescaled Gram exactly symmetric, as QuACK's symmetric GEMM assumes.
+    return X * s[..., :, None], A * (s[..., :, None] * s[..., None, :])
+
+
 def _zeropower_via_newtonschulz_replicated(
     X: jax.Array,
     steps: int = 5,
@@ -383,20 +413,24 @@ def _zeropower_via_newtonschulz_replicated(
     orig_dtype = X.dtype
     X = X.astype(jnp.bfloat16)
 
-    coeffs = NEWTON_SCHULZ_COEFFICIENTS[coefficient_type]
+    coeffs = _newton_schulz_coefficients(coefficient_type, steps)
     has_mesh = not jax.sharding.get_abstract_mesh().empty
     if has_mesh:
         X = reshard(X, P(None, None))
-    X = X / (jnp.linalg.norm(X) + eps)
 
     transpose = X.shape[0] > X.shape[1]
     if transpose:
         X = X.T
 
-    for i in range(steps):
-        a, b, c = coeffs[i % len(coeffs)]
-        out_sharding = P(None, None) if has_mesh else None
-        A = jnp.einsum("ik,jk->ij", X, X, out_sharding=out_sharding)
+    out_sharding = P(None, None) if has_mesh else None
+
+    def gram(M):
+        return jnp.einsum("ik,jk->ij", M, M, out_sharding=out_sharding)
+
+    X, A = _newton_schulz_start(X, gram, eps, coefficient_type)
+    for i, (a, b, c) in enumerate(coeffs):
+        if i:
+            A = gram(X)
         B = b * A + c * jnp.einsum("ik,kj->ij", A, A, out_sharding=out_sharding)
         X = a * X + jnp.einsum("ik,kj->ij", B, X, out_sharding=out_sharding)
 
@@ -416,16 +450,18 @@ def _zeropower_via_newtonschulz_local(
     orig_dtype = X.dtype
     X = X.astype(jnp.bfloat16)
 
-    coeffs = NEWTON_SCHULZ_COEFFICIENTS[coefficient_type]
-    X = X / (jnp.linalg.norm(X) + eps)
-
+    coeffs = _newton_schulz_coefficients(coefficient_type, steps)
     transpose = X.shape[0] > X.shape[1]
     if transpose:
         X = X.T
 
-    for i in range(steps):
-        a, b, c = coeffs[i % len(coeffs)]
-        A = jnp.einsum("ik,jk->ij", X, X)
+    def gram(M):
+        return jnp.einsum("ik,jk->ij", M, M)
+
+    X, A = _newton_schulz_start(X, gram, eps, coefficient_type)
+    for i, (a, b, c) in enumerate(coeffs):
+        if i:
+            A = gram(X)
         B = b * A + c * jnp.einsum("ik,kj->ij", A, A)
         X = a * X + jnp.einsum("ik,kj->ij", B, X)
 
@@ -445,16 +481,15 @@ def _newtonschulz_batched_syrk(
 
     orig_dtype = X.dtype
     X = X.astype(jnp.bfloat16)
-    coeffs = NEWTON_SCHULZ_COEFFICIENTS[coefficient_type]
-    X = X / (jnp.linalg.norm(X, axis=(-2, -1), keepdims=True) + eps)
-
+    coeffs = _newton_schulz_coefficients(coefficient_type, steps)
     transpose = X.shape[-2] > X.shape[-1]
     if transpose:
         X = jnp.swapaxes(X, -1, -2)
 
-    for i in range(steps):
-        a, b, c = coeffs[i % len(coeffs)]
-        A = quack_symmetric_gemm(X)
+    X, A = _newton_schulz_start(X, quack_symmetric_gemm, eps, coefficient_type)
+    for i, (a, b, c) in enumerate(coeffs):
+        if i:
+            A = quack_symmetric_gemm(X)
         B = b * A + c * quack_symmetric_gemm(A)
         X = a * X + jnp.matmul(B, X)
 

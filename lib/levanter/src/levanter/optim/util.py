@@ -232,11 +232,13 @@ NEWTON_SCHULZ_COEFFICIENTS = {
         (1.8564, -1.2132, 0.3568),
         (1.8750, -1.2500, 0.3750),
     ],
+    # Turbo-Muon (arXiv 2512.04632): the last four "quintic" steps. Tuned for inputs rescaled by the AOL
+    # preconditioner rather than the Frobenius norm, and run for exactly four steps.
     "aol": [
-        (4.0098, -7.0585, 2.4635),
-        (3.4585, -5.5479, 2.5959),
-        (2.7573, -3.2939, 1.4254),
-        (2.7215, -3.0494, 1.3169),
+        (3.9505, -6.3029, 2.6377),
+        (3.7418, -5.5913, 2.3037),
+        (2.8769, -3.1427, 1.2046),
+        (2.8366, -3.0525, 1.2012),
     ],
 }
 
@@ -253,7 +255,7 @@ def zeropower_via_newtonschulz5(X, steps: int = 5, eps: float = 1e-7, coefficien
             - "simple": Basic Newton-Schulz coefficients
             - "quintic": Optimized quintic iteration coefficients (default)
             - "polar_express": Specialized polar iteration coefficients
-            - "aol": Alternative optimized coefficients
+            - "aol": Turbo-Muon coefficients; they expect AOL-preconditioned inputs, which this function does not apply
 
     Returns:
         Orthogonalized version of X
