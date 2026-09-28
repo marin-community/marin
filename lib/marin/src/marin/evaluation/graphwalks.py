@@ -11,10 +11,10 @@ import statistics
 import time
 import uuid
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from typing import TypedDict, cast
+from typing import Protocol, TypedDict, cast
 
 import requests
 from finestore.eval import EvalSample, EvaluationStore, Grading, Message, SampleKind
@@ -60,6 +60,23 @@ class _Example:
     date_added: str
 
 
+@dataclass(frozen=True)
+class _Selection:
+    n_benchmark: int
+    examples: tuple[_Example, ...]
+    skipped_context: Mapping[str, int]
+    skipped_output_cap: Mapping[str, int]
+    not_inspected_after_limit: int
+
+
+class _TokenCounter(Protocol):
+    def encode(self, text: str, *, add_special_tokens: bool) -> list[int]: ...
+
+    def apply_chat_template(
+        self, messages: list[dict[str, str]], *, tokenize: bool, add_generation_prompt: bool
+    ) -> list[int]: ...
+
+
 class _GraphWalksRow(TypedDict):
     prompt: str
     answer_nodes: list[str]
@@ -75,6 +92,15 @@ class _Result:
     error: str | None
 
 
+@dataclass(frozen=True)
+class GraphWalksGrade:
+    """Extracted answer and its set-based scores."""
+
+    scores: dict[str, float]
+    extracted: list[str]
+    failed_to_parse: bool
+
+
 def extract_answer(response: str) -> tuple[list[str], bool]:
     """Apply the GraphWalks last-line parser from the dataset card."""
     line = response.split("\n")[-1]
@@ -86,7 +112,7 @@ def extract_answer(response: str) -> tuple[list[str], bool]:
     return [node.strip() for node in match.group(0).strip("[]").split(",") if node.strip()], False
 
 
-def grade_answer(response: str, answer_nodes: tuple[str, ...]) -> tuple[dict[str, float], list[str], bool]:
+def grade_answer(response: str, answer_nodes: tuple[str, ...]) -> GraphWalksGrade:
     """Score a predicted node set using GraphWalks precision, recall, and F1."""
     extracted, failed_to_parse = extract_answer(response)
     predicted = set(extracted)
@@ -100,15 +126,15 @@ def grade_answer(response: str, answer_nodes: tuple[str, ...]) -> tuple[dict[str
         recall = overlap / len(truth) if truth else 0.0
         precision = overlap / len(predicted) if predicted else 0.0
         f1 = 2 * recall * precision / (recall + precision) if recall + precision else 0.0
-    return (
-        {
+    return GraphWalksGrade(
+        scores={
             "f1": f1,
             "precision": precision,
             "recall": recall,
             "exact_match": float(predicted == truth and not failed_to_parse),
         },
-        extracted,
-        failed_to_parse,
+        extracted=extracted,
+        failed_to_parse=failed_to_parse,
     )
 
 
@@ -157,26 +183,30 @@ def _request(example: _Example, endpoint_url: str, model: str, api_key: str | No
 
 def _sample(result: _Result) -> EvalSample:
     assert result.output is not None
-    scores, extracted, failed_to_parse = grade_answer(result.output, result.example.answer_nodes)
+    grade = grade_answer(result.output, result.example.answer_nodes)
     return EvalSample(
         task=GRAPHWALKS_TASK,
         doc_id=str(result.example.index),
         kind=SampleKind.GENERATION,
         prompt_messages=[Message(role="user", content=result.example.prompt)],
         output=result.output,
-        extracted=json.dumps(extracted),
+        extracted=json.dumps(grade.extracted),
         target_text=json.dumps(list(result.example.answer_nodes)),
         grading=Grading(
             method="graphwalks:set_f1",
             metric="f1",
-            score=scores["f1"],
-            passed=bool(scores["exact_match"]),
+            score=grade.scores["f1"],
+            passed=bool(grade.scores["exact_match"]),
             detail=json.dumps(
-                {"precision": scores["precision"], "recall": scores["recall"], "failed_to_parse": failed_to_parse}
+                {
+                    "precision": grade.scores["precision"],
+                    "recall": grade.scores["recall"],
+                    "failed_to_parse": grade.failed_to_parse,
+                }
             ),
         ),
-        metrics=scores,
-        correct=bool(scores["exact_match"]),
+        metrics=grade.scores,
+        correct=bool(grade.scores["exact_match"]),
         doc=json.dumps(
             {
                 "answer_nodes": list(result.example.answer_nodes),
@@ -222,6 +252,10 @@ class GraphWalksExecutor:
 
         tokenizer = AutoTokenizer.from_pretrained(session.model.tokenizer, trust_remote_code=True)
         dataset = load_dataset(GRAPHWALKS_DATASET, split="train", revision=GRAPHWALKS_REVISION)
+        selection = self._select_examples(cast(Sequence[_GraphWalksRow], dataset), cast(_TokenCounter, tokenizer))
+        return self._evaluate(selection, session, output_dir)
+
+    def _select_examples(self, dataset: Sequence[_GraphWalksRow], tokenizer: _TokenCounter) -> _Selection:
         n_benchmark = len(dataset)
         eligible: list[_Example] = []
         skipped = Counter()
@@ -231,7 +265,7 @@ class GraphWalksExecutor:
             if self.limit is not None and len(eligible) >= self.limit:
                 capped = n_benchmark - index
                 break
-            row = cast(_GraphWalksRow, dataset[index])
+            row = dataset[index]
             prompt = row["prompt"]
             answer_text = "Final Answer: [" + ", ".join(row["answer_nodes"]) + "]"
             answer_tokens = len(tokenizer.encode(answer_text, add_special_tokens=False))
@@ -289,7 +323,16 @@ class GraphWalksExecutor:
             dict(skipped),
             dict(skipped_output_cap),
         )
+        return _Selection(
+            n_benchmark=n_benchmark,
+            examples=tuple(eligible),
+            skipped_context=dict(skipped),
+            skipped_output_cap=dict(skipped_output_cap),
+            not_inspected_after_limit=capped,
+        )
 
+    def _evaluate(self, selection: _Selection, session: RemoteInferenceSession, output_dir: str) -> EvaluationOutcome:
+        n_attempted = len(selection.examples)
         totals: dict[str, list[float]] = {key: [] for key in ("f1", "precision", "recall", "exact_match")}
         errors: Counter[str] = Counter()
         n_unanswered = 0
@@ -300,11 +343,11 @@ class GraphWalksExecutor:
                     {
                         "dataset": GRAPHWALKS_DATASET,
                         "revision": GRAPHWALKS_REVISION,
-                        "n_benchmark": n_benchmark,
+                        "n_benchmark": selection.n_benchmark,
                         "n_attempted": n_attempted,
-                        "skipped_context_by_type": dict(skipped),
-                        "skipped_output_cap_by_type": dict(skipped_output_cap),
-                        "not_inspected_after_limit": capped,
+                        "skipped_context_by_type": dict(selection.skipped_context),
+                        "skipped_output_cap_by_type": dict(selection.skipped_output_cap),
+                        "not_inspected_after_limit": selection.not_inspected_after_limit,
                         "max_model_len": self.max_model_len,
                         "max_output_tokens": self.max_output_tokens,
                         "output_budget_policy": "max(4096, tokenized_gold_list_length + 4096)",
@@ -322,7 +365,7 @@ class GraphWalksExecutor:
                         session.model.endpoint.model,
                         session.model.endpoint.api_key,
                     ): example
-                    for example in eligible
+                    for example in selection.examples
                 }
                 for future in as_completed(futures):
                     result = future.result()
@@ -342,7 +385,7 @@ class GraphWalksExecutor:
 
         n_scored = len(totals["f1"])
         coverage = TaskCoverage(
-            n_benchmark=n_benchmark,
+            n_benchmark=selection.n_benchmark,
             n_attempted=n_attempted,
             n_scored=n_scored,
             n_correct=None,
@@ -360,15 +403,21 @@ class GraphWalksExecutor:
             {
                 "total_examples": float(n_scored),
                 "eligible_examples": float(n_attempted),
-                "skipped_context": float(sum(skipped.values())),
-                "skipped_output_cap": float(sum(skipped_output_cap.values())),
-                "not_inspected_after_limit": float(capped),
+                "skipped_context": float(sum(selection.skipped_context.values())),
+                "skipped_output_cap": float(sum(selection.skipped_output_cap.values())),
+                "not_inspected_after_limit": float(selection.not_inspected_after_limit),
             }
         )
         stderr = statistics.stdev(totals["f1"]) / math.sqrt(n_scored) if n_scored > 1 else 0.0
         return EvaluationOutcome(
             metrics={GRAPHWALKS_TASK: source_metrics},
             canonical_metrics={GRAPHWALKS_TASK: {**source_metrics, "f1_stderr": stderr}},
-            tasks=(EvalTaskRef(name=GRAPHWALKS_TASK, num_fewshot=None, benchmark=_benchmark(n_benchmark, n_attempted)),),
+            tasks=(
+                EvalTaskRef(
+                    name=GRAPHWALKS_TASK,
+                    num_fewshot=None,
+                    benchmark=_benchmark(selection.n_benchmark, n_attempted),
+                ),
+            ),
             coverage={GRAPHWALKS_TASK: coverage},
         )

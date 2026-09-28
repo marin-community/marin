@@ -13,22 +13,22 @@ from marin.inference.types import OpenAIEndpoint, RunningModel
 
 
 def test_graphwalks_grades_unordered_sets_and_empty_answers():
-    scores, extracted, failed = grade_answer("Reasoning\nFinal Answer: [b, a, b]", ("a", "b"))
-    assert extracted == ["b", "a", "b"]
-    assert not failed
-    assert scores == {"f1": 1.0, "precision": 1.0, "recall": 1.0, "exact_match": 1.0}
+    grade = grade_answer("Reasoning\nFinal Answer: [b, a, b]", ("a", "b"))
+    assert grade.extracted == ["b", "a", "b"]
+    assert not grade.failed_to_parse
+    assert grade.scores == {"f1": 1.0, "precision": 1.0, "recall": 1.0, "exact_match": 1.0}
 
-    scores, extracted, failed = grade_answer("Final Answer: []", ())
-    assert extracted == []
-    assert not failed
-    assert scores["f1"] == 1.0
+    grade = grade_answer("Final Answer: []", ())
+    assert grade.extracted == []
+    assert not grade.failed_to_parse
+    assert grade.scores["f1"] == 1.0
 
 
 def test_graphwalks_requires_answer_on_last_line():
-    scores, _, failed = grade_answer("Final Answer: [a]\nThanks!", ("a",))
-    assert failed
-    assert scores["f1"] == 0.0
-    assert scores["exact_match"] == 0.0
+    grade = grade_answer("Final Answer: [a]\nThanks!", ("a",))
+    assert grade.failed_to_parse
+    assert grade.scores["f1"] == 0.0
+    assert grade.scores["exact_match"] == 0.0
 
 
 def test_graphwalks_records_scored_sample_and_context_coverage(tmp_path, monkeypatch):
