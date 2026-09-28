@@ -5,6 +5,7 @@
 
 import math
 import re
+from dataclasses import dataclass
 from typing import Any
 
 from .nemotron_counts import NEMOTRON_COUNTS
@@ -44,31 +45,38 @@ def canonical_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return list(parents.values())
 
 
-def component_classification(dataset_id: str) -> tuple[str, str, str]:
+@dataclass(frozen=True)
+class ComponentClassification:
+    task_type: str
+    interaction: str
+    family: str
+
+
+def component_classification(dataset_id: str) -> ComponentClassification:
     """Return type, interaction capability, and family for audited blend components."""
     name = dataset_id.lower()
     if "swe" in name:
-        return "Agentic", "Multi-turn", "swe-repo"
+        return ComponentClassification("Agentic", "Multi-turn", "swe-repo")
     if "agentic" in name:
-        return "Agentic", "Multi-turn", "tool-use"
+        return ComponentClassification("Agentic", "Multi-turn", "tool-use")
     if "rlhf" in name or "safety" in name:
-        return "Alignment", "Single-turn", "preference" if "rlhf" in name else "safety"
+        return ComponentClassification("Alignment", "Single-turn", "preference" if "rlhf" in name else "safety")
     if "multiturnchat" in name:
-        return "RLVR", "Multi-turn", "instruction-following"
+        return ComponentClassification("RLVR", "Multi-turn", "instruction-following")
     if "instruction" in name or "litmus" in name:
-        return "RLVR", "Single-turn", "instruction-following"
+        return ComponentClassification("RLVR", "Single-turn", "instruction-following")
     if "math" in name:
-        return "RLVR", "Single-turn", "math-proof" if "proof" in name else "math-answer"
+        return ComponentClassification("RLVR", "Single-turn", "math-proof" if "proof" in name else "math-answer")
     if "coding" in name:
-        return "RLVR", "Single-turn", "competitive-programming"
+        return ComponentClassification("RLVR", "Single-turn", "competitive-programming")
     if "arc-agi" in name:
-        return "RLVR", "Single-turn", "arc-agi"
+        return ComponentClassification("RLVR", "Single-turn", "arc-agi")
     if "reasoninggym" in name:
-        return "RLVR", "Single-turn", "reasoning-gym"
+        return ComponentClassification("RLVR", "Single-turn", "reasoning-gym")
     if "science" in name or "mcqa" in name:
-        return "RLVR", "Single-turn", "qa-multiple-choice"
+        return ComponentClassification("RLVR", "Single-turn", "qa-multiple-choice")
     if "abstention" in name:
-        return "RLVR", "Single-turn", "qa-abstention"
+        return ComponentClassification("RLVR", "Single-turn", "qa-abstention")
     raise ValueError(f"Unreviewed Nemotron component: {dataset_id}")
 
 
@@ -121,13 +129,13 @@ def nemotron_components(parent: dict[str, Any], info: dict[str, Any]) -> list[di
     for (datasets, ratio), count in zip(groups, counts, strict=True):
         for dataset in datasets:
             row = child_row(parent, dataset, count if len(datasets) == 1 else None)
-            task_type, turns, family = component_classification(dataset)
+            classification = component_classification(dataset)
             row.update(
                 display_name=f"{dataset} · {blend}",
                 url=f"https://huggingface.co/datasets/{dataset}",
-                type=task_type,
-                turns=turns,
-                family=family,
+                type=classification.task_type,
+                turns=classification.interaction,
+                family=classification.family,
                 component_ratio=f"{ratio:g}%" + (" combined SWE share" if len(datasets) > 1 else ""),
                 count_precision="estimated" if len(datasets) == 1 else "unknown",
                 count_basis=(

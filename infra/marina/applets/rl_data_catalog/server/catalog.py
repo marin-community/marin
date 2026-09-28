@@ -22,6 +22,8 @@ from .source_annotations import (
 
 SKYRL = "marin-community/MarinSkyRL"
 TASKTROVE = "open-athena/task-trove"
+SKYRL_ORIGIN = "MarinSkyRL"
+TASKTROVE_ORIGIN = "Task Trove"
 SOURCE_PATH = "infra/rl_data/sources.py"
 GYM_PATH = "skyrl-gym/skyrl_gym/envs/__init__.py"
 MULTI_TURN_ENVS = {"gsm8k_multi_turn", "search", "searchcode", "text2sql"}
@@ -55,7 +57,7 @@ def get_text(client: httpx.Client, url: str) -> str:
 
 
 def registry_sources(source_text: str) -> list[dict[str, Any]]:
-    """Extract only sources selected by SOURCES, using a restricted AST reader."""
+    """Return the sources selected by the upstream SOURCES registry."""
     tree = ast.parse(source_text)
     constants = {
         node.targets[0].id: node.value.value
@@ -322,7 +324,7 @@ def set_count_metadata(
 
 def annotate_source(row: dict[str, Any]) -> None:
     """Apply audited classifications and canonical names without changing source IDs."""
-    if row["origin"] == "Task Trove":
+    if row["origin"] == TASKTROVE_ORIGIN:
         row["display_name"] = row["name"].replace("__", "/", 1)
         row.update(
             count_precision="exact",
@@ -375,7 +377,7 @@ def merge_gym_sources(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if saved["kind"] == "Environment":
             continue
         row = dict(saved)
-        if row["origin"] == "MarinSkyRL":
+        if row["origin"] == SKYRL_ORIGIN:
             row["gym_alias"] = f"gym/{row['environment']}"
             row["gym_url"] = f"https://github.com/{SKYRL}/blob/{row['revision']}/{GYM_PATH}"
             adapter = adapters.get(row["environment"])
@@ -391,13 +393,15 @@ def set_revision_date(row: dict[str, Any]) -> None:
     row["revision_basis"] = "Latest upstream dataset repository or MarinSkyRL verifier change"
 
 
+def datasets_metadata(client: httpx.Client, dataset_ids: set[str]) -> dict[str, dict[str, Any]]:
+    names = sorted(dataset_ids)
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        return dict(zip(names, pool.map(lambda name: dataset_metadata(client, name), names), strict=True))
+
+
 def refresh_dataset_metadata(client: httpx.Client, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows = canonical_rows(merge_gym_sources(rows))
-    dataset_ids = sorted({row["dataset_id"] for row in rows})
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        metadata = dict(
-            zip(dataset_ids, pool.map(lambda name: dataset_metadata(client, name), dataset_ids), strict=True)
-        )
+    metadata = datasets_metadata(client, {row["dataset_id"] for row in rows})
     refreshed = []
     for saved in rows:
         row = dict(saved)
@@ -434,7 +438,7 @@ def skyrl_snapshot(
         and all(row["revision"] == revision and row.get("verifier_revised_at") for row in cached_rows)
     ):
         rows = refresh_dataset_metadata(client, cached_rows)
-        return Snapshot("MarinSkyRL", revision, head["commit"]["committer"]["date"], rows)
+        return Snapshot(SKYRL_ORIGIN, revision, head["commit"]["committer"]["date"], rows)
     raw = f"https://raw.githubusercontent.com/{SKYRL}/{revision}"
     source_text = get_text(client, f"{raw}/{SOURCE_PATH}")
     gym_text = get_text(client, f"{raw}/{GYM_PATH}")
@@ -461,17 +465,13 @@ def skyrl_snapshot(
             verifier_revised_at=commit["commit"]["committer"]["date"],
         )
     verifier_by_env = {env["name"]: env for env in environments}
-    dataset_ids = sorted({source["dataset_id"] for source in sources})
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        metadata = dict(
-            zip(dataset_ids, pool.map(lambda name: dataset_metadata(client, name), dataset_ids), strict=True)
-        )
+    metadata = datasets_metadata(client, {source["dataset_id"] for source in sources})
     previous_by_id = {row["id"]: row for row in cached_rows or []}
     rows = []
     for source in sources:
         info = metadata[source["dataset_id"]]
         env = source["env_id"]
-        row = source_row("MarinSkyRL", source["name"], revision, registry_date)
+        row = source_row(SKYRL_ORIGIN, source["name"], revision, registry_date)
         row.update(
             url=f"https://huggingface.co/datasets/{source['dataset_id']}",
             provenance_url=f"https://github.com/{SKYRL}/blob/{revision}/{SOURCE_PATH}",
@@ -516,7 +516,7 @@ def skyrl_snapshot(
         annotate_source(row)
         set_revision_date(row)
         rows.extend(component_rows(row, info))
-    return Snapshot("MarinSkyRL", revision, head["commit"]["committer"]["date"], rows)
+    return Snapshot(SKYRL_ORIGIN, revision, head["commit"]["committer"]["date"], rows)
 
 
 def tasktrove_snapshot(manifest: dict[str, Any], info: dict[str, Any]) -> Snapshot:
@@ -527,7 +527,7 @@ def tasktrove_snapshot(manifest: dict[str, Any], info: dict[str, Any]) -> Snapsh
         family = verdict["family"]
         modes = list(details.get("modes", {}))
         count = statuses.get("converted", 0)
-        row = source_row("Task Trove", name, info["sha"], info["lastModified"])
+        row = source_row(TASKTROVE_ORIGIN, name, info["sha"], info["lastModified"])
         row.update(
             url=f"https://huggingface.co/datasets/{TASKTROVE}",
             provenance_url=f"https://huggingface.co/datasets/{TASKTROVE}/blob/{info['sha']}/manifest.json",
@@ -555,4 +555,4 @@ def tasktrove_snapshot(manifest: dict[str, Any], info: dict[str, Any]) -> Snapsh
         rows.append(row)
     if sum(row["task_count"] for row in rows) != manifest["clean_tasks"]:
         raise ValueError("Task Trove source counts disagree with release total")
-    return Snapshot("Task Trove", info["sha"], info["lastModified"], rows)
+    return Snapshot(TASKTROVE_ORIGIN, info["sha"], info["lastModified"], rows)

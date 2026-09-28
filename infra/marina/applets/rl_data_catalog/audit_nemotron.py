@@ -9,12 +9,16 @@ import json
 import pprint
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from .server.nemotron_records import SWE_SELECTIONS, count_records, record_selection
 
 
-def records(path: Path, digest: Any) -> Iterator[dict[str, Any]]:
+class Digest(Protocol):
+    def update(self, data: bytes) -> None: ...
+
+
+def records(path: Path, digest: Digest) -> Iterator[dict[str, Any]]:
     with path.open("rb") as stream:
         for line in stream:
             digest.update(line)

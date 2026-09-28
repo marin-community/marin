@@ -99,7 +99,8 @@ RECORD_SOURCES = {
     ),
 }
 SWE_RECORD_SOURCE = "ultra_sft_step3200_swe_pivot_len40k"
-SWE_UNLABELED = "agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent"
+SWE_AGENT = "swe_pivot_single_step_tool_use_with_argument_comparison_agent"
+SWE_UNLABELED = f"agent:{SWE_AGENT}"
 SWE_SELECTIONS = {
     SWE_RECORD_SOURCE: "",
     SWE_UNLABELED: "unlabeled dataset records",
@@ -113,7 +114,7 @@ def record_selection(record: dict[str, Any]) -> str:
     if dataset:
         return dataset
     agent = record["agent_ref"]["name"]
-    if agent == "swe_pivot_single_step_tool_use_with_argument_comparison_agent":
+    if agent == SWE_AGENT:
         return SWE_UNLABELED
     raise ValueError(f"Cannot identify dataset population for agent {agent}")
 

@@ -17,8 +17,10 @@ from sqlalchemy.engine import Connection
 
 from .catalog import (
     SKYRL,
+    SKYRL_ORIGIN,
     TASKTROVE,
     TASKTROVE_CLASSIFICATION,
+    TASKTROVE_ORIGIN,
     Snapshot,
     annotate_source,
     get_json,
@@ -180,12 +182,12 @@ def refresh_catalog(connection: Connection, client: httpx.Client, force: bool) -
     if not lock:
         return {"busy": True, "message": "Another visitor is refreshing the catalog. Your saved data remains available."}
     results = []
-    for origin in ("MarinSkyRL", "Task Trove"):
+    for origin in (SKYRL_ORIGIN, TASKTROVE_ORIGIN):
         previous = connection.execute(
             text("SELECT revision FROM catalog_refreshes WHERE origin = :origin"), {"origin": origin}
         ).scalar_one_or_none()
         try:
-            if origin == "MarinSkyRL":
+            if origin == SKYRL_ORIGIN:
                 head = get_json(client, f"https://api.github.com/repos/{SKYRL}/commits/main")
                 revision = head["sha"]
                 cached_rows = [
