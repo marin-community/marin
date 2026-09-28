@@ -11,9 +11,10 @@ browser fetches use relative URLs (``new URL(path, location.href)``) — the pro
 does not rewrite HTML bodies, so an absolute path like ``/v1/chat/completions``
 would escape the prefix.
 
-``/v1/*`` requests are reverse-proxied to whichever serving backend runs on the
-slice (see :mod:`marin.inference.backend`). Direct sessions preserve server-sent
-events end to end; brokered sessions return buffered JSON and reject streaming.
+``/v1/*`` and ``/tokenize`` requests are reverse-proxied to whichever serving
+backend runs on the slice (see :mod:`marin.inference.backend`). Direct sessions
+preserve server-sent events end to end; brokered sessions return buffered JSON
+and reject streaming.
 ``/tools`` returns model-facing JSON schemas for dashboard-authored Python,
 ``/tools/{name}`` validates and runs one function, and ``/shell`` executes a
 command in a reconstructed ShellSim agent workspace. ``/chat-shares`` stores
@@ -198,6 +199,7 @@ def build_dashboard_app(
             Route("/shell", shell_workspace_response, methods=["POST"]),
             Route("/shell/repository", repository_snapshot_response, methods=["POST"]),
             Route("/metrics", proxy, methods=["GET"]),
+            Route("/tokenize", proxy, methods=["POST"]),
             Route("/v1/{path:path}", proxy, methods=["GET", "POST", "OPTIONS"]),
         ],
         lifespan=lifespan,

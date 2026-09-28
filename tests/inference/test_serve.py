@@ -1092,6 +1092,11 @@ def _fake_vllm_app() -> Starlette:
     async def completions(_request):
         return _sse([{"choices": [{"text": tok}]} for tok in ("123", "456")])
 
+    async def tokenize(request):
+        payload = await request.json()
+        assert payload == {"model": "fake-model", "prompt": "hello"}
+        return JSONResponse({"count": 1, "tokens": [15339]})
+
     async def metrics(_request):
         return PlainTextResponse("# TYPE vllm:generation_tokens_total counter\nvllm:generation_tokens_total 42\n")
 
@@ -1101,6 +1106,7 @@ def _fake_vllm_app() -> Starlette:
             Route("/v1/models", models),
             Route("/v1/chat/completions", chat, methods=["POST"]),
             Route("/v1/completions", completions, methods=["POST"]),
+            Route("/tokenize", tokenize, methods=["POST"]),
             Route("/metrics", metrics),
         ]
     )
@@ -1161,6 +1167,11 @@ def test_dashboard_serves_ui_and_reverse_proxies_streaming():
             assert requests.get(f"{base}/health", timeout=10).json() == {"status": "ok", "model": "fake-model"}
             assert requests.get(f"{base}/v1/models", timeout=10).json()["data"][0]["id"] == "fake-model"
             assert "vllm:generation_tokens_total 42" in requests.get(f"{base}/metrics", timeout=10).text
+            assert requests.post(
+                f"{base}/tokenize",
+                json={"model": "fake-model", "prompt": "hello"},
+                timeout=10,
+            ).json() == {"count": 1, "tokens": [15339]}
 
             chat = requests.post(
                 f"{base}/v1/chat/completions",
