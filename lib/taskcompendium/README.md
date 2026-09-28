@@ -2,23 +2,23 @@
 
 ## What problem does it solve?
 
-Training and evaluation tasks arrive with different prompt formats, answer rules, tools, and graders. TaskCompendium separates the problem a model must solve from the way a framework runs and grades it. A caller can choose among compatible presentations of a task while keeping its reference answer private. Additional environment bindings can use the same task definition.
+Training and evaluation tasks arrive with different prompt formats, answer rules, tools, and graders. TaskCompendium separates the problem a model must solve from the way a framework runs and grades it. A caller can choose among compatible presentations of a task while keeping its reference answer private. Additional Harbor environment configurations can use the same task definition.
 
-The current implementation is a small direct-chat slice. It accepts a final text or number answer, exports a Harbor task, and grades the answer through a private verifier registry. The task model also names file, workspace-state, and native-action results, but this slice has no environment binding or submission convention for those result types.
+The current implementation is a small direct-chat slice. It accepts a final text or number answer, exports a Harbor task, and grades the answer through a private verifier registry. The task model also names file, workspace-state, and native-action results, but this slice has no Harbor environment configuration or submission convention for those result types.
 
 ## What does it contain?
 
 - **Task specs** describe the source problem, the required capabilities, the kind of result, and how to verify it.
 - **Submission conventions** describe how to ask for and extract a result, such as a plain answer or a JSON object.
-- **Environment bindings** describe the capabilities and tools exposed during execution. The only binding in this slice is direct chat with no tools.
-- **Lowering tools** find compatible convention and binding pairs, select a pair, and export a runnable Harbor task package.
+- **Harbor environment configurations** describe the capabilities and tools exposed during execution. The only configuration in this slice is direct chat with no tools.
+- **Lowering tools** find compatible convention and environment configuration pairs, select a pair, and export a runnable Harbor task package.
 - **A Harbor adapter** runs the exported task with a replay agent or an OpenAI-compatible chat endpoint and records a grading result. Harbor acts as the harness: it orchestrates the model and environment after lowering.
 
 ```mermaid
 flowchart LR
     S[TaskSpec] --> C[Find compatible lowerings]
     V[Submission conventions] --> C
-    E[Environment bindings] --> C
+    E[Harbor environment configurations] --> C
     C --> P[Select a lowering]
     P --> H[Export Harbor task package]
     H --> T[Harbor trial]
@@ -46,15 +46,15 @@ The TaskTrove MCQA importer is one concrete source adapter for the [Nemotron kno
 
 ## What is a lowering?
 
-A lowering is one runnable presentation of a spec for a target framework. It combines a compatible submission convention with an environment binding, then writes the target's task files. The spec says *what* result is needed; the convention says *how* the model delivers it; the binding says *which capabilities* the environment provides. Agent and model selection happens when the task is launched.
+A lowering is one runnable presentation of a spec for a target framework. It combines a compatible submission convention with a Harbor environment configuration, then writes the target's task files. The spec says *what* result is needed; the convention says *how* the model delivers it; the environment configuration says *which capabilities* the environment provides. Agent and model selection happens when the task is launched.
 
-`SubmissionConvention.supports(spec.answer_type)` checks the result kind. `compatible_lowerings` uses that check and the environment requirements; it does not read convention IDs from the spec. The direct-chat binding accepts only tasks with no required capabilities or action interfaces; a task requiring `shell` has no candidate in this slice. `select_lowerings` can keep all candidates, take the first, or sample one with an explicit RNG key. The order of the caller-supplied convention and binding sequences determines the first candidate and the sample order. A training caller should record those ordered inputs, the selection policy and key, and the TaskCompendium code revision.
+`SubmissionConvention.supports(spec.answer_type)` checks the result kind. `compatible_lowerings` uses that check and the environment requirements; it does not read convention IDs from the spec. The direct-chat environment configuration accepts only tasks with no required capabilities or action interfaces; a task requiring `shell` has no candidate in this slice. `select_lowerings` can keep all candidates, take the first, or sample one with an explicit RNG key. The order of the caller-supplied convention and environment configuration sequences determines the first candidate and the sample order. A training caller should record those ordered inputs, the selection policy and key, and the TaskCompendium code revision.
 
 ```python
 from pathlib import Path
 
 from taskcompendium.lowering import (
-    HarborTaskBinding,
+    HarborEnvironmentConfig,
     SelectionPolicy,
     compatible_lowerings,
     lower_to_harbor,
@@ -76,16 +76,16 @@ conventions = (
     SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
     SubmissionConvention(id="json", answer_format=AnswerFormat.JSON),
 )
-candidates = compatible_lowerings(spec, conventions, (HarborTaskBinding(),))
+candidates = compatible_lowerings(spec, conventions, (HarborEnvironmentConfig(),))
 chosen = select_lowerings(candidates, SelectionPolicy.SAMPLE, rng_key=1234)[0]
-lower_to_harbor(spec, chosen.convention, chosen.binding, Path("/tmp/arithmetic-task"))
+lower_to_harbor(spec, chosen.convention, chosen.environment_config, Path("/tmp/arithmetic-task"))
 ```
 
 ## How does Harbor run it?
 
-`lower_to_harbor` writes `instruction.md` and `task.toml` for Harbor, plus `specification.json`, `submission_convention.json`, and `binding.json` for the launcher and custom verifier. The package also has an empty `environment/` directory. The agent receives the instruction but has no tool to read the package files. Harbor's custom verifier can read the spec and private reference answer. The convention file tells it how to extract the submitted answer.
+`lower_to_harbor` writes `instruction.md` and `task.toml` for Harbor, plus `specification.json`, `submission_convention.json`, and `environment_config.json` for the launcher and custom verifier. The package also has an empty `environment/` directory. The agent receives the instruction but has no tool to read the package files. Harbor's custom verifier can read the spec and private reference answer. The convention file tells it how to extract the submitted answer.
 
-`run_trial` takes the exported directory, its binding, and a launch choice. The Harbor harness selects and runs the agent and environment; those choices are absent from `TaskSpec`. A replay launch supplies a fixed response without calling a model. It exercises Harbor's agent and verifier path:
+`run_trial` takes the exported directory, its environment configuration, and a launch choice. The Harbor harness selects and runs the agent and environment; those choices are absent from `TaskSpec`. A replay launch supplies a fixed response without calling a model. It exercises Harbor's agent and verifier path:
 
 ```python
 import asyncio
@@ -95,7 +95,7 @@ from taskcompendium.harbor.runner import ReplayLaunch, run_trial
 result = asyncio.run(
     run_trial(
         Path("/tmp/arithmetic-task"),
-        chosen.binding,
+        chosen.environment_config,
         ReplayLaunch(response="12"),
         Path("/tmp/arithmetic-trials"),
         "arithmetic-run",

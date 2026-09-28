@@ -18,7 +18,7 @@ from taskcompendium.grading import Outcome, grade_answer
 from taskcompendium.harbor.runner import ReplayLaunch, run_trial
 from taskcompendium.importers.tasktrove import MAX_ARCHIVE_MEMBERS, read_archive
 from taskcompendium.importers.tasktrove_mcqa import import_task
-from taskcompendium.lowering import HarborTaskBinding, lower_to_harbor
+from taskcompendium.lowering import HarborEnvironmentConfig, lower_to_harbor
 from taskcompendium.models import AnswerType
 from taskcompendium.submission import AnswerFormat, SubmissionConvention, render_instruction
 
@@ -122,14 +122,17 @@ def test_archive_rejects_excessive_empty_members():
 
 async def test_imported_mcqa_runs_through_direct_chat_harbor(tmp_path):
     specification = import_task(_archive())
-    binding = HarborTaskBinding()
+    environment_config = HarborEnvironmentConfig()
     task = lower_to_harbor(
-        specification, SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN), binding, tmp_path / "task"
+        specification,
+        SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        environment_config,
+        tmp_path / "task",
     )
 
     result = await run_trial(
         task,
-        binding,
+        environment_config,
         ReplayLaunch(response="C"),
         tmp_path / "trials",
         "mcqa",
@@ -144,7 +147,7 @@ def test_imported_mcqa_resolves_verifier_in_fresh_process(tmp_path):
     task = lower_to_harbor(
         import_task(_archive()),
         SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
-        HarborTaskBinding(),
+        HarborEnvironmentConfig(),
         tmp_path / "task",
     )
     script = (
