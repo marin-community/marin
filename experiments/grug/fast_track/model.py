@@ -352,6 +352,10 @@ class GrugModelConfig:
     router_combine: "RouterCombine" = dataclasses.field(default_factory=lambda: RouterCombine.SIGMOID_RENORM)
     routing_renorm_sum: float = 2.5
     """Total combine weight of a token's K routed experts (``RouterCombine``)."""
+    latent_select: bool = False
+    """With a MoE latent, form the expert input by selecting the first ``latent_dim`` channels of the hidden
+    state (then the learnable ``latent_norm``) instead of projecting with ``w_latent_down``. The output side
+    keeps ``w_latent_up``."""
     latent_out_norm: bool = False
     """Kimi K3 normalized LatentMoE: a learnable RMSNorm on the combined routed output before ``W_latent_up``."""
     proj_biases: tuple[str, ...] = ()
@@ -817,6 +821,12 @@ class GrugModelConfig:
             if self.moe_null_target_frac is not None and not 0.0 < self.moe_null_target_frac < 1.0:
                 raise ValueError(f"moe_null_target_frac must be in (0, 1), got {self.moe_null_target_frac}")
 
+        if self.latent_select and (
+            self.latent_dim is None or self.latent_dim > self.hidden_dim or self.erc_loss_weight > 0
+        ):
+            raise ValueError(
+                "latent_select needs latent_dim <= hidden_dim and no ERC loss (ERC maps router rows via w_latent_down)"
+            )
         if self.erc_loss_weight > 0 and (self.dense_mlp or self.router_rank or self.moe_bank2_experts):
             raise ValueError("erc_loss_weight needs a MoE with a full-rank router and one expert bank")
 
@@ -2027,7 +2037,7 @@ class MoEMLP(eqx.Module):
             router_bias=jnp.zeros((e,)),
             w_latent_down=(
                 None
-                if latent is None
+                if latent is None or cfg.latent_select
                 else reshard(_init_weight(k_down, (d, latent), cfg.initializer_std), P(_FSDP_AXES, "model"))
             ),
             latent_norm=None if latent is None else _learned_rms_norm(cfg, latent, cfg.layer_norm_eps),
@@ -2310,6 +2320,9 @@ class MoEMLP(eqx.Module):
         if self.w_latent_down is not None and self.latent_norm is not None:
             # Keep the expert input scale independent of the down-projection initialization.
             routed_input = self.latent_norm(reshard(projected[1], _batch_spec()))
+        elif self.cfg.latent_select and self.latent_norm is not None:
+            assert self.cfg.latent_dim is not None
+            routed_input = self.latent_norm(x_flat[..., : self.cfg.latent_dim])
         if self.cfg.newton_muon:
             router_stats[NEWTON_GRAM_LOCAL_KEY] = _local_input_gram(routed_input)
         bank_mlps = [self.expert_mlp] if self.expert_mlp_b is None else [self.expert_mlp, self.expert_mlp_b]
