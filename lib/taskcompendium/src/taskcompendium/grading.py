@@ -29,7 +29,7 @@ def _normalize_answer(value: str, contract: ExactAnswer) -> str:
 
 
 def grade_answer(specification: TaskSpec, convention: SubmissionConvention, response: str | None) -> GradeResult:
-    """Extract and score a response while distinguishing invalid submissions from verifier failures."""
+    """Extract and score a response, treating malformed submissions as extraction errors."""
     try:
         candidate = extract_answer(response, convention)
     except (ValueError, TypeError) as error:
