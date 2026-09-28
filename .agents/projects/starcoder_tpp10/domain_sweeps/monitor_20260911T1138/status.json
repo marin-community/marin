@@ -1,0 +1,21 @@
+{
+  "checked_at": "2026-09-11T11:42:34.217714+00:00",
+  "survey": {
+    "parent": "/calvinxu/tpp10-domain-sweeps",
+    "state": "running",
+    "wikipedia_raw": "succeeded and independently validated",
+    "tokens": 190316544,
+    "finemath_raw": "running (runtime initialized)",
+    "training_complete": 0
+  },
+  "refinement": {
+    "parent": "/calvinxu/starcoder-tpp10-refinement-batch-recovery",
+    "state": "pending CPU capacity",
+    "retained_verified_successes": 11,
+    "unfinished": 34,
+    "configured_tpu_band": "batch",
+    "live_tpu_band_verified": false
+  },
+  "repairs": [],
+  "transient_probe_children": "Normal Zephyr shutdown after two successful cache-ledger probes; not a training failure."
+}

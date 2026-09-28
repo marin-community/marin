@@ -9,6 +9,7 @@ import pyarrow.parquet as pq
 import pytest
 from levanter.data.text.formats import TextLmDatasetFormat
 from levanter.store.cache import CacheLedger
+from marin.execution.types import InputName
 from marin.processing.tokenize.tokenize import (
     MIN_GROUP_BYTES,
     TokenizeConfig,
@@ -45,6 +46,12 @@ DUMMY_VALIDATION_PATHS = []
             "gs://bucket/data/test/file2.jsonl",
         ),
         ([], False, None),
+        ([InputName.hardcoded("gs://bucket/data/train/file.jsonl")], False, None),
+        (
+            [InputName.hardcoded("gs://bucket/data/validation/file.jsonl")],
+            True,
+            "gs://bucket/data/validation/file.jsonl",
+        ),
     ],
 )
 def test_train_paths_variants(train_paths, should_error, expected_error_path):

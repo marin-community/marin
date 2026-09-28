@@ -1,0 +1,1 @@
+{"allows_region_only_parent": false, "child_table9_tpu_zone": null, "child_tpu_regions": ["us-east5"], "child_tpu_zone": "us-east5-b", "errors": [], "marin_gcs_paths": ["gs://marin-us-east5"], "ok": true, "parent_regions": ["us-east5"], "parent_zone": "us-east5-a", "warnings": []}

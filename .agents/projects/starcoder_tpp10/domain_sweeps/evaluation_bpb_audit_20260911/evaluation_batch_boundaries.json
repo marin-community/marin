@@ -1,0 +1,74 @@
+[
+  {
+    "tags": [
+      "uncheatable_eval/wikipedia_english"
+    ],
+    "examples": 335,
+    "start_offset": 0,
+    "offset_mod32": 0,
+    "offset_mod128": 0
+  },
+  {
+    "tags": [
+      "uncheatable_eval/github_python"
+    ],
+    "examples": 630,
+    "start_offset": 335,
+    "offset_mod32": 15,
+    "offset_mod128": 79
+  },
+  {
+    "tags": [
+      "uncheatable_eval/github_cpp"
+    ],
+    "examples": 649,
+    "start_offset": 965,
+    "offset_mod32": 5,
+    "offset_mod128": 69
+  },
+  {
+    "tags": [
+      "uncheatable_eval/bbc_news"
+    ],
+    "examples": 445,
+    "start_offset": 1614,
+    "offset_mod32": 14,
+    "offset_mod128": 78
+  },
+  {
+    "tags": [
+      "uncheatable_eval/arxiv_physics"
+    ],
+    "examples": 602,
+    "start_offset": 2059,
+    "offset_mod32": 11,
+    "offset_mod128": 11
+  },
+  {
+    "tags": [
+      "uncheatable_eval/arxiv_computer_science"
+    ],
+    "examples": 536,
+    "start_offset": 2661,
+    "offset_mod32": 5,
+    "offset_mod128": 101
+  },
+  {
+    "tags": [
+      "uncheatable_eval/ao3_english"
+    ],
+    "examples": 613,
+    "start_offset": 3197,
+    "offset_mod32": 29,
+    "offset_mod128": 125
+  },
+  {
+    "tags": [
+      "paloma/dolma_100_programing_languages-tpp10"
+    ],
+    "examples": 5673,
+    "start_offset": 3810,
+    "offset_mod32": 2,
+    "offset_mod128": 98
+  }
+]

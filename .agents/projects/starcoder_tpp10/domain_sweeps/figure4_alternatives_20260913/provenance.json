@@ -1,0 +1,101 @@
+{
+  "metric": "ratio of total scored loss bits to total scored bytes",
+  "math_scoring": "Reference-solution tokens only; native BPB schema v2, already present in result receipts",
+  "axes": {
+    "scale": "linear",
+    "shared_y_limits": [
+      0.7,
+      2.02
+    ]
+  },
+  "no_normalization": true,
+  "no_smoothing": true,
+  "compute": {
+    "unmatched": {
+      "parameters": 16587008,
+      "steps": 2532,
+      "tokens": 165937152,
+      "tpp": 10.00404364669023,
+      "batch_size": 32,
+      "training_flops": 2.4908860401647616e+16
+    },
+    "target": {
+      "parameters": 301241344,
+      "steps": 11491,
+      "tokens": 3012296704,
+      "tpp": 9.99961248347106,
+      "batch_size": 128,
+      "training_flops": 6.66390282503612e+18
+    }
+  },
+  "versions": {
+    "gsm8k": {
+      "pdf": "figure4_left_gsm8k.pdf",
+      "png": "figure4_left_gsm8k.png",
+      "points": 64,
+      "clipped": [
+        {
+          "panel": 1,
+          "benchmark": "math500",
+          "domain": "wikipedia",
+          "arm": "matched",
+          "epochs": 15.825,
+          "percent": 100,
+          "bpb": 2.9336230754852295,
+          "run_name": "tpp10_wikipedia_matched_p100_s20260910"
+        }
+      ]
+    },
+    "math500": {
+      "pdf": "figure4_left_math500.pdf",
+      "png": "figure4_left_math500.png",
+      "points": 64,
+      "clipped": [
+        {
+          "panel": 1,
+          "benchmark": "math500",
+          "domain": "wikipedia",
+          "arm": "matched",
+          "epochs": 15.825,
+          "percent": 100,
+          "bpb": 2.9336230754852295,
+          "run_name": "tpp10_wikipedia_matched_p100_s20260910"
+        }
+      ]
+    },
+    "wikipedia_english_math500": {
+      "pdf": "figure4_left_wikipedia_english_math500.pdf",
+      "png": "figure4_left_wikipedia_english_math500.png",
+      "points": 64,
+      "clipped": [
+        {
+          "panel": 1,
+          "benchmark": "math500",
+          "domain": "wikipedia",
+          "arm": "matched",
+          "epochs": 15.825,
+          "percent": 100,
+          "bpb": 2.9336230754852295,
+          "run_name": "tpp10_wikipedia_matched_p100_s20260910"
+        }
+      ]
+    }
+  },
+  "source_sha256": {
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/native_closeout_20260912/plots/curves.json": "7420a579400a8ffcc3b592d6e118e3218c99a91d5aaf0083aa5c1302bdb4d770",
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/target_math_complete_20260912/results/c788d33ddd3b357a7f80de6ed1d5ecb632104e4beabd5cc0934d580ecac77d39/receipt.json": "7f0994dc178adb4663621389a8895cd3df7505ceec90d4d55ff38c939e610f47",
+    "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/starcoder_tpp10_assets/design.json": "bbcbfffb09ff23654abe115ecdc58bfe4bd5f073bff772246469eafcf917d781",
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/figure4_alternatives_20260913/plot_alternatives.py": "8e6bb2a3c3ec60d0d6d4145f9a6c4fc319d6ee81779d00296d951899095f6162"
+  },
+  "output_sha256": {
+    "figure4_left_wikipedia_english_math500_points.csv": "1e4eb6577e8a4dc6b86b34b05b00247386a32ac3daeac1258e1432d12b3ca03a",
+    "figure4_left_math500.pdf": "533484fab3d3c9cba27595c7d4926c0728047b854a5d351798eff424fa2d62c6",
+    "figure4_left_math500_points.csv": "97ff4ed86b78adf978a8e9acb90a7f5fae247ba192b02d4d8be6b3f30098fe13",
+    "figure4_left_math500.png": "f0ffe39031c3aae471d48ce736542bdd8ef0efd1e6ead8e94134c12c7c807659",
+    "figure4_left_gsm8k_points.csv": "f5de557f365af92613fc7083e5220b124ac70c87abb828183d1836ea6071c1ad",
+    "figure4_left_wikipedia_english_math500.pdf": "9630e018791fe426cc9e0e244004e522bce7cd2e1c89641c08705fbd07158240",
+    "figure4_left_gsm8k.png": "d59b86e02ce01f3dac33f2d45131e2d8c98b8a7bc0b73e815019a5c12228a24e",
+    "figure4_left_gsm8k.pdf": "a5bd17404c92445b06fbc7e1ef47ed759bcc1355d5fd73dfab9a489f3c9ff554",
+    "figure4_left_wikipedia_english_math500.png": "ec9832882b27cb022123ce4751922a97f1bc52cfbc49fe145520e8a16e3293d5"
+  }
+}

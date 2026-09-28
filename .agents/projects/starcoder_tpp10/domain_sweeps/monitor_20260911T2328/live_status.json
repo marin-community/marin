@@ -1,0 +1,449 @@
+{
+  "checked_at": "2026-09-11T23:28:45.202833+00:00",
+  "rows": [
+    {
+      "job_id": "/calvinxu/tpp10-domain-sweeps-cpu4g",
+      "state": "JOB_STATE_RUNNING",
+      "task_state_counts": {
+        "running": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 0,
+      "pending_reason": "",
+      "error": "",
+      "priority_band": "PRIORITY_BAND_INTERACTIVE"
+    },
+    {
+      "job_id": "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_wikipedia_matched_p005_s20260910",
+      "state": "JOB_STATE_SUCCEEDED",
+      "task_state_counts": {
+        "succeeded": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 0,
+      "pending_reason": "",
+      "error": "",
+      "priority_band": "PRIORITY_BAND_INTERACTIVE"
+    },
+    {
+      "job_id": "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_wikipedia_matched_p010_s20260910",
+      "state": "JOB_STATE_SUCCEEDED",
+      "task_state_counts": {
+        "succeeded": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 0,
+      "pending_reason": "",
+      "error": "",
+      "priority_band": "PRIORITY_BAND_INTERACTIVE"
+    },
+    {
+      "job_id": "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_wikipedia_matched_p020_s20260910",
+      "state": "JOB_STATE_SUCCEEDED",
+      "task_state_counts": {
+        "succeeded": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 1,
+      "pending_reason": "",
+      "error": "",
+      "priority_band": "PRIORITY_BAND_INTERACTIVE"
+    },
+    {
+      "job_id": "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_wikipedia_matched_p030_s20260910",
+      "state": "JOB_STATE_SUCCEEDED",
+      "task_state_counts": {
+        "succeeded": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 0,
+      "pending_reason": "",
+      "error": "",
+      "priority_band": "PRIORITY_BAND_INTERACTIVE"
+    },
+    {
+      "job_id": "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_wikipedia_matched_p050_s20260910",
+      "state": "JOB_STATE_SUCCEEDED",
+      "task_state_counts": {
+        "succeeded": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 1,
+      "pending_reason": "",
+      "error": "",
+      "priority_band": "PRIORITY_BAND_INTERACTIVE"
+    },
+    {
+      "job_id": "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_wikipedia_matched_p070_s20260910",
+      "state": "JOB_STATE_SUCCEEDED",
+      "task_state_counts": {
+        "succeeded": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 0,
+      "pending_reason": "",
+      "error": "",
+      "priority_band": "PRIORITY_BAND_INTERACTIVE"
+    },
+    {
+      "job_id": "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_wikipedia_matched_p100_s20260910",
+      "state": "JOB_STATE_SUCCEEDED",
+      "task_state_counts": {
+        "succeeded": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 0,
+      "pending_reason": "",
+      "error": "",
+      "priority_band": "PRIORITY_BAND_INTERACTIVE"
+    },
+    {
+      "job_id": "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_wikipedia_target_p005_s20260910",
+      "state": "JOB_STATE_RUNNING",
+      "task_state_counts": {
+        "running": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 1,
+      "pending_reason": "",
+      "error": "",
+      "priority_band": "PRIORITY_BAND_INTERACTIVE"
+    },
+    {
+      "job_id": "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_wikipedia_target_p010_s20260910",
+      "state": "JOB_STATE_RUNNING",
+      "task_state_counts": {
+        "pending": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 1,
+      "pending_reason": "",
+      "error": "",
+      "priority_band": "PRIORITY_BAND_INTERACTIVE"
+    },
+    {
+      "job_id": "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_wikipedia_target_p020_s20260910",
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 0,
+      "pending_reason": "Scheduler: Insufficient TPUs (need 4, available 0) - 2 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: Unsatisfied autoscaler demand: tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity",
+      "error": "",
+      "priority_band": "PRIORITY_BAND_INTERACTIVE"
+    },
+    {
+      "job_id": "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_wikipedia_target_p030_s20260910",
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 0,
+      "pending_reason": "Scheduler: Insufficient TPUs (need 4, available 0) - 2 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: Unsatisfied autoscaler demand: tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity",
+      "error": "",
+      "priority_band": "PRIORITY_BAND_INTERACTIVE"
+    },
+    {
+      "job_id": "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_wikipedia_target_p050_s20260910",
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 0,
+      "pending_reason": "Scheduler: Insufficient TPUs (need 4, available 0) - 2 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: Unsatisfied autoscaler demand: tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity",
+      "error": "",
+      "priority_band": "PRIORITY_BAND_INTERACTIVE"
+    },
+    {
+      "job_id": "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_wikipedia_target_p070_s20260910",
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 0,
+      "pending_reason": "Scheduler: Insufficient TPUs (need 4, available 0) - 2 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: Unsatisfied autoscaler demand: tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity",
+      "error": "",
+      "priority_band": "PRIORITY_BAND_INTERACTIVE"
+    },
+    {
+      "job_id": "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_wikipedia_target_p100_s20260910",
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 0,
+      "pending_reason": "Scheduler: Insufficient TPUs (need 4, available 0) - 2 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: Unsatisfied autoscaler demand: tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity",
+      "error": "",
+      "priority_band": "PRIORITY_BAND_INTERACTIVE"
+    },
+    {
+      "job_id": "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_matched_p005_s20260910",
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 0,
+      "pending_reason": "Scheduler: Insufficient TPUs (need 4, available 0) - 2 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: Unsatisfied autoscaler demand: tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity",
+      "error": "",
+      "priority_band": "PRIORITY_BAND_INTERACTIVE"
+    },
+    {
+      "job_id": "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_matched_p010_s20260910",
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 0,
+      "pending_reason": "Scheduler: Insufficient TPUs (need 4, available 0) - 2 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: Unsatisfied autoscaler demand: tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity",
+      "error": "",
+      "priority_band": "PRIORITY_BAND_INTERACTIVE"
+    },
+    {
+      "job_id": "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_matched_p020_s20260910",
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 0,
+      "pending_reason": "Scheduler: Insufficient TPUs (need 4, available 0) - 2 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: Unsatisfied autoscaler demand: tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity",
+      "error": "",
+      "priority_band": "PRIORITY_BAND_INTERACTIVE"
+    },
+    {
+      "job_id": "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_matched_p030_s20260910",
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 0,
+      "pending_reason": "Scheduler: Insufficient TPUs (need 4, available 0) - 2 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: Unsatisfied autoscaler demand: tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity",
+      "error": "",
+      "priority_band": "PRIORITY_BAND_INTERACTIVE"
+    },
+    {
+      "job_id": "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_matched_p050_s20260910",
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 0,
+      "pending_reason": "Scheduler: Insufficient TPUs (need 4, available 0) - 2 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: Unsatisfied autoscaler demand: tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity",
+      "error": "",
+      "priority_band": "PRIORITY_BAND_INTERACTIVE"
+    },
+    {
+      "job_id": "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_matched_p070_s20260910",
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 0,
+      "pending_reason": "Scheduler: Insufficient TPUs (need 4, available 0) - 2 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: Unsatisfied autoscaler demand: tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity",
+      "error": "",
+      "priority_band": "PRIORITY_BAND_INTERACTIVE"
+    },
+    {
+      "job_id": "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_matched_p100_s20260910",
+      "state": "JOB_STATE_SUCCEEDED",
+      "task_state_counts": {
+        "succeeded": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 0,
+      "pending_reason": "",
+      "error": "",
+      "priority_band": "PRIORITY_BAND_INTERACTIVE"
+    },
+    {
+      "job_id": "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_target_p005_s20260910",
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 0,
+      "pending_reason": "Scheduler: Insufficient TPUs (need 4, available 0) - 2 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: Unsatisfied autoscaler demand: tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity",
+      "error": "",
+      "priority_band": "PRIORITY_BAND_INTERACTIVE"
+    },
+    {
+      "job_id": "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_target_p010_s20260910",
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 0,
+      "pending_reason": "Scheduler: Insufficient TPUs (need 4, available 0) - 2 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: Unsatisfied autoscaler demand: tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity",
+      "error": "",
+      "priority_band": "PRIORITY_BAND_INTERACTIVE"
+    },
+    {
+      "job_id": "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_target_p020_s20260910",
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 0,
+      "pending_reason": "Scheduler: Insufficient TPUs (need 4, available 0) - 2 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: Unsatisfied autoscaler demand: tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity",
+      "error": "",
+      "priority_band": "PRIORITY_BAND_INTERACTIVE"
+    },
+    {
+      "job_id": "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_target_p030_s20260910",
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 0,
+      "pending_reason": "Scheduler: Insufficient TPUs (need 4, available 0) - 2 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: Unsatisfied autoscaler demand: tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity",
+      "error": "",
+      "priority_band": "PRIORITY_BAND_INTERACTIVE"
+    },
+    {
+      "job_id": "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_target_p050_s20260910",
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 0,
+      "pending_reason": "Scheduler: Insufficient TPUs (need 4, available 0) - 2 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: Unsatisfied autoscaler demand: tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity",
+      "error": "",
+      "priority_band": "PRIORITY_BAND_INTERACTIVE"
+    },
+    {
+      "job_id": "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_target_p070_s20260910",
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 0,
+      "pending_reason": "Scheduler: Insufficient TPUs (need 4, available 0) - 2 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: Unsatisfied autoscaler demand: tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity",
+      "error": "",
+      "priority_band": "PRIORITY_BAND_INTERACTIVE"
+    },
+    {
+      "job_id": "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_target_p100_s20260910",
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 0,
+      "pending_reason": "Scheduler: Insufficient TPUs (need 4, available 0) - 2 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: Unsatisfied autoscaler demand: tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity",
+      "error": "",
+      "priority_band": "PRIORITY_BAND_INTERACTIVE"
+    },
+    {
+      "job_id": "/calvinxu/tpp10-domain-sweeps-cpu4g/domain-survey-p0-target",
+      "state": "JOB_STATE_FAILED",
+      "task_state_counts": {
+        "failed": 1
+      },
+      "failure_count": 1,
+      "preemption_count": 0,
+      "pending_reason": "",
+      "error": "Cumulative failed task attempts exceeded max_task_failures: failures=1, limit=0; Exit code: 1. stderr: ValueError: Restored PALOMA control failed for tpp10_target_p000_s20260910: 0.005950927734375",
+      "priority_band": "PRIORITY_BAND_INTERACTIVE"
+    },
+    {
+      "job_id": "/calvinxu/tpp10-domain-sweeps-cpu4g/domain-survey-p0-unmatched",
+      "state": "JOB_STATE_FAILED",
+      "task_state_counts": {
+        "failed": 1
+      },
+      "failure_count": 1,
+      "preemption_count": 0,
+      "pending_reason": "",
+      "error": "Cumulative failed task attempts exceeded max_task_failures: failures=1, limit=0; Exit code: 1. stderr: ValueError: Restored PALOMA control failed for tpp10_unmatched_p000_s20260910: 0.0002589225769042969",
+      "priority_band": "PRIORITY_BAND_INTERACTIVE"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery",
+      "state": "JOB_STATE_RUNNING",
+      "task_state_counts": {
+        "running": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 0,
+      "pending_reason": "",
+      "error": "",
+      "priority_band": "PRIORITY_BAND_INTERACTIVE"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d",
+      "state": "JOB_STATE_RUNNING",
+      "task_state_counts": {
+        "pending": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 10,
+      "pending_reason": "",
+      "error": "",
+      "priority_band": "PRIORITY_BAND_BATCH"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-e7af7ef9",
+      "state": "JOB_STATE_RUNNING",
+      "task_state_counts": {
+        "pending": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 5,
+      "pending_reason": "",
+      "error": "",
+      "priority_band": "PRIORITY_BAND_BATCH"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-aa2a4590",
+      "state": "JOB_STATE_RUNNING",
+      "task_state_counts": {
+        "pending": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 3,
+      "pending_reason": "",
+      "error": "",
+      "priority_band": "PRIORITY_BAND_BATCH"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-e24265b9",
+      "state": "JOB_STATE_RUNNING",
+      "task_state_counts": {
+        "pending": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 1,
+      "pending_reason": "",
+      "error": "",
+      "priority_band": "PRIORITY_BAND_BATCH"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-cffa480f",
+      "state": "JOB_STATE_RUNNING",
+      "task_state_counts": {
+        "pending": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 1,
+      "pending_reason": "",
+      "error": "",
+      "priority_band": "PRIORITY_BAND_BATCH"
+    }
+  ]
+}

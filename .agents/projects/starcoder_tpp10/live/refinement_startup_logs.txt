@@ -1,0 +1,30 @@
+[07:12:41] task=/calvinxu/starcoder-tpp10-refinement/verified_training-88ffc03d/0 attempt=0 |  + zipp==3.23.0
+[07:12:41] task=/calvinxu/starcoder-tpp10-refinement/verified_training-88ffc03d/0 attempt=0 |  + zstandard==0.25.0
+[07:12:41] task=/calvinxu/starcoder-tpp10-refinement/verified_training-88ffc03d/0 attempt=0 | Resolved 14 packages in 116ms
+[07:12:41] task=/calvinxu/starcoder-tpp10-refinement/verified_training-88ffc03d/0 attempt=0 | Installed 5 packages in 11ms
+[07:12:41] task=/calvinxu/starcoder-tpp10-refinement/verified_training-88ffc03d/0 attempt=0 |  + linkify-it-py==2.2.0
+[07:12:41] task=/calvinxu/starcoder-tpp10-refinement/verified_training-88ffc03d/0 attempt=0 |  + mdit-py-plugins==0.6.1
+[07:12:41] task=/calvinxu/starcoder-tpp10-refinement/verified_training-88ffc03d/0 attempt=0 |  + memray==1.20.0
+[07:12:41] task=/calvinxu/starcoder-tpp10-refinement/verified_training-88ffc03d/0 attempt=0 |  + py-spy==0.4.2
+[07:12:41] task=/calvinxu/starcoder-tpp10-refinement/verified_training-88ffc03d/0 attempt=0 |  + textual==8.2.8
+[07:13:07] task=/calvinxu/starcoder-tpp10-refinement/verified_training-88ffc03d/0 attempt=0 | I20260911 07:13:04 datasets JAX version 0.11.1 available.
+[07:13:07] task=/calvinxu/starcoder-tpp10-refinement/verified_training-88ffc03d/0 attempt=0 | I20260911 07:13:06 marin.training.training Using output path: gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p040_s20260910/2026.09.09
+[07:13:07] task=/calvinxu/starcoder-tpp10-refinement/verified_training-88ffc03d/0 attempt=0 | I20260911 07:13:06 marin.training.training Using run ID: tpp10_target_p040_s20260910
+[07:13:07] task=/calvinxu/starcoder-tpp10-refinement/verified_training-88ffc03d/0 attempt=0 | fatal: not a git repository (or any parent up to mount point /)
+[07:13:07] task=/calvinxu/starcoder-tpp10-refinement/verified_training-88ffc03d/0 attempt=0 | Stopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).
+[07:13:07] task=/calvinxu/starcoder-tpp10-refinement/verified_training-88ffc03d/0 attempt=0 | W20260911 07:13:06 marin.training.run_environment Failed to find or infer git commit for logging.
+[07:13:07] task=/calvinxu/starcoder-tpp10-refinement/verified_training-88ffc03d/0 attempt=0 | I20260911 07:13:06 marin.training.training JAX compilation cache: gs://marin-us-central1/tmp/ttl=30d/compilation-cache
+[07:13:07] task=/calvinxu/starcoder-tpp10-refinement/verified_training-88ffc03d/0 attempt=0 | I20260911 07:13:06 marin.training.training XLA sub-caches disabled (compilation cache is remote: gs://marin-us-central1/tmp/ttl=30d/compilation-cache)
+[07:13:07] task=/calvinxu/starcoder-tpp10-refinement/verified_training-88ffc03d/0 attempt=0 | W20260911 07:13:06 rigging.filesystem.cluster_config Found unexpected type <class 'jax._src.numpy.scalar_types._ScalarMeta'> at trainer.mp.param_dtype. Skipping.
+[07:13:07] task=/calvinxu/starcoder-tpp10-refinement/verified_training-88ffc03d/0 attempt=0 | W20260911 07:13:06 rigging.filesystem.cluster_config Found unexpected type <class 'jax._src.numpy.scalar_types._ScalarMeta'> at trainer.mp.compute_dtype. Skipping.
+[07:13:07] task=/calvinxu/starcoder-tpp10-refinement/verified_training-88ffc03d/0 attempt=0 | W20260911 07:13:06 rigging.filesystem.cluster_config Found unexpected type <class 'jax._src.numpy.scalar_types._ScalarMeta'> at trainer.mp.output_dtype. Skipping.
+[07:13:07] task=/calvinxu/starcoder-tpp10-refinement/verified_training-88ffc03d/0 attempt=0 | W20260911 07:13:06 rigging.filesystem.cluster_config Found unexpected type <class 'datetime.timedelta'> at trainer.progress_watchdog.startup_grace_period. Skipping.
+[07:13:07] task=/calvinxu/starcoder-tpp10-refinement/verified_training-88ffc03d/0 attempt=0 | W20260911 07:13:06 rigging.filesystem.cluster_config Found unexpected type <class 'datetime.timedelta'> at trainer.checkpointer.save_interval. Skipping.
+[07:13:07] task=/calvinxu/starcoder-tpp10-refinement/verified_training-88ffc03d/0 attempt=0 | I20260911 07:13:06 marin.training.training Model config: type=Qwen3Config seq_len=2048 hidden=1024 batch=128 device=TpuConfig(variant='v5p-8', kind='tpu', topology=None)
+[07:13:07] task=/calvinxu/starcoder-tpp10-refinement/verified_training-88ffc03d/0 attempt=0 | I20260911 07:13:06 levanter.distributed Detected Iris job context; initializing jax.distributed via iris.runtime.jax_init.
+[07:13:07] task=/calvinxu/starcoder-tpp10-refinement/verified_training-88ffc03d/0 attempt=0 | I20260911 07:13:06 iris.runtime.jax_init JAX compilation cache: gs://marin-us-central1/tmp/ttl=30d/compilation-cache
+[07:13:07] task=/calvinxu/starcoder-tpp10-refinement/verified_training-88ffc03d/0 attempt=0 | I20260911 07:13:06 iris.env_resources TaskResources: TaskResources(memory_bytes=240518168576, cpu_cores=104.0, gpu_count=0, tpu_count=4)
+[07:13:07] task=/calvinxu/starcoder-tpp10-refinement/verified_training-88ffc03d/0 attempt=0 | I20260911 07:13:06 iris.runtime.jax_init initialize_jax bootstrap inputs: task_index=0 num_tasks=1 advertise_host=10.128.0.141 ports={} endpoint_name=jax_coordinator-calvinxu-1eea28080ec01c4a848315804df03135b9de60c4c1cd62da4045d95c9169a9a6 requested_port=None env={'IRIS_TASK_ID': '/calvinxu/starcoder-tpp10-refinement/verified_training-88ffc03d/0:0', 'IRIS_NUM_TASKS': '1'}
+[07:13:07] task=/calvinxu/starcoder-tpp10-refinement/verified_training-88ffc03d/0 attempt=0 | I20260911 07:13:06 iris.runtime.jax_init JAX coordinator port 47953 (selected by the kernel)
+[07:13:07] task=/calvinxu/starcoder-tpp10-refinement/verified_training-88ffc03d/0 attempt=0 | I20260911 07:13:06 jax._src.distributed Starting JAX distributed service on [::]:47953
+[07:13:07] task=/calvinxu/starcoder-tpp10-refinement/verified_training-88ffc03d/0 attempt=0 | I20260911 07:13:06 jax._src.distributed Connecting to JAX distributed service on 10.128.0.141:47953

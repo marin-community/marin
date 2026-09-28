@@ -8,6 +8,7 @@ raw data is a :func:`raw_download` handle (re-fetched on demand — a small repo
 each subset tokenizer depends on.
 """
 
+from fray.cluster import ResourceConfig
 from marin.datakit.download.uncheatable_eval import (
     UncheatableEvalDownloadConfig,
     download_latest_uncheatable_eval,
@@ -30,7 +31,7 @@ UNCHEATABLE_SUBSETS = {
 }
 
 
-def uncheatable_raw() -> ArtifactStep[TokenizedCache]:
+def uncheatable_raw(*, resources: ResourceConfig | None = None) -> ArtifactStep[TokenizedCache]:
     """The Uncheatable Eval GitHub dump as a raw-download handle."""
     return raw_download(
         "raw/uncheatable_eval",
@@ -43,6 +44,7 @@ def uncheatable_raw() -> ArtifactStep[TokenizedCache]:
             branch="master",
         ),
         version="2026.06.28",
+        resources=resources,
     )
 
 
@@ -52,6 +54,7 @@ def uncheatable_dataset(
     tokenizer: str = llama3_tokenizer,
     tag: str = "llama3",
     raw: ArtifactStep[TokenizedCache] | None = None,
+    resources: ResourceConfig | None = None,
 ) -> ArtifactStep[TokenizedCache]:
     """One Uncheatable Eval subset as a validation handle.
 
@@ -67,15 +70,19 @@ def uncheatable_dataset(
         raw=raw,
         glob=UNCHEATABLE_SUBSETS[subset],
         validation=True,
+        resources=resources,
     )
 
 
 def uncheatable_datasets(
-    *, tokenizer: str = llama3_tokenizer, tag: str = "llama3"
+    *, tokenizer: str = llama3_tokenizer, tag: str = "llama3", resources: ResourceConfig | None = None
 ) -> dict[str, ArtifactStep[TokenizedCache]]:
     """All Uncheatable Eval subsets, keyed by subset name; one shared raw download."""
-    raw = uncheatable_raw()
-    return {subset: uncheatable_dataset(subset, tokenizer=tokenizer, tag=tag, raw=raw) for subset in UNCHEATABLE_SUBSETS}
+    raw = uncheatable_raw(resources=resources)
+    return {
+        subset: uncheatable_dataset(subset, tokenizer=tokenizer, tag=tag, raw=raw, resources=resources)
+        for subset in UNCHEATABLE_SUBSETS
+    }
 
 
 if __name__ == "__main__":

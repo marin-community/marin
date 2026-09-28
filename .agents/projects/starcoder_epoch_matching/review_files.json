@@ -1,0 +1,390 @@
+{
+  "design_sha256": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b",
+  "files": [
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/code_changes.patch",
+      "bytes": 171888,
+      "sha256": "2c1377cbaba3938623dfb7cdc94e9e8928ab6dd4148138ffe841533e714e82ce"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/design.md",
+      "bytes": 7938,
+      "sha256": "e1eb3a7835121d7b2c6caca3c43a5a5e769bbf473068a404cf4657577e6e2f8c"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/historical_metadata/cache_audit.json",
+      "bytes": 9147,
+      "sha256": "1b4864442b34d2185191f5af5ef8313f2485160143846b1150456354278ab4f6"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/historical_metadata/config_comparison.json",
+      "bytes": 3821,
+      "sha256": "610b9f7c6a571ff39d09c54f27a9cd91c64cccdaa597388a0663b642dd53514c"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/historical_metadata/download_manifest.json",
+      "bytes": 2318,
+      "sha256": "219ae9290ac75ea30df274479e2009b92b4a98a95a6e024b75e37a2a791913cf"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/historical_metadata/indices/index_audit.json",
+      "bytes": 825,
+      "sha256": "db00ca87aa7f3abcb47ecca63e4656dcb7f2d0a522cb1bdc613b6366dec481ea"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/historical_metadata/indices/matched_indices.i64le",
+      "bytes": 40960,
+      "sha256": "6c8ac23d240d4c99f88b2fa854cb7f7415b19e5387a68cf634f03dd73d2706c3"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/historical_metadata/indices/parent_indices.i64le",
+      "bytes": 1093632,
+      "sha256": "24c5bdd4bd466de18bc56ba06ea92053e329ad749aadea354a983fb38c61c4c1"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/historical_metadata/indices_training_runtime/index_audit.json",
+      "bytes": 824,
+      "sha256": "c40188d3e6badcd4d4dc1ebd78c03f05893506f0cc104a7f865939609efafdcb"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/historical_metadata/indices_training_runtime/matched_indices.i64le",
+      "bytes": 40960,
+      "sha256": "6c8ac23d240d4c99f88b2fa854cb7f7415b19e5387a68cf634f03dd73d2706c3"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/historical_metadata/indices_training_runtime/parent_indices.i64le",
+      "bytes": 1093632,
+      "sha256": "24c5bdd4bd466de18bc56ba06ea92053e329ad749aadea354a983fb38c61c4c1"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/historical_metadata/legacy_dataset_source.py",
+      "bytes": 22242,
+      "sha256": "b539015dbda23015df097a7b3dcaf391f6247a7adb672124699629d83a73235a"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/historical_metadata/legacy_shuffle_source_parity.json",
+      "bytes": 937,
+      "sha256": "d02192c8be81270fb80e15f6a18e03524846625856cf962899aa7354c4f0d684"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/historical_metadata/legacy_shuffle_training_runtime_parity.json",
+      "bytes": 395,
+      "sha256": "789a5b07bd5c81e237a4e5c28a55fbebddde556698a5d8cf334fb59c3437e38b"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/historical_metadata/target_artifact.json",
+      "bytes": 51121,
+      "sha256": "b9e047c49742fa6d73672d62f9890d70fc95eb5f855a47c6f23f94654ced013e"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/historical_metadata/target_eval_metrics.jsonl",
+      "bytes": 105973,
+      "sha256": "f02e5b25e7ffbf0cbadd0d86b07ef75f2a0daeb8f9b14a63e89a7ecfde35094c"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/historical_metadata/target_executor_info.json",
+      "bytes": 4444,
+      "sha256": "8b443a338526f0eb53e58a976ba6163fd919cedc7205e9d2492061ab574b4461"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/historical_metadata/target_tracker_metrics.jsonl",
+      "bytes": 39651,
+      "sha256": "52c046c42cb8db5c20125d9932116758bda33b4ecf9938a9203ae11981a7d387"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/historical_metadata/wandb/config.yaml",
+      "bytes": 28666,
+      "sha256": "b5cd23d8b4937fa2c624ddebc704dfb1912dfa0d189e9d04978758e9a74e52fb"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/historical_metadata/wandb/requirements.txt",
+      "bytes": 4195,
+      "sha256": "3391beb4545a665f3f8f8d8f6927ba02840a0a2c4be8348b0cf6548256395808"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/historical_metadata/wandb/wandb-metadata.json",
+      "bytes": 712,
+      "sha256": "28f00bcb22c5769ef52239b811ef1b26276cdc005173f12c27c9781afaeaa29e"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/pilot_collection.log",
+      "bytes": 124,
+      "sha256": "f9e31d850b83d527e856c2d14c060058b615399b5efe457722e31b436be64e12"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/pilot_collection_plan.json",
+      "bytes": 15338,
+      "sha256": "707bbdcc5ba9c3f14a8b6fdbb436b7998cea4f94100544d51e8ef527f6f49f28"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/pilot_completion_snapshot.json",
+      "bytes": 23882,
+      "sha256": "45d71008ecafc81689fc46793238fd01a87c2139f19aa4d013a96bc58c196499"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/pilot_initial_child_snapshot.json",
+      "bytes": 8431,
+      "sha256": "3745c3417a1a8a1aba70bb5bd9dd79ce10ffb26ff7bdea28e912c5a9f20675bb"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/pilot_initial_status.txt",
+      "bytes": 517,
+      "sha256": "4461856fcdafb1f1a1c1d30dcfc5123b2050d271138c009064c8f2e1f128da9a"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/pilot_measurements.csv",
+      "bytes": 2013,
+      "sha256": "9e89c2042b8619e9c5095d1b3986c95aeccad85f0d21a34bf6b1e588868017be"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/pilot_plan.json",
+      "bytes": 15338,
+      "sha256": "707bbdcc5ba9c3f14a8b6fdbb436b7998cea4f94100544d51e8ef527f6f49f28"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/pilot_plan_runtime_v2.json",
+      "bytes": 18147,
+      "sha256": "aad095a8ca27562cbf23cc84a811bfff952529f316886ed0989e02d68bc68913"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/pilot_plan_training_runtime.json",
+      "bytes": 14844,
+      "sha256": "912507570b53c620fd51440c705fe6d3660cb1a0254a1e89204671ba7b8fa1d0"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/pilot_results/RESULTS.md",
+      "bytes": 5264,
+      "sha256": "169babaaa10ec79b206ba6ac27a218903dc7d326abe558ff5baaedc9aec1ace1"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/pilot_results/analysis.json",
+      "bytes": 5390,
+      "sha256": "6d74b3f327f2c6b2006cca88aeddd44688bc52a655fd5a3196046bd846af98fd"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/pilot_results/curves.csv",
+      "bytes": 1465,
+      "sha256": "d1f1031d6220d7382ac61c5a163a1193ae89a0ea2834db3fe8e07081b69ce94a"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/pilot_results/curves.pdf",
+      "bytes": 116468,
+      "sha256": "95a423ebdf9b36b62ad2409d0e3dfd255cf70b6d25cc68678cb7f80b51f68d87"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/pilot_results/curves.png",
+      "bytes": 73162,
+      "sha256": "cd9a8e9982ecede38fef79f5d79fab1b03c25e4580c9c991e282c86b7464b5c3"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/pilot_results/excess_curves.pdf",
+      "bytes": 116471,
+      "sha256": "074f29abaf93cc2c60b0d0a8f4f555ecef89908e48473cd2f772a2f03074f59d"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/pilot_results/excess_curves.png",
+      "bytes": 80306,
+      "sha256": "17fbd12e66e830229cd8aae71d3213a024af73191c88f0a7d306f3134d00302c"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/pilot_results/handoff.md",
+      "bytes": 5264,
+      "sha256": "169babaaa10ec79b206ba6ac27a218903dc7d326abe558ff5baaedc9aec1ace1"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/pilot_runtime_metadata/provenance.json",
+      "bytes": 407,
+      "sha256": "7d0be6a82e8918289aded4adcf582dc0375f74eec7d63dd9c84850f7924c3fcd"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/pilot_runtime_metadata/requirements.txt",
+      "bytes": 5354,
+      "sha256": "389ac7accad56fb3b644a7e4fbaab94a2ea0b3900d041efeae005d0ae35f09d1"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/pilot_submission_ack.log",
+      "bytes": 1248,
+      "sha256": "e481ac95898a7df0cc9e673c4150ee3b9105379b6263c5a89029d055ad814b72"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/pilot_submission_plan.json",
+      "bytes": 18147,
+      "sha256": "aad095a8ca27562cbf23cc84a811bfff952529f316886ed0989e02d68bc68913"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/planned_pilot_submission.txt",
+      "bytes": 915,
+      "sha256": "59ab7ee2526234ffb583c06c320dc42f10c7f0eef0000f3b628654d3c7c71ef6"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/primary_plan.json",
+      "bytes": 39756,
+      "sha256": "a72c4184fd8f40315cc52c0ff0ce185be022ab1ed051dfafc6d8cf096e8bbec6"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/refinement/README.md",
+      "bytes": 4840,
+      "sha256": "e18e776bff9211a929e69e47e42143926ee2f832cc0bd4ee534850012049f122"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/refinement/initial_snapshot.json",
+      "bytes": 13742,
+      "sha256": "96f53b5913a827072c0dbd78c84dee9ae421daf1a5d4f613926c6fa7408ffec7"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/refinement/pending_audit.json",
+      "bytes": 535,
+      "sha256": "5664f4da28aca1ff618a652f8d72b5be36e71d919ee1af3174b44cd07507324b"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/refinement/planned_submission.txt",
+      "bytes": 930,
+      "sha256": "573d62bcb2f390f6a3ed57e96f3c14f9bb6add685a0ffc7818a32da0bb455d9d"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/refinement/pyrefly.log",
+      "bytes": 15,
+      "sha256": "7f5e59adbab3afa8c93f23d4297e1c003ec37056a7862a8dc0354c5fe6f42634"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/refinement/region_safety.log",
+      "bytes": 40,
+      "sha256": "52f666ce91f3ff042889d7ad8b01fad5e0cd34b15a95b2abe0f5ba0987516170"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/refinement/release.json",
+      "bytes": 5602,
+      "sha256": "da6c5322f3d5eed2831a3990314fa91c4a58ff2ae6815a7fdf08ac0c359ab1eb"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/refinement/runtime_plan.json",
+      "bytes": 24135,
+      "sha256": "0b605cb0e0ff772d18798a7980d977dcd116d2385168b339bc79e39d407f2008"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/refinement/submission_ack.log",
+      "bytes": 1278,
+      "sha256": "f0c4a7e9b0c63b973acfee98ef1955df580da631b5d9a02533c70bd58cd2e728"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/refinement/submission_plan.json",
+      "bytes": 24135,
+      "sha256": "0b605cb0e0ff772d18798a7980d977dcd116d2385168b339bc79e39d407f2008"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/region_safety_validation.txt",
+      "bytes": 40,
+      "sha256": "52f666ce91f3ff042889d7ad8b01fad5e0cd34b15a95b2abe0f5ba0987516170"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/replicated_plan.json",
+      "bytes": 99327,
+      "sha256": "da94adbf65dc0559e32cd1f240349362e79138d869b8298c93d137ad4ca4e676"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/research.md",
+      "bytes": 3882,
+      "sha256": "9cbce3c6aec0323e1fe4a0d3a6689683862d0c90744d8abd4a912398fe5df0ef"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/reuse_audit.json",
+      "bytes": 1580,
+      "sha256": "8e0f198a97cb9fcf630399580e0750f175eff2f136438e96d8a19e2442b09624"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/review_packet.md",
+      "bytes": 14551,
+      "sha256": "cfe48be9201cefc359a3000574a6b47fce7b8b927401f3a1869fa43b778dafd6"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/runtime_audit_v2.log",
+      "bytes": 886,
+      "sha256": "10cef96e661a5b9190c3c2c495c831f14378bf631e15dd9a284fe7ca54809898"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/sequence_allocation_audit.json",
+      "bytes": 6839,
+      "sha256": "ea93bad7387d63837d329d9f3a4c9f85d6e56e45ae17fa91fb075966eadb8875"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/spec.md",
+      "bytes": 9399,
+      "sha256": "db7b403ba91898c29237b6821213ac51c0c377da259dd1915d941d5fedfbbc17"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/submission_handoff.md",
+      "bytes": 2650,
+      "sha256": "ca021e7492f73165c879c3c57dbefac2923f85fc6a6ac6377102f721d5a28f16"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/target_reuse_audit.md",
+      "bytes": 15261,
+      "sha256": "56f58b1cc9a0abd58dd63ce2a805cb9b8ae7591bf4f41729984806460dc8ba65"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/tests_v2.log",
+      "bytes": 224,
+      "sha256": "6be3fcda61637fb7d5c1f828a8c3417ae8ba7505e4a9e002604d2718aab03239"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/verification.json",
+      "bytes": 3308,
+      "sha256": "0a595d977af1202fce071bb294f684b59fba7236874590d816461d0a1fd9dec8"
+    },
+    {
+      "path": ".agents/projects/starcoder_epoch_matching/verified_historical_config.md",
+      "bytes": 9687,
+      "sha256": "2315e7cd0909871d7a7319771215aa94e376e92431fe4ccbb01bd078bc205e93"
+    },
+    {
+      "path": "experiments/domain_phase_mix/audit_starcoder_epoch_matching_indices.py",
+      "bytes": 4665,
+      "sha256": "22a490cd461fa5dfaf9451f60bef42b0407cabbca6c203f12bd25e4f15bea88a"
+    },
+    {
+      "path": "experiments/domain_phase_mix/exploratory/two_phase_many/analyze_starcoder_epoch_matching.py",
+      "bytes": 17117,
+      "sha256": "f9b38499c006c70fb726dca5fec2d19791318fd7421ac9cf25c4176244305eba"
+    },
+    {
+      "path": "experiments/domain_phase_mix/launch_starcoder_epoch_matching.py",
+      "bytes": 24214,
+      "sha256": "2dea0230c54d0e8dd0d33d27bacda690177e196c46f135eea4951492fc3f0898"
+    },
+    {
+      "path": "experiments/domain_phase_mix/starcoder_epoch_matching.py",
+      "bytes": 10694,
+      "sha256": "29dac8e4085591732c329fe6a238f07cb4e02cdc6198ce344d4ab8b599619085"
+    },
+    {
+      "path": "experiments/domain_phase_mix/starcoder_epoch_matching_design_20260908.json",
+      "bytes": 69124,
+      "sha256": "17703162656b08a0f5a693d71fef2b23d2484af9986167b0facda5420b1fda3c"
+    },
+    {
+      "path": "lib/levanter/src/levanter/data/text/datasets.py",
+      "bytes": 69963,
+      "sha256": "c3ea1ea1f03ac5b96f81c208ce81fd50d5ebd9a74c57cb31ec02619fb4188948"
+    },
+    {
+      "path": "lib/levanter/tests/test_text.py",
+      "bytes": 49535,
+      "sha256": "32f8154e387c70eda91a151c04e66faca7092acf093924d11c0c2157c08df46c"
+    },
+    {
+      "path": "tests/test_starcoder_epoch_matching_analysis.py",
+      "bytes": 13248,
+      "sha256": "27d399a2282526d8f2361bb3a306068db990958affd57289e17bed2dfa883434"
+    },
+    {
+      "path": "tests/test_starcoder_epoch_matching_launcher.py",
+      "bytes": 17897,
+      "sha256": "d744bb428141487edf66445bfa50f0a33072ba1a26a342d47305fc503fa05583"
+    },
+    {
+      "path": "uv.lock",
+      "bytes": 1360637,
+      "sha256": "347c4bb876ef55f60ecd5cf137d22016aaa742387717d20e296ca0ff2cc05dd5"
+    }
+  ]
+}

@@ -1,0 +1,42 @@
+{
+  "recovery_sha256": "a2460bd0d1331717edde775ea9295b2eb49658106b7e2d1663fbd2a8a46f6d1b",
+  "proxies_verified": 14,
+  "selected": [
+    {
+      "run_name": "tpp10_finemath_3plus_target_p030_s20260910",
+      "fingerprint": "c1a0bf9e",
+      "resumed_fingerprint": "c1a0bf9e",
+      "status": "RUNNING",
+      "resume_step": 7965,
+      "allow_partial_checkpoint": false,
+      "resources": "ResourceConfig(cpu=8, ram='64g', disk='32g', device=TpuConfig(variant='v5p-8', kind='tpu', topology=None), preemptible=True, regions=('us-central1',), zone='us-central1-a', target_cluster=None, replicas=1, device_alternatives=None, image=None)"
+    },
+    {
+      "run_name": "tpp10_finemath_3plus_target_p050_s20260910",
+      "fingerprint": "ccaa1599",
+      "resumed_fingerprint": "ccaa1599",
+      "status": "RUNNING",
+      "resume_step": 6426,
+      "allow_partial_checkpoint": false,
+      "resources": "ResourceConfig(cpu=8, ram='64g', disk='32g', device=TpuConfig(variant='v5p-8', kind='tpu', topology=None), preemptible=True, regions=('us-central1',), zone='us-central1-a', target_cluster=None, replicas=1, device_alternatives=None, image=None)"
+    },
+    {
+      "run_name": "tpp10_finemath_3plus_target_p070_s20260910",
+      "fingerprint": "066c48ff",
+      "resumed_fingerprint": "066c48ff",
+      "status": "RUNNING",
+      "resume_step": 7219,
+      "allow_partial_checkpoint": false,
+      "resources": "ResourceConfig(cpu=8, ram='64g', disk='32g', device=TpuConfig(variant='v5p-8', kind='tpu', topology=None), preemptible=True, regions=('us-central1',), zone='us-central1-a', target_cluster=None, replicas=1, device_alternatives=None, image=None)"
+    },
+    {
+      "run_name": "tpp10_finemath_3plus_target_p100_s20260910",
+      "fingerprint": "9c2ae241",
+      "resumed_fingerprint": "9c2ae241",
+      "status": "RUNNING",
+      "resume_step": 6432,
+      "allow_partial_checkpoint": false,
+      "resources": "ResourceConfig(cpu=8, ram='64g', disk='32g', device=TpuConfig(variant='v5p-8', kind='tpu', topology=None), preemptible=True, regions=('us-central1',), zone='us-central1-a', target_cluster=None, replicas=1, device_alternatives=None, image=None)"
+    }
+  ]
+}

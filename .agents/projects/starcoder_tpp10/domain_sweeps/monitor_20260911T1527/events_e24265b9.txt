@@ -1,0 +1,4 @@
+Task: /calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-e24265b9/0
+
+TIME (UTC)                          ATTEMPT  TYPE    SOURCE           ACTION                COUNT  MESSAGE
+2026-09-11T15:17:23.439000+00:00          0  Normal  iris/controller  TaskRetryScheduled        1  Parent task preempted; controller returned the task to PENDING.

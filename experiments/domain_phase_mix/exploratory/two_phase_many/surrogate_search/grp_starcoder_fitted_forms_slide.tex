@@ -1,0 +1,28 @@
+% Slide-ready GRP forms for the 2-phase StarCoder packet.
+
+% On the U-shaped slice: z = p_{1,\mathrm{S}},\; p_{1,\mathrm{N}} = 1-z,\; p_{0,\mathrm{N}} = 1,\; p_{0,\mathrm{S}} = 0.
+
+\paragraph{Fit on U-shaped subset only}
+\[
+x_{\mathrm{N}}(z) \approx 0.50 + 5.73(1-z)
+\qquad
+x_{\mathrm{S}}(z) = 151.69\,z
+\]
+\[
+\hat y(z) \approx 3.17 - 0.54\,\log\!\bigl(1 + 3.22\,x_{\mathrm{N}}(z)\bigr) - 0.16\,\log\!\bigl(1 + 3.22\,x_{\mathrm{S}}(z)\bigr)
+\]
+\emph{On the U-shaped slice, this is essentially a two-channel saturated total-exposure law with negligible retention and negligible overexposure penalty.}
+
+\paragraph{Fit on all 2-phase StarCoder data}
+\[
+x_{\mathrm{N}}(z) \approx 0.50\,e^{-2.51 z} + 0.49(1-z)
+\qquad
+x_{\mathrm{S}}(z) = 12.89\,z
+\]
+\[
+\hat y(z) \approx 2.42 - 0.42\,\log\!\bigl(1 + 8.31\,x_{\mathrm{N}}(z)\bigr) - 0.26\,\log\!\bigl(1 + 8.31\,x_{\mathrm{S}}(z)\bigr) + 2.80\,P\bigl(x_{\mathrm{N}}(z), x_{\mathrm{S}}(z)\bigr)
+\]
+\[
+P(x_{\mathrm{N}}, x_{\mathrm{S}}) = \operatorname{softplus}\!\bigl(\log(1+x_{\mathrm{N}})-3.22\bigr)^2 + \operatorname{softplus}\!\bigl(\log(1+x_{\mathrm{S}})-3.22\bigr)^2
+\]
+\emph{On the full packet, the fit is still simple, but now it learns meaningful retention on Nemotron and a real overexposure penalty.}

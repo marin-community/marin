@@ -1,0 +1,18 @@
+Continue your independent read-only implementation review. Focus only on whether the following resolutions leave a concrete pre-preparation/calibration blocker; do not repeat the full review. Return at most 1000 words. No shell, writes, delegation or cloud reads.
+
+Current files under /Users/calvinxu/Projects/Work/Marin/marin:
+experiments/domain_phase_mix/{starcoder_tpp10,prepare_starcoder_tpp10,launch_starcoder_tpp10,analyze_starcoder_tpp10}.py
+tests/test_starcoder_tpp10.py
+.agents/projects/starcoder_tpp10/{spec,README}.md
+
+Resolutions to verify:
+B1: write_design accepts a new file or identical manifest and refuses to overwrite a different existing design. The CLI uses it; a test checks that a changed budget leaves original bytes intact. The pre-submission draft was explicitly revised during this review; there are no prepared caches or trained jobs to invalidate.
+B2: We retain code/data/lock pins as scientific training identity. Automatically treating altered training/preparation code as equivalent is not acceptable. The recovery defect is fixed separately: collect_results now reads only archived plan paths/fingerprints/code/runtime receipts; --collect-results returns before load_design/build_plan and never overwrites the archived plan. The test supplies old design/code pins different from today's checkout and invokes the actual CLI against local completed artifacts. Stage expansion/resubmission requires the same frozen source recipe, explicitly stated in spec/README. A selected-source archive is being saved; the actual Iris workspace bundle must be retained at submission. Restoring that exact workspace permits same-recipe continuation. Distinguish ordinary maintenance of a *separate/current* checkout from modifying an intentionally frozen experiment release. Please assess this alternative to dropping provenance out of identity.
+B3: verified_tokenizer checks CWD-relative resolution against the bundled ASSETS directory and compares actual loaded length to VOCAB_SIZE. load_design calls it on the parent/preparation path; verified_training calls it before entering Levanter. Native tokenizer loading does not initialize a JAX backend.
+B4: The original parent already supplied MARIN_PREFIX, and Iris does inherit parent job.env at lib/iris/src/iris/client/client.py:993-1012. Thus missing create_environment defaults did not establish the claimed failure. Nevertheless, all preparation/training remote wrappers now explicitly set MARIN_PREFIX too; exact regional checks remain intact, not weakened.
+
+Also implemented: blank-line skipping (invalid JSON still fails), explicit parent/subset receipt index hashes, raw/subset recipe-design equality, proxy and target web-wrap checks, derived web token budgets, namespaced training-data artifacts with stable runtime component names, --max-concurrent defaults 4 preparation / 8 training. No automatic retry or larger read-budget fallback was added; repeated submission resumes verified artifacts and checkpoints under the frozen recipe.
+
+Your upstream ordering question is settled by source: Zephyr _regroup_map_refs in coordinator.py preserves input-shard order, and the final _result_executor.map(list, shards) at lines 1238-1242 preserves that ordering before flattening. The actual local two-shard consolidation/native-reader check passed. Full test/lint/type checks are being refreshed after these fixes, so do not infer completion until reading the logs.
+
+Separate remaining live cache-yield, regional runtime and optimizer feasibility checks from offline correctness blockers. The scientific reviewer independently closed its objections after a native train_sets zero-weight audit; do not read that review for your judgment.

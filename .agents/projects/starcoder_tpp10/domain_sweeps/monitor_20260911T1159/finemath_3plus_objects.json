@@ -1,0 +1,152 @@
+[
+  {
+    "name": "tpp10_domain_sweeps/finemath_3plus/raw/2026.09.11/.executor_info",
+    "size": 595,
+    "generation": 1789125005743041,
+    "updated": "2026-09-11T11:10:05.749000+00:00"
+  },
+  {
+    "name": "tpp10_domain_sweeps/finemath_3plus/raw/2026.09.11/.executor_status",
+    "size": 7,
+    "generation": 1789125006511475,
+    "updated": "2026-09-11T11:10:06.518000+00:00"
+  },
+  {
+    "name": "tpp10_domain_sweeps/finemath_3plus/raw/2026.09.11/.executor_status.lock",
+    "size": 165,
+    "generation": 1789128024476049,
+    "updated": "2026-09-11T12:00:24.489000+00:00"
+  },
+  {
+    "name": "tpp10_domain_sweeps/finemath_3plus/raw/2026.09.11/train/parts/000/input_ids/data/c/0",
+    "size": 14512142,
+    "generation": 1789126863753702,
+    "updated": "2026-09-11T11:41:03.780000+00:00"
+  },
+  {
+    "name": "tpp10_domain_sweeps/finemath_3plus/raw/2026.09.11/train/parts/000/input_ids/data/zarr.json",
+    "size": 556,
+    "generation": 1789126818791435,
+    "updated": "2026-09-11T11:40:18.797000+00:00"
+  },
+  {
+    "name": "tpp10_domain_sweeps/finemath_3plus/raw/2026.09.11/train/parts/000/input_ids/offsets/c/0",
+    "size": 23053,
+    "generation": 1789126863898764,
+    "updated": "2026-09-11T11:41:03.910000+00:00"
+  },
+  {
+    "name": "tpp10_domain_sweeps/finemath_3plus/raw/2026.09.11/train/parts/000/input_ids/offsets/zarr.json",
+    "size": 556,
+    "generation": 1789126818658091,
+    "updated": "2026-09-11T11:40:18.664000+00:00"
+  },
+  {
+    "name": "tpp10_domain_sweeps/finemath_3plus/raw/2026.09.11/train/parts/000/receipt.json",
+    "size": 474,
+    "generation": 1789126864560764,
+    "updated": "2026-09-11T11:41:04.569000+00:00"
+  },
+  {
+    "name": "tpp10_domain_sweeps/finemath_3plus/raw/2026.09.11/train/parts/000/shard_ledger.json",
+    "size": 432,
+    "generation": 1789126864425772,
+    "updated": "2026-09-11T11:41:04.432000+00:00"
+  },
+  {
+    "name": "tpp10_domain_sweeps/finemath_3plus/raw/2026.09.11/train/parts/001/input_ids/data/c/0",
+    "size": 14327168,
+    "generation": 1789126907552389,
+    "updated": "2026-09-11T11:41:47.566000+00:00"
+  },
+  {
+    "name": "tpp10_domain_sweeps/finemath_3plus/raw/2026.09.11/train/parts/001/input_ids/data/zarr.json",
+    "size": 556,
+    "generation": 1789126864986527,
+    "updated": "2026-09-11T11:41:04.993000+00:00"
+  },
+  {
+    "name": "tpp10_domain_sweeps/finemath_3plus/raw/2026.09.11/train/parts/001/input_ids/offsets/c/0",
+    "size": 22130,
+    "generation": 1789126907685831,
+    "updated": "2026-09-11T11:41:47.701000+00:00"
+  },
+  {
+    "name": "tpp10_domain_sweeps/finemath_3plus/raw/2026.09.11/train/parts/001/input_ids/offsets/zarr.json",
+    "size": 556,
+    "generation": 1789126864813747,
+    "updated": "2026-09-11T11:41:04.819000+00:00"
+  },
+  {
+    "name": "tpp10_domain_sweeps/finemath_3plus/raw/2026.09.11/train/parts/001/receipt.json",
+    "size": 474,
+    "generation": 1789126908092503,
+    "updated": "2026-09-11T11:41:48.099000+00:00"
+  },
+  {
+    "name": "tpp10_domain_sweeps/finemath_3plus/raw/2026.09.11/train/parts/001/shard_ledger.json",
+    "size": 432,
+    "generation": 1789126907951238,
+    "updated": "2026-09-11T11:41:47.956000+00:00"
+  },
+  {
+    "name": "tpp10_domain_sweeps/finemath_3plus/raw/2026.09.11/train/parts/002/input_ids/data/c/0",
+    "size": 14888168,
+    "generation": 1789126955680659,
+    "updated": "2026-09-11T11:42:35.694000+00:00"
+  },
+  {
+    "name": "tpp10_domain_sweeps/finemath_3plus/raw/2026.09.11/train/parts/002/input_ids/data/zarr.json",
+    "size": 556,
+    "generation": 1789126908472093,
+    "updated": "2026-09-11T11:41:48.477000+00:00"
+  },
+  {
+    "name": "tpp10_domain_sweeps/finemath_3plus/raw/2026.09.11/train/parts/002/input_ids/offsets/c/0",
+    "size": 23048,
+    "generation": 1789126955791521,
+    "updated": "2026-09-11T11:42:35.807000+00:00"
+  },
+  {
+    "name": "tpp10_domain_sweeps/finemath_3plus/raw/2026.09.11/train/parts/002/input_ids/offsets/zarr.json",
+    "size": 556,
+    "generation": 1789126908387690,
+    "updated": "2026-09-11T11:41:48.393000+00:00"
+  },
+  {
+    "name": "tpp10_domain_sweeps/finemath_3plus/raw/2026.09.11/train/parts/002/receipt.json",
+    "size": 474,
+    "generation": 1789126956203875,
+    "updated": "2026-09-11T11:42:36.211000+00:00"
+  },
+  {
+    "name": "tpp10_domain_sweeps/finemath_3plus/raw/2026.09.11/train/parts/002/shard_ledger.json",
+    "size": 432,
+    "generation": 1789126956032463,
+    "updated": "2026-09-11T11:42:36.037000+00:00"
+  },
+  {
+    "name": "tpp10_domain_sweeps/finemath_3plus/raw/2026.09.11/train/parts/003/input_ids/data/c/0",
+    "size": 10248215,
+    "generation": 1789126989651024,
+    "updated": "2026-09-11T11:43:09.667000+00:00"
+  },
+  {
+    "name": "tpp10_domain_sweeps/finemath_3plus/raw/2026.09.11/train/parts/003/input_ids/data/zarr.json",
+    "size": 556,
+    "generation": 1789126956617883,
+    "updated": "2026-09-11T11:42:36.622000+00:00"
+  },
+  {
+    "name": "tpp10_domain_sweeps/finemath_3plus/raw/2026.09.11/train/parts/003/input_ids/offsets/c/0",
+    "size": 19168,
+    "generation": 1789126989193632,
+    "updated": "2026-09-11T11:43:09.209000+00:00"
+  },
+  {
+    "name": "tpp10_domain_sweeps/finemath_3plus/raw/2026.09.11/train/parts/003/input_ids/offsets/zarr.json",
+    "size": 556,
+    "generation": 1789126956507141,
+    "updated": "2026-09-11T11:42:36.514000+00:00"
+  }
+]

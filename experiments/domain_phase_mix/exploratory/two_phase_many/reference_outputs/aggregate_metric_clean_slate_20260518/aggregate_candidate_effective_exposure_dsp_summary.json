@@ -1,0 +1,42 @@
+{
+  "candidates": [
+    "suite_balanced_mean_no_dsp",
+    "role_balanced_mean_no_dsp",
+    "optimize_only_suite_balanced",
+    "suite_balanced_mean_dsp_suite_gated",
+    "suite_balanced_mean_dsp_weighted",
+    "reliability_weighted_mean_unbalanced",
+    "suite_balanced_clipped_mean_no_dsp",
+    "role_balanced_clipped_mean_no_dsp",
+    "suite_balanced_rank_mean_no_dsp",
+    "role_balanced_rank_mean_no_dsp",
+    "suite_factor_1",
+    "suite_factor_blend_3_diagnostic",
+    "item_factor_horn_balanced_projection",
+    "item_factor_varimax_diagnostic",
+    "item_factor_balance_penalized",
+    "item_factor_controllable065_balanced_projection",
+    "item_factor_controllable065_balance_penalized_beta0p5",
+    "item_factor_controllable065_balance_penalized_beta1p0",
+    "item_factor_controllable080_balanced_projection",
+    "item_factor_controllable080_balance_penalized_beta0p5",
+    "item_factor_controllable080_balance_penalized_beta1p0",
+    "item_factor_optimize_controllable065_balanced_projection",
+    "item_factor_optimize_controllable065_balance_penalized_beta0p5",
+    "item_factor_optimize_controllable065_balance_penalized_beta1p0",
+    "item_factor_task_proxy_controllable065_balanced_projection",
+    "item_factor_task_proxy_controllable065_balance_penalized_beta0p5",
+    "item_factor_task_proxy_controllable065_balance_penalized_beta1p0"
+  ],
+  "elapsed_seconds": 243.1122896670131,
+  "max_observed_starts": 242,
+  "maxiter": 100,
+  "optimum_starts": 200,
+  "rows": 27,
+  "stability_seeds": 5,
+  "stability_starts": 80,
+  "status_counts": {
+    "ok": 27
+  },
+  "workers": 16
+}

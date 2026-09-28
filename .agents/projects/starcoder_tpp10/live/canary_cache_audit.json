@@ -1,0 +1,78 @@
+{
+  "caches": {
+    "evaluation": {
+      "fingerprint": "3a557be8",
+      "path": "gs://marin-us-central1/paloma/dolma_100_programing_languages-tpp10/2026.09.09",
+      "receipt_sha256": "aed724e9c8231a21247ebf9da71c3d967d0c60a9ae71c75e490a0c7dbe653e72",
+      "tokens": 11620242
+    },
+    "hq_actual": {
+      "fingerprint": "6724be3d",
+      "path": "gs://marin-us-central1/starcoder_tpp10/hq_actual/2026.09.09",
+      "receipt_sha256": "a10aa93b9ea79e8e91730904d759bd4d6c8fdb761efc7f276d1150e869abe782",
+      "tokens": 343357440
+    },
+    "hq_synth": {
+      "fingerprint": "1aff8317",
+      "path": "gs://marin-us-central1/starcoder_tpp10/hq_synth/2026.09.09",
+      "receipt_sha256": "0e457efcaa33fe532aadf59ee68be9c00c481ea27eb583bcbf0d2cb2064a75e2",
+      "tokens": 948922368
+    },
+    "low_actual": {
+      "fingerprint": "76ed50a5",
+      "path": "gs://marin-us-central1/starcoder_tpp10/low_actual/2026.09.09",
+      "receipt_sha256": "c8330836a31dc38be05827541167588c1689ca55b7ed76f0ba071a2b60ae9e74",
+      "tokens": 246509568
+    },
+    "medium": {
+      "fingerprint": "12062edd",
+      "path": "gs://marin-us-central1/starcoder_tpp10/medium/2026.09.09",
+      "receipt_sha256": "96f6d87e1875dcd2dbe7d25b6e93fb3ec8ec68d9746dd64ab7408fe2889d16e7",
+      "tokens": 1241057280
+    },
+    "medium_high": {
+      "fingerprint": "e46a2568",
+      "path": "gs://marin-us-central1/starcoder_tpp10/medium_high/2026.09.09",
+      "receipt_sha256": "a5f564a9e19a67b648c542a1cdfe96d886a61f700ebd30b081a54262914bf7de",
+      "tokens": 312719360
+    },
+    "medium_low": {
+      "fingerprint": "351e53d8",
+      "path": "gs://marin-us-central1/starcoder_tpp10/medium_low/2026.09.09",
+      "receipt_sha256": "4b6a74eb58f3efdcf951f8487da7f6e43df9a68b22a7126881370d64f007217f",
+      "tokens": 547362816
+    },
+    "starcoder": {
+      "fingerprint": "7277121a",
+      "path": "gs://marin-us-central1/starcoder_tpp10/parent/2026.09.09",
+      "receipt_sha256": "7c0bd471435b883bc2fc5f2036aa363aab28da2c7d811d665dd05a638b7280b2",
+      "tokens": 190316544
+    },
+    "starcoder_raw": {
+      "fingerprint": "c87645e3",
+      "path": "gs://marin-us-central1/starcoder_tpp10/starcoder/2026.09.09",
+      "receipt_sha256": "a5d2987017af31893319f22ea39b20e9a914c066762e6ed2a28a8799ff6d6343",
+      "tokens": 190316544
+    },
+    "subset_20260912": {
+      "fingerprint": "87312d28",
+      "path": "gs://marin-us-central1/starcoder_tpp10/subset_20260912/2026.09.09",
+      "receipt_sha256": "67231ad8aa1fbb294c7c738409260bcd2a91edd2d8019a9cfe466227953b49f0",
+      "tokens": 10485760
+    },
+    "subset_20260913": {
+      "fingerprint": "3e166c0e",
+      "path": "gs://marin-us-central1/starcoder_tpp10/subset_20260913/2026.09.09",
+      "receipt_sha256": "fd7186bdaf72f35d9e25c16dd7b6b8557d27e7bf5498f406d846dc1332fd1c00",
+      "tokens": 10485760
+    },
+    "subset_20260914": {
+      "fingerprint": "cac63c83",
+      "path": "gs://marin-us-central1/starcoder_tpp10/subset_20260914/2026.09.09",
+      "receipt_sha256": "2b2db1f0524fbd588c99b56d295d86f8c4908cd7654a5277ac5a8089ab085c4e",
+      "tokens": 10485760
+    }
+  },
+  "design_sha256": "72d14a845033b901d73397c74c724a668cbdec5fd72cec41178626b993f889a2",
+  "status": "passed"
+}

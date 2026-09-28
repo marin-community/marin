@@ -1,0 +1,89 @@
+{
+  "dolmino_flan": {
+    "dataset": "Dolma 3 Dolmino pool component dolmino_1-flan (the swarm's dolmino_synth_instruction bucket)",
+    "selection_seed": 20260916,
+    "selection_key": "sha256(UTF8(str(seed) + colon + full gs URI)) ascending; first four shards form the pool, the fifth is the held-out evaluation source",
+    "inventory_count": 206,
+    "selected": [
+      {
+        "uri": "gs://marin-us-central1/raw/dolma3_dolmino_pool-72089d/data/dolmino_1-flan/tulu_flan-0020.jsonl.zst",
+        "generation": "1768949439455382",
+        "size_bytes": 123673669,
+        "crc32c": "xFxgyw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma3_dolmino_pool-72089d/data/dolmino_1-flan/tulu_flan-0206.jsonl.zst",
+        "generation": "1768949548135874",
+        "size_bytes": 181998818,
+        "crc32c": "XTGoHA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma3_dolmino_pool-72089d/data/dolmino_1-flan/tulu_flan-0131.jsonl.zst",
+        "generation": "1768949502815780",
+        "size_bytes": 126482254,
+        "crc32c": "7Z9IzA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/dolma3_dolmino_pool-72089d/data/dolmino_1-flan/tulu_flan-0207.jsonl.zst",
+        "generation": "1768949550489350",
+        "size_bytes": 181842310,
+        "crc32c": "xsE0fg=="
+      }
+    ]
+  },
+  "dolmino_flan_heldout": {
+    "selected": [
+      {
+        "uri": "gs://marin-us-central1/raw/dolma3_dolmino_pool-72089d/data/dolmino_1-flan/tulu_flan-0133.jsonl.zst",
+        "generation": "1768949503106564",
+        "size_bytes": 126556417,
+        "crc32c": "xeSbKg=="
+      }
+    ]
+  },
+  "qa_evaluations": {
+    "rendering": "one document per validation example: 'Question: <question>\\nAnswer: <correct answer text>\\n'; rendered on 2026-09-19 from the pinned allenai parquet snapshots in central1",
+    "sets": {
+      "arc_easy": {
+        "uri": "gs://marin-us-central1/raw/tpp10_qa_evals/2026.09.19/arc_easy.jsonl.gz",
+        "generation": "1789798481835165",
+        "size_bytes": 34710,
+        "crc32c": "5KXZcg==",
+        "documents": 570,
+        "source_parquet": "gs://marin-us-central1/raw/allenai/ai2_arc_9fc351b7/ARC-Easy/validation-00000-of-00001.parquet"
+      },
+      "arc_challenge": {
+        "uri": "gs://marin-us-central1/raw/tpp10_qa_evals/2026.09.19/arc_challenge.jsonl.gz",
+        "generation": "1789798482331421",
+        "size_bytes": 21808,
+        "crc32c": "0nq2Kg==",
+        "documents": 299,
+        "source_parquet": "gs://marin-us-central1/raw/allenai/ai2_arc_9fc351b7/ARC-Challenge/validation-00000-of-00001.parquet"
+      },
+      "openbookqa": {
+        "uri": "gs://marin-us-central1/raw/tpp10_qa_evals/2026.09.19/openbookqa.jsonl.gz",
+        "generation": "1789798482815091",
+        "size_bytes": 20116,
+        "crc32c": "kNrptw==",
+        "documents": 500,
+        "source_parquet": "gs://marin-us-central1/raw/allenai/openbookqa_3b95bb0a/main/validation-00000-of-00001.parquet"
+      },
+      "qasc": {
+        "uri": "gs://marin-us-central1/raw/tpp10_qa_evals/2026.09.19/qasc.jsonl.gz",
+        "generation": "1789798483372155",
+        "size_bytes": 38374,
+        "crc32c": "sAigtQ==",
+        "documents": 926,
+        "source_parquet": "gs://marin-us-central1/raw/allenai/qasc_491d1bd3/data/validation-00000-of-00001.parquet"
+      },
+      "sciq": {
+        "uri": "gs://marin-us-central1/raw/tpp10_qa_evals/2026.09.19/sciq.jsonl.gz",
+        "generation": "1789798483958296",
+        "size_bytes": 40021,
+        "crc32c": "o0JJig==",
+        "documents": 1000,
+        "source_parquet": "gs://marin-us-central1/raw/allenai/sciq_55616027/data/validation-00000-of-00001.parquet"
+      }
+    }
+  }
+}

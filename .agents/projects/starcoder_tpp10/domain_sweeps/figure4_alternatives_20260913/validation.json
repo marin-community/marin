@@ -1,0 +1,10 @@
+{
+  "versions": 3,
+  "points_per_version": 64,
+  "all_192_values_match_sources_exactly": true,
+  "all_epoch_coordinates_match": true,
+  "right_panels_identical": true,
+  "compute_audit": "Independent audit verifies3xanalytic_forward_flops_per_token times D and math schema2 solution-only BPB",
+  "visual_checks": "All3 versions checked; annotation positions adjusted to avoid curves",
+  "lint": "Ruff and Black pass"
+}

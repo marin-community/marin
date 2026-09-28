@@ -1,0 +1,87 @@
+[
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789339870.1067526,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/figure3_mariner_20260913/epoch_matching_tpp10_mariner.pdf",
+      "fieldbook.local_size_at_capture": 30419
+    },
+    "content_hash": "sha256:cdbb1202522e9c5c272464e747714e70730607bbbc5f365a8d58553b2a2928e7",
+    "created_at": "2026-09-13T22:53:30Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m2efkhpm7rrw0xgm94cn63g4",
+    "job_id": null,
+    "run_id": null,
+    "type": "plot",
+    "updated_at": "2026-09-13T22:53:30Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/figure3_mariner_20260913/epoch_matching_tpp10_mariner.pdf"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789339820.888106,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/figure3_mariner_20260913/fits/summary.json",
+      "fieldbook.local_size_at_capture": 909788
+    },
+    "content_hash": "sha256:30e82ea406f74d86ddb3c6236864c9d90e9aa739d86de7c1b67306dd054ea9e0",
+    "created_at": "2026-09-13T22:53:30Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m2efkhzmg5zgjqz5tdtfjg9z",
+    "job_id": null,
+    "run_id": null,
+    "type": "metric-table",
+    "updated_at": "2026-09-13T22:53:30Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/figure3_mariner_20260913/fits/summary.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789339972.0127559,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/figure3_mariner_20260913/README.md",
+      "fieldbook.local_size_at_capture": 5363
+    },
+    "content_hash": "sha256:1ccc02a56a5cec8de23e6f4a58be66ef6eb8a200732d0cf49ca18ce3eddf3733",
+    "created_at": "2026-09-13T22:53:30Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m2efkj88pwnt1wh1ztmzna5d",
+    "job_id": null,
+    "run_id": null,
+    "type": "report",
+    "updated_at": "2026-09-13T22:53:30Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/figure3_mariner_20260913/README.md"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789339762.8320343,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/figure3_mariner_20260913/audit/REPORT.md",
+      "fieldbook.local_size_at_capture": 12878
+    },
+    "content_hash": "sha256:4d67eed85e3bf784b3dd504a7c7d9d3771e3c9ae3f4a6a4a6842b497e1d0fbb5",
+    "created_at": "2026-09-13T22:54:07Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m2efmnn423sk1d71gjjfvn0w",
+    "job_id": null,
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-13T22:54:07Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/figure3_mariner_20260913/audit/REPORT.md"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789339996.9739926,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/figure3_mariner_20260913/audit/audit.json",
+      "fieldbook.local_size_at_capture": 44005
+    },
+    "content_hash": "sha256:cd536a3ec935907c2b931337b66fe8e597e77166cab73a1b700d8630769c2463",
+    "created_at": "2026-09-13T22:54:07Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m2efmp0pmeztttjxhjhkp6f2",
+    "job_id": null,
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-13T22:54:07Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/figure3_mariner_20260913/audit/audit.json"
+  }
+]

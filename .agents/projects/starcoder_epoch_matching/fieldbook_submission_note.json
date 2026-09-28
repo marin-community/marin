@@ -1,0 +1,18 @@
+{
+  "attrs": {
+    "session_id": "ses_01m21rrny5b6z8jkbx2n8t4nvc"
+  },
+  "author": null,
+  "body": "Pilot submitted after CC review on 2026-09-08 at 17:29:55 PDT.\n\nIris parent: /calvinxu/starcoder-epoch-matching-pilot\nDashboard: https://iris.oa.dev/#/job/%2Fcalvinxu%2Fstarcoder-epoch-matching-pilot\nFieldbook parent: job_01m21s421dw5vb3p9c2d67q9ts\nFrozen v2 design: 3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b\n\nTen new runs: nine 277.873M-token proxies on p={0,0.1,0.3,0.7,1}, with the identical p=0 arms deduplicated, and one corrected 7.408B-token target endpoint. Estimated training compute is 8.705e18 FLOPs. Later full-grid and replication releases remain separate decisions.\n\nThe intended new child environment is the bundled uv.lock (JAX/JAXlib 0.11.1, NumPy 2.3.5). Full parent and matched index hashes reproduce the reviewed historical mapping and are checked at submission. This establishes corpus identity, not numerical equivalence to the historical 0.10.1 training. All ten run names, paths and configuration fingerprints remain unchanged from the reviewed v1 protocol. The v1 baseline is archived under pre_cc_runtime_fix/.\n\n100 targeted tests passed. Scoped lint and Pyrefly passed. Live cache/runtime/index audit passed under 0.11.1; exact command passed central1 placement validation. Iris accepted the parent, and its initial task was building dependencies. Child training has not yet been verified. The ledger recorded all ten datapoints and a submitting parent before the external call, then attached the acknowledged Iris ID.\n\nAll valid pilot outcomes, including ties and an unfavorable ordering, are retained. No one-grid-step promotion threshold is used on this irregular grid. Independent subset replication remains a separate follow-up; changing a trainer/data seed does not by itself change the fixed named-key support. Analysis now reports selected-weight displacement, matched-minus-unmatched target regret and optional excess-over-own-grid-minimum plots.\n\nSpecification and exact collection/analysis commands: .agents/projects/starcoder_epoch_matching/review_packet.md. Do not resubmit while this parent is queued or running. If it fails, inspect its failure and durable per-run artifacts before preparing a linked retry.\n",
+  "body_format": "markdown",
+  "created_at": "2026-09-09T00:32:38Z",
+  "deleted_at": null,
+  "entity_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+  "entity_type": "experiment",
+  "id": "note_01m21s9ftq14111yawzxsse6vv",
+  "note_type": "decision",
+  "resolved_at": null,
+  "status": "open",
+  "title": "CC runtime correction applied; ten-run pilot submitted",
+  "updated_at": "2026-09-09T00:32:38Z"
+}

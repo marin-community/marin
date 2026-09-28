@@ -1,0 +1,18 @@
+{
+  "source_completion_sha256": "627ab5df22b1304a78de9a109a7185da93b2d1f86cfb9d3c07fbff92dc8b2d42",
+  "official_models_sha256": "97ce64ebf85aa83e6802fa1bf93ba01606aa6eddc2cac3798ff195a41f1970ba",
+  "candidate_weights_sha256": "7c4b8b005b5a8d7eaaa19278d236591a00873f7e3ff3da5ff5031270f91c3899",
+  "predictions_sha256": "1c27ce510cd4ac2acae8a03ca215600d50c07181939555255ffab8d2b2ce653c",
+  "rows": 16,
+  "mixtures": 4,
+  "saved_before_training": true,
+  "uncheatable_aggregation_weights": [
+    0.1725032419832083,
+    0.1459150285318545,
+    0.1673147061106415,
+    0.1206224088062254,
+    0.1543450059149921,
+    0.1478598606213357,
+    0.0914397685598754
+  ]
+}

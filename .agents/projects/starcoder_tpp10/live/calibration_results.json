@@ -1,0 +1,93 @@
+{
+  "plan_sha256": "bb1f21b75529a4f6c09130ed6c94778f301e0cb8c359e32eb0354fd21cd7d626",
+  "primary_metric": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+  "rows": [
+    {
+      "config_fingerprint": "91ded376",
+      "metric": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+      "plan_sha256": "bb1f21b75529a4f6c09130ed6c94778f301e0cb8c359e32eb0354fd21cd7d626",
+      "run_name": "tpp10_unmatched_p050_s20260910",
+      "status": "succeeded",
+      "step": "2531",
+      "value": "1.127394676208496"
+    },
+    {
+      "config_fingerprint": "ea94a64a",
+      "metric": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+      "plan_sha256": "bb1f21b75529a4f6c09130ed6c94778f301e0cb8c359e32eb0354fd21cd7d626",
+      "run_name": "tpp10_matched_p050_s20260910_d20260912",
+      "status": "succeeded",
+      "step": "2531",
+      "value": "1.1596766710281372"
+    },
+    {
+      "config_fingerprint": "ddbddc21",
+      "metric": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+      "plan_sha256": "bb1f21b75529a4f6c09130ed6c94778f301e0cb8c359e32eb0354fd21cd7d626",
+      "run_name": "tpp10_unmatched_p050_s20260911",
+      "status": "succeeded",
+      "step": "2531",
+      "value": "1.1253341436386108"
+    },
+    {
+      "config_fingerprint": "e55bc8dd",
+      "metric": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+      "plan_sha256": "bb1f21b75529a4f6c09130ed6c94778f301e0cb8c359e32eb0354fd21cd7d626",
+      "run_name": "tpp10_matched_p050_s20260911_d20260912",
+      "status": "succeeded",
+      "step": "2531",
+      "value": "1.1570158004760742"
+    },
+    {
+      "config_fingerprint": "f4e03c84",
+      "metric": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+      "plan_sha256": "bb1f21b75529a4f6c09130ed6c94778f301e0cb8c359e32eb0354fd21cd7d626",
+      "run_name": "tpp10_unmatched_p050_s20260910_b128",
+      "status": "succeeded",
+      "step": "632",
+      "value": "1.1233506202697754"
+    },
+    {
+      "config_fingerprint": "ed85fdb6",
+      "metric": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+      "plan_sha256": "bb1f21b75529a4f6c09130ed6c94778f301e0cb8c359e32eb0354fd21cd7d626",
+      "run_name": "tpp10_matched_p050_s20260910_d20260912_b128",
+      "status": "succeeded",
+      "step": "632",
+      "value": "1.1822760105133057"
+    },
+    {
+      "config_fingerprint": "948187ef",
+      "metric": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+      "plan_sha256": "bb1f21b75529a4f6c09130ed6c94778f301e0cb8c359e32eb0354fd21cd7d626",
+      "run_name": "tpp10_unmatched_p050_s20260911_b128",
+      "status": "succeeded",
+      "step": "632",
+      "value": "1.1187710762023926"
+    },
+    {
+      "config_fingerprint": "0dc56dea",
+      "metric": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+      "plan_sha256": "bb1f21b75529a4f6c09130ed6c94778f301e0cb8c359e32eb0354fd21cd7d626",
+      "run_name": "tpp10_matched_p050_s20260911_d20260912_b128",
+      "status": "succeeded",
+      "step": "632",
+      "value": "1.1858829259872437"
+    }
+  ],
+  "summary": {
+    "batch32_loss_screen_passed": true,
+    "batch_means": {
+      "matched": {
+        "128": 1.1840794682502747,
+        "32": 1.1583462357521057
+      },
+      "unmatched": {
+        "128": 1.121060848236084,
+        "32": 1.1263644099235535
+      }
+    },
+    "criterion": "Review a new recipe if unmatched mean BPB at batch32 exceeds batch128 by more than 0.01. Matched losses are diagnostics; they do not select the optimizer recipe.",
+    "unmatched_batch32_minus_batch128_bpb": 0.005303561687469482
+  }
+}

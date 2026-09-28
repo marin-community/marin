@@ -1,0 +1,6 @@
+I20260912 15:39:55 8553706816 iris.cli.main Resolved cluster 'marin' to config: /Users/calvinxu/Projects/Work/Marin/marin/lib/iris/config/marin.yaml
+I20260912 15:39:55 8553706816 iris.cluster.config Loading config from /Users/calvinxu/Projects/Work/Marin/marin/lib/iris/config/marin.yaml
+I20260912 15:39:55 8553706816 finelog.client.log_client LogClient resolved /system/log-server -> https://iris.oa.dev/proxy/system.log-server (log)
+Not all requested scopes were granted by the authorization server, missing scopes email.
+[21:39:00] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | I20260912 21:38:59 139911902876480 levanter.checkpoint Loading checkpoint from gs://marin-us-central1/tmp/ttl=14d/checkpoints-temp/marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p065_s20260910/2026.09.09/checkpoints/step-2283
+

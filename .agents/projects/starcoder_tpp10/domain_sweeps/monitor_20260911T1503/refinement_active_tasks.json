@@ -1,0 +1,98 @@
+[
+  {
+    "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-d1a98d0f",
+    "state": "JOB_STATE_RUNNING",
+    "task_state_counts": {
+      "running": 1
+    },
+    "failure_count": 0,
+    "preemption_count": 0,
+    "run_name": "tpp10_unmatched_p080_s20260911",
+    "last_training_progress": "[15:05:31] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-d1a98d0f/0 attempt=0 | I20260911 15:05:24 140135539323712 tqdm_loggable.tqdm_logging Progress on:train 375it/2.53kit rate:12.5it/s remaining:02:53 elapsed:01:00 postfix:loss=2.94",
+    "last_log": "[15:05:44] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-d1a98d0f/0 attempt=0 | I20260911 15:05:41 140135539323712 levanter.eval paloma/dolma_100_programing_languages-tpp10 loss: 2.228"
+  },
+  {
+    "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-20560554",
+    "state": "JOB_STATE_RUNNING",
+    "task_state_counts": {
+      "running": 1
+    },
+    "failure_count": 0,
+    "preemption_count": 0,
+    "run_name": "tpp10_matched_p080_s20260910_d20260913",
+    "last_training_progress": "[15:05:30] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-20560554/0 attempt=0 | I20260911 15:05:25 140396384260928 tqdm_loggable.tqdm_logging Progress on:train 387it/2.53kit rate:6.8it/s remaining:05:15 elapsed:01:00 postfix:loss=2.81",
+    "last_log": "[15:05:43] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-20560554/0 attempt=0 | I20260911 15:05:42 140396384260928 levanter.eval paloma/dolma_100_programing_languages-tpp10 loss: 2.239"
+  },
+  {
+    "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-e24265b9",
+    "state": "JOB_STATE_RUNNING",
+    "task_state_counts": {
+      "running": 1
+    },
+    "failure_count": 0,
+    "preemption_count": 0,
+    "run_name": "tpp10_target_p080_s20260910",
+    "last_training_progress": "[15:05:43] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-e24265b9/0 attempt=0 | I20260911 15:05:37 140413639828288 tqdm_loggable.tqdm_logging Progress on:train 3.00it/11.5kit rate:24.3s/it remaining:77:40:15 elapsed:01:13 postfix:-",
+    "last_log": "[15:05:50] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-e24265b9/0 attempt=0 | I20260911 15:05:45 140105457071808 finelog.client.log_client LogClient resolved /system/log-server -> http://10.128.0.128:10001 (stats)"
+  },
+  {
+    "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-f24df5e7",
+    "state": "JOB_STATE_RUNNING",
+    "task_state_counts": {
+      "running": 1
+    },
+    "failure_count": 0,
+    "preemption_count": 0,
+    "run_name": "tpp10_unmatched_p080_s20260910",
+    "last_training_progress": "[15:05:17] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-f24df5e7/0 attempt=0 | I20260911 15:05:11 140549474079552 tqdm_loggable.tqdm_logging Progress on:train 380it/2.53kit rate:14.5it/s remaining:02:28 elapsed:01:00 postfix:loss=3.3",
+    "last_log": "[15:05:31] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-f24df5e7/0 attempt=0 | I20260911 15:05:28 140549474079552 levanter.eval paloma/dolma_100_programing_languages-tpp10 loss: 2.225"
+  },
+  {
+    "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-ceb33beb",
+    "state": "JOB_STATE_RUNNING",
+    "task_state_counts": {
+      "running": 1
+    },
+    "failure_count": 0,
+    "preemption_count": 1,
+    "run_name": "tpp10_matched_p065_s20260911_d20260912",
+    "last_training_progress": "[15:05:17] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-ceb33beb/0 attempt=1 | I20260911 15:05:11 139897030722368 tqdm_loggable.tqdm_logging Progress on:train 381it/2.53kit rate:14.6it/s remaining:02:26 elapsed:01:00 postfix:loss=3.11",
+    "last_log": "[15:05:30] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-ceb33beb/0 attempt=1 | I20260911 15:05:29 139897030722368 levanter.eval paloma/dolma_100_programing_languages-tpp10 loss: 2.327"
+  },
+  {
+    "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-aa2a4590",
+    "state": "JOB_STATE_RUNNING",
+    "task_state_counts": {
+      "running": 1
+    },
+    "failure_count": 0,
+    "preemption_count": 1,
+    "run_name": "tpp10_target_p065_s20260910",
+    "last_training_progress": "[15:05:25] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-aa2a4590/0 attempt=1 | I20260911 15:05:23 139823315006272 tqdm_loggable.tqdm_logging Progress on:train 3.00it/11.5kit rate:23.9s/it remaining:76:12:33 elapsed:01:11 postfix:-",
+    "last_log": "[15:05:31] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-aa2a4590/0 attempt=1 | I20260911 15:05:30 139486705129152 finelog.client.log_client LogClient resolved /system/log-server -> http://10.128.0.128:10001 (stats)"
+  },
+  {
+    "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-e7af7ef9",
+    "state": "JOB_STATE_RUNNING",
+    "task_state_counts": {
+      "running": 1
+    },
+    "failure_count": 0,
+    "preemption_count": 2,
+    "run_name": "tpp10_target_p060_s20260910",
+    "last_training_progress": "[15:05:53] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-e7af7ef9/0 attempt=2 | I20260911 15:05:47 139942624813888 tqdm_loggable.tqdm_logging Progress on:train 5.19kit/11.5kit rate:1.1it/s remaining:1:39:24 elapsed:47:23 postfix:loss=2.32",
+    "last_log": "[15:05:53] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-e7af7ef9/0 attempt=2 | I20260911 15:05:47 139942624813888 tqdm_loggable.tqdm_logging Progress on:train 5.19kit/11.5kit rate:1.1it/s remaining:1:39:24 elapsed:47:23 postfix:loss=2.32"
+  },
+  {
+    "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d",
+    "state": "JOB_STATE_RUNNING",
+    "task_state_counts": {
+      "running": 1
+    },
+    "failure_count": 0,
+    "preemption_count": 5,
+    "run_name": "tpp10_target_p055_s20260910",
+    "last_training_progress": "[15:05:14] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=5 | I20260911 15:05:09 140664450732864 tqdm_loggable.tqdm_logging Progress on:train 9.01kit/11.5kit rate:1.3it/s remaining:31:36 elapsed:47:24 postfix:loss=2.35",
+    "last_log": "[15:05:14] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=5 | I20260911 15:05:09 140664450732864 tqdm_loggable.tqdm_logging Progress on:train 9.01kit/11.5kit rate:1.3it/s remaining:31:36 elapsed:47:24 postfix:loss=2.35"
+  }
+]

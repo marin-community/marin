@@ -1,0 +1,112 @@
+{
+  "plan_sha256": "afa613b25468dd3dadff230544361d815f8524370bd33c14e6c58d3717496ba0",
+  "stage": "pilot",
+  "grid_percent": [
+    0,
+    10,
+    30,
+    50,
+    70,
+    90,
+    100
+  ],
+  "target_selected_percent": 70,
+  "unmatched_selected_percent": 100,
+  "unmatched_target_regret_bpb": 0.036357223987579346,
+  "unmatched_excess_curve_rmse_bpb": 0.12877784803979778,
+  "unmatched_spearman": 0.6785714285714287,
+  "unmatched_trainer_seed_selections": [
+    100,
+    100
+  ],
+  "matched_subsets": [
+    {
+      "subset_seed": 20260912,
+      "selected_percent": 50,
+      "target_regret_bpb": 0.009852409362792969,
+      "paired_regret_difference_bpb": -0.026504814624786377,
+      "trainer_seed_selections": [
+        50,
+        50
+      ],
+      "excess_curve_rmse_bpb": 0.08756270534291906,
+      "spearman": 0.7857142857142859
+    },
+    {
+      "subset_seed": 20260913,
+      "selected_percent": 50,
+      "target_regret_bpb": 0.009852409362792969,
+      "paired_regret_difference_bpb": -0.026504814624786377,
+      "trainer_seed_selections": [
+        50,
+        50
+      ],
+      "excess_curve_rmse_bpb": 0.08602844730788878,
+      "spearman": 0.7857142857142859
+    },
+    {
+      "subset_seed": 20260914,
+      "selected_percent": 50,
+      "target_regret_bpb": 0.009852409362792969,
+      "paired_regret_difference_bpb": -0.026504814624786377,
+      "trainer_seed_selections": [
+        50,
+        50
+      ],
+      "excess_curve_rmse_bpb": 0.08251415428515163,
+      "spearman": 0.8571428571428573
+    }
+  ],
+  "mean_paired_regret_difference_bpb": -0.026504814624786377,
+  "pooled_subset_selection_secondary_percent": 50,
+  "scope": "Descriptive, conditional on one target trainer seed and one finite parent. Subset comparisons share target and unmatched curves; no independent-replicate or significance claim.",
+  "curves": {
+    "target": [
+      1.2149097919464111,
+      0.88910973072052,
+      0.8211872577667236,
+      0.7942407727241516,
+      0.7843883633613586,
+      0.7987733483314514,
+      0.820745587348938
+    ],
+    "unmatched": [
+      1.7806804180145264,
+      1.3038452863693237,
+      1.1910187602043152,
+      1.1263644099235535,
+      1.0953689813613892,
+      1.0725759863853455,
+      1.0617330074310303
+    ],
+    "matched_subset_means": [
+      [
+        1.7806804180145264,
+        1.2996904850006104,
+        1.1991100907325745,
+        1.1583462357521057,
+        1.169834017753601,
+        1.2210935950279236,
+        1.3085170984268188
+      ],
+      [
+        1.7806804180145264,
+        1.2953864932060242,
+        1.199903666973114,
+        1.161024034023285,
+        1.1678801774978638,
+        1.220880150794983,
+        1.311133623123169
+      ],
+      [
+        1.7806804180145264,
+        1.3048062324523926,
+        1.198056399822235,
+        1.1568414568901062,
+        1.163600206375122,
+        1.207229495048523,
+        1.2766250967979431
+      ]
+    ]
+  }
+}

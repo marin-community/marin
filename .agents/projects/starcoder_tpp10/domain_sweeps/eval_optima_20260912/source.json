@@ -1,0 +1,8 @@
+{
+  "checked_at": "2026-09-12T06:02:23.013409+00:00",
+  "repair_sha256": "6c7f6700b8cbf69e363a07ba5e3d3ecfb98c55aa1dd429dce936007b91b5983b",
+  "results_sha256": "55d581607435941fcfb9864ba92d4835332b07934a1fe0bbb4d663312952c905",
+  "source": "gs://marin-us-central1/experiments/tpp10_bpb_repair/6c7f6700b8cbf69e363a07ba5e3d3ecfb98c55aa1dd429dce936007b91b5983b/corrected_results.json",
+  "all_three_checkpoint_audits_passed": true,
+  "snapshot_directory": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/plots_20260912"
+}

@@ -1,0 +1,3 @@
+lwspu_u_bl_cap06 run=run_01m1ve9cayczabx9ygc6c1837w job=job_01m1ve9crtsh4zt89gm9t234hr
+lwspu_t9_bl_cap06 run=run_01m1ve9d5adybcfr035vcey561 job=job_01m1ve9dk5yeyxrd8h358hf97j
+lwspu_t9_bl_cap08 run=run_01m1ve9dytnmmce7sky0h5d1nf job=job_01m1ve9ec8ts6xp1wrwe7qx5jx

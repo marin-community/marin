@@ -1,0 +1,142 @@
+{
+  "tpp10_wikipedia_matched_p005_s20260910": {
+    "state": "verified",
+    "fingerprint": "30a8b417",
+    "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_matched_p005_s20260910/2026.09.11/checkpoints/step-2531"
+  },
+  "tpp10_wikipedia_matched_p010_s20260910": {
+    "state": "verified",
+    "fingerprint": "8473c67d",
+    "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_matched_p010_s20260910/2026.09.11/checkpoints/step-2531"
+  },
+  "tpp10_wikipedia_matched_p020_s20260910": {
+    "state": "verified",
+    "fingerprint": "2cca0d99",
+    "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_matched_p020_s20260910/2026.09.11/checkpoints/step-2531"
+  },
+  "tpp10_wikipedia_matched_p030_s20260910": {
+    "state": "verified",
+    "fingerprint": "22b4d41f",
+    "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_matched_p030_s20260910/2026.09.11/checkpoints/step-2531"
+  },
+  "tpp10_wikipedia_matched_p050_s20260910": {
+    "state": "verified",
+    "fingerprint": "d3239fd4",
+    "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_matched_p050_s20260910/2026.09.11/checkpoints/step-2531"
+  },
+  "tpp10_wikipedia_matched_p070_s20260910": {
+    "state": "verified",
+    "fingerprint": "5176efbf",
+    "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_matched_p070_s20260910/2026.09.11/checkpoints/step-2531"
+  },
+  "tpp10_wikipedia_matched_p100_s20260910": {
+    "state": "verified",
+    "fingerprint": "a853b1a5",
+    "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_matched_p100_s20260910/2026.09.11/checkpoints/step-2531"
+  },
+  "tpp10_wikipedia_target_p005_s20260910": {
+    "state": "verified",
+    "fingerprint": "54246867",
+    "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_target_p005_s20260910/2026.09.11/checkpoints/step-11490"
+  },
+  "tpp10_wikipedia_target_p010_s20260910": {
+    "state": "verified",
+    "fingerprint": "bbe58448",
+    "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_target_p010_s20260910/2026.09.11/checkpoints/step-11490"
+  },
+  "tpp10_wikipedia_target_p020_s20260910": {
+    "state": "verified",
+    "fingerprint": "79ebc3c2",
+    "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_target_p020_s20260910/2026.09.11/checkpoints/step-11490"
+  },
+  "tpp10_wikipedia_target_p030_s20260910": {
+    "state": "verified",
+    "fingerprint": "c25c16fa",
+    "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_target_p030_s20260910/2026.09.11/checkpoints/step-11490"
+  },
+  "tpp10_wikipedia_target_p050_s20260910": {
+    "state": "verified",
+    "fingerprint": "88a32a5c",
+    "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_target_p050_s20260910/2026.09.11/checkpoints/step-11490"
+  },
+  "tpp10_wikipedia_target_p070_s20260910": {
+    "state": "verified",
+    "fingerprint": "021fb1cb",
+    "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_target_p070_s20260910/2026.09.11/checkpoints/step-11490"
+  },
+  "tpp10_wikipedia_target_p100_s20260910": {
+    "state": "verified",
+    "fingerprint": "12f413d5",
+    "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_target_p100_s20260910/2026.09.11/checkpoints/step-11490"
+  },
+  "tpp10_finemath_3plus_matched_p005_s20260910": {
+    "state": "verified",
+    "fingerprint": "22cd3e74",
+    "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_matched_p005_s20260910/2026.09.11/checkpoints/step-2531"
+  },
+  "tpp10_finemath_3plus_matched_p010_s20260910": {
+    "state": "verified",
+    "fingerprint": "0ba80871",
+    "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_matched_p010_s20260910/2026.09.11/checkpoints/step-2531"
+  },
+  "tpp10_finemath_3plus_matched_p020_s20260910": {
+    "state": "verified",
+    "fingerprint": "0a03b570",
+    "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_matched_p020_s20260910/2026.09.11/checkpoints/step-2531"
+  },
+  "tpp10_finemath_3plus_matched_p030_s20260910": {
+    "state": "verified",
+    "fingerprint": "ecb1661f",
+    "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_matched_p030_s20260910/2026.09.11/checkpoints/step-2531"
+  },
+  "tpp10_finemath_3plus_matched_p050_s20260910": {
+    "state": "verified",
+    "fingerprint": "f1aac662",
+    "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_matched_p050_s20260910/2026.09.11/checkpoints/step-2531"
+  },
+  "tpp10_finemath_3plus_matched_p070_s20260910": {
+    "state": "verified",
+    "fingerprint": "d7f2adfb",
+    "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_matched_p070_s20260910/2026.09.11/checkpoints/step-2531"
+  },
+  "tpp10_finemath_3plus_matched_p100_s20260910": {
+    "state": "verified",
+    "fingerprint": "5a5a6129",
+    "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_matched_p100_s20260910/2026.09.11/checkpoints/step-2531"
+  },
+  "tpp10_finemath_3plus_target_p005_s20260910": {
+    "state": "verified",
+    "fingerprint": "cd15f7bd",
+    "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_target_p005_s20260910/2026.09.11/checkpoints/step-11490"
+  },
+  "tpp10_finemath_3plus_target_p010_s20260910": {
+    "state": "verified",
+    "fingerprint": "cddbbe61",
+    "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_target_p010_s20260910/2026.09.11/checkpoints/step-11490"
+  },
+  "tpp10_finemath_3plus_target_p020_s20260910": {
+    "state": "verified",
+    "fingerprint": "eac63280",
+    "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_target_p020_s20260910/2026.09.11/checkpoints/step-11490"
+  },
+  "tpp10_finemath_3plus_target_p030_s20260910": {
+    "state": "verified",
+    "fingerprint": "c1a0bf9e",
+    "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_target_p030_s20260910/2026.09.11/checkpoints/step-11490"
+  },
+  "tpp10_finemath_3plus_target_p050_s20260910": {
+    "state": "verified",
+    "fingerprint": "ccaa1599",
+    "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_target_p050_s20260910/2026.09.11/checkpoints/step-11490"
+  },
+  "tpp10_finemath_3plus_target_p070_s20260910": {
+    "state": "verified",
+    "fingerprint": "066c48ff",
+    "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_target_p070_s20260910/2026.09.11/checkpoints/step-11490"
+  },
+  "tpp10_finemath_3plus_target_p100_s20260910": {
+    "state": "verified",
+    "fingerprint": "9c2ae241",
+    "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_target_p100_s20260910/2026.09.11/checkpoints/step-11490"
+  }
+}

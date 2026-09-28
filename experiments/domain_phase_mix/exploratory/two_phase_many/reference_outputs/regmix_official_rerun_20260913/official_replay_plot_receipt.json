@@ -1,0 +1,17 @@
+{
+  "source_sha256": {
+    "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/regmix_official_rerun_20260913/completion.json": "627ab5df22b1304a78de9a109a7185da93b2d1f86cfb9d3c07fbff92dc8b2d42",
+    "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/regmix_official_rerun_20260913/path_predictions.csv": "41da6023542aa418f707a7906ad534e9f7e5741928f4c85344a1629aad4de391",
+    "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/regmix_official_rerun_20260913/cross_predictions.csv": "a1b002579aa13bfb7dc77f100b49825311e37eea0a15d755651bd7b00dbe1f83",
+    "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/regmix_official_rerun_20260913/proposal_comparison.csv": "5d8b7cd2c23d62edf23c8599dcd3d2be558d8bd7b4ecc9660d114de79df4dfa6",
+    "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/regmix_official_rerun_20260913/historical_measurements.csv": "601596533d1ad37de2588016a007e07d40d623d8159e13500f23e5133bfeee1d"
+  },
+  "output_sha256": "5f49f5af25f9da0376487f81875f2451c7b85fe95e9796dde35f738dc1290e68",
+  "script_sha256": "4d0b8b205c4ea2af6f63aed39386350b24e7d5a898bc1ef46a7004820c6df635",
+  "observations": "Only historical trainer seed zero; three points on each old path, MARINER at zero on each new path.",
+  "primary_reference_predictor": "official_objective",
+  "components_sensitivity_plotted": false,
+  "paper_assets_modified": false,
+  "new_policy_measurements": false,
+  "note": "Curves interpolate exact continuous mixture paths; measured midpoints use archived runtime-rounded weights."
+}

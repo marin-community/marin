@@ -1,0 +1,191 @@
+{
+  "raw/math500-ec7cea": [
+    {
+      "name": "marin-us-central1/raw/math500-ec7cea/.executor_info",
+      "size": 376,
+      "type": "file",
+      "generation": "1771911772250611",
+      "updated": "2026-02-24T05:42:52.262Z"
+    },
+    {
+      "name": "marin-us-central1/raw/math500-ec7cea/.executor_status",
+      "size": 7,
+      "type": "file",
+      "generation": "1769930962663720",
+      "updated": "2026-02-01T07:29:22.680Z"
+    },
+    {
+      "name": "marin-us-central1/raw/math500-ec7cea/math500-00000.jsonl.gz",
+      "size": 125766,
+      "type": "file",
+      "generation": "1769929998023758",
+      "updated": "2026-02-01T07:13:18.028Z"
+    }
+  ],
+  "raw/eval-datasets": [
+    {
+      "name": "marin-us-central1/raw/eval-datasets/agentic-coding-v1",
+      "size": 0,
+      "type": "directory",
+      "generation": null,
+      "updated": null
+    },
+    {
+      "name": "marin-us-central1/raw/eval-datasets/code-tasks",
+      "size": 0,
+      "type": "directory",
+      "generation": null,
+      "updated": null
+    },
+    {
+      "name": "marin-us-central1/raw/eval-datasets/core-tasks",
+      "size": 0,
+      "type": "directory",
+      "generation": null,
+      "updated": null
+    },
+    {
+      "name": "marin-us-central1/raw/eval-datasets/qsplit240-300m-6b-expanded-tasks",
+      "size": 0,
+      "type": "directory",
+      "generation": null,
+      "updated": null
+    }
+  ],
+  "raw/evals": [
+    {
+      "name": "marin-us-central1/raw/evals/asr_ocr_noisy_ppl-a47c48",
+      "size": 0,
+      "type": "directory",
+      "generation": null,
+      "updated": null
+    },
+    {
+      "name": "marin-us-central1/raw/evals/asr_ocr_noisy_ppl_5830e97f",
+      "size": 0,
+      "type": "directory",
+      "generation": null,
+      "updated": null
+    },
+    {
+      "name": "marin-us-central1/raw/evals/fever_factuality_ppl",
+      "size": 0,
+      "type": "directory",
+      "generation": null,
+      "updated": null
+    },
+    {
+      "name": "marin-us-central1/raw/evals/issue5005",
+      "size": 0,
+      "type": "directory",
+      "generation": null,
+      "updated": null
+    },
+    {
+      "name": "marin-us-central1/raw/evals/lima_ppl",
+      "size": 0,
+      "type": "directory",
+      "generation": null,
+      "updated": null
+    },
+    {
+      "name": "marin-us-central1/raw/evals/ppl_circuit_coverage_ec9b2e6a",
+      "size": 0,
+      "type": "directory",
+      "generation": null,
+      "updated": null
+    },
+    {
+      "name": "marin-us-central1/raw/evals/ppl_circuit_coverage_v2-c27507",
+      "size": 0,
+      "type": "directory",
+      "generation": null,
+      "updated": null
+    },
+    {
+      "name": "marin-us-central1/raw/evals/ppl_circuit_coverage_v2_compact_v1-40f441",
+      "size": 0,
+      "type": "directory",
+      "generation": null,
+      "updated": null
+    },
+    {
+      "name": "marin-us-central1/raw/evals/synthetic_reasoning_connected_components_target_only_4634aac4",
+      "size": 0,
+      "type": "directory",
+      "generation": null,
+      "updated": null
+    }
+  ],
+  "raw/gsm8k-ef3e8c": [
+    {
+      "name": "marin-us-central1/raw/gsm8k-ef3e8c/.artifact.json",
+      "size": 4,
+      "type": "file",
+      "generation": "1779308503672857",
+      "updated": "2026-05-20T20:21:43.676Z"
+    },
+    {
+      "name": "marin-us-central1/raw/gsm8k-ef3e8c/.executor_info",
+      "size": 441,
+      "type": "file",
+      "generation": "1777906843246927",
+      "updated": "2026-05-04T15:00:43.264Z"
+    },
+    {
+      "name": "marin-us-central1/raw/gsm8k-ef3e8c/.executor_status",
+      "size": 7,
+      "type": "file",
+      "generation": "1777880552961830",
+      "updated": "2026-05-04T07:42:32.973Z"
+    },
+    {
+      "name": "marin-us-central1/raw/gsm8k-ef3e8c/gsm8k-00000.jsonl.gz",
+      "size": 1444876,
+      "type": "file",
+      "generation": "1777880482953473",
+      "updated": "2026-08-03T18:33:54.548Z"
+    }
+  ],
+  "raw/HuggingFaceH4--MATH-500-retry-2-4ecfc7": [
+    {
+      "name": "marin-us-central1/raw/HuggingFaceH4--MATH-500-retry-2-4ecfc7/test.jsonl",
+      "size": 446564,
+      "type": "file",
+      "generation": "1775950068557461",
+      "updated": "2026-07-13T03:56:58.090Z"
+    }
+  ],
+  "tokenized/math500": [
+    {
+      "name": "marin-us-central1/tokenized/math500/deepseek-r1",
+      "size": 0,
+      "type": "directory",
+      "generation": null,
+      "updated": null
+    }
+  ],
+  "tokenized/finemath_3_plus-a26b0f": [
+    {
+      "name": "marin-us-central1/tokenized/finemath_3_plus-a26b0f/.executor_info",
+      "size": 1852,
+      "type": "file",
+      "generation": "1776415832346022",
+      "updated": "2026-04-17T08:50:32.363Z"
+    },
+    {
+      "name": "marin-us-central1/tokenized/finemath_3_plus-a26b0f/.executor_status",
+      "size": 9667,
+      "type": "file",
+      "generation": "1763918431620069",
+      "updated": "2025-11-23T17:20:31.630Z"
+    },
+    {
+      "name": "marin-us-central1/tokenized/finemath_3_plus-a26b0f/train",
+      "size": 0,
+      "type": "directory",
+      "generation": null,
+      "updated": null
+    }
+  ]
+}

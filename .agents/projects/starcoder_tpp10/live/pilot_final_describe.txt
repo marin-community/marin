@@ -1,0 +1,6 @@
+Job: /calvinxu/starcoder-tpp10-pilot (/calvinxu/starcoder-tpp10-pilot)
+State: succeeded  exit=0  failures=0  preemptions=0
+Tasks: 1/1 completed  succeeded=1
+
+  TASK  STATE        EXIT  DURATION                               PEAK MEM    CUR MEM    DIAGNOSTIC
+     0  succeeded       0  5 hours, 40 minutes and 52.87 seconds  -           -

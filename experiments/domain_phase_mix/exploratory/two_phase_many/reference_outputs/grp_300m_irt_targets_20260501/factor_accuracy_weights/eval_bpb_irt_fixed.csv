@@ -1,0 +1,7 @@
+target_family,noise_mode,factor,accuracy_weight
+eval_bpb_irt,fixed,theta_1,0.2377379489438661
+eval_bpb_irt,fixed,theta_2,0.40842382413483064
+eval_bpb_irt,fixed,theta_3,0.18614492439992683
+eval_bpb_irt,fixed,theta_4,0.0
+eval_bpb_irt,fixed,theta_5,0.1483131999350785
+eval_bpb_irt,fixed,theta_6,0.019380102586297954

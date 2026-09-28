@@ -1,0 +1,280 @@
+{
+  "status": "passed",
+  "checked_at": "2026-09-11T12:47:57.403134+00:00",
+  "count": 34,
+  "proof": "Every submitted callable hash matches its original training job; the 34 mapped run names equal exactly the unfinished plan rows. All 11 successful recipes were omitted.",
+  "rows": [
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-cffa480f",
+      "callable_sha256": "d798624c64d9ae436c443e7ecc0f16994d8426ef1e04bd73632dc13cfe8d9a6b",
+      "original_job_id": "/calvinxu/starcoder-tpp10-refinement/verified_training-92c6adac",
+      "prior_fieldbook_job": "job_01m27nbx618gzmf7j8s2q0bnjy",
+      "run_id": "run_01m27mq30yq05gy5dfxx7jhdpe",
+      "run_name": "tpp10_matched_p080_s20260911_d20260914"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-5300643e",
+      "callable_sha256": "f71cb5925c0a8c1104cdfe4d5e8574b6bff6acd000401be4efa8f70bcd323f4b",
+      "original_job_id": "/calvinxu/starcoder-tpp10-refinement/verified_training-0ce702b7",
+      "prior_fieldbook_job": "job_01m27nbw0147t755maj1vemy9z",
+      "run_id": "run_01m27mq2rjch3arcmj8d6kw7g2",
+      "run_name": "tpp10_matched_p080_s20260911_d20260913"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-538206b0",
+      "callable_sha256": "ae102fa99d03c15b07b2e3ae3b300a5cdc9ca1dc74fa336094f646686b80eabd",
+      "original_job_id": "/calvinxu/starcoder-tpp10-refinement/verified_training-d77be194",
+      "prior_fieldbook_job": "job_01m27nbtrqnfn3fqp4k00ywyq0",
+      "run_id": "run_01m27mq2bnnta1cs169wxf13pd",
+      "run_name": "tpp10_matched_p080_s20260911_d20260912"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-9740ffae",
+      "callable_sha256": "218287509d459d853a91ac84281c78e7e720791b6ee21c22cca2843436fb3c77",
+      "original_job_id": "/calvinxu/starcoder-tpp10-refinement/verified_training-32487660",
+      "prior_fieldbook_job": "job_01m27nbph5dg43et9cm3evjwdy",
+      "run_id": "run_01m27mq12b0b4a6882ggxjjd1q",
+      "run_name": "tpp10_matched_p080_s20260910_d20260912"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-23772e08",
+      "callable_sha256": "fd9cc4fcf7fc44c16331df14051fda5c9e1482cad58d21a3065117dd64b98e7c",
+      "original_job_id": "/calvinxu/starcoder-tpp10-refinement/verified_training-d9002fed",
+      "prior_fieldbook_job": "job_01m27nbrjggqf4zfnwgvyqpey2",
+      "run_id": "run_01m27mq1p4hn04t256tcymbhf8",
+      "run_name": "tpp10_matched_p080_s20260910_d20260914"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-d1a98d0f",
+      "callable_sha256": "74fb144b9607d71918e056d56c3096302e8c70cf2fb90e67c946c8efb283a3b0",
+      "original_job_id": "/calvinxu/starcoder-tpp10-refinement/verified_training-cf6e1c9a",
+      "prior_fieldbook_job": "job_01m27nbspm1afnhfjmxzq1pazt",
+      "run_id": "run_01m27mq1ybnwy2hcascsrmzg6x",
+      "run_name": "tpp10_unmatched_p080_s20260911"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-20560554",
+      "callable_sha256": "7c649adef1fe3acb34ad941e6e3efe4671ee610e9576544cb1ce71e1f4e4ad2d",
+      "original_job_id": "/calvinxu/starcoder-tpp10-refinement/verified_training-957b8f0c",
+      "prior_fieldbook_job": "job_01m27nbqgrks5n40bsy3exvs3v",
+      "run_id": "run_01m27mq1c8rywwk290bnwnx5ez",
+      "run_name": "tpp10_matched_p080_s20260910_d20260913"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-e24265b9",
+      "callable_sha256": "553a31161eebe5f2b618d3c15636eca2f5e8997aa8c37731c49953d745d3e9f1",
+      "original_job_id": "/calvinxu/starcoder-tpp10-refinement/verified_training-32fdeb12",
+      "prior_fieldbook_job": "job_01m27nbmdgmkxs09b158brhh6t",
+      "run_id": "run_01m27mq0dnp8akz8698eszx60r",
+      "run_name": "tpp10_target_p080_s20260910"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-f24df5e7",
+      "callable_sha256": "ef310a25460bd4b944c72bb25ef38abf7720dfae75601f050ce8aef4886e7dea",
+      "original_job_id": "/calvinxu/starcoder-tpp10-refinement/verified_training-55c8c616",
+      "prior_fieldbook_job": "job_01m27nbnggjqs0nrwwfj3533pm",
+      "run_id": "run_01m27mq0t8cd5zp00z91yqyzjk",
+      "run_name": "tpp10_unmatched_p080_s20260910"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-41a71805",
+      "callable_sha256": "38d3d43b37a347fb2fc2abe4d4622d31624bfc6418eb182607a9f6a9ed614229",
+      "original_job_id": "/calvinxu/starcoder-tpp10-refinement/verified_training-f895305b",
+      "prior_fieldbook_job": "job_01m27nbkbkntf4ba028wjyvsfq",
+      "run_id": "run_01m27mq04hgaaqg5aavqxymdmn",
+      "run_name": "tpp10_matched_p065_s20260911_d20260914"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-aef5dc6f",
+      "callable_sha256": "3951f45d90e1bcb5c30f01e85c963393649db18d5cfa4180fde80d19a790f4d4",
+      "original_job_id": "/calvinxu/starcoder-tpp10-refinement/verified_training-52038c22",
+      "prior_fieldbook_job": "job_01m27nbjasbw8je0hpwzqn7ak2",
+      "run_id": "run_01m27mpzwafm8f7m7zxtyzz8m9",
+      "run_name": "tpp10_matched_p065_s20260911_d20260913"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-ceb33beb",
+      "callable_sha256": "6473178196f58b2af177a0ffd1050b38b569b0b55eb4da5ea476110f75da1c4d",
+      "original_job_id": "/calvinxu/starcoder-tpp10-refinement/verified_training-cfef10a7",
+      "prior_fieldbook_job": "job_01m27nbh9qaem1d5qds21c3q3v",
+      "run_id": "run_01m27mpzg5gaqb816ca96vf141",
+      "run_name": "tpp10_matched_p065_s20260911_d20260912"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-ebabfa94",
+      "callable_sha256": "763d877bf7e5f64de85c2ad2bf74f7963bb88f045281a4e682b43ed49f99455d",
+      "original_job_id": "/calvinxu/starcoder-tpp10-refinement/verified_training-c26afa18",
+      "prior_fieldbook_job": "job_01m27nbgdf5y2b8a5q3kmx9nzn",
+      "run_id": "run_01m27mpz7y8g43hnqwhtgmwhkp",
+      "run_name": "tpp10_unmatched_p065_s20260911"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-41348564",
+      "callable_sha256": "b7ae92702a21b520d9e48bee7c13035d1965a677f13b6340ba5a761cd440836a",
+      "original_job_id": "/calvinxu/starcoder-tpp10-refinement/verified_training-43b157c8",
+      "prior_fieldbook_job": "job_01m27nbff6pjn2801v9qvm2bvx",
+      "run_id": "run_01m27mpyyr3rj1zmrfq0yygrm7",
+      "run_name": "tpp10_matched_p065_s20260910_d20260914"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-88eabaca",
+      "callable_sha256": "76747a4a4274f2e2a52aba95532082d7acfa6a94970bf1f780b49372077b4f90",
+      "original_job_id": "/calvinxu/starcoder-tpp10-refinement/verified_training-d64db282",
+      "prior_fieldbook_job": "job_01m27nbebz9n68g6k3cnkwmzpp",
+      "run_id": "run_01m27mpyp0tsgbt3e1ymbbx368",
+      "run_name": "tpp10_matched_p065_s20260910_d20260913"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-d9142c95",
+      "callable_sha256": "d82021a803e21d9d891bbdbe6f4e8d481a9785e010a9bc6c2f441e064d3c0dbb",
+      "original_job_id": "/calvinxu/starcoder-tpp10-refinement/verified_training-05e184e6",
+      "prior_fieldbook_job": "job_01m27nbddnd13xt9cmv0w9g6mk",
+      "run_id": "run_01m27mpycfwb8e4qn4c4c5dpbz",
+      "run_name": "tpp10_matched_p065_s20260910_d20260912"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-868b9225",
+      "callable_sha256": "c9c09fb93a2b8b19ce27e3849274fe556b0ef81addca586f8d814607e7b938d7",
+      "original_job_id": "/calvinxu/starcoder-tpp10-refinement/verified_training-df862f23",
+      "prior_fieldbook_job": "job_01m27nbcfdjaa1xs95anw44pe1",
+      "run_id": "run_01m27mpy2rypn9gm39jnnzkx61",
+      "run_name": "tpp10_unmatched_p065_s20260910"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-aa2a4590",
+      "callable_sha256": "fdd36a93872710d60185f5f894ecaabb44ab01fbf590f5ae65776553bba66d17",
+      "original_job_id": "/calvinxu/starcoder-tpp10-refinement/verified_training-2f744dba",
+      "prior_fieldbook_job": "job_01m27nbbgjkw62gnda5yeye0nt",
+      "run_id": "run_01m27mpxta54khxb3s64prvpbb",
+      "run_name": "tpp10_target_p065_s20260910"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-cbf1a3d2",
+      "callable_sha256": "8476a4b7d9bbfd6692e908090f877c1ecf99a38421a91da5482c6f82264a0617",
+      "original_job_id": "/calvinxu/starcoder-tpp10-refinement/verified_training-31e7c5ce",
+      "prior_fieldbook_job": "job_01m27nbak44k60hyz628ykpxmh",
+      "run_id": "run_01m27mpxhrg4d3sah8g2tfrs95",
+      "run_name": "tpp10_matched_p060_s20260911_d20260914"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-0e6106c5",
+      "callable_sha256": "423cb3f8aa038b343f74f35515284999faebe34830b9f3e2bbd36142753e28db",
+      "original_job_id": "/calvinxu/starcoder-tpp10-refinement/verified_training-dfa30856",
+      "prior_fieldbook_job": "job_01m27nb9jwazbgs1yvfss95jhb",
+      "run_id": "run_01m27mpx8aebv8c96phmdf5eme",
+      "run_name": "tpp10_matched_p060_s20260911_d20260913"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-0bdba9e0",
+      "callable_sha256": "72d312464fcbe6ee08ce727d057731190aa64a21fa9ffd960d34e0372fc25999",
+      "original_job_id": "/calvinxu/starcoder-tpp10-refinement/verified_training-824ba00f",
+      "prior_fieldbook_job": "job_01m27nb8n7pvk5q8p2v296628e",
+      "run_id": "run_01m27mpwynyj8tzazgw4edd5w0",
+      "run_name": "tpp10_matched_p060_s20260911_d20260912"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-330cbf0c",
+      "callable_sha256": "16868303987bbb22696d962e751e9b45eec8471a12ebf00e9637fac1ec43ff7c",
+      "original_job_id": "/calvinxu/starcoder-tpp10-refinement/verified_training-8857c0fd",
+      "prior_fieldbook_job": "job_01m27nb7nv2a57gj59vz8jsk6w",
+      "run_id": "run_01m27mpwj3179ymj4j2m6rq9f3",
+      "run_name": "tpp10_unmatched_p060_s20260911"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-5af121b9",
+      "callable_sha256": "3a839aa211ed0f300f182790392fd1f12a1dc4a3b48c9794f050fb173dd0a00f",
+      "original_job_id": "/calvinxu/starcoder-tpp10-refinement/verified_training-0530f635",
+      "prior_fieldbook_job": "job_01m27nb6s81zvhdmwqev8d1wnc",
+      "run_id": "run_01m27mpw5j2bb64ckbtrpj6jw4",
+      "run_name": "tpp10_matched_p060_s20260910_d20260914"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-3a3d98fc",
+      "callable_sha256": "f0c0e50bebed89e5991af45396eea133321ac1609dabffaa2cd4edeffb5a12d8",
+      "original_job_id": "/calvinxu/starcoder-tpp10-refinement/verified_training-282d53ae",
+      "prior_fieldbook_job": "job_01m27nb5vkgg36aaqhver72gah",
+      "run_id": "run_01m27mpvw7bp215y10qy96zx6t",
+      "run_name": "tpp10_matched_p060_s20260910_d20260913"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-84488469",
+      "callable_sha256": "57f631ba98e7cdb7672d5e415e287210ba229a6e71804e11fe7f9a145a42ac12",
+      "original_job_id": "/calvinxu/starcoder-tpp10-refinement/verified_training-082af850",
+      "prior_fieldbook_job": "job_01m27nb4tktrhb616a43f4gd4q",
+      "run_id": "run_01m27mpvknzr8sn09vg0f6kyhj",
+      "run_name": "tpp10_matched_p060_s20260910_d20260912"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-2fc546b7",
+      "callable_sha256": "c61b2e3f488e174a68eb204e4bf6e0adb4adafa9e23c84ecb5078148f59cb1f5",
+      "original_job_id": "/calvinxu/starcoder-tpp10-refinement/verified_training-87afbf59",
+      "prior_fieldbook_job": "job_01m27nb3ym5d0qq6mvdyassg69",
+      "run_id": "run_01m27mpvb0gh16q75n2328pfvj",
+      "run_name": "tpp10_unmatched_p060_s20260910"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-e7af7ef9",
+      "callable_sha256": "2e960bca6d5345e57cb2cb665c9c449d1c44fc7e7f283bcab7048a09f19f8b87",
+      "original_job_id": "/calvinxu/starcoder-tpp10-refinement/verified_training-3689a32f",
+      "prior_fieldbook_job": "job_01m27nb31f97q9tee2a13h3fkb",
+      "run_id": "run_01m27mpv1b6nrwtved53w0qbdd",
+      "run_name": "tpp10_target_p060_s20260910"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-1e3db94a",
+      "callable_sha256": "2596c9fafbc74f266c8e5315459ad3d0e54e2d53e9c77b33fbeb1ffa17297e8c",
+      "original_job_id": "/calvinxu/starcoder-tpp10-refinement/verified_training-5ebb6cc3",
+      "prior_fieldbook_job": "job_01m27nb250de0n36cm38fhnc88",
+      "run_id": "run_01m27mptrbsqwxgz6cpqvsfx49",
+      "run_name": "tpp10_matched_p055_s20260911_d20260914"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-16aa333a",
+      "callable_sha256": "37a9383d593dbe84e6223446bc70e9f676096df8e35dcd865974da4c102f6301",
+      "original_job_id": "/calvinxu/starcoder-tpp10-refinement/verified_training-54836e19",
+      "prior_fieldbook_job": "job_01m27nb159wsfbwr1f359nejp7",
+      "run_id": "run_01m27mptfrshcsm9wb5q3587h6",
+      "run_name": "tpp10_matched_p055_s20260911_d20260913"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-36f0bb02",
+      "callable_sha256": "fd1a0c16b643d212295314bc9dea78aa5dedcd475c7bc6b9d5566fcf69c55915",
+      "original_job_id": "/calvinxu/starcoder-tpp10-refinement/verified_training-9ae89296",
+      "prior_fieldbook_job": "job_01m27nb046fwp5txmccqst1ssj",
+      "run_id": "run_01m27mpt63arefq39fhvc0gd88",
+      "run_name": "tpp10_matched_p055_s20260911_d20260912"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-4bdb909e",
+      "callable_sha256": "11b687861a3ccf74d948e9e683fc349d5017649ca1939e50c1ede599c1ddf4f6",
+      "original_job_id": "/calvinxu/starcoder-tpp10-refinement/verified_training-16729990",
+      "prior_fieldbook_job": "job_01m27naz28zavdzfa15aqnh37v",
+      "run_id": "run_01m27mpsxn7szt4wzbmy6vb5sp",
+      "run_name": "tpp10_unmatched_p055_s20260911"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-63a9e4db",
+      "callable_sha256": "610174b462e5a6b0fd020a46d08b1a71f2272b90280732d8181e0b7b262e3599",
+      "original_job_id": "/calvinxu/starcoder-tpp10-refinement/verified_training-3fb644de",
+      "prior_fieldbook_job": "job_01m27nawwej4b9k0pcetmksdky",
+      "run_id": "run_01m27mps6ssjtrm13ebva60hxj",
+      "run_name": "tpp10_matched_p055_s20260910_d20260913"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-3c9d2262",
+      "callable_sha256": "51ddcea5f7ba40cdbf8ebc053e6cbd792fc23bdd161481eea6a3607717f3689c",
+      "original_job_id": "/calvinxu/starcoder-tpp10-refinement/verified_training-02c57e63",
+      "prior_fieldbook_job": "job_01m27nay2gymapw0epbgp8x8c7",
+      "run_id": "run_01m27mpskbntq6p8pwzybqsp4p",
+      "run_name": "tpp10_matched_p055_s20260910_d20260914"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d",
+      "callable_sha256": "3b6c83ee7e71b6fc9e6c6a8802c14144e459323435ac123748a76626cc4c98df",
+      "original_job_id": "/calvinxu/starcoder-tpp10-refinement/verified_training-a76fbc50",
+      "prior_fieldbook_job": "job_01m27nast1z1qt39qk5ww0sh4e",
+      "run_id": "run_01m27mprdmnq7716cf7as9t2zy",
+      "run_name": "tpp10_target_p055_s20260910"
+    }
+  ]
+}

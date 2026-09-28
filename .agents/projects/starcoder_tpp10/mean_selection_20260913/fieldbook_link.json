@@ -1,0 +1,13 @@
+{
+  "attrs": {},
+  "created_at": "2026-09-14T01:06:11Z",
+  "deleted_at": null,
+  "failure_reason": null,
+  "finished_at": null,
+  "job_id": "job_01m2eq6g7am42rg90yytpvvxr6",
+  "role": "train",
+  "run_id": "run_01m2eq6fva59907aatmt7fqyxh",
+  "started_at": null,
+  "status": "submitting",
+  "updated_at": "2026-09-14T01:06:11Z"
+}

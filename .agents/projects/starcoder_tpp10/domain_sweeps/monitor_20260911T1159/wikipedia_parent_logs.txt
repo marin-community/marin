@@ -1,0 +1,15 @@
+I20260911 05:00:28 8553706816 iris.cluster.config Loading config from lib/iris/config/marin.yaml
+I20260911 05:00:28 8553706816 finelog.client.log_client LogClient resolved /system/log-server -> https://iris.oa.dev/proxy/system.log-server (log)
+Not all requested scopes were granted by the authorization server, missing scopes email.
+[11:43:35] task=/calvinxu/tpp10-domain-sweeps/prepare_parent-219e0a84/0 attempt=0 |  + zstandard==0.25.0
+[11:43:35] task=/calvinxu/tpp10-domain-sweeps/prepare_parent-219e0a84/0 attempt=0 | Resolved 14 packages in 11ms
+[11:43:35] task=/calvinxu/tpp10-domain-sweeps/prepare_parent-219e0a84/0 attempt=0 | Installed 5 packages in 11ms
+[11:43:35] task=/calvinxu/tpp10-domain-sweeps/prepare_parent-219e0a84/0 attempt=0 |  + linkify-it-py==2.2.0
+[11:43:35] task=/calvinxu/tpp10-domain-sweeps/prepare_parent-219e0a84/0 attempt=0 |  + mdit-py-plugins==0.6.1
+[11:43:35] task=/calvinxu/tpp10-domain-sweeps/prepare_parent-219e0a84/0 attempt=0 |  + memray==1.20.0
+[11:43:35] task=/calvinxu/tpp10-domain-sweeps/prepare_parent-219e0a84/0 attempt=0 |  + py-spy==0.4.2
+[11:43:35] task=/calvinxu/tpp10-domain-sweeps/prepare_parent-219e0a84/0 attempt=0 |  + textual==8.2.8
+[11:43:42] task=/calvinxu/tpp10-domain-sweeps/prepare_parent-219e0a84/0 attempt=0 | I20260911 11:43:39 datasets JAX version 0.11.1 available.
+[11:44:09] task=/calvinxu/tpp10-domain-sweeps/prepare_parent-219e0a84/0 attempt=0 | I20260911 11:44:04 levanter.store.cache Loading cache from gs://marin-us-central1/tpp10_domain_sweeps/wikipedia/raw/2026.09.11/train
+[11:44:09] task=/calvinxu/tpp10-domain-sweeps/prepare_parent-219e0a84/0 attempt=0 | I20260911 11:44:04 levanter.store.cache Attempting to load cache ledger from gs://marin-us-central1/tpp10_domain_sweeps/wikipedia/raw/2026.09.11/train/shard_ledger.json
+[11:44:09] task=/calvinxu/tpp10-domain-sweeps/prepare_parent-219e0a84/0 attempt=0 | I0911 11:44:04.724967      25 google_auth_provider.cc:181] Running on GCE, using service account iris-worker@hai-gcp-models.iam.gserviceaccount.com

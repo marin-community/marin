@@ -1,0 +1,7 @@
+Your assignment is a principled local-to-global continuation of the phase field. Build on your SFOS39/HAN39 aggregate work and MCST39/SJST39 residual-spectrum transport, but explicitly address why local RMSE gains previously produced unstable global optima.
+
+Start from exact aggregate fibers, where the phase delta is directly observed. Propose the lowest-dimensional mechanism that transports a phase-specific value field from those anchors to nearby aggregates without making it a free kernel smoother or nearest-neighbor correction. Candidate mechanisms may use a family-level dynamical state, a low-rank response basis identified from fit rows, or a conservation law, but must specify why the continuation should hold as aggregate exposure changes.
+
+Preregister the local signature, continuation law, and radius of validity before heldout evaluation. Test leave-region-out and leave-anchor-out prediction, not only random grouped CV. Report when the continuation becomes unsupported and how the raw optimizer is prevented from exploiting an unidentified direction without confusing that support boundary with the model equation.
+
+The desired result is a low-dimensional continuation that improves exact-fiber ranking and target-matched global selection on both targets while producing a stable asymmetric raw optimum. If this cannot be done, characterize the breakdown radius and prove which additional anchor fibers are needed.

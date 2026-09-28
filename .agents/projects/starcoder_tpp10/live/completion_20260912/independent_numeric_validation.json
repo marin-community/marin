@@ -1,0 +1,52 @@
+{
+  "status": "pass",
+  "method": "Independent Python-standard-library recomputation from57 initial and45 refinement CSV rows, without the shared estimator or plotted analysis",
+  "artifacts": 102,
+  "grid": [
+    0,
+    10,
+    30,
+    40,
+    50,
+    55,
+    60,
+    65,
+    70,
+    80,
+    90,
+    100
+  ],
+  "selected": {
+    "('target', None)": 65,
+    "('unmatched', None)": 100,
+    "('matched', 20260912)": 50,
+    "('matched', 20260913)": 50,
+    "('matched', 20260914)": 50
+  },
+  "target_minimum": 0.7665561437606812,
+  "unmatched_regret": 0.054189443588256836,
+  "matched": [
+    {
+      "subset_seed": 20260912,
+      "selected_percent": 50,
+      "regret": 0.02768462896347046,
+      "regret_reduction_percent": 48.91139836418273
+    },
+    {
+      "subset_seed": 20260913,
+      "selected_percent": 50,
+      "regret": 0.02768462896347046,
+      "regret_reduction_percent": 48.91139836418273
+    },
+    {
+      "subset_seed": 20260914,
+      "selected_percent": 50,
+      "regret": 0.02768462896347046,
+      "regret_reduction_percent": 48.91139836418273
+    }
+  ],
+  "sources_sha256": {
+    "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260911_tpp10_measured_curves/data/pilot_metrics.csv": "263395e98471389c0c339ce0a24697217014085f07c44c3c3fdc715aea0336bd",
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/completion_20260912/refinement_metrics.csv": "963f61944aec2ae448f8f12be7150e9168d8f3d318d573b7808887eb500f675c"
+  }
+}

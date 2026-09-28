@@ -1,0 +1,448 @@
+{
+  "jobs": [
+    {
+      "attrs": {
+        "evaluation.spec_sha256": "c788d33ddd3b357a7f80de6ed1d5ecb632104e4beabd5cc0934d580ecac77d39"
+      },
+      "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+      "code_dirty": true,
+      "command": "uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources --cpu 1 --memory 4GB --disk 32GB --timeout 172800 --max-retries 0 --max-preemption-retries 0 --priority interactive --extra cpu --no-preemptible --region us-central1 --zone us-central1-a --job-name tpp10-target-math-completion --bundle-include .agents/projects/starcoder_tpp10/domain_sweeps/target_math_complete_20260912/spec.json --bundle-include 'experiments/domain_phase_mix/tpp10_domain_sweeps_assets/*' --bundle-include 'experiments/domain_phase_mix/starcoder_tpp10_assets/*' --exclude '^(checkpoints|cache|logs|wandb|tmp)/' --exclude '^experiments/domain_phase_mix/exploratory/.*(?<!\\.py)$' --exclude '^\\.agents/(?!projects/starcoder_tpp10/domain_sweeps/target_math_complete_20260912/spec\\.json$).*' --exclude '^(docs|tests)/' --exclude '^lib/[^/]+/tests/' --exclude '^experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/' -e MARIN_PREFIX gs://marin-us-central1 -- python -m experiments.domain_phase_mix.evaluate_tpp10_target_math_complete --spec .agents/projects/starcoder_tpp10/domain_sweeps/target_math_complete_20260912/spec.json --submit",
+      "created_at": "2026-09-12T21:09:43Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "external_id": "/calvinxu/tpp10-target-math-completion",
+      "external_system": "iris",
+      "failure_reason": null,
+      "finished_at": null,
+      "id": "job_01m2bq8ta6wg2w5d3bgjhkkxxs",
+      "launcher": "iris",
+      "name": "Four final FineMath target math evaluations",
+      "retry_of": null,
+      "run_id": null,
+      "started_at": null,
+      "status": "succeeded",
+      "updated_at": "2026-09-12T21:26:56Z"
+    },
+    {
+      "attrs": {
+        "evaluation.spec_sha256": "c788d33ddd3b357a7f80de6ed1d5ecb632104e4beabd5cc0934d580ecac77d39"
+      },
+      "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+      "code_dirty": true,
+      "command": "fray.remote(evaluate_tpp10_target_math_complete.evaluate, name=\"target-math-completion\", resources=frozen central1 v5p-8 TPU)(spec c788d33ddd3b357a7f80de6ed1d5ecb632104e4beabd5cc0934d580ecac77d39)",
+      "created_at": "2026-09-12T21:17:35Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "external_id": "/calvinxu/tpp10-target-math-completion/target-math-completion",
+      "external_system": "iris",
+      "failure_reason": null,
+      "finished_at": null,
+      "id": "job_01m2bqq7b7dxhpvdgm15aevfny",
+      "launcher": "iris/fray",
+      "name": "Four final FineMath target math evaluations: TPU worker",
+      "retry_of": null,
+      "run_id": null,
+      "started_at": null,
+      "status": "succeeded",
+      "updated_at": "2026-09-12T21:26:56Z"
+    }
+  ],
+  "points": [
+    {
+      "run_id": "run_01m282e802bn0z14qb1whz7hb5",
+      "run_name": "tpp10_finemath_3plus_target_p030_s20260910",
+      "links": [
+        {
+          "attrs": {},
+          "created_at": "2026-09-12T21:09:44Z",
+          "deleted_at": null,
+          "failure_reason": null,
+          "finished_at": null,
+          "job_id": "job_01m2bq8ta6wg2w5d3bgjhkkxxs",
+          "role": "eval",
+          "run_id": "run_01m282e802bn0z14qb1whz7hb5",
+          "started_at": null,
+          "status": "succeeded",
+          "updated_at": "2026-09-12T21:26:57Z"
+        },
+        {
+          "attrs": {},
+          "created_at": "2026-09-12T21:17:36Z",
+          "deleted_at": null,
+          "failure_reason": null,
+          "finished_at": null,
+          "job_id": "job_01m2bqq7b7dxhpvdgm15aevfny",
+          "role": "eval",
+          "run_id": "run_01m282e802bn0z14qb1whz7hb5",
+          "started_at": null,
+          "status": "succeeded",
+          "updated_at": "2026-09-12T21:26:57Z"
+        }
+      ],
+      "metrics": [
+        {
+          "created_at": "2026-09-12T21:26:58Z",
+          "deleted_at": null,
+          "id": "met_01m2br8cykgdnhwwcngyd3th0e",
+          "metric_name": "math500/reference_solution_loss",
+          "run_id": "run_01m282e802bn0z14qb1whz7hb5",
+          "source_artifact_id": "art_01m2br8catf1degmt71z9a5tpn",
+          "source_job_id": "job_01m2bqq7b7dxhpvdgm15aevfny",
+          "split": "math500",
+          "step": null,
+          "updated_at": "2026-09-12T21:26:58Z",
+          "value": 1.4228099584579468
+        },
+        {
+          "created_at": "2026-09-12T21:26:59Z",
+          "deleted_at": null,
+          "id": "met_01m2br8d85kkywszynxwtsdwn4",
+          "metric_name": "math500/reference_solution_perplexity",
+          "run_id": "run_01m282e802bn0z14qb1whz7hb5",
+          "source_artifact_id": "art_01m2br8catf1degmt71z9a5tpn",
+          "source_job_id": "job_01m2bqq7b7dxhpvdgm15aevfny",
+          "split": "math500",
+          "step": null,
+          "updated_at": "2026-09-12T21:26:59Z",
+          "value": 4.148761925208614
+        },
+        {
+          "created_at": "2026-09-12T21:26:59Z",
+          "deleted_at": null,
+          "id": "met_01m2br8dh3phd4bf3tb2kjhgaq",
+          "metric_name": "gsm8k/reference_solution_loss",
+          "run_id": "run_01m282e802bn0z14qb1whz7hb5",
+          "source_artifact_id": "art_01m2br8catf1degmt71z9a5tpn",
+          "source_job_id": "job_01m2bqq7b7dxhpvdgm15aevfny",
+          "split": "gsm8k",
+          "step": null,
+          "updated_at": "2026-09-12T21:26:59Z",
+          "value": 1.5687613487243652
+        },
+        {
+          "created_at": "2026-09-12T21:26:59Z",
+          "deleted_at": null,
+          "id": "met_01m2br8dtj90cgef87f5kkpyb1",
+          "metric_name": "gsm8k/reference_solution_perplexity",
+          "run_id": "run_01m282e802bn0z14qb1whz7hb5",
+          "source_artifact_id": "art_01m2br8catf1degmt71z9a5tpn",
+          "source_job_id": "job_01m2bqq7b7dxhpvdgm15aevfny",
+          "split": "gsm8k",
+          "step": null,
+          "updated_at": "2026-09-12T21:26:59Z",
+          "value": 4.800698118653246
+        }
+      ],
+      "artifact": {
+        "attrs": {},
+        "content_hash": null,
+        "created_at": "2026-09-12T21:26:58Z",
+        "deleted_at": null,
+        "experiment_id": null,
+        "id": "art_01m2br8catf1degmt71z9a5tpn",
+        "job_id": "job_01m2bqq7b7dxhpvdgm15aevfny",
+        "run_id": "run_01m282e802bn0z14qb1whz7hb5",
+        "type": "eval-result",
+        "updated_at": "2026-09-12T21:26:58Z",
+        "uri": "gs://marin-us-central1/experiments/tpp10_finemath_math/c788d33ddd3b357a7f80de6ed1d5ecb632104e4beabd5cc0934d580ecac77d39/tpp10_finemath_3plus_target_p030_s20260910.json"
+      }
+    },
+    {
+      "run_id": "run_01m282e890rabs0ttghv2ena7m",
+      "run_name": "tpp10_finemath_3plus_target_p050_s20260910",
+      "links": [
+        {
+          "attrs": {},
+          "created_at": "2026-09-12T21:09:44Z",
+          "deleted_at": null,
+          "failure_reason": null,
+          "finished_at": null,
+          "job_id": "job_01m2bq8ta6wg2w5d3bgjhkkxxs",
+          "role": "eval",
+          "run_id": "run_01m282e890rabs0ttghv2ena7m",
+          "started_at": null,
+          "status": "succeeded",
+          "updated_at": "2026-09-12T21:27:00Z"
+        },
+        {
+          "attrs": {},
+          "created_at": "2026-09-12T21:17:36Z",
+          "deleted_at": null,
+          "failure_reason": null,
+          "finished_at": null,
+          "job_id": "job_01m2bqq7b7dxhpvdgm15aevfny",
+          "role": "eval",
+          "run_id": "run_01m282e890rabs0ttghv2ena7m",
+          "started_at": null,
+          "status": "succeeded",
+          "updated_at": "2026-09-12T21:27:00Z"
+        }
+      ],
+      "metrics": [
+        {
+          "created_at": "2026-09-12T21:27:01Z",
+          "deleted_at": null,
+          "id": "met_01m2br8fjap2qn2j49dxyzajc2",
+          "metric_name": "math500/reference_solution_loss",
+          "run_id": "run_01m282e890rabs0ttghv2ena7m",
+          "source_artifact_id": "art_01m2br8f051c7qsawc1e9yt1nw",
+          "source_job_id": "job_01m2bqq7b7dxhpvdgm15aevfny",
+          "split": "math500",
+          "step": null,
+          "updated_at": "2026-09-12T21:27:01Z",
+          "value": 1.3319295644760132
+        },
+        {
+          "created_at": "2026-09-12T21:27:01Z",
+          "deleted_at": null,
+          "id": "met_01m2br8fvgbc2e2dex8pvdewv6",
+          "metric_name": "math500/reference_solution_perplexity",
+          "run_id": "run_01m282e890rabs0ttghv2ena7m",
+          "source_artifact_id": "art_01m2br8f051c7qsawc1e9yt1nw",
+          "source_job_id": "job_01m2bqq7b7dxhpvdgm15aevfny",
+          "split": "math500",
+          "step": null,
+          "updated_at": "2026-09-12T21:27:01Z",
+          "value": 3.7883461979275896
+        },
+        {
+          "created_at": "2026-09-12T21:27:02Z",
+          "deleted_at": null,
+          "id": "met_01m2br8g4d2t5db3btctzavtk7",
+          "metric_name": "gsm8k/reference_solution_loss",
+          "run_id": "run_01m282e890rabs0ttghv2ena7m",
+          "source_artifact_id": "art_01m2br8f051c7qsawc1e9yt1nw",
+          "source_job_id": "job_01m2bqq7b7dxhpvdgm15aevfny",
+          "split": "gsm8k",
+          "step": null,
+          "updated_at": "2026-09-12T21:27:02Z",
+          "value": 1.4724475145339966
+        },
+        {
+          "created_at": "2026-09-12T21:27:02Z",
+          "deleted_at": null,
+          "id": "met_01m2br8geb8v3ve8264r95811t",
+          "metric_name": "gsm8k/reference_solution_perplexity",
+          "run_id": "run_01m282e890rabs0ttghv2ena7m",
+          "source_artifact_id": "art_01m2br8f051c7qsawc1e9yt1nw",
+          "source_job_id": "job_01m2bqq7b7dxhpvdgm15aevfny",
+          "split": "gsm8k",
+          "step": null,
+          "updated_at": "2026-09-12T21:27:02Z",
+          "value": 4.359892994587627
+        }
+      ],
+      "artifact": {
+        "attrs": {},
+        "content_hash": null,
+        "created_at": "2026-09-12T21:27:00Z",
+        "deleted_at": null,
+        "experiment_id": null,
+        "id": "art_01m2br8f051c7qsawc1e9yt1nw",
+        "job_id": "job_01m2bqq7b7dxhpvdgm15aevfny",
+        "run_id": "run_01m282e890rabs0ttghv2ena7m",
+        "type": "eval-result",
+        "updated_at": "2026-09-12T21:27:00Z",
+        "uri": "gs://marin-us-central1/experiments/tpp10_finemath_math/c788d33ddd3b357a7f80de6ed1d5ecb632104e4beabd5cc0934d580ecac77d39/tpp10_finemath_3plus_target_p050_s20260910.json"
+      }
+    },
+    {
+      "run_id": "run_01m282e8n76khqwmzkyy0dr1hj",
+      "run_name": "tpp10_finemath_3plus_target_p070_s20260910",
+      "links": [
+        {
+          "attrs": {},
+          "created_at": "2026-09-12T21:09:44Z",
+          "deleted_at": null,
+          "failure_reason": null,
+          "finished_at": null,
+          "job_id": "job_01m2bq8ta6wg2w5d3bgjhkkxxs",
+          "role": "eval",
+          "run_id": "run_01m282e8n76khqwmzkyy0dr1hj",
+          "started_at": null,
+          "status": "succeeded",
+          "updated_at": "2026-09-12T21:27:02Z"
+        },
+        {
+          "attrs": {},
+          "created_at": "2026-09-12T21:17:36Z",
+          "deleted_at": null,
+          "failure_reason": null,
+          "finished_at": null,
+          "job_id": "job_01m2bqq7b7dxhpvdgm15aevfny",
+          "role": "eval",
+          "run_id": "run_01m282e8n76khqwmzkyy0dr1hj",
+          "started_at": null,
+          "status": "succeeded",
+          "updated_at": "2026-09-12T21:27:03Z"
+        }
+      ],
+      "metrics": [
+        {
+          "created_at": "2026-09-12T21:27:04Z",
+          "deleted_at": null,
+          "id": "met_01m2br8j5ewr4v0fc67bw2p3qj",
+          "metric_name": "math500/reference_solution_loss",
+          "run_id": "run_01m282e8n76khqwmzkyy0dr1hj",
+          "source_artifact_id": "art_01m2br8hkhsp25gj1ahwgqajfp",
+          "source_job_id": "job_01m2bqq7b7dxhpvdgm15aevfny",
+          "split": "math500",
+          "step": null,
+          "updated_at": "2026-09-12T21:27:04Z",
+          "value": 1.2790066003799438
+        },
+        {
+          "created_at": "2026-09-12T21:27:04Z",
+          "deleted_at": null,
+          "id": "met_01m2br8jf53cxq605c9abj7vjz",
+          "metric_name": "math500/reference_solution_perplexity",
+          "run_id": "run_01m282e8n76khqwmzkyy0dr1hj",
+          "source_artifact_id": "art_01m2br8hkhsp25gj1ahwgqajfp",
+          "source_job_id": "job_01m2bqq7b7dxhpvdgm15aevfny",
+          "split": "math500",
+          "step": null,
+          "updated_at": "2026-09-12T21:27:04Z",
+          "value": 3.5930685991039373
+        },
+        {
+          "created_at": "2026-09-12T21:27:04Z",
+          "deleted_at": null,
+          "id": "met_01m2br8jrbfer2rmqv876qkzza",
+          "metric_name": "gsm8k/reference_solution_loss",
+          "run_id": "run_01m282e8n76khqwmzkyy0dr1hj",
+          "source_artifact_id": "art_01m2br8hkhsp25gj1ahwgqajfp",
+          "source_job_id": "job_01m2bqq7b7dxhpvdgm15aevfny",
+          "split": "gsm8k",
+          "step": null,
+          "updated_at": "2026-09-12T21:27:04Z",
+          "value": 1.3953553438186646
+        },
+        {
+          "created_at": "2026-09-12T21:27:05Z",
+          "deleted_at": null,
+          "id": "met_01m2br8k1ahps0pyhm2td2cxrh",
+          "metric_name": "gsm8k/reference_solution_perplexity",
+          "run_id": "run_01m282e8n76khqwmzkyy0dr1hj",
+          "source_artifact_id": "art_01m2br8hkhsp25gj1ahwgqajfp",
+          "source_job_id": "job_01m2bqq7b7dxhpvdgm15aevfny",
+          "split": "gsm8k",
+          "step": null,
+          "updated_at": "2026-09-12T21:27:05Z",
+          "value": 4.036408630681798
+        }
+      ],
+      "artifact": {
+        "attrs": {},
+        "content_hash": null,
+        "created_at": "2026-09-12T21:27:03Z",
+        "deleted_at": null,
+        "experiment_id": null,
+        "id": "art_01m2br8hkhsp25gj1ahwgqajfp",
+        "job_id": "job_01m2bqq7b7dxhpvdgm15aevfny",
+        "run_id": "run_01m282e8n76khqwmzkyy0dr1hj",
+        "type": "eval-result",
+        "updated_at": "2026-09-12T21:27:03Z",
+        "uri": "gs://marin-us-central1/experiments/tpp10_finemath_math/c788d33ddd3b357a7f80de6ed1d5ecb632104e4beabd5cc0934d580ecac77d39/tpp10_finemath_3plus_target_p070_s20260910.json"
+      }
+    },
+    {
+      "run_id": "run_01m282e8y00xtx0zzgbv90zxpc",
+      "run_name": "tpp10_finemath_3plus_target_p100_s20260910",
+      "links": [
+        {
+          "attrs": {},
+          "created_at": "2026-09-12T21:09:45Z",
+          "deleted_at": null,
+          "failure_reason": null,
+          "finished_at": null,
+          "job_id": "job_01m2bq8ta6wg2w5d3bgjhkkxxs",
+          "role": "eval",
+          "run_id": "run_01m282e8y00xtx0zzgbv90zxpc",
+          "started_at": null,
+          "status": "succeeded",
+          "updated_at": "2026-09-12T21:27:05Z"
+        },
+        {
+          "attrs": {},
+          "created_at": "2026-09-12T21:17:37Z",
+          "deleted_at": null,
+          "failure_reason": null,
+          "finished_at": null,
+          "job_id": "job_01m2bqq7b7dxhpvdgm15aevfny",
+          "role": "eval",
+          "run_id": "run_01m282e8y00xtx0zzgbv90zxpc",
+          "started_at": null,
+          "status": "succeeded",
+          "updated_at": "2026-09-12T21:27:05Z"
+        }
+      ],
+      "metrics": [
+        {
+          "created_at": "2026-09-12T21:27:06Z",
+          "deleted_at": null,
+          "id": "met_01m2br8mq360hwqjqfahp2cdcp",
+          "metric_name": "math500/reference_solution_loss",
+          "run_id": "run_01m282e8y00xtx0zzgbv90zxpc",
+          "source_artifact_id": "art_01m2br8m58adshydd73za5kfgh",
+          "source_job_id": "job_01m2bqq7b7dxhpvdgm15aevfny",
+          "split": "math500",
+          "step": null,
+          "updated_at": "2026-09-12T21:27:06Z",
+          "value": 1.2683117389678955
+        },
+        {
+          "created_at": "2026-09-12T21:27:07Z",
+          "deleted_at": null,
+          "id": "met_01m2br8n0bhzms198ncgn0sgbj",
+          "metric_name": "math500/reference_solution_perplexity",
+          "run_id": "run_01m282e8y00xtx0zzgbv90zxpc",
+          "source_artifact_id": "art_01m2br8m58adshydd73za5kfgh",
+          "source_job_id": "job_01m2bqq7b7dxhpvdgm15aevfny",
+          "split": "math500",
+          "step": null,
+          "updated_at": "2026-09-12T21:27:07Z",
+          "value": 3.554845985494926
+        },
+        {
+          "created_at": "2026-09-12T21:27:07Z",
+          "deleted_at": null,
+          "id": "met_01m2br8n9avex0tttp4mdhsnz6",
+          "metric_name": "gsm8k/reference_solution_loss",
+          "run_id": "run_01m282e8y00xtx0zzgbv90zxpc",
+          "source_artifact_id": "art_01m2br8m58adshydd73za5kfgh",
+          "source_job_id": "job_01m2bqq7b7dxhpvdgm15aevfny",
+          "split": "gsm8k",
+          "step": null,
+          "updated_at": "2026-09-12T21:27:07Z",
+          "value": 1.4420050382614136
+        },
+        {
+          "created_at": "2026-09-12T21:27:07Z",
+          "deleted_at": null,
+          "id": "met_01m2br8njahcbcnqzqqye3stz2",
+          "metric_name": "gsm8k/reference_solution_perplexity",
+          "run_id": "run_01m282e8y00xtx0zzgbv90zxpc",
+          "source_artifact_id": "art_01m2br8m58adshydd73za5kfgh",
+          "source_job_id": "job_01m2bqq7b7dxhpvdgm15aevfny",
+          "split": "gsm8k",
+          "step": null,
+          "updated_at": "2026-09-12T21:27:07Z",
+          "value": 4.229166963247635
+        }
+      ],
+      "artifact": {
+        "attrs": {},
+        "content_hash": null,
+        "created_at": "2026-09-12T21:27:06Z",
+        "deleted_at": null,
+        "experiment_id": null,
+        "id": "art_01m2br8m58adshydd73za5kfgh",
+        "job_id": "job_01m2bqq7b7dxhpvdgm15aevfny",
+        "run_id": "run_01m282e8y00xtx0zzgbv90zxpc",
+        "type": "eval-result",
+        "updated_at": "2026-09-12T21:27:06Z",
+        "uri": "gs://marin-us-central1/experiments/tpp10_finemath_math/c788d33ddd3b357a7f80de6ed1d5ecb632104e4beabd5cc0934d580ecac77d39/tpp10_finemath_3plus_target_p100_s20260910.json"
+      }
+    }
+  ]
+}

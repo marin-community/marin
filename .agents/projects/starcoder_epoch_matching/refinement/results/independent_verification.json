@@ -1,0 +1,149 @@
+{
+  "independently_calculated": true,
+  "analyzer_imported": false,
+  "design_sha256": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b",
+  "input_sha256": {
+    "experiments/domain_phase_mix/starcoder_epoch_matching_design_20260908.json": "17703162656b08a0f5a693d71fef2b23d2484af9986167b0facda5420b1fda3c",
+    ".agents/projects/starcoder_epoch_matching/refinement/submission_plan.json": "0b605cb0e0ff772d18798a7980d977dcd116d2385168b339bc79e39d407f2008",
+    ".agents/projects/starcoder_epoch_matching/refinement/measurements.csv": "65f23da7430340f61146b22759790b694a5b5c36934e22489813582e7a8315ae"
+  },
+  "all_20_identities_final_steps_metrics_fingerprints_valid": true,
+  "pilot_measurements_unchanged": true,
+  "prior_pilot_hashes_unchanged": {
+    "pilot_submission_plan.json": true,
+    "pilot_measurements.csv": true,
+    "pilot_results/analysis.json": true,
+    "pilot_results/RESULTS.md": true
+  },
+  "exact_agreement_with_analyzer": true,
+  "grid": [
+    0,
+    0.1,
+    0.2,
+    0.3,
+    0.4,
+    0.5,
+    0.6,
+    0.7,
+    0.9,
+    1
+  ],
+  "selections": {
+    "unmatched": {
+      "selected_weight": 1.0,
+      "observed_min_bpb": 0.9089168310165405,
+      "exact_ties": [
+        1.0
+      ],
+      "target_bpb_at_selection": 0.8198691606521606,
+      "target_grid_regret": 0.03182625770568848,
+      "weight_displacement": 0.30000000000000004
+    },
+    "matched": {
+      "selected_weight": 0.2,
+      "observed_min_bpb": 1.1632834672927856,
+      "exact_ties": [
+        0.2
+      ],
+      "target_bpb_at_selection": 0.8518126606941223,
+      "target_grid_regret": 0.06376975774765015,
+      "weight_displacement": 0.49999999999999994
+    },
+    "target": {
+      "selected_weight": 0.7,
+      "observed_min_bpb": 0.7880429029464722,
+      "exact_ties": [
+        0.7
+      ],
+      "target_bpb_at_selection": 0.7880429029464722,
+      "target_grid_regret": 0.0,
+      "weight_displacement": 0.0
+    }
+  },
+  "delta_target_regret_matched_minus_unmatched": 0.03194350004196167,
+  "curve_diagnostics_not_prespecified_tests": {
+    "unmatched": {
+      "spearman_on_ten_point_grid_descriptive_only": 0.7454545454545455,
+      "rise_from_own_minimum_to_p1": 0.0,
+      "strictly_decreasing_in_p": true,
+      "bpb_change_added_p02_minus_prior_p03": 0.04755079746246338
+    },
+    "matched": {
+      "spearman_on_ten_point_grid_descriptive_only": -0.28484848484848485,
+      "rise_from_own_minimum_to_p1": 1.4290043115615845,
+      "strictly_decreasing_in_p": false,
+      "bpb_change_added_p02_minus_prior_p03": -0.026886343955993652
+    }
+  },
+  "target_rise_from_minimum_to_p1": 0.03182625770568848,
+  "measured_values": [
+    {
+      "p": 0,
+      "unmatched": 2.014068603515625,
+      "matched": 2.014068603515625,
+      "target": 1.573216438293457
+    },
+    {
+      "p": 0.1,
+      "unmatched": 1.2048306465148926,
+      "matched": 1.221239686012268,
+      "target": 0.9132958650588988
+    },
+    {
+      "p": 0.2,
+      "unmatched": 1.0997356176376343,
+      "matched": 1.1632834672927856,
+      "target": 0.8518126606941223
+    },
+    {
+      "p": 0.3,
+      "unmatched": 1.052184820175171,
+      "matched": 1.1901698112487793,
+      "target": 0.8213925957679749
+    },
+    {
+      "p": 0.4,
+      "unmatched": 1.0017962455749512,
+      "matched": 1.2436186075210571,
+      "target": 0.8039188385009766
+    },
+    {
+      "p": 0.5,
+      "unmatched": 0.9794742465019226,
+      "matched": 1.3555514812469482,
+      "target": 0.7982456684112549
+    },
+    {
+      "p": 0.6,
+      "unmatched": 0.9597709774971008,
+      "matched": 1.5118560791015625,
+      "target": 0.792351245880127
+    },
+    {
+      "p": 0.7,
+      "unmatched": 0.9418837428092957,
+      "matched": 1.7630075216293335,
+      "target": 0.7880429029464722
+    },
+    {
+      "p": 0.9,
+      "unmatched": 0.9163249731063843,
+      "matched": 2.2323997020721436,
+      "target": 0.8038912415504456
+    },
+    {
+      "p": 1,
+      "unmatched": 0.9089168310165405,
+      "matched": 2.59228777885437,
+      "target": 0.8198691606521606
+    }
+  ],
+  "scope": [
+    "Adaptive grid chosen after pilot and historical-target inspection.",
+    "One trainer/data seed; fixed subsets; no repeat uncertainty or significance claim.",
+    "Matched p=0 aliases unmatched; 19 proxy runs plus corrected target endpoint.",
+    "Historical target interior JAX0.10.1; new proxies and corrected target endpoint JAX0.11.1.",
+    "Target regret is relative to same ten-point grid, not a continuous population optimum.",
+    "Spearman values are exploratory descriptions; common high-loss p=0 can inflate agreement."
+  ]
+}

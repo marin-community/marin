@@ -1,0 +1,44 @@
+[
+  {
+    "identity": {
+      "quota": 11894784,
+      "recipe_sha256": "d4db300c169d35c67d2bbdadd25dae4252d222594be190d09e1b966ba5864f75",
+      "source": {
+        "crc32c": "AjOmRg==",
+        "generation": "1769303528425284",
+        "size_bytes": 508250699,
+        "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00090-of-00128.parquet"
+      }
+    },
+    "token_stream_sha256": "5fbcb99c90b1794fe7256ff698e145549cb39e663cb859f6bc5e314a69e737f0",
+    "tokens": 11894784
+  },
+  {
+    "identity": {
+      "quota": 11894784,
+      "recipe_sha256": "d4db300c169d35c67d2bbdadd25dae4252d222594be190d09e1b966ba5864f75",
+      "source": {
+        "crc32c": "tE1FDA==",
+        "generation": "1769303620074299",
+        "size_bytes": 511761680,
+        "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00016-of-00128.parquet"
+      }
+    },
+    "token_stream_sha256": "a63c02e8d2ef1baea41b43529cbdf7c0a10a74ef2e2968d28f1970aed59b6809",
+    "tokens": 11894784
+  },
+  {
+    "identity": {
+      "quota": 11894784,
+      "recipe_sha256": "d4db300c169d35c67d2bbdadd25dae4252d222594be190d09e1b966ba5864f75",
+      "source": {
+        "crc32c": "03oJbg==",
+        "generation": "1769303529475572",
+        "size_bytes": 509062125,
+        "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00096-of-00128.parquet"
+      }
+    },
+    "token_stream_sha256": "b637aed79cf7f810dc750e760bdd329404cc967df4359b8ee055c34de8ba3594",
+    "tokens": 11894784
+  }
+]

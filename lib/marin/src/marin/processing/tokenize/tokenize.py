@@ -38,6 +38,7 @@ from zephyr.dataset import Dataset, FileEntry
 from zephyr.readers import load_file
 
 from marin.execution.artifact import Artifact
+from marin.execution.types import InputName
 from marin.processing.tokenize._core import (
     MIN_GROUP_BYTES,
     bundle_files_by_size,
@@ -59,6 +60,7 @@ __all__ = [
     "MIN_GROUP_BYTES",
     "HfDatasetSpec",
     "HfTokenizeConfig",
+    "HistoricalFullDocumentTokenizeConfig",
     "TokenizeConfig",
     "TokenizeConfigBase",
     "TokenizedCache",
@@ -155,6 +157,11 @@ class TokenizeConfigBase(abc.ABC):
     """Number of tokenized records to accumulate before flushing to disk. Defaults to 16384.
     Lower values reduce peak memory for datasets with large documents."""
 
+    @property
+    def split_long_documents(self) -> bool:
+        """Whether to split long inputs before BPE encoding."""
+        return True
+
     @abc.abstractmethod
     def as_lm_dataset_source_config(self, actual_output_path: str | None) -> LmDatasetSourceConfigBase:
         """
@@ -165,8 +172,8 @@ class TokenizeConfigBase(abc.ABC):
 
 @dataclasses.dataclass(frozen=True)
 class TokenizeConfig(TokenizeConfigBase):
-    train_paths: list[str]  # path to training data
-    validation_paths: list[str]  # path to validation data
+    train_paths: list[str | InputName]  # path to training data
+    validation_paths: list[str | InputName]  # path to validation data
     cache_path: str  # base path to save the tokenized files
     tokenizer: str  # tokenizer name. Should be the same as you intend to use in the tokenizer spec for the training run
     tags: list[str] = dataclasses.field(default_factory=list)  # tags to be added to config
@@ -217,6 +224,17 @@ class TokenizeConfig(TokenizeConfigBase):
 
 
 @dataclasses.dataclass(frozen=True)
+class HistoricalFullDocumentTokenizeConfig(TokenizeConfig):
+    """Reproduce historical full-document BPE boundaries at higher memory cost."""
+
+    historical_full_document_tokenization: bool = True
+
+    @property
+    def split_long_documents(self) -> bool:
+        return False
+
+
+@dataclasses.dataclass(frozen=True)
 class HfTokenizeConfig(TokenizeConfigBase):
     """
     Tokenize a HuggingFace dataset directly without having to download it first.
@@ -243,12 +261,14 @@ class HfTokenizeConfig(TokenizeConfigBase):
         )
 
 
-def _validate_train_urls(train_paths: list[str], warn):
+def _validate_train_urls(train_paths: list[str | InputName], warn):
     """
     Validates the training data URLs to ensure they do not contain forbidden patterns.
     Raises a ValueError if a forbidden pattern is found.
     """
     for url_to_check in train_paths:
+        if isinstance(url_to_check, InputName):
+            url_to_check = url_to_check.name or (url_to_check.step.name if url_to_check.step is not None else "")
         # \b doesn't work because of underscores
         if re.search(r"[^a-zA-Z]test[^a-zA-Z]", url_to_check) or re.search(r"validation", url_to_check):
             if warn:
@@ -303,6 +323,7 @@ def _run_split(
         sample_count=config.sample_count,
         sample_parquet_path=sample_path,
         levanter_batch_size=config.levanter_batch_size,
+        split_long_documents=config.split_long_documents,
     )
 
     ctx = ZephyrContext(

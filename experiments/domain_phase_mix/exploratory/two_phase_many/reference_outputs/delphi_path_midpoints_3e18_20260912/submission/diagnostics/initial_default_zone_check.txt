@@ -1,0 +1,2 @@
+region-local launch safety check failed
+- Child --tpu-zone must be us-east5-a: got 'us-east5-b'.

@@ -1,0 +1,84 @@
+{
+  "eval_result": {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789360719.7533548,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/mean_selection_20260913/result.json",
+      "fieldbook.local_size_at_capture": 959
+    },
+    "content_hash": "sha256:289b9e648598f4f4cea2e579100c24f1886d20f8c3567e589bd0037cb323381d",
+    "created_at": "2026-09-14T04:48:12Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m2f3x1c2xqv1sf60ckdyj0gy",
+    "job_id": "job_01m2eqe4sqeys23nddz7pd1yfd",
+    "run_id": "run_01m2eq6fva59907aatmt7fqyxh",
+    "type": "eval-result",
+    "updated_at": "2026-09-14T04:50:21Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/mean_selection_20260913/result.json"
+  },
+  "checkpoint": {
+    "attrs": {},
+    "content_hash": null,
+    "created_at": "2026-09-14T04:50:21Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m2f40zd4kznny6v78sewvz5b",
+    "job_id": "job_01m2eqe4sqeys23nddz7pd1yfd",
+    "run_id": "run_01m2eq6fva59907aatmt7fqyxh",
+    "type": "checkpoint",
+    "updated_at": "2026-09-14T04:50:21Z",
+    "uri": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p8of15_s20260910/2026.09.09/checkpoints/step-11490"
+  },
+  "normalized_bpb": {
+    "created_at": "2026-09-14T04:50:22Z",
+    "deleted_at": null,
+    "id": "met_01m2f40zpse0z2j1qhw6k853q2",
+    "metric_name": "paloma_programming_languages/normalized_bpb",
+    "run_id": "run_01m2eq6fva59907aatmt7fqyxh",
+    "source_artifact_id": "art_01m2f3x1c2xqv1sf60ckdyj0gy",
+    "source_job_id": "job_01m2eqe4sqeys23nddz7pd1yfd",
+    "split": null,
+    "step": "11490",
+    "updated_at": "2026-09-14T04:50:22Z",
+    "value": 0.7744325345176816
+  },
+  "target_regret_bpb": {
+    "created_at": "2026-09-14T04:50:22Z",
+    "deleted_at": null,
+    "id": "met_01m2f4102ytfn2tr31dtmdzp1c",
+    "metric_name": "paloma_programming_languages/target_regret_bpb",
+    "run_id": "run_01m2eq6fva59907aatmt7fqyxh",
+    "source_artifact_id": "art_01m2f3x1c2xqv1sf60ckdyj0gy",
+    "source_job_id": "job_01m2eqe4sqeys23nddz7pd1yfd",
+    "split": null,
+    "step": "11490",
+    "updated_at": "2026-09-14T04:50:22Z",
+    "value": 0.008868010917602143
+  },
+  "excess_percent": {
+    "created_at": "2026-09-14T04:50:22Z",
+    "deleted_at": null,
+    "id": "met_01m2f410cnrvxppg636tkcrjz2",
+    "metric_name": "paloma_programming_languages/excess_percent",
+    "run_id": "run_01m2eq6fva59907aatmt7fqyxh",
+    "source_artifact_id": "art_01m2f3x1c2xqv1sf60ckdyj0gy",
+    "source_job_id": "job_01m2eqe4sqeys23nddz7pd1yfd",
+    "split": null,
+    "step": "11490",
+    "updated_at": "2026-09-14T04:50:22Z",
+    "value": 1.158362312284297
+  },
+  "regret_reduction_percent": {
+    "created_at": "2026-09-14T04:50:23Z",
+    "deleted_at": null,
+    "id": "met_01m2f410ncpnrcvzk5h3p5vczf",
+    "metric_name": "paloma_programming_languages/regret_reduction_percent",
+    "run_id": "run_01m2eq6fva59907aatmt7fqyxh",
+    "source_artifact_id": "art_01m2f3x1c2xqv1sf60ckdyj0gy",
+    "source_job_id": "job_01m2eqe4sqeys23nddz7pd1yfd",
+    "split": null,
+    "step": "11490",
+    "updated_at": "2026-09-14T04:50:23Z",
+    "value": 74.70206000824624
+  }
+}

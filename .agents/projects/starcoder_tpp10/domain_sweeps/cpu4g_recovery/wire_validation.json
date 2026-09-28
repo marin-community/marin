@@ -1,0 +1,10 @@
+{
+  "passed": true,
+  "cpu_memory_gib_before": 8,
+  "cpu_memory_gib_after": 4,
+  "cpu": 2,
+  "other_cpu_wire_fields_equal": true,
+  "serialized_callable_sha256": "5e63507eef40afce5582b25e2cb5eae51747f018e3e62c1d57a97849aeaf18cf",
+  "original_request_unchanged": true,
+  "tpu_wire_request_identical": true
+}

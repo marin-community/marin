@@ -1,0 +1,98 @@
+{
+  "method": "uv run python; await sequence_allocation(percent, 2532, 32) and await sequence_allocation(percent, 11491, 128); compare every component count with archived allocation audit",
+  "local_computation_only": true,
+  "source_path": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/starcoder_tpp10.py",
+  "source_sha256": "1c7cc50019f3e99234fb7b3f5668ae2a07b9381ef1fcabfa1aa8011fe98d6473",
+  "archived_path": "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260912_outline_figures/data/allocation_audit.json",
+  "archived_sha256": "561124284d1d90b4e25fcb873f232ff5b9cbd6afb9f81dbaf20faed770497167",
+  "rows": [
+    {
+      "percent": 55,
+      "proxy_allocation": {
+        "hq_actual": 3406,
+        "hq_synth": 9491,
+        "medium_high": 3082,
+        "medium": 12457,
+        "medium_low": 5463,
+        "low_actual": 2410,
+        "starcoder": 44715
+      },
+      "target_allocation": {
+        "hq_actual": 61761,
+        "hq_synth": 172365,
+        "medium_high": 56023,
+        "medium": 226228,
+        "medium_low": 99108,
+        "low_actual": 43806,
+        "starcoder": 811557
+      },
+      "matches_archived": true
+    },
+    {
+      "percent": 60,
+      "proxy_allocation": {
+        "hq_actual": 3011,
+        "hq_synth": 8460,
+        "medium_high": 2729,
+        "medium": 11070,
+        "medium_low": 4868,
+        "low_actual": 2134,
+        "starcoder": 48752
+      },
+      "target_allocation": {
+        "hq_actual": 54579,
+        "hq_synth": 153692,
+        "medium_high": 49556,
+        "medium": 201101,
+        "medium_low": 88330,
+        "low_actual": 38782,
+        "starcoder": 884808
+      },
+      "matches_archived": true
+    },
+    {
+      "percent": 65,
+      "proxy_allocation": {
+        "hq_actual": 2655,
+        "hq_synth": 7393,
+        "medium_high": 2412,
+        "medium": 9687,
+        "medium_low": 4233,
+        "low_actual": 1899,
+        "starcoder": 52745
+      },
+      "target_allocation": {
+        "hq_actual": 48114,
+        "hq_synth": 134300,
+        "medium_high": 43813,
+        "medium": 175965,
+        "medium_low": 76840,
+        "low_actual": 34472,
+        "starcoder": 957344
+      },
+      "matches_archived": true
+    },
+    {
+      "percent": 70,
+      "proxy_allocation": {
+        "hq_actual": 2258,
+        "hq_synth": 6320,
+        "medium_high": 2063,
+        "medium": 8304,
+        "medium_low": 3637,
+        "low_actual": 1620,
+        "starcoder": 56822
+      },
+      "target_allocation": {
+        "hq_actual": 40933,
+        "hq_synth": 114910,
+        "medium_high": 37345,
+        "medium": 150826,
+        "medium_low": 66080,
+        "low_actual": 29446,
+        "starcoder": 1031308
+      },
+      "matches_archived": true
+    }
+  ]
+}

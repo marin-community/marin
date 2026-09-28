@@ -1,0 +1,31 @@
+# /opt/sandbox/versions.txt of mt-mbpp-sandbox:2277a08ead83 (image sha256:47daf21ae3a985dfceb1f54d203eb459180bab7ce4cc82981dc4e186c7c2a26b,
+# linux/arm64, built 2026-09-26 from this directory's Dockerfile), the image that validated the tests and graded the results.
+base swift:6.4.0-resolute (Ubuntu 26.04.1), apt snapshot 20260925T000000Z
+GNU bash, version 5.3.9(1)-release (aarch64-unknown-linux-gnu)
+timeout (GNU coreutils) 9.7
+gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0
+g++ (Ubuntu 15.2.0-16ubuntu1) 15.2.0
+dotnet sdk 10.0.112 runtime 10.0.12
+go version go1.27.1 linux/arm64
+The Glorious Glasgow Haskell Compilation System, version 9.10.3
+openjdk version "25.0.4.1" 2026-08-18
+node v22.22.1
+esbuild 0.28.2
+GNU Octave (aarch64-unknown-linux-gnu) version 11.1.0
+PHP 8.5.4 (cli) (built: Sep  2 2026 14:42:18) (NTS)
+Python 3.14.4
+R version 4.5.2 (2025-10-31) -- "[Not] Part in a Rumble"
+ruby 3.3.8 (2025-04-09 revision b200bad6cd) [aarch64-linux-gnu]
+rustc 1.93.1 (01f6ddf75 2026-02-11) (built from a source tarball)
+crate aho-corasick 1.1.5
+crate autocfg 1.5.1
+crate memchr 2.8.3
+crate num-bigint 0.4.8
+crate num-complex 0.4.6
+crate num-integer 0.1.47
+crate num-traits 0.2.19
+crate regex 1.13.1
+crate regex-automata 0.4.18
+crate regex-syntax 0.8.11
+scala 3.9.0
+Swift version 6.4 (swift-6.4-RELEASE)

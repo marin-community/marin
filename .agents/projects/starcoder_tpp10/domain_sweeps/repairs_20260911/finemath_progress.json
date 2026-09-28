@@ -1,0 +1,51 @@
+[
+  {
+    "run": "tpp10_finemath_3plus_target_p005_s20260910",
+    "state": "running",
+    "step": 9505,
+    "final_step": 11490,
+    "runtime": 7204.569408168
+  },
+  {
+    "run": "tpp10_finemath_3plus_target_p010_s20260910",
+    "state": "running",
+    "step": 7948,
+    "final_step": 11490,
+    "runtime": 6049.569721211
+  },
+  {
+    "run": "tpp10_finemath_3plus_target_p020_s20260910",
+    "state": "running",
+    "step": 6705,
+    "final_step": 11490,
+    "runtime": 5074.955034704
+  },
+  {
+    "run": "tpp10_finemath_3plus_target_p030_s20260910",
+    "state": "running",
+    "step": 3251,
+    "final_step": 11490,
+    "runtime": 2539.944730406
+  },
+  {
+    "run": "tpp10_finemath_3plus_target_p050_s20260910",
+    "state": "running",
+    "step": 1880,
+    "final_step": 11490,
+    "runtime": 1503.992803723
+  },
+  {
+    "run": "tpp10_finemath_3plus_target_p070_s20260910",
+    "state": "running",
+    "step": 1878,
+    "final_step": 11490,
+    "runtime": 1504.916985846
+  },
+  {
+    "run": "tpp10_finemath_3plus_target_p100_s20260910",
+    "state": "running",
+    "step": 1828,
+    "final_step": 11490,
+    "runtime": 1459.506806786
+  }
+]

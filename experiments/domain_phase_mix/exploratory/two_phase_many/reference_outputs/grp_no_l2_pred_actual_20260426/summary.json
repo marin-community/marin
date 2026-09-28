@@ -1,0 +1,38 @@
+{
+  "metrics": [
+    {
+      "actual_max": 1.1824864149093628,
+      "actual_mean": 1.1175274272595555,
+      "actual_min": 1.0571987628936768,
+      "label": "60M/1.2B GRP no-L2",
+      "oof_bias": 7.711381016513159e-05,
+      "oof_rmse": 0.009193275501588084,
+      "oof_spearman": 0.8697981957129449,
+      "param_mode": "standard",
+      "param_source": "original 60M no-L2 reference params",
+      "row_count": 242,
+      "scale_key": "60m_1p2b",
+      "target_metric": "eval/uncheatable_eval/bpb",
+      "train_bias": -6.881547673296425e-17,
+      "train_rmse": 0.00759754376717028,
+      "train_spearman": 0.9105341524554401
+    },
+    {
+      "actual_max": 1.054013967514038,
+      "actual_mean": 0.9972573898055337,
+      "actual_min": 0.9554399251937866,
+      "label": "100M/6B GRP no-L2",
+      "oof_bias": 7.146637886461857e-05,
+      "oof_rmse": 0.007429579836167388,
+      "oof_spearman": 0.9190691440157052,
+      "param_mode": "moderate_clip",
+      "param_source": "300m_6b fast_moderate_clip_powell120 stabilized debug params",
+      "row_count": 242,
+      "scale_key": "300m_6b",
+      "target_metric": "eval/uncheatable_eval/bpb",
+      "train_bias": -8.25785720795571e-18,
+      "train_rmse": 0.006629404994435429,
+      "train_spearman": 0.9355777482270629
+    }
+  ]
+}

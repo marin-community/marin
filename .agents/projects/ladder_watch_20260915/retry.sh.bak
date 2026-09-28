@@ -1,0 +1,35 @@
+#!/bin/bash
+# Scoped retry of ladder training steps whose child exhausted its failure budget.
+# usage: retry.sh <mariner|olmix> <retry-suffix e.g. retry8> <budget> <run-only regex>...
+# Builds the 2026-09-10/09-13 command shape, validates it with east5_launch_safety, records it under the
+# family's reference_outputs submission_<suffix>/ directory, submits from a subshell that sources the secrets
+# file (output redacted), and registers the parent in Fieldbook.
+set -euo pipefail
+FAMILY=$1; SUFFIX=$2; BUDGET=$3; shift 3
+cd /Users/calvinxu/Projects/Work/Marin/marin
+R=experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs
+case $FAMILY in
+  mariner)
+    BASE=dm-delphi-frozen-unconstrained-scaling-v6e-20260908; MODULE=experiments.domain_phase_mix.launch_delphi_frozen_procedure_scaling
+    DIR=$R/delphi_frozen_procedure_scaling_v6e_20260908/submission_$SUFFIX; EXP=exp_01m1zy8yths4dqp5bgc0ffzztp
+    INCLUDES="--working-dir-include experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_corrected_screen_20260908/materialized_flat15_nocap/runtime_materialization/candidate_weights.csv"
+    RETRY_OF=job_01m1zykf9snh1tmnj99febd2q0;;
+  olmix)
+    BASE=dm-delphi-matched-olmix-scaling-v6e-20260910; MODULE=experiments.domain_phase_mix.launch_delphi_matched_olmix_scaling
+    DIR=$R/delphi_matched_olmix_scaling_v6e_20260910/submission_$SUFFIX; EXP=exp_01m21dyb8mxjg2aqhtbjncejpc
+    INCLUDES="--working-dir-include experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_corrected_screen_20260908/materialized_flat15_nocap/runtime_materialization/candidate_weights.csv --working-dir-include experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_matched_olmix_3e18_20260908/candidate_weights.csv"
+    RETRY_OF=job_01m257ja1rdvpgddjvhhyd7wd2;;
+  *) echo "unknown family $FAMILY"; exit 2;;
+esac
+JOB=$BASE-$SUFFIX
+RUNONLY=""; for p in "$@"; do RUNONLY="$RUNONLY --run-only $p"; done
+TAIL="--no-wait --no-preemptible --job-name $JOB --region us-east5 --zone us-east5-a --priority interactive --enable-extra-resources --cpu 1 --memory 4GB --disk 16GB --timeout 604800 --extra cpu -e MARIN_PREFIX gs://marin-us-east5 -e MARIN_EXECUTOR_STRICT 1 -e HF_HUB_DISABLE_XET 1 -- python -m $MODULE$RUNONLY --max-retries-failure $BUDGET --max-task-failures $BUDGET"
+INNER="iris --config lib/iris/config/marin.yaml job run $TAIL"
+WRAP="UV_FROZEN=1 uv run python -m marin.run.iris_run --config lib/iris/config/marin.yaml --working-dir-exclude .agents/ --working-dir-exclude .github/ --working-dir-exclude docs/ --working-dir-exclude scripts/ --working-dir-exclude experiments/domain_phase_mix/exploratory/ --working-dir-exclude experiments/domain_phase_mix/manifests/ --working-dir-exclude checkpoints/ --working-dir-exclude tests/ --working-dir-exclude infra/grafana/ --working-dir-exclude .experiments/ --working-dir-exclude .experiments.zip --working-dir-exclude cache/ --working-dir-exclude tmp/ --working-dir-include experiments/domain_phase_mix/exploratory/general_scaling_models.py --working-dir-include experiments/domain_phase_mix/exploratory/dsre_ceq_tools.py $INCLUDES -- $TAIL"
+mkdir -p "$DIR"
+echo "$INNER" > "$DIR/inner_command.txt"; echo "$WRAP" > "$DIR/launch_command.sh"
+uv run --offline --no-sync python -m experiments.domain_phase_mix.east5_launch_safety --expected-child-zone us-east5-b --command "$INNER" 2>&1 | tee "$DIR/east5_launch_safety.log" | tail -1
+grep -q 'safety check passed' "$DIR/east5_launch_safety.log"
+( set -a; source ~/.zshrc.secrets; set +a; bash "$DIR/launch_command.sh" ) 2>&1 | sed -E 's/(WANDB_API_KEY|HF_TOKEN)(=|: ?)[^ ]+/\1=<redacted>/g; s/[0-9a-f]{40}/<redacted-40hex>/g' | tee "$DIR/submit.log" | grep -i 'bundle size\|submitted\|error\|Traceback\|exceed' | cut -c1-200
+grep -q "Job submitted: /calvinxu/$JOB" "$DIR/submit.log"
+uv run fieldbook job add --experiment $EXP --name "$JOB" --status running --external-system iris --external-id "/calvinxu/$JOB" --retry-of $RETRY_OF --launcher "experiments/domain_phase_mix/$(basename ${MODULE//.//}).py" --command "$WRAP" --started-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --attr "launch.retry_policy=max_retries_failure=$BUDGET max_task_failures=$BUDGET" --attr "launch.run_only=$(IFS=,; echo "$*")" --attr placement.parent=us-east5-a --attr placement.child=us-east5-b --json | python3 -c "import json,sys; d=json.load(sys.stdin); print('fieldbook job', d.get('id'))" | tee "$DIR/fieldbook_job.txt"

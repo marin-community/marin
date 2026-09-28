@@ -1,0 +1,12 @@
+kind,candidate_id,label,metric,seeds,values,mean,sd,n,standard_error
+policy,olmix_u_kl0p1_cap04,"Olmix, KL 0.1, cap 4",uncheatable_bpb,0;1;2,1.0043;1.0017;1.0039,1.0033085743586223,0.001427889469039112,3,
+policy,olmix_u_kl0p05_cap04,"Olmix, KL 0.05, cap 4 (ladder policy)",uncheatable_bpb,0;1;2,1.0030;0.9997;1.0022,1.0016499360402424,0.0017535159740946437,3,
+policy,lwspu_u_snc_cap06,"ours, unconstrained (5.3 epochs)",uncheatable_bpb,0;1;2,0.9814;0.9834;0.9825,0.982468863328298,0.0010087987790363825,3,
+policy,olmix_t9_kl0p005_cap05,"Olmix, KL 0.005, cap 4",table9_macro_bpb,0;1;2,1.0777;1.0803;1.0910,1.0829794304833873,0.007053533886589166,3,
+policy,lwspu_t9_snc_cap08,"ours, unconstrained (7.5 epochs)",table9_macro_bpb,0;1;2,1.0682;1.0624;1.0727,1.0677790093549702,0.005174516279352866,3,
+policy,lwspu_t9_snc_cap06,"ours, cap 6",table9_macro_bpb,0;1;2,1.0642;1.0639;1.0694,1.0658063544812448,0.003079372093977175,3,
+paired_difference,lwspu_u_snc_cap06 - olmix_u_kl0p1_cap04,lwspu_u_snc_cap06 minus olmix_u_kl0p1_cap04,uncheatable_bpb,0;1;2,-0.0229;-0.0182;-0.0214,-0.020839711030324448,0.002378335437470456,3,0.0013731326050467943
+paired_difference,lwspu_u_snc_cap06 - olmix_u_kl0p05_cap04,lwspu_u_snc_cap06 minus olmix_u_kl0p05_cap04,uncheatable_bpb,0;1;2,-0.0216;-0.0162;-0.0197,-0.01918107271194458,0.0027218766778794447,3,0.0015714762326746617
+paired_difference,lwspu_t9_snc_cap08 - olmix_t9_kl0p005_cap05,lwspu_t9_snc_cap08 minus olmix_t9_kl0p005_cap05,table9_macro_bpb,0;1;2,-0.0095;-0.0179;-0.0183,-0.015200421128417204,0.004976961343307402,3,0.00287344997130489
+paired_difference,lwspu_t9_snc_cap06 - olmix_t9_kl0p005_cap05,lwspu_t9_snc_cap06 minus olmix_t9_kl0p005_cap05,table9_macro_bpb,0;1;2,-0.0135;-0.0164;-0.0216,-0.017173076002142535,0.0041273351070086495,3,0.002382918035067237
+paired_difference,lwspu_t9_snc_cap06 - lwspu_t9_snc_cap08,lwspu_t9_snc_cap06 minus lwspu_t9_snc_cap08,table9_macro_bpb,0;1;2,-0.0040;+0.0015;-0.0034,-0.0019726548737253324,0.0029957697482650195,3,0.0017296084705909465

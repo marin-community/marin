@@ -1,0 +1,33 @@
+{
+  "plan_sha256": "9ba0b1dc80e072d59f832f86bc73dde81d801bb47fb46d28a66a2c37f984f94c",
+  "source_pins_verified": 14,
+  "zip_sha256": "c951c9374844ec2717c1c3799e3baed563e5d4fa7280dad7b4f687e62783ccc3",
+  "zip_bytes": 24334650,
+  "file_count": 4547,
+  "source_hashes": {
+    "experiments/domain_phase_mix/evaluate_mariner_ladder_accuracy.py": "7a453e2e16515aba84eb98ab3ab9eea8dcf015dd86a996fd31e174ab64cb4cab",
+    "experiments/evals/olmo_base_easy_overlap.py": "39a848b00eec01dfb7863280ecbd1ffa308530d66c406c459677b561849a7347",
+    "lib/levanter/src/levanter/eval_harness.py": "d5ea8a960b2b6eca4869c3bd94a89e370f96b9111d35021b510627f912e9c9a3",
+    "lib/levanter/src/levanter/models/qwen.py": "241b086569a8aa23b3a006a4be3ebc9142c45cdda8eaef81a19dabc77526b66b",
+    "lib/levanter/src/levanter/models/llama.py": "f4ebbfbff8708d76e300d70e70c1393ff9553e46c251c38de3d71cd5b948de57",
+    "lib/levanter/src/levanter/compat/hf_checkpoints.py": "0bedd25779e7adb1070e8afd116131cb3cb4346c3e9179d1847ed9ec91fba9a5",
+    "lib/levanter/src/levanter/tokenizers.py": "c49f9f74dc25e683ee9dba413c4008ecbc78a4bac864cba4647a129d6eb0dcb3",
+    "lib/levanter/src/levanter/trainer.py": "c45bd422f0ae23a4efd45610becaa8409d101b4bcaa396fca1e1348847eca03c",
+    "lib/levanter/src/levanter/distributed.py": "e96cccd01287e9a6e6c4fdf94811250d0ed498148be1d7495d159b9871b80123",
+    "lib/marin/src/marin/evaluation/eval_dataset_cache.py": "3763f6b931744114f468e3e24d2bde7c8c57119febf5427cc7cb206fb65314be",
+    "lib/marin/src/marin/evaluation/evaluation_config.py": "44b74bac25cd17b17e6016a6e315b367b3cf557c8e2d1bb307869aac0d8b3e5a",
+    "lib/marin/src/marin/execution/remote.py": "23e8517a4d315180adfe085fc2539a76662a79babab33e12ee6a187224064f60",
+    "lib/marin/src/marin/training/run_environment.py": "3e1b0cca3563df838b178254f76ace751521e3fb829de22cd40220ffaea41151",
+    "uv.lock": "347c4bb876ef55f60ecd5cf137d22016aaa742387717d20e296ca0ff2cc05dd5"
+  },
+  "excludes": [
+    "^(checkpoints|cache|logs|wandb|tmp)/",
+    "^experiments/domain_phase_mix/exploratory/.*(?<!\\.py)$",
+    "^\\.agents/(?!projects/mariner_ladder_accuracy_20260914/plan_v5p\\.json$).*",
+    "^(docs|tests)/",
+    "^lib/[^/]+/tests/"
+  ],
+  "extra_includes": [
+    ".agents/projects/mariner_ladder_accuracy_20260914/plan_v5p.json"
+  ]
+}

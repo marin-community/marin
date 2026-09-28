@@ -1,0 +1,6 @@
+run_order,run_name,candidate_id,target,epoch_cap,aliases,run_id,data_seed,trainer_seed,train_steps,expected_checkpoint_step,tpu_type,tpu_region,tpu_zone,fit_panel_max_materialized_epoch,runtime_max_simulated_epoch
+0,flr_floor_seed662009_t0_floor_1_e8df5e6e_cap17,floor_1_e8df5e6e_cap17,table9,17,floor_1_e8df5e6e_cap17,7395000,662009,0,3007,3006,v6e-8,us-east5,us-east5-b,15.993110158566047,15.993102155130003
+1,flr_floor_seed662009_t0_floor_2_d3ffb3bd_cap17,floor_2_d3ffb3bd_cap17,table9,17,floor_2_d3ffb3bd_cap17,7395001,662009,0,3007,3006,v6e-8,us-east5,us-east5-b,15.993110158566047,15.993102155130003
+2,flr_floor_seed662009_t0_floor_3_a446352f_cap17,floor_3_a446352f_cap17,table9,17,floor_3_a446352f_cap17,7395002,662009,0,3007,3006,v6e-8,us-east5,us-east5-b,13.46788223879246,13.467875499056845
+3,flr_floor_seed662009_t0_floor_4_5969f449_cap17,floor_4_5969f449_cap17,table9,17,floor_4_5969f449_cap17,7395003,662009,0,3007,3006,v6e-8,us-east5,us-east5-b,7.993251216234453,7.9932472161697845
+4,flr_floor_seed662009_t0_floor_5_c8a7abc2_cap17,floor_5_c8a7abc2_cap17,table9,17,floor_5_c8a7abc2_cap17,7395004,662009,0,3007,3006,v6e-8,us-east5,us-east5-b,13.032136283063272,13.032129761388113

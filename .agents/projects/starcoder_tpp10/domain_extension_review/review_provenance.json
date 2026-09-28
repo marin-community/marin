@@ -1,0 +1,39 @@
+{
+  "reviewer": "Claude Opus 5, max effort, 1M context",
+  "session_id": "875daf68-2b08-47ac-ba7f-77294cb92faa",
+  "oauth_subscription_preflight_passed": true,
+  "api_key_removed": true,
+  "invocation": "claude -p; env -u ANTHROPIC_API_KEY; read-only tools; no fallback model",
+  "tools": [
+    "Read",
+    "Grep",
+    "Glob"
+  ],
+  "disallowed_tools": [
+    "Bash",
+    "Edit",
+    "Write",
+    "Agent",
+    "Task"
+  ],
+  "reviewed_inputs": {
+    "SPEC.reviewed_v1.md": "b48ea42fcbc3f6a91f6cc3076d874339e13b795bce9fbea8d32376f9ee75f0d7",
+    "evidence.json": "8b7e42f4a594292315398dee7da21b6f7cabf3480e926197ba993d74ed0cfd25",
+    "cc_prompt.md": "818619ce8cb58e1571a915be5f38cbce863ed376e8e3946d4314a4906090e391"
+  },
+  "target_scope_reviewed_inputs": {
+    "SPEC.target_scope_reviewed.md": "02bf7e15ba1f1dc9346bd1b4ed4ea0153c95a94a62dbe07285d4027ebfa4233a",
+    "CC_DISPOSITION.md": "bd19b0d22090e7fda42b4dae989f877b75e7990dbfbff1045b4fdafe6a0504a3",
+    "cc_target_scope_prompt.md": "b4d6e861463e5bb274866ec848644974d0941fbac3e8f49a7192674dcfb4a9d0"
+  },
+  "reviews_complete": [
+    "cc_review.md",
+    "cc_closure.md",
+    "cc_target_scope.md"
+  ],
+  "final_spec_sha256": "8f8f2c12b34d9f9ac3ee91d31928ede85ac6fccbaec7b5cf6469e4d49efe0d71",
+  "post_review_edits": [
+    "Reword title and question as mixture sweeps at fixed exposure paths.",
+    "Clarify grid-resolution disclosure and reject exact numerical-error cancellation."
+  ]
+}

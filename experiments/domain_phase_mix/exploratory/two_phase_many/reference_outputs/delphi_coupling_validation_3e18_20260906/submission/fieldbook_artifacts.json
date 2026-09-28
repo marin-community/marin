@@ -1,0 +1,121 @@
+[
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1788697906.1192307,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_coupling_validation_3e18_20260906/offline_materialization/manifest.json",
+      "fieldbook.local_size_at_capture": 12649
+    },
+    "content_hash": "sha256:276167d3a41b7c5a02f2ace1ce39492981cc2d07f4645d70ad7c5e12afd46d54",
+    "created_at": "2026-09-06T12:39:44Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m1vbajfrdebbsatntj4sm00z",
+    "id": "art_01m1vbpnw8jkqqpzn7zexx6vmc",
+    "job_id": null,
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-06T12:39:44Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_coupling_validation_3e18_20260906/offline_materialization/manifest.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1788698295.8978007,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_coupling_validation_3e18_20260906/runtime_materialization/candidate_weights.csv",
+      "fieldbook.local_size_at_capture": 38088
+    },
+    "content_hash": "sha256:e72d1f2c9b3acc6ffde470dbd05db7ed2cf50d5a8c28fddfcad0d5d547c0f241",
+    "created_at": "2026-09-06T12:39:44Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m1vbajfrdebbsatntj4sm00z",
+    "id": "art_01m1vbpnyr53ma3yzgfbmcnxef",
+    "job_id": null,
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-06T12:39:44Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_coupling_validation_3e18_20260906/runtime_materialization/candidate_weights.csv"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1788698123.3633797,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_coupling_validation_3e18_20260906/launch_dry_run/uncheatable/run_specs.json",
+      "fieldbook.local_size_at_capture": 15913
+    },
+    "content_hash": "sha256:27b92e19eb11b80b9175d02331427e390a9988bb85bd9b5392b45e8bc1adb273",
+    "created_at": "2026-09-06T12:39:44Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m1vbajfrdebbsatntj4sm00z",
+    "id": "art_01m1vbpp15rpxrfd445v075hnt",
+    "job_id": null,
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-06T12:39:44Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_coupling_validation_3e18_20260906/launch_dry_run/uncheatable/run_specs.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1788698123.3703017,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_coupling_validation_3e18_20260906/launch_dry_run/table9/run_specs.json",
+      "fieldbook.local_size_at_capture": 32253
+    },
+    "content_hash": "sha256:5e8b4d2dc071c2912a4b42c7f6be632108956064d2fbf003c1adc4bd4e50b17c",
+    "created_at": "2026-09-06T12:39:44Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m1vbajfrdebbsatntj4sm00z",
+    "id": "art_01m1vbpp3npb1c4zv75mdqqk41",
+    "job_id": null,
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-06T12:39:44Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_coupling_validation_3e18_20260906/launch_dry_run/table9/run_specs.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1788698135.4154818,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_coupling_validation_3e18_20260906/submission/launch_command.sh",
+      "fieldbook.local_size_at_capture": 1250
+    },
+    "content_hash": "sha256:e7cfbc4efff7aa59ce9bc20d1cd353bf5ed265815c9cd3f8346e7915cad098ee",
+    "created_at": "2026-09-06T12:39:44Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m1vbajfrdebbsatntj4sm00z",
+    "id": "art_01m1vbpp657df50993n0kj43h2",
+    "job_id": null,
+    "run_id": null,
+    "type": "other",
+    "updated_at": "2026-09-06T12:39:44Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_coupling_validation_3e18_20260906/submission/launch_command.sh"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1788698244.3407688,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_coupling_validation_3e18_20260906/submission/launch_source_hashes.json",
+      "fieldbook.local_size_at_capture": 715
+    },
+    "content_hash": "sha256:d041d2d38d7de10c9ad491c418d45c98bc574819d7c9589df7ff3a24927caeb5",
+    "created_at": "2026-09-06T12:39:44Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m1vbajfrdebbsatntj4sm00z",
+    "id": "art_01m1vbpp8jk2kxjvf889cy5hkw",
+    "job_id": null,
+    "run_id": null,
+    "type": "other",
+    "updated_at": "2026-09-06T12:39:44Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_coupling_validation_3e18_20260906/submission/launch_source_hashes.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1788698244.3413374,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_coupling_validation_3e18_20260906/submission/preflight.json",
+      "fieldbook.local_size_at_capture": 887
+    },
+    "content_hash": "sha256:a89e3c82e8a1714e2fc3b2ddd9ff95e0f8737c2975d392b09b94e154af7b70ed",
+    "created_at": "2026-09-06T12:39:44Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m1vbajfrdebbsatntj4sm00z",
+    "id": "art_01m1vbppazw0m4xcbv57nvwwnq",
+    "job_id": null,
+    "run_id": null,
+    "type": "other",
+    "updated_at": "2026-09-06T12:39:44Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_coupling_validation_3e18_20260906/submission/preflight.json"
+  }
+]

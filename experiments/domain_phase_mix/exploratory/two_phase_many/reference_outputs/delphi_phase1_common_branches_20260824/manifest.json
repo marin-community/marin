@@ -1,0 +1,161 @@
+{
+  "candidate_counts_by_exposure_tv_cell": {
+    "0/0": 36,
+    "0/1": 16720,
+    "0/2": 11071,
+    "0/3": 4920,
+    "0/4": 211,
+    "0/5": 0,
+    "1/0": 0,
+    "1/1": 1,
+    "1/2": 145,
+    "1/3": 263,
+    "1/4": 91,
+    "1/5": 0,
+    "2/0": 0,
+    "2/1": 0,
+    "2/2": 2,
+    "2/3": 40,
+    "2/4": 42,
+    "2/5": 0,
+    "3/0": 0,
+    "3/1": 0,
+    "3/2": 0,
+    "3/3": 15,
+    "3/4": 19,
+    "3/5": 0,
+    "4/0": 0,
+    "4/1": 0,
+    "4/2": 0,
+    "4/3": 3,
+    "4/4": 20,
+    "4/5": 0
+  },
+  "candidate_pool_size": 33599,
+  "candidate_prefix_ids": [
+    "shared_bounded_ensemble_kl0p05",
+    "shared_bounded_ensemble_kl0p2",
+    "shared_bounded_ensemble_kl0p5",
+    "observed_cap10_best",
+    "proportional_control"
+  ],
+  "candidate_prefix_weights_sha256": "fef07d4188ef05f4df4a43d1eda6a12f7d2daf69a1ae1eb777863fd20db732b6",
+  "continuation_summary_sha256": "0b5f31b587d3af4a6adfb6763d4896f9fd9f8fb7a27598c00bcc700d85be5ee4",
+  "continuation_weights_sha256": "9305b5c1598c9eb11e7f898f709bfb193f37802efaba40a43fbecd0d52c12355",
+  "control_continuations": 3,
+  "design_seed": 20260824,
+  "dirichlet_concentrations": [
+    500.0,
+    100.0,
+    20.0,
+    5.0,
+    1.0
+  ],
+  "dirichlet_draws_per_concentration": 20000,
+  "endpoint_metric_values_used_for_fit_selection": false,
+  "exposure_bin_edges": [
+    0.0,
+    5.0,
+    15.0,
+    25.0,
+    35.0,
+    62.28165425173962
+  ],
+  "fit_continuations": 50,
+  "fit_exposure_bin_counts": {
+    "[0,5)": 10,
+    "[15,25)": 10,
+    "[25,35)": 10,
+    "[35,62.2817)": 10,
+    "[5,15)": 10
+  },
+  "fit_max_phase_1_epoch_range": [
+    0.245092608426493,
+    53.69349492823572
+  ],
+  "fit_max_total_epoch_range": [
+    9.405571234274813,
+    63.09906616251054
+  ],
+  "fit_per_exposure_bin": 10,
+  "fit_tv_bin_counts": {
+    "[0,0.05)": 1,
+    "[0.05,0.15)": 3,
+    "[0.15,0.25)": 7,
+    "[0.25,0.5)": 21,
+    "[0.5,0.75)": 18,
+    "[0.75,1)": 0
+  },
+  "fit_tv_to_proportional_quantiles": {
+    "0.0": 0.04931640625,
+    "0.25": 0.3792724609375,
+    "0.5": 0.436279296875,
+    "0.75": 0.536865234375,
+    "1.0": 0.6796875
+  },
+  "historical_phase_1_epoch_cap": 62.28165425173962,
+  "historical_total_epoch_cap": 255.8246349460757,
+  "incumbent_row_id": "run_00125",
+  "minimum_fit_direction_distance": 0.30173173569063616,
+  "mixture_block_size": 2048,
+  "outcome_selected_incumbent_used_as_fit_repeller": false,
+  "outcome_selected_incumbent_used_only_as_control": true,
+  "per_bucket_phase_1_and_total_support_enforced": true,
+  "rejection_counts": {
+    "duplicate_or_control": 2,
+    "phase_1_cap": 66679,
+    "total_cap": 0
+  },
+  "selection_geometry": "exposure-by-TV stratification, then round-robin maximin over unit sqrt(c1 * w1) directions",
+  "tv_bin_edges": [
+    0.0,
+    0.05,
+    0.15,
+    0.25,
+    0.5,
+    0.75,
+    1.000001
+  ],
+  "tv_quotas_by_exposure_bin": [
+    [
+      1,
+      2,
+      3,
+      3,
+      1,
+      0
+    ],
+    [
+      0,
+      1,
+      3,
+      4,
+      2,
+      0
+    ],
+    [
+      0,
+      0,
+      1,
+      6,
+      3,
+      0
+    ],
+    [
+      0,
+      0,
+      0,
+      5,
+      5,
+      0
+    ],
+    [
+      0,
+      0,
+      0,
+      3,
+      7,
+      0
+    ]
+  ]
+}

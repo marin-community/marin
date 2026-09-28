@@ -1,0 +1,61 @@
+{
+  "task_names": [
+    "arc_challenge",
+    "arc_easy",
+    "commonsense_qa",
+    "hellaswag",
+    "lambada_openai",
+    "medmcqa",
+    "mmlu",
+    "piqa",
+    "sciq",
+    "social_iqa",
+    "winogrande"
+  ],
+  "cached_datasets": [
+    [
+      "sciq",
+      null
+    ],
+    [
+      "EleutherAI/lambada_openai",
+      "default"
+    ],
+    [
+      "social_i_qa",
+      null
+    ],
+    [
+      "baber/piqa",
+      null
+    ],
+    [
+      "allenai/ai2_arc",
+      "ARC-Challenge"
+    ],
+    [
+      "medmcqa",
+      null
+    ],
+    [
+      "tau/commonsense_qa",
+      null
+    ],
+    [
+      "Rowan/hellaswag",
+      null
+    ],
+    [
+      "allenai/ai2_arc",
+      "ARC-Easy"
+    ],
+    [
+      "winogrande",
+      "winogrande_xl"
+    ]
+  ],
+  "failed_datasets": [],
+  "cache_layout_version": 2,
+  "includes_hf_hub_cache": true,
+  "includes_hf_modules_cache": true
+}

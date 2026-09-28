@@ -1,0 +1,65 @@
+{
+  "job_id": "/calvinxu/tpp10-domain-sweeps",
+  "state": "JOB_STATE_RUNNING",
+  "exit_code": 0,
+  "error": "",
+  "started_at": {
+    "epoch_ms": "1789124934325"
+  },
+  "failure_count": 0,
+  "preemption_count": 0,
+  "name": "/calvinxu/tpp10-domain-sweeps",
+  "submitted_at": {
+    "epoch_ms": "1789124919194"
+  },
+  "resources": {
+    "cpu_millicores": 2000,
+    "memory_bytes": "8589934592",
+    "device": {},
+    "disk_bytes": "34359738368"
+  },
+  "task_state_counts": {
+    "running": 1
+  },
+  "task_count": 1,
+  "completed_count": 0,
+  "pending_reason": "",
+  "has_children": true,
+  "parent_job_id": "",
+  "backend_id": "default",
+  "cluster": "local",
+  "peer_status": "PEER_STATUS_NONE",
+  "priority_band": "PRIORITY_BAND_INTERACTIVE",
+  "constraints": [
+    {
+      "key": "region",
+      "op": "CONSTRAINT_OP_EQ",
+      "value": {
+        "string_value": "us-central1"
+      },
+      "mode": "CONSTRAINT_MODE_REQUIRED"
+    },
+    {
+      "key": "zone",
+      "op": "CONSTRAINT_OP_EQ",
+      "value": {
+        "string_value": "us-central1-a"
+      },
+      "mode": "CONSTRAINT_MODE_REQUIRED"
+    },
+    {
+      "key": "preemptible",
+      "op": "CONSTRAINT_OP_EQ",
+      "value": {
+        "string_value": "false"
+      },
+      "mode": "CONSTRAINT_MODE_REQUIRED"
+    }
+  ],
+  "bundle_id": "7b1f5152da2e20a6a95514f5a6004bf0428ae34520f6d172cf884aa4850a5828",
+  "timeout": {
+    "milliseconds": "172800000"
+  },
+  "max_retries_failure": 0,
+  "max_retries_preemption": 0
+}

@@ -1,0 +1,304 @@
+{
+  "schema_version": 1,
+  "kind": "mt_mbpp_signature",
+  "native_request_set": "gs://marin-us-east5/raw/eval-datasets/olmo_base_eval_table9/v2",
+  "sources": {
+    "google-research-datasets/mbpp": "4bb6404fdc6cacfda99d4ac4205087b89d32030c",
+    "allenai/multilingual_mbpp": "c86b037e7d20e705f3595b1cbb9db993681ca181"
+  },
+  "prompt_format": {
+    "signature_line": "Function signature: `{signature}`",
+    "shots": 3
+  },
+  "tasks": {
+    "mt_mbpp_bash": {
+      "count": 500,
+      "metric": "pass@1",
+      "task_spec": "mt_mbpp_bash:signature",
+      "generation": {
+        "max_gen_toks": 1024,
+        "temperature": 0.0,
+        "seed": 0,
+        "n": 1,
+        "until": [
+          "```"
+        ]
+      },
+      "file": "mt_mbpp_bash.json.gz",
+      "sha256": "b028d52816b37b44a26446639cfed8151ca90c7794a9047d784329991f17a9ad",
+      "size": 71648
+    },
+    "mt_mbpp_c": {
+      "count": 500,
+      "metric": "pass@1",
+      "task_spec": "mt_mbpp_c:signature",
+      "generation": {
+        "max_gen_toks": 1024,
+        "temperature": 0.0,
+        "seed": 0,
+        "n": 1,
+        "until": [
+          "```"
+        ]
+      },
+      "file": "mt_mbpp_c.json.gz",
+      "sha256": "a89de6c55f558d74c13979166006f2ff2fadc32acf54960ba422c2c1c37f7a36",
+      "size": 91418
+    },
+    "mt_mbpp_cpp": {
+      "count": 500,
+      "metric": "pass@1",
+      "task_spec": "mt_mbpp_cpp:signature",
+      "generation": {
+        "max_gen_toks": 1024,
+        "temperature": 0.0,
+        "seed": 0,
+        "n": 1,
+        "until": [
+          "```"
+        ]
+      },
+      "file": "mt_mbpp_cpp.json.gz",
+      "sha256": "28383c6ca8523e74f2f43de1e177bbb93ea9481fd6011f4305e0432b9d00fa98",
+      "size": 76491
+    },
+    "mt_mbpp_csharp": {
+      "count": 500,
+      "metric": "pass@1",
+      "task_spec": "mt_mbpp_csharp:signature",
+      "generation": {
+        "max_gen_toks": 1024,
+        "temperature": 0.0,
+        "seed": 0,
+        "n": 1,
+        "until": [
+          "```"
+        ]
+      },
+      "file": "mt_mbpp_csharp.json.gz",
+      "sha256": "af961ad4b7940d09b6db150d89cf6b83d2a0c8ac9bab40be1a7a11eed0b1541e",
+      "size": 77732
+    },
+    "mt_mbpp_go": {
+      "count": 500,
+      "metric": "pass@1",
+      "task_spec": "mt_mbpp_go:signature",
+      "generation": {
+        "max_gen_toks": 1024,
+        "temperature": 0.0,
+        "seed": 0,
+        "n": 1,
+        "until": [
+          "```"
+        ]
+      },
+      "file": "mt_mbpp_go.json.gz",
+      "sha256": "2383636f37e7bb4d047efbb6582f4236ed2c860d849c0989d09050d762a01224",
+      "size": 75871
+    },
+    "mt_mbpp_haskell": {
+      "count": 500,
+      "metric": "pass@1",
+      "task_spec": "mt_mbpp_haskell:signature",
+      "generation": {
+        "max_gen_toks": 1024,
+        "temperature": 0.0,
+        "seed": 0,
+        "n": 1,
+        "until": [
+          "```"
+        ]
+      },
+      "file": "mt_mbpp_haskell.json.gz",
+      "sha256": "0238dcd69f2f55b834340958c350513137080b5514d193c2f12d1d32d3cb4dff",
+      "size": 65084
+    },
+    "mt_mbpp_java": {
+      "count": 500,
+      "metric": "pass@1",
+      "task_spec": "mt_mbpp_java:signature",
+      "generation": {
+        "max_gen_toks": 1024,
+        "temperature": 0.0,
+        "seed": 0,
+        "n": 1,
+        "until": [
+          "```"
+        ]
+      },
+      "file": "mt_mbpp_java.json.gz",
+      "sha256": "be52d54db15f41cfe4fd68ad308a337f893ae389aa07de8732062e4196a46a76",
+      "size": 80350
+    },
+    "mt_mbpp_javascript": {
+      "count": 500,
+      "metric": "pass@1",
+      "task_spec": "mt_mbpp_javascript:signature",
+      "generation": {
+        "max_gen_toks": 1024,
+        "temperature": 0.0,
+        "seed": 0,
+        "n": 1,
+        "until": [
+          "```"
+        ]
+      },
+      "file": "mt_mbpp_javascript.json.gz",
+      "sha256": "44a39bc35ae4eeaf022e09d53521f4773247a40463faeaf81b48398b53845015",
+      "size": 71700
+    },
+    "mt_mbpp_matlab": {
+      "count": 500,
+      "metric": "pass@1",
+      "task_spec": "mt_mbpp_matlab:signature",
+      "generation": {
+        "max_gen_toks": 1024,
+        "temperature": 0.0,
+        "seed": 0,
+        "n": 1,
+        "until": [
+          "```"
+        ]
+      },
+      "file": "mt_mbpp_matlab.json.gz",
+      "sha256": "ed9d9bc0c592a3e361bf75fd537f8f2615484baf0c7782959f298c04e75ef505",
+      "size": 61566
+    },
+    "mt_mbpp_php": {
+      "count": 500,
+      "metric": "pass@1",
+      "task_spec": "mt_mbpp_php:signature",
+      "generation": {
+        "max_gen_toks": 1024,
+        "temperature": 0.0,
+        "seed": 0,
+        "n": 1,
+        "until": [
+          "```"
+        ]
+      },
+      "file": "mt_mbpp_php.json.gz",
+      "sha256": "4e3c91e09c8232fe34c8a130d9f74a203c17b3d3e53b9ced4739d1c0924e5621",
+      "size": 65225
+    },
+    "mt_mbpp_python": {
+      "count": 500,
+      "metric": "pass@1",
+      "task_spec": "mt_mbpp_python:signature",
+      "generation": {
+        "max_gen_toks": 1024,
+        "temperature": 0.0,
+        "seed": 0,
+        "n": 1,
+        "until": [
+          "```"
+        ]
+      },
+      "file": "mt_mbpp_python.json.gz",
+      "sha256": "1656fdbf9dc7e015890f0a75892b27be8a90ef5bf4b792c97c86ee717417475e",
+      "size": 58638
+    },
+    "mt_mbpp_r": {
+      "count": 500,
+      "metric": "pass@1",
+      "task_spec": "mt_mbpp_r:signature",
+      "generation": {
+        "max_gen_toks": 1024,
+        "temperature": 0.0,
+        "seed": 0,
+        "n": 1,
+        "until": [
+          "```"
+        ]
+      },
+      "file": "mt_mbpp_r.json.gz",
+      "sha256": "206637b71d7dabacb34cb827f10ed3d3f685a046928f7b6dd08d1bb527b933f4",
+      "size": 60140
+    },
+    "mt_mbpp_ruby": {
+      "count": 500,
+      "metric": "pass@1",
+      "task_spec": "mt_mbpp_ruby:signature",
+      "generation": {
+        "max_gen_toks": 1024,
+        "temperature": 0.0,
+        "seed": 0,
+        "n": 1,
+        "until": [
+          "```"
+        ]
+      },
+      "file": "mt_mbpp_ruby.json.gz",
+      "sha256": "f6937e14e440f07f2d9eb7b66c154917809a6afda90cd10732540b0116926090",
+      "size": 54667
+    },
+    "mt_mbpp_rust": {
+      "count": 500,
+      "metric": "pass@1",
+      "task_spec": "mt_mbpp_rust:signature",
+      "generation": {
+        "max_gen_toks": 1024,
+        "temperature": 0.0,
+        "seed": 0,
+        "n": 1,
+        "until": [
+          "```"
+        ]
+      },
+      "file": "mt_mbpp_rust.json.gz",
+      "sha256": "b1936c201db6aca27257800ae7795ce7048a19c4324bf3cb6e83621feef55386",
+      "size": 71854
+    },
+    "mt_mbpp_scala": {
+      "count": 500,
+      "metric": "pass@1",
+      "task_spec": "mt_mbpp_scala:signature",
+      "generation": {
+        "max_gen_toks": 1024,
+        "temperature": 0.0,
+        "seed": 0,
+        "n": 1,
+        "until": [
+          "```"
+        ]
+      },
+      "file": "mt_mbpp_scala.json.gz",
+      "sha256": "9af0c8c2fffb123650d34e8027880f0dda3158c9671759b2091b7c041521f8ce",
+      "size": 66340
+    },
+    "mt_mbpp_swift": {
+      "count": 500,
+      "metric": "pass@1",
+      "task_spec": "mt_mbpp_swift:signature",
+      "generation": {
+        "max_gen_toks": 1024,
+        "temperature": 0.0,
+        "seed": 0,
+        "n": 1,
+        "until": [
+          "```"
+        ]
+      },
+      "file": "mt_mbpp_swift.json.gz",
+      "sha256": "3a678504ec164d6a16c1f9abba1dc2543f10e417272720b2a15b657bae1b6535",
+      "size": 81772
+    },
+    "mt_mbpp_typescript": {
+      "count": 500,
+      "metric": "pass@1",
+      "task_spec": "mt_mbpp_typescript:signature",
+      "generation": {
+        "max_gen_toks": 1024,
+        "temperature": 0.0,
+        "seed": 0,
+        "n": 1,
+        "until": [
+          "```"
+        ]
+      },
+      "file": "mt_mbpp_typescript.json.gz",
+      "sha256": "0faaa5bf301f7d217f3da0ecf0f4807d43e654f9898e81ac6bf9b6aed7913a92",
+      "size": 79347
+    }
+  }
+}

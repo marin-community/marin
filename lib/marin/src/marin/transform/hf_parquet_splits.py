@@ -33,6 +33,7 @@ def find_split_parquet_files(input_path: str, split: str, subset: str | None) ->
     restricted to that subset so sibling subsets sharing the same split name
     are not pulled in; otherwise it falls back to the whole tree.
     """
+    input_path = StoragePath.normalize(input_path)
     fs, root = url_to_fs(input_path)
     roots: list[str] = []
     if subset and subset != "default":

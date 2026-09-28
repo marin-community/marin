@@ -1,0 +1,22 @@
+[07:15:51] task=/calvinxu/tpp10-finemath-math-eval-retry/finemath-math-proxies/0 attempt=0 |  + urllib3==2.7.0
+[07:15:51] task=/calvinxu/tpp10-finemath-math-eval-retry/finemath-math-proxies/0 attempt=0 |  + uvicorn==0.40.0
+[07:15:51] task=/calvinxu/tpp10-finemath-math-eval-retry/finemath-math-proxies/0 attempt=0 |  + uvloop==0.22.1
+[07:15:51] task=/calvinxu/tpp10-finemath-math-eval-retry/finemath-math-proxies/0 attempt=0 |  + vortex-data==0.61.0
+[07:15:51] task=/calvinxu/tpp10-finemath-math-eval-retry/finemath-math-proxies/0 attempt=0 |  + wadler-lindig==0.1.7
+[07:15:51] task=/calvinxu/tpp10-finemath-math-eval-retry/finemath-math-proxies/0 attempt=0 |  + wandb==0.26.0
+[07:15:51] task=/calvinxu/tpp10-finemath-math-eval-retry/finemath-math-proxies/0 attempt=0 |  + watchdog==6.0.0
+[07:15:51] task=/calvinxu/tpp10-finemath-math-eval-retry/finemath-math-proxies/0 attempt=0 |  + watchfiles==1.1.1
+[07:15:51] task=/calvinxu/tpp10-finemath-math-eval-retry/finemath-math-proxies/0 attempt=0 |  + websocket-client==1.9.0
+[07:15:51] task=/calvinxu/tpp10-finemath-math-eval-retry/finemath-math-proxies/0 attempt=0 |  + websockets==15.0.1
+[07:15:51] task=/calvinxu/tpp10-finemath-math-eval-retry/finemath-math-proxies/0 attempt=0 |  + wrapt==1.17.3
+[07:15:51] task=/calvinxu/tpp10-finemath-math-eval-retry/finemath-math-proxies/0 attempt=0 |  + xxhash==3.6.0
+[07:15:51] task=/calvinxu/tpp10-finemath-math-eval-retry/finemath-math-proxies/0 attempt=0 |  + yarl==1.22.0
+[07:15:51] task=/calvinxu/tpp10-finemath-math-eval-retry/finemath-math-proxies/0 attempt=0 |  + zipp==3.23.0
+[07:15:51] task=/calvinxu/tpp10-finemath-math-eval-retry/finemath-math-proxies/0 attempt=0 |  + zstandard==0.25.0
+[07:15:51] task=/calvinxu/tpp10-finemath-math-eval-retry/finemath-math-proxies/0 attempt=0 | Resolved 14 packages in 76ms
+[07:15:51] task=/calvinxu/tpp10-finemath-math-eval-retry/finemath-math-proxies/0 attempt=0 | Installed 5 packages in 3ms
+[07:15:51] task=/calvinxu/tpp10-finemath-math-eval-retry/finemath-math-proxies/0 attempt=0 |  + linkify-it-py==2.2.0
+[07:15:51] task=/calvinxu/tpp10-finemath-math-eval-retry/finemath-math-proxies/0 attempt=0 |  + mdit-py-plugins==0.6.1
+[07:15:51] task=/calvinxu/tpp10-finemath-math-eval-retry/finemath-math-proxies/0 attempt=0 |  + memray==1.20.0
+[07:15:51] task=/calvinxu/tpp10-finemath-math-eval-retry/finemath-math-proxies/0 attempt=0 |  + py-spy==0.4.2
+[07:15:51] task=/calvinxu/tpp10-finemath-math-eval-retry/finemath-math-proxies/0 attempt=0 |  + textual==8.2.8

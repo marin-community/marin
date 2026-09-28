@@ -1,0 +1,50 @@
+{
+  "canary_version": "2026-08-10-canary-v3",
+  "scientific_design_version": "2026-08-10-review-v5",
+  "scientific_design_manifest_sha256": "8ca0c9f433ef6fccf02fb7ed597d90e3b0ea3b663c58d12bb63b2a4a61bec0dc",
+  "cell_id": "r3_increase_d_h0640_s28260",
+  "model_hidden_size": 640,
+  "total_parameters": 210052480,
+  "non_embedding_parameters": 45884800,
+  "total_steps": 28260,
+  "boundary_step": 22608,
+  "materialized_tokens": 7408189440,
+  "phase_0_starcoder": 0.35,
+  "phase_1_starcoder": 0.35,
+  "support_id": "m100a",
+  "support_pool_seed": 2026081101,
+  "starcoder_support_batches": 1068,
+  "starcoder_support_sequences": 136704,
+  "starcoder_support_tokens": 279969792,
+  "scientific_checkpoint_steps": [
+    2826,
+    7065,
+    11304,
+    15543,
+    19782,
+    22352,
+    22544,
+    22608,
+    22672,
+    22864,
+    25434,
+    28259
+  ],
+  "diagnostic_checkpoint_steps": [2842],
+  "exact_fork": {
+    "source_step": 2826,
+    "reference_step": 2842,
+    "num_updates": 16,
+    "trainer_num_train_steps": 2843
+  },
+  "trajectories": [
+    {
+      "trajectory_id": "gcf_p1_r3d28260_m100a_common-tied-035_s2026081000",
+      "training_seed": 2026081000
+    },
+    {
+      "trajectory_id": "gcf_p1_r3d28260_m100a_common-tied-035_s2026081001",
+      "training_seed": 2026081001
+    }
+  ]
+}

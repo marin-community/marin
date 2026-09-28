@@ -1,0 +1,1031 @@
+{
+  "pilot_plan_sha256": "afa613b25468dd3dadff230544361d815f8524370bd33c14e6c58d3717496ba0",
+  "refinement_plan_sha256": "99ca724bc3bde33e80afb07373e47ddc0d7e44f22e15cd41da3daa3de2f4ef40",
+  "refinement_complete": 45,
+  "refinement_planned": 45,
+  "curves": [
+    {
+      "arm": "target",
+      "subset_seed": null,
+      "points": [
+        {
+          "percent": 0,
+          "value": 1.2026038443378393,
+          "seed_values": [
+            1.2026038443378393
+          ],
+          "run_names": [
+            "tpp10_target_p000_s20260910"
+          ]
+        },
+        {
+          "percent": 10,
+          "value": 0.8713679774060257,
+          "seed_values": [
+            0.8713679774060257
+          ],
+          "run_names": [
+            "tpp10_target_p010_s20260910"
+          ]
+        },
+        {
+          "percent": 30,
+          "value": 0.802878976641109,
+          "seed_values": [
+            0.802878976641109
+          ],
+          "run_names": [
+            "tpp10_target_p030_s20260910"
+          ]
+        },
+        {
+          "percent": 40,
+          "value": 0.7881435930137257,
+          "seed_values": [
+            0.7881435930137257
+          ],
+          "run_names": [
+            "tpp10_target_p040_s20260910"
+          ]
+        },
+        {
+          "percent": 50,
+          "value": 0.7756673393195197,
+          "seed_values": [
+            0.7756673393195197
+          ],
+          "run_names": [
+            "tpp10_target_p050_s20260910"
+          ]
+        },
+        {
+          "percent": 55,
+          "value": 0.7701349690829891,
+          "seed_values": [
+            0.7701349690829891
+          ],
+          "run_names": [
+            "tpp10_target_p055_s20260910"
+          ]
+        },
+        {
+          "percent": 60,
+          "value": 0.7694386281196114,
+          "seed_values": [
+            0.7694386281196114
+          ],
+          "run_names": [
+            "tpp10_target_p060_s20260910"
+          ]
+        },
+        {
+          "percent": 65,
+          "value": 0.7665562587791359,
+          "seed_values": [
+            0.7665562587791359
+          ],
+          "run_names": [
+            "tpp10_target_p065_s20260910"
+          ]
+        },
+        {
+          "percent": 70,
+          "value": 0.7655645236000794,
+          "seed_values": [
+            0.7655645236000794
+          ],
+          "run_names": [
+            "tpp10_target_p070_s20260910"
+          ]
+        },
+        {
+          "percent": 80,
+          "value": 0.7704052085807014,
+          "seed_values": [
+            0.7704052085807014
+          ],
+          "run_names": [
+            "tpp10_target_p080_s20260910"
+          ]
+        },
+        {
+          "percent": 90,
+          "value": 0.7792857273691156,
+          "seed_values": [
+            0.7792857273691156
+          ],
+          "run_names": [
+            "tpp10_target_p090_s20260910"
+          ]
+        },
+        {
+          "percent": 100,
+          "value": 0.8006188043853639,
+          "seed_values": [
+            0.8006188043853639
+          ],
+          "run_names": [
+            "tpp10_target_p100_s20260910"
+          ]
+        }
+      ],
+      "selected_percent": 70
+    },
+    {
+      "arm": "unmatched",
+      "subset_seed": null,
+      "points": [
+        {
+          "percent": 0,
+          "value": 1.7595969815957786,
+          "seed_values": [
+            1.7713407604775941,
+            1.7478532027139628
+          ],
+          "run_names": [
+            "tpp10_unmatched_p000_s20260910",
+            "tpp10_unmatched_p000_s20260911"
+          ]
+        },
+        {
+          "percent": 10,
+          "value": 1.2730186402787909,
+          "seed_values": [
+            1.271205485428236,
+            1.274831795129346
+          ],
+          "run_names": [
+            "tpp10_unmatched_p010_s20260910",
+            "tpp10_unmatched_p010_s20260911"
+          ]
+        },
+        {
+          "percent": 30,
+          "value": 1.1575948966140666,
+          "seed_values": [
+            1.155363006043991,
+            1.159826787184142
+          ],
+          "run_names": [
+            "tpp10_unmatched_p030_s20260910",
+            "tpp10_unmatched_p030_s20260911"
+          ]
+        },
+        {
+          "percent": 40,
+          "value": 1.1140561101279127,
+          "seed_values": [
+            1.1111057118678538,
+            1.1170065083879719
+          ],
+          "run_names": [
+            "tpp10_unmatched_p040_s20260910",
+            "tpp10_unmatched_p040_s20260911"
+          ]
+        },
+        {
+          "percent": 50,
+          "value": 1.0951940324787643,
+          "seed_values": [
+            1.0961722869526125,
+            1.0942157780049164
+          ],
+          "run_names": [
+            "tpp10_unmatched_p050_s20260910",
+            "tpp10_unmatched_p050_s20260911"
+          ]
+        },
+        {
+          "percent": 55,
+          "value": 1.085302391311535,
+          "seed_values": [
+            1.0890445377939995,
+            1.0815602448290704
+          ],
+          "run_names": [
+            "tpp10_unmatched_p055_s20260910",
+            "tpp10_unmatched_p055_s20260911"
+          ]
+        },
+        {
+          "percent": 60,
+          "value": 1.0845571654197332,
+          "seed_values": [
+            1.0851279065137063,
+            1.0839864243257604
+          ],
+          "run_names": [
+            "tpp10_unmatched_p060_s20260910",
+            "tpp10_unmatched_p060_s20260911"
+          ]
+        },
+        {
+          "percent": 65,
+          "value": 1.0720462371281094,
+          "seed_values": [
+            1.0742751744509098,
+            1.069817299805309
+          ],
+          "run_names": [
+            "tpp10_unmatched_p065_s20260910",
+            "tpp10_unmatched_p065_s20260911"
+          ]
+        },
+        {
+          "percent": 70,
+          "value": 1.0636281968629724,
+          "seed_values": [
+            1.065622854816645,
+            1.0616335389092997
+          ],
+          "run_names": [
+            "tpp10_unmatched_p070_s20260910",
+            "tpp10_unmatched_p070_s20260911"
+          ]
+        },
+        {
+          "percent": 80,
+          "value": 1.054923413659468,
+          "seed_values": [
+            1.0599945909038884,
+            1.0498522364150478
+          ],
+          "run_names": [
+            "tpp10_unmatched_p080_s20260910",
+            "tpp10_unmatched_p080_s20260911"
+          ]
+        },
+        {
+          "percent": 90,
+          "value": 1.0400203898191172,
+          "seed_values": [
+            1.038802574875132,
+            1.0412382047631021
+          ],
+          "run_names": [
+            "tpp10_unmatched_p090_s20260910",
+            "tpp10_unmatched_p090_s20260911"
+          ]
+        },
+        {
+          "percent": 100,
+          "value": 1.0303341556858907,
+          "seed_values": [
+            1.0297158151946606,
+            1.0309524961771206
+          ],
+          "run_names": [
+            "tpp10_unmatched_p100_s20260910",
+            "tpp10_unmatched_p100_s20260911"
+          ]
+        }
+      ],
+      "selected_percent": 100
+    },
+    {
+      "arm": "matched",
+      "subset_seed": 20260912,
+      "points": [
+        {
+          "percent": 0,
+          "value": 1.7595969815957786,
+          "seed_values": [
+            1.7713407604775941,
+            1.7478532027139628
+          ],
+          "run_names": [
+            "tpp10_unmatched_p000_s20260910",
+            "tpp10_unmatched_p000_s20260911"
+          ]
+        },
+        {
+          "percent": 10,
+          "value": 1.2692725329705694,
+          "seed_values": [
+            1.2691131965940576,
+            1.2694318693470812
+          ],
+          "run_names": [
+            "tpp10_matched_p010_s20260910_d20260912",
+            "tpp10_matched_p010_s20260911_d20260912"
+          ]
+        },
+        {
+          "percent": 30,
+          "value": 1.1671675175874165,
+          "seed_values": [
+            1.1655417723345292,
+            1.1687932628403037
+          ],
+          "run_names": [
+            "tpp10_matched_p030_s20260910_d20260912",
+            "tpp10_matched_p030_s20260911_d20260912"
+          ]
+        },
+        {
+          "percent": 40,
+          "value": 1.1423124326149965,
+          "seed_values": [
+            1.1480673734638112,
+            1.1365574917661818
+          ],
+          "run_names": [
+            "tpp10_matched_p040_s20260910_d20260912",
+            "tpp10_matched_p040_s20260911_d20260912"
+          ]
+        },
+        {
+          "percent": 50,
+          "value": 1.126984002190692,
+          "seed_values": [
+            1.1283489930812327,
+            1.1256190113001514
+          ],
+          "run_names": [
+            "tpp10_matched_p050_s20260910_d20260912",
+            "tpp10_matched_p050_s20260911_d20260912"
+          ]
+        },
+        {
+          "percent": 55,
+          "value": 1.1337089979091557,
+          "seed_values": [
+            1.1371847614874082,
+            1.1302332343309032
+          ],
+          "run_names": [
+            "tpp10_matched_p055_s20260910_d20260912",
+            "tpp10_matched_p055_s20260911_d20260912"
+          ]
+        },
+        {
+          "percent": 60,
+          "value": 1.1363837018500649,
+          "seed_values": [
+            1.1320153279689418,
+            1.140752075731188
+          ],
+          "run_names": [
+            "tpp10_matched_p060_s20260910_d20260912",
+            "tpp10_matched_p060_s20260911_d20260912"
+          ]
+        },
+        {
+          "percent": 65,
+          "value": 1.1380798038762703,
+          "seed_values": [
+            1.1348031933966147,
+            1.1413564143559256
+          ],
+          "run_names": [
+            "tpp10_matched_p065_s20260910_d20260912",
+            "tpp10_matched_p065_s20260911_d20260912"
+          ]
+        },
+        {
+          "percent": 70,
+          "value": 1.1360913651139177,
+          "seed_values": [
+            1.134908120535094,
+            1.1372746096927417
+          ],
+          "run_names": [
+            "tpp10_matched_p070_s20260910_d20260912",
+            "tpp10_matched_p070_s20260911_d20260912"
+          ]
+        },
+        {
+          "percent": 80,
+          "value": 1.142733947861364,
+          "seed_values": [
+            1.1497853990080233,
+            1.1356824967147048
+          ],
+          "run_names": [
+            "tpp10_matched_p080_s20260910_d20260912",
+            "tpp10_matched_p080_s20260911_d20260912"
+          ]
+        },
+        {
+          "percent": 90,
+          "value": 1.1813983476038743,
+          "seed_values": [
+            1.179422173503735,
+            1.1833745217040135
+          ],
+          "run_names": [
+            "tpp10_matched_p090_s20260910_d20260912",
+            "tpp10_matched_p090_s20260911_d20260912"
+          ]
+        },
+        {
+          "percent": 100,
+          "value": 1.2628200698594672,
+          "seed_values": [
+            1.2679753972791843,
+            1.2576647424397498
+          ],
+          "run_names": [
+            "tpp10_matched_p100_s20260910_d20260912",
+            "tpp10_matched_p100_s20260911_d20260912"
+          ]
+        }
+      ],
+      "selected_percent": 50
+    },
+    {
+      "arm": "matched",
+      "subset_seed": 20260913,
+      "points": [
+        {
+          "percent": 0,
+          "value": 1.7595969815957786,
+          "seed_values": [
+            1.7713407604775941,
+            1.7478532027139628
+          ],
+          "run_names": [
+            "tpp10_unmatched_p000_s20260910",
+            "tpp10_unmatched_p000_s20260911"
+          ]
+        },
+        {
+          "percent": 10,
+          "value": 1.2657523317068484,
+          "seed_values": [
+            1.2592494896716417,
+            1.272255173742055
+          ],
+          "run_names": [
+            "tpp10_matched_p010_s20260910_d20260913",
+            "tpp10_matched_p010_s20260911_d20260913"
+          ]
+        },
+        {
+          "percent": 30,
+          "value": 1.1678019098461885,
+          "seed_values": [
+            1.1713372247871408,
+            1.1642665949052364
+          ],
+          "run_names": [
+            "tpp10_matched_p030_s20260910_d20260913",
+            "tpp10_matched_p030_s20260911_d20260913"
+          ]
+        },
+        {
+          "percent": 40,
+          "value": 1.1438604206043352,
+          "seed_values": [
+            1.141342169280834,
+            1.1463786719278364
+          ],
+          "run_names": [
+            "tpp10_matched_p040_s20260910_d20260913",
+            "tpp10_matched_p040_s20260911_d20260913"
+          ]
+        },
+        {
+          "percent": 50,
+          "value": 1.1289550341661643,
+          "seed_values": [
+            1.1318510579322762,
+            1.1260590104000523
+          ],
+          "run_names": [
+            "tpp10_matched_p050_s20260910_d20260913",
+            "tpp10_matched_p050_s20260911_d20260913"
+          ]
+        },
+        {
+          "percent": 55,
+          "value": 1.1292118971909249,
+          "seed_values": [
+            1.13118251223737,
+            1.1272412821444797
+          ],
+          "run_names": [
+            "tpp10_matched_p055_s20260910_d20260913",
+            "tpp10_matched_p055_s20260911_d20260913"
+          ]
+        },
+        {
+          "percent": 60,
+          "value": 1.1326849159864159,
+          "seed_values": [
+            1.1349760799665063,
+            1.1303937520063252
+          ],
+          "run_names": [
+            "tpp10_matched_p060_s20260910_d20260913",
+            "tpp10_matched_p060_s20260911_d20260913"
+          ]
+        },
+        {
+          "percent": 65,
+          "value": 1.1321186916235693,
+          "seed_values": [
+            1.1272091091212242,
+            1.1370282741259146
+          ],
+          "run_names": [
+            "tpp10_matched_p065_s20260910_d20260913",
+            "tpp10_matched_p065_s20260911_d20260913"
+          ]
+        },
+        {
+          "percent": 70,
+          "value": 1.134608661261401,
+          "seed_values": [
+            1.136481193754228,
+            1.132736128768574
+          ],
+          "run_names": [
+            "tpp10_matched_p070_s20260910_d20260913",
+            "tpp10_matched_p070_s20260911_d20260913"
+          ]
+        },
+        {
+          "percent": 80,
+          "value": 1.1394980921941045,
+          "seed_values": [
+            1.1367042507837102,
+            1.142291933604499
+          ],
+          "run_names": [
+            "tpp10_matched_p080_s20260910_d20260913",
+            "tpp10_matched_p080_s20260911_d20260913"
+          ]
+        },
+        {
+          "percent": 90,
+          "value": 1.183159177861532,
+          "seed_values": [
+            1.179385205796668,
+            1.1869331499263962
+          ],
+          "run_names": [
+            "tpp10_matched_p090_s20260910_d20260913",
+            "tpp10_matched_p090_s20260911_d20260913"
+          ]
+        },
+        {
+          "percent": 100,
+          "value": 1.2647104260682012,
+          "seed_values": [
+            1.2589898818641196,
+            1.2704309702722827
+          ],
+          "run_names": [
+            "tpp10_matched_p100_s20260910_d20260913",
+            "tpp10_matched_p100_s20260911_d20260913"
+          ]
+        }
+      ],
+      "selected_percent": 50
+    },
+    {
+      "arm": "matched",
+      "subset_seed": 20260914,
+      "points": [
+        {
+          "percent": 0,
+          "value": 1.7595969815957786,
+          "seed_values": [
+            1.7713407604775941,
+            1.7478532027139628
+          ],
+          "run_names": [
+            "tpp10_unmatched_p000_s20260910",
+            "tpp10_unmatched_p000_s20260911"
+          ]
+        },
+        {
+          "percent": 10,
+          "value": 1.2723018003049158,
+          "seed_values": [
+            1.280188916198165,
+            1.2644146844116664
+          ],
+          "run_names": [
+            "tpp10_matched_p010_s20260910_d20260914",
+            "tpp10_matched_p010_s20260911_d20260914"
+          ]
+        },
+        {
+          "percent": 30,
+          "value": 1.1659432749875973,
+          "seed_values": [
+            1.1724704378827164,
+            1.1594161120924782
+          ],
+          "run_names": [
+            "tpp10_matched_p030_s20260910_d20260914",
+            "tpp10_matched_p030_s20260911_d20260914"
+          ]
+        },
+        {
+          "percent": 40,
+          "value": 1.1395922486660512,
+          "seed_values": [
+            1.1328869875882022,
+            1.1462975097439
+          ],
+          "run_names": [
+            "tpp10_matched_p040_s20260910_d20260914",
+            "tpp10_matched_p040_s20260911_d20260914"
+          ]
+        },
+        {
+          "percent": 50,
+          "value": 1.125549940058,
+          "seed_values": [
+            1.1233976829320949,
+            1.1277021971839052
+          ],
+          "run_names": [
+            "tpp10_matched_p050_s20260910_d20260914",
+            "tpp10_matched_p050_s20260911_d20260914"
+          ]
+        },
+        {
+          "percent": 55,
+          "value": 1.1275203813840173,
+          "seed_values": [
+            1.1324425412453458,
+            1.1225982215226886
+          ],
+          "run_names": [
+            "tpp10_matched_p055_s20260910_d20260914",
+            "tpp10_matched_p055_s20260911_d20260914"
+          ]
+        },
+        {
+          "percent": 60,
+          "value": 1.1295855698314359,
+          "seed_values": [
+            1.126376571342337,
+            1.132794568320535
+          ],
+          "run_names": [
+            "tpp10_matched_p060_s20260910_d20260914",
+            "tpp10_matched_p060_s20260911_d20260914"
+          ]
+        },
+        {
+          "percent": 65,
+          "value": 1.130750052604042,
+          "seed_values": [
+            1.1261070962145077,
+            1.135393008993576
+          ],
+          "run_names": [
+            "tpp10_matched_p065_s20260910_d20260914",
+            "tpp10_matched_p065_s20260911_d20260914"
+          ]
+        },
+        {
+          "percent": 70,
+          "value": 1.1307618655931422,
+          "seed_values": [
+            1.1258959216622968,
+            1.1356278095239873
+          ],
+          "run_names": [
+            "tpp10_matched_p070_s20260910_d20260914",
+            "tpp10_matched_p070_s20260911_d20260914"
+          ]
+        },
+        {
+          "percent": 80,
+          "value": 1.150990567104854,
+          "seed_values": [
+            1.157090759932168,
+            1.1448903742775398
+          ],
+          "run_names": [
+            "tpp10_matched_p080_s20260910_d20260914",
+            "tpp10_matched_p080_s20260911_d20260914"
+          ]
+        },
+        {
+          "percent": 90,
+          "value": 1.1739598473437518,
+          "seed_values": [
+            1.1771349008612302,
+            1.1707847938262734
+          ],
+          "run_names": [
+            "tpp10_matched_p090_s20260910_d20260914",
+            "tpp10_matched_p090_s20260911_d20260914"
+          ]
+        },
+        {
+          "percent": 100,
+          "value": 1.2435862999826859,
+          "seed_values": [
+            1.2460903757192667,
+            1.241082224246105
+          ],
+          "run_names": [
+            "tpp10_matched_p100_s20260910_d20260914",
+            "tpp10_matched_p100_s20260911_d20260914"
+          ]
+        }
+      ],
+      "selected_percent": 50
+    }
+  ],
+  "pilot_common_grid_analysis": {
+    "plan_sha256": "afa613b25468dd3dadff230544361d815f8524370bd33c14e6c58d3717496ba0",
+    "stage": "pilot",
+    "grid_percent": [
+      0,
+      10,
+      30,
+      50,
+      70,
+      90,
+      100
+    ],
+    "target_selected_percent": 70,
+    "unmatched_selected_percent": 100,
+    "unmatched_target_regret_bpb": 0.0350542807852845,
+    "unmatched_excess_curve_rmse_bpb": 0.1296000665595605,
+    "unmatched_spearman": 0.6785714285714287,
+    "unmatched_trainer_seed_selections": [
+      100,
+      100
+    ],
+    "matched_subsets": [
+      {
+        "subset_seed": 20260912,
+        "selected_percent": 50,
+        "target_regret_bpb": 0.010102815719440272,
+        "paired_regret_difference_bpb": -0.024951465065844225,
+        "trainer_seed_selections": [
+          50,
+          50
+        ],
+        "excess_curve_rmse_bpb": 0.08584567516712327,
+        "spearman": 0.8571428571428573
+      },
+      {
+        "subset_seed": 20260913,
+        "selected_percent": 50,
+        "target_regret_bpb": 0.010102815719440272,
+        "paired_regret_difference_bpb": -0.024951465065844225,
+        "trainer_seed_selections": [
+          50,
+          50
+        ],
+        "excess_curve_rmse_bpb": 0.0848179195357442,
+        "spearman": 0.8571428571428573
+      },
+      {
+        "subset_seed": 20260914,
+        "selected_percent": 50,
+        "target_regret_bpb": 0.010102815719440272,
+        "paired_regret_difference_bpb": -0.024951465065844225,
+        "trainer_seed_selections": [
+          50,
+          50
+        ],
+        "excess_curve_rmse_bpb": 0.08342392276094603,
+        "spearman": 0.8571428571428573
+      }
+    ],
+    "mean_paired_regret_difference_bpb": -0.024951465065844225,
+    "pooled_subset_selection_secondary_percent": 50,
+    "scope": "Descriptive, conditional on one target trainer seed and one finite parent. Subset comparisons share target and unmatched curves; no independent-replicate or significance claim.",
+    "curves": {
+      "target": [
+        1.2026038443378393,
+        0.8713679774060257,
+        0.802878976641109,
+        0.7756673393195197,
+        0.7655645236000794,
+        0.7792857273691156,
+        0.8006188043853639
+      ],
+      "unmatched": [
+        1.7595969815957786,
+        1.2730186402787909,
+        1.1575948966140666,
+        1.0951940324787643,
+        1.0636281968629724,
+        1.0400203898191172,
+        1.0303341556858907
+      ],
+      "matched_subset_means": [
+        [
+          1.7595969815957786,
+          1.2692725329705694,
+          1.1671675175874165,
+          1.126984002190692,
+          1.1360913651139177,
+          1.1813983476038743,
+          1.2628200698594672
+        ],
+        [
+          1.7595969815957786,
+          1.2657523317068484,
+          1.1678019098461885,
+          1.1289550341661643,
+          1.134608661261401,
+          1.183159177861532,
+          1.2647104260682012
+        ],
+        [
+          1.7595969815957786,
+          1.2723018003049158,
+          1.1659432749875973,
+          1.125549940058,
+          1.1307618655931422,
+          1.1739598473437518,
+          1.2435862999826859
+        ]
+      ]
+    }
+  },
+  "missing_run_names": [],
+  "verified_but_unplotted": [],
+  "scope": "Measured selections on the complete twelve-coordinate common grid from 57 pilot and 45 refinement artifacts. Trainer seeds are averaged within each subset; target regrets share one target trainer seed.",
+  "complete_common_grid_analysis": {
+    "pilot_plan_sha256": "afa613b25468dd3dadff230544361d815f8524370bd33c14e6c58d3717496ba0",
+    "refinement_plan_sha256": "99ca724bc3bde33e80afb07373e47ddc0d7e44f22e15cd41da3daa3de2f4ef40",
+    "stage": "pilot_plus_refinement",
+    "verified_artifact_count": 102,
+    "grid_percent": [
+      0,
+      10,
+      30,
+      40,
+      50,
+      55,
+      60,
+      65,
+      70,
+      80,
+      90,
+      100
+    ],
+    "target_selected_percent": 70,
+    "unmatched_selected_percent": 100,
+    "unmatched_target_regret_bpb": 0.0350542807852845,
+    "unmatched_excess_curve_rmse_bpb": 0.10345481920380002,
+    "unmatched_spearman": 0.5314685314685316,
+    "unmatched_trainer_seed_selections": [
+      100,
+      100
+    ],
+    "matched_subsets": [
+      {
+        "subset_seed": 20260912,
+        "selected_percent": 50,
+        "target_regret_bpb": 0.010102815719440272,
+        "paired_regret_difference_bpb": -0.024951465065844225,
+        "trainer_seed_selections": [
+          50,
+          50
+        ],
+        "excess_curve_rmse_bpb": 0.06576169718333202,
+        "spearman": 0.7902097902097903
+      },
+      {
+        "subset_seed": 20260913,
+        "selected_percent": 50,
+        "target_regret_bpb": 0.010102815719440272,
+        "paired_regret_difference_bpb": -0.024951465065844225,
+        "trainer_seed_selections": [
+          65,
+          50
+        ],
+        "excess_curve_rmse_bpb": 0.06485451913679324,
+        "spearman": 0.7972027972027973
+      },
+      {
+        "subset_seed": 20260914,
+        "selected_percent": 50,
+        "target_regret_bpb": 0.010102815719440272,
+        "paired_regret_difference_bpb": -0.024951465065844225,
+        "trainer_seed_selections": [
+          50,
+          55
+        ],
+        "excess_curve_rmse_bpb": 0.0640563467269511,
+        "spearman": 0.7692307692307694
+      }
+    ],
+    "mean_paired_regret_difference_bpb": -0.024951465065844225,
+    "pooled_subset_selection_secondary_percent": 50,
+    "scope": "Descriptive, conditional on one target trainer seed and one finite parent. Subset comparisons share target and unmatched curves; no independent-replicate or significance claim.",
+    "curves": {
+      "target": [
+        1.2026038443378393,
+        0.8713679774060257,
+        0.802878976641109,
+        0.7881435930137257,
+        0.7756673393195197,
+        0.7701349690829891,
+        0.7694386281196114,
+        0.7665562587791359,
+        0.7655645236000794,
+        0.7704052085807014,
+        0.7792857273691156,
+        0.8006188043853639
+      ],
+      "unmatched": [
+        1.7595969815957786,
+        1.2730186402787909,
+        1.1575948966140666,
+        1.1140561101279127,
+        1.0951940324787643,
+        1.085302391311535,
+        1.0845571654197332,
+        1.0720462371281094,
+        1.0636281968629724,
+        1.054923413659468,
+        1.0400203898191172,
+        1.0303341556858907
+      ],
+      "matched_subset_means": [
+        [
+          1.7595969815957786,
+          1.2692725329705694,
+          1.1671675175874165,
+          1.1423124326149965,
+          1.126984002190692,
+          1.1337089979091557,
+          1.1363837018500649,
+          1.1380798038762703,
+          1.1360913651139177,
+          1.142733947861364,
+          1.1813983476038743,
+          1.2628200698594672
+        ],
+        [
+          1.7595969815957786,
+          1.2657523317068484,
+          1.1678019098461885,
+          1.1438604206043352,
+          1.1289550341661643,
+          1.1292118971909249,
+          1.1326849159864159,
+          1.1321186916235693,
+          1.134608661261401,
+          1.1394980921941045,
+          1.183159177861532,
+          1.2647104260682012
+        ],
+        [
+          1.7595969815957786,
+          1.2723018003049158,
+          1.1659432749875973,
+          1.1395922486660512,
+          1.125549940058,
+          1.1275203813840173,
+          1.1295855698314359,
+          1.130750052604042,
+          1.1307618655931422,
+          1.150990567104854,
+          1.1739598473437518,
+          1.2435862999826859
+        ]
+      ]
+    }
+  },
+  "metric_definition": {
+    "id": "scored_byte_bpb_from_token_loss_v1",
+    "schema_version": 2,
+    "metric": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+    "formula": "token_average_loss * scored_tokens / (scored_bytes * ln(2))",
+    "population": {
+      "examples": 5673,
+      "tokens": 11612631,
+      "bytes": 28741166
+    },
+    "population_counts_sha256": "7c7258e80208b230394cbee4ce1f41436d6c248d5d02e4ad86d24d05b5c32f4a",
+    "total_records": 102,
+    "reported_schema_counts": {
+      "legacy_unversioned": 97,
+      "2": 5
+    },
+    "normalization_source_sha256": {
+      "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/target_jump_audit_20260912/all_102_final_metric_records.json": "83b627a5b1799eb13bb6be6a7e5e02d7165eb60bdc1833fccd72316ed97f70eb",
+      "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/repairs_20260911/population_counts.json": "2dae669cdaa9e543eb9aab50d0f6da78ba46ab3ace9a1cc067110348301beef7"
+    },
+    "schema2_reconstruction_tolerance_bpb": 5e-05
+  },
+  "sources_sha256": {
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/pilot_plan.json": "4a60c10d04b57c8d3dc4807efaaec54c6cfe3e4df1f6c7004c71ead57c94e38a",
+    "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260911_tpp10_measured_curves/data/pilot_metrics.csv": "263395e98471389c0c339ce0a24697217014085f07c44c3c3fdc715aea0336bd",
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/refinement_plan.json": "c456342e7bec3fecd464b640910c20ba80095476df77ed9d04903b223c49b0f3",
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/completion_20260912/verified_endpoints.json": "d453914f60b164dda8c59f99260c8facb68118faa8c97f027d087216a5db74d1",
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/target_jump_audit_20260912/all_102_final_metric_records.json": "83b627a5b1799eb13bb6be6a7e5e02d7165eb60bdc1833fccd72316ed97f70eb",
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/repairs_20260911/population_counts.json": "2dae669cdaa9e543eb9aab50d0f6da78ba46ab3ace9a1cc067110348301beef7",
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/consistent_bpb_20260912/metric_provenance.json": "71aea0d912dae58372c8a63219ceecba8a42f6add2e201b4e359e88d16973527",
+    "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/plot_starcoder_tpp10_refinement.py": "7729da9711741f7fe93e6a510df49b7d07ecbab9f2881fea1d216313f64c9bd5",
+    "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/analyze_starcoder_tpp10.py": "e332709a4eac55c0c286c2d4e1142bca44c8e4640dc4e6606d9234842b1b2618"
+  }
+}

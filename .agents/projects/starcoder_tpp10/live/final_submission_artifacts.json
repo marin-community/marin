@@ -1,0 +1,138 @@
+[
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1788985840.3591545,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/README.md",
+      "fieldbook.local_size_at_capture": 8474
+    },
+    "content_hash": "sha256:862f97c1ea09989aadcf73e29f548107d23956d01617309909a0c8182990618d",
+    "created_at": "2026-09-09T16:44:46Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m23gxgfbkc2j1j7nmq3h3gj3",
+    "job_id": null,
+    "run_id": null,
+    "type": "report",
+    "updated_at": "2026-09-09T20:31:03Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/README.md"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1788985840.3595455,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/CC_CHANGES.md",
+      "fieldbook.local_size_at_capture": 10207
+    },
+    "content_hash": "sha256:65fd1e1d252cce97d1c9184f26aee0678ffb1e5fa853f035a341614efb44c3a2",
+    "created_at": "2026-09-09T16:48:19Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m23h40esv05vv0jnhh3m92p6",
+    "job_id": null,
+    "run_id": null,
+    "type": "report",
+    "updated_at": "2026-09-09T20:31:03Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/CC_CHANGES.md"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1788985669.6520228,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/coordinator_review.md",
+      "fieldbook.local_size_at_capture": 3457
+    },
+    "content_hash": "sha256:93acd0e58ae5d00e2671900ce5fdc3e771def83396f4e977355589783642b9e2",
+    "created_at": "2026-09-09T20:31:04Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m23xvvt9d2rmdrbzjq6hv0h9",
+    "job_id": null,
+    "run_id": null,
+    "type": "report",
+    "updated_at": "2026-09-09T20:31:04Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/coordinator_review.md"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1788985746.6839428,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/coordinator_review_disposition.md",
+      "fieldbook.local_size_at_capture": 1281
+    },
+    "content_hash": "sha256:4b5f3d21d64242d26ee6b487c17fbe05908eabc8be04bbf46c1ff63451009236",
+    "created_at": "2026-09-09T20:31:04Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m23xvw3nvng3yy0609z7ah8v",
+    "job_id": null,
+    "run_id": null,
+    "type": "report",
+    "updated_at": "2026-09-09T20:31:04Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/coordinator_review_disposition.md"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1788985718.6610234,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/submitted_calibration.txt",
+      "fieldbook.local_size_at_capture": 864
+    },
+    "content_hash": "sha256:4260124448b5020f2f78b7021ece6fd69c1287cc8663392bd155bb56a502b05c",
+    "created_at": "2026-09-09T20:23:18Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m23xdn9cqhgkexnnndtwdass",
+    "job_id": null,
+    "run_id": null,
+    "type": "other",
+    "updated_at": "2026-09-09T20:31:04Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/submitted_calibration.txt"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1788985746.6857471,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/coordinator_source_sha256.json",
+      "fieldbook.local_size_at_capture": 142
+    },
+    "content_hash": "sha256:eecdbd1c573f29163916ea49dd980f70891ca59417e2c3f95fb121940e0043af",
+    "created_at": "2026-09-09T20:31:04Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m23xvwmgw2t3m3pfc5b0xren",
+    "job_id": null,
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-09T20:31:04Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/coordinator_source_sha256.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1788985840.7135973,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/calibration_workspace_receipt.json",
+      "fieldbook.local_size_at_capture": 460
+    },
+    "content_hash": "sha256:c8a485cda3e31c685dc4d0fe6aed9c179d7ce32cbb196bf89b6df6254004cf45",
+    "created_at": "2026-09-09T20:31:05Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m23xvwx680y964pb2mr9kcqa",
+    "job_id": null,
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-09T20:31:05Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/calibration_workspace_receipt.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1788985718.3186514,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/await_starcoder_tpp10_calibration.py",
+      "fieldbook.local_size_at_capture": 4187
+    },
+    "content_hash": "sha256:459082f49f501f80783b7e7872dd3c882500b648c765ccb23b8402018ee12138",
+    "created_at": "2026-09-09T20:23:19Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m23xdp2wbeec75zpwjt5sbgb",
+    "job_id": null,
+    "run_id": null,
+    "type": "other",
+    "updated_at": "2026-09-09T20:31:05Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/await_starcoder_tpp10_calibration.py"
+  }
+]

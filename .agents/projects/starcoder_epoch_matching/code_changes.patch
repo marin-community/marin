@@ -1,0 +1,4395 @@
+--- /dev/null
++++ b/experiments/domain_phase_mix/audit_starcoder_epoch_matching_indices.py
+@@ -0,0 +1,106 @@
++# Copyright The Marin Authors
++# SPDX-License-Identifier: Apache-2.0
++
++"""Audit source-index identities without reading StarCoder token payloads."""
++
++import argparse
++import asyncio
++import hashlib
++import json
++from collections.abc import Sequence
++from pathlib import Path
++
++import jax
++import numpy as np
++from levanter.data.dataset import AsyncDataset, BlockShufflingDataset
++from levanter.utils.jax_utils import key_iterator
++
++from experiments.domain_phase_mix import starcoder_epoch_matching as experiment
++
++
++class SourceIndices(AsyncDataset[int]):
++    """A finite source returning sequence indices instead of corpus tokens."""
++
++    def __init__(self, count: int):
++        self.count = count
++
++    def is_finite(self) -> bool:
++        return True
++
++    async def async_len(self) -> int:
++        return self.count
++
++    async def get_batch(self, indices: Sequence[int]) -> Sequence[int]:
++        if any(index < 0 or index >= self.count for index in indices):
++            raise IndexError("Source index outside the packed corpus")
++        return list(indices)
++
++
++async def audit_indices(
++    packed_sequences: int, output_dir: Path, *, design: experiment.ExperimentDesign | None = None
++) -> dict:
++    """Compare the legacy interior, explicit parent, nested subset and old endpoint."""
++    if design is None:
++        design = experiment.load_design()
++    parent_count = experiment.PARENT_BATCHES * experiment.BATCH_SIZE
++    matched_count = experiment.MATCHED_BATCHES * experiment.BATCH_SIZE
++    if packed_sequences < parent_count:
++        raise ValueError("Packed source cannot cover the frozen parent")
++    _, shuffle_key = jax.random.split(jax.random.PRNGKey(experiment.REFERENCE_SEED))
++    legacy_keys = key_iterator(shuffle_key)
++    keys = {name: next(legacy_keys) for name in design.component_order}
++    source = SourceIndices(packed_sequences)
++
++    async def mapped(key, count):
++        dataset = BlockShufflingDataset(source, 256, window_blocks=512, key=key, perm_type="feistel")
++        return np.asarray(await dataset.get_batch(range(count)), dtype="<i8")
++
++    legacy = await mapped(keys["dolma/starcoder"], parent_count)
++    explicit_key = np.asarray(design.component_shuffle_keys["dolma/starcoder"], dtype=np.uint32)
++    parent = await mapped(explicit_key, parent_count)
++    matched = await mapped(explicit_key, matched_count)
++    endpoint = await mapped(next(key_iterator(shuffle_key)), parent_count)
++    if not np.array_equal(legacy, parent) or not np.array_equal(parent[:matched_count], matched):
++        raise ValueError("Legacy-parent or nested-subset source identity differs")
++    if len(np.unique(parent)) != parent_count:
++        raise ValueError("Parent contains duplicate source sequence indices")
++    endpoint_differences = int(np.count_nonzero(endpoint != parent))
++    if endpoint_differences == 0:
++        raise ValueError("Expected historical endpoint mismatch was not reproduced")
++    observed_environment = {
++        "jax_version": jax.__version__,
++        "numpy_version": np.__version__,
++        "jax_default_prng_impl": jax.config.jax_default_prng_impl,
++        "jax_enable_x64": bool(jax.config.jax_enable_x64),
++    }
++    result = {
++        "design_sha256": design.design_sha256,
++        "packed_starcoder_sequence_count": packed_sequences,
++        "parent_sequence_count": parent_count,
++        "matched_sequence_count": matched_count,
++        "legacy_parent_match": True,
++        "nested_subset_match": True,
++        "historical_endpoint_different_positions": endpoint_differences,
++        "parent_indices_sha256": hashlib.sha256(parent.tobytes()).hexdigest(),
++        "matched_indices_sha256": hashlib.sha256(matched.tobytes()).hexdigest(),
++        "observed_environment": observed_environment,
++        "matches_training_environment": observed_environment == design.training_environment,
++        "scope": "Index mapping under the recorded audit runtime; no token reads or historical binary replay.",
++    }
++    output_dir.mkdir(parents=True, exist_ok=True)
++    (output_dir / "parent_indices.i64le").write_bytes(parent.tobytes())
++    (output_dir / "matched_indices.i64le").write_bytes(matched.tobytes())
++    (output_dir / "index_audit.json").write_text(json.dumps(result, indent=2) + "\n")
++    return result
++
++
++def main() -> None:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--packed-sequences", required=True, type=int, help="Actual cache length verified from metadata")
++    parser.add_argument("--output-dir", required=True, type=Path)
++    args = parser.parse_args()
++    print(json.dumps(asyncio.run(audit_indices(args.packed_sequences, args.output_dir)), indent=2))
++
++
++if __name__ == "__main__":
++    main()
+--- /dev/null
++++ b/experiments/domain_phase_mix/exploratory/two_phase_many/analyze_starcoder_epoch_matching.py
+@@ -0,0 +1,383 @@
++# /// script
++# requires-python = ">=3.12"
++# dependencies = ["matplotlib>=3.9"]
++# ///
++# Copyright The Marin Authors
++# SPDX-License-Identifier: Apache-2.0
++"""Compare completed, frozen StarCoder proxy curves on their shared measured grid."""
++
++from __future__ import annotations
++
++import argparse
++import csv
++import json
++import math
++from collections import defaultdict
++from dataclasses import asdict, dataclass
++from pathlib import Path
++from statistics import mean, stdev
++from typing import Literal
++
++from matplotlib.backends.backend_agg import FigureCanvasAgg
++from matplotlib.figure import Figure
++
++from experiments.domain_phase_mix import starcoder_epoch_matching as design_module
++
++ARMS = ("unmatched", "matched")
++MEASUREMENT_COLUMNS = ("run_name", "step", "metric", "value", "design_sha256", "config_fingerprint", "status")
++
++
++@dataclass(frozen=True)
++class Measurement:
++    run_name: str
++    step: int
++    metric: str
++    value: float
++    design_sha256: str
++    config_fingerprint: str
++    status: str
++
++
++@dataclass(frozen=True)
++class CurvePoint:
++    arm: str
++    starcoder_weight: float
++    trainer_seed: int
++    observed_bpb: float
++    source_run_name: str
++    source_kind: str
++    config_fingerprint: str
++    is_alias: bool
++
++
++def read_measurements(path: Path) -> tuple[Measurement, ...]:
++    """Read one provenance-bearing final measurement per newly trained run."""
++    with path.open(newline="") as handle:
++        reader = csv.DictReader(handle)
++        missing = set(MEASUREMENT_COLUMNS) - set(reader.fieldnames or ())
++        if missing:
++            raise ValueError(f"Measurement CSV is missing columns: {sorted(missing)}")
++        return tuple(
++            Measurement(
++                row["run_name"],
++                int(row["step"]),
++                row["metric"],
++                float(row["value"]),
++                row["design_sha256"],
++                row["config_fingerprint"],
++                row["status"],
++            )
++            for row in reader
++        )
++
++
++def read_plan(path: Path) -> dict:
++    """Read the launcher's expected training identities without importing training code."""
++    payload = json.loads(path.read_text())
++    if not isinstance(payload, dict):
++        raise ValueError("Launch plan must be a JSON object")
++    return payload
++
++
++def _expected_fingerprints(design: design_module.ExperimentDesign, plan: dict, stage: str) -> dict[str, str]:
++    if plan.get("design_sha256") != design.design_sha256:
++        raise ValueError("Launch plan design hash mismatch")
++    if plan.get("stage") != stage:
++        raise ValueError("Launch plan stage mismatch")
++    if plan.get("metric") != design.primary_metric:
++        raise ValueError("Launch plan metric mismatch")
++    planned = {run.run_name: run for run in design_module.select_runs(design, stage)}
++    if plan.get("new_training_runs") != len(planned):
++        raise ValueError("Launch plan run count mismatch")
++    rows = plan.get("runs")
++    if not isinstance(rows, list):
++        raise ValueError("Launch plan has no run records")
++    fingerprints = {}
++    for row in rows:
++        if not isinstance(row, dict):
++            raise ValueError("Launch plan run must be a JSON object")
++        name = row.get("run_name")
++        if name not in planned:
++            raise ValueError(f"Launch plan includes a run outside stage {stage}: {name}")
++        if name in fingerprints:
++            raise ValueError(f"Duplicate launch plan run: {name}")
++        for field, expected in asdict(planned[name]).items():
++            if row.get(field) != expected:
++                raise ValueError(f"Launch plan run configuration mismatch: {name}/{field}")
++        fingerprint = row.get("fingerprint")
++        if not isinstance(fingerprint, str) or not fingerprint.strip():
++            raise ValueError(f"Launch plan is missing a config fingerprint: {name}")
++        fingerprints[name] = fingerprint
++    if set(fingerprints) != set(planned):
++        raise ValueError("Launch plan is missing required stage runs")
++    return fingerprints
++
++
++def _validated_measurements(
++    design: design_module.ExperimentDesign, measurements: tuple[Measurement, ...], stage: str, plan: dict
++) -> dict[str, Measurement]:
++    expected_fingerprints = _expected_fingerprints(design, plan, stage)
++    planned = {run.run_name: run for run in design_module.select_runs(design, stage)}
++    records = {}
++    for record in measurements:
++        if record.run_name in records:
++            raise ValueError(f"Duplicate measurement: {record.run_name}")
++        if record.run_name not in planned:
++            raise ValueError(f"Measurement is outside the planned stage: {record.run_name}")
++        run = planned[record.run_name]
++        if record.design_sha256 != design.design_sha256:
++            raise ValueError(f"Measurement design hash mismatch: {record.run_name}")
++        if record.step != run.total_steps - 1:
++            raise ValueError(f"Measurement is not the final step: {record.run_name}")
++        if record.metric != design.primary_metric:
++            raise ValueError(f"Measurement metric mismatch: {record.run_name}")
++        if record.status != "succeeded":
++            raise ValueError(f"Measurement run did not succeed: {record.run_name}")
++        if not math.isfinite(record.value):
++            raise ValueError(f"Nonfinite measurement: {record.run_name}")
++        if record.config_fingerprint != expected_fingerprints[record.run_name]:
++            raise ValueError(f"Measurement config fingerprint mismatch: {record.run_name}")
++        records[record.run_name] = record
++    required = {run.run_name for run in design_module.select_runs(design, stage)}
++    missing = required - set(records)
++    if missing:
++        raise ValueError(f"Stage {stage} has {len(missing)} missing final measurements: {sorted(missing)}")
++    return records
++
++
++def _curve_summary(points: tuple[CurvePoint, ...], arm: str) -> list[dict]:
++    groups = defaultdict(list)
++    for point in points:
++        if point.arm == arm:
++            groups[point.starcoder_weight].append(point)
++    return [
++        {
++            "starcoder_weight": weight,
++            "mean_bpb": mean(point.observed_bpb for point in group),
++            "trainer_seed_sd": stdev(point.observed_bpb for point in group) if len(group) > 1 else None,
++            "n_measurements": len(group),
++            "trainer_seeds": sorted(point.trainer_seed for point in group),
++        }
++        for weight, group in sorted(groups.items())
++    ]
++
++
++def _minimum(curve: list[dict]) -> tuple[float, list[float]]:
++    minimum = min(row["mean_bpb"] for row in curve)
++    ties = [row["starcoder_weight"] for row in curve if row["mean_bpb"] == minimum]
++    return min(ties), ties
++
++
++def analyze(
++    design: design_module.ExperimentDesign, measurements: tuple[Measurement, ...], stage: str, plan: dict
++) -> tuple[dict, tuple[CurvePoint, ...]]:
++    """Report measured-grid selection only after every run in the stage succeeds."""
++    records = _validated_measurements(design, measurements, stage, plan)
++    requests = design_module.select_runs(design, stage)
++    proxy_runs = [run for run in requests if run.arm in ARMS]
++    grid = sorted({run.starcoder_weight for run in proxy_runs})
++    seeds = sorted({run.trainer_seed for run in proxy_runs})
++    runs_by_coordinate = {(run.arm, run.starcoder_weight, run.trainer_seed): run for run in proxy_runs}
++    if len(runs_by_coordinate) != len(proxy_runs):
++        raise ValueError("Frozen design has duplicate proxy coordinates")
++    points = []
++    for arm in ARMS:
++        for weight in grid:
++            for seed in seeds:
++                is_alias = arm == "matched" and weight == 0.0
++                source_arm = "unmatched" if is_alias else arm
++                key = (source_arm, weight, seed)
++                if key not in runs_by_coordinate:
++                    raise ValueError(f"Frozen stage lacks a common-grid coordinate: {key}")
++                run = runs_by_coordinate[key]
++                record = records[run.run_name]
++                points.append(
++                    CurvePoint(arm, weight, seed, record.value, run.run_name, "new", record.config_fingerprint, is_alias)
++                )
++    historical = {}
++    for observation in design.target_observations:
++        if not observation.reusable:
++            continue
++        if observation.starcoder_weight in historical:
++            raise ValueError("Duplicate reusable historical target coordinate")
++        historical[observation.starcoder_weight] = observation
++    targets = {run.starcoder_weight: run for run in requests if run.arm == "target"}
++    if len(targets) != sum(run.arm == "target" for run in requests):
++        raise ValueError("Duplicate newly trained target coordinate")
++    for weight in grid:
++        if weight in targets:
++            run = targets[weight]
++            record = records[run.run_name]
++            point = CurvePoint(
++                "target",
++                weight,
++                run.trainer_seed,
++                record.value,
++                run.run_name,
++                "new",
++                record.config_fingerprint,
++                False,
++            )
++        elif weight in historical and weight < 1.0:
++            observation = historical[weight]
++            point = CurvePoint(
++                "target",
++                weight,
++                design_module.REFERENCE_SEED,
++                observation.observed_bpb,
++                observation.source_run_name,
++                "historical",
++                "",
++                False,
++            )
++        else:
++            raise ValueError(f"No eligible target measurement at mixture weight {weight}")
++        if not math.isfinite(point.observed_bpb):
++            raise ValueError(f"Nonfinite historical target measurement at mixture weight {weight}")
++        points.append(point)
++    points = tuple(points)
++    curves = {arm: _curve_summary(points, arm) for arm in (*ARMS, "target")}
++    target_values = {row["starcoder_weight"]: row["mean_bpb"] for row in curves["target"]}
++    target_best_weight, target_ties = _minimum(curves["target"])
++    target_minimum = target_values[target_best_weight]
++    selections: dict[str, dict] = {}
++    for arm in ARMS:
++        selected, ties = _minimum(curves[arm])
++        selections[arm] = {
++            "selected_weight": selected,
++            "absolute_weight_displacement_from_target_minimum": abs(selected - target_best_weight),
++            "tied_weights": ties,
++            "proxy_mean_bpb": min(row["mean_bpb"] for row in curves[arm]),
++            "target_bpb_at_selected_weight": target_values[selected],
++            "target_grid_regret": target_values[selected] - target_minimum,
++        }
++    report = {
++        "design_sha256": design.design_sha256,
++        "launch_plan_sha256": design_module.canonical_sha256(plan),
++        "stage": stage,
++        "metric": design.primary_metric,
++        "complete": True,
++        "grid": grid,
++        "proxy_trainer_seeds": seeds,
++        "new_measurements_used": len(requests),
++        "proxy_measurements_used": len(proxy_runs),
++        "proxy_curve_points": len(proxy_runs) + len(seeds),
++        "shared_zero_weight_sources": [runs_by_coordinate[("unmatched", 0.0, seed)].run_name for seed in seeds],
++        "target_trainer_seed": design_module.REFERENCE_SEED,
++        "target_minimum": {"weight": target_best_weight, "tied_weights": target_ties, "bpb": target_minimum},
++        "selection": selections,
++        "delta_target_regret": (
++            selections["matched"]["target_grid_regret"] - selections["unmatched"]["target_grid_regret"]
++        ),
++        "curves": curves,
++        "interpretation": {
++            "selection_grid": {
++                "pilot": "pilot grid only",
++                "refinement": "adaptive refinement grid",
++                "primary": "full prespecified grid",
++                "replicated": "full prespecified grid",
++            }[stage],
++            "target_regret": "descriptive, conditional on the fixed target data and trainer seed",
++            "delta_target_regret": "matched minus unmatched; negative values favor matching",
++            "weight_displacement": "absolute distance from the lowest-weight exact target minimum",
++            "replication": "proxy trainer seeds share the same fixed data pool",
++            "zero_weight": "matched and unmatched reuse one web-only run per trainer seed",
++            "tie_rule": "exact measured ties are reported; the lowest mixture weight is selected",
++            "fingerprints": (
++                "all input fingerprints match the checked launch plan; the collector verifies artifact records"
++            ),
++            "statistical_superiority_test": False,
++        },
++    }
++    return report, points
++
++
++def write_outputs(report: dict, points: tuple[CurvePoint, ...], output_dir: Path) -> None:
++    """Write aggregate selection results and the individual measured curve points."""
++    output_dir.mkdir(parents=True, exist_ok=True)
++    (output_dir / "analysis.json").write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
++    with (output_dir / "curves.csv").open("w", newline="") as handle:
++        writer = csv.DictWriter(handle, fieldnames=tuple(CurvePoint.__dataclass_fields__))
++        writer.writeheader()
++        writer.writerows(asdict(point) for point in points)
++
++
++def plot_curves(
++    report: dict,
++    points: tuple[CurvePoint, ...],
++    output_paths: tuple[Path, ...],
++    *,
++    mode: Literal["raw", "excess"] = "raw",
++) -> Figure:
++    """Plot raw BPB or BPB above each arm's observed mean-curve minimum."""
++    if mode not in ("raw", "excess"):
++        raise ValueError(f"Unknown curve plot mode: {mode}")
++    figure = Figure(figsize=(6.8, 3.8), layout="constrained")
++    FigureCanvasAgg(figure)
++    axis = figure.subplots()
++    colors = {"target": "#333333", "unmatched": "#0072B2", "matched": "#D55E00"}
++    labels = {"target": "Target", "unmatched": "Unmatched proxy", "matched": "Epoch-matched proxy"}
++    minimum_sizes = {"target": 220, "unmatched": 140, "matched": 70} if mode == "excess" else dict.fromkeys(labels, 100)
++    for arm in ("target", *ARMS):
++        curve = report["curves"][arm]
++        offset = min(row["mean_bpb"] for row in curve) if mode == "excess" else 0.0
++        axis.plot(
++            [row["starcoder_weight"] for row in curve],
++            [row["mean_bpb"] - offset for row in curve],
++            marker="o",
++            markersize=4,
++            linewidth=1.2,
++            color=colors[arm],
++            label=labels[arm],
++        )
++        if len(report["proxy_trainer_seeds"]) > 1 and arm != "target":
++            samples = [point for point in points if point.arm == arm]
++            axis.scatter(
++                [point.starcoder_weight for point in samples],
++                [point.observed_bpb - offset for point in samples],
++                s=10,
++                color=colors[arm],
++                alpha=0.35,
++            )
++        weight, _ = _minimum(curve)
++        value = next(row["mean_bpb"] for row in curve if row["starcoder_weight"] == weight)
++        axis.scatter(
++            [weight], [value - offset], marker="*", s=minimum_sizes[arm], color=colors[arm], edgecolor="white", zorder=5
++        )
++    ylabel = "BPB above observed grid minimum" if mode == "excess" else "Programming-languages BPB"
++    axis.set(xlabel="StarCoder mixture fraction", ylabel=ylabel, xlim=(-0.02, 1.02))
++    axis.spines[["top", "right"]].set_visible(False)
++    axis.grid(alpha=0.2)
++    axis.legend(loc="best", framealpha=0.95)
++    axis.set_title(f"{report['stage'].capitalize()} measured grid; stars mark grid minima", fontsize=10)
++    for path in output_paths:
++        path.parent.mkdir(parents=True, exist_ok=True)
++        figure.savefig(path, dpi=180)
++    return figure
++
++
++def main() -> None:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--design", type=Path, default=design_module.DESIGN_PATH)
++    parser.add_argument("--measurements", type=Path, required=True)
++    parser.add_argument("--plan", type=Path, required=True, help="Launch plan with the expected config fingerprints")
++    parser.add_argument("--stage", choices=design_module.STAGES, required=True)
++    parser.add_argument("--output-dir", type=Path, required=True)
++    parser.add_argument("--plot-pdf", type=Path)
++    parser.add_argument("--plot-png", type=Path)
++    parser.add_argument("--plot-excess-pdf", type=Path, help="Plot BPB above each arm's observed grid minimum")
++    parser.add_argument("--plot-excess-png", type=Path, help="Plot BPB above each arm's observed grid minimum")
++    args = parser.parse_args()
++    design = design_module.load_design(args.design)
++    report, points = analyze(design, read_measurements(args.measurements), args.stage, read_plan(args.plan))
++    write_outputs(report, points, args.output_dir)
++    paths = tuple(path for path in (args.plot_pdf, args.plot_png) if path is not None)
++    if paths:
++        plot_curves(report, points, paths)
++    excess_paths = tuple(path for path in (args.plot_excess_pdf, args.plot_excess_png) if path is not None)
++    if excess_paths:
++        plot_curves(report, points, excess_paths, mode="excess")
++
++
++if __name__ == "__main__":
++    main()
+--- /dev/null
++++ b/experiments/domain_phase_mix/launch_starcoder_epoch_matching.py
+@@ -0,0 +1,490 @@
++# Copyright The Marin Authors
++# SPDX-License-Identifier: Apache-2.0
++
++"""Plan or explicitly submit the matched-epoch StarCoder proxy experiment."""
++
++from __future__ import annotations
++
++import argparse
++import asyncio
++import csv
++import json
++import logging
++import math
++import os
++import re
++import tempfile
++import tomllib
++from collections.abc import Sequence
++from dataclasses import asdict, replace
++from pathlib import Path
++from typing import Any
++
++import fsspec
++import jax
++import numpy as np
++from fray.types import ResourceConfig
++from levanter.data.text.datasets import BlockShuffleConfig
++from levanter.main.train_lm import TrainLmConfig
++from marin.execution.artifact import FingerprintMismatchError, read_record
++from marin.execution.lazy import ArtifactStep, StepContext, lower, materialized_config, run
++from marin.execution.step_status import STATUS_SUCCESS, StatusFile
++from marin.experiment.data import mixture
++from marin.experiment.train import train_lm
++from marin.processing.tokenize.tokenize import TokenizedCache
++from marin.training.training import LevanterCheckpoint, TrainLmOnPodConfig
++
++from experiments.datasets.dolma import dolma_datasets
++from experiments.datasets.nemotron import nemotron_datasets
++from experiments.datasets.paloma import paloma_datasets
++from experiments.datasets.uncheatable import uncheatable_datasets
++from experiments.domain_phase_mix import audit_starcoder_epoch_matching_indices as index_audit
++from experiments.domain_phase_mix import launch_starcoder_wsd80_dense_support_surfaces as historical
++from experiments.domain_phase_mix import launch_starcoder_wsd_80_20_surface as base
++from experiments.domain_phase_mix import starcoder_epoch_matching as design_module
++from experiments.llama import llama3_tokenizer, llama3_tokenizer_vocab_size
++from experiments.scaling_law_sweeps.completed_adamh import CompletedAdamHHeuristic
++
++logger = logging.getLogger(__name__)
++
++NAME = "pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908"
++VERSION = "2026.09.08"
++TOTAL_PARAMETERS = 210_052_480
++NON_EMBEDDING_PARAMETERS = 45_884_800
++
++
++def _with_epoch_support(
++    training: ArtifactStep[LevanterCheckpoint],
++    *,
++    datasets: dict[ArtifactStep[TokenizedCache], float],
++    validation: tuple[ArtifactStep[TokenizedCache], ...],
++    weights: dict[str, float],
++    request: design_module.RunSpec,
++    component_shuffle_keys: dict[str, tuple[int, int]],
++) -> ArtifactStep[LevanterCheckpoint]:
++    def build_config(ctx: StepContext) -> TrainLmOnPodConfig:
++        pod = training.build_config(ctx)
++        data = mixture(ctx, datasets, validation=validation)
++        if set(weights) != set(component_shuffle_keys) or not set(weights).issubset(data.components):
++            raise ValueError(f"{request.run_name}: component shuffle-key coverage drifted")
++        data = replace(
++            data,
++            train_weights=[(0, weights), (request.boundary_step, weights)],
++            mixture_block_size=design_module.BLOCK_SIZE,
++            experiment_budget=None,
++            target_budget=None,
++            simulated_epoch_subset_seed=None,
++            max_train_batches={"dolma/starcoder": request.starcoder_support_batches},
++            train_component_shuffle_keys=component_shuffle_keys,
++        )
++        trainer = replace(
++            pod.train_config.trainer,
++            seed=request.trainer_seed,
++            checkpointer=replace(pod.train_config.trainer.checkpointer, keep=None),
++        )
++        return replace(
++            pod,
++            train_config=replace(pod.train_config, data=data, data_seed=request.data_seed, trainer=trainer),
++        )
++
++    return replace(training, build_config=build_config)
++
++
++def build_training_steps(
++    design: design_module.ExperimentDesign, stage: str = "pilot"
++) -> tuple[tuple[design_module.RunSpec, ...], tuple[ArtifactStep[LevanterCheckpoint], ...]]:
++    """Build immutable training identities without reading caches or submitting jobs."""
++    requests = design_module.select_runs(design, stage)
++    model = CompletedAdamHHeuristic()._build_model_config(640, seq_len=design_module.SEQ_LEN)
++    if (
++        model.total_trainable_params(llama3_tokenizer_vocab_size) != TOTAL_PARAMETERS
++        or model.total_trainable_params(0) != NON_EMBEDDING_PARAMETERS
++    ):
++        raise ValueError("Historical StarCoder model geometry drifted")
++    nemotron = nemotron_datasets(tokenizer=llama3_tokenizer)
++    starcoder = dolma_datasets(tokenizer=llama3_tokenizer)["dolma/starcoder"]
++    handles = (*tuple(nemotron[split] for split in base.NEMOTRON_TOKEN_COUNTS), starcoder)
++    if tuple(handle.name for handle in handles) != design.component_order:
++        raise ValueError("Training component order differs from the frozen shuffle-key contract")
++    validation = (
++        *paloma_datasets(tokenizer=llama3_tokenizer).values(),
++        *uncheatable_datasets(tokenizer=llama3_tokenizer).values(),
++    )
++    resources = ResourceConfig.with_tpu(
++        base.DEFAULT_TPU_TYPE, regions=(base.DEFAULT_TPU_REGION,), zone=base.DEFAULT_TPU_ZONE
++    )
++    steps = []
++    for request in requests:
++        weights = base._phase_leaf_weights(request.starcoder_weight, nemotron=nemotron, starcoder=starcoder)
++        datasets = {handle: weights[handle.name] for handle in handles}
++        schedule = base._schedule_summary(request.materialized_tokens)
++        if schedule["total_steps"] != request.total_steps or schedule["boundary_step"] != request.boundary_step:
++            raise ValueError(f"{request.run_name}: optimizer schedule differs from the frozen design")
++        training = train_lm(
++            name=f"checkpoints/{NAME}/{request.run_name}",
++            version=VERSION,
++            model=model,
++            optimizer=base._optimizer(request.materialized_tokens),
++            datasets=datasets,
++            validation=validation,
++            batch_size=design_module.BATCH_SIZE,
++            seq_len=design_module.SEQ_LEN,
++            num_train_steps=request.total_steps,
++            z_loss_weight=None,
++            evals=None,
++            resources=resources,
++            steps_per_eval=1_000,
++            wandb_project="marin",
++            wandb_group=NAME,
++            run_id=request.run_name,
++            tags=("starcoder_epoch_matching_20260908", "starcoder", "wsd80_20", request.arm, request.coordinate_id),
++            env_vars={"HF_ALLOW_CODE_EVAL": "1"},
++        )
++        training = _with_epoch_support(
++            training,
++            datasets=datasets,
++            validation=validation,
++            weights=weights,
++            request=request,
++            component_shuffle_keys=design.component_shuffle_keys,
++        )
++        steps.append(replace(training, expected_fingerprint=training.fingerprint()))
++    return requests, tuple(steps)
++
++
++def pending_training_steps(
++    steps: tuple[ArtifactStep[LevanterCheckpoint], ...], *, marin_prefix: str
++) -> tuple[ArtifactStep[LevanterCheckpoint], ...]:
++    """Reuse only successful artifacts with matching recorded config fingerprints."""
++    pending = []
++    for step in steps:
++        path = step.path(marin_prefix)
++        status = StatusFile(path, worker_id="epoch-matching-resume-check").status
++        record = read_record(path)
++        if record is not None and record.fingerprint != step.fingerprint():
++            raise FingerprintMismatchError(f"{path}: recorded training config differs from the requested experiment")
++        if status == STATUS_SUCCESS:
++            if record is None:
++                raise RuntimeError(f"{path}: successful output has no artifact fingerprint; cannot safely reuse it")
++            continue
++        pending.append(step)
++    return tuple(pending)
++
++
++def require_previous_stage_complete(design: design_module.ExperimentDesign, stage: str, *, marin_prefix: str) -> None:
++    previous_stage = {"refinement": "pilot", "primary": "pilot", "replicated": "primary"}.get(stage)
++    if previous_stage is None:
++        return
++    _, previous_steps = build_training_steps(design, previous_stage)
++    incomplete = pending_training_steps(previous_steps, marin_prefix=marin_prefix)
++    if incomplete:
++        raise RuntimeError(
++            f"Cannot submit {stage}: {len(incomplete)} of {len(previous_steps)} "
++            f"{previous_stage} artifacts remain incomplete"
++        )
++
++
++def audit_runtime_configs(
++    design: design_module.ExperimentDesign,
++    requests: tuple[design_module.RunSpec, ...],
++    steps: tuple[ArtifactStep[LevanterCheckpoint], ...],
++    *,
++    marin_prefix: str,
++) -> None:
++    """Check resolved paths, support, shuffle keys, and independent trainer seeds."""
++    artifact_cache: dict[int, Any] = {}
++    for request, step in zip(requests, steps, strict=True):
++        pod = materialized_config(step, marin_prefix, artifact_cache=artifact_cache)
++        if not isinstance(pod, TrainLmOnPodConfig) or not isinstance(pod.train_config, TrainLmConfig):
++            raise TypeError(f"{request.run_name}: unexpected training config")
++        config = pod.train_config
++        data = config.data
++        if data.max_train_batches != {"dolma/starcoder": request.starcoder_support_batches}:
++            raise ValueError(f"{request.run_name}: source support cap drifted")
++        if data.train_component_shuffle_keys != design.component_shuffle_keys:
++            raise ValueError(f"{request.run_name}: frozen component permutations drifted")
++        if data.max_train_batches_subset_seed is not None:
++            raise ValueError(f"{request.run_name}: an independent subset permutation is active")
++        if data.shuffle != BlockShuffleConfig(io_block_size=256, window_blocks=512, perm_type="feistel"):
++            raise ValueError(f"{request.run_name}: legacy block-shuffle geometry drifted")
++        if config.data_seed != request.data_seed or config.trainer.seed != request.trainer_seed:
++            raise ValueError(f"{request.run_name}: data/trainer seeds drifted")
++        if any(
++            value is not None for value in (data.experiment_budget, data.target_budget, data.simulated_epoch_subset_seed)
++        ):
++            raise ValueError(f"{request.run_name}: global simulated-epoch slicing is active")
++        if not isinstance(data.train_weights, list) or [boundary for boundary, _ in data.train_weights] != [
++            0,
++            request.boundary_step,
++        ]:
++            raise ValueError(f"{request.run_name}: mixture schedule drifted")
++        for _boundary, weights in data.train_weights:
++            if weights["dolma/starcoder"] != request.starcoder_weight:
++                raise ValueError(f"{request.run_name}: StarCoder weight drifted")
++        for component in data.components.values():
++            cache_dir = component.cache_dir
++            if cache_dir is not None and not cache_dir.startswith(f"{base.DEFAULT_MARIN_PREFIX}/"):
++                raise ValueError(f"{request.run_name}: non-central1 training cache {cache_dir}")
++        if config.optimizer.decay != request.total_steps - request.boundary_step:
++            raise ValueError(f"{request.run_name}: WSD decay interval drifted")
++
++
++def observed_runtime_environment() -> dict[str, str | bool]:
++    """Describe the process performing the launch audit, without identifying a child runtime."""
++    return {
++        "jax_version": jax.__version__,
++        "numpy_version": np.__version__,
++        "jax_default_prng_impl": jax.config.jax_default_prng_impl,
++        "jax_enable_x64": bool(jax.config.jax_enable_x64),
++    }
++
++
++def intended_child_runtime(design: design_module.ExperimentDesign) -> dict[str, Any]:
++    """Bind intended child dependencies to the repository lock, not the historical version."""
++    lock_path = design_module.REPO_ROOT / "uv.lock"
++    lock = tomllib.loads(lock_path.read_text())
++    versions = {}
++    for name in ("jax", "jaxlib", "numpy"):
++        candidates = {package["version"] for package in lock["package"] if package["name"] == name}
++        if len(candidates) != 1:
++            raise ValueError(f"Expected one {name} version in the child runtime lock")
++        versions[name] = candidates.pop()
++    for name in ("jax", "numpy"):
++        if design.training_environment[f"{name}_version"] != versions[name]:
++            raise ValueError(f"Intended child {name} version disagrees with the frozen design")
++    return {
++        "environment": design.training_environment,
++        "locked_packages": versions,
++        "uv_lock_sha256": design_module.file_sha256(lock_path),
++        "source": "repository uv.lock bundled with the child job",
++        "observed_on_child": False,
++    }
++
++
++def validate_runtime_indices(design: design_module.ExperimentDesign, receipt: dict[str, Any]) -> dict[str, Any]:
++    """Recompute every parent and matched sequence index and compare with the reviewed receipt."""
++    if receipt.get("design_sha256") != design.design_sha256 or receipt.get("status") != "passed":
++        raise ValueError("Runtime index verification requires a passed receipt for this design")
++    if any(receipt.get(field) is not True for field in ("legacy_parent_match", "nested_subset_match")):
++        raise ValueError("Runtime index verification requires both reviewed source-identity checks")
++    count = receipt["packed_starcoder_sequence_count"]
++    with tempfile.TemporaryDirectory(prefix="starcoder-runtime-indices-") as directory:
++        result = asyncio.run(index_audit.audit_indices(count, Path(directory), design=design))
++    for field in (
++        "design_sha256",
++        "packed_starcoder_sequence_count",
++        "parent_indices_sha256",
++        "matched_indices_sha256",
++        "legacy_parent_match",
++        "nested_subset_match",
++    ):
++        if result[field] != receipt[field]:
++            raise ValueError(f"Runtime source-index audit differs from the reviewed receipt: {field}")
++    return {**result, "status": "passed", "verified_process": "parent", "child_process_verified": False}
++
++
++def validate_reuse_audit(design: design_module.ExperimentDesign, receipt_path: Path | None) -> dict[str, Any]:
++    """Require reviewed historical-config and sequence-identity evidence before training."""
++    if receipt_path is None:
++        raise ValueError("--submit requires --reuse-audit with a passed historical-target reuse receipt")
++    receipt = json.loads(receipt_path.read_text())
++    if not isinstance(receipt, dict):
++        raise ValueError("Reuse audit receipt must be a JSON object")
++    if receipt.get("design_sha256") != design.design_sha256:
++        raise ValueError("Reuse audit receipt is bound to a different experiment design")
++    if receipt.get("status") != "passed":
++        raise ValueError("Historical-target reuse audit has not passed")
++    for field in ("legacy_parent_match", "nested_subset_match"):
++        if receipt.get(field) is not True:
++            raise ValueError(f"Reuse audit does not establish {field}")
++    uri = receipt.get("historical_config_uri")
++    prefix = f"{base.DEFAULT_MARIN_PREFIX}/"
++    if not isinstance(uri, str) or not uri.startswith(prefix) or not uri.removeprefix(prefix).strip():
++        raise ValueError("Reuse audit needs a historical config URI in the pinned central1 bucket")
++    for field in ("historical_config_sha256", "parent_indices_sha256", "matched_indices_sha256"):
++        digest = receipt.get(field)
++        if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
++            raise ValueError(f"Reuse audit needs a SHA-256 digest for {field}")
++    sequence_count = receipt.get("packed_starcoder_sequence_count")
++    if type(sequence_count) is not int or sequence_count < design_module.PARENT_BATCHES * design_module.BATCH_SIZE:
++        raise ValueError("Reuse audit packed StarCoder sequence count cannot cover the frozen parent")
++    return receipt
++
++
++def collect_results(
++    design: design_module.ExperimentDesign,
++    requests: tuple[design_module.RunSpec, ...],
++    steps: tuple[ArtifactStep[LevanterCheckpoint], ...],
++    *,
++    marin_prefix: str,
++    output_path: Path,
++) -> int:
++    """Export verified final-checkpoint metrics from durable per-evaluation records."""
++    rows = []
++    for request, step in zip(requests, steps, strict=True):
++        if pending_training_steps((step,), marin_prefix=marin_prefix):
++            raise RuntimeError(f"{request.run_name}: training has not completed successfully")
++        artifact_path = step.path(marin_prefix)
++        metrics_path = f"{LevanterCheckpoint(path=artifact_path).checkpoint_dir}/eval_metrics.jsonl"
++        expected_step = request.total_steps - 1
++        values = []
++        with fsspec.open(metrics_path, "rt") as stream:
++            for line in stream:
++                if not line.strip():
++                    continue
++                record = json.loads(line)
++                if record.get("step") != expected_step or design.primary_metric not in record:
++                    continue
++                value = float(record[design.primary_metric])
++                if not math.isfinite(value):
++                    raise ValueError(f"{request.run_name}: nonfinite final evaluation")
++                values.append(value)
++        if not values:
++            raise ValueError(f"{request.run_name}: no {design.primary_metric} at final step {expected_step}")
++        if len(set(values)) != 1:
++            raise ValueError(f"{request.run_name}: conflicting evaluations at final step {expected_step}")
++        rows.append(
++            {
++                "run_name": request.run_name,
++                "step": expected_step,
++                "metric": design.primary_metric,
++                "value": values[0],
++                "design_sha256": design.design_sha256,
++                "config_fingerprint": step.fingerprint(),
++                "status": "succeeded",
++            }
++        )
++    if not rows:
++        raise ValueError("No selected training runs to collect")
++    output_path.parent.mkdir(parents=True, exist_ok=True)
++    temporary_path = output_path.with_suffix(output_path.suffix + ".tmp")
++    with temporary_path.open("w", newline="") as stream:
++        writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
++        writer.writeheader()
++        writer.writerows(rows)
++    temporary_path.replace(output_path)
++    return len(rows)
++
++
++def persist_submission_plan(plan: dict[str, Any], path: str) -> None:
++    """Create the complete reviewed submission plan once, refusing changed contents."""
++    encoded = (json.dumps(plan, indent=2, sort_keys=True, allow_nan=False) + "\n").encode()
++    fs, plain_path = fsspec.core.url_to_fs(path)
++    parent = os.path.dirname(plain_path)
++    if parent:
++        fs.makedirs(parent, exist_ok=True)
++    try:
++        with fs.open(plain_path, "xb") as handle:
++            handle.write(encoded)
++    except FileExistsError as error:
++        with fs.open(plain_path, "rb") as handle:
++            if handle.read() != encoded:
++                raise ValueError(f"Existing submission plan differs; refusing to overwrite {path}") from error
++    with fs.open(plain_path, "rb") as handle:
++        if handle.read() != encoded:
++            raise RuntimeError(f"Submission plan did not persist exactly: {path}")
++
++
++def launch_plan(
++    design: design_module.ExperimentDesign,
++    stage: str,
++    requests: tuple[design_module.RunSpec, ...],
++    steps: tuple[ArtifactStep[LevanterCheckpoint], ...],
++) -> dict[str, Any]:
++    plan = {
++        "design_sha256": design.design_sha256,
++        "stage": stage,
++        "submission_plan_uri": (
++            f"{base.DEFAULT_MARIN_PREFIX}/experiments/starcoder_epoch_matching_20260908/"
++            f"{design.design_sha256}/{stage}/launch_plan.json"
++        ),
++        "metric": design.primary_metric,
++        "marin_prefix": base.DEFAULT_MARIN_PREFIX,
++        "tpu_region": base.DEFAULT_TPU_REGION,
++        "tpu_zone": base.DEFAULT_TPU_ZONE,
++        "observed_parent_runtime": observed_runtime_environment(),
++        "intended_child_runtime": intended_child_runtime(design),
++        "new_training_runs": len(requests),
++        "runs": [
++            {**asdict(request), "output_path": step.path(base.DEFAULT_MARIN_PREFIX), "fingerprint": step.fingerprint()}
++            for request, step in zip(requests, steps, strict=True)
++        ],
++        "target_observations": [asdict(observation) for observation in design.target_observations],
++    }
++
++    if stage == "refinement":
++        plan["adaptive_release"] = {
++            "based_on_stage": "pilot",
++            "additional_starcoder_weights": list(design_module.REFINEMENT_WEIGHTS),
++            "trainer_seed": design_module.REFERENCE_SEED,
++        }
++    return plan
++
++
++def main(argv: Sequence[str] | None = None) -> None:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--design", type=Path, default=design_module.DESIGN_PATH)
++    parser.add_argument("--stage", choices=design_module.STAGES, default="pilot")
++    parser.add_argument("--plan-path", type=Path)
++    parser.add_argument("--audit-runtime", action="store_true")
++    parser.add_argument(
++        "--reuse-audit", type=Path, help="Passed historical-target reuse receipt required for submission"
++    )
++    parser.add_argument("--collect-results", type=Path, metavar="CSV", help="Export verified durable final evaluations")
++    parser.add_argument("--submit", action="store_true", help="Submit training; otherwise only emit the plan")
++    parser.add_argument("--marin-prefix", default=base.DEFAULT_MARIN_PREFIX)
++    parser.add_argument("--tpu-region", default=base.DEFAULT_TPU_REGION)
++    parser.add_argument("--tpu-zone", default=base.DEFAULT_TPU_ZONE)
++    args = parser.parse_args(argv)
++    logging.basicConfig(level=logging.INFO)
++    if (args.marin_prefix, args.tpu_region, args.tpu_zone) != (
++        base.DEFAULT_MARIN_PREFIX,
++        base.DEFAULT_TPU_REGION,
++        base.DEFAULT_TPU_ZONE,
++    ):
++        raise ValueError("This historical StarCoder experiment is frozen to us-central1/us-central1-a")
++    configured_prefix = os.environ.get("MARIN_PREFIX")
++    if args.submit and configured_prefix not in (None, args.marin_prefix):
++        raise ValueError(f"MARIN_PREFIX conflicts with the central1 experiment: {configured_prefix!r}")
++    design = design_module.load_design(args.design)
++    receipt = validate_reuse_audit(design, args.reuse_audit) if args.submit or args.reuse_audit is not None else None
++    requests, steps = build_training_steps(design, args.stage)
++    for step in steps:
++        lower(step)
++    plan = launch_plan(design, args.stage, requests, steps)
++    if receipt is not None:
++        plan["reuse_audit"] = receipt
++        plan["historical_training_environment"] = receipt.get("audit_runtime")
++    if args.audit_runtime or args.submit:
++        if receipt is not None:
++            plan["runtime_index_audit"] = validate_runtime_indices(design, receipt)
++        if args.submit:
++            require_previous_stage_complete(design, args.stage, marin_prefix=args.marin_prefix)
++        historical._validate_starcoder_source(args.marin_prefix, ())
++        audit_runtime_configs(design, requests, steps, marin_prefix=args.marin_prefix)
++    encoded = json.dumps(plan, indent=2, sort_keys=True) + "\n"
++    if args.plan_path is not None:
++        args.plan_path.parent.mkdir(parents=True, exist_ok=True)
++        args.plan_path.write_text(encoded)
++    else:
++        print(encoded, end="")
++    if args.submit:
++        persist_submission_plan(plan, plan["submission_plan_uri"])
++        os.environ["MARIN_PREFIX"] = args.marin_prefix
++        pending = pending_training_steps(steps, marin_prefix=args.marin_prefix)
++        logger.info("Selected %d training runs; submitting %d incomplete artifacts", len(steps), len(pending))
++        if pending:
++            run(*pending, max_concurrent=len(pending), force_run_failed=True)
++        incomplete = pending_training_steps(steps, marin_prefix=args.marin_prefix)
++        if incomplete:
++            raise RuntimeError(f"{len(incomplete)} selected training artifacts did not complete successfully")
++        logger.info("All %d selected training artifacts are complete", len(steps))
++    if args.collect_results is not None:
++        count = collect_results(
++            design, requests, steps, marin_prefix=args.marin_prefix, output_path=args.collect_results
++        )
++        logger.info("Collected %d verified final evaluations into %s", count, args.collect_results)
++
++
++if __name__ == "__main__":
++    main()
+--- /dev/null
++++ b/experiments/domain_phase_mix/starcoder_epoch_matching.py
+@@ -0,0 +1,279 @@
++# Copyright The Marin Authors
++# SPDX-License-Identifier: Apache-2.0
++"""Frozen finite-pool experiment comparing unmatched and epoch-matched proxies."""
++
++from __future__ import annotations
++
++import argparse
++import csv
++import hashlib
++import json
++from dataclasses import asdict, dataclass
++from pathlib import Path
++
++REPO_ROOT = Path(__file__).resolve().parents[2]
++DESIGN_PATH = Path(__file__).with_name("starcoder_epoch_matching_design_20260908.json")
++SOURCE_DESIGN = Path(__file__).with_name("starcoder_wsd80_dense_support_surface_design_20260808.json")
++SOURCE_OBSERVATIONS = Path(__file__).parent / (
++    "exploratory/two_phase_many/reference_outputs/" "starcoder_all_tied_curves_canonical_dsp_20260902/predictions.csv"
++)
++DESIGN_VERSION = "2026-09-08-v2"
++SEQ_LEN = 2048
++BATCH_SIZE = 128
++BLOCK_SIZE = 2048
++PROXY_STEPS = 1060
++TARGET_STEPS = 28260
++PARENT_BATCHES = 1068
++MATCHED_BATCHES = 40
++REFERENCE_SEED = 20260711
++TRAINER_SEEDS = (REFERENCE_SEED, 20260908, 20260909)
++PILOT_WEIGHTS = (0.0, 0.1, 0.3, 0.7, 1.0)
++REFINEMENT_WEIGHTS = (0.2, 0.4, 0.5, 0.6, 0.9)
++STAGES = ("pilot", "refinement", "primary", "replicated")
++TRAINING_FLOPS_PER_TOKEN = 878499840
++METRIC = "eval/paloma/dolma_100_programing_languages-llama3/bpb"
++COMPONENT_SHUFFLE_KEYS = {
++    "nemotron_cc/hq_actual-llama3": (4181282030, 3509741613),
++    "nemotron_cc/hq_synth-llama3": (1692708717, 814235673),
++    "nemotron_cc/medium_high-llama3": (838510724, 1386979079),
++    "nemotron_cc/medium-llama3": (3430063960, 3470476155),
++    "nemotron_cc/medium_low-llama3": (34974657, 2948256024),
++    "nemotron_cc/low_actual-llama3": (1427242644, 385010521),
++    "dolma/starcoder": (898005854, 446240491),
++}
++
++
++@dataclass(frozen=True)
++class RunSpec:
++    """A newly trained policy; first_stage controls cumulative batch release."""
++
++    run_name: str
++    arm: str
++    starcoder_weight: float
++    trainer_seed: int
++    data_seed: int
++    total_steps: int
++    boundary_step: int
++    materialized_tokens: int
++    starcoder_support_batches: int
++    first_stage: str
++    coordinate_id: str
++
++
++@dataclass(frozen=True)
++class TargetObservation:
++    """Archived endpoint loss, with explicit eligibility for the fixed-parent target."""
++
++    starcoder_weight: float
++    observed_bpb: float
++    source_run_name: str
++    source_observation_id: str
++    reusable: bool
++    reason: str
++
++
++@dataclass(frozen=True)
++class ExperimentDesign:
++    """Persisted experiment contract; its digest excludes only design_sha256 itself."""
++
++    design_version: str
++    primary_metric: str
++    design_sha256: str
++    runs: tuple[RunSpec, ...]
++    component_shuffle_keys: dict[str, tuple[int, int]]
++    component_order: tuple[str, ...]
++    training_environment: dict[str, str | bool]
++    source_sha256: dict[str, str]
++    target_observations: tuple[TargetObservation, ...]
++
++    def to_dict(self) -> dict:
++        return asdict(self)
++
++
++def canonical_sha256(payload: dict) -> str:
++    """Hash JSON independent of whitespace and mapping insertion order."""
++    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
++
++
++def file_sha256(path: Path) -> str:
++    return hashlib.sha256(path.read_bytes()).hexdigest()
++
++
++def select_runs(design: ExperimentDesign, stage: str) -> tuple[RunSpec, ...]:
++    """Select a cumulative stage, including earlier runs for safe resubmission."""
++    if stage not in STAGES:
++        raise ValueError(f"Unknown experiment stage: {stage}")
++    if stage == "refinement":
++        return tuple(
++            run
++            for run in design.runs
++            if run.first_stage == "pilot"
++            or (
++                run.arm in ("unmatched", "matched")
++                and run.trainer_seed == REFERENCE_SEED
++                and run.starcoder_weight in REFINEMENT_WEIGHTS
++            )
++        )
++    return tuple(run for run in design.runs if STAGES.index(run.first_stage) <= STAGES.index(stage))
++
++
++def build_design() -> ExperimentDesign:
++    """Construct a manifest from archived C40 outcomes and the frozen source design."""
++    source = json.loads(SOURCE_DESIGN.read_text())
++    claimed_hash = source.pop("design_sha256")
++    if canonical_sha256(source) != claimed_hash:
++        raise ValueError("Historical design checksum mismatch")
++    historical = {row["run_name"]: row for row in source["runs"]}
++    observations = []
++    coordinates = []
++    with SOURCE_OBSERVATIONS.open(newline="") as handle:
++        rows = [row for row in csv.DictReader(handle) if row["curve_ref"] == "C40"]
++    rows.sort(key=lambda row: float(row["starcoder_weight"]))
++    if len(rows) != 26:
++        raise ValueError("Expected all 26 C40 target coordinates")
++    for row in rows:
++        p = float(row["starcoder_weight"])
++        source_name = row["training_run_id"].removeprefix("run:")
++        run = historical[source_name]
++        if run["data_seed"] != REFERENCE_SEED or run["total_steps"] != TARGET_STEPS:
++            raise ValueError(f"Target seed or horizon changed: {source_name}")
++        if abs(run["phase_0_starcoder"] - p) > 1e-14 or abs(run["phase_1_starcoder"] - p) > 1e-14:
++            raise ValueError(f"Target policy is not tied at the expected weight: {source_name}")
++        if not row["observation_id"].endswith("@endpoint"):
++            raise ValueError(f"Target measurement is not an endpoint: {source_name}")
++        if run["support_id"] != "m100":
++            if run["support_id"] != "full" or run["starcoder_total_sequences"] > PARENT_BATCHES * BATCH_SIZE:
++                raise ValueError(f"Full-pool alias exceeds the benchmark parent: {source_name}")
++        elif run["starcoder_support_batches"] != PARENT_BATCHES:
++            raise ValueError(f"Target parent cap changed: {source_name}")
++        reusable = p < 1.0
++        observations.append(
++            TargetObservation(
++                p,
++                float(row["observed_bpb"]),
++                source_name,
++                row["observation_id"],
++                reusable,
++                (
++                    "same ordered parent, or a prefix-equivalent no-wrap alias"
++                    if reusable
++                    else "excluded: dropping zero-weight web components changed the StarCoder shuffle key"
++                ),
++            )
++        )
++        coordinates.append((run["coordinate_id"], p))
++
++    runs = []
++    for seed in TRAINER_SEEDS:
++        for coordinate, p in coordinates:
++            for arm, cap in (("unmatched", PARENT_BATCHES), ("matched", MATCHED_BATCHES)):
++                if arm == "matched" and p == 0:
++                    continue  # Exactly the same web-only stream; analysis aliases the unmatched run.
++                stage = "replicated" if seed != REFERENCE_SEED else "pilot" if p in PILOT_WEIGHTS else "primary"
++                runs.append(
++                    RunSpec(
++                        f"epmatch_{arm}_{coordinate}_s{seed}",
++                        arm,
++                        p,
++                        seed,
++                        REFERENCE_SEED,
++                        PROXY_STEPS,
++                        848,
++                        PROXY_STEPS * BATCH_SIZE * SEQ_LEN,
++                        cap,
++                        stage,
++                        coordinate,
++                    )
++                )
++    runs.append(
++        RunSpec(
++            "epmatch_target_c124_s20260711",
++            "target",
++            1.0,
++            REFERENCE_SEED,
++            REFERENCE_SEED,
++            TARGET_STEPS,
++            22608,
++            TARGET_STEPS * BATCH_SIZE * SEQ_LEN,
++            PARENT_BATCHES,
++            "pilot",
++            "c124",
++        )
++    )
++    design = ExperimentDesign(
++        DESIGN_VERSION,
++        METRIC,
++        "",
++        tuple(runs),
++        COMPONENT_SHUFFLE_KEYS,
++        tuple(COMPONENT_SHUFFLE_KEYS),
++        {
++            "jax_version": "0.11.1",
++            "numpy_version": "2.3.5",
++            "jax_default_prng_impl": "threefry2x32",
++            "jax_enable_x64": False,
++        },
++        {str(path.relative_to(REPO_ROOT)): file_sha256(path) for path in (SOURCE_DESIGN, SOURCE_OBSERVATIONS)},
++        tuple(observations),
++    )
++    payload = design.to_dict()
++    payload.pop("design_sha256")
++    payload["design_sha256"] = canonical_sha256(payload)
++    return _decode_design(payload)
++
++
++def _decode_design(payload: dict) -> ExperimentDesign:
++    actual_hash = payload["design_sha256"]
++    unsigned = {key: value for key, value in payload.items() if key != "design_sha256"}
++    if canonical_sha256(unsigned) != actual_hash:
++        raise ValueError("Experiment design checksum mismatch")
++    design = ExperimentDesign(
++        payload["design_version"],
++        payload["primary_metric"],
++        actual_hash,
++        tuple(RunSpec(**row) for row in payload["runs"]),
++        {name: tuple(key) for name, key in payload["component_shuffle_keys"].items()},
++        tuple(payload["component_order"]),
++        payload["training_environment"],
++        payload["source_sha256"],
++        tuple(TargetObservation(**row) for row in payload["target_observations"]),
++    )
++    if len({run.run_name for run in design.runs}) != len(design.runs):
++        raise ValueError("Duplicate planned run identities")
++    for run in design.runs:
++        if run.materialized_tokens != run.total_steps * BATCH_SIZE * SEQ_LEN:
++            raise ValueError(f"Incorrect token accounting: {run.run_name}")
++        if run.boundary_step * 5 != run.total_steps * 4 or run.boundary_step * BATCH_SIZE % BLOCK_SIZE:
++            raise ValueError(f"Unaligned WSD80 boundary: {run.run_name}")
++        if run.arm == "unmatched" and run.total_steps > run.starcoder_support_batches:
++            raise ValueError(f"Unmatched proxy can repeat the parent: {run.run_name}")
++    return design
++
++
++def load_design(path: Path = DESIGN_PATH) -> ExperimentDesign:
++    """Load and checksum-validate the self-contained frozen manifest without remote I/O."""
++    return _decode_design(json.loads(path.read_text()))
++
++
++def main() -> None:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--output", type=Path, default=DESIGN_PATH)
++    args = parser.parse_args()
++    design = build_design()
++    encoded = json.dumps(design.to_dict(), indent=2) + "\n"
++    if args.output.exists() and args.output.read_text() != encoded:
++        raise ValueError("Existing frozen manifest differs; review and version the experiment instead of overwriting")
++    args.output.write_text(encoded)
++    print(
++        json.dumps(
++            {
++                "path": str(args.output),
++                "design_sha256": design.design_sha256,
++                "stage_runs": {stage: len(select_runs(design, stage)) for stage in STAGES},
++            }
++        )
++    )
++
++
++if __name__ == "__main__":
++    main()
+--- /dev/null
++++ b/experiments/domain_phase_mix/starcoder_epoch_matching_design_20260908.json
+@@ -0,0 +1,2268 @@
++{
++  "design_version": "2026-09-08-v2",
++  "primary_metric": "eval/paloma/dolma_100_programing_languages-llama3/bpb",
++  "design_sha256": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b",
++  "runs": [
++    {
++      "run_name": "epmatch_unmatched_c000_s20260711",
++      "arm": "unmatched",
++      "starcoder_weight": 0.0,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "pilot",
++      "coordinate_id": "c000"
++    },
++    {
++      "run_name": "epmatch_unmatched_c028_s20260711",
++      "arm": "unmatched",
++      "starcoder_weight": 0.0364194347695976,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "primary",
++      "coordinate_id": "c028"
++    },
++    {
++      "run_name": "epmatch_matched_c028_s20260711",
++      "arm": "matched",
++      "starcoder_weight": 0.0364194347695976,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "primary",
++      "coordinate_id": "c028"
++    },
++    {
++      "run_name": "epmatch_unmatched_c030_s20260711",
++      "arm": "unmatched",
++      "starcoder_weight": 0.05,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "primary",
++      "coordinate_id": "c030"
++    },
++    {
++      "run_name": "epmatch_matched_c030_s20260711",
++      "arm": "matched",
++      "starcoder_weight": 0.05,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "primary",
++      "coordinate_id": "c030"
++    },
++    {
++      "run_name": "epmatch_unmatched_c032_s20260711",
++      "arm": "unmatched",
++      "starcoder_weight": 0.1,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "pilot",
++      "coordinate_id": "c032"
++    },
++    {
++      "run_name": "epmatch_matched_c032_s20260711",
++      "arm": "matched",
++      "starcoder_weight": 0.1,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "pilot",
++      "coordinate_id": "c032"
++    },
++    {
++      "run_name": "epmatch_unmatched_c036_s20260711",
++      "arm": "unmatched",
++      "starcoder_weight": 0.1407040424010894,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "primary",
++      "coordinate_id": "c036"
++    },
++    {
++      "run_name": "epmatch_matched_c036_s20260711",
++      "arm": "matched",
++      "starcoder_weight": 0.1407040424010894,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "primary",
++      "coordinate_id": "c036"
++    },
++    {
++      "run_name": "epmatch_unmatched_c038_s20260711",
++      "arm": "unmatched",
++      "starcoder_weight": 0.15,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "primary",
++      "coordinate_id": "c038"
++    },
++    {
++      "run_name": "epmatch_matched_c038_s20260711",
++      "arm": "matched",
++      "starcoder_weight": 0.15,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "primary",
++      "coordinate_id": "c038"
++    },
++    {
++      "run_name": "epmatch_unmatched_c039_s20260711",
++      "arm": "unmatched",
++      "starcoder_weight": 0.17005,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "primary",
++      "coordinate_id": "c039"
++    },
++    {
++      "run_name": "epmatch_matched_c039_s20260711",
++      "arm": "matched",
++      "starcoder_weight": 0.17005,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "primary",
++      "coordinate_id": "c039"
++    },
++    {
++      "run_name": "epmatch_unmatched_c041_s20260711",
++      "arm": "unmatched",
++      "starcoder_weight": 0.18,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "primary",
++      "coordinate_id": "c041"
++    },
++    {
++      "run_name": "epmatch_matched_c041_s20260711",
++      "arm": "matched",
++      "starcoder_weight": 0.18,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "primary",
++      "coordinate_id": "c041"
++    },
++    {
++      "run_name": "epmatch_unmatched_c043_s20260711",
++      "arm": "unmatched",
++      "starcoder_weight": 0.2,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "primary",
++      "coordinate_id": "c043"
++    },
++    {
++      "run_name": "epmatch_matched_c043_s20260711",
++      "arm": "matched",
++      "starcoder_weight": 0.2,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "primary",
++      "coordinate_id": "c043"
++    },
++    {
++      "run_name": "epmatch_unmatched_c048_s20260711",
++      "arm": "unmatched",
++      "starcoder_weight": 0.2405,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "primary",
++      "coordinate_id": "c048"
++    },
++    {
++      "run_name": "epmatch_matched_c048_s20260711",
++      "arm": "matched",
++      "starcoder_weight": 0.2405,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "primary",
++      "coordinate_id": "c048"
++    },
++    {
++      "run_name": "epmatch_unmatched_c049_s20260711",
++      "arm": "unmatched",
++      "starcoder_weight": 0.25,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "primary",
++      "coordinate_id": "c049"
++    },
++    {
++      "run_name": "epmatch_matched_c049_s20260711",
++      "arm": "matched",
++      "starcoder_weight": 0.25,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "primary",
++      "coordinate_id": "c049"
++    },
++    {
++      "run_name": "epmatch_unmatched_c050_s20260711",
++      "arm": "unmatched",
++      "starcoder_weight": 0.26,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "primary",
++      "coordinate_id": "c050"
++    },
++    {
++      "run_name": "epmatch_matched_c050_s20260711",
++      "arm": "matched",
++      "starcoder_weight": 0.26,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "primary",
++      "coordinate_id": "c050"
++    },
++    {
++      "run_name": "epmatch_unmatched_c057_s20260711",
++      "arm": "unmatched",
++      "starcoder_weight": 0.3,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "pilot",
++      "coordinate_id": "c057"
++    },
++    {
++      "run_name": "epmatch_matched_c057_s20260711",
++      "arm": "matched",
++      "starcoder_weight": 0.3,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "pilot",
++      "coordinate_id": "c057"
++    },
++    {
++      "run_name": "epmatch_unmatched_c073_s20260711",
++      "arm": "unmatched",
++      "starcoder_weight": 0.35,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "primary",
++      "coordinate_id": "c073"
++    },
++    {
++      "run_name": "epmatch_matched_c073_s20260711",
++      "arm": "matched",
++      "starcoder_weight": 0.35,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "primary",
++      "coordinate_id": "c073"
++    },
++    {
++      "run_name": "epmatch_unmatched_c079_s20260711",
++      "arm": "unmatched",
++      "starcoder_weight": 0.4,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "primary",
++      "coordinate_id": "c079"
++    },
++    {
++      "run_name": "epmatch_matched_c079_s20260711",
++      "arm": "matched",
++      "starcoder_weight": 0.4,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "primary",
++      "coordinate_id": "c079"
++    },
++    {
++      "run_name": "epmatch_unmatched_c085_s20260711",
++      "arm": "unmatched",
++      "starcoder_weight": 0.46,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "primary",
++      "coordinate_id": "c085"
++    },
++    {
++      "run_name": "epmatch_matched_c085_s20260711",
++      "arm": "matched",
++      "starcoder_weight": 0.46,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "primary",
++      "coordinate_id": "c085"
++    },
++    {
++      "run_name": "epmatch_unmatched_c088_s20260711",
++      "arm": "unmatched",
++      "starcoder_weight": 0.5,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "primary",
++      "coordinate_id": "c088"
++    },
++    {
++      "run_name": "epmatch_matched_c088_s20260711",
++      "arm": "matched",
++      "starcoder_weight": 0.5,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "primary",
++      "coordinate_id": "c088"
++    },
++    {
++      "run_name": "epmatch_unmatched_c094_s20260711",
++      "arm": "unmatched",
++      "starcoder_weight": 0.54,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "primary",
++      "coordinate_id": "c094"
++    },
++    {
++      "run_name": "epmatch_matched_c094_s20260711",
++      "arm": "matched",
++      "starcoder_weight": 0.54,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "primary",
++      "coordinate_id": "c094"
++    },
++    {
++      "run_name": "epmatch_unmatched_c096_s20260711",
++      "arm": "unmatched",
++      "starcoder_weight": 0.55,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "primary",
++      "coordinate_id": "c096"
++    },
++    {
++      "run_name": "epmatch_matched_c096_s20260711",
++      "arm": "matched",
++      "starcoder_weight": 0.55,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "primary",
++      "coordinate_id": "c096"
++    },
++    {
++      "run_name": "epmatch_unmatched_c100_s20260711",
++      "arm": "unmatched",
++      "starcoder_weight": 0.6,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "primary",
++      "coordinate_id": "c100"
++    },
++    {
++      "run_name": "epmatch_matched_c100_s20260711",
++      "arm": "matched",
++      "starcoder_weight": 0.6,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "primary",
++      "coordinate_id": "c100"
++    },
++    {
++      "run_name": "epmatch_unmatched_c103_s20260711",
++      "arm": "unmatched",
++      "starcoder_weight": 0.65,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "primary",
++      "coordinate_id": "c103"
++    },
++    {
++      "run_name": "epmatch_matched_c103_s20260711",
++      "arm": "matched",
++      "starcoder_weight": 0.65,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "primary",
++      "coordinate_id": "c103"
++    },
++    {
++      "run_name": "epmatch_unmatched_c109_s20260711",
++      "arm": "unmatched",
++      "starcoder_weight": 0.7,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "pilot",
++      "coordinate_id": "c109"
++    },
++    {
++      "run_name": "epmatch_matched_c109_s20260711",
++      "arm": "matched",
++      "starcoder_weight": 0.7,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "pilot",
++      "coordinate_id": "c109"
++    },
++    {
++      "run_name": "epmatch_unmatched_c112_s20260711",
++      "arm": "unmatched",
++      "starcoder_weight": 0.75,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "primary",
++      "coordinate_id": "c112"
++    },
++    {
++      "run_name": "epmatch_matched_c112_s20260711",
++      "arm": "matched",
++      "starcoder_weight": 0.75,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "primary",
++      "coordinate_id": "c112"
++    },
++    {
++      "run_name": "epmatch_unmatched_c116_s20260711",
++      "arm": "unmatched",
++      "starcoder_weight": 0.8,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "primary",
++      "coordinate_id": "c116"
++    },
++    {
++      "run_name": "epmatch_matched_c116_s20260711",
++      "arm": "matched",
++      "starcoder_weight": 0.8,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "primary",
++      "coordinate_id": "c116"
++    },
++    {
++      "run_name": "epmatch_unmatched_c119_s20260711",
++      "arm": "unmatched",
++      "starcoder_weight": 0.9,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "primary",
++      "coordinate_id": "c119"
++    },
++    {
++      "run_name": "epmatch_matched_c119_s20260711",
++      "arm": "matched",
++      "starcoder_weight": 0.9,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "primary",
++      "coordinate_id": "c119"
++    },
++    {
++      "run_name": "epmatch_unmatched_c124_s20260711",
++      "arm": "unmatched",
++      "starcoder_weight": 1.0,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "pilot",
++      "coordinate_id": "c124"
++    },
++    {
++      "run_name": "epmatch_matched_c124_s20260711",
++      "arm": "matched",
++      "starcoder_weight": 1.0,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "pilot",
++      "coordinate_id": "c124"
++    },
++    {
++      "run_name": "epmatch_unmatched_c000_s20260908",
++      "arm": "unmatched",
++      "starcoder_weight": 0.0,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c000"
++    },
++    {
++      "run_name": "epmatch_unmatched_c028_s20260908",
++      "arm": "unmatched",
++      "starcoder_weight": 0.0364194347695976,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c028"
++    },
++    {
++      "run_name": "epmatch_matched_c028_s20260908",
++      "arm": "matched",
++      "starcoder_weight": 0.0364194347695976,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c028"
++    },
++    {
++      "run_name": "epmatch_unmatched_c030_s20260908",
++      "arm": "unmatched",
++      "starcoder_weight": 0.05,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c030"
++    },
++    {
++      "run_name": "epmatch_matched_c030_s20260908",
++      "arm": "matched",
++      "starcoder_weight": 0.05,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c030"
++    },
++    {
++      "run_name": "epmatch_unmatched_c032_s20260908",
++      "arm": "unmatched",
++      "starcoder_weight": 0.1,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c032"
++    },
++    {
++      "run_name": "epmatch_matched_c032_s20260908",
++      "arm": "matched",
++      "starcoder_weight": 0.1,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c032"
++    },
++    {
++      "run_name": "epmatch_unmatched_c036_s20260908",
++      "arm": "unmatched",
++      "starcoder_weight": 0.1407040424010894,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c036"
++    },
++    {
++      "run_name": "epmatch_matched_c036_s20260908",
++      "arm": "matched",
++      "starcoder_weight": 0.1407040424010894,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c036"
++    },
++    {
++      "run_name": "epmatch_unmatched_c038_s20260908",
++      "arm": "unmatched",
++      "starcoder_weight": 0.15,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c038"
++    },
++    {
++      "run_name": "epmatch_matched_c038_s20260908",
++      "arm": "matched",
++      "starcoder_weight": 0.15,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c038"
++    },
++    {
++      "run_name": "epmatch_unmatched_c039_s20260908",
++      "arm": "unmatched",
++      "starcoder_weight": 0.17005,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c039"
++    },
++    {
++      "run_name": "epmatch_matched_c039_s20260908",
++      "arm": "matched",
++      "starcoder_weight": 0.17005,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c039"
++    },
++    {
++      "run_name": "epmatch_unmatched_c041_s20260908",
++      "arm": "unmatched",
++      "starcoder_weight": 0.18,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c041"
++    },
++    {
++      "run_name": "epmatch_matched_c041_s20260908",
++      "arm": "matched",
++      "starcoder_weight": 0.18,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c041"
++    },
++    {
++      "run_name": "epmatch_unmatched_c043_s20260908",
++      "arm": "unmatched",
++      "starcoder_weight": 0.2,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c043"
++    },
++    {
++      "run_name": "epmatch_matched_c043_s20260908",
++      "arm": "matched",
++      "starcoder_weight": 0.2,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c043"
++    },
++    {
++      "run_name": "epmatch_unmatched_c048_s20260908",
++      "arm": "unmatched",
++      "starcoder_weight": 0.2405,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c048"
++    },
++    {
++      "run_name": "epmatch_matched_c048_s20260908",
++      "arm": "matched",
++      "starcoder_weight": 0.2405,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c048"
++    },
++    {
++      "run_name": "epmatch_unmatched_c049_s20260908",
++      "arm": "unmatched",
++      "starcoder_weight": 0.25,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c049"
++    },
++    {
++      "run_name": "epmatch_matched_c049_s20260908",
++      "arm": "matched",
++      "starcoder_weight": 0.25,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c049"
++    },
++    {
++      "run_name": "epmatch_unmatched_c050_s20260908",
++      "arm": "unmatched",
++      "starcoder_weight": 0.26,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c050"
++    },
++    {
++      "run_name": "epmatch_matched_c050_s20260908",
++      "arm": "matched",
++      "starcoder_weight": 0.26,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c050"
++    },
++    {
++      "run_name": "epmatch_unmatched_c057_s20260908",
++      "arm": "unmatched",
++      "starcoder_weight": 0.3,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c057"
++    },
++    {
++      "run_name": "epmatch_matched_c057_s20260908",
++      "arm": "matched",
++      "starcoder_weight": 0.3,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c057"
++    },
++    {
++      "run_name": "epmatch_unmatched_c073_s20260908",
++      "arm": "unmatched",
++      "starcoder_weight": 0.35,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c073"
++    },
++    {
++      "run_name": "epmatch_matched_c073_s20260908",
++      "arm": "matched",
++      "starcoder_weight": 0.35,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c073"
++    },
++    {
++      "run_name": "epmatch_unmatched_c079_s20260908",
++      "arm": "unmatched",
++      "starcoder_weight": 0.4,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c079"
++    },
++    {
++      "run_name": "epmatch_matched_c079_s20260908",
++      "arm": "matched",
++      "starcoder_weight": 0.4,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c079"
++    },
++    {
++      "run_name": "epmatch_unmatched_c085_s20260908",
++      "arm": "unmatched",
++      "starcoder_weight": 0.46,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c085"
++    },
++    {
++      "run_name": "epmatch_matched_c085_s20260908",
++      "arm": "matched",
++      "starcoder_weight": 0.46,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c085"
++    },
++    {
++      "run_name": "epmatch_unmatched_c088_s20260908",
++      "arm": "unmatched",
++      "starcoder_weight": 0.5,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c088"
++    },
++    {
++      "run_name": "epmatch_matched_c088_s20260908",
++      "arm": "matched",
++      "starcoder_weight": 0.5,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c088"
++    },
++    {
++      "run_name": "epmatch_unmatched_c094_s20260908",
++      "arm": "unmatched",
++      "starcoder_weight": 0.54,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c094"
++    },
++    {
++      "run_name": "epmatch_matched_c094_s20260908",
++      "arm": "matched",
++      "starcoder_weight": 0.54,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c094"
++    },
++    {
++      "run_name": "epmatch_unmatched_c096_s20260908",
++      "arm": "unmatched",
++      "starcoder_weight": 0.55,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c096"
++    },
++    {
++      "run_name": "epmatch_matched_c096_s20260908",
++      "arm": "matched",
++      "starcoder_weight": 0.55,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c096"
++    },
++    {
++      "run_name": "epmatch_unmatched_c100_s20260908",
++      "arm": "unmatched",
++      "starcoder_weight": 0.6,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c100"
++    },
++    {
++      "run_name": "epmatch_matched_c100_s20260908",
++      "arm": "matched",
++      "starcoder_weight": 0.6,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c100"
++    },
++    {
++      "run_name": "epmatch_unmatched_c103_s20260908",
++      "arm": "unmatched",
++      "starcoder_weight": 0.65,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c103"
++    },
++    {
++      "run_name": "epmatch_matched_c103_s20260908",
++      "arm": "matched",
++      "starcoder_weight": 0.65,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c103"
++    },
++    {
++      "run_name": "epmatch_unmatched_c109_s20260908",
++      "arm": "unmatched",
++      "starcoder_weight": 0.7,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c109"
++    },
++    {
++      "run_name": "epmatch_matched_c109_s20260908",
++      "arm": "matched",
++      "starcoder_weight": 0.7,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c109"
++    },
++    {
++      "run_name": "epmatch_unmatched_c112_s20260908",
++      "arm": "unmatched",
++      "starcoder_weight": 0.75,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c112"
++    },
++    {
++      "run_name": "epmatch_matched_c112_s20260908",
++      "arm": "matched",
++      "starcoder_weight": 0.75,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c112"
++    },
++    {
++      "run_name": "epmatch_unmatched_c116_s20260908",
++      "arm": "unmatched",
++      "starcoder_weight": 0.8,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c116"
++    },
++    {
++      "run_name": "epmatch_matched_c116_s20260908",
++      "arm": "matched",
++      "starcoder_weight": 0.8,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c116"
++    },
++    {
++      "run_name": "epmatch_unmatched_c119_s20260908",
++      "arm": "unmatched",
++      "starcoder_weight": 0.9,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c119"
++    },
++    {
++      "run_name": "epmatch_matched_c119_s20260908",
++      "arm": "matched",
++      "starcoder_weight": 0.9,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c119"
++    },
++    {
++      "run_name": "epmatch_unmatched_c124_s20260908",
++      "arm": "unmatched",
++      "starcoder_weight": 1.0,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c124"
++    },
++    {
++      "run_name": "epmatch_matched_c124_s20260908",
++      "arm": "matched",
++      "starcoder_weight": 1.0,
++      "trainer_seed": 20260908,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c124"
++    },
++    {
++      "run_name": "epmatch_unmatched_c000_s20260909",
++      "arm": "unmatched",
++      "starcoder_weight": 0.0,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c000"
++    },
++    {
++      "run_name": "epmatch_unmatched_c028_s20260909",
++      "arm": "unmatched",
++      "starcoder_weight": 0.0364194347695976,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c028"
++    },
++    {
++      "run_name": "epmatch_matched_c028_s20260909",
++      "arm": "matched",
++      "starcoder_weight": 0.0364194347695976,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c028"
++    },
++    {
++      "run_name": "epmatch_unmatched_c030_s20260909",
++      "arm": "unmatched",
++      "starcoder_weight": 0.05,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c030"
++    },
++    {
++      "run_name": "epmatch_matched_c030_s20260909",
++      "arm": "matched",
++      "starcoder_weight": 0.05,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c030"
++    },
++    {
++      "run_name": "epmatch_unmatched_c032_s20260909",
++      "arm": "unmatched",
++      "starcoder_weight": 0.1,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c032"
++    },
++    {
++      "run_name": "epmatch_matched_c032_s20260909",
++      "arm": "matched",
++      "starcoder_weight": 0.1,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c032"
++    },
++    {
++      "run_name": "epmatch_unmatched_c036_s20260909",
++      "arm": "unmatched",
++      "starcoder_weight": 0.1407040424010894,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c036"
++    },
++    {
++      "run_name": "epmatch_matched_c036_s20260909",
++      "arm": "matched",
++      "starcoder_weight": 0.1407040424010894,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c036"
++    },
++    {
++      "run_name": "epmatch_unmatched_c038_s20260909",
++      "arm": "unmatched",
++      "starcoder_weight": 0.15,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c038"
++    },
++    {
++      "run_name": "epmatch_matched_c038_s20260909",
++      "arm": "matched",
++      "starcoder_weight": 0.15,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c038"
++    },
++    {
++      "run_name": "epmatch_unmatched_c039_s20260909",
++      "arm": "unmatched",
++      "starcoder_weight": 0.17005,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c039"
++    },
++    {
++      "run_name": "epmatch_matched_c039_s20260909",
++      "arm": "matched",
++      "starcoder_weight": 0.17005,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c039"
++    },
++    {
++      "run_name": "epmatch_unmatched_c041_s20260909",
++      "arm": "unmatched",
++      "starcoder_weight": 0.18,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c041"
++    },
++    {
++      "run_name": "epmatch_matched_c041_s20260909",
++      "arm": "matched",
++      "starcoder_weight": 0.18,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c041"
++    },
++    {
++      "run_name": "epmatch_unmatched_c043_s20260909",
++      "arm": "unmatched",
++      "starcoder_weight": 0.2,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c043"
++    },
++    {
++      "run_name": "epmatch_matched_c043_s20260909",
++      "arm": "matched",
++      "starcoder_weight": 0.2,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c043"
++    },
++    {
++      "run_name": "epmatch_unmatched_c048_s20260909",
++      "arm": "unmatched",
++      "starcoder_weight": 0.2405,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c048"
++    },
++    {
++      "run_name": "epmatch_matched_c048_s20260909",
++      "arm": "matched",
++      "starcoder_weight": 0.2405,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c048"
++    },
++    {
++      "run_name": "epmatch_unmatched_c049_s20260909",
++      "arm": "unmatched",
++      "starcoder_weight": 0.25,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c049"
++    },
++    {
++      "run_name": "epmatch_matched_c049_s20260909",
++      "arm": "matched",
++      "starcoder_weight": 0.25,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c049"
++    },
++    {
++      "run_name": "epmatch_unmatched_c050_s20260909",
++      "arm": "unmatched",
++      "starcoder_weight": 0.26,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c050"
++    },
++    {
++      "run_name": "epmatch_matched_c050_s20260909",
++      "arm": "matched",
++      "starcoder_weight": 0.26,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c050"
++    },
++    {
++      "run_name": "epmatch_unmatched_c057_s20260909",
++      "arm": "unmatched",
++      "starcoder_weight": 0.3,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c057"
++    },
++    {
++      "run_name": "epmatch_matched_c057_s20260909",
++      "arm": "matched",
++      "starcoder_weight": 0.3,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c057"
++    },
++    {
++      "run_name": "epmatch_unmatched_c073_s20260909",
++      "arm": "unmatched",
++      "starcoder_weight": 0.35,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c073"
++    },
++    {
++      "run_name": "epmatch_matched_c073_s20260909",
++      "arm": "matched",
++      "starcoder_weight": 0.35,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c073"
++    },
++    {
++      "run_name": "epmatch_unmatched_c079_s20260909",
++      "arm": "unmatched",
++      "starcoder_weight": 0.4,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c079"
++    },
++    {
++      "run_name": "epmatch_matched_c079_s20260909",
++      "arm": "matched",
++      "starcoder_weight": 0.4,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c079"
++    },
++    {
++      "run_name": "epmatch_unmatched_c085_s20260909",
++      "arm": "unmatched",
++      "starcoder_weight": 0.46,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c085"
++    },
++    {
++      "run_name": "epmatch_matched_c085_s20260909",
++      "arm": "matched",
++      "starcoder_weight": 0.46,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c085"
++    },
++    {
++      "run_name": "epmatch_unmatched_c088_s20260909",
++      "arm": "unmatched",
++      "starcoder_weight": 0.5,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c088"
++    },
++    {
++      "run_name": "epmatch_matched_c088_s20260909",
++      "arm": "matched",
++      "starcoder_weight": 0.5,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c088"
++    },
++    {
++      "run_name": "epmatch_unmatched_c094_s20260909",
++      "arm": "unmatched",
++      "starcoder_weight": 0.54,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c094"
++    },
++    {
++      "run_name": "epmatch_matched_c094_s20260909",
++      "arm": "matched",
++      "starcoder_weight": 0.54,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c094"
++    },
++    {
++      "run_name": "epmatch_unmatched_c096_s20260909",
++      "arm": "unmatched",
++      "starcoder_weight": 0.55,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c096"
++    },
++    {
++      "run_name": "epmatch_matched_c096_s20260909",
++      "arm": "matched",
++      "starcoder_weight": 0.55,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c096"
++    },
++    {
++      "run_name": "epmatch_unmatched_c100_s20260909",
++      "arm": "unmatched",
++      "starcoder_weight": 0.6,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c100"
++    },
++    {
++      "run_name": "epmatch_matched_c100_s20260909",
++      "arm": "matched",
++      "starcoder_weight": 0.6,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c100"
++    },
++    {
++      "run_name": "epmatch_unmatched_c103_s20260909",
++      "arm": "unmatched",
++      "starcoder_weight": 0.65,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c103"
++    },
++    {
++      "run_name": "epmatch_matched_c103_s20260909",
++      "arm": "matched",
++      "starcoder_weight": 0.65,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c103"
++    },
++    {
++      "run_name": "epmatch_unmatched_c109_s20260909",
++      "arm": "unmatched",
++      "starcoder_weight": 0.7,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c109"
++    },
++    {
++      "run_name": "epmatch_matched_c109_s20260909",
++      "arm": "matched",
++      "starcoder_weight": 0.7,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c109"
++    },
++    {
++      "run_name": "epmatch_unmatched_c112_s20260909",
++      "arm": "unmatched",
++      "starcoder_weight": 0.75,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c112"
++    },
++    {
++      "run_name": "epmatch_matched_c112_s20260909",
++      "arm": "matched",
++      "starcoder_weight": 0.75,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c112"
++    },
++    {
++      "run_name": "epmatch_unmatched_c116_s20260909",
++      "arm": "unmatched",
++      "starcoder_weight": 0.8,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c116"
++    },
++    {
++      "run_name": "epmatch_matched_c116_s20260909",
++      "arm": "matched",
++      "starcoder_weight": 0.8,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c116"
++    },
++    {
++      "run_name": "epmatch_unmatched_c119_s20260909",
++      "arm": "unmatched",
++      "starcoder_weight": 0.9,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c119"
++    },
++    {
++      "run_name": "epmatch_matched_c119_s20260909",
++      "arm": "matched",
++      "starcoder_weight": 0.9,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c119"
++    },
++    {
++      "run_name": "epmatch_unmatched_c124_s20260909",
++      "arm": "unmatched",
++      "starcoder_weight": 1.0,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 1068,
++      "first_stage": "replicated",
++      "coordinate_id": "c124"
++    },
++    {
++      "run_name": "epmatch_matched_c124_s20260909",
++      "arm": "matched",
++      "starcoder_weight": 1.0,
++      "trainer_seed": 20260909,
++      "data_seed": 20260711,
++      "total_steps": 1060,
++      "boundary_step": 848,
++      "materialized_tokens": 277872640,
++      "starcoder_support_batches": 40,
++      "first_stage": "replicated",
++      "coordinate_id": "c124"
++    },
++    {
++      "run_name": "epmatch_target_c124_s20260711",
++      "arm": "target",
++      "starcoder_weight": 1.0,
++      "trainer_seed": 20260711,
++      "data_seed": 20260711,
++      "total_steps": 28260,
++      "boundary_step": 22608,
++      "materialized_tokens": 7408189440,
++      "starcoder_support_batches": 1068,
++      "first_stage": "pilot",
++      "coordinate_id": "c124"
++    }
++  ],
++  "component_shuffle_keys": {
++    "nemotron_cc/hq_actual-llama3": [
++      4181282030,
++      3509741613
++    ],
++    "nemotron_cc/hq_synth-llama3": [
++      1692708717,
++      814235673
++    ],
++    "nemotron_cc/medium_high-llama3": [
++      838510724,
++      1386979079
++    ],
++    "nemotron_cc/medium-llama3": [
++      3430063960,
++      3470476155
++    ],
++    "nemotron_cc/medium_low-llama3": [
++      34974657,
++      2948256024
++    ],
++    "nemotron_cc/low_actual-llama3": [
++      1427242644,
++      385010521
++    ],
++    "dolma/starcoder": [
++      898005854,
++      446240491
++    ]
++  },
++  "component_order": [
++    "nemotron_cc/hq_actual-llama3",
++    "nemotron_cc/hq_synth-llama3",
++    "nemotron_cc/medium_high-llama3",
++    "nemotron_cc/medium-llama3",
++    "nemotron_cc/medium_low-llama3",
++    "nemotron_cc/low_actual-llama3",
++    "dolma/starcoder"
++  ],
++  "training_environment": {
++    "jax_version": "0.11.1",
++    "numpy_version": "2.3.5",
++    "jax_default_prng_impl": "threefry2x32",
++    "jax_enable_x64": false
++  },
++  "source_sha256": {
++    "experiments/domain_phase_mix/starcoder_wsd80_dense_support_surface_design_20260808.json": "ca06420ec7c46379463091bdd55c5f720910ac38b46a0f37f08545ea9966ecbe",
++    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/starcoder_all_tied_curves_canonical_dsp_20260902/predictions.csv": "a7b8a767ff4b2a1bcbc72d49806eabc53d8599673599455dec73fd6919b2636b"
++  },
++  "target_observations": [
++    {
++      "starcoder_weight": 0.0,
++      "observed_bpb": 1.573216438293457,
++      "source_run_name": "dss_r3d28260_full_c000_s0711",
++      "source_observation_id": "run:dss_r3d28260_full_c000_s0711@endpoint",
++      "reusable": true,
++      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias"
++    },
++    {
++      "starcoder_weight": 0.0364194347695976,
++      "observed_bpb": 1.0213229656219482,
++      "source_run_name": "dss_r3d28260_full_c028_s0711",
++      "source_observation_id": "run:dss_r3d28260_full_c028_s0711@endpoint",
++      "reusable": true,
++      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias"
++    },
++    {
++      "starcoder_weight": 0.05,
++      "observed_bpb": 0.9918119311332704,
++      "source_run_name": "dss_r3d28260_m100_c030_s0711",
++      "source_observation_id": "run:dss_r3d28260_m100_c030_s0711@endpoint",
++      "reusable": true,
++      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias"
++    },
++    {
++      "starcoder_weight": 0.1,
++      "observed_bpb": 0.9132958650588988,
++      "source_run_name": "dss_r3d28260_m100_c032_s0711",
++      "source_observation_id": "run:dss_r3d28260_m100_c032_s0711@endpoint",
++      "reusable": true,
++      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias"
++    },
++    {
++      "starcoder_weight": 0.1407040424010894,
++      "observed_bpb": 0.8835771679878235,
++      "source_run_name": "dss_r3d28260_m100_c036_s0711",
++      "source_observation_id": "run:dss_r3d28260_m100_c036_s0711@endpoint",
++      "reusable": true,
++      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias"
++    },
++    {
++      "starcoder_weight": 0.15,
++      "observed_bpb": 0.8769946098327637,
++      "source_run_name": "dss_r3d28260_m100_c038_s0711",
++      "source_observation_id": "run:dss_r3d28260_m100_c038_s0711@endpoint",
++      "reusable": true,
++      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias"
++    },
++    {
++      "starcoder_weight": 0.17005,
++      "observed_bpb": 0.8698081970214844,
++      "source_run_name": "dss_r3d28260_m100_c039_s0711",
++      "source_observation_id": "run:dss_r3d28260_m100_c039_s0711@endpoint",
++      "reusable": true,
++      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias"
++    },
++    {
++      "starcoder_weight": 0.18,
++      "observed_bpb": 0.8654301762580872,
++      "source_run_name": "dss_r3d28260_m100_c041_s0711",
++      "source_observation_id": "run:dss_r3d28260_m100_c041_s0711@endpoint",
++      "reusable": true,
++      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias"
++    },
++    {
++      "starcoder_weight": 0.2,
++      "observed_bpb": 0.8518126606941223,
++      "source_run_name": "dss_r3d28260_m100_c043_s0711",
++      "source_observation_id": "run:dss_r3d28260_m100_c043_s0711@endpoint",
++      "reusable": true,
++      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias"
++    },
++    {
++      "starcoder_weight": 0.2405,
++      "observed_bpb": 0.8371742367744446,
++      "source_run_name": "dss_r3d28260_m100_c048_s0711",
++      "source_observation_id": "run:dss_r3d28260_m100_c048_s0711@endpoint",
++      "reusable": true,
++      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias"
++    },
++    {
++      "starcoder_weight": 0.25,
++      "observed_bpb": 0.8376805186271667,
++      "source_run_name": "dss_r3d28260_m100_c049_s0711",
++      "source_observation_id": "run:dss_r3d28260_m100_c049_s0711@endpoint",
++      "reusable": true,
++      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias"
++    },
++    {
++      "starcoder_weight": 0.26,
++      "observed_bpb": 0.8344674110412598,
++      "source_run_name": "dss_r3d28260_m100_c050_s0711",
++      "source_observation_id": "run:dss_r3d28260_m100_c050_s0711@endpoint",
++      "reusable": true,
++      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias"
++    },
++    {
++      "starcoder_weight": 0.3,
++      "observed_bpb": 0.8213925957679749,
++      "source_run_name": "dss_r3d28260_m100_c057_s0711",
++      "source_observation_id": "run:dss_r3d28260_m100_c057_s0711@endpoint",
++      "reusable": true,
++      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias"
++    },
++    {
++      "starcoder_weight": 0.35,
++      "observed_bpb": 0.8136085867881775,
++      "source_run_name": "dss_r3d28260_m100_c073_s0711",
++      "source_observation_id": "run:dss_r3d28260_m100_c073_s0711@endpoint",
++      "reusable": true,
++      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias"
++    },
++    {
++      "starcoder_weight": 0.4,
++      "observed_bpb": 0.8039188385009766,
++      "source_run_name": "dss_r3d28260_m100_c079_s0711",
++      "source_observation_id": "run:dss_r3d28260_m100_c079_s0711@endpoint",
++      "reusable": true,
++      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias"
++    },
++    {
++      "starcoder_weight": 0.46,
++      "observed_bpb": 0.7982728481292725,
++      "source_run_name": "dss_r3d28260_m100_c085_s0711",
++      "source_observation_id": "run:dss_r3d28260_m100_c085_s0711@endpoint",
++      "reusable": true,
++      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias"
++    },
++    {
++      "starcoder_weight": 0.5,
++      "observed_bpb": 0.7982456684112549,
++      "source_run_name": "dss_r3d28260_m100_c088_s0711",
++      "source_observation_id": "run:dss_r3d28260_m100_c088_s0711@endpoint",
++      "reusable": true,
++      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias"
++    },
++    {
++      "starcoder_weight": 0.54,
++      "observed_bpb": 0.794552743434906,
++      "source_run_name": "dss_r3d28260_m100_c094_s0711",
++      "source_observation_id": "run:dss_r3d28260_m100_c094_s0711@endpoint",
++      "reusable": true,
++      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias"
++    },
++    {
++      "starcoder_weight": 0.55,
++      "observed_bpb": 0.7927592992782593,
++      "source_run_name": "dss_r3d28260_m100_c096_s0711",
++      "source_observation_id": "run:dss_r3d28260_m100_c096_s0711@endpoint",
++      "reusable": true,
++      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias"
++    },
++    {
++      "starcoder_weight": 0.6,
++      "observed_bpb": 0.792351245880127,
++      "source_run_name": "dss_r3d28260_m100_c100_s0711",
++      "source_observation_id": "run:dss_r3d28260_m100_c100_s0711@endpoint",
++      "reusable": true,
++      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias"
++    },
++    {
++      "starcoder_weight": 0.65,
++      "observed_bpb": 0.7898608446121216,
++      "source_run_name": "dss_r3d28260_m100_c103_s0711",
++      "source_observation_id": "run:dss_r3d28260_m100_c103_s0711@endpoint",
++      "reusable": true,
++      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias"
++    },
++    {
++      "starcoder_weight": 0.7,
++      "observed_bpb": 0.7880429029464722,
++      "source_run_name": "dss_r3d28260_m100_c109_s0711",
++      "source_observation_id": "run:dss_r3d28260_m100_c109_s0711@endpoint",
++      "reusable": true,
++      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias"
++    },
++    {
++      "starcoder_weight": 0.75,
++      "observed_bpb": 0.7921496033668518,
++      "source_run_name": "dss_r3d28260_m100_c112_s0711",
++      "source_observation_id": "run:dss_r3d28260_m100_c112_s0711@endpoint",
++      "reusable": true,
++      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias"
++    },
++    {
++      "starcoder_weight": 0.8,
++      "observed_bpb": 0.7932103276252747,
++      "source_run_name": "dss_r3d28260_m100_c116_s0711",
++      "source_observation_id": "run:dss_r3d28260_m100_c116_s0711@endpoint",
++      "reusable": true,
++      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias"
++    },
++    {
++      "starcoder_weight": 0.9,
++      "observed_bpb": 0.8038912415504456,
++      "source_run_name": "dss_r3d28260_m100_c119_s0711",
++      "source_observation_id": "run:dss_r3d28260_m100_c119_s0711@endpoint",
++      "reusable": true,
++      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias"
++    },
++    {
++      "starcoder_weight": 1.0,
++      "observed_bpb": 0.8343366384506226,
++      "source_run_name": "dss_r3d28260_m100_c124_s0711",
++      "source_observation_id": "run:dss_r3d28260_m100_c124_s0711@endpoint",
++      "reusable": false,
++      "reason": "excluded: dropping zero-weight web components changed the StarCoder shuffle key"
++    }
++  ]
++}
+diff --git a/lib/levanter/src/levanter/data/text/datasets.py b/lib/levanter/src/levanter/data/text/datasets.py
+index bb5788b7f2..dff532c26f 100644
+--- a/lib/levanter/src/levanter/data/text/datasets.py
++++ b/lib/levanter/src/levanter/data/text/datasets.py
+@@ -782,6 +782,13 @@ class LmDataConfig:
+     """
+     Type of permutation to use for full shuffle.
+     """
++    train_component_shuffle_keys: dict[str, tuple[int, int]] | None = None
++    """Raw uint32 JAX keys overriding the run-order shuffle for named training components.
++
++    Overrides preserve a component's order when zero-weight components are removed. They also fix capped support
++    in the legacy shuffle-before-slice paths. Explicit subset seeds still control support selection independently.
++    Validation shuffles and mixture sampling are unaffected.
++    """
+ 
+     block_cross_document_attention: bool = True
+     """Whether to block attention across document boundaries.
+@@ -844,6 +851,15 @@ class LmDataConfig:
+             assert (
+                 self.experiment_budget is None and self.target_budget is None
+             ), "max_train_batches/num_validation_sequences and simulated data budget cannot all be set"
++        if self.train_component_shuffle_keys is not None:
++            if not self.shuffle:
++                raise ValueError("train_component_shuffle_keys requires dataset shuffling")
++            unknown = set(self.train_component_shuffle_keys) - set(self.components)
++            if unknown:
++                raise ValueError(f"train_component_shuffle_keys names unknown components: {sorted(unknown)}")
++            for name, raw_key in self.train_component_shuffle_keys.items():
++                if len(raw_key) != 2 or any(type(value) is not int or not 0 <= value < 2**32 for value in raw_key):
++                    raise ValueError(f"train_component_shuffle_keys[{name!r}] must contain two uint32 integers")
+         if self.simulated_epoch_pool_fractions is not None:
+             if self.experiment_budget is None or self.target_budget is None:
+                 raise ValueError("simulated_epoch_pool_fractions requires experiment_budget and target_budget")
+@@ -1231,6 +1247,20 @@ class LmDataConfig:
+                 ds = ds.shuffle(k, perm_type=perm_type)
+             return ds
+ 
++        def shuffle_train_sets(
++            ds_by_name: Mapping[str, AsyncDataset[GrugLmExample]],
++        ) -> dict[str, AsyncDataset[GrugLmExample]]:
++            key_iter = key_iterator(key)
++            shuffled = {}
++            overrides = self.train_component_shuffle_keys or {}
++            for name, ds in ds_by_name.items():
++                # Consume every key so an override leaves later components' default keys unchanged.
++                component_key = next(key_iter)
++                if name in overrides:
++                    component_key = jnp.asarray(overrides[name], dtype=jnp.uint32)
++                shuffled[name] = shuffle_ds(ds, component_key)
++            return shuffled
++
+         if (
+             self.experiment_budget is not None and self.target_budget is not None
+         ) and self.experiment_budget > self.target_budget:
+@@ -1266,8 +1296,7 @@ class LmDataConfig:
+         if self.experiment_budget is not None and self.target_budget is not None:
+             if self.simulated_epoch_subset_seed is None:
+                 if shuffle_cfg:
+-                    key_iter = key_iterator(key)
+-                    datasets = {name: shuffle_ds(ds, next(key_iter)) for name, ds in datasets.items()}
++                    datasets = shuffle_train_sets(datasets)
+                 datasets = slice_for_simulated_epoching(datasets, subset_seed=None)
+             else:
+                 datasets = slice_for_simulated_epoching(
+@@ -1275,11 +1304,9 @@ class LmDataConfig:
+                     subset_seed=self.simulated_epoch_subset_seed,
+                 )
+                 if shuffle_cfg:
+-                    key_iter = key_iterator(key)
+-                    datasets = {name: shuffle_ds(ds, next(key_iter)) for name, ds in datasets.items()}
++                    datasets = shuffle_train_sets(datasets)
+         elif shuffle_cfg and self.max_train_batches_subset_seed is None:
+-            key_iter = key_iterator(key)
+-            datasets = {name: shuffle_ds(ds, next(key_iter)) for name, ds in datasets.items()}
++            datasets = shuffle_train_sets(datasets)
+ 
+         if self.max_train_batches is not None:
+             assert (
+@@ -1305,8 +1332,7 @@ class LmDataConfig:
+                     datasets[name] = ds.slice_dataset(start_index=start_sequence, end_index=end_sequence)
+ 
+         if shuffle_cfg and self.max_train_batches_subset_seed is not None:
+-            key_iter = key_iterator(key)
+-            datasets = {name: shuffle_ds(ds, next(key_iter)) for name, ds in datasets.items()}
++            datasets = shuffle_train_sets(datasets)
+ 
+         return datasets
+ 
+diff --git a/lib/levanter/tests/test_text.py b/lib/levanter/tests/test_text.py
+index 87ebb62421..8dcca67636 100644
+--- a/lib/levanter/tests/test_text.py
++++ b/lib/levanter/tests/test_text.py
+@@ -18,6 +18,7 @@ from levanter.data.dataset import ListAsyncDataset
+ from levanter.data.text._batch_tokenizer import BatchTokenizer
+ from levanter.data.text.cache import build_lm_dataset_cache
+ from levanter.data.text.datasets import (
++    BlockShuffleConfig,
+     ChatDataset,
+     DEFAULT_LM_DATA_SHUFFLE,
+     DatasetComponent,
+@@ -42,6 +43,7 @@ from levanter.models.lm_model import LmExample
+ from levanter.models.loss import maybe_fused_next_token_loss
+ from levanter.schedule import BatchSchedule
+ from levanter.store.cache import LEDGER_FILE_NAME, CacheCatalog, write_levanter_cache
++from levanter.utils.jax_utils import key_iterator
+ 
+ 
+ def test_dont_blow_up_without_validation_set():
+@@ -540,6 +542,89 @@ def test_max_train_batches_fixed_subset_is_independent_of_training_shuffle():
+     assert len(first_order["uncapped"]) == 1_024
+ 
+ 
++@pytest.mark.parametrize("shuffle", [True, BlockShuffleConfig(io_block_size=8, window_blocks=4)])
++@pytest.mark.parametrize("support_mode", ["full", "cap", "fixed_cap", "simulated", "fixed_simulated"])
++def test_component_shuffle_keys_preserve_data_when_other_components_have_zero_weight(shuffle, support_mode):
++    Pos = hax.Axis("position", 4)
++    source = ListAsyncDataset(
++        [GrugLmExample.causal(jnp.full((Pos.size,), value, dtype=jnp.int32)) for value in range(128)]
++    )
++    components = {
++        name: DirectDatasetComponent(datasets={"train": source, "validation": source}) for name in ("web", "code")
++    }
++    training_key = jax.random.PRNGKey(17)
++    historical_keys = key_iterator(training_key)
++    next(historical_keys)
++    code_key = tuple(int(value) for value in np.asarray(next(historical_keys)))
++    support = {}
++    if support_mode in ("cap", "fixed_cap"):
++        support["max_train_batches"] = {"code": 64}
++        if support_mode == "fixed_cap":
++            support["max_train_batches_subset_seed"] = 5
++    elif support_mode in ("simulated", "fixed_simulated"):
++        support.update(experiment_budget=64, target_budget=128)
++        if support_mode == "fixed_simulated":
++            support["simulated_epoch_subset_seed"] = 5
++
++    def config(web_weight, overrides=None):
++        return LmDataConfig(
++            components=components,
++            train_weights={"web": web_weight, "code": 1.0},
++            tokenizer="passthrough",
++            vocab_size=256,
++            shuffle=shuffle,
++            train_component_shuffle_keys=overrides,
++            **support,
++        )
++
++    def code_order(data_config, key=training_key):
++        dataset = data_config.train_sets(Pos, initial_batch_size=1, key=key)["code"].as_sync_dataset()
++        return [int(np.asarray(dataset[index].tokens)[0]) for index in range(len(dataset))]
++
++    interior = code_order(config(web_weight=1.0))
++    endpoint = config(web_weight=0.0, overrides={"code": code_key})
++    assert code_order(config(web_weight=0.0)) != interior
++    assert code_order(endpoint) == interior
++    assert code_order(endpoint, key=jax.random.PRNGKey(29)) == interior
++
++    original_validation = config(web_weight=1.0).validation_sets(Pos)["code"].as_sync_dataset()
++    endpoint_validation = endpoint.validation_sets(Pos)["code"].as_sync_dataset()
++    assert [int(example.tokens.array[0]) for example in endpoint_validation] == [
++        int(example.tokens.array[0]) for example in original_validation
++    ]
++
++
++def test_component_shuffle_keys_keep_capped_support_nested_and_leave_other_components_unchanged():
++    Pos = hax.Axis("position", 4)
++    source = ListAsyncDataset(
++        [GrugLmExample.causal(jnp.full((Pos.size,), value, dtype=jnp.int32)) for value in range(128)]
++    )
++    components = {name: DirectDatasetComponent(datasets={"train": source}) for name in ("code", "web")}
++
++    def orders(cap, overrides):
++        config = LmDataConfig(
++            components=components,
++            tokenizer="passthrough",
++            vocab_size=256,
++            shuffle=True,
++            max_train_batches={"code": cap},
++            train_component_shuffle_keys=overrides,
++        )
++        result = {}
++        for name, dataset in config.train_sets(Pos, initial_batch_size=1, key=jax.random.PRNGKey(17)).items():
++            sync_dataset = dataset.as_sync_dataset()
++            result[name] = [int(np.asarray(sync_dataset[index].tokens)[0]) for index in range(len(sync_dataset))]
++        return result
++
++    historical = orders(cap=64, overrides=None)
++    parent = orders(cap=64, overrides={"code": (898005854, 446240491)})
++    proxy = orders(cap=16, overrides={"code": (898005854, 446240491)})
++    assert proxy["code"] == parent["code"][:16]
++    assert set(proxy["code"]) < set(parent["code"])
++    assert parent["code"] != historical["code"]
++    assert parent["web"] == historical["web"]
++
++
+ def test_simulated_epoch_pool_fraction_keeps_a_nested_subset_of_the_full_support():
+     Pos = hax.Axis("position", 4)
+     components = {
+--- /dev/null
++++ b/tests/test_starcoder_epoch_matching_analysis.py
+@@ -0,0 +1,290 @@
++# Copyright The Marin Authors
++# SPDX-License-Identifier: Apache-2.0
++
++import csv
++import json
++from dataclasses import asdict, replace
++
++import numpy as np
++import pytest
++
++from experiments.domain_phase_mix import starcoder_epoch_matching as design_module
++from experiments.domain_phase_mix.exploratory.two_phase_many import analyze_starcoder_epoch_matching as analysis
++
++
++@pytest.fixture
++def design(tmp_path):
++    payload = design_module.load_design().to_dict()
++    target_values = {0.0: 4.0, 0.1: 1.0, 0.3: 3.0, 0.5: 1.0, 0.7: 2.0, 1.0: -100.0}
++    for observation in payload["target_observations"]:
++        observation["observed_bpb"] = target_values.get(observation["starcoder_weight"], 2.5)
++    payload.pop("design_sha256")
++    payload["design_sha256"] = design_module.canonical_sha256(payload)
++    path = tmp_path / "synthetic_design.json"
++    path.write_text(json.dumps(payload))
++    return design_module.load_design(path)
++
++
++def measurements(design, stage):
++    records = []
++    for run in design_module.select_runs(design, stage):
++        if run.arm == "target":
++            value = 5.0
++        elif run.arm == "unmatched":
++            value = 100.0 + (run.starcoder_weight - 0.7) ** 2
++        else:
++            value = 10.0 + (run.starcoder_weight - 0.1) ** 2
++        records.append(
++            analysis.Measurement(
++                run.run_name,
++                run.total_steps - 1,
++                design_module.METRIC,
++                value,
++                design.design_sha256,
++                f"verified-{run.run_name}",
++                "succeeded",
++            )
++        )
++    return tuple(records)
++
++
++def launch_plan(design, stage) -> dict:
++    runs = design_module.select_runs(design, stage)
++    return {
++        "design_sha256": design.design_sha256,
++        "metric": design.primary_metric,
++        "stage": stage,
++        "new_training_runs": len(runs),
++        "runs": [{**asdict(run), "fingerprint": f"verified-{run.run_name}"} for run in runs],
++    }
++
++
++def test_analysis_uses_target_loss_at_proxy_choices_and_excludes_historical_endpoint(design, tmp_path):
++    input_path = tmp_path / "measurements.csv"
++    with input_path.open("w", newline="") as handle:
++        writer = csv.DictWriter(handle, fieldnames=analysis.MEASUREMENT_COLUMNS)
++        writer.writeheader()
++        writer.writerows(asdict(record) for record in measurements(design, "pilot"))
++    plan_path = tmp_path / "launch_plan.json"
++    plan_path.write_text(json.dumps(launch_plan(design, "pilot")))
++    report, points = analysis.analyze(
++        design, analysis.read_measurements(input_path), "pilot", analysis.read_plan(plan_path)
++    )
++    assert report["selection"]["unmatched"]["selected_weight"] == 0.7
++    assert report["selection"]["unmatched"]["absolute_weight_displacement_from_target_minimum"] == pytest.approx(0.6)
++    assert report["selection"]["unmatched"]["target_grid_regret"] == 1.0
++    assert report["selection"]["matched"]["selected_weight"] == 0.1
++    assert report["selection"]["matched"]["absolute_weight_displacement_from_target_minimum"] == 0.0
++    assert report["selection"]["matched"]["target_grid_regret"] == 0.0
++    assert report["target_minimum"]["bpb"] == 1.0
++    assert report["delta_target_regret"] == -1.0
++    endpoint = next(point for point in points if point.arm == "target" and point.starcoder_weight == 1.0)
++    assert endpoint.observed_bpb == 5.0
++    assert endpoint.source_kind == "new"
++    analysis.write_outputs(report, points, tmp_path / "results")
++    assert json.loads((tmp_path / "results/analysis.json").read_text())["grid"] == [0.0, 0.1, 0.3, 0.7, 1.0]
++    with (tmp_path / "results/curves.csv").open(newline="") as handle:
++        saved = list(csv.DictReader(handle))
++    assert len(saved) == 15
++    assert sum(row["is_alias"] == "True" for row in saved) == 1
++
++
++def test_analysis_refuses_missing_corrected_endpoint_even_with_archived_value(design):
++    target_name = next(run.run_name for run in design.runs if run.arm == "target")
++    records = tuple(record for record in measurements(design, "pilot") if record.run_name != target_name)
++    with pytest.raises(ValueError, match="missing final measurements"):
++        analysis.analyze(design, records, "pilot", launch_plan(design, "pilot"))
++
++
++@pytest.mark.parametrize(("matched_choice", "delta_regret"), [(0.1, -1.0), (0.7, 0.0), (0.3, 1.0)])
++def test_analysis_reports_matching_improvement_tie_and_worsening(design, matched_choice, delta_regret):
++    runs = {run.run_name: run for run in design.runs}
++    records = tuple(
++        (
++            replace(record, value=10.0 + (runs[record.run_name].starcoder_weight - matched_choice) ** 2)
++            if runs[record.run_name].arm == "matched"
++            else record
++        )
++        for record in measurements(design, "pilot")
++    )
++    report, _ = analysis.analyze(design, records, "pilot", launch_plan(design, "pilot"))
++    assert report["delta_target_regret"] == delta_regret
++
++
++def test_excess_plot_subtracts_each_mean_curve_minimum_on_one_axis_without_changing_raw_values(design):
++    report, points = analysis.analyze(design, measurements(design, "pilot"), "pilot", launch_plan(design, "pilot"))
++    original_report = json.dumps(report, sort_keys=True)
++    raw = analysis.plot_curves(report, points, ())
++    excess = analysis.plot_curves(report, points, (), mode="excess")
++    assert len(excess.axes) == 1
++    raw_lines = raw.axes[0].lines
++    excess_lines = excess.axes[0].lines
++    assert len(raw_lines) == len(excess_lines) == 3
++    # Independently specified target, unmatched, and matched minima have very different BPB levels.
++    for raw_line, excess_line, minimum in zip(raw_lines, excess_lines, (1.0, 100.0, 10.0), strict=True):
++        raw_values = np.asarray(raw_line.get_ydata(), dtype=float)
++        excess_values = np.asarray(excess_line.get_ydata(), dtype=float)
++        assert min(raw_values) == minimum
++        assert min(excess_values) == 0.0
++        assert excess_values == pytest.approx(raw_values - minimum)
++        assert excess_line.get_xdata() == pytest.approx(raw_line.get_xdata())
++    assert json.dumps(report, sort_keys=True) == original_report
++
++
++def test_analysis_refuses_primary_selection_from_only_pilot_measurements(design):
++    with pytest.raises(ValueError, match="missing final measurements"):
++        analysis.analyze(design, measurements(design, "pilot"), "primary", launch_plan(design, "primary"))
++
++
++@pytest.mark.parametrize(
++    "change",
++    [
++        {"design_sha256": "stale"},
++        {"metric": "eval/another_task/bpb"},
++        {"step": 0},
++        {"status": "running"},
++        {"value": float("nan")},
++        {"config_fingerprint": ""},
++        {"config_fingerprint": "nonempty-but-wrong-config"},
++    ],
++)
++def test_analysis_rejects_unverified_or_nonfinal_measurements(design, change):
++    records = measurements(design, "pilot")
++    corrupted = (replace(records[0], **change), *records[1:])
++    with pytest.raises(ValueError):
++        analysis.analyze(design, corrupted, "pilot", launch_plan(design, "pilot"))
++
++
++def test_analysis_rejects_duplicate_run_instead_of_counting_it_as_replication(design):
++    records = measurements(design, "pilot")
++    with pytest.raises(ValueError, match="Duplicate measurement"):
++        analysis.analyze(design, (*records, records[0]), "pilot", launch_plan(design, "pilot"))
++
++
++def test_replicated_analysis_aliases_zero_weight_once_per_seed(design):
++    report, points = analysis.analyze(
++        design, measurements(design, "replicated"), "replicated", launch_plan(design, "replicated")
++    )
++    zeros = [point for point in points if point.arm != "target" and point.starcoder_weight == 0.0]
++    assert len(zeros) == 6
++    assert len({point.source_run_name for point in zeros}) == 3
++    assert sum(point.is_alias for point in zeros) == 3
++    assert report["new_measurements_used"] == 154
++    assert report["proxy_measurements_used"] == 153
++    assert report["proxy_curve_points"] == 156
++    assert all(row["n_measurements"] == 3 for row in report["curves"]["matched"])
++    assert all(row["n_measurements"] == 1 for row in report["curves"]["target"])
++    assert report["interpretation"]["statistical_superiority_test"] is False
++
++
++def test_analysis_reports_all_exact_ties_and_selects_lowest_weight(design):
++    runs = {run.run_name: run for run in design.runs}
++    records = tuple(
++        (
++            replace(record, value=1.0 if runs[record.run_name].starcoder_weight in (0.3, 0.7) else 3.0)
++            if runs[record.run_name].arm == "unmatched"
++            else record
++        )
++        for record in measurements(design, "pilot")
++    )
++    report, _ = analysis.analyze(design, records, "pilot", launch_plan(design, "pilot"))
++    assert report["selection"]["unmatched"]["selected_weight"] == 0.3
++    assert report["selection"]["unmatched"]["tied_weights"] == [0.3, 0.7]
++    assert report["selection"]["unmatched"]["target_grid_regret"] == 2.0
++
++
++def test_replicated_selection_uses_mean_over_all_prespecified_trainer_seeds(design):
++    runs = {run.run_name: run for run in design.runs}
++    values = {
++        (design_module.REFERENCE_SEED, 0.3): 4.0,
++        (design_module.REFERENCE_SEED, 0.7): 0.0,
++        (design_module.TRAINER_SEEDS[1], 0.3): 1.0,
++        (design_module.TRAINER_SEEDS[1], 0.7): 9.0,
++        (design_module.TRAINER_SEEDS[2], 0.3): 1.0,
++        (design_module.TRAINER_SEEDS[2], 0.7): 9.0,
++    }
++    records = tuple(
++        (
++            replace(
++                record,
++                value=values.get((runs[record.run_name].trainer_seed, runs[record.run_name].starcoder_weight), 20.0),
++            )
++            if runs[record.run_name].arm == "unmatched"
++            else record
++        )
++        for record in measurements(design, "replicated")
++    )
++    report, _ = analysis.analyze(design, records, "replicated", launch_plan(design, "replicated"))
++    assert report["selection"]["unmatched"]["selected_weight"] == 0.3
++    assert report["selection"]["unmatched"]["proxy_mean_bpb"] == 2.0
++    assert report["selection"]["unmatched"]["target_grid_regret"] == 2.0
++
++
++@pytest.mark.parametrize("change", ["design", "stage", "metric", "count", "missing", "duplicate", "seed", "blank"])
++def test_analysis_rejects_changed_launch_plan(design, change):
++    plan = launch_plan(design, "pilot")
++    if change == "design":
++        plan["design_sha256"] = "old-design"
++    elif change == "stage":
++        plan["stage"] = "primary"
++    elif change == "metric":
++        plan["metric"] = "eval/another_task/bpb"
++    elif change == "count":
++        plan["new_training_runs"] += 1
++    elif change == "missing":
++        plan["runs"].pop()
++    elif change == "duplicate":
++        plan["runs"][-1] = plan["runs"][0]
++    elif change == "seed":
++        plan["runs"][0]["data_seed"] += 1
++    elif change == "blank":
++        plan["runs"][0]["fingerprint"] = ""
++    with pytest.raises(ValueError, match=r"Launch plan|Duplicate launch plan"):
++        analysis.analyze(design, measurements(design, "pilot"), "pilot", plan)
++
++
++def test_analysis_rejects_results_outside_checked_stage(design):
++    with pytest.raises(ValueError, match="outside the planned stage"):
++        analysis.analyze(design, measurements(design, "primary"), "pilot", launch_plan(design, "pilot"))
++
++
++def test_refinement_analysis_uses_expanded_grid_without_counting_alias_as_new_run(design):
++    # An unmeasured-for-proxies target point cannot lower the refinement grid's regret reference.
++    observations = tuple(
++        replace(observation, observed_bpb=-10.0) if observation.starcoder_weight == 0.8 else observation
++        for observation in design.target_observations
++    )
++    design = replace(design, target_observations=observations)
++    payload = design.to_dict()
++    payload.pop("design_sha256")
++    design = replace(design, design_sha256=design_module.canonical_sha256(payload))
++    runs = {run.run_name: run for run in design.runs}
++    records = tuple(
++        (
++            replace(record, value=10.0 + (runs[record.run_name].starcoder_weight - 0.5) ** 2)
++            if runs[record.run_name].arm == "matched"
++            else record
++        )
++        for record in measurements(design, "refinement")
++    )
++
++    report, points = analysis.analyze(design, records, "refinement", launch_plan(design, "refinement"))
++
++    assert report["grid"] == [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.9, 1.0]
++    assert report["new_measurements_used"] == 20
++    assert report["proxy_measurements_used"] == 19
++    assert report["proxy_curve_points"] == 20
++    assert len(points) == 30
++    assert sum(point.is_alias for point in points) == 1
++    assert report["selection"]["matched"]["selected_weight"] == 0.5
++    assert report["selection"]["matched"]["target_grid_regret"] == 0.0
++    assert report["target_minimum"]["bpb"] == 1.0
++    assert report["interpretation"]["selection_grid"] == "adaptive refinement grid"
++    endpoint = next(point for point in points if point.arm == "target" and point.starcoder_weight == 1.0)
++    assert endpoint.source_kind == "new"
++    assert endpoint.observed_bpb == 5.0
++
++
++def test_refinement_analysis_refuses_to_select_from_pilot_results_alone(design):
++    with pytest.raises(ValueError, match="missing final measurements"):
++        analysis.analyze(design, measurements(design, "pilot"), "refinement", launch_plan(design, "refinement"))
+--- /dev/null
++++ b/tests/test_starcoder_epoch_matching_launcher.py
+@@ -0,0 +1,359 @@
++# Copyright The Marin Authors
++# SPDX-License-Identifier: Apache-2.0
++
++from __future__ import annotations
++
++import csv
++import hashlib
++import json
++from dataclasses import replace
++from pathlib import Path
++from types import SimpleNamespace
++from typing import Any
++
++import pytest
++from levanter.main.train_lm import TrainLmConfig
++from marin.execution.artifact import ArtifactRecord, FingerprintMismatchError, write_record
++from marin.execution.lazy import ArtifactStep, materialized_config
++from marin.execution.step_status import STATUS_FAILED, STATUS_SUCCESS, StatusFile
++from marin.training.training import LevanterCheckpoint, TrainLmOnPodConfig
++
++from experiments.domain_phase_mix import launch_starcoder_epoch_matching as launcher
++
++
++@pytest.fixture
++def cached_metadata(monkeypatch: Any) -> None:
++    def load_cache(_cls: type[launcher.TokenizedCache], path: str) -> launcher.TokenizedCache:
++        cache = launcher.TokenizedCache(path=path)
++        cache.__dict__["record"] = SimpleNamespace(
++            config={
++                "format": {"text_key": "text"},
++                "tags": [],
++                "tokenizer": "meta-llama/Meta-Llama-3.1-8B",
++            },
++            source=None,
++        )
++        return cache
++
++    monkeypatch.setattr(launcher.TokenizedCache, "raw_load", classmethod(load_cache))
++
++
++def test_default_cli_emits_plan_without_reading_remote_caches(tmp_path: Path, monkeypatch: Any) -> None:
++    def reject_cache_read(_cls: type[launcher.TokenizedCache], _path: str) -> launcher.TokenizedCache:
++        raise AssertionError("A default dry-run must not read remote cache records")
++
++    monkeypatch.setattr(launcher.TokenizedCache, "raw_load", classmethod(reject_cache_read))
++    output = tmp_path / "plan.json"
++    launcher.main(["--plan-path", str(output)])
++    plan = json.loads(output.read_text())
++
++    assert plan["new_training_runs"] == 10
++    assert sum(row["arm"] == "target" for row in plan["runs"]) == 1
++    assert all(row["fingerprint"] for row in plan["runs"])
++    assert all(row["output_path"].startswith("gs://marin-us-central1/") for row in plan["runs"])
++
++
++def test_stage_expansion_preserves_existing_training_identities() -> None:
++    design = launcher.design_module.load_design()
++    pilot_rows, pilot_steps = launcher.build_training_steps(design, "pilot")
++    full_rows, full_steps = launcher.build_training_steps(design, "replicated")
++    full = {row.run_name: step for row, step in zip(full_rows, full_steps, strict=True)}
++
++    for row, step in zip(pilot_rows, pilot_steps, strict=True):
++        assert full[row.run_name].path(launcher.base.DEFAULT_MARIN_PREFIX) == step.path(
++            launcher.base.DEFAULT_MARIN_PREFIX
++        )
++        assert full[row.run_name].fingerprint() == step.fingerprint()
++
++
++def test_endpoint_and_proxy_configs_keep_legacy_subset_keys(cached_metadata: None) -> None:
++    design = launcher.design_module.load_design()
++    rows, steps = launcher.build_training_steps(design, "pilot")
++    endpoint = next((row, step) for row, step in zip(rows, steps, strict=True) if row.arm == "target")
++    proxy = next(
++        (row, step)
++        for row, step in zip(rows, steps, strict=True)
++        if row.arm == "matched" and row.starcoder_weight == 1.0
++    )
++    for row, step in (endpoint, proxy):
++        pod = materialized_config(step, launcher.base.DEFAULT_MARIN_PREFIX)
++        assert isinstance(pod, TrainLmOnPodConfig)
++        config = pod.train_config
++        assert isinstance(config, TrainLmConfig)
++        shuffle_keys = config.data.train_component_shuffle_keys
++        assert shuffle_keys is not None
++        assert shuffle_keys["dolma/starcoder"] == (898005854, 446240491)
++        assert len(shuffle_keys) == 7
++        assert config.data.max_train_batches == {"dolma/starcoder": 1068 if row.arm == "target" else 40}
++        assert config.data.experiment_budget is None
++        assert config.data.target_budget is None
++        assert config.data_seed == 20260711
++        assert config.trainer.seed == 20260711
++        assert config.optimizer.decay == row.total_steps - row.boundary_step
++    launcher.audit_runtime_configs(design, rows, steps, marin_prefix=launcher.base.DEFAULT_MARIN_PREFIX)
++
++
++def test_replicates_change_model_seed_without_changing_data_or_support(cached_metadata: None) -> None:
++    design = launcher.design_module.load_design()
++    rows, steps = launcher.build_training_steps(design, "replicated")
++    selected = [
++        (row, materialized_config(step, launcher.base.DEFAULT_MARIN_PREFIX).train_config)
++        for row, step in zip(rows, steps, strict=True)
++        if row.arm == "matched" and row.starcoder_weight == 0.5
++    ]
++    assert {config.trainer.seed for _, config in selected} == {20260711, 20260908, 20260909}
++    assert {config.data_seed for _, config in selected} == {20260711}
++    assert len({tuple(sorted(config.data.train_component_shuffle_keys.items())) for _, config in selected}) == 1
++    assert all(config.data.max_train_batches == {"dolma/starcoder": 40} for _, config in selected)
++
++
++def test_resume_requires_success_and_matching_fingerprint(tmp_path: Path) -> None:
++    step = ArtifactStep(
++        name="training",
++        version=launcher.VERSION,
++        artifact_type=LevanterCheckpoint,
++        run=lambda _config: None,
++        build_config=lambda _ctx: {"trainer_seed": 20260711},
++    )
++    path = step.path(str(tmp_path))
++    status = StatusFile(path, worker_id="test")
++    status.write_status(STATUS_FAILED)
++    assert launcher.pending_training_steps((step,), marin_prefix=str(tmp_path)) == (step,)
++
++    status.write_status(STATUS_SUCCESS)
++    with pytest.raises(RuntimeError, match="no artifact fingerprint"):
++        launcher.pending_training_steps((step,), marin_prefix=str(tmp_path))
++
++    write_record(ArtifactRecord(output_path=path, fingerprint=step.fingerprint()))
++    assert launcher.pending_training_steps((step,), marin_prefix=str(tmp_path)) == ()
++
++    changed = replace(step, build_config=lambda _ctx: {"trainer_seed": 20260908})
++    with pytest.raises(FingerprintMismatchError):
++        launcher.pending_training_steps((changed,), marin_prefix=str(tmp_path))
++
++
++def test_noncentral_deployment_is_rejected_before_planning(tmp_path: Path) -> None:
++    output = tmp_path / "plan.json"
++    with pytest.raises(ValueError, match="frozen to us-central1"):
++        launcher.main(["--marin-prefix", "gs://marin-us-east5", "--plan-path", str(output)])
++    assert not output.exists()
++
++
++def test_primary_release_waits_for_successful_pilot_artifacts(tmp_path: Path) -> None:
++    design = launcher.design_module.load_design()
++    _, pilot_steps = launcher.build_training_steps(design, "pilot")
++    for step in pilot_steps:
++        path = step.path(str(tmp_path))
++        write_record(ArtifactRecord(output_path=path, fingerprint=step.fingerprint()))
++        StatusFile(path, worker_id="test").write_status(STATUS_SUCCESS)
++    unfinished_path = pilot_steps[-1].path(str(tmp_path))
++    StatusFile(unfinished_path, worker_id="test").write_status(STATUS_FAILED)
++    with pytest.raises(RuntimeError, match="Cannot submit primary"):
++        launcher.require_previous_stage_complete(design, "primary", marin_prefix=str(tmp_path))
++
++    StatusFile(unfinished_path, worker_id="test").write_status(STATUS_SUCCESS)
++    # The gate concerns completion and identity, not measured gains or response direction.
++    launcher.require_previous_stage_complete(design, "primary", marin_prefix=str(tmp_path))
++    assert launcher.pending_training_steps(pilot_steps, marin_prefix=str(tmp_path)) == ()
++
++
++@pytest.mark.parametrize("failure", [None, "stale_step", "conflicting_values", "wrong_fingerprint", "failed_status"])
++def test_result_collection_requires_verified_final_evaluation(tmp_path: Path, failure: str | None) -> None:
++    design = replace(launcher.design_module.load_design(), primary_metric="eval/test_fixture/bpb")
++    requests, steps = launcher.build_training_steps(design, "pilot")
++    request, step = requests[0], steps[0]
++    artifact_path = step.path(str(tmp_path))
++    fingerprint = "wrong" if failure == "wrong_fingerprint" else step.fingerprint()
++    write_record(ArtifactRecord(output_path=artifact_path, fingerprint=fingerprint))
++    StatusFile(artifact_path, worker_id="test").write_status(
++        STATUS_FAILED if failure == "failed_status" else STATUS_SUCCESS
++    )
++    checkpoint_dir = Path(LevanterCheckpoint(path=artifact_path).checkpoint_dir)
++    checkpoint_dir.mkdir(parents=True)
++    metric = design.primary_metric
++    final_step = request.total_steps - 1
++    records = [{"step": final_step - 1 if failure == "stale_step" else final_step, metric: 0.9}]
++    if failure == "conflicting_values":
++        records.append({"step": final_step, metric: 0.91})
++    (checkpoint_dir / "eval_metrics.jsonl").write_text("".join(json.dumps(record) + "\n" for record in records))
++    output = tmp_path / "measured.csv"
++
++    if failure is not None:
++        with pytest.raises((ValueError, RuntimeError, FingerprintMismatchError)):
++            launcher.collect_results(design, (request,), (step,), marin_prefix=str(tmp_path), output_path=output)
++        assert not output.exists()
++        return
++
++    assert launcher.collect_results(design, (request,), (step,), marin_prefix=str(tmp_path), output_path=output) == 1
++    with output.open() as stream:
++        (row,) = list(csv.DictReader(stream))
++    assert row == {
++        "run_name": request.run_name,
++        "step": str(final_step),
++        "metric": metric,
++        "value": "0.9",
++        "design_sha256": design.design_sha256,
++        "config_fingerprint": step.fingerprint(),
++        "status": "succeeded",
++    }
++
++
++def test_submission_requires_reuse_receipt_before_planning(tmp_path: Path, monkeypatch: Any) -> None:
++    monkeypatch.delenv("MARIN_PREFIX", raising=False)
++    output = tmp_path / "unsubmitted_plan.json"
++    with pytest.raises(ValueError, match="requires --reuse-audit"):
++        launcher.main(["--submit", "--plan-path", str(output)])
++    assert not output.exists()
++
++
++@pytest.mark.parametrize(
++    "change",
++    [
++        {"design_sha256": "stale"},
++        {"status": "pending"},
++        {"legacy_parent_match": False},
++        {"nested_subset_match": False},
++        {"historical_config_uri": "gs://marin-us-east5/unreviewed/config.json"},
++        {"historical_config_sha256": "missing"},
++        {"packed_starcoder_sequence_count": 1},
++    ],
++)
++def test_reuse_receipt_rejects_stale_or_unverified_evidence(tmp_path: Path, change: dict) -> None:
++    design = launcher.design_module.load_design()
++    # Synthetic evidence exists only in this temporary validation test, never as an experiment receipt.
++    receipt = {
++        "design_sha256": design.design_sha256,
++        "status": "passed",
++        "historical_config_uri": "gs://marin-us-central1/synthetic-test-fixture/config.json",
++        "historical_config_sha256": hashlib.sha256(b"synthetic config").hexdigest(),
++        "parent_indices_sha256": hashlib.sha256(b"synthetic parent indices").hexdigest(),
++        "matched_indices_sha256": hashlib.sha256(b"synthetic matched indices").hexdigest(),
++        "packed_starcoder_sequence_count": 1_000_000,
++        "legacy_parent_match": True,
++        "nested_subset_match": True,
++    }
++    path = tmp_path / "synthetic_receipt.json"
++    path.write_text(json.dumps(receipt))
++    assert launcher.validate_reuse_audit(design, path) == receipt
++    path.write_text(json.dumps({**receipt, **change}))
++    with pytest.raises(ValueError):
++        launcher.validate_reuse_audit(design, path)
++
++
++@pytest.mark.parametrize("change", [{"max_train_batches_subset_seed": 11}, {"shuffle": True}])
++def test_runtime_audit_rejects_changed_subset_permutation(cached_metadata: None, change: dict) -> None:
++    design = launcher.design_module.load_design()
++    requests, steps = launcher.build_training_steps(design, "pilot")
++    request, step = requests[0], steps[0]
++    pod = materialized_config(step, launcher.base.DEFAULT_MARIN_PREFIX)
++    changed_config = replace(pod.train_config, data=replace(pod.train_config.data, **change))
++    changed_pod = replace(pod, train_config=changed_config)
++    changed_step = replace(step, build_config=lambda _ctx: changed_pod, expected_fingerprint=None)
++    with pytest.raises(ValueError, match=r"subset permutation|block-shuffle geometry"):
++        launcher.audit_runtime_configs(
++            design, (request,), (changed_step,), marin_prefix=launcher.base.DEFAULT_MARIN_PREFIX
++        )
++
++
++def test_submission_plan_is_create_only_and_reusable_when_identical(tmp_path: Path) -> None:
++    path = tmp_path / "durable" / "launch_plan.json"
++    plan = {"design_sha256": "synthetic-test-design", "runs": [{"run_name": "test_run"}], "reuse_audit": {"test": True}}
++    launcher.persist_submission_plan(plan, path.as_uri())
++    original = path.read_bytes()
++    assert json.loads(original) == plan
++    launcher.persist_submission_plan(plan, path.as_uri())
++    assert path.read_bytes() == original
++    with pytest.raises(ValueError, match="refusing to overwrite"):
++        launcher.persist_submission_plan({**plan, "runs": []}, path.as_uri())
++    assert path.read_bytes() == original
++
++
++def index_reference_receipt(design: launcher.design_module.ExperimentDesign) -> dict[str, Any]:
++    # Full index hashes independently measured under the historical 0.10.1 runtime.
++    return {
++        "design_sha256": design.design_sha256,
++        "status": "passed",
++        "packed_starcoder_sequence_count": 105745752,
++        "parent_indices_sha256": "24c5bdd4bd466de18bc56ba06ea92053e329ad749aadea354a983fb38c61c4c1",
++        "matched_indices_sha256": "6c8ac23d240d4c99f88b2fa854cb7f7415b19e5387a68cf634f03dd73d2706c3",
++        "legacy_parent_match": True,
++        "nested_subset_match": True,
++        "audit_runtime": {"jax_version": "0.10.1"},
++    }
++
++
++def test_runtime_index_audit_accepts_0111_with_matching_historical_hashes(monkeypatch: Any) -> None:
++    original = launcher.design_module.load_design()
++    alternate = replace(original, design_version="unit-test-alternate-path")
++    payload = alternate.to_dict()
++    payload.pop("design_sha256")
++    design = replace(alternate, design_sha256=launcher.design_module.canonical_sha256(payload))
++    monkeypatch.setattr(launcher.jax, "__version__", "0.11.1")
++    receipt = index_reference_receipt(design)
++
++    result = launcher.validate_runtime_indices(design, receipt)
++
++    assert result["status"] == "passed"
++    assert result["design_sha256"] == design.design_sha256
++    assert result["parent_sequence_count"] == 136704
++    assert result["matched_sequence_count"] == 5120
++    assert result["parent_indices_sha256"] == receipt["parent_indices_sha256"]
++    assert result["observed_environment"]["jax_version"] == "0.11.1"
++    assert result["child_process_verified"] is False
++
++
++@pytest.mark.parametrize("field", ["parent_indices_sha256", "matched_indices_sha256"])
++def test_runtime_index_audit_rejects_wrong_reviewed_hash(field: str) -> None:
++    design = launcher.design_module.load_design()
++    receipt = index_reference_receipt(design)
++    receipt[field] = "f" * 64
++    with pytest.raises(ValueError, match=field):
++        launcher.validate_runtime_indices(design, receipt)
++
++
++def test_refinement_selects_only_authorized_reference_seed_additions() -> None:
++    design = launcher.design_module.load_design()
++    pilot = launcher.design_module.select_runs(design, "pilot")
++    refinement = launcher.design_module.select_runs(design, "refinement")
++    primary = launcher.design_module.select_runs(design, "primary")
++    replicated = launcher.design_module.select_runs(design, "replicated")
++    pilot_names = {run.run_name for run in pilot}
++    additional = [run for run in refinement if run.run_name not in pilot_names]
++
++    assert len(refinement) == 20
++    assert {run.run_name for run in refinement} >= pilot_names
++    assert {(run.arm, run.starcoder_weight, run.trainer_seed) for run in additional} == {
++        (arm, weight, 20260711) for arm in ("matched", "unmatched") for weight in (0.2, 0.4, 0.5, 0.6, 0.9)
++    }
++    assert len(additional) == 10
++    assert {run.run_name for run in primary} == {run.run_name for run in design.runs if run.trainer_seed == 20260711}
++    assert len(primary) == 52
++    assert replicated == design.runs
++    assert len(replicated) == 154
++
++
++def test_refinement_requires_pilot_and_skips_its_successful_artifacts(tmp_path: Path) -> None:
++    design = launcher.design_module.load_design()
++    pilot_rows, pilot_steps = launcher.build_training_steps(design, "pilot")
++    refinement_rows, refinement_steps = launcher.build_training_steps(design, "refinement")
++    with pytest.raises(RuntimeError, match="Cannot submit refinement"):
++        launcher.require_previous_stage_complete(design, "refinement", marin_prefix=str(tmp_path))
++    for step in pilot_steps:
++        path = step.path(str(tmp_path))
++        write_record(ArtifactRecord(output_path=path, fingerprint=step.fingerprint()))
++        StatusFile(path, worker_id="test").write_status(STATUS_SUCCESS)
++
++    launcher.require_previous_stage_complete(design, "refinement", marin_prefix=str(tmp_path))
++    # Primary retains its original pilot gate even while refinement runs are unfinished.
++    launcher.require_previous_stage_complete(design, "primary", marin_prefix=str(tmp_path))
++    pending = launcher.pending_training_steps(refinement_steps, marin_prefix=str(tmp_path))
++    pilot_names = {run.run_name for run in pilot_rows}
++    expected = tuple(
++        step for row, step in zip(refinement_rows, refinement_steps, strict=True) if row.run_name not in pilot_names
++    )
++    assert pending == expected
++    assert len(pending) == 10
++    plan = launcher.launch_plan(design, "refinement", refinement_rows, refinement_steps)
++    assert plan["adaptive_release"]["based_on_stage"] == "pilot"
++    assert plan["adaptive_release"]["additional_starcoder_weights"] == [0.2, 0.4, 0.5, 0.6, 0.9]
++    assert "adaptive_release" not in launcher.launch_plan(design, "pilot", pilot_rows, pilot_steps)

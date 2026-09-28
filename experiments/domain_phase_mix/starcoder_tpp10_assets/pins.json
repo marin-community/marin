@@ -1,0 +1,12 @@
+{
+  "tokenizer_repo": "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T",
+  "tokenizer_revision": "59f6f375b26bde864a6ca194a9a3044570490064",
+  "vocabulary_size": 32000,
+  "files_sha256": {
+    "sources.json": "9f9b80e55ca9d2d9decc3125336000713c81e941b8f4c08b61f898566259e44a",
+    "tokenizer_config.json": "f514e7c3008881b6ba7e6a0cdb44c71ce47dc335920dac143ae7bc788197e53a",
+    "special_tokens_map.json": "6fa06efa2785e450051989a6f8fb4416b10149ded485ddd3f127a40734f5cfd0",
+    "tokenizer.json": "bcd04f0eadf90287bd26e1a183ac487d8a141b09b06aecb7725bbdd343640f2e",
+    "tokenizer.model": "9e556afd44213b6bd1be2b850ebbbd98f5481437a8021afaf58ee7fb1818d347"
+  }
+}

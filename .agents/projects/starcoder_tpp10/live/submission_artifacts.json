@@ -1,0 +1,104 @@
+[
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1788985258.9348204,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/releases/calibration_authorization.json",
+      "fieldbook.local_size_at_capture": 436
+    },
+    "content_hash": "sha256:f67666d8bf69ec0e4b4b3550eb98380f847ef7bf388b1a84e5da3f175260a151",
+    "created_at": "2026-09-09T20:23:18Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m23xdmr6gnqcykfpd3gmkt5a",
+    "job_id": null,
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-09T20:23:18Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/releases/calibration_authorization.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1788984980.6486495,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/submitted_preparation.txt",
+      "fieldbook.local_size_at_capture": 719
+    },
+    "content_hash": "sha256:e122ba2a6c7bbec3322174a61bac5c7c8eb217ecc9effa6efe5f997840b58dec",
+    "created_at": "2026-09-09T20:23:18Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m23xdn0t96swyh6y2txffd3d",
+    "job_id": null,
+    "run_id": null,
+    "type": "other",
+    "updated_at": "2026-09-09T20:23:18Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/submitted_preparation.txt"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1788985258.9349818,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/submitted_calibration.txt",
+      "fieldbook.local_size_at_capture": 821
+    },
+    "content_hash": "sha256:c4cdbe13cc3eb9abe041f8bf5e6c34fa51ce56d105a7d2fbb080c80d41e402a3",
+    "created_at": "2026-09-09T20:23:18Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m23xdn9cqhgkexnnndtwdass",
+    "job_id": null,
+    "run_id": null,
+    "type": "other",
+    "updated_at": "2026-09-09T20:23:18Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/submitted_calibration.txt"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1788985142.1777785,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/preparation_workspace_receipt.json",
+      "fieldbook.local_size_at_capture": 458
+    },
+    "content_hash": "sha256:70ef1976e726c6ba62c03c5db49e4c54952541e8b4711d4f439b87aa011c5ac6",
+    "created_at": "2026-09-09T20:23:18Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m23xdnhd5mg9z9sk4k8jxdyx",
+    "job_id": null,
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-09T20:23:18Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/preparation_workspace_receipt.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1788985373.0975468,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/launch_state.json",
+      "fieldbook.local_size_at_capture": 707
+    },
+    "content_hash": "sha256:3b095d619c712beb03ea01372a02d07598e6724f2529fbd190ad8e49bb3fedcc",
+    "created_at": "2026-09-09T20:23:19Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m23xdnsy5wj0c2dew1nnk95x",
+    "job_id": null,
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-09T20:23:19Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/launch_state.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1788985299.7432706,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/await_starcoder_tpp10_calibration.py",
+      "fieldbook.local_size_at_capture": 3588
+    },
+    "content_hash": "sha256:962a39f88aa61fe36af7959d81c9db448d01dbcfcb65f8852724f8f4e984a722",
+    "created_at": "2026-09-09T20:23:19Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m23xdp2wbeec75zpwjt5sbgb",
+    "job_id": null,
+    "run_id": null,
+    "type": "other",
+    "updated_at": "2026-09-09T20:23:19Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/await_starcoder_tpp10_calibration.py"
+  }
+]

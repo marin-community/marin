@@ -1,0 +1,4 @@
+objective,component,proportional_bpb,repeat_sd
+uncheatable_worsened,eval/uncheatable_eval/ao3_english/bpb,1.2330933809280396,0.0011842286008303
+uncheatable_worsened,eval/uncheatable_eval/bbc_news/bpb,1.041663570837541,0.0010248296843735
+uncheatable_worsened,eval/uncheatable_eval/wikipedia_english/bpb,1.1010358225215564,0.0009772005537736

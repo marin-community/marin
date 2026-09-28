@@ -1,0 +1,302 @@
+[
+  {
+    "attrs": {
+      "artifact.config_fingerprint": "f5a68b1f",
+      "artifact.output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_unmatched_c043_s20260711/2026.09.08",
+      "protocol.arm": "unmatched",
+      "protocol.data_seed": 20260711,
+      "protocol.design_sha256": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b",
+      "protocol.release": "20260908-adaptive-refinement",
+      "protocol.stage": "refinement",
+      "protocol.starcoder_weight": 0.2,
+      "protocol.trainer_seed": 20260711
+    },
+    "created_at": "2026-09-09T04:36:00Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+    "experiment_ids": [
+      "exp_01m21p4aw15bpvhnswz8gtwn0d"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m22773gd8zv0ms1wxgx8m5nn",
+    "idempotency_key": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b.epmatch_unmatched_c043_s20260711",
+    "kind": "datapoint",
+    "name": "epmatch_unmatched_c043_s20260711",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-09T04:36:00Z"
+  },
+  {
+    "attrs": {
+      "artifact.config_fingerprint": "56278bb1",
+      "artifact.output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_matched_c043_s20260711/2026.09.08",
+      "protocol.arm": "matched",
+      "protocol.data_seed": 20260711,
+      "protocol.design_sha256": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b",
+      "protocol.release": "20260908-adaptive-refinement",
+      "protocol.stage": "refinement",
+      "protocol.starcoder_weight": 0.2,
+      "protocol.trainer_seed": 20260711
+    },
+    "created_at": "2026-09-09T04:36:00Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+    "experiment_ids": [
+      "exp_01m21p4aw15bpvhnswz8gtwn0d"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m22773sb0x8mv0rrtw288mx0",
+    "idempotency_key": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b.epmatch_matched_c043_s20260711",
+    "kind": "datapoint",
+    "name": "epmatch_matched_c043_s20260711",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-09T04:36:00Z"
+  },
+  {
+    "attrs": {
+      "artifact.config_fingerprint": "8274649e",
+      "artifact.output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_unmatched_c079_s20260711/2026.09.08",
+      "protocol.arm": "unmatched",
+      "protocol.data_seed": 20260711,
+      "protocol.design_sha256": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b",
+      "protocol.release": "20260908-adaptive-refinement",
+      "protocol.stage": "refinement",
+      "protocol.starcoder_weight": 0.4,
+      "protocol.trainer_seed": 20260711
+    },
+    "created_at": "2026-09-09T04:36:01Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+    "experiment_ids": [
+      "exp_01m21p4aw15bpvhnswz8gtwn0d"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m227741hr96s213q583jjq7v",
+    "idempotency_key": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b.epmatch_unmatched_c079_s20260711",
+    "kind": "datapoint",
+    "name": "epmatch_unmatched_c079_s20260711",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-09T04:36:01Z"
+  },
+  {
+    "attrs": {
+      "artifact.config_fingerprint": "a3549d99",
+      "artifact.output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_matched_c079_s20260711/2026.09.08",
+      "protocol.arm": "matched",
+      "protocol.data_seed": 20260711,
+      "protocol.design_sha256": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b",
+      "protocol.release": "20260908-adaptive-refinement",
+      "protocol.stage": "refinement",
+      "protocol.starcoder_weight": 0.4,
+      "protocol.trainer_seed": 20260711
+    },
+    "created_at": "2026-09-09T04:36:01Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+    "experiment_ids": [
+      "exp_01m21p4aw15bpvhnswz8gtwn0d"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m22774a4cvjm8b7y2wvt39t1",
+    "idempotency_key": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b.epmatch_matched_c079_s20260711",
+    "kind": "datapoint",
+    "name": "epmatch_matched_c079_s20260711",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-09T04:36:01Z"
+  },
+  {
+    "attrs": {
+      "artifact.config_fingerprint": "2dbda662",
+      "artifact.output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_unmatched_c088_s20260711/2026.09.08",
+      "protocol.arm": "unmatched",
+      "protocol.data_seed": 20260711,
+      "protocol.design_sha256": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b",
+      "protocol.release": "20260908-adaptive-refinement",
+      "protocol.stage": "refinement",
+      "protocol.starcoder_weight": 0.5,
+      "protocol.trainer_seed": 20260711
+    },
+    "created_at": "2026-09-09T04:36:01Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+    "experiment_ids": [
+      "exp_01m21p4aw15bpvhnswz8gtwn0d"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m22774jhrjdwaeb4ym4hg3x1",
+    "idempotency_key": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b.epmatch_unmatched_c088_s20260711",
+    "kind": "datapoint",
+    "name": "epmatch_unmatched_c088_s20260711",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-09T04:36:01Z"
+  },
+  {
+    "attrs": {
+      "artifact.config_fingerprint": "0d11d8b2",
+      "artifact.output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_matched_c088_s20260711/2026.09.08",
+      "protocol.arm": "matched",
+      "protocol.data_seed": 20260711,
+      "protocol.design_sha256": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b",
+      "protocol.release": "20260908-adaptive-refinement",
+      "protocol.stage": "refinement",
+      "protocol.starcoder_weight": 0.5,
+      "protocol.trainer_seed": 20260711
+    },
+    "created_at": "2026-09-09T04:36:02Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+    "experiment_ids": [
+      "exp_01m21p4aw15bpvhnswz8gtwn0d"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m22774vjvfk0wtyt46zbm267",
+    "idempotency_key": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b.epmatch_matched_c088_s20260711",
+    "kind": "datapoint",
+    "name": "epmatch_matched_c088_s20260711",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-09T04:36:02Z"
+  },
+  {
+    "attrs": {
+      "artifact.config_fingerprint": "2338ca81",
+      "artifact.output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_unmatched_c100_s20260711/2026.09.08",
+      "protocol.arm": "unmatched",
+      "protocol.data_seed": 20260711,
+      "protocol.design_sha256": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b",
+      "protocol.release": "20260908-adaptive-refinement",
+      "protocol.stage": "refinement",
+      "protocol.starcoder_weight": 0.6,
+      "protocol.trainer_seed": 20260711
+    },
+    "created_at": "2026-09-09T04:36:02Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+    "experiment_ids": [
+      "exp_01m21p4aw15bpvhnswz8gtwn0d"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m227756dg9r2ns8tdsk7nt6w",
+    "idempotency_key": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b.epmatch_unmatched_c100_s20260711",
+    "kind": "datapoint",
+    "name": "epmatch_unmatched_c100_s20260711",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-09T04:36:02Z"
+  },
+  {
+    "attrs": {
+      "artifact.config_fingerprint": "d8382fba",
+      "artifact.output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_matched_c100_s20260711/2026.09.08",
+      "protocol.arm": "matched",
+      "protocol.data_seed": 20260711,
+      "protocol.design_sha256": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b",
+      "protocol.release": "20260908-adaptive-refinement",
+      "protocol.stage": "refinement",
+      "protocol.starcoder_weight": 0.6,
+      "protocol.trainer_seed": 20260711
+    },
+    "created_at": "2026-09-09T04:36:02Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+    "experiment_ids": [
+      "exp_01m21p4aw15bpvhnswz8gtwn0d"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m22775fav4cqc7a31hbxebz4",
+    "idempotency_key": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b.epmatch_matched_c100_s20260711",
+    "kind": "datapoint",
+    "name": "epmatch_matched_c100_s20260711",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-09T04:36:02Z"
+  },
+  {
+    "attrs": {
+      "artifact.config_fingerprint": "c683238a",
+      "artifact.output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_unmatched_c119_s20260711/2026.09.08",
+      "protocol.arm": "unmatched",
+      "protocol.data_seed": 20260711,
+      "protocol.design_sha256": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b",
+      "protocol.release": "20260908-adaptive-refinement",
+      "protocol.stage": "refinement",
+      "protocol.starcoder_weight": 0.9,
+      "protocol.trainer_seed": 20260711
+    },
+    "created_at": "2026-09-09T04:36:02Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+    "experiment_ids": [
+      "exp_01m21p4aw15bpvhnswz8gtwn0d"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m22775r8w6gvev9s0qj1rg9a",
+    "idempotency_key": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b.epmatch_unmatched_c119_s20260711",
+    "kind": "datapoint",
+    "name": "epmatch_unmatched_c119_s20260711",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-09T04:36:02Z"
+  },
+  {
+    "attrs": {
+      "artifact.config_fingerprint": 40443787,
+      "artifact.output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_matched_c119_s20260711/2026.09.08",
+      "protocol.arm": "matched",
+      "protocol.data_seed": 20260711,
+      "protocol.design_sha256": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b",
+      "protocol.release": "20260908-adaptive-refinement",
+      "protocol.stage": "refinement",
+      "protocol.starcoder_weight": 0.9,
+      "protocol.trainer_seed": 20260711
+    },
+    "created_at": "2026-09-09T04:36:03Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+    "experiment_ids": [
+      "exp_01m21p4aw15bpvhnswz8gtwn0d"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m227761bpq24363ch1pt6vzs",
+    "idempotency_key": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b.epmatch_matched_c119_s20260711",
+    "kind": "datapoint",
+    "name": "epmatch_matched_c119_s20260711",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-09T04:36:03Z"
+  }
+]

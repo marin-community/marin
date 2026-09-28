@@ -1,0 +1,6 @@
+Job: /calvinxu/mariner-ladder-accuracy-1e21-20260914 (/calvinxu/mariner-ladder-accuracy-1e21-20260914)
+State: running  exit=0  failures=0  preemptions=0
+Tasks: 0/1 completed  building=1
+
+  TASK  STATE     EXIT    DURATION       PEAK MEM    CUR MEM    DIAGNOSTIC
+     0  building  -       29.81 seconds  -           -

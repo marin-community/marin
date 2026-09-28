@@ -1,0 +1,15 @@
+{
+  "independent_numeric_check": "pass",
+  "benchmarks": 11,
+  "curves": 22,
+  "points": 176,
+  "values_match_sources_exactly": true,
+  "epoch_coordinates_match_exactly": true,
+  "native_zero_controls_verified": 18,
+  "derived_statistic_max_error": 1e-12,
+  "visual_pages_checked": 6,
+  "language_contact_sheet_checked": true,
+  "layout": "no accidental overlap or clipping; disclosed 5% excess view clipping",
+  "lint": "ruff and black pass",
+  "caveat": "coincident minimum stars overlap; absolute views show each separately"
+}

@@ -1,0 +1,13 @@
+{
+  "recovery_sha256": "a2460bd0d1331717edde775ea9295b2eb49658106b7e2d1663fbd2a8a46f6d1b",
+  "bundle_sha256": "dc6956aec8aa4a053dabd3b9dc511e8f171311efcd741bbbab0a019cd0fcf887",
+  "bytes": 24234306,
+  "files": 4528,
+  "pinned_files_verified": 36,
+  "original_training_plan_exact": true,
+  "four_post_dispatch_fingerprints_unchanged": true,
+  "full_state_required": true,
+  "proxies_verified": 14,
+  "lint_and_focused_pyrefly": "pass",
+  "region_check": "region-local launch safety check passed"
+}

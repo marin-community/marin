@@ -38,6 +38,16 @@ uv run iris --cluster=<parent> query \
 
 Only root jobs federate; their whole tree stays on the peer. Parent `job describe` is the liveness source, while forwarded logs may lag. CoreWeave tasks normally read regional S3 and GCP tasks read GCS.
 
+## Submission concurrency
+
+- For each released experiment batch, set `max_concurrent` to the number of
+  selected child jobs, bounded only by a documented Iris or controller limit.
+- Do not reduce submission concurrency based on currently available
+  accelerator capacity; Iris owns queueing and scheduling.
+- Canary and staged gates change which jobs are released, not concurrency
+  within the released batch. Lower concurrency only for an explicit user cap
+  or a measured non-scheduler bottleneck, and record the reason.
+
 ## Temporary outputs
 
 Write bounded diagnostics to `$IRIS_OUTPUT_DIR`. Iris preserves that directory as one `outputs.tar.zst` archive per attempt without changing the command outcome when capture fails. Find the archive URI and its uploaded, empty, failed, or unavailable state with:

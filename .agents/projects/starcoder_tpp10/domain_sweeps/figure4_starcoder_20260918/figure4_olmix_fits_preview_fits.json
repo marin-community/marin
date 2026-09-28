@@ -1,0 +1,54 @@
+{
+  "unmatched": {
+    "dolmino_flan": {
+      "arm": "unmatched",
+      "optimum_weight": 0.0,
+      "optimum_epochs": 0.0,
+      "optimum_loss": 1.4919517736417707,
+      "log_c": 0.39937734800905755,
+      "coefficients": [
+        -2.375255011665521,
+        -6.853575387642865
+      ],
+      "huber_loss": 0.004307726606047426
+    },
+    "finemath_3plus": {
+      "arm": "unmatched",
+      "optimum_weight": 1.0,
+      "optimum_epochs": 15.827823691460056,
+      "optimum_loss": 1.5269616365029874,
+      "log_c": 0.4104313720951051,
+      "coefficients": [
+        -3.9376633254486904,
+        -0.9260375280438202
+      ],
+      "huber_loss": 0.0009785147354045875
+    }
+  },
+  "matched": {
+    "dolmino_flan": {
+      "arm": "matched",
+      "optimum_weight": 0.0,
+      "optimum_epochs": 0.0,
+      "optimum_loss": 1.4971703348735457,
+      "log_c": 0.4032802913876065,
+      "coefficients": [
+        -0.6064835423956344,
+        -7.71972542841236
+      ],
+      "huber_loss": 0.003556482812746691
+    },
+    "finemath_3plus": {
+      "arm": "matched",
+      "optimum_weight": 1.0,
+      "optimum_epochs": 15.827823691460056,
+      "optimum_loss": 1.6095240776276931,
+      "log_c": 0.4758153525342228,
+      "coefficients": [
+        -8.525996618607806,
+        -1.1790892251567189
+      ],
+      "huber_loss": 0.0021650065412042634
+    }
+  }
+}

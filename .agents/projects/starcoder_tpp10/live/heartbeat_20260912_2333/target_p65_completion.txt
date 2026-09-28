@@ -1,0 +1,20 @@
+I20260912 16:34:07 8553706816 iris.cli.main Resolved cluster 'marin' to config: /Users/calvinxu/Projects/Work/Marin/marin/lib/iris/config/marin.yaml
+I20260912 16:34:07 8553706816 iris.cluster.config Loading config from /Users/calvinxu/Projects/Work/Marin/marin/lib/iris/config/marin.yaml
+I20260912 16:34:07 8553706816 finelog.client.log_client LogClient resolved /system/log-server -> https://iris.oa.dev/proxy/system.log-server (log)
+Not all requested scopes were granted by the authorization server, missing scopes email.
+[23:33:43] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | wandb:                                              eval/bpb 0.76656
+[23:33:43] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | wandb:                               eval/bpb_schema_version 2
+[23:33:43] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | wandb:                                     eval/loading_time 2.50622
+[23:33:43] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | wandb:                                             eval/loss 1.31505
+[23:33:43] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | wandb:                                       eval/paloma/bpb 0.76656
+[23:33:43] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | wandb:  eval/paloma/dolma_100_programing_languages-tpp10/bpb 0.76656
+[23:33:43] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | wandb: eval/paloma/dolma_100_programing_languages-tpp10/loss 1.31505
+[23:33:43] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | wandb:                                eval/paloma/micro_loss 1.31505
+[23:33:43] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | wandb:                                       eval/total_time 9.53905
+[23:33:43] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | wandb:                                                  +412 ...
+[23:33:43] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | wandb: 
+[23:33:43] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | wandb: 🚀 View run tpp10_target_p065_s20260910 at: https://wandb.ai/marin-community/marin/runs/tpp10_target_p065_s20260910
+[23:33:43] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | wandb: ⭐️ View project at: https://wandb.ai/marin-community/marin
+[23:33:43] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | wandb: Synced 6 W&B file(s), 0 media file(s), 2636 artifact file(s) and 0 other file(s)
+[23:33:43] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | wandb: Find logs at: ./wandb/run-20260912_213840-tpp10_target_p065_s20260910/logs
+

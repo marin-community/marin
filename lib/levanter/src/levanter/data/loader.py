@@ -271,9 +271,12 @@ class DataLoaderIterator(Iterator[Ex]):
     async def _produce_batches(self):
         with local_cpu_mesh():
             batch_number = self._start_from_batch or 0
+            first_batch_number = batch_number
             done = False
             while not done:
-                target_next_batch_number = batch_number + self.dl.fetch_batch_size
+                # we try to prefetch multiple batches at a time
+                fetch_batch_size = 1 if batch_number == first_batch_number else self.dl.fetch_batch_size
+                target_next_batch_number = batch_number + fetch_batch_size
                 max_achievable_batch_number, final_batch_size = await self._dataset_get_available_batch_number(
                     target_next_batch_number
                 )

@@ -1,0 +1,124 @@
+{
+  "observed_at": "2026-09-15T01:52:00Z",
+  "parent_jobs": [
+    {
+      "id": "job_01m2hbzfs1zvmzavgwrs7tkp3h",
+      "iris": "/calvinxu/table9-accuracy-choices-v6e4-canary-20260915-r2",
+      "name": "table9-accuracy-choices-v6e4-canary-20260915-r2",
+      "command": "uv run --no-sync iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources --cpu 1 --memory 4GB --disk 32GB --timeout 172800 --max-retries 0 --max-preemption-retries 0 --priority interactive --extra cpu --extra lm_eval --no-preemptible --region us-east5 --zone us-east5-a --job-name table9-accuracy-choices-v6e4-canary-20260915-r2 --bundle-include .agents/projects/mariner_table9_accuracy_20260914/plan_v6e4_r2.json --exclude '^(checkpoints|cache|logs|wandb|tmp)/' --exclude '^experiments/domain_phase_mix/exploratory/.*(?<!\\.py)$' --exclude '^\\.agents/(?!projects/mariner_table9_accuracy_20260914/plan_v6e4_r2\\.json$).*' --exclude '^(docs|tests)/' --exclude '^lib/[^/]+/tests/' -e MARIN_PREFIX gs://marin-us-east5 -- python -m experiments.domain_phase_mix.evaluate_table9_accuracy --plan .agents/projects/mariner_table9_accuracy_20260914/plan_v6e4_r2.json --submit --mode choices --canary-documents 2",
+      "retry_of": "job_01m2h8f0cpfxr7mrpr9vx8232f",
+      "mode": "choices"
+    },
+    {
+      "id": "job_01m2hbzgk988nzgwbdksp1d3wn",
+      "iris": "/calvinxu/table9-accuracy-generation-v6e4-canary-20260915-r2",
+      "name": "table9-accuracy-generation-v6e4-canary-20260915-r2",
+      "command": "uv run --no-sync iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources --cpu 1 --memory 4GB --disk 32GB --timeout 172800 --max-retries 0 --max-preemption-retries 0 --priority interactive --extra cpu --extra lm_eval --no-preemptible --region us-east5 --zone us-east5-a --job-name table9-accuracy-generation-v6e4-canary-20260915-r2 --bundle-include .agents/projects/mariner_table9_accuracy_20260914/plan_v6e4_r2.json --exclude '^(checkpoints|cache|logs|wandb|tmp)/' --exclude '^experiments/domain_phase_mix/exploratory/.*(?<!\\.py)$' --exclude '^\\.agents/(?!projects/mariner_table9_accuracy_20260914/plan_v6e4_r2\\.json$).*' --exclude '^(docs|tests)/' --exclude '^lib/[^/]+/tests/' -e MARIN_PREFIX gs://marin-us-east5 -- python -m experiments.domain_phase_mix.evaluate_table9_accuracy --plan .agents/projects/mariner_table9_accuracy_20260914/plan_v6e4_r2.json --submit --mode generation --canary-documents 2",
+      "retry_of": "job_01m2h8f0m0gpp5bxsc0d89zvdz",
+      "mode": "generation"
+    }
+  ],
+  "children": [
+    {
+      "id": "job_01m2hc4ezc7p90j112h1xvx11c",
+      "iris": "/calvinxu/table9-accuracy-choices-v6e4-canary-20260915-r2/table9-accuracy-choices-proportional_1e21-2f1a48-e2fe42b087-n2",
+      "mode": "choices",
+      "row": "proportional_1e21-2f1a48",
+      "run": "run_01m2g8d93rsaq6p46egp60khvf",
+      "retry_of": "job_01m2h8m2g6dar9rqjckvwry9np"
+    },
+    {
+      "id": "job_01m2hc4fdsr9xzbms1b8wpnprt",
+      "iris": "/calvinxu/table9-accuracy-choices-v6e4-canary-20260915-r2/table9-accuracy-choices-unimax8_1e21-d685cd-e2fe42b087-n2",
+      "mode": "choices",
+      "row": "unimax8_1e21-d685cd",
+      "run": "run_01m2g8d99y7rgmb8954nbrzw32",
+      "retry_of": "job_01m2h8m2xek47qhvkfqzge9p1c"
+    },
+    {
+      "id": "job_01m2hc4g2dv6e51aa0m5ksatjm",
+      "iris": "/calvinxu/table9-accuracy-generation-v6e4-canary-20260915-r2/table9-accuracy-generation-proportional_1e21-2f1a48-e2fe42b087-n2",
+      "mode": "generation",
+      "row": "proportional_1e21-2f1a48",
+      "run": "run_01m2g8d93rsaq6p46egp60khvf",
+      "retry_of": "job_01m2h8m3gf55ys6a35xqn6831h"
+    },
+    {
+      "id": "job_01m2hc4gh3nkn7pp4yrr0nz5q3",
+      "iris": "/calvinxu/table9-accuracy-generation-v6e4-canary-20260915-r2/table9-accuracy-generation-unimax8_1e21-d685cd-e2fe42b087-n2",
+      "mode": "generation",
+      "row": "unimax8_1e21-d685cd",
+      "run": "run_01m2g8d99y7rgmb8954nbrzw32",
+      "retry_of": "job_01m2h8m3xqffx8619wnh2fj4rm"
+    }
+  ],
+  "hashes": {
+    "file_sha256": "a1091d3a6c9db164f6b72d73106ec8f9f858f56dabbd2958f8a9bb8a85baede7",
+    "canonical_sha256": "3e429ef8afb9abeb3fc7b2e76327b8f4bbe22a33fac2f8853beeb1c9b0603956",
+    "protocol_sha256": "e2fe42b0875d66d27c387b15a55230a1980ee78649523460a447aa253a13671b",
+    "source_sha256": "8e9dcfeba45f4b43da8c3fdd6c2ae35e18b10f55cf246368aa41679f6ba84339"
+  },
+  "sampled_wire_request": {
+    "job_id": "/calvinxu/table9-accuracy-generation-v6e4-canary-20260915-r2/table9-accuracy-generation-proportional_1e21-2f1a48-e2fe42b087-n2",
+    "state": "JOB_STATE_PENDING",
+    "bundle_sha256": "39e5a7701c38b664d5299ae3276773f06225449b9badfc4a6221788d371084f7",
+    "pending_reason": "Scheduler: Insufficient TPUs (need 4, available 0) - 21 worker(s)\nInsufficient CPU (need 8 cores, available 0 cores) - 1 worker(s)\n(with constraints=['device-type', 'device-variant', 'zone', 'region'])\n\nAutoscaler: (scaling up) Waiting for worker scale-up in scale group 'tpu_v6e-preemptible_4-us-east5-b' (174 slice(s) requested)",
+    "resources": {
+      "cpu_millicores": 8000,
+      "memory_bytes": "68719476736",
+      "device": {
+        "tpu": {
+          "variant": "v6e-4",
+          "count": 4
+        }
+      },
+      "disk_bytes": "34359738368"
+    },
+    "constraints": [
+      {
+        "key": "device-type",
+        "op": "CONSTRAINT_OP_EQ",
+        "value": {
+          "string_value": "tpu"
+        },
+        "mode": "CONSTRAINT_MODE_REQUIRED"
+      },
+      {
+        "key": "device-variant",
+        "op": "CONSTRAINT_OP_EQ",
+        "value": {
+          "string_value": "v6e-4"
+        },
+        "mode": "CONSTRAINT_MODE_REQUIRED"
+      },
+      {
+        "key": "zone",
+        "op": "CONSTRAINT_OP_EQ",
+        "value": {
+          "string_value": "us-east5-b"
+        },
+        "mode": "CONSTRAINT_MODE_REQUIRED"
+      },
+      {
+        "key": "region",
+        "op": "CONSTRAINT_OP_EQ",
+        "value": {
+          "string_value": "us-east5"
+        },
+        "mode": "CONSTRAINT_MODE_REQUIRED"
+      }
+    ]
+  },
+  "regression": {
+    "before": "HFValidationError when a remote checkpoint URI reaches the Hub/local tokenizer loader",
+    "after": "fsspec HF staging with persistent cache; Marin tokenizer loaded from the same local directory",
+    "tests_passed": 16,
+    "lint": "pass",
+    "type_errors": 0,
+    "cpu_parent_preflight": "Both real checkpoints passed before four TPU children were released",
+    "memory_probe": "Pending TPU capacity"
+  },
+  "old_results": "No backfill output roots existed; failed before weights and memory probes",
+  "full_evaluation_released": false,
+  "echo_publication": "403 access denied; incident draft /tmp/table9-tokenizer-incident-20260915.md"
+}

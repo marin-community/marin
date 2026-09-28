@@ -1,0 +1,248 @@
+{
+  "runtime": {
+    "code_sha256": {
+      "experiments/domain_phase_mix/launch_starcoder_epoch_matching.py": "2dea0230c54d0e8dd0d33d27bacda690177e196c46f135eea4951492fc3f0898",
+      "experiments/domain_phase_mix/launch_starcoder_tpp10.py": "eb48d4ea35f323265972653568b6924a7999c8be0a1ce2db1441ac6273105f62",
+      "experiments/domain_phase_mix/prepare_starcoder_tpp10.py": "3dcd74598da46f09dc978ee0a6b0ddee62a820b6906c4c184bf9148883079105",
+      "experiments/domain_phase_mix/starcoder_epoch_matching.py": "29dac8e4085591732c329fe6a238f07cb4e02cdc6198ce344d4ab8b599619085",
+      "experiments/domain_phase_mix/starcoder_tpp10.py": "1c7cc50019f3e99234fb7b3f5668ae2a07b9381ef1fcabfa1aa8011fe98d6473",
+      "experiments/domain_phase_mix/starcoder_tpp10_assets/design.json": "bbcbfffb09ff23654abe115ecdc58bfe4bd5f073bff772246469eafcf917d781",
+      "experiments/domain_phase_mix/starcoder_tpp10_assets/pins.json": "e555f7ec9484c5ec813593de3cd2091fa3a0d35907f8a3209c086fd7de3d1068",
+      "experiments/domain_phase_mix/starcoder_tpp10_assets/sources.json": "9f9b80e55ca9d2d9decc3125336000713c81e941b8f4c08b61f898566259e44a",
+      "experiments/domain_phase_mix/starcoder_tpp10_assets/special_tokens_map.json": "6fa06efa2785e450051989a6f8fb4416b10149ded485ddd3f127a40734f5cfd0",
+      "experiments/domain_phase_mix/starcoder_tpp10_assets/tokenizer.json": "bcd04f0eadf90287bd26e1a183ac487d8a141b09b06aecb7725bbdd343640f2e",
+      "experiments/domain_phase_mix/starcoder_tpp10_assets/tokenizer.model": "9e556afd44213b6bd1be2b850ebbbd98f5481437a8021afaf58ee7fb1818d347",
+      "experiments/domain_phase_mix/starcoder_tpp10_assets/tokenizer_config.json": "f514e7c3008881b6ba7e6a0cdb44c71ce47dc335920dac143ae7bc788197e53a",
+      "lib/levanter/src/levanter/data/dataset.py": "021f5336885a2b9dbe6a60abb26ff4809c0b3c4733baa81a1ba8830be6f56993",
+      "lib/levanter/src/levanter/data/mixture.py": "67e97941a79753b2e5865f7f41c7762436a428599ecd1a60d643aa891a817685",
+      "lib/levanter/src/levanter/data/text/cache.py": "383e718429f2642f17b20af9972009ca16fbddbdbf217037e15c6618da9d4990",
+      "lib/levanter/src/levanter/data/text/datasets.py": "c3ea1ea1f03ac5b96f81c208ce81fd50d5ebd9a74c57cb31ec02619fb4188948",
+      "lib/levanter/src/levanter/data/text/formats.py": "cd9371c30025fa0ed2c9cb72215f1503e8d7ffd2e71a336866a2986f7126c529",
+      "lib/levanter/src/levanter/main/train_lm.py": "3d1fd8e1238b2acb829649a193f4bc9e3c4eccc10cc2cbc0bef2fbc6428e8f76",
+      "lib/levanter/src/levanter/models/llama.py": "f4ebbfbff8708d76e300d70e70c1393ff9553e46c251c38de3d71cd5b948de57",
+      "lib/levanter/src/levanter/models/qwen.py": "241b086569a8aa23b3a006a4be3ebc9142c45cdda8eaef81a19dabc77526b66b",
+      "lib/levanter/src/levanter/optim/muonh.py": "db9fde2f87994a5ae45581f23051365b4aa20db6bf3d584d6c00a1ee74c19412",
+      "lib/levanter/src/levanter/store/cache.py": "55d704474f94d9a84b3f306c40f3263db080da7633a39cbb438e64668a4e4881",
+      "lib/levanter/src/levanter/tokenizers.py": "c49f9f74dc25e683ee9dba413c4008ecbc78a4bac864cba4647a129d6eb0dcb3",
+      "lib/levanter/src/levanter/trainer.py": "c45bd422f0ae23a4efd45610becaa8409d101b4bcaa396fca1e1348847eca03c",
+      "lib/marin/src/marin/experiment/train.py": "138170826fce499a37dcd09354079ac929bbd582ff2cf0dc80bce3b57b6628cf",
+      "lib/marin/src/marin/training/training.py": "4809c96be5a972241a6def1ed097ce195a6d41307bf552422ba97df8455adcb2",
+      "uv.lock": "347c4bb876ef55f60ecd5cf137d22016aaa742387717d20e296ca0ff2cc05dd5"
+    },
+    "design_sha256": "72d14a845033b901d73397c74c724a668cbdec5fd72cec41178626b993f889a2",
+    "versions": {
+      "jax": "0.11.1",
+      "jaxlib": "0.11.1",
+      "numpy": "2.3.5",
+      "tokenizers": "0.22.2"
+    }
+  },
+  "extra_code": {
+    "extra_code_sha256": {
+      "experiments/domain_phase_mix/launch_starcoder_tpp10_mean_selection.py": "24d143e8e305f8807ccc0a44b5212d2d6fc88a0107ce71d7584ae8a8b69b8086",
+      "lib/levanter/src/levanter/eval.py": "0d7b85d886d748f97fa41e4e7e2afcf4ccd2d07bceba01ada5b8c9c306e4e64e"
+    }
+  },
+  "plan": {
+    "allocation": {
+      "full_blocks": 718,
+      "realized_starcoder_fraction": 0.5346725154468714,
+      "remainder_sequences": 384,
+      "sequences_by_component": {
+        "hq_actual": 63915,
+        "hq_synth": 178831,
+        "low_actual": 45963,
+        "medium": 234845,
+        "medium_high": 58176,
+        "medium_low": 102696,
+        "starcoder": 786422
+      },
+      "sequences_per_block": {
+        "hq_actual": 89,
+        "hq_synth": 249,
+        "low_actual": 64,
+        "medium": 327,
+        "medium_high": 81,
+        "medium_low": 143,
+        "starcoder": 1095
+      },
+      "starcoder_epochs": 8.462702307162534,
+      "total_sequences": 1470848
+    },
+    "code_sha256": {
+      "experiments/domain_phase_mix/launch_starcoder_epoch_matching.py": "2dea0230c54d0e8dd0d33d27bacda690177e196c46f135eea4951492fc3f0898",
+      "experiments/domain_phase_mix/launch_starcoder_tpp10.py": "eb48d4ea35f323265972653568b6924a7999c8be0a1ce2db1441ac6273105f62",
+      "experiments/domain_phase_mix/prepare_starcoder_tpp10.py": "3dcd74598da46f09dc978ee0a6b0ddee62a820b6906c4c184bf9148883079105",
+      "experiments/domain_phase_mix/starcoder_epoch_matching.py": "29dac8e4085591732c329fe6a238f07cb4e02cdc6198ce344d4ab8b599619085",
+      "experiments/domain_phase_mix/starcoder_tpp10.py": "1c7cc50019f3e99234fb7b3f5668ae2a07b9381ef1fcabfa1aa8011fe98d6473",
+      "experiments/domain_phase_mix/starcoder_tpp10_assets/design.json": "bbcbfffb09ff23654abe115ecdc58bfe4bd5f073bff772246469eafcf917d781",
+      "experiments/domain_phase_mix/starcoder_tpp10_assets/pins.json": "e555f7ec9484c5ec813593de3cd2091fa3a0d35907f8a3209c086fd7de3d1068",
+      "experiments/domain_phase_mix/starcoder_tpp10_assets/sources.json": "9f9b80e55ca9d2d9decc3125336000713c81e941b8f4c08b61f898566259e44a",
+      "experiments/domain_phase_mix/starcoder_tpp10_assets/special_tokens_map.json": "6fa06efa2785e450051989a6f8fb4416b10149ded485ddd3f127a40734f5cfd0",
+      "experiments/domain_phase_mix/starcoder_tpp10_assets/tokenizer.json": "bcd04f0eadf90287bd26e1a183ac487d8a141b09b06aecb7725bbdd343640f2e",
+      "experiments/domain_phase_mix/starcoder_tpp10_assets/tokenizer.model": "9e556afd44213b6bd1be2b850ebbbd98f5481437a8021afaf58ee7fb1818d347",
+      "experiments/domain_phase_mix/starcoder_tpp10_assets/tokenizer_config.json": "f514e7c3008881b6ba7e6a0cdb44c71ce47dc335920dac143ae7bc788197e53a",
+      "lib/levanter/src/levanter/data/dataset.py": "021f5336885a2b9dbe6a60abb26ff4809c0b3c4733baa81a1ba8830be6f56993",
+      "lib/levanter/src/levanter/data/mixture.py": "67e97941a79753b2e5865f7f41c7762436a428599ecd1a60d643aa891a817685",
+      "lib/levanter/src/levanter/data/text/cache.py": "383e718429f2642f17b20af9972009ca16fbddbdbf217037e15c6618da9d4990",
+      "lib/levanter/src/levanter/data/text/datasets.py": "c3ea1ea1f03ac5b96f81c208ce81fd50d5ebd9a74c57cb31ec02619fb4188948",
+      "lib/levanter/src/levanter/data/text/formats.py": "cd9371c30025fa0ed2c9cb72215f1503e8d7ffd2e71a336866a2986f7126c529",
+      "lib/levanter/src/levanter/main/train_lm.py": "3d1fd8e1238b2acb829649a193f4bc9e3c4eccc10cc2cbc0bef2fbc6428e8f76",
+      "lib/levanter/src/levanter/models/llama.py": "f4ebbfbff8708d76e300d70e70c1393ff9553e46c251c38de3d71cd5b948de57",
+      "lib/levanter/src/levanter/models/qwen.py": "241b086569a8aa23b3a006a4be3ebc9142c45cdda8eaef81a19dabc77526b66b",
+      "lib/levanter/src/levanter/optim/muonh.py": "db9fde2f87994a5ae45581f23051365b4aa20db6bf3d584d6c00a1ee74c19412",
+      "lib/levanter/src/levanter/store/cache.py": "55d704474f94d9a84b3f306c40f3263db080da7633a39cbb438e64668a4e4881",
+      "lib/levanter/src/levanter/tokenizers.py": "c49f9f74dc25e683ee9dba413c4008ecbc78a4bac864cba4647a129d6eb0dcb3",
+      "lib/levanter/src/levanter/trainer.py": "c45bd422f0ae23a4efd45610becaa8409d101b4bcaa396fca1e1348847eca03c",
+      "lib/marin/src/marin/experiment/train.py": "138170826fce499a37dcd09354079ac929bbd582ff2cf0dc80bce3b57b6628cf",
+      "lib/marin/src/marin/training/training.py": "4809c96be5a972241a6def1ed097ce195a6d41307bf552422ba97df8455adcb2",
+      "uv.lock": "347c4bb876ef55f60ecd5cf137d22016aaa742387717d20e296ca0ff2cc05dd5"
+    },
+    "design_sha256": "72d14a845033b901d73397c74c724a668cbdec5fd72cec41178626b993f889a2",
+    "extra_code_sha256": {
+      "experiments/domain_phase_mix/launch_starcoder_tpp10_mean_selection.py": "24d143e8e305f8807ccc0a44b5212d2d6fc88a0107ce71d7584ae8a8b69b8086",
+      "lib/levanter/src/levanter/eval.py": "0d7b85d886d748f97fa41e4e7e2afcf4ccd2d07bceba01ada5b8c9c306e4e64e"
+    },
+    "marin_prefix": "gs://marin-us-central1",
+    "model": {
+      "batch_size": 128,
+      "parameters": 301241344,
+      "steps": 11491,
+      "tokens": 3012296704,
+      "tpp": 9.99961248347106,
+      "training_flops": 6.66390282503612e+18
+    },
+    "nominal_starcoder_fraction": {
+      "denominator": 15,
+      "numerator": 8
+    },
+    "plan_sha256": "2d8de87ec6b975ef757c5994cb610bb7d9386dfbefc2aac264e8e8c2991b0bf1",
+    "primary_metric": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+    "proxy_track_selections_percent": [
+      50,
+      50,
+      65,
+      50,
+      50,
+      55
+    ],
+    "reference_losses": {
+      "target_grid_minimum_bpb": 0.7655645236000794,
+      "target_grid_minimum_percent": 70,
+      "unmatched_choice_percent": 100,
+      "unmatched_choice_target_bpb": 0.8006188043853639
+    },
+    "region": "us-central1",
+    "runs": [
+      {
+        "arm": "target",
+        "batch_size": 128,
+        "fingerprint": "8bace5e8",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p8of15_s20260910/2026.09.09",
+        "percent": 53.333333333333336,
+        "run_name": "tpp10_target_p8of15_s20260910",
+        "subset_seed": null,
+        "support_sequences": 92928,
+        "tokens": 3012296704,
+        "total_steps": 11491,
+        "trainer_seed": 20260910
+      }
+    ],
+    "runtime_versions": {
+      "jax": "0.11.1",
+      "jaxlib": "0.11.1",
+      "numpy": "2.3.5",
+      "tokenizers": "0.22.2"
+    },
+    "stage": "mean-selection-target",
+    "training_flops": 6.66390282503612e+18,
+    "weights": {
+      "hq_actual": 0.043785960724461004,
+      "hq_synth": 0.12196475680385856,
+      "low_actual": 0.03128283439167336,
+      "medium": 0.15967939367268486,
+      "medium_high": 0.0398304885538784,
+      "medium_low": 0.0701232325201105,
+      "starcoder": 0.5333333333333333
+    },
+    "zone": "us-central1-a"
+  },
+  "cache_audit": {
+    "caches": {
+      "evaluation": {
+        "fingerprint": "3a557be8",
+        "path": "gs://marin-us-central1/paloma/dolma_100_programing_languages-tpp10/2026.09.09",
+        "receipt_sha256": "aed724e9c8231a21247ebf9da71c3d967d0c60a9ae71c75e490a0c7dbe653e72",
+        "tokens": 11620242
+      },
+      "hq_actual": {
+        "fingerprint": "6724be3d",
+        "path": "gs://marin-us-central1/starcoder_tpp10/hq_actual/2026.09.09",
+        "receipt_sha256": "a10aa93b9ea79e8e91730904d759bd4d6c8fdb761efc7f276d1150e869abe782",
+        "tokens": 343357440
+      },
+      "hq_synth": {
+        "fingerprint": "1aff8317",
+        "path": "gs://marin-us-central1/starcoder_tpp10/hq_synth/2026.09.09",
+        "receipt_sha256": "0e457efcaa33fe532aadf59ee68be9c00c481ea27eb583bcbf0d2cb2064a75e2",
+        "tokens": 948922368
+      },
+      "low_actual": {
+        "fingerprint": "76ed50a5",
+        "path": "gs://marin-us-central1/starcoder_tpp10/low_actual/2026.09.09",
+        "receipt_sha256": "c8330836a31dc38be05827541167588c1689ca55b7ed76f0ba071a2b60ae9e74",
+        "tokens": 246509568
+      },
+      "medium": {
+        "fingerprint": "12062edd",
+        "path": "gs://marin-us-central1/starcoder_tpp10/medium/2026.09.09",
+        "receipt_sha256": "96f6d87e1875dcd2dbe7d25b6e93fb3ec8ec68d9746dd64ab7408fe2889d16e7",
+        "tokens": 1241057280
+      },
+      "medium_high": {
+        "fingerprint": "e46a2568",
+        "path": "gs://marin-us-central1/starcoder_tpp10/medium_high/2026.09.09",
+        "receipt_sha256": "a5f564a9e19a67b648c542a1cdfe96d886a61f700ebd30b081a54262914bf7de",
+        "tokens": 312719360
+      },
+      "medium_low": {
+        "fingerprint": "351e53d8",
+        "path": "gs://marin-us-central1/starcoder_tpp10/medium_low/2026.09.09",
+        "receipt_sha256": "4b6a74eb58f3efdcf951f8487da7f6e43df9a68b22a7126881370d64f007217f",
+        "tokens": 547362816
+      },
+      "starcoder": {
+        "fingerprint": "7277121a",
+        "path": "gs://marin-us-central1/starcoder_tpp10/parent/2026.09.09",
+        "receipt_sha256": "7c0bd471435b883bc2fc5f2036aa363aab28da2c7d811d665dd05a638b7280b2",
+        "tokens": 190316544
+      },
+      "starcoder_raw": {
+        "fingerprint": "c87645e3",
+        "path": "gs://marin-us-central1/starcoder_tpp10/starcoder/2026.09.09",
+        "receipt_sha256": "a5d2987017af31893319f22ea39b20e9a914c066762e6ed2a28a8799ff6d6343",
+        "tokens": 190316544
+      },
+      "subset_20260912": {
+        "fingerprint": "87312d28",
+        "path": "gs://marin-us-central1/starcoder_tpp10/subset_20260912/2026.09.09",
+        "receipt_sha256": "67231ad8aa1fbb294c7c738409260bcd2a91edd2d8019a9cfe466227953b49f0",
+        "tokens": 10485760
+      },
+      "subset_20260913": {
+        "fingerprint": "3e166c0e",
+        "path": "gs://marin-us-central1/starcoder_tpp10/subset_20260913/2026.09.09",
+        "receipt_sha256": "fd7186bdaf72f35d9e25c16dd7b6b8557d27e7bf5498f406d846dc1332fd1c00",
+        "tokens": 10485760
+      },
+      "subset_20260914": {
+        "fingerprint": "cac63c83",
+        "path": "gs://marin-us-central1/starcoder_tpp10/subset_20260914/2026.09.09",
+        "receipt_sha256": "2b2db1f0524fbd588c99b56d295d86f8c4908cd7654a5277ac5a8089ab085c4e",
+        "tokens": 10485760
+      }
+    },
+    "design_sha256": "72d14a845033b901d73397c74c724a668cbdec5fd72cec41178626b993f889a2",
+    "status": "passed"
+  }
+}

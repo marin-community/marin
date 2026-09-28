@@ -1,0 +1,17 @@
+{
+  "attrs": {},
+  "check_name": "figure10_midpoints_cc_release_review",
+  "created_at": "2026-09-12T22:13:42Z",
+  "deleted_at": null,
+  "details": {},
+  "entity_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+  "entity_type": "experiment",
+  "expected_value": "Completed CC review before submission, all release gates satisfied",
+  "id": "val_01m2btxz528aekx3k09rrn1j0d",
+  "measured_value": "Opus 5 review: no correctness blockers; stale region receipt corrected; source/input hashes and final 25.4MB bundle checked",
+  "session_id": "ses_01m2bsq9b2sp76rjtp26waqp9m",
+  "source_artifact_id": null,
+  "source_job_id": null,
+  "status": "pass",
+  "updated_at": "2026-09-12T22:13:42Z"
+}

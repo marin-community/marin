@@ -1,0 +1,73 @@
+{
+  "minima_records": [
+    {
+      "label": "adamh_scaling_v6",
+      "flops": 2.891595768701961e+18,
+      "optimal_tokens": 1385734942.0531974,
+      "loss_at_optimal": 1.0875359081872613,
+      "optimal_params": 447244032.0,
+      "scaling_alpha": 0.5801435708999634,
+      "scaling_A": 0.02664569951593876
+    },
+    {
+      "label": "adamh_scaling_v6",
+      "flops": 9.075066214500617e+18,
+      "optimal_tokens": 2678702111.257973,
+      "loss_at_optimal": 1.0280106772906574,
+      "optimal_params": 550337664.0,
+      "scaling_alpha": 0.5801435708999634,
+      "scaling_A": 0.02664569951593876
+    },
+    {
+      "label": "adamh_scaling_v6",
+      "flops": 1.768473671582963e+19,
+      "optimal_tokens": 3908354805.7350073,
+      "loss_at_optimal": 0.993941939776203,
+      "optimal_params": 837007744.0,
+      "scaling_alpha": 0.5801435708999634,
+      "scaling_A": 0.02664569951593876
+    },
+    {
+      "label": "adamh_scaling_v6",
+      "flops": 3.1329589861031875e+19,
+      "optimal_tokens": 5295177530.699777,
+      "loss_at_optimal": 0.9716475500645743,
+      "optimal_params": 998036992.0,
+      "scaling_alpha": 0.5801435708999634,
+      "scaling_A": 0.02664569951593876
+    },
+    {
+      "label": "adamh_scaling_v6",
+      "flops": 8.93869762280846e+19,
+      "optimal_tokens": 9614849394.666327,
+      "loss_at_optimal": 0.9251524745332986,
+      "optimal_params": 1384584448.0,
+      "scaling_alpha": 0.5801435708999634,
+      "scaling_A": 0.02664569951593876
+    },
+    {
+      "label": "adamh_scaling_v6",
+      "flops": 1.7418992909296203e+20,
+      "optimal_tokens": 15176228559.960299,
+      "loss_at_optimal": 0.8975541210740161,
+      "optimal_params": 1934716160.0,
+      "scaling_alpha": 0.5801435708999634,
+      "scaling_A": 0.02664569951593876
+    },
+    {
+      "label": "adamh_scaling_v6",
+      "flops": 3.085880849738571e+20,
+      "optimal_tokens": 20848364274.247314,
+      "loss_at_optimal": 0.8792616660514128,
+      "optimal_params": 2544614912.0,
+      "scaling_alpha": 0.5801435708999634,
+      "scaling_A": 0.02664569951593876
+    }
+  ],
+  "scaling_fits": {
+    "adamh_scaling_v6": [
+      0.5801435708999634,
+      0.02664569951593876
+    ]
+  }
+}

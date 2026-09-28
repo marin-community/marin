@@ -1,0 +1,652 @@
+{
+  "allocation": {
+    "coordinates": [
+      {
+        "matched_epochs": 0.0,
+        "percent": 0,
+        "proxy_allocation": {
+          "hq_actual": 7593,
+          "hq_synth": 21158,
+          "low_actual": 5422,
+          "medium": 27813,
+          "medium_high": 6888,
+          "medium_low": 12150,
+          "starcoder": 0
+        },
+        "relative_error": 0.0,
+        "target_allocation": {
+          "hq_actual": 137890,
+          "hq_synth": 384232,
+          "low_actual": 98392,
+          "medium": 504888,
+          "medium_high": 124959,
+          "medium_low": 220487,
+          "starcoder": 0
+        },
+        "target_epochs": 0.0
+      },
+      {
+        "matched_epochs": 0.787890625,
+        "percent": 5,
+        "proxy_allocation": {
+          "hq_actual": 7199,
+          "hq_synth": 20092,
+          "low_actual": 5145,
+          "medium": 26431,
+          "medium_high": 6569,
+          "medium_low": 11554,
+          "starcoder": 4034
+        },
+        "relative_error": 0.0005037267589483863,
+        "target_allocation": {
+          "hq_actual": 130705,
+          "hq_synth": 364844,
+          "low_actual": 93372,
+          "medium": 479750,
+          "medium_high": 119217,
+          "medium_low": 209706,
+          "starcoder": 73254
+        },
+        "target_epochs": 0.7882877066115702
+      },
+      {
+        "matched_epochs": 1.5763671875,
+        "percent": 10,
+        "proxy_allocation": {
+          "hq_actual": 6803,
+          "hq_synth": 19020,
+          "low_actual": 4874,
+          "medium": 25132,
+          "medium_high": 6210,
+          "medium_low": 10914,
+          "starcoder": 8071
+        },
+        "relative_error": 0.0002139639639638924,
+        "target_allocation": {
+          "hq_actual": 123523,
+          "hq_synth": 345457,
+          "low_actual": 88331,
+          "medium": 456047,
+          "medium_high": 112750,
+          "medium_low": 198220,
+          "starcoder": 146520
+        },
+        "target_epochs": 1.5767045454545454
+      },
+      {
+        "matched_epochs": 2.3736328125,
+        "percent": 15,
+        "proxy_allocation": {
+          "hq_actual": 6447,
+          "hq_synth": 17951,
+          "low_actual": 4587,
+          "medium": 23706,
+          "medium_high": 5860,
+          "medium_low": 10320,
+          "starcoder": 12153
+        },
+        "relative_error": 0.0003943489500657371,
+        "target_allocation": {
+          "hq_actual": 117059,
+          "hq_synth": 326072,
+          "low_actual": 83308,
+          "medium": 430192,
+          "medium_high": 106282,
+          "medium_low": 187445,
+          "starcoder": 220490
+        },
+        "target_epochs": 2.372697141873278
+      },
+      {
+        "matched_epochs": 3.1619140625,
+        "percent": 20,
+        "proxy_allocation": {
+          "hq_actual": 6047,
+          "hq_synth": 16932,
+          "low_actual": 4306,
+          "medium": 22314,
+          "medium_high": 5497,
+          "medium_low": 9739,
+          "starcoder": 16189
+        },
+        "relative_error": 0.0002973687883627285,
+        "target_allocation": {
+          "hq_actual": 109877,
+          "hq_synth": 307400,
+          "low_actual": 78280,
+          "medium": 405057,
+          "medium_high": 99818,
+          "medium_low": 176673,
+          "starcoder": 293743
+        },
+        "target_epochs": 3.1609740874655645
+      },
+      {
+        "matched_epochs": 3.9568359375,
+        "percent": 25,
+        "proxy_allocation": {
+          "hq_actual": 5692,
+          "hq_synth": 15862,
+          "low_actual": 4036,
+          "medium": 20892,
+          "medium_high": 5181,
+          "medium_low": 9102,
+          "starcoder": 20259
+        },
+        "relative_error": 3.5761488548113896e-05,
+        "target_allocation": {
+          "hq_actual": 103415,
+          "hq_synth": 288005,
+          "low_actual": 73255,
+          "medium": 379196,
+          "medium_high": 94076,
+          "medium_low": 165187,
+          "starcoder": 367714
+        },
+        "target_epochs": 3.9569774449035813
+      },
+      {
+        "matched_epochs": 4.768359375,
+        "percent": 30,
+        "proxy_allocation": {
+          "hq_actual": 5296,
+          "hq_synth": 14797,
+          "low_actual": 3792,
+          "medium": 19395,
+          "medium_high": 4820,
+          "medium_low": 8510,
+          "starcoder": 24414
+        },
+        "relative_error": 2.008471688452751e-05,
+        "target_allocation": {
+          "hq_actual": 96232,
+          "hq_synth": 268613,
+          "low_actual": 68947,
+          "medium": 351898,
+          "medium_high": 87620,
+          "medium_low": 154415,
+          "starcoder": 443123
+        },
+        "target_epochs": 4.7684551480716255
+      },
+      {
+        "matched_epochs": 5.56328125,
+        "percent": 35,
+        "proxy_allocation": {
+          "hq_actual": 4901,
+          "hq_synth": 13726,
+          "low_actual": 3530,
+          "medium": 18001,
+          "medium_high": 4470,
+          "medium_low": 7912,
+          "starcoder": 28484
+        },
+        "relative_error": 0.0002173673411371979,
+        "target_allocation": {
+          "hq_actual": 89051,
+          "hq_synth": 249217,
+          "low_actual": 63920,
+          "medium": 326756,
+          "medium_high": 81163,
+          "medium_low": 143644,
+          "starcoder": 517097
+        },
+        "target_epochs": 5.564490788567493
+      },
+      {
+        "matched_epochs": 6.3529296875,
+        "percent": 40,
+        "proxy_allocation": {
+          "hq_actual": 4548,
+          "hq_synth": 12697,
+          "low_actual": 3243,
+          "medium": 16611,
+          "medium_high": 4112,
+          "medium_low": 7286,
+          "starcoder": 32527
+        },
+        "relative_error": 1.5329733245694754e-05,
+        "target_allocation": {
+          "hq_actual": 82589,
+          "hq_synth": 230545,
+          "low_actual": 58893,
+          "medium": 301625,
+          "medium_high": 74694,
+          "medium_low": 132146,
+          "starcoder": 590356
+        },
+        "target_epochs": 6.352832300275482
+      },
+      {
+        "matched_epochs": 7.140234375,
+        "percent": 45,
+        "proxy_allocation": {
+          "hq_actual": 4155,
+          "hq_synth": 11626,
+          "low_actual": 2973,
+          "medium": 15229,
+          "medium_high": 3797,
+          "medium_low": 6686,
+          "starcoder": 36558
+        },
+        "relative_error": 0.00012703206090303176,
+        "target_allocation": {
+          "hq_actual": 75408,
+          "hq_synth": 211149,
+          "low_actual": 53868,
+          "medium": 276491,
+          "medium_high": 68952,
+          "medium_low": 121368,
+          "starcoder": 663612
+        },
+        "target_epochs": 7.14114152892562
+      },
+      {
+        "matched_epochs": 7.937890625,
+        "percent": 50,
+        "proxy_allocation": {
+          "hq_actual": 3800,
+          "hq_synth": 10559,
+          "low_actual": 2688,
+          "medium": 13843,
+          "medium_high": 3437,
+          "medium_low": 6055,
+          "starcoder": 40642
+        },
+        "relative_error": 8.853192911484342e-05,
+        "target_allocation": {
+          "hq_actual": 68944,
+          "hq_synth": 191757,
+          "low_actual": 48835,
+          "medium": 251363,
+          "medium_high": 62486,
+          "medium_low": 109876,
+          "starcoder": 737587
+        },
+        "target_epochs": 7.937187930440771
+      },
+      {
+        "matched_epochs": 8.7333984375,
+        "percent": 55,
+        "proxy_allocation": {
+          "hq_actual": 3406,
+          "hq_synth": 9491,
+          "low_actual": 2410,
+          "medium": 12457,
+          "medium_high": 3082,
+          "medium_low": 5463,
+          "starcoder": 44715
+        },
+        "relative_error": 2.4952036640657482e-05,
+        "target_allocation": {
+          "hq_actual": 61761,
+          "hq_synth": 172365,
+          "low_actual": 43806,
+          "medium": 226228,
+          "medium_high": 56023,
+          "medium_low": 99108,
+          "starcoder": 811557
+        },
+        "target_epochs": 8.733180526859504
+      },
+      {
+        "matched_epochs": 9.521875,
+        "percent": 60,
+        "proxy_allocation": {
+          "hq_actual": 3011,
+          "hq_synth": 8460,
+          "low_actual": 2134,
+          "medium": 11070,
+          "medium_high": 2729,
+          "medium_low": 4868,
+          "starcoder": 48752
+        },
+        "relative_error": 4.61116988090815e-05,
+        "target_allocation": {
+          "hq_actual": 54579,
+          "hq_synth": 153692,
+          "low_actual": 38782,
+          "medium": 201101,
+          "medium_high": 49556,
+          "medium_low": 88330,
+          "starcoder": 884808
+        },
+        "target_epochs": 9.521435950413224
+      },
+      {
+        "matched_epochs": 10.3017578125,
+        "percent": 65,
+        "proxy_allocation": {
+          "hq_actual": 2655,
+          "hq_synth": 7393,
+          "low_actual": 1899,
+          "medium": 9687,
+          "medium_high": 2412,
+          "medium_low": 4233,
+          "starcoder": 52745
+        },
+        "relative_error": 2.3241384497052486e-05,
+        "target_allocation": {
+          "hq_actual": 48114,
+          "hq_synth": 134300,
+          "low_actual": 34472,
+          "medium": 175965,
+          "medium_high": 43813,
+          "medium_low": 76840,
+          "starcoder": 957344
+        },
+        "target_epochs": 10.301997245179063
+      },
+      {
+        "matched_epochs": 11.098046875,
+        "percent": 70,
+        "proxy_allocation": {
+          "hq_actual": 2258,
+          "hq_synth": 6320,
+          "low_actual": 1620,
+          "medium": 8304,
+          "medium_high": 2063,
+          "medium_low": 3637,
+          "starcoder": 56822
+        },
+        "relative_error": 1.0956959511476683e-05,
+        "target_allocation": {
+          "hq_actual": 40933,
+          "hq_synth": 114910,
+          "low_actual": 29446,
+          "medium": 150826,
+          "medium_high": 37345,
+          "medium_low": 66080,
+          "starcoder": 1031308
+        },
+        "target_epochs": 11.097925275482094
+      },
+      {
+        "matched_epochs": 11.8927734375,
+        "percent": 75,
+        "proxy_allocation": {
+          "hq_actual": 1900,
+          "hq_synth": 5260,
+          "low_actual": 1346,
+          "medium": 6926,
+          "medium_high": 1695,
+          "medium_low": 3006,
+          "starcoder": 60891
+        },
+        "relative_error": 0.00010255273526726949,
+        "target_allocation": {
+          "hq_actual": 34468,
+          "hq_synth": 95519,
+          "low_actual": 24422,
+          "medium": 125688,
+          "medium_high": 30882,
+          "medium_low": 54584,
+          "starcoder": 1105285
+        },
+        "target_epochs": 11.893993199035812
+      },
+      {
+        "matched_epochs": 12.6806640625,
+        "percent": 80,
+        "proxy_allocation": {
+          "hq_actual": 1505,
+          "hq_synth": 4227,
+          "low_actual": 1068,
+          "medium": 5538,
+          "medium_high": 1349,
+          "medium_low": 2412,
+          "starcoder": 64925
+        },
+        "relative_error": 0.00013173033845159665,
+        "target_allocation": {
+          "hq_actual": 27287,
+          "hq_synth": 76846,
+          "low_actual": 19393,
+          "medium": 100550,
+          "medium_high": 24417,
+          "medium_low": 43811,
+          "starcoder": 1178544
+        },
+        "target_epochs": 12.682334710743802
+      },
+      {
+        "matched_epochs": 13.468359375,
+        "percent": 85,
+        "proxy_allocation": {
+          "hq_actual": 1109,
+          "hq_synth": 3164,
+          "low_actual": 794,
+          "medium": 4156,
+          "medium_high": 1023,
+          "medium_low": 1820,
+          "starcoder": 68958
+        },
+        "relative_error": 0.00017279062856478955,
+        "target_allocation": {
+          "hq_actual": 20107,
+          "hq_synth": 57455,
+          "low_actual": 14363,
+          "medium": 75410,
+          "medium_high": 18670,
+          "medium_low": 33039,
+          "starcoder": 1251804
+        },
+        "target_epochs": 13.470686983471074
+      },
+      {
+        "matched_epochs": 14.2650390625,
+        "percent": 90,
+        "proxy_allocation": {
+          "hq_actual": 752,
+          "hq_synth": 2102,
+          "low_actual": 511,
+          "medium": 2763,
+          "medium_high": 670,
+          "medium_low": 1189,
+          "starcoder": 73037
+        },
+        "relative_error": 0.00011725199637657724,
+        "target_allocation": {
+          "hq_actual": 13644,
+          "hq_synth": 38062,
+          "low_actual": 9336,
+          "medium": 50271,
+          "medium_high": 12209,
+          "medium_low": 21549,
+          "starcoder": 1325777
+        },
+        "target_epochs": 14.266711862947659
+      },
+      {
+        "matched_epochs": 15.059765625,
+        "percent": 95,
+        "proxy_allocation": {
+          "hq_actual": 356,
+          "hq_synth": 1030,
+          "low_actual": 237,
+          "medium": 1389,
+          "medium_high": 316,
+          "medium_low": 590,
+          "starcoder": 77106
+        },
+        "relative_error": 0.00019724950884081327,
+        "target_allocation": {
+          "hq_actual": 6463,
+          "hq_synth": 18670,
+          "low_actual": 4309,
+          "medium": 25137,
+          "medium_high": 5745,
+          "medium_low": 10774,
+          "starcoder": 1399750
+        },
+        "target_epochs": 15.062736742424242
+      },
+      {
+        "matched_epochs": 15.825,
+        "percent": 100,
+        "proxy_allocation": {
+          "hq_actual": 0,
+          "hq_synth": 0,
+          "low_actual": 0,
+          "medium": 0,
+          "medium_high": 0,
+          "medium_low": 0,
+          "starcoder": 81024
+        },
+        "relative_error": 0.00017840048733797076,
+        "target_allocation": {
+          "hq_actual": 0,
+          "hq_synth": 0,
+          "low_actual": 0,
+          "medium": 0,
+          "medium_high": 0,
+          "medium_low": 0,
+          "starcoder": 1470848
+        },
+        "target_epochs": 15.827823691460056
+      }
+    ],
+    "design_sha256": "72d14a845033b901d73397c74c724a668cbdec5fd72cec41178626b993f889a2",
+    "maximum_epoch_relative_error": 0.0005037267589483863,
+    "status": "passed"
+  },
+  "data": {
+    "caches": {
+      "finemath_3plus/matched": {
+        "fingerprint": "6d286890",
+        "path": "gs://marin-us-central1/tpp10_domain_sweeps/finemath_3plus/matched/2026.09.11",
+        "receipt_sha256": "7d49e62140539331eb9077f4f679f7ad839b4871024dad577c25bb4b9768d3a1",
+        "tokens": 10485760
+      },
+      "finemath_3plus/parent": {
+        "fingerprint": "60e2a8fa",
+        "path": "gs://marin-us-central1/tpp10_domain_sweeps/finemath_3plus/parent/2026.09.11",
+        "receipt_sha256": "526b9de24d1edc258c6a7ad02cadadb872922715d768f1d88bfb296de9ab10e4",
+        "tokens": 190316544
+      },
+      "finemath_3plus/raw": {
+        "fingerprint": "951e1108",
+        "path": "gs://marin-us-central1/tpp10_domain_sweeps/finemath_3plus/raw/2026.09.11",
+        "receipt_sha256": "71e3ebf004c319429ccbaa7d6c8f66ee48c7327c91fc265c9ed42f219fc81ff1",
+        "tokens": 190316544
+      },
+      "wikipedia/matched": {
+        "fingerprint": "475c0f64",
+        "path": "gs://marin-us-central1/tpp10_domain_sweeps/wikipedia/matched/2026.09.11",
+        "receipt_sha256": "f376cc317ccb973d4a3ea175c288d94cf5f6eef572db0871da7884133d1e18c8",
+        "tokens": 10485760
+      },
+      "wikipedia/parent": {
+        "fingerprint": "447ffaff",
+        "path": "gs://marin-us-central1/tpp10_domain_sweeps/wikipedia/parent/2026.09.11",
+        "receipt_sha256": "9807d1d7497443c32646af2a9c4b872ead0517166dfa559629f18439bd89cb2f",
+        "tokens": 190316544
+      },
+      "wikipedia/raw": {
+        "fingerprint": "5e2ac160",
+        "path": "gs://marin-us-central1/tpp10_domain_sweeps/wikipedia/raw/2026.09.11",
+        "receipt_sha256": "39ab782cfacf324b4e241b1b6c3bb972ae364686bc6e7dfa3521dc20b627fbb7",
+        "tokens": 190316544
+      }
+    },
+    "status": "passed"
+  },
+  "evaluation_paths": {
+    "paloma/dolma_100_programing_languages-tpp10": "gs://marin-us-central1/paloma/dolma_100_programing_languages-tpp10/2026.09.09",
+    "uncheatable_eval/ao3_english": "gs://marin-us-central1/tokenized/uncheatable_eval/ao3_english-tpp10/2026.09.11/63c94a7dc60e9e32a65cb6782bc687e546254824d164b5c6040534e0b7d3f6a8",
+    "uncheatable_eval/arxiv_computer_science": "gs://marin-us-central1/tokenized/uncheatable_eval/arxiv_computer_science-tpp10/2026.09.11/df41770beca319c42762b31efe5d70ad7026c160e175cd51718174c6c5c043d7",
+    "uncheatable_eval/arxiv_physics": "gs://marin-us-central1/tokenized/uncheatable_eval/arxiv_physics-tpp10/2026.09.11/7d6e7f1c2e34383226494edcc4812273b3251c7cd6614b146926098e3878c509",
+    "uncheatable_eval/bbc_news": "gs://marin-us-central1/tokenized/uncheatable_eval/bbc_news-tpp10/2026.09.11/5b0c5e6e05de77909432ae14e4b8fdc28fd3498f47b9befa0ca91292c9c8bb35",
+    "uncheatable_eval/github_cpp": "gs://marin-us-central1/tokenized/uncheatable_eval/github_cpp-tpp10/2026.09.11/4087483d339a8811e3b50112b3188d93f246c5f93a9935d13c811694b8dfc55f",
+    "uncheatable_eval/github_python": "gs://marin-us-central1/tokenized/uncheatable_eval/github_python-tpp10/2026.09.11/dd0ef40165054a5419152a0b9f3a289b58a4dd55849ece882470eb187c60adf5",
+    "uncheatable_eval/wikipedia_english": "gs://marin-us-central1/tokenized/uncheatable_eval/wikipedia_english-tpp10/2026.09.11/56aadad78362c1b7d2faca56f13594e0fe5584fe7f5326333775071d49d1cf0c"
+  },
+  "evaluation_populations": {
+    "paloma/dolma_100_programing_languages-tpp10": 5673,
+    "uncheatable_eval/ao3_english": 613,
+    "uncheatable_eval/arxiv_computer_science": 536,
+    "uncheatable_eval/arxiv_physics": 602,
+    "uncheatable_eval/bbc_news": 445,
+    "uncheatable_eval/github_cpp": 649,
+    "uncheatable_eval/github_python": 630,
+    "uncheatable_eval/wikipedia_english": 335
+  },
+  "frozen_data": {
+    "caches": {
+      "evaluation": {
+        "fingerprint": "3a557be8",
+        "path": "gs://marin-us-central1/paloma/dolma_100_programing_languages-tpp10/2026.09.09",
+        "receipt_sha256": "aed724e9c8231a21247ebf9da71c3d967d0c60a9ae71c75e490a0c7dbe653e72",
+        "tokens": 11620242
+      },
+      "hq_actual": {
+        "fingerprint": "6724be3d",
+        "path": "gs://marin-us-central1/starcoder_tpp10/hq_actual/2026.09.09",
+        "receipt_sha256": "a10aa93b9ea79e8e91730904d759bd4d6c8fdb761efc7f276d1150e869abe782",
+        "tokens": 343357440
+      },
+      "hq_synth": {
+        "fingerprint": "1aff8317",
+        "path": "gs://marin-us-central1/starcoder_tpp10/hq_synth/2026.09.09",
+        "receipt_sha256": "0e457efcaa33fe532aadf59ee68be9c00c481ea27eb583bcbf0d2cb2064a75e2",
+        "tokens": 948922368
+      },
+      "low_actual": {
+        "fingerprint": "76ed50a5",
+        "path": "gs://marin-us-central1/starcoder_tpp10/low_actual/2026.09.09",
+        "receipt_sha256": "c8330836a31dc38be05827541167588c1689ca55b7ed76f0ba071a2b60ae9e74",
+        "tokens": 246509568
+      },
+      "medium": {
+        "fingerprint": "12062edd",
+        "path": "gs://marin-us-central1/starcoder_tpp10/medium/2026.09.09",
+        "receipt_sha256": "96f6d87e1875dcd2dbe7d25b6e93fb3ec8ec68d9746dd64ab7408fe2889d16e7",
+        "tokens": 1241057280
+      },
+      "medium_high": {
+        "fingerprint": "e46a2568",
+        "path": "gs://marin-us-central1/starcoder_tpp10/medium_high/2026.09.09",
+        "receipt_sha256": "a5f564a9e19a67b648c542a1cdfe96d886a61f700ebd30b081a54262914bf7de",
+        "tokens": 312719360
+      },
+      "medium_low": {
+        "fingerprint": "351e53d8",
+        "path": "gs://marin-us-central1/starcoder_tpp10/medium_low/2026.09.09",
+        "receipt_sha256": "4b6a74eb58f3efdcf951f8487da7f6e43df9a68b22a7126881370d64f007217f",
+        "tokens": 547362816
+      },
+      "starcoder": {
+        "fingerprint": "7277121a",
+        "path": "gs://marin-us-central1/starcoder_tpp10/parent/2026.09.09",
+        "receipt_sha256": "7c0bd471435b883bc2fc5f2036aa363aab28da2c7d811d665dd05a638b7280b2",
+        "tokens": 190316544
+      },
+      "starcoder_raw": {
+        "fingerprint": "c87645e3",
+        "path": "gs://marin-us-central1/starcoder_tpp10/starcoder/2026.09.09",
+        "receipt_sha256": "a5d2987017af31893319f22ea39b20e9a914c066762e6ed2a28a8799ff6d6343",
+        "tokens": 190316544
+      },
+      "subset_20260912": {
+        "fingerprint": "87312d28",
+        "path": "gs://marin-us-central1/starcoder_tpp10/subset_20260912/2026.09.09",
+        "receipt_sha256": "67231ad8aa1fbb294c7c738409260bcd2a91edd2d8019a9cfe466227953b49f0",
+        "tokens": 10485760
+      },
+      "subset_20260913": {
+        "fingerprint": "3e166c0e",
+        "path": "gs://marin-us-central1/starcoder_tpp10/subset_20260913/2026.09.09",
+        "receipt_sha256": "fd7186bdaf72f35d9e25c16dd7b6b8557d27e7bf5498f406d846dc1332fd1c00",
+        "tokens": 10485760
+      },
+      "subset_20260914": {
+        "fingerprint": "cac63c83",
+        "path": "gs://marin-us-central1/starcoder_tpp10/subset_20260914/2026.09.09",
+        "receipt_sha256": "2b2db1f0524fbd588c99b56d295d86f8c4908cd7654a5277ac5a8089ab085c4e",
+        "tokens": 10485760
+      }
+    },
+    "design_sha256": "72d14a845033b901d73397c74c724a668cbdec5fd72cec41178626b993f889a2",
+    "status": "passed"
+  }
+}

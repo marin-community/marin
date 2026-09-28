@@ -1,0 +1,20 @@
+{
+  "model_id": "scale_only_chinchilla_approach3",
+  "formula": "E + A*((N/N0)^(-alpha)-1) + B*((D/D0)^(-beta)-1)",
+  "mixture_dependence": "none",
+  "cross_term": "none",
+  "intercept": 0.9988899509799611,
+  "scale_coef_A_B": [
+    6.66760843566949,
+    0.052194972487134485
+  ],
+  "alpha": 0.009106700517040218,
+  "beta": 0.5456612638076765,
+  "pair_weight": 4.0,
+  "ridge_scale": 1e-05,
+  "scale_fit_success": true,
+  "scale_fit_cost": 0.0011689313644381227,
+  "pair_count": 58,
+  "fitted_param_count_counting_exponents": 5,
+  "total_constant_count": 5
+}

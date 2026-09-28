@@ -1,0 +1,14 @@
+{
+  "panel": "delphi_3e18_39bucket",
+  "reference_package": "/Users/calvinxu/Projects/Work/Marin/mixture-selection",
+  "candidate_samples": 1000000,
+  "top_k": 128,
+  "sample_seed": 20260909,
+  "start_seed": 20260906,
+  "panel_starts": 4,
+  "block_size": 2048,
+  "mariner_policies": {
+    "uncheatable": "lwspu_u_snc_cap06",
+    "table9": "lwspu_t9_snc_cap08"
+  }
+}

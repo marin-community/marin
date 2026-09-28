@@ -1,0 +1,85 @@
+{
+  "observed_at": "2026-09-06T12:40:21.965914+00:00",
+  "jobs": [
+    {
+      "job_id": "/calvinxu/dm-delphi-3e18-cwspu-kappa-v6e8-20260906/pinlin_calvin_xu-data_mixture-delphi_wspu_coupling_validation_3e18_20260906-table9_seed662009-cwspu_table9_seed662009_cwspu_t9_k1_cap08_6ada1f93-79621a5b",
+      "state": "pending",
+      "pending_reason": "Scheduler: Insufficient CPU (need 90 cores, available 80 cores) - 2 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: Unsatisfied autoscaler demand: tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity",
+      "error_message": "",
+      "failure_count": 0,
+      "preemption_count": 0
+    },
+    {
+      "job_id": "/calvinxu/dm-delphi-3e18-cwspu-kappa-v6e8-20260906/pinlin_calvin_xu-data_mixture-delphi_wspu_coupling_validation_3e18_20260906-table9_seed662009-cwspu_table9_seed662009_cwspu_t9_k05_cap08_835691a9-e5337efd",
+      "state": "pending",
+      "pending_reason": "Scheduler: Insufficient CPU (need 90 cores, available 80 cores) - 2 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: Unsatisfied autoscaler demand: tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity",
+      "error_message": "",
+      "failure_count": 0,
+      "preemption_count": 0
+    },
+    {
+      "job_id": "/calvinxu/dm-delphi-3e18-cwspu-kappa-v6e8-20260906/pinlin_calvin_xu-data_mixture-delphi_wspu_coupling_validation_3e18_20260906-table9_seed662009-cwspu_table9_seed662009_cwspu_t9_k025_cap08_0981cacc-08e3389f",
+      "state": "pending",
+      "pending_reason": "Scheduler: Insufficient CPU (need 90 cores, available 80 cores) - 2 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: Unsatisfied autoscaler demand: tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity",
+      "error_message": "",
+      "failure_count": 0,
+      "preemption_count": 0
+    },
+    {
+      "job_id": "/calvinxu/dm-delphi-3e18-cwspu-kappa-v6e8-20260906/pinlin_calvin_xu-data_mixture-delphi_wspu_coupling_validation_3e18_20260906-table9_seed662009-cwspu_table9_seed662009_cwspu_t9_k1_cap06_e6f02e4f-cd73b181",
+      "state": "pending",
+      "pending_reason": "Scheduler: Insufficient CPU (need 90 cores, available 80 cores) - 2 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: Unsatisfied autoscaler demand: tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity",
+      "error_message": "",
+      "failure_count": 0,
+      "preemption_count": 0
+    },
+    {
+      "job_id": "/calvinxu/dm-delphi-3e18-cwspu-kappa-v6e8-20260906/pinlin_calvin_xu-data_mixture-delphi_wspu_coupling_validation_3e18_20260906-table9_seed662009-cwspu_table9_seed662009_cwspu_t9_k05_cap06_3d8dc8d5-9736eb17",
+      "state": "pending",
+      "pending_reason": "Scheduler: Insufficient CPU (need 90 cores, available 80 cores) - 2 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: Unsatisfied autoscaler demand: tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity",
+      "error_message": "",
+      "failure_count": 0,
+      "preemption_count": 0
+    },
+    {
+      "job_id": "/calvinxu/dm-delphi-3e18-cwspu-kappa-v6e8-20260906/pinlin_calvin_xu-data_mixture-delphi_wspu_coupling_validation_3e18_20260906-table9_seed662009-cwspu_table9_seed662009_cwspu_t9_k025_cap06_3ffb88ec-4906884f",
+      "state": "pending",
+      "pending_reason": "Scheduler: Insufficient CPU (need 90 cores, available 80 cores) - 2 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: Unsatisfied autoscaler demand: tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity",
+      "error_message": "",
+      "failure_count": 0,
+      "preemption_count": 0
+    },
+    {
+      "job_id": "/calvinxu/dm-delphi-3e18-cwspu-kappa-v6e8-20260906/pinlin_calvin_xu-data_mixture-delphi_wspu_coupling_validation_3e18_20260906-uncheatable_seed666200-cwspu_uncheatable_seed666200_cwspu_u_k1_cap06_72512f73-5f5e1c36",
+      "state": "pending",
+      "pending_reason": "Scheduler: Insufficient CPU (need 90 cores, available 80 cores) - 2 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: Unsatisfied autoscaler demand: tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity",
+      "error_message": "",
+      "failure_count": 0,
+      "preemption_count": 0
+    },
+    {
+      "job_id": "/calvinxu/dm-delphi-3e18-cwspu-kappa-v6e8-20260906/pinlin_calvin_xu-data_mixture-delphi_wspu_coupling_validation_3e18_20260906-uncheatable_seed666200-cwspu_uncheatable_seed666200_cwspu_u_k05_cap06_7bf58d8d-8df125d5",
+      "state": "pending",
+      "pending_reason": "Scheduler: Insufficient CPU (need 90 cores, available 80 cores) - 2 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: Unsatisfied autoscaler demand: tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity",
+      "error_message": "",
+      "failure_count": 0,
+      "preemption_count": 0
+    },
+    {
+      "job_id": "/calvinxu/dm-delphi-3e18-cwspu-kappa-v6e8-20260906/pinlin_calvin_xu-data_mixture-delphi_wspu_coupling_validation_3e18_20260906-uncheatable_seed666200-cwspu_uncheatable_seed666200_cwspu_u_k025_cap06_6a6349a5-61f6658e",
+      "state": "pending",
+      "pending_reason": "Scheduler: Insufficient CPU (need 90 cores, available 80 cores) - 2 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: Unsatisfied autoscaler demand: tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity",
+      "error_message": "",
+      "failure_count": 0,
+      "preemption_count": 0
+    },
+    {
+      "job_id": "/calvinxu/dm-delphi-3e18-cwspu-kappa-v6e8-20260906",
+      "state": "running",
+      "pending_reason": "",
+      "error_message": "",
+      "failure_count": 0,
+      "preemption_count": 0
+    }
+  ]
+}

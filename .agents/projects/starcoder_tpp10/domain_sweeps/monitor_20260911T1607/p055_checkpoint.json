@@ -1,0 +1,15 @@
+{
+  "checked_at": "2026-09-11T16:08:58.407216+00:00",
+  "latest": {
+    "uri": "gs://marin-us-central1/tmp/ttl=14d/checkpoints-temp/marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p055_s20260910/2026.09.09/checkpoints/step-10759/metadata.json",
+    "generation": "1789142234112601",
+    "metadata_sha256": "03cd84d725638631ed0307ad7933755e12fb59785994f78ccafa71b141b4a741",
+    "metadata": {
+      "step": 10759,
+      "timestamp": "2026-09-11T15:57:13.988422",
+      "is_temporary": true
+    }
+  },
+  "metadata_records": 1,
+  "listed_objects": 7
+}

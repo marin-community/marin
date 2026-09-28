@@ -1,0 +1,112 @@
+{
+  "plan_sha256": "b9f102efdd879866550233b2263a2fe93cfdd69129696e1367121e32eba69a7a",
+  "stage": "pilot",
+  "grid_percent": [
+    0,
+    10,
+    30,
+    50,
+    70,
+    90,
+    100
+  ],
+  "target_selected_percent": 70,
+  "unmatched_selected_percent": 100,
+  "unmatched_target_regret_bpb": 0.03600000000000003,
+  "unmatched_excess_curve_rmse_bpb": 0.026358110706194433,
+  "unmatched_spearman": 0.7207499701564473,
+  "unmatched_trainer_seed_selections": [
+    100,
+    100
+  ],
+  "matched_subsets": [
+    {
+      "subset_seed": 20260912,
+      "selected_percent": 10,
+      "target_regret_bpb": 0.1439999999999999,
+      "paired_regret_difference_bpb": 0.10799999999999987,
+      "trainer_seed_selections": [
+        10,
+        10
+      ],
+      "excess_curve_rmse_bpb": 0.08555699854482973,
+      "spearman": -0.05454545454545455
+    },
+    {
+      "subset_seed": 20260913,
+      "selected_percent": 30,
+      "target_regret_bpb": 0.06400000000000006,
+      "paired_regret_difference_bpb": 0.028000000000000025,
+      "trainer_seed_selections": [
+        30,
+        30
+      ],
+      "excess_curve_rmse_bpb": 0.06842722933369218,
+      "spearman": 0.3394638275806279
+    },
+    {
+      "subset_seed": 20260914,
+      "selected_percent": 50,
+      "target_regret_bpb": 0.016000000000000014,
+      "paired_regret_difference_bpb": -0.020000000000000018,
+      "trainer_seed_selections": [
+        50,
+        50
+      ],
+      "excess_curve_rmse_bpb": 0.055312101491703944,
+      "spearman": 0.8991204081865278
+    }
+  ],
+  "mean_paired_regret_difference_bpb": 0.03866666666666663,
+  "pooled_subset_selection_secondary_percent": 30,
+  "scope": "Descriptive, conditional on one target trainer seed and one finite parent. Subset comparisons share target and unmatched curves; no independent-replicate or significance claim.",
+  "curves": {
+    "target": [
+      1.196,
+      1.144,
+      1.064,
+      1.016,
+      1.0,
+      1.016,
+      1.036
+    ],
+    "unmatched": [
+      1.7515,
+      1.7229999999999999,
+      1.6749999999999998,
+      1.6390000000000002,
+      1.6150000000000002,
+      1.6030000000000002,
+      1.6015000000000001
+    ],
+    "matched_subset_means": [
+      [
+        1.7515,
+        1.6534999999999997,
+        1.6534999999999997,
+        1.6694999999999998,
+        1.7014999999999998,
+        1.7494999999999998,
+        1.7795
+      ],
+      [
+        1.7515,
+        1.6694999999999998,
+        1.6534999999999997,
+        1.6534999999999997,
+        1.6694999999999998,
+        1.7014999999999998,
+        1.7235
+      ],
+      [
+        1.7515,
+        1.7014999999999998,
+        1.6694999999999998,
+        1.6534999999999997,
+        1.6534999999999997,
+        1.6694999999999998,
+        1.6835
+      ]
+    ]
+  }
+}

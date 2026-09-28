@@ -1,0 +1,241 @@
+{
+  "checked_at": "2026-09-12T22:39:35.621794+00:00",
+  "plan_sha256": "99ca724bc3bde33e80afb07373e47ddc0d7e44f22e15cd41da3daa3de2f4ef40",
+  "previous_checked_at": "2026-09-12T21:10:21.035750+00:00",
+  "scope": "Five remaining StarCoder refinement artifacts only. No tensors or training data read.",
+  "previously_verified_refinements": 40,
+  "newly_verified_complete": 3,
+  "rows": [
+    {
+      "run_name": "tpp10_target_p055_s20260910",
+      "arm": "target",
+      "percent": 55,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 11491,
+      "batch_size": 128,
+      "tokens": 3012296704,
+      "support_sequences": 92928,
+      "fingerprint": "650ffe00",
+      "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p055_s20260910/2026.09.09",
+      "artifact_status": "SUCCESS",
+      "plan_sha256": "99ca724bc3bde33e80afb07373e47ddc0d7e44f22e15cd41da3daa3de2f4ef40",
+      "value": 0.7701349258422852,
+      "step": 11490,
+      "metric": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+      "checkpoint": {
+        "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p055_s20260910/2026.09.09/checkpoints/step-11490",
+        "metadata_sha256": "d1d8d037b5031c2b1c36d5e60d616660162a40808b79196672b8bde90c5223ea",
+        "metadata": {
+          "step": 11490,
+          "timestamp": "2026-09-12T21:49:27.171875",
+          "is_temporary": false
+        }
+      },
+      "runtime_verified": true,
+      "wandb_state": "finished",
+      "temporary_checkpoint_records": [],
+      "temporary_objects_listed": 0,
+      "prior_temporary_checkpoint": {
+        "uri": "gs://marin-us-central1/tmp/ttl=14d/checkpoints-temp/marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p055_s20260910/2026.09.09/checkpoints/step-10759/metadata.json",
+        "generation": "1789142234112601",
+        "metadata_sha256": "03cd84d725638631ed0307ad7933755e12fb59785994f78ccafa71b141b4a741",
+        "metadata": {
+          "step": 10759,
+          "timestamp": "2026-09-11T15:57:13.988422",
+          "is_temporary": true
+        }
+      },
+      "temporary_checkpoint_advanced": false,
+      "final_metadata_exists": true,
+      "final_metadata_object": {
+        "uri": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p055_s20260910/2026.09.09/checkpoints/step-11490/metadata.json",
+        "generation": "1789249767264338",
+        "metadata_sha256": "d1d8d037b5031c2b1c36d5e60d616660162a40808b79196672b8bde90c5223ea",
+        "metadata": {
+          "step": 11490,
+          "timestamp": "2026-09-12T21:49:27.171875",
+          "is_temporary": false
+        }
+      }
+    },
+    {
+      "run_name": "tpp10_target_p060_s20260910",
+      "arm": "target",
+      "percent": 60,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 11491,
+      "batch_size": 128,
+      "tokens": 3012296704,
+      "support_sequences": 92928,
+      "fingerprint": "1e801f9f",
+      "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p060_s20260910/2026.09.09",
+      "artifact_status": "SUCCESS",
+      "plan_sha256": "99ca724bc3bde33e80afb07373e47ddc0d7e44f22e15cd41da3daa3de2f4ef40",
+      "value": 0.7694385051727295,
+      "step": 11490,
+      "metric": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+      "checkpoint": {
+        "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p060_s20260910/2026.09.09/checkpoints/step-11490",
+        "metadata_sha256": "bdde47e048657f511916f6003aa56b615f42a90ea4b4e61ef11595bed85e82ee",
+        "metadata": {
+          "step": 11490,
+          "timestamp": "2026-09-12T22:36:24.407915",
+          "is_temporary": false
+        }
+      },
+      "runtime_verified": true,
+      "wandb_state": "finished",
+      "temporary_checkpoint_records": [],
+      "temporary_objects_listed": 0,
+      "prior_temporary_checkpoint": {
+        "uri": "gs://marin-us-central1/tmp/ttl=14d/checkpoints-temp/marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p060_s20260910/2026.09.09/checkpoints/step-6958/metadata.json",
+        "generation": "1789142803516288",
+        "metadata_sha256": "d670cbd223c434d01f4b0bcbeb108d7daf307bafe53e8bb08b27673bfed5217e",
+        "metadata": {
+          "step": 6958,
+          "timestamp": "2026-09-11T16:06:43.388476",
+          "is_temporary": true
+        }
+      },
+      "temporary_checkpoint_advanced": false,
+      "final_metadata_exists": true,
+      "final_metadata_object": {
+        "uri": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p060_s20260910/2026.09.09/checkpoints/step-11490/metadata.json",
+        "generation": "1789252584506049",
+        "metadata_sha256": "bdde47e048657f511916f6003aa56b615f42a90ea4b4e61ef11595bed85e82ee",
+        "metadata": {
+          "step": 11490,
+          "timestamp": "2026-09-12T22:36:24.407915",
+          "is_temporary": false
+        }
+      }
+    },
+    {
+      "run_name": "tpp10_target_p065_s20260910",
+      "arm": "target",
+      "percent": 65,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 11491,
+      "batch_size": 128,
+      "tokens": 3012296704,
+      "support_sequences": 92928,
+      "fingerprint": "97b113a1",
+      "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p065_s20260910/2026.09.09",
+      "artifact_status": "RUNNING",
+      "plan_sha256": "99ca724bc3bde33e80afb07373e47ddc0d7e44f22e15cd41da3daa3de2f4ef40",
+      "temporary_checkpoint_records": [
+        {
+          "uri": "gs://marin-us-central1/tmp/ttl=14d/checkpoints-temp/marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p065_s20260910/2026.09.09/checkpoints/step-7112/metadata.json",
+          "generation": "1789252768646907",
+          "metadata_sha256": "6db04f31b5ce55e778d012676632700ce3fac50b054d08fc3669476bc0d1f0f7",
+          "metadata": {
+            "step": 7112,
+            "timestamp": "2026-09-12T22:39:28.556824",
+            "is_temporary": true
+          }
+        }
+      ],
+      "temporary_objects_listed": 7,
+      "prior_temporary_checkpoint": {
+        "uri": "gs://marin-us-central1/tmp/ttl=14d/checkpoints-temp/marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p065_s20260910/2026.09.09/checkpoints/step-2283/metadata.json",
+        "generation": "1789142836395311",
+        "metadata_sha256": "19669526a1d39fe402e2821a78942418273afe089e62cd9091955d8580b72928",
+        "metadata": {
+          "step": 2283,
+          "timestamp": "2026-09-11T16:07:16.196006",
+          "is_temporary": true
+        }
+      },
+      "temporary_checkpoint_advanced": true,
+      "final_metadata_exists": false
+    },
+    {
+      "run_name": "tpp10_target_p080_s20260910",
+      "arm": "target",
+      "percent": 80,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 11491,
+      "batch_size": 128,
+      "tokens": 3012296704,
+      "support_sequences": 92928,
+      "fingerprint": "4ab6f469",
+      "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p080_s20260910/2026.09.09",
+      "artifact_status": "RUNNING",
+      "plan_sha256": "99ca724bc3bde33e80afb07373e47ddc0d7e44f22e15cd41da3daa3de2f4ef40",
+      "temporary_checkpoint_records": [
+        {
+          "uri": "gs://marin-us-central1/tmp/ttl=14d/checkpoints-temp/marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p080_s20260910/2026.09.09/checkpoints/step-5572/metadata.json",
+          "generation": "1789252767517031",
+          "metadata_sha256": "7733813288c857a64acf3ccfaa128ce47548c2cd20f1dc76288b35c63ec36b35",
+          "metadata": {
+            "step": 5572,
+            "timestamp": "2026-09-12T22:39:27.424212",
+            "is_temporary": true
+          }
+        }
+      ],
+      "temporary_objects_listed": 7,
+      "prior_temporary_checkpoint": {
+        "uri": "gs://marin-us-central1/tmp/ttl=14d/checkpoints-temp/marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p080_s20260910/2026.09.09/checkpoints/step-728/metadata.json",
+        "generation": "1789139686438436",
+        "metadata_sha256": "f7d812037820d72dad265da65a1b4d121e28188efe522de710bd97eb09a9f65d",
+        "metadata": {
+          "step": 728,
+          "timestamp": "2026-09-11T15:14:46.307102",
+          "is_temporary": true
+        }
+      },
+      "temporary_checkpoint_advanced": true,
+      "final_metadata_exists": false
+    },
+    {
+      "run_name": "tpp10_matched_p080_s20260911_d20260914",
+      "arm": "matched",
+      "percent": 80,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260914,
+      "total_steps": 2532,
+      "batch_size": 32,
+      "tokens": 165937152,
+      "support_sequences": 5120,
+      "fingerprint": "f310450f",
+      "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p080_s20260911_d20260914/2026.09.09",
+      "artifact_status": "SUCCESS",
+      "plan_sha256": "99ca724bc3bde33e80afb07373e47ddc0d7e44f22e15cd41da3daa3de2f4ef40",
+      "value": 1.1448901891708374,
+      "step": 2531,
+      "metric": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+      "checkpoint": {
+        "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p080_s20260911_d20260914/2026.09.09/checkpoints/step-2531",
+        "metadata_sha256": "e0e88663ba4ded13bc080b400248b88cde0771cbc41382b55a1014b67545f655",
+        "metadata": {
+          "step": 2531,
+          "timestamp": "2026-09-12T21:43:21.194923",
+          "is_temporary": false
+        }
+      },
+      "runtime_verified": true,
+      "wandb_state": "finished",
+      "temporary_checkpoint_records": [],
+      "temporary_objects_listed": 0,
+      "prior_temporary_checkpoint": null,
+      "temporary_checkpoint_advanced": false,
+      "final_metadata_exists": true,
+      "final_metadata_object": {
+        "uri": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p080_s20260911_d20260914/2026.09.09/checkpoints/step-2531/metadata.json",
+        "generation": "1789249401304302",
+        "metadata_sha256": "e0e88663ba4ded13bc080b400248b88cde0771cbc41382b55a1014b67545f655",
+        "metadata": {
+          "step": 2531,
+          "timestamp": "2026-09-12T21:43:21.194923",
+          "is_temporary": false
+        }
+      }
+    }
+  ],
+  "verified_refinement_total": 43
+}

@@ -1,0 +1,10 @@
+{
+  "checked_at": "2026-09-11T13:28:14.488246+00:00",
+  "uri": "gs://marin-us-central1/tmp/ttl=14d/checkpoints-temp/marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p055_s20260910/2026.09.09/checkpoints/step-3748/metadata.json",
+  "generation": "1789132632402448",
+  "metadata": {
+    "step": 3748,
+    "timestamp": "2026-09-11T13:17:12.290280",
+    "is_temporary": true
+  }
+}

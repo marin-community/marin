@@ -1,0 +1,47 @@
+{
+  "checked_at": "2026-09-11T11:18:50.285841+00:00",
+  "rows": [
+    {
+      "name": "tpp10_domain_sweeps/wikipedia/raw/2026.09.11/.executor_info",
+      "size": 580,
+      "updated": "2026-09-11T11:10:04.997000+00:00",
+      "generation": 1789125004987181
+    },
+    {
+      "name": "tpp10_domain_sweeps/wikipedia/raw/2026.09.11/.executor_status",
+      "size": 7,
+      "updated": "2026-09-11T11:10:05.788000+00:00",
+      "generation": 1789125005782156
+    },
+    {
+      "name": "tpp10_domain_sweeps/wikipedia/raw/2026.09.11/.executor_status.lock",
+      "size": 165,
+      "updated": "2026-09-11T11:18:38.694000+00:00",
+      "generation": 1789125518676821
+    },
+    {
+      "name": "tpp10_domain_sweeps/wikipedia/raw/2026.09.11/train/parts/000/input_ids/data/c/0",
+      "size": 99040306,
+      "updated": "2026-09-11T11:18:49.030000+00:00",
+      "generation": 1789125529009560
+    },
+    {
+      "name": "tpp10_domain_sweeps/wikipedia/raw/2026.09.11/train/parts/000/input_ids/data/zarr.json",
+      "size": 556,
+      "updated": "2026-09-11T11:11:25.764000+00:00",
+      "generation": 1789125085758515
+    },
+    {
+      "name": "tpp10_domain_sweeps/wikipedia/raw/2026.09.11/train/parts/000/input_ids/offsets/c/0",
+      "size": 126340,
+      "updated": "2026-09-11T11:18:49.877000+00:00",
+      "generation": 1789125529862769
+    },
+    {
+      "name": "tpp10_domain_sweeps/wikipedia/raw/2026.09.11/train/parts/000/input_ids/offsets/zarr.json",
+      "size": 556,
+      "updated": "2026-09-11T11:11:25.631000+00:00",
+      "generation": 1789125085625468
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+run_order,run_name,candidate_id,target,epoch_cap,aliases,run_id,data_seed,trainer_seed,train_steps,expected_checkpoint_step,tpu_type,tpu_region,tpu_zone,fit_panel_max_materialized_epoch,runtime_max_simulated_epoch
+0,onephase_wspuw_wspu_worsened_cap04,wspu_worsened_cap04,uncheatable_worsened,4,wspu_worsened_cap04,7360000,7280000,0,3007,3006,v6e-8,us-east5,us-east5-b,3.999393512954555,3.999391511537077
+1,onephase_wspuw_wspu_worsened_cap06,wspu_worsened_cap06,uncheatable_worsened,6,wspu_worsened_cap06,7360001,7280000,0,3007,3006,v6e-8,us-east5,us-east5-b,5.989468928001751,5.989465930690343
+2,onephase_wspuw_wspu_worsened_cap07,wspu_worsened_cap07,uncheatable_worsened,7,wspu_worsened_cap07,7360002,7280000,0,3007,3006,v6e-8,us-east5,us-east5-b,6.013378983602556,6.013375974325833

@@ -1319,7 +1319,13 @@ class Attention(eqx.Module):
         return Attention(config, q_proj, k_proj, v_proj, o_proj, q_norm, k_norm, rot_embs)
 
     def empty_page_cache(self, spec: PageTableSpec, *, dtype) -> "KvPageCache":
-        return KvPageCache.init(spec, self.config.KVHeads, self.config.HeadSize, dtype=dtype)
+        return KvPageCache.init(
+            spec,
+            self.config.KVHeads,
+            self.config.HeadSize,
+            dtype=dtype,
+            cache_kv_heads=paged_cache_kv_heads(self.config.num_kv_heads, dtype),
+        )
 
     @named_call
     def __call__(
@@ -1599,6 +1605,24 @@ class GatedAttention(Attention):
         return self.o_proj(attn_output, key=key_o), kv_cache
 
 
+def _tpu_rpa_available() -> bool:
+    if tpu_ragged_paged_attention is None:
+        return False
+    if jax.default_backend() != "tpu":
+        return False
+    kind = str(getattr(jax.devices()[0], "device_kind", "")).lower()
+    if "tpu v2" in kind or "tpu v3" in kind:
+        return False
+    return True
+
+
+def paged_cache_kv_heads(num_kv_heads: int, dtype) -> int:
+    """KV heads to allocate in a page cache: the TPU kernel's tileable count when that kernel will run, else exact."""
+    if not _tpu_rpa_available():
+        return num_kv_heads
+    return _tpu_rpa_padded_kv_heads(num_kv_heads, dtype)
+
+
 @named_call
 def ragged_paged_attention(
     q: NamedArray,  # [Tok, KVHeads, QHeadsPerGroup, HeadSize]
@@ -1614,17 +1638,14 @@ def ragged_paged_attention(
 
     This function dispatches to the TPU implementation when available and
     supported, otherwise it falls back to :func:`default_ragged_paged_attention`.
-    """
 
-    def _tpu_rpa_available() -> bool:
-        if tpu_ragged_paged_attention is None:
-            return False
-        if jax.default_backend() != "tpu":
-            return False
-        kind = str(getattr(jax.devices()[0], "device_kind", "")).lower()
-        if "tpu v2" in kind or "tpu v3" in kind:
-            return False
-        return True
+    ``kv_pages`` may hold more KV heads than ``q`` (see :func:`paged_cache_kv_heads`); the extra heads are zero and
+    are ignored.
+    """
+    num_kv_heads = q.axis_size("kv_head")
+    cache_kv_heads = kv_pages.axis_size("kv_head") // 2
+    if cache_kv_heads < num_kv_heads:
+        raise ValueError(f"KV cache holds {cache_kv_heads} heads but the query has {num_kv_heads}")
 
     if _tpu_rpa_available():
         try:
@@ -1646,6 +1667,8 @@ def ragged_paged_attention(
                 exc_info=True,
             )
 
+    if cache_kv_heads != num_kv_heads:
+        kv_pages = kv_pages["kv_head", hax.ds(0, 2 * num_kv_heads)]
     return default_ragged_paged_attention(
         q,
         kv_pages,
@@ -1656,6 +1679,28 @@ def ragged_paged_attention(
         sm_scale=sm_scale,
         soft_cap=soft_cap,
     )
+
+
+def _tpu_rpa_padded_kv_heads(num_kv_heads: int, kv_dtype) -> int:
+    """Smallest KV-head count at or above ``num_kv_heads`` that the TPU ragged paged attention kernel tiles.
+
+    The kernel packs the interleaved K/V head axis (``2 * num_kv_heads`` entries) into 32-bit lanes and requires
+    the packed count to be 1, 2, 4, 8 or a multiple of 8; Qwen3's 20 KV heads in bfloat16 (40 combined, 20 packed)
+    violate this and would otherwise fall back to the reference implementation.
+    """
+    packing = 32 // (jnp.dtype(kv_dtype).itemsize * 8)
+
+    def tiles(heads: int) -> bool:
+        combined = 2 * heads
+        if combined % packing:
+            return False
+        packed = combined // packing
+        return packed in (1, 2, 4, 8) or packed % 8 == 0
+
+    heads = num_kv_heads
+    while not tiles(heads):
+        heads += 1
+    return heads
 
 
 def _do_tpu_ragged_paged_attention(
@@ -1693,6 +1738,40 @@ def _do_tpu_ragged_paged_attention(
     else:
         q_padded = q
         kv_pages_padded = kv_pages
+
+    # The kernel needs a tileable KV-head count. Caches built through ``paged_cache_kv_heads`` already carry the
+    # padded heads (zero keys and values, so the real heads are unaffected); an unpadded cache is padded here at the
+    # cost of copying it on every call.
+    num_kv_heads = q.axis_size("kv_head")
+    cache_kv_heads = kv_pages_padded.axis_size("kv_head") // 2
+    padded_kv_heads = _tpu_rpa_padded_kv_heads(cache_kv_heads, kv_pages_padded.dtype)
+    if padded_kv_heads != cache_kv_heads:
+        logger.warning(
+            "KV cache has %d heads, which the TPU ragged paged attention kernel cannot tile; padding it to %d on "
+            "every call. Allocate the cache with paged_cache_kv_heads to avoid the copy.",
+            cache_kv_heads,
+            padded_kv_heads,
+        )
+        kv_pages_padded = hax.concatenate(
+            "kv_head",
+            [
+                kv_pages_padded,
+                hax.zeros(
+                    _resize_axis(kv_pages_padded.axes, "kv_head", 2 * (padded_kv_heads - cache_kv_heads)),
+                    dtype=kv_pages_padded.dtype,
+                ),
+            ],
+        )
+    if padded_kv_heads != num_kv_heads:
+        q_padded = hax.concatenate(
+            "kv_head",
+            [
+                q_padded,
+                hax.zeros(
+                    _resize_axis(q_padded.axes, "kv_head", padded_kv_heads - num_kv_heads), dtype=q_padded.dtype
+                ),
+            ],
+        )
 
     # The TPU kernel expects the second dimension of the query tensor to be the total number of query heads.
     q_flat = q_padded.flatten_axes(("kv_head", "q_heads_per_group"), "kv_head")
@@ -1763,16 +1842,22 @@ def _do_tpu_ragged_paged_attention(
     out = out.unflatten_axis(
         "kv_head",
         (
-            q.resolve_axis("kv_head"),
-            q.resolve_axis("q_heads_per_group"),
+            q_padded.resolve_axis("kv_head"),
+            q_padded.resolve_axis("q_heads_per_group"),
         ),
     )
 
-    # If we padded head_size for the kernel, slice back to the original size
+    # If we padded heads or head_size for the kernel, slice back to the original sizes
+    if padded_kv_heads != num_kv_heads:
+        out = out["kv_head", hax.ds(0, num_kv_heads)]
     if padded_head_size != orig_head_size:
         out = out["head_size", hax.ds(0, orig_head_size)]
 
     return out
+
+
+def _resize_axis(axes, name: str, size: int):
+    return tuple(ax.resize(size) if ax.name == name else ax for ax in axes)
 
 
 def default_ragged_paged_attention(

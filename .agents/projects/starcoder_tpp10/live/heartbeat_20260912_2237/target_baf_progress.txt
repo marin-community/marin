@@ -1,0 +1,14 @@
+I20260912 15:39:06 8553706816 iris.cli.main Resolved cluster 'marin' to config: /Users/calvinxu/Projects/Work/Marin/marin/lib/iris/config/marin.yaml
+I20260912 15:39:06 8553706816 iris.cluster.config Loading config from /Users/calvinxu/Projects/Work/Marin/marin/lib/iris/config/marin.yaml
+I20260912 15:39:06 8553706816 finelog.client.log_client LogClient resolved /system/log-server -> https://iris.oa.dev/proxy/system.log-server (log)
+Not all requested scopes were granted by the authorization server, missing scopes email.
+[22:36:13] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | I20260912 22:36:13 139911902876480 tqdm_loggable.tqdm_logging Progress on:eval -/45 rate:- remaining:? elapsed:00:00 postfix:-
+[22:36:19] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | W20260912 22:36:15 139911902876480 levanter.data.loader Data loader stalled 1.761s. queue_size=0 fetch_batch_size=32 max_buffered=100
+[22:36:26] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | I20260912 22:36:20 139911902876480 tqdm_loggable.tqdm_logging Progress on:eval 45.0it/45.0it rate:6.3it/s remaining:00:00 elapsed:00:07 postfix:-
+[22:36:26] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | I20260912 22:36:22 139911902876480 levanter.eval eval loss: 1.572
+[22:36:26] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | I20260912 22:36:22 139911902876480 levanter.eval paloma micro loss: 1.572
+[22:36:26] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | I20260912 22:36:22 139911902876480 levanter.eval paloma/dolma_100_programing_languages-tpp10 loss: 1.572
+[22:36:26] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | I20260912 22:36:25 139911902876480 tqdm_loggable.tqdm_logging Progress on:train 6.90kit/11.5kit rate:1.7s/it remaining:2:12:03 elapsed:57:28 postfix:loss=2.19
+[22:37:32] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | I20260912 22:37:27 139911902876480 tqdm_loggable.tqdm_logging Progress on:train 6.98kit/11.5kit rate:1.0s/it remaining:1:18:04 elapsed:58:29 postfix:loss=2.13
+[22:38:31] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | I20260912 22:38:27 139911902876480 tqdm_loggable.tqdm_logging Progress on:train 7.06kit/11.5kit rate:1.4it/s remaining:53:00 elapsed:59:29 postfix:loss=2.03
+

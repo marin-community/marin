@@ -1,0 +1,232 @@
+{
+  "calibration_optimizer_review.md": {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789002951.7482352,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/calibration_optimizer_review.md",
+      "fieldbook.local_size_at_capture": 2456
+    },
+    "content_hash": "sha256:f3061a0409cc887d88d83df39c1052fc9c0b5124462a825b096cde15e11e0f34",
+    "created_at": "2026-09-10T01:16:23Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m24e69kvxceeep31h0fqdhce",
+    "job_id": null,
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-10T01:17:17Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/calibration_optimizer_review.md"
+  },
+  "calibration_trace_summary.json": {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789002836.1718147,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/calibration_trace_summary.json",
+      "fieldbook.local_size_at_capture": 18910
+    },
+    "content_hash": "sha256:c718daa7802b685a34e2a93935ac1eb3d1051c9c45594dff8bf6ea2930cae64d",
+    "created_at": "2026-09-10T01:17:17Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m24e7z01awkcjdtqwmkh4scw",
+    "job_id": null,
+    "run_id": null,
+    "type": "metric-table",
+    "updated_at": "2026-09-10T01:17:17Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/calibration_trace_summary.json"
+  },
+  "calibration_optimizer_traces.png": {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789002839.1824129,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/calibration_optimizer_traces.png",
+      "fieldbook.local_size_at_capture": 381809
+    },
+    "content_hash": "sha256:da465a19ba243df87e18a0118bb486e5b4c235c0270a282439377e59077390fa",
+    "created_at": "2026-09-10T01:17:17Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m24e7z97dkg2vn9qvbtz9yzh",
+    "job_id": null,
+    "run_id": null,
+    "type": "plot",
+    "updated_at": "2026-09-10T01:17:17Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/calibration_optimizer_traces.png"
+  },
+  "canary_safety_validation.txt": {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789002982.7845428,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/canary_safety_validation.txt",
+      "fieldbook.local_size_at_capture": 40
+    },
+    "content_hash": "sha256:52f666ce91f3ff042889d7ad8b01fad5e0cd34b15a95b2abe0f5ba0987516170",
+    "created_at": "2026-09-10T01:17:18Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m24e7zkbpnkceaz2vf99mbpb",
+    "job_id": null,
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-10T01:17:18Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/canary_safety_validation.txt"
+  },
+  "release": {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789002953.1857712,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/releases/canary.json",
+      "fieldbook.local_size_at_capture": 666
+    },
+    "content_hash": "sha256:a0e653204c3e564ea53ad6f623f65ec1dcae7fb23c27d7ed1b7e7531fc93ab5b",
+    "created_at": "2026-09-10T01:17:18Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m24e7zw7dzy4xrtyz80q2w9v",
+    "job_id": null,
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-10T01:17:18Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/releases/canary.json"
+  },
+  "validation": {
+    "attrs": {},
+    "check_name": "tpp10_calibration_optimizer_traces",
+    "created_at": "2026-09-10T01:17:18Z",
+    "deleted_at": null,
+    "details": {
+      "batch32_gap_bpb": 0.005303561687469482,
+      "batch_threshold_bpb": 0.01,
+      "decision": "Retain frozen batch32; release only three p=1 canaries.",
+      "loss_lr_records": 12644,
+      "nonfinite_scanned_values": 0,
+      "norm_records": 1264,
+      "runs": 8
+    },
+    "entity_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "entity_type": "experiment",
+    "expected_value": null,
+    "id": "val_01m24e8055wcwrv10wc77n1gkm",
+    "measured_value": null,
+    "session_id": "ses_01m24dp3a66c6med6kz310bcdm",
+    "source_artifact_id": "art_01m24e69kvxceeep31h0fqdhce",
+    "source_job_id": null,
+    "status": "pass",
+    "updated_at": "2026-09-10T01:17:18Z"
+  },
+  "runs": [
+    {
+      "attrs": {
+        "marin.config_fingerprint": "0cbcd192",
+        "marin.output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p100_s20260910/2026.09.09",
+        "marin.plan_sha256": "4362a8b1b2e37d7ae73096f7658c5b3a79774288bf268f240fa4e49edd826b60",
+        "marin.stage": "canary"
+      },
+      "created_at": "2026-09-10T01:17:19Z",
+      "deleted_at": null,
+      "description": "Frozen TPP10 p=1 canary; reusable in later stages.",
+      "existed": false,
+      "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "external_id": null,
+      "external_system": null,
+      "id": "run_01m24e80g20ytz5q6svvyeayny",
+      "idempotency_key": "starcoder-tpp10.tpp10_target_p100_s20260910",
+      "kind": "datapoint",
+      "name": "tpp10_target_p100_s20260910",
+      "parent_run_id": null,
+      "status": "active",
+      "updated_at": "2026-09-10T01:17:19Z"
+    },
+    {
+      "attrs": {
+        "marin.config_fingerprint": "78cb251e",
+        "marin.output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_unmatched_p100_s20260910/2026.09.09",
+        "marin.plan_sha256": "4362a8b1b2e37d7ae73096f7658c5b3a79774288bf268f240fa4e49edd826b60",
+        "marin.stage": "canary"
+      },
+      "created_at": "2026-09-10T01:17:19Z",
+      "deleted_at": null,
+      "description": "Frozen TPP10 p=1 canary; reusable in later stages.",
+      "existed": false,
+      "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "external_id": null,
+      "external_system": null,
+      "id": "run_01m24e80sba2fhm6bw4z584d2e",
+      "idempotency_key": "starcoder-tpp10.tpp10_unmatched_p100_s20260910",
+      "kind": "datapoint",
+      "name": "tpp10_unmatched_p100_s20260910",
+      "parent_run_id": null,
+      "status": "active",
+      "updated_at": "2026-09-10T01:17:19Z"
+    },
+    {
+      "attrs": {
+        "marin.config_fingerprint": "347b7fbc",
+        "marin.output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p100_s20260910_d20260912/2026.09.09",
+        "marin.plan_sha256": "4362a8b1b2e37d7ae73096f7658c5b3a79774288bf268f240fa4e49edd826b60",
+        "marin.stage": "canary"
+      },
+      "created_at": "2026-09-10T01:17:19Z",
+      "deleted_at": null,
+      "description": "Frozen TPP10 p=1 canary; reusable in later stages.",
+      "existed": false,
+      "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "external_id": null,
+      "external_system": null,
+      "id": "run_01m24e812c8hzgjhsxjbbnagsw",
+      "idempotency_key": "starcoder-tpp10.tpp10_matched_p100_s20260910_d20260912",
+      "kind": "datapoint",
+      "name": "tpp10_matched_p100_s20260910_d20260912",
+      "parent_run_id": null,
+      "status": "active",
+      "updated_at": "2026-09-10T01:17:19Z"
+    }
+  ],
+  "job": {
+    "attrs": {
+      "marin.region": "us-central1",
+      "marin.stage": "canary",
+      "marin.zone": "us-central1-a"
+    },
+    "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+    "code_dirty": true,
+    "command": "uv run iris --config lib/iris/config/marin.yaml job run --no-wait \\\n  --enable-extra-resources --cpu 2 --memory 8GB --disk 32GB --timeout 172800 --max-retries 0 --max-preemption-retries 0 \\\n  --extra cpu --region us-central1 --zone us-central1-a \\\n  --job-name starcoder-tpp10-canary \\\n  --exclude '^(checkpoints|logs|wandb)/' \\\n  --exclude '^experiments/domain_phase_mix/exploratory/.*(?<!\\.py)$' \\\n  --exclude '^\\.agents/(?!projects/starcoder_tpp10/releases/).*' \\\n  --exclude '^(docs|tests)/.*(?<!\\.py)$' \\\n  --exclude '^lib/[^/]+/tests/.*(?<!\\.py)$' \\\n  -e MARIN_PREFIX gs://marin-us-central1 \\\n  -e WANDB_API_KEY \"$WANDB_API_KEY\" \\\n  -- python -m experiments.domain_phase_mix.launch_starcoder_tpp10 \\\n  --stage canary --release .agents/projects/starcoder_tpp10/releases/canary.json \\\n  --plan-path .agents/projects/starcoder_tpp10/live/canary_plan.json --max-concurrent 3 --submit\n",
+    "created_at": "2026-09-10T01:17:20Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "external_id": "/calvinxu/starcoder-tpp10-canary",
+    "external_system": "iris",
+    "failure_reason": null,
+    "finished_at": null,
+    "id": "job_01m24e81eab4ds2k7pcb4cwg1a",
+    "launcher": "iris",
+    "name": "starcoder-tpp10-canary",
+    "retry_of": null,
+    "run_id": null,
+    "started_at": null,
+    "status": "submitting",
+    "updated_at": "2026-09-10T01:17:20Z"
+  },
+  "note": {
+    "attrs": {
+      "session_id": "ses_01m24dp3a66c6med6kz310bcdm"
+    },
+    "author": null,
+    "body": "# TPP10 calibration optimizer review \u2014 9 September 2026\n\nThe eight calibration runs support retaining proxy batch 32 and releasing the three frozen p=1 canaries. The user authorized this review and canary submission with \u201cDo those.\u201d Pilot and dense-grid stages remain unreleased.\n\nThe archived endpoint check passed for all eight runs. Mean unmatched-proxy BPB is 1.126364 at batch 32 and 1.121061 at batch 128: the 0.005304 gap passes the prespecified 0.010 threshold. Matched-arm outcomes remain diagnostic and did not select the recipe.\n\nW&B history scans cover 12,644 training-loss/LR records and 1,264 paired gradient/parameter-norm records across the eight runs. All scanned values are finite. Training/LR records cover steps 2\u20132531 for batch 32 and 2\u2013632 for batch 128; norms are logged approximately every ten updates. The GCS `tracker_metrics.jsonl` files contain configuration and final summaries, so the longitudinal review uses the separately archived W&B histories.\n\nTraining loss falls from about 10.3 to 2.66\u20132.81, with no sustained divergence. Batch 32 has visibly greater minibatch noise. Its largest late gradient spike, in unmatched seed 20260911 at step 2480, rises to 0.908 and returns to 0.164 at the next logged norm (step 2490). The final logged gradient norms range from 0.101 to 0.189. These are observed total norms; clipping is configured per optimizer group.\n\nBoth learning rates follow the frozen warmup, plateau and final-20% cosine decay, with peaks 0.020 (Muon) and 0.008 (Adam). The last logged Muon rates are 1.92e-7 at batch 32 and 3.06e-6 at batch 128. Parameter norms settle near the end of training. The rendered diagnostic was visually checked for loss/gradient instability and legibility.\n\nThis is a feasibility review at p=0.5 on the proxy architecture. The target architecture and the three p=1 endpoints are the next canary checks; this review establishes neither target stability nor a simulated-epoching benefit.\n\nArtifacts:\n\n- [Trace plot](calibration_optimizer_traces.png)\n- [Numerical trace summary and history hashes](calibration_trace_summary.json)\n- [Collector and plot script](review_calibration_traces.py)\n- [Verified calibration endpoints](calibration_metrics.csv)\n\nThe rebuilt canary plan exactly matches the frozen plan `4362a8b1b2e37d7ae73096f7658c5b3a79774288bf268f240fa4e49edd826b60`; all 27 source and asset pins match. No optimizer, data, mixture-grid or runtime changes were made.\n",
+    "body_format": "markdown",
+    "created_at": "2026-09-10T01:17:21Z",
+    "deleted_at": null,
+    "entity_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "entity_type": "experiment",
+    "id": "note_01m24e82kapsy5y0049k5ms6g9",
+    "note_type": "decision",
+    "resolved_at": null,
+    "status": "open",
+    "title": "Release three p=1 canaries after calibration trace review",
+    "updated_at": "2026-09-10T01:17:21Z"
+  }
+}

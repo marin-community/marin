@@ -1,0 +1,1030 @@
+{
+  "arxiv_papers": {
+    "dataset": "common-pile/arxiv_papers_filtered@033cf7f",
+    "selection_seed": 20260916,
+    "selection_key": "sha256(UTF8(str(seed) + colon + full gs URI)) ascending",
+    "inventory_count": 8,
+    "selected": [
+      {
+        "uri": "gs://marin-us-central1/raw/common_pile/arxiv_papers_filtered-033cf7f/arxiv-papers-0006.json.gz",
+        "generation": "1753375399031028",
+        "size_bytes": 840230674,
+        "crc32c": "XpGMbg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/common_pile/arxiv_papers_filtered-033cf7f/arxiv-papers-0004.json.gz",
+        "generation": "1753375394886737",
+        "size_bytes": 840154089,
+        "crc32c": "3y2yyg=="
+      }
+    ]
+  },
+  "s2orc_evaluation": {
+    "dataset": "paloma m2d2_s2orc_unsplit, val split, all files",
+    "inventory_count": 167,
+    "selected": [
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_Art.jsonl.gz",
+        "generation": "1765314638816117",
+        "size_bytes": 169592,
+        "crc32c": "AIXISQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_Philosophy.jsonl.gz",
+        "generation": "1765314638800777",
+        "size_bytes": 153479,
+        "crc32c": "Yy1rbQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_astro-ph.CO.jsonl.gz",
+        "generation": "1765314638787591",
+        "size_bytes": 140865,
+        "crc32c": "80ZNug=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_astro-ph.EP.jsonl.gz",
+        "generation": "1765314638794562",
+        "size_bytes": 140700,
+        "crc32c": "QihkDw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_astro-ph.GA.jsonl.gz",
+        "generation": "1765314638850251",
+        "size_bytes": 140088,
+        "crc32c": "G6YLZw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_astro-ph.HE.jsonl.gz",
+        "generation": "1765314638918314",
+        "size_bytes": 141843,
+        "crc32c": "G2Eb4g=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_astro-ph.IM.jsonl.gz",
+        "generation": "1765314638948060",
+        "size_bytes": 154010,
+        "crc32c": "4Q9qSA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_astro-ph.SR.jsonl.gz",
+        "generation": "1765314638883323",
+        "size_bytes": 141483,
+        "crc32c": "qo9rVQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_astro-ph.jsonl.gz",
+        "generation": "1765314638872556",
+        "size_bytes": 140080,
+        "crc32c": "hpLHpA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_astro-ph_l1.jsonl.gz",
+        "generation": "1765314639058300",
+        "size_bytes": 154006,
+        "crc32c": "q9vyRw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_atom-ph.jsonl.gz",
+        "generation": "1765314639097642",
+        "size_bytes": 144113,
+        "crc32c": "m+lCRg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_chem-ph.jsonl.gz",
+        "generation": "1765314639017529",
+        "size_bytes": 146303,
+        "crc32c": "K3N6Fw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cond-mat.dis-nn.jsonl.gz",
+        "generation": "1765314639127717",
+        "size_bytes": 140256,
+        "crc32c": "q+epSg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cond-mat.jsonl.gz",
+        "generation": "1765314639145308",
+        "size_bytes": 137759,
+        "crc32c": "UFIJSg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cond-mat.mes-hall.jsonl.gz",
+        "generation": "1765314639111721",
+        "size_bytes": 138533,
+        "crc32c": "/VYg4A=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cond-mat.mtrl-sci.jsonl.gz",
+        "generation": "1765314639362931",
+        "size_bytes": 140044,
+        "crc32c": "ijoLDQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cond-mat.other.jsonl.gz",
+        "generation": "1765314639419984",
+        "size_bytes": 138766,
+        "crc32c": "ePa+Fg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cond-mat.quant-gas.jsonl.gz",
+        "generation": "1765314639561876",
+        "size_bytes": 137778,
+        "crc32c": "ORo3vA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cond-mat.soft.jsonl.gz",
+        "generation": "1765314639465600",
+        "size_bytes": 144039,
+        "crc32c": "eHH5Ag=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cond-mat.stat-mech.jsonl.gz",
+        "generation": "1765314639447481",
+        "size_bytes": 141175,
+        "crc32c": "gA10/g=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cond-mat.str-el.jsonl.gz",
+        "generation": "1765314639608983",
+        "size_bytes": 132291,
+        "crc32c": "yzugAQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cond-mat.supr-con.jsonl.gz",
+        "generation": "1765314639562184",
+        "size_bytes": 138550,
+        "crc32c": "WByMlA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cond-mat_l1.jsonl.gz",
+        "generation": "1765314639503081",
+        "size_bytes": 140248,
+        "crc32c": "3smttA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cs.AI.jsonl.gz",
+        "generation": "1765314639558468",
+        "size_bytes": 136271,
+        "crc32c": "PDr3Vw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cs.AR.jsonl.gz",
+        "generation": "1765314639558414",
+        "size_bytes": 146067,
+        "crc32c": "zM6sEA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cs.CC.jsonl.gz",
+        "generation": "1765314639680400",
+        "size_bytes": 111356,
+        "crc32c": "ATVbzQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cs.CE.jsonl.gz",
+        "generation": "1765314639703077",
+        "size_bytes": 150649,
+        "crc32c": "RL27+w=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cs.CG.jsonl.gz",
+        "generation": "1765314639766902",
+        "size_bytes": 117722,
+        "crc32c": "4Z6iLQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cs.CL.jsonl.gz",
+        "generation": "1765314639745867",
+        "size_bytes": 150244,
+        "crc32c": "NZ4K2w=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cs.CR.jsonl.gz",
+        "generation": "1765314639742520",
+        "size_bytes": 151039,
+        "crc32c": "me1U5Q=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cs.CV.jsonl.gz",
+        "generation": "1765314639919113",
+        "size_bytes": 147381,
+        "crc32c": "5OjB3A=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cs.CY.jsonl.gz",
+        "generation": "1765314639974648",
+        "size_bytes": 167787,
+        "crc32c": "UfLD0Q=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cs.DB.jsonl.gz",
+        "generation": "1765314640029787",
+        "size_bytes": 137478,
+        "crc32c": "piwI2Q=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cs.DC.jsonl.gz",
+        "generation": "1765314640091482",
+        "size_bytes": 143474,
+        "crc32c": "Aa34lw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cs.DL.jsonl.gz",
+        "generation": "1765314640095055",
+        "size_bytes": 151472,
+        "crc32c": "kEsOkg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cs.DM.jsonl.gz",
+        "generation": "1765314640172402",
+        "size_bytes": 117556,
+        "crc32c": "jyfghQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cs.DS.jsonl.gz",
+        "generation": "1765314640152178",
+        "size_bytes": 121309,
+        "crc32c": "xRbTng=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cs.ET.jsonl.gz",
+        "generation": "1765314640219633",
+        "size_bytes": 151858,
+        "crc32c": "5LJ8vg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cs.FL.jsonl.gz",
+        "generation": "1765314640236575",
+        "size_bytes": 118576,
+        "crc32c": "ivAjaA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cs.GL.jsonl.gz",
+        "generation": "1765314640253055",
+        "size_bytes": 166661,
+        "crc32c": "Lpb00g=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cs.GR.jsonl.gz",
+        "generation": "1765314640264214",
+        "size_bytes": 145409,
+        "crc32c": "xPqsQA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cs.GT.jsonl.gz",
+        "generation": "1765314640317516",
+        "size_bytes": 122318,
+        "crc32c": "fQAj1A=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cs.HC.jsonl.gz",
+        "generation": "1765314640325107",
+        "size_bytes": 164418,
+        "crc32c": "pIxYsA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cs.IR.jsonl.gz",
+        "generation": "1765314640297001",
+        "size_bytes": 150500,
+        "crc32c": "Awv3WQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cs.LG.jsonl.gz",
+        "generation": "1765314640289287",
+        "size_bytes": 131442,
+        "crc32c": "MnjpCA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cs.LO.jsonl.gz",
+        "generation": "1765314640313066",
+        "size_bytes": 118214,
+        "crc32c": "vKyuTg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cs.MA.jsonl.gz",
+        "generation": "1765314640441496",
+        "size_bytes": 135665,
+        "crc32c": "tSCBpA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cs.MM.jsonl.gz",
+        "generation": "1765314640569957",
+        "size_bytes": 147059,
+        "crc32c": "2IJrDg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cs.MS.jsonl.gz",
+        "generation": "1765314640574973",
+        "size_bytes": 146002,
+        "crc32c": "fZNjTw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cs.NA.jsonl.gz",
+        "generation": "1765314640630911",
+        "size_bytes": 130082,
+        "crc32c": "sEBPbg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cs.NE.jsonl.gz",
+        "generation": "1765314640711729",
+        "size_bytes": 150934,
+        "crc32c": "e+2krw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cs.NI.jsonl.gz",
+        "generation": "1765314640747920",
+        "size_bytes": 130164,
+        "crc32c": "XeioVg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cs.OH.jsonl.gz",
+        "generation": "1765314640780036",
+        "size_bytes": 149332,
+        "crc32c": "+Ae3sA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cs.OS.jsonl.gz",
+        "generation": "1765314640787910",
+        "size_bytes": 142484,
+        "crc32c": "/Lk65A=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cs.PF.jsonl.gz",
+        "generation": "1765314640837841",
+        "size_bytes": 140144,
+        "crc32c": "25iDCA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cs.PL.jsonl.gz",
+        "generation": "1765314640811456",
+        "size_bytes": 146934,
+        "crc32c": "Pz2bNg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cs.RO.jsonl.gz",
+        "generation": "1765314640843098",
+        "size_bytes": 146641,
+        "crc32c": "E+kmFg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cs.SC.jsonl.gz",
+        "generation": "1765314640855999",
+        "size_bytes": 128618,
+        "crc32c": "Wgng1g=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cs.SD.jsonl.gz",
+        "generation": "1765314640862507",
+        "size_bytes": 147182,
+        "crc32c": "ujEwEQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cs.SE.jsonl.gz",
+        "generation": "1765314640899555",
+        "size_bytes": 140477,
+        "crc32c": "afQNhQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cs.SI.jsonl.gz",
+        "generation": "1765314640901083",
+        "size_bytes": 146531,
+        "crc32c": "dE06zA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cs.SY.jsonl.gz",
+        "generation": "1765314640944914",
+        "size_bytes": 134460,
+        "crc32c": "ioJewg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_cs_l1.jsonl.gz",
+        "generation": "1765314641027771",
+        "size_bytes": 117721,
+        "crc32c": "aH6IZQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_econ.EM.jsonl.gz",
+        "generation": "1765314641121461",
+        "size_bytes": 133823,
+        "crc32c": "Q9k6bQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_econ.TH.jsonl.gz",
+        "generation": "1765314641156260",
+        "size_bytes": 122371,
+        "crc32c": "B4rJ7Q=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_econ_l1.jsonl.gz",
+        "generation": "1765314641206482",
+        "size_bytes": 122371,
+        "crc32c": "xgXEnA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_eess.AS.jsonl.gz",
+        "generation": "1765314641345860",
+        "size_bytes": 145515,
+        "crc32c": "RBSuSQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_eess.IV.jsonl.gz",
+        "generation": "1765314641342311",
+        "size_bytes": 151623,
+        "crc32c": "yt4Z+Q=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_eess.SP.jsonl.gz",
+        "generation": "1765314641362003",
+        "size_bytes": 139261,
+        "crc32c": "m515rg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_eess_l1.jsonl.gz",
+        "generation": "1765314641390665",
+        "size_bytes": 151622,
+        "crc32c": "WFNvxA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_gr-qc.jsonl.gz",
+        "generation": "1765314641415320",
+        "size_bytes": 137110,
+        "crc32c": "+00srw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_hep-ex.jsonl.gz",
+        "generation": "1765314641514846",
+        "size_bytes": 140564,
+        "crc32c": "2tTBGA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_hep-lat.jsonl.gz",
+        "generation": "1765314641567018",
+        "size_bytes": 145677,
+        "crc32c": "I/qPpA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_hep-ph.jsonl.gz",
+        "generation": "1765314641416032",
+        "size_bytes": 135456,
+        "crc32c": "2wJ6JQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_hep-th.jsonl.gz",
+        "generation": "1765314641451072",
+        "size_bytes": 135638,
+        "crc32c": "LottDQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_math.AC.jsonl.gz",
+        "generation": "1765314641501653",
+        "size_bytes": 101017,
+        "crc32c": "nFXZWA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_math.AG.jsonl.gz",
+        "generation": "1765314641473314",
+        "size_bytes": 110249,
+        "crc32c": "7z4+Ow=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_math.AP.jsonl.gz",
+        "generation": "1765314641594660",
+        "size_bytes": 117102,
+        "crc32c": "2TlERg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_math.AT.jsonl.gz",
+        "generation": "1765314641744718",
+        "size_bytes": 112798,
+        "crc32c": "0Rxruw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_math.CA.jsonl.gz",
+        "generation": "1765314641716381",
+        "size_bytes": 115932,
+        "crc32c": "q9nGWA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_math.CO.jsonl.gz",
+        "generation": "1765314641702367",
+        "size_bytes": 104841,
+        "crc32c": "AgkjIg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_math.CT.jsonl.gz",
+        "generation": "1765314641785485",
+        "size_bytes": 114345,
+        "crc32c": "NhjbMQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_math.CV.jsonl.gz",
+        "generation": "1765314642027623",
+        "size_bytes": 107746,
+        "crc32c": "orqHtA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_math.DG.jsonl.gz",
+        "generation": "1765314641972209",
+        "size_bytes": 112223,
+        "crc32c": "twS9qQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_math.DS.jsonl.gz",
+        "generation": "1765314641949574",
+        "size_bytes": 111040,
+        "crc32c": "Nq54wg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_math.FA.jsonl.gz",
+        "generation": "1765314641978244",
+        "size_bytes": 107409,
+        "crc32c": "7e2HPA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_math.GM.jsonl.gz",
+        "generation": "1765314642021206",
+        "size_bytes": 108718,
+        "crc32c": "SwLNLA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_math.GN.jsonl.gz",
+        "generation": "1765314642042807",
+        "size_bytes": 98696,
+        "crc32c": "qdwCag=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_math.GR.jsonl.gz",
+        "generation": "1765314642104850",
+        "size_bytes": 107327,
+        "crc32c": "nrs7+w=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_math.GT.jsonl.gz",
+        "generation": "1765314642051183",
+        "size_bytes": 107568,
+        "crc32c": "tsJG0Q=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_math.HO.jsonl.gz",
+        "generation": "1765314642116887",
+        "size_bytes": 157163,
+        "crc32c": "1Baaaw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_math.KT.jsonl.gz",
+        "generation": "1765314642097785",
+        "size_bytes": 107746,
+        "crc32c": "1dsAGw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_math.LO.jsonl.gz",
+        "generation": "1765314642172603",
+        "size_bytes": 111818,
+        "crc32c": "M2L+QA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_math.MG.jsonl.gz",
+        "generation": "1765314642256593",
+        "size_bytes": 111560,
+        "crc32c": "/Y4UPg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_math.NA.jsonl.gz",
+        "generation": "1765314642298913",
+        "size_bytes": 124821,
+        "crc32c": "uA8CYw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_math.NT.jsonl.gz",
+        "generation": "1765314642329079",
+        "size_bytes": 110620,
+        "crc32c": "Mfb9ww=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_math.OA.jsonl.gz",
+        "generation": "1765314642349821",
+        "size_bytes": 97456,
+        "crc32c": "IPbDMg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_math.OC.jsonl.gz",
+        "generation": "1765314642434029",
+        "size_bytes": 122402,
+        "crc32c": "p+sQGA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_math.PR.jsonl.gz",
+        "generation": "1765314642518187",
+        "size_bytes": 116677,
+        "crc32c": "redfLg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_math.QA.jsonl.gz",
+        "generation": "1765314642557362",
+        "size_bytes": 105834,
+        "crc32c": "BAJBzg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_math.RA.jsonl.gz",
+        "generation": "1765314642578805",
+        "size_bytes": 106364,
+        "crc32c": "0z/DoA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_math.RT.jsonl.gz",
+        "generation": "1765314642613372",
+        "size_bytes": 111349,
+        "crc32c": "Sagjqw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_math.SG.jsonl.gz",
+        "generation": "1765314642626425",
+        "size_bytes": 114381,
+        "crc32c": "OrL92w=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_math.SP.jsonl.gz",
+        "generation": "1765314642643481",
+        "size_bytes": 116565,
+        "crc32c": "ooRLyg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_math_l1.jsonl.gz",
+        "generation": "1765314642687100",
+        "size_bytes": 107750,
+        "crc32c": "eSL03w=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_nlin.AO.jsonl.gz",
+        "generation": "1765314642809280",
+        "size_bytes": 142549,
+        "crc32c": "2RvX0g=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_nlin.CD.jsonl.gz",
+        "generation": "1765314642714359",
+        "size_bytes": 139181,
+        "crc32c": "nLzK8w=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_nlin.CG.jsonl.gz",
+        "generation": "1765314642733983",
+        "size_bytes": 140335,
+        "crc32c": "MO7t4g=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_nlin.PS.jsonl.gz",
+        "generation": "1765314642837341",
+        "size_bytes": 138491,
+        "crc32c": "eZXUKQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_nlin.SI.jsonl.gz",
+        "generation": "1765314643034727",
+        "size_bytes": 116299,
+        "crc32c": "Z9fv2A=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_nlin_l1.jsonl.gz",
+        "generation": "1765314642914054",
+        "size_bytes": 140332,
+        "crc32c": "EEowCA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_nucl-ex.jsonl.gz",
+        "generation": "1765314642948882",
+        "size_bytes": 145935,
+        "crc32c": "gRNQ6g=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_nucl-th.jsonl.gz",
+        "generation": "1765314642958644",
+        "size_bytes": 135306,
+        "crc32c": "8nDAIg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_physics.acc-ph.jsonl.gz",
+        "generation": "1765314643032240",
+        "size_bytes": 143147,
+        "crc32c": "HyOWhQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_physics.ao-ph.jsonl.gz",
+        "generation": "1765314643069945",
+        "size_bytes": 146815,
+        "crc32c": "FChw4g=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_physics.app-ph.jsonl.gz",
+        "generation": "1765314643153762",
+        "size_bytes": 147803,
+        "crc32c": "0HG13w=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_physics.atm-clus.jsonl.gz",
+        "generation": "1765314643150376",
+        "size_bytes": 143703,
+        "crc32c": "6Gu2jQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_physics.atom-ph.jsonl.gz",
+        "generation": "1765314643242217",
+        "size_bytes": 144126,
+        "crc32c": "/U6mlw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_physics.bio-ph.jsonl.gz",
+        "generation": "1765314643211934",
+        "size_bytes": 149103,
+        "crc32c": "ymoMLQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_physics.chem-ph.jsonl.gz",
+        "generation": "1765314643256482",
+        "size_bytes": 146316,
+        "crc32c": "j3kq0A=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_physics.class-ph.jsonl.gz",
+        "generation": "1765314643212883",
+        "size_bytes": 137772,
+        "crc32c": "NmtP+Q=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_physics.comp-ph.jsonl.gz",
+        "generation": "1765314643268981",
+        "size_bytes": 142109,
+        "crc32c": "SvSqpA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_physics.data-an.jsonl.gz",
+        "generation": "1765314643352000",
+        "size_bytes": 146810,
+        "crc32c": "m+NDAA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_physics.ed-ph.jsonl.gz",
+        "generation": "1765314643420913",
+        "size_bytes": 156796,
+        "crc32c": "jIx49Q=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_physics.flu-dyn.jsonl.gz",
+        "generation": "1765314643381367",
+        "size_bytes": 138734,
+        "crc32c": "lP+Dog=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_physics.gen-ph.jsonl.gz",
+        "generation": "1765314643515962",
+        "size_bytes": 141596,
+        "crc32c": "W7F1Kw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_physics.geo-ph.jsonl.gz",
+        "generation": "1765314643502470",
+        "size_bytes": 144851,
+        "crc32c": "JnLerQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_physics.hist-ph.jsonl.gz",
+        "generation": "1765314643571038",
+        "size_bytes": 162842,
+        "crc32c": "a+kDIA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_physics.ins-det.jsonl.gz",
+        "generation": "1765314643588525",
+        "size_bytes": 149894,
+        "crc32c": "ZTacmg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_physics.med-ph.jsonl.gz",
+        "generation": "1765314643631918",
+        "size_bytes": 152609,
+        "crc32c": "7+cAPw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_physics.optics.jsonl.gz",
+        "generation": "1765314643674964",
+        "size_bytes": 144804,
+        "crc32c": "VJlYeQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_physics.plasm-ph.jsonl.gz",
+        "generation": "1765314643707057",
+        "size_bytes": 140156,
+        "crc32c": "pH6W/g=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_physics.pop-ph.jsonl.gz",
+        "generation": "1765314643741128",
+        "size_bytes": 159528,
+        "crc32c": "Pzj82g=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_physics.soc-ph.jsonl.gz",
+        "generation": "1765314643784556",
+        "size_bytes": 149387,
+        "crc32c": "n/UKqg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_physics.space-ph.jsonl.gz",
+        "generation": "1765314643815850",
+        "size_bytes": 139639,
+        "crc32c": "YW6uRw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_physics_l1.jsonl.gz",
+        "generation": "1765314643831471",
+        "size_bytes": 162836,
+        "crc32c": "npHJog=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_plasm-ph.jsonl.gz",
+        "generation": "1765314643862589",
+        "size_bytes": 140147,
+        "crc32c": "lwEMqQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_q-bio.BM.jsonl.gz",
+        "generation": "1765314643877756",
+        "size_bytes": 146211,
+        "crc32c": "ddR/tw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_q-bio.CB.jsonl.gz",
+        "generation": "1765314643878335",
+        "size_bytes": 144515,
+        "crc32c": "LVlxGA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_q-bio.GN.jsonl.gz",
+        "generation": "1765314643975000",
+        "size_bytes": 144793,
+        "crc32c": "4FoT9g=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_q-bio.MN.jsonl.gz",
+        "generation": "1765314643963334",
+        "size_bytes": 150603,
+        "crc32c": "yeoqvw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_q-bio.NC.jsonl.gz",
+        "generation": "1765314644066175",
+        "size_bytes": 149444,
+        "crc32c": "Yl+v9g=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_q-bio.OT.jsonl.gz",
+        "generation": "1765314644113566",
+        "size_bytes": 155720,
+        "crc32c": "mipixA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_q-bio.PE.jsonl.gz",
+        "generation": "1765314644104495",
+        "size_bytes": 144163,
+        "crc32c": "Fih29g=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_q-bio.QM.jsonl.gz",
+        "generation": "1765314644137055",
+        "size_bytes": 146369,
+        "crc32c": "36yOsA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_q-bio.SC.jsonl.gz",
+        "generation": "1765314644290991",
+        "size_bytes": 148160,
+        "crc32c": "+G6WvQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_q-bio.TO.jsonl.gz",
+        "generation": "1765314644243566",
+        "size_bytes": 154071,
+        "crc32c": "kB02sg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_q-bio.jsonl.gz",
+        "generation": "1765314644311756",
+        "size_bytes": 149436,
+        "crc32c": "mBqiHA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_q-bio_l1.jsonl.gz",
+        "generation": "1765314644334898",
+        "size_bytes": 149443,
+        "crc32c": "8l2QOg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_q-fin.CP.jsonl.gz",
+        "generation": "1765314644332963",
+        "size_bytes": 133087,
+        "crc32c": "i4LxXg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_q-fin.EC.jsonl.gz",
+        "generation": "1765314644439893",
+        "size_bytes": 136741,
+        "crc32c": "99Z7YQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_q-fin.GN.jsonl.gz",
+        "generation": "1765314644407602",
+        "size_bytes": 149618,
+        "crc32c": "KIdEhQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_q-fin.MF.jsonl.gz",
+        "generation": "1765314644438834",
+        "size_bytes": 119730,
+        "crc32c": "TXKWcQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_q-fin.PM.jsonl.gz",
+        "generation": "1765314644455898",
+        "size_bytes": 130082,
+        "crc32c": "dBN1+A=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_q-fin.PR.jsonl.gz",
+        "generation": "1765314644522369",
+        "size_bytes": 122750,
+        "crc32c": "MF6b+w=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_q-fin.RM.jsonl.gz",
+        "generation": "1765314644493790",
+        "size_bytes": 136970,
+        "crc32c": "g141kA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_q-fin.ST.jsonl.gz",
+        "generation": "1765314644541995",
+        "size_bytes": 141448,
+        "crc32c": "9ZNJXg=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_q-fin.TR.jsonl.gz",
+        "generation": "1765314644649414",
+        "size_bytes": 138210,
+        "crc32c": "KH+4jQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_q-fin_l1.jsonl.gz",
+        "generation": "1765314644661966",
+        "size_bytes": 149620,
+        "crc32c": "uuq6aw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_quant-ph.jsonl.gz",
+        "generation": "1765314644712476",
+        "size_bytes": 131873,
+        "crc32c": "15EflQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_stat.AP.jsonl.gz",
+        "generation": "1765314644674577",
+        "size_bytes": 147722,
+        "crc32c": "L2yXfA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_stat.CO.jsonl.gz",
+        "generation": "1765314644759182",
+        "size_bytes": 136246,
+        "crc32c": "OLAbfw=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_stat.ME.jsonl.gz",
+        "generation": "1765314644922974",
+        "size_bytes": 130016,
+        "crc32c": "xVhXQA=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_stat.ML.jsonl.gz",
+        "generation": "1765314644875383",
+        "size_bytes": 133891,
+        "crc32c": "01ru1A=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_stat.OT.jsonl.gz",
+        "generation": "1765314644956965",
+        "size_bytes": 141489,
+        "crc32c": "LsEGug=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_stat_l1.jsonl.gz",
+        "generation": "1765314644970527",
+        "size_bytes": 136246,
+        "crc32c": "c9NDnQ=="
+      },
+      {
+        "uri": "gs://marin-us-central1/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val_supr-con.jsonl.gz",
+        "generation": "1765314645009922",
+        "size_bytes": 138537,
+        "crc32c": "5ZXyHQ=="
+      }
+    ]
+  }
+}

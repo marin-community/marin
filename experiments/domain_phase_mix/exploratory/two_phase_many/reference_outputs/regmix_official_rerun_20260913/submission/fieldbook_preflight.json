@@ -1,0 +1,53 @@
+[
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789314892.781366,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/regmix_official_rerun_20260913/submission/full_graph_regional_preflight.json",
+      "fieldbook.local_size_at_capture": 28110
+    },
+    "content_hash": "sha256:e353eeab79c332c2051a7ee3a8bc0936f2c0d7f9dd2b195fa764c09e2d4e03ae",
+    "created_at": "2026-09-13T15:55:34Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+    "id": "art_01m2dqp9g4gec736ddcv91t5mf",
+    "job_id": null,
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-13T15:55:34Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/regmix_official_rerun_20260913/submission/full_graph_regional_preflight.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789314912.8978958,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/regmix_official_rerun_20260913/submission/review_resolution.json",
+      "fieldbook.local_size_at_capture": 497
+    },
+    "content_hash": "sha256:bec5c71dae48775c767406d56b4c5cbfaea03bf25bbd1e32a3e37fbd8c52447a",
+    "created_at": "2026-09-13T15:55:34Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+    "id": "art_01m2dqp9smq058ptnv2yph7bz4",
+    "job_id": null,
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-13T15:55:34Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/regmix_official_rerun_20260913/submission/review_resolution.json"
+  },
+  {
+    "attrs": {},
+    "check_name": "regmix-official-four-run-launch-preflight",
+    "created_at": "2026-09-13T15:55:34Z",
+    "deleted_at": null,
+    "details": {},
+    "entity_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+    "entity_type": "experiment",
+    "expected_value": "4 training,4 native eval,all east5,CC approved,frozen mixtures",
+    "id": "val_01m2dqpa66rck358nqk4p0by3b",
+    "measured_value": "4 training,4 native eval,180east5URIs,CC approved,455sourcehashes,all8outputpathsunmodified",
+    "session_id": "ses_01m2dpra4kyynye6mps5hs38eb",
+    "source_artifact_id": "art_01m2dqp9smq058ptnv2yph7bz4",
+    "source_job_id": null,
+    "status": "pass",
+    "updated_at": "2026-09-13T15:55:34Z"
+  }
+]

@@ -1,0 +1,13 @@
+{
+  "status": "passed",
+  "checked_at": "2026-09-11T13:08:44.490228+00:00",
+  "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d",
+  "run_name": "tpp10_target_p055_s20260910",
+  "saved_checkpoint_step": 3010,
+  "first_resumed_step": 3011,
+  "first_resumed_step_completed_at": "2026-09-11T13:07:24Z",
+  "restored_gib": 2.37,
+  "same_wandb_run": true,
+  "wandb_previous_logged_step": 3402,
+  "wandb_note": "Metrics are suppressed until the resumed trainer catches up with the previous logged step. Use live Iris steps during catch-up; this is expected after restoring the last saved checkpoint."
+}

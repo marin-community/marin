@@ -1,0 +1,23 @@
+{
+  "plan_sha256": "2d8de87ec6b975ef757c5994cb610bb7d9386dfbefc2aac264e8e8c2991b0bf1",
+  "run_name": "tpp10_target_p8of15_s20260910",
+  "final_native_record": {
+    "eval/bpb": 0.7744324207305908,
+    "eval/bpb_schema_version": 2,
+    "eval/loading_time": 2.508699149997483,
+    "eval/loss": 1.328565001487732,
+    "eval/paloma/bpb": 0.7744324745140994,
+    "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 0.7744324207305908,
+    "eval/paloma/dolma_100_programing_languages-tpp10/loss": 1.328565001487732,
+    "eval/paloma/micro_loss": 1.328565001487732,
+    "eval/total_time": 10.149237999999968,
+    "step": 11490
+  },
+  "scored_tokens": 11612631,
+  "scored_bytes": 28741166,
+  "normalized_bpb": 0.7744325345176816,
+  "target_regret_bpb": 0.008868010917602143,
+  "excess_percent": 1.158362312284297,
+  "regret_reduction_percent": 74.70206000824624,
+  "reference": "Existing twelve-point target grid; this follow-up does not redefine its minimum."
+}

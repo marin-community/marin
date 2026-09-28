@@ -1,0 +1,1442 @@
+{
+  "schema_version": 1,
+  "purpose": "Secondary common-objective evaluation of the completed Figure 5 pilot",
+  "training_plan": {
+    "design_sha256": "72d14a845033b901d73397c74c724a668cbdec5fd72cec41178626b993f889a2",
+    "stage": "pilot",
+    "primary_metric": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+    "code_sha256": {
+      "experiments/domain_phase_mix/starcoder_tpp10.py": "1c7cc50019f3e99234fb7b3f5668ae2a07b9381ef1fcabfa1aa8011fe98d6473",
+      "experiments/domain_phase_mix/prepare_starcoder_tpp10.py": "3dcd74598da46f09dc978ee0a6b0ddee62a820b6906c4c184bf9148883079105",
+      "experiments/domain_phase_mix/launch_starcoder_tpp10.py": "eb48d4ea35f323265972653568b6924a7999c8be0a1ce2db1441ac6273105f62",
+      "experiments/domain_phase_mix/launch_starcoder_epoch_matching.py": "2dea0230c54d0e8dd0d33d27bacda690177e196c46f135eea4951492fc3f0898",
+      "experiments/domain_phase_mix/starcoder_epoch_matching.py": "29dac8e4085591732c329fe6a238f07cb4e02cdc6198ce344d4ab8b599619085",
+      "lib/levanter/src/levanter/data/text/datasets.py": "c3ea1ea1f03ac5b96f81c208ce81fd50d5ebd9a74c57cb31ec02619fb4188948",
+      "lib/levanter/src/levanter/data/text/formats.py": "cd9371c30025fa0ed2c9cb72215f1503e8d7ffd2e71a336866a2986f7126c529",
+      "lib/levanter/src/levanter/data/text/cache.py": "383e718429f2642f17b20af9972009ca16fbddbdbf217037e15c6618da9d4990",
+      "lib/levanter/src/levanter/store/cache.py": "55d704474f94d9a84b3f306c40f3263db080da7633a39cbb438e64668a4e4881",
+      "lib/levanter/src/levanter/data/mixture.py": "67e97941a79753b2e5865f7f41c7762436a428599ecd1a60d643aa891a817685",
+      "lib/levanter/src/levanter/data/dataset.py": "021f5336885a2b9dbe6a60abb26ff4809c0b3c4733baa81a1ba8830be6f56993",
+      "lib/levanter/src/levanter/tokenizers.py": "c49f9f74dc25e683ee9dba413c4008ecbc78a4bac864cba4647a129d6eb0dcb3",
+      "lib/levanter/src/levanter/models/qwen.py": "241b086569a8aa23b3a006a4be3ebc9142c45cdda8eaef81a19dabc77526b66b",
+      "lib/levanter/src/levanter/models/llama.py": "f4ebbfbff8708d76e300d70e70c1393ff9553e46c251c38de3d71cd5b948de57",
+      "lib/levanter/src/levanter/optim/muonh.py": "db9fde2f87994a5ae45581f23051365b4aa20db6bf3d584d6c00a1ee74c19412",
+      "lib/levanter/src/levanter/main/train_lm.py": "3d1fd8e1238b2acb829649a193f4bc9e3c4eccc10cc2cbc0bef2fbc6428e8f76",
+      "lib/levanter/src/levanter/trainer.py": "c45bd422f0ae23a4efd45610becaa8409d101b4bcaa396fca1e1348847eca03c",
+      "lib/marin/src/marin/experiment/train.py": "138170826fce499a37dcd09354079ac929bbd582ff2cf0dc80bce3b57b6628cf",
+      "lib/marin/src/marin/training/training.py": "4809c96be5a972241a6def1ed097ce195a6d41307bf552422ba97df8455adcb2",
+      "uv.lock": "347c4bb876ef55f60ecd5cf137d22016aaa742387717d20e296ca0ff2cc05dd5",
+      "experiments/domain_phase_mix/starcoder_tpp10_assets/design.json": "bbcbfffb09ff23654abe115ecdc58bfe4bd5f073bff772246469eafcf917d781",
+      "experiments/domain_phase_mix/starcoder_tpp10_assets/pins.json": "e555f7ec9484c5ec813593de3cd2091fa3a0d35907f8a3209c086fd7de3d1068",
+      "experiments/domain_phase_mix/starcoder_tpp10_assets/sources.json": "9f9b80e55ca9d2d9decc3125336000713c81e941b8f4c08b61f898566259e44a",
+      "experiments/domain_phase_mix/starcoder_tpp10_assets/special_tokens_map.json": "6fa06efa2785e450051989a6f8fb4416b10149ded485ddd3f127a40734f5cfd0",
+      "experiments/domain_phase_mix/starcoder_tpp10_assets/tokenizer.json": "bcd04f0eadf90287bd26e1a183ac487d8a141b09b06aecb7725bbdd343640f2e",
+      "experiments/domain_phase_mix/starcoder_tpp10_assets/tokenizer.model": "9e556afd44213b6bd1be2b850ebbbd98f5481437a8021afaf58ee7fb1818d347",
+      "experiments/domain_phase_mix/starcoder_tpp10_assets/tokenizer_config.json": "f514e7c3008881b6ba7e6a0cdb44c71ce47dc335920dac143ae7bc788197e53a"
+    },
+    "runtime_versions": {
+      "jax": "0.11.1",
+      "jaxlib": "0.11.1",
+      "numpy": "2.3.5",
+      "tokenizers": "0.22.2"
+    },
+    "marin_prefix": "gs://marin-us-central1",
+    "region": "us-central1",
+    "zone": "us-central1-a",
+    "training_flops": 4.789276279533522e+19,
+    "runs": [
+      {
+        "run_name": "tpp10_target_p000_s20260910",
+        "arm": "target",
+        "percent": 0,
+        "trainer_seed": 20260910,
+        "subset_seed": null,
+        "total_steps": 11491,
+        "batch_size": 128,
+        "tokens": 3012296704,
+        "support_sequences": 92928,
+        "fingerprint": "7069115a",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p000_s20260910/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_unmatched_p000_s20260910",
+        "arm": "unmatched",
+        "percent": 0,
+        "trainer_seed": 20260910,
+        "subset_seed": null,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 92928,
+        "fingerprint": "e135b8f4",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_unmatched_p000_s20260910/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_unmatched_p000_s20260911",
+        "arm": "unmatched",
+        "percent": 0,
+        "trainer_seed": 20260911,
+        "subset_seed": null,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 92928,
+        "fingerprint": "64794a32",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_unmatched_p000_s20260911/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_target_p010_s20260910",
+        "arm": "target",
+        "percent": 10,
+        "trainer_seed": 20260910,
+        "subset_seed": null,
+        "total_steps": 11491,
+        "batch_size": 128,
+        "tokens": 3012296704,
+        "support_sequences": 92928,
+        "fingerprint": "33d2329d",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p010_s20260910/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_unmatched_p010_s20260910",
+        "arm": "unmatched",
+        "percent": 10,
+        "trainer_seed": 20260910,
+        "subset_seed": null,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 92928,
+        "fingerprint": "eed52aa7",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_unmatched_p010_s20260910/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_matched_p010_s20260910_d20260912",
+        "arm": "matched",
+        "percent": 10,
+        "trainer_seed": 20260910,
+        "subset_seed": 20260912,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 5120,
+        "fingerprint": "5ded1895",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p010_s20260910_d20260912/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_matched_p010_s20260910_d20260913",
+        "arm": "matched",
+        "percent": 10,
+        "trainer_seed": 20260910,
+        "subset_seed": 20260913,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 5120,
+        "fingerprint": "b11f1c31",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p010_s20260910_d20260913/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_matched_p010_s20260910_d20260914",
+        "arm": "matched",
+        "percent": 10,
+        "trainer_seed": 20260910,
+        "subset_seed": 20260914,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 5120,
+        "fingerprint": "466edcd2",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p010_s20260910_d20260914/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_unmatched_p010_s20260911",
+        "arm": "unmatched",
+        "percent": 10,
+        "trainer_seed": 20260911,
+        "subset_seed": null,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 92928,
+        "fingerprint": "62727180",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_unmatched_p010_s20260911/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_matched_p010_s20260911_d20260912",
+        "arm": "matched",
+        "percent": 10,
+        "trainer_seed": 20260911,
+        "subset_seed": 20260912,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 5120,
+        "fingerprint": "137bc36d",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p010_s20260911_d20260912/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_matched_p010_s20260911_d20260913",
+        "arm": "matched",
+        "percent": 10,
+        "trainer_seed": 20260911,
+        "subset_seed": 20260913,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 5120,
+        "fingerprint": "9f50866f",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p010_s20260911_d20260913/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_matched_p010_s20260911_d20260914",
+        "arm": "matched",
+        "percent": 10,
+        "trainer_seed": 20260911,
+        "subset_seed": 20260914,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 5120,
+        "fingerprint": "d4c0e8bf",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p010_s20260911_d20260914/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_target_p030_s20260910",
+        "arm": "target",
+        "percent": 30,
+        "trainer_seed": 20260910,
+        "subset_seed": null,
+        "total_steps": 11491,
+        "batch_size": 128,
+        "tokens": 3012296704,
+        "support_sequences": 92928,
+        "fingerprint": "100ce930",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p030_s20260910/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_unmatched_p030_s20260910",
+        "arm": "unmatched",
+        "percent": 30,
+        "trainer_seed": 20260910,
+        "subset_seed": null,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 92928,
+        "fingerprint": "b259d37e",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_unmatched_p030_s20260910/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_matched_p030_s20260910_d20260912",
+        "arm": "matched",
+        "percent": 30,
+        "trainer_seed": 20260910,
+        "subset_seed": 20260912,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 5120,
+        "fingerprint": "351b10ea",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p030_s20260910_d20260912/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_matched_p030_s20260910_d20260913",
+        "arm": "matched",
+        "percent": 30,
+        "trainer_seed": 20260910,
+        "subset_seed": 20260913,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 5120,
+        "fingerprint": "3cda7d26",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p030_s20260910_d20260913/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_matched_p030_s20260910_d20260914",
+        "arm": "matched",
+        "percent": 30,
+        "trainer_seed": 20260910,
+        "subset_seed": 20260914,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 5120,
+        "fingerprint": "fa6f7187",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p030_s20260910_d20260914/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_unmatched_p030_s20260911",
+        "arm": "unmatched",
+        "percent": 30,
+        "trainer_seed": 20260911,
+        "subset_seed": null,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 92928,
+        "fingerprint": "cff7ae28",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_unmatched_p030_s20260911/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_matched_p030_s20260911_d20260912",
+        "arm": "matched",
+        "percent": 30,
+        "trainer_seed": 20260911,
+        "subset_seed": 20260912,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 5120,
+        "fingerprint": "737ac4b4",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p030_s20260911_d20260912/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_matched_p030_s20260911_d20260913",
+        "arm": "matched",
+        "percent": 30,
+        "trainer_seed": 20260911,
+        "subset_seed": 20260913,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 5120,
+        "fingerprint": "c4f68dc8",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p030_s20260911_d20260913/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_matched_p030_s20260911_d20260914",
+        "arm": "matched",
+        "percent": 30,
+        "trainer_seed": 20260911,
+        "subset_seed": 20260914,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 5120,
+        "fingerprint": "c245a10d",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p030_s20260911_d20260914/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_target_p050_s20260910",
+        "arm": "target",
+        "percent": 50,
+        "trainer_seed": 20260910,
+        "subset_seed": null,
+        "total_steps": 11491,
+        "batch_size": 128,
+        "tokens": 3012296704,
+        "support_sequences": 92928,
+        "fingerprint": "747891fe",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p050_s20260910/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_unmatched_p050_s20260910",
+        "arm": "unmatched",
+        "percent": 50,
+        "trainer_seed": 20260910,
+        "subset_seed": null,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 92928,
+        "fingerprint": "91ded376",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_unmatched_p050_s20260910/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_matched_p050_s20260910_d20260912",
+        "arm": "matched",
+        "percent": 50,
+        "trainer_seed": 20260910,
+        "subset_seed": 20260912,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 5120,
+        "fingerprint": "ea94a64a",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p050_s20260910_d20260912/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_matched_p050_s20260910_d20260913",
+        "arm": "matched",
+        "percent": 50,
+        "trainer_seed": 20260910,
+        "subset_seed": 20260913,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 5120,
+        "fingerprint": "695c3741",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p050_s20260910_d20260913/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_matched_p050_s20260910_d20260914",
+        "arm": "matched",
+        "percent": 50,
+        "trainer_seed": 20260910,
+        "subset_seed": 20260914,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 5120,
+        "fingerprint": "80238a01",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p050_s20260910_d20260914/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_unmatched_p050_s20260911",
+        "arm": "unmatched",
+        "percent": 50,
+        "trainer_seed": 20260911,
+        "subset_seed": null,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 92928,
+        "fingerprint": "ddbddc21",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_unmatched_p050_s20260911/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_matched_p050_s20260911_d20260912",
+        "arm": "matched",
+        "percent": 50,
+        "trainer_seed": 20260911,
+        "subset_seed": 20260912,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 5120,
+        "fingerprint": "e55bc8dd",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p050_s20260911_d20260912/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_matched_p050_s20260911_d20260913",
+        "arm": "matched",
+        "percent": 50,
+        "trainer_seed": 20260911,
+        "subset_seed": 20260913,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 5120,
+        "fingerprint": "c861103f",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p050_s20260911_d20260913/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_matched_p050_s20260911_d20260914",
+        "arm": "matched",
+        "percent": 50,
+        "trainer_seed": 20260911,
+        "subset_seed": 20260914,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 5120,
+        "fingerprint": "bf566716",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p050_s20260911_d20260914/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_target_p070_s20260910",
+        "arm": "target",
+        "percent": 70,
+        "trainer_seed": 20260910,
+        "subset_seed": null,
+        "total_steps": 11491,
+        "batch_size": 128,
+        "tokens": 3012296704,
+        "support_sequences": 92928,
+        "fingerprint": "66e8dc46",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p070_s20260910/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_unmatched_p070_s20260910",
+        "arm": "unmatched",
+        "percent": 70,
+        "trainer_seed": 20260910,
+        "subset_seed": null,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 92928,
+        "fingerprint": "31f6754c",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_unmatched_p070_s20260910/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_matched_p070_s20260910_d20260912",
+        "arm": "matched",
+        "percent": 70,
+        "trainer_seed": 20260910,
+        "subset_seed": 20260912,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 5120,
+        "fingerprint": "0fb94737",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p070_s20260910_d20260912/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_matched_p070_s20260910_d20260913",
+        "arm": "matched",
+        "percent": 70,
+        "trainer_seed": 20260910,
+        "subset_seed": 20260913,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 5120,
+        "fingerprint": "0d5ccef6",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p070_s20260910_d20260913/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_matched_p070_s20260910_d20260914",
+        "arm": "matched",
+        "percent": 70,
+        "trainer_seed": 20260910,
+        "subset_seed": 20260914,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 5120,
+        "fingerprint": "0c3c0436",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p070_s20260910_d20260914/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_unmatched_p070_s20260911",
+        "arm": "unmatched",
+        "percent": 70,
+        "trainer_seed": 20260911,
+        "subset_seed": null,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 92928,
+        "fingerprint": "7cab8537",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_unmatched_p070_s20260911/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_matched_p070_s20260911_d20260912",
+        "arm": "matched",
+        "percent": 70,
+        "trainer_seed": 20260911,
+        "subset_seed": 20260912,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 5120,
+        "fingerprint": "c4838333",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p070_s20260911_d20260912/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_matched_p070_s20260911_d20260913",
+        "arm": "matched",
+        "percent": 70,
+        "trainer_seed": 20260911,
+        "subset_seed": 20260913,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 5120,
+        "fingerprint": "602bb858",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p070_s20260911_d20260913/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_matched_p070_s20260911_d20260914",
+        "arm": "matched",
+        "percent": 70,
+        "trainer_seed": 20260911,
+        "subset_seed": 20260914,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 5120,
+        "fingerprint": "b17987be",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p070_s20260911_d20260914/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_target_p090_s20260910",
+        "arm": "target",
+        "percent": 90,
+        "trainer_seed": 20260910,
+        "subset_seed": null,
+        "total_steps": 11491,
+        "batch_size": 128,
+        "tokens": 3012296704,
+        "support_sequences": 92928,
+        "fingerprint": "e51b00bd",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p090_s20260910/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_unmatched_p090_s20260910",
+        "arm": "unmatched",
+        "percent": 90,
+        "trainer_seed": 20260910,
+        "subset_seed": null,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 92928,
+        "fingerprint": "901b7f00",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_unmatched_p090_s20260910/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_matched_p090_s20260910_d20260912",
+        "arm": "matched",
+        "percent": 90,
+        "trainer_seed": 20260910,
+        "subset_seed": 20260912,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 5120,
+        "fingerprint": "533d8447",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p090_s20260910_d20260912/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_matched_p090_s20260910_d20260913",
+        "arm": "matched",
+        "percent": 90,
+        "trainer_seed": 20260910,
+        "subset_seed": 20260913,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 5120,
+        "fingerprint": "09b89f30",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p090_s20260910_d20260913/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_matched_p090_s20260910_d20260914",
+        "arm": "matched",
+        "percent": 90,
+        "trainer_seed": 20260910,
+        "subset_seed": 20260914,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 5120,
+        "fingerprint": "79af7387",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p090_s20260910_d20260914/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_unmatched_p090_s20260911",
+        "arm": "unmatched",
+        "percent": 90,
+        "trainer_seed": 20260911,
+        "subset_seed": null,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 92928,
+        "fingerprint": "d8df97a9",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_unmatched_p090_s20260911/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_matched_p090_s20260911_d20260912",
+        "arm": "matched",
+        "percent": 90,
+        "trainer_seed": 20260911,
+        "subset_seed": 20260912,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 5120,
+        "fingerprint": "06eccb74",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p090_s20260911_d20260912/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_matched_p090_s20260911_d20260913",
+        "arm": "matched",
+        "percent": 90,
+        "trainer_seed": 20260911,
+        "subset_seed": 20260913,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 5120,
+        "fingerprint": "300112cb",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p090_s20260911_d20260913/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_matched_p090_s20260911_d20260914",
+        "arm": "matched",
+        "percent": 90,
+        "trainer_seed": 20260911,
+        "subset_seed": 20260914,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 5120,
+        "fingerprint": "b16aa99f",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p090_s20260911_d20260914/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_target_p100_s20260910",
+        "arm": "target",
+        "percent": 100,
+        "trainer_seed": 20260910,
+        "subset_seed": null,
+        "total_steps": 11491,
+        "batch_size": 128,
+        "tokens": 3012296704,
+        "support_sequences": 92928,
+        "fingerprint": "0cbcd192",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p100_s20260910/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_unmatched_p100_s20260910",
+        "arm": "unmatched",
+        "percent": 100,
+        "trainer_seed": 20260910,
+        "subset_seed": null,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 92928,
+        "fingerprint": "78cb251e",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_unmatched_p100_s20260910/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_matched_p100_s20260910_d20260912",
+        "arm": "matched",
+        "percent": 100,
+        "trainer_seed": 20260910,
+        "subset_seed": 20260912,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 5120,
+        "fingerprint": "347b7fbc",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p100_s20260910_d20260912/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_matched_p100_s20260910_d20260913",
+        "arm": "matched",
+        "percent": 100,
+        "trainer_seed": 20260910,
+        "subset_seed": 20260913,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 5120,
+        "fingerprint": "555e382d",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p100_s20260910_d20260913/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_matched_p100_s20260910_d20260914",
+        "arm": "matched",
+        "percent": 100,
+        "trainer_seed": 20260910,
+        "subset_seed": 20260914,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 5120,
+        "fingerprint": "09d73161",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p100_s20260910_d20260914/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_unmatched_p100_s20260911",
+        "arm": "unmatched",
+        "percent": 100,
+        "trainer_seed": 20260911,
+        "subset_seed": null,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 92928,
+        "fingerprint": "c3342c8f",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_unmatched_p100_s20260911/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_matched_p100_s20260911_d20260912",
+        "arm": "matched",
+        "percent": 100,
+        "trainer_seed": 20260911,
+        "subset_seed": 20260912,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 5120,
+        "fingerprint": "578d7016",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p100_s20260911_d20260912/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_matched_p100_s20260911_d20260913",
+        "arm": "matched",
+        "percent": 100,
+        "trainer_seed": 20260911,
+        "subset_seed": 20260913,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 5120,
+        "fingerprint": "c074a884",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p100_s20260911_d20260913/2026.09.09"
+      },
+      {
+        "run_name": "tpp10_matched_p100_s20260911_d20260914",
+        "arm": "matched",
+        "percent": 100,
+        "trainer_seed": 20260911,
+        "subset_seed": 20260914,
+        "total_steps": 2532,
+        "batch_size": 32,
+        "tokens": 165937152,
+        "support_sequences": 5120,
+        "fingerprint": "5e9f594b",
+        "output_path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p100_s20260911_d20260914/2026.09.09"
+      }
+    ],
+    "plan_sha256": "afa613b25468dd3dadff230544361d815f8524370bd33c14e6c58d3717496ba0"
+  },
+  "sources": {
+    "wikipedia_english": {
+      "uri": "gs://marin-us-central1/raw/uncheatable_eval/2026.06.28/wikipedia_english_20250901to20250914.jsonl.gz",
+      "generation": "1783764317093004",
+      "size_bytes": 987916,
+      "crc32c": "MdwhcQ=="
+    },
+    "github_python": {
+      "uri": "gs://marin-us-central1/raw/uncheatable_eval/2026.06.28/github_python_20250901to20250914.jsonl.gz",
+      "generation": "1783764316218628",
+      "size_bytes": 1191875,
+      "crc32c": "xBQztw=="
+    },
+    "github_cpp": {
+      "uri": "gs://marin-us-central1/raw/uncheatable_eval/2026.06.28/github_cpp_20250901to20250914.jsonl.gz",
+      "generation": "1783764326326792",
+      "size_bytes": 1039264,
+      "crc32c": "kCXKcA=="
+    },
+    "bbc_news": {
+      "uri": "gs://marin-us-central1/raw/uncheatable_eval/2026.06.28/bbc_news_20250901to20250914.jsonl.gz",
+      "generation": "1783764316895020",
+      "size_bytes": 1415005,
+      "crc32c": "KTLXWA=="
+    },
+    "arxiv_physics": {
+      "uri": "gs://marin-us-central1/raw/uncheatable_eval/2026.06.28/arxiv_physics_20250901to20250914.jsonl.gz",
+      "generation": "1783764312844471",
+      "size_bytes": 1747524,
+      "crc32c": "PQJ70Q=="
+    },
+    "arxiv_computer_science": {
+      "uri": "gs://marin-us-central1/raw/uncheatable_eval/2026.06.28/arxiv_computer_science_20250901to20250914.jsonl.gz",
+      "generation": "1783764309251512",
+      "size_bytes": 1662821,
+      "crc32c": "5w+xCQ=="
+    },
+    "ao3_english": {
+      "uri": "gs://marin-us-central1/raw/uncheatable_eval/2026.06.28/ao3_english_20250901to20250914.jsonl.gz",
+      "generation": "1783764309037104",
+      "size_bytes": 1896123,
+      "crc32c": "hKS2dQ=="
+    }
+  },
+  "checkpoints": {
+    "tpp10_target_p000_s20260910": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p000_s20260910/2026.09.09/checkpoints/step-11490",
+      "metadata_sha256": "ad70eb43511b131848fd20de092a1ad0a6400dfbd8dbcaf03c7acace04f1d4b1",
+      "metadata": {
+        "step": 11490,
+        "timestamp": "2026-09-11T03:17:04.403633",
+        "is_temporary": false
+      }
+    },
+    "tpp10_unmatched_p000_s20260910": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_unmatched_p000_s20260910/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "d1c2f10bfea92ece3aa17b2a97c51d8c7c87d5e7714521023e315f29041e3396",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T01:00:43.270557",
+        "is_temporary": false
+      }
+    },
+    "tpp10_unmatched_p000_s20260911": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_unmatched_p000_s20260911/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "bb3a1dde13fbd24a3459bc358d40abb95d282f090bf0f5045b0de38447b42099",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T01:00:47.277487",
+        "is_temporary": false
+      }
+    },
+    "tpp10_target_p010_s20260910": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p010_s20260910/2026.09.09/checkpoints/step-11490",
+      "metadata_sha256": "cf6bd97b49aef14a19089a1635c14c70874c91a77521a629817c644cc212599f",
+      "metadata": {
+        "step": 11490,
+        "timestamp": "2026-09-11T03:19:36.399887",
+        "is_temporary": false
+      }
+    },
+    "tpp10_unmatched_p010_s20260910": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_unmatched_p010_s20260910/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "296748d0476ac2dca74d1df59931add9f5eb0f8937ed746a55800fcfc3086266",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T01:06:35.974746",
+        "is_temporary": false
+      }
+    },
+    "tpp10_matched_p010_s20260910_d20260912": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p010_s20260910_d20260912/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "7d7df049d3e501caa48fdba62a91a8eac6bd589b5687b7a1dbdd043533362902",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T01:06:45.357899",
+        "is_temporary": false
+      }
+    },
+    "tpp10_matched_p010_s20260910_d20260913": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p010_s20260910_d20260913/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "8e1ea871db11a9d90c299f536c6e841efb6c84464b31f86385dd0291833be0f2",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T01:06:58.196138",
+        "is_temporary": false
+      }
+    },
+    "tpp10_matched_p010_s20260910_d20260914": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p010_s20260910_d20260914/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "4049c7f49bd0cefb9e7f22c3ef978dae72a4ce80c7b2b22708f23f7ee7b17ebd",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T01:12:46.638425",
+        "is_temporary": false
+      }
+    },
+    "tpp10_unmatched_p010_s20260911": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_unmatched_p010_s20260911/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "b577a129cb2d9fbc2d6ad4885abadb83af850d68f20fb4f51de61a42337af687",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T01:12:51.081206",
+        "is_temporary": false
+      }
+    },
+    "tpp10_matched_p010_s20260911_d20260912": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p010_s20260911_d20260912/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "a8683677b3673064a211e19cb44900176500599e099fe81e4ed5bcef0f0fffc0",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T01:12:49.383641",
+        "is_temporary": false
+      }
+    },
+    "tpp10_matched_p010_s20260911_d20260913": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p010_s20260911_d20260913/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "c00edd9176b75e1ab0004bca135ecaf01537d0111de9250b185b55e679b6f52a",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T01:18:45.451674",
+        "is_temporary": false
+      }
+    },
+    "tpp10_matched_p010_s20260911_d20260914": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p010_s20260911_d20260914/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "fc85c50ae5bceaa547d5cb4174ad4b73a6163101892f7e9d0b6d42e6824a95f5",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T01:19:02.893628",
+        "is_temporary": false
+      }
+    },
+    "tpp10_target_p030_s20260910": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p030_s20260910/2026.09.09/checkpoints/step-11490",
+      "metadata_sha256": "ffc13f321b8175b73bb0d4ba298b8c036a12030d8526f1b3298ce4917918f125",
+      "metadata": {
+        "step": 11490,
+        "timestamp": "2026-09-11T03:36:55.844590",
+        "is_temporary": false
+      }
+    },
+    "tpp10_unmatched_p030_s20260910": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_unmatched_p030_s20260910/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "f54572cd9e4fa303458a92576eb4bba32e1f85a6be51374aa9504f110c6e5df6",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T01:40:27.846776",
+        "is_temporary": false
+      }
+    },
+    "tpp10_matched_p030_s20260910_d20260912": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p030_s20260910_d20260912/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "e2c482548f0b74af3b4637dab872f01ad626a3b6817c263e2e8f06e2b704293c",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T01:40:14.086577",
+        "is_temporary": false
+      }
+    },
+    "tpp10_matched_p030_s20260910_d20260913": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p030_s20260910_d20260913/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "474cd5896740e6c1ee438fc0db2b6a713734d8ca2bda7b9081bf65c774503101",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T01:40:08.809476",
+        "is_temporary": false
+      }
+    },
+    "tpp10_matched_p030_s20260910_d20260914": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p030_s20260910_d20260914/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "b1b9895b0a601fa07fe60d60e10a8f60c6a9319bc6b89f41e9b99cd46745aa14",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T01:40:09.017974",
+        "is_temporary": false
+      }
+    },
+    "tpp10_unmatched_p030_s20260911": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_unmatched_p030_s20260911/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "97aa589f54fc0881d4c835024b46673cc032c34a2ec28dc6fc77ea902bbf2f3d",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T01:46:15.648745",
+        "is_temporary": false
+      }
+    },
+    "tpp10_matched_p030_s20260911_d20260912": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p030_s20260911_d20260912/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "dccf7e1e8c5d2e3a97958283a6893c84e6e332cea69c63778ba34e80440fac41",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T01:46:26.967964",
+        "is_temporary": false
+      }
+    },
+    "tpp10_matched_p030_s20260911_d20260913": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p030_s20260911_d20260913/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "294ed3ce4d5bd3b7e6b7d4e4835a2a4b23fccb475ad0aea2837cb971a0b94fd3",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T01:46:27.657399",
+        "is_temporary": false
+      }
+    },
+    "tpp10_matched_p030_s20260911_d20260914": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p030_s20260911_d20260914/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "7dbfc5cd1126a36f02f80c5cc19f0c55cd20d8b279eb7f6a5d7887ccf64653b6",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T01:46:42.482223",
+        "is_temporary": false
+      }
+    },
+    "tpp10_target_p050_s20260910": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p050_s20260910/2026.09.09/checkpoints/step-11490",
+      "metadata_sha256": "1e7902ec7f4ecc0d27a0ba8ac785b144c1227c1321e45d52f48d83a4f9d7a405",
+      "metadata": {
+        "step": 11490,
+        "timestamp": "2026-09-11T04:17:14.372598",
+        "is_temporary": false
+      }
+    },
+    "tpp10_unmatched_p050_s20260910": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_unmatched_p050_s20260910/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "68c3dfe579489a8cd69b3cc725498016d95d7334d414c70bd20710cb1df2d19e",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-09T22:47:47.501456",
+        "is_temporary": false
+      }
+    },
+    "tpp10_matched_p050_s20260910_d20260912": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p050_s20260910_d20260912/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "c11e108e20a0bdb79b183a079809297b111e8c4c29a4615ee05cb1bb90376eac",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-09T22:53:45.136011",
+        "is_temporary": false
+      }
+    },
+    "tpp10_matched_p050_s20260910_d20260913": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p050_s20260910_d20260913/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "e8db73d7c2816adb0c71afffebdb78a0a0428e79ddcce26235908a9075512fbb",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T01:52:20.904451",
+        "is_temporary": false
+      }
+    },
+    "tpp10_matched_p050_s20260910_d20260914": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p050_s20260910_d20260914/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "23052b1c9fb7540607e88cd2038caa6f6268da69dd7941c9fbadaa7c3215310e",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T01:58:10.417829",
+        "is_temporary": false
+      }
+    },
+    "tpp10_unmatched_p050_s20260911": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_unmatched_p050_s20260911/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "86791010a74be0e0b0428c602bf3a3ef1bb969759163419e1953f6a53dae86a2",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-09T22:59:46.449270",
+        "is_temporary": false
+      }
+    },
+    "tpp10_matched_p050_s20260911_d20260912": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p050_s20260911_d20260912/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "e8fa297ece654abbeb3f781e7af4687a8cc25440460cc6d0920128a094ce29d8",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-09T22:59:34.777570",
+        "is_temporary": false
+      }
+    },
+    "tpp10_matched_p050_s20260911_d20260913": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p050_s20260911_d20260913/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "e22bf896210e9bec6f8a2cb9cdf2251d0853d497534218d438d79b8225c561a3",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T01:52:29.831710",
+        "is_temporary": false
+      }
+    },
+    "tpp10_matched_p050_s20260911_d20260914": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p050_s20260911_d20260914/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "511c997c385cdce3b5ccd5cd848ee89239ae6a42f8d7e846366c2f845ea82413",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T01:52:48.087662",
+        "is_temporary": false
+      }
+    },
+    "tpp10_target_p070_s20260910": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p070_s20260910/2026.09.09/checkpoints/step-11490",
+      "metadata_sha256": "6b5bdc5b6abd5a26e2b314351990a03ebc8c599056ebb1a7050fd2bddb9fbc5d",
+      "metadata": {
+        "step": 11490,
+        "timestamp": "2026-09-11T04:15:09.410345",
+        "is_temporary": false
+      }
+    },
+    "tpp10_unmatched_p070_s20260910": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_unmatched_p070_s20260910/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "f1cc882089ca899521fe86181b3266d264cef80d0729569426c4757476217c8b",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T01:58:56.667813",
+        "is_temporary": false
+      }
+    },
+    "tpp10_matched_p070_s20260910_d20260912": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p070_s20260910_d20260912/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "62de51e3b736e9ee23b82e7e82435e082bd6582ad94f95a3ec9b6147b1e14686",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T02:03:20.572349",
+        "is_temporary": false
+      }
+    },
+    "tpp10_matched_p070_s20260910_d20260913": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p070_s20260910_d20260913/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "f2dd7e194a6bad13ddec8f2359a454fa1c3bc5f6f80cd8bf559276d22280a43a",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T02:04:28.048319",
+        "is_temporary": false
+      }
+    },
+    "tpp10_matched_p070_s20260910_d20260914": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p070_s20260910_d20260914/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "2947bde9c881ab8b570d5ea06a812c163e9612d0b772da75efa113e6fbae1304",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T02:04:54.601295",
+        "is_temporary": false
+      }
+    },
+    "tpp10_unmatched_p070_s20260911": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_unmatched_p070_s20260911/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "51bb2f266900e666d3aa1805ffd342e1d069040165103995f452ec8bbc467533",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T02:10:00.539951",
+        "is_temporary": false
+      }
+    },
+    "tpp10_matched_p070_s20260911_d20260912": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p070_s20260911_d20260912/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "be4bd7ab66fd510f8cf860c0212e4dc00a96e2690df3f71822c0a48b700afa9c",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T02:09:32.529455",
+        "is_temporary": false
+      }
+    },
+    "tpp10_matched_p070_s20260911_d20260913": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p070_s20260911_d20260913/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "2e0fc3b6c931510142a21f9ee5c1040cf6633e9f39ed563c86e0e3a5542fce3e",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T02:10:19.246194",
+        "is_temporary": false
+      }
+    },
+    "tpp10_matched_p070_s20260911_d20260914": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p070_s20260911_d20260914/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "2abc042fc868c64297dff4fa0778d0399e7c94103b2a3498575bc06bfd358998",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T02:11:02.256283",
+        "is_temporary": false
+      }
+    },
+    "tpp10_target_p090_s20260910": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p090_s20260910/2026.09.09/checkpoints/step-11490",
+      "metadata_sha256": "22deed14dc4a8ece59137bcef60ef84f1939e1ffd43184fda4551401ee8c3377",
+      "metadata": {
+        "step": 11490,
+        "timestamp": "2026-09-11T04:32:39.666405",
+        "is_temporary": false
+      }
+    },
+    "tpp10_unmatched_p090_s20260910": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_unmatched_p090_s20260910/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "71bf5e3c2c0cb74fa46ce5bf6936dbb44eed2dc002f291bef28081aa01a7ffbb",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T02:16:06.482619",
+        "is_temporary": false
+      }
+    },
+    "tpp10_matched_p090_s20260910_d20260912": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p090_s20260910_d20260912/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "8e64f42ed988f83fb2fc2e5ced3a9f4a3a2102443f00ec120e8ad42881d3ac68",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T02:16:06.427157",
+        "is_temporary": false
+      }
+    },
+    "tpp10_matched_p090_s20260910_d20260913": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p090_s20260910_d20260913/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "ff79af080dff10e2a565d50980cd72f302e70563bff0f51b2c4df6222835b428",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T02:17:04.256455",
+        "is_temporary": false
+      }
+    },
+    "tpp10_matched_p090_s20260910_d20260914": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p090_s20260910_d20260914/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "b1528fa2c796e9b7c01e4f187f340d5741aeb27aa40279a65d76d5bf42cd536e",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T02:21:41.613604",
+        "is_temporary": false
+      }
+    },
+    "tpp10_unmatched_p090_s20260911": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_unmatched_p090_s20260911/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "1f64ac0a1aa30896d7d3a7a869d80e32cc51156cf1024da8da791302d45ef7df",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T02:23:14.605845",
+        "is_temporary": false
+      }
+    },
+    "tpp10_matched_p090_s20260911_d20260912": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p090_s20260911_d20260912/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "48c52178c93f471b8f5c266396c1e2834e57f9fc5b122a8de70f6b76002eb972",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T02:22:02.211180",
+        "is_temporary": false
+      }
+    },
+    "tpp10_matched_p090_s20260911_d20260913": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p090_s20260911_d20260913/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "b7988967ce9f01cb45f33f47e30ed401d3a09f04c3191c8a243887d4a30222e7",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T02:27:54.449705",
+        "is_temporary": false
+      }
+    },
+    "tpp10_matched_p090_s20260911_d20260914": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p090_s20260911_d20260914/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "60aa134ecd7eaba893935be8796295f2d82d1004a0eeadc4470833dda3112ab2",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T02:27:48.654439",
+        "is_temporary": false
+      }
+    },
+    "tpp10_target_p100_s20260910": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p100_s20260910/2026.09.09/checkpoints/step-11490",
+      "metadata_sha256": "a88b41e92de75970421dfabcf14d5253844abbf755bcd223f911ac718e35fb56",
+      "metadata": {
+        "step": 11490,
+        "timestamp": "2026-09-10T04:14:32.384157",
+        "is_temporary": false
+      }
+    },
+    "tpp10_unmatched_p100_s20260910": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_unmatched_p100_s20260910/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "29ec00661649121f918c8b2339d37e78cd4f228ef22407c42b1aa09b34811e73",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-10T01:56:39.754400",
+        "is_temporary": false
+      }
+    },
+    "tpp10_matched_p100_s20260910_d20260912": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p100_s20260910_d20260912/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "d3a4f187d8d754b02dbac9dc62f2e3490347c0c2ba4f8926b203bcc1daa1a141",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-10T12:25:30.441042",
+        "is_temporary": false
+      }
+    },
+    "tpp10_matched_p100_s20260910_d20260913": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p100_s20260910_d20260913/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "d0a6645906c3c2d107ca3dac0bf0f8252860ccec28bd638ecb9027fa158c1f55",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T02:29:09.600393",
+        "is_temporary": false
+      }
+    },
+    "tpp10_matched_p100_s20260910_d20260914": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p100_s20260910_d20260914/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "3fe0f06bfd00174cd721dd7a9e147e1e30449c4a36dbe286b34b1bba838e64f9",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T02:33:30.158386",
+        "is_temporary": false
+      }
+    },
+    "tpp10_unmatched_p100_s20260911": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_unmatched_p100_s20260911/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "996c5c15bd0e1418eeea7d533b3cdb141b656d09c31adb60f8fb2dfd4d73256c",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T02:33:47.604049",
+        "is_temporary": false
+      }
+    },
+    "tpp10_matched_p100_s20260911_d20260912": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p100_s20260911_d20260912/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "55eafb6a07f78e92507c0579fe1ff0362ec5a9ee10ae2e6fb5e52befe0a688ac",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T02:34:54.596098",
+        "is_temporary": false
+      }
+    },
+    "tpp10_matched_p100_s20260911_d20260913": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p100_s20260911_d20260913/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "294e81012feeada5e34ab9e8d1c14b80bbee1aae596f6cce353cfe1d43082479",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T02:38:12.458866",
+        "is_temporary": false
+      }
+    },
+    "tpp10_matched_p100_s20260911_d20260914": {
+      "path": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p100_s20260911_d20260914/2026.09.09/checkpoints/step-2531",
+      "metadata_sha256": "d322386006b27b33ed239c82553b7dd5f11e864a9e027d63d8dac5b297ecd604",
+      "metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T02:39:07.372493",
+        "is_temporary": false
+      }
+    }
+  },
+  "primary_bpb": {
+    "tpp10_target_p000_s20260910": 1.2149097919464111,
+    "tpp10_unmatched_p000_s20260910": 1.794845700263977,
+    "tpp10_unmatched_p000_s20260911": 1.7665151357650757,
+    "tpp10_target_p010_s20260910": 0.88910973072052,
+    "tpp10_unmatched_p010_s20260910": 1.3014569282531738,
+    "tpp10_matched_p010_s20260910_d20260912": 1.298938512802124,
+    "tpp10_matched_p010_s20260910_d20260913": 1.2872486114501953,
+    "tpp10_matched_p010_s20260910_d20260914": 1.313508152961731,
+    "tpp10_unmatched_p010_s20260911": 1.3062336444854736,
+    "tpp10_matched_p010_s20260911_d20260912": 1.3004424571990967,
+    "tpp10_matched_p010_s20260911_d20260913": 1.303524374961853,
+    "tpp10_matched_p010_s20260911_d20260914": 1.2961043119430542,
+    "tpp10_target_p030_s20260910": 0.8211872577667236,
+    "tpp10_unmatched_p030_s20260910": 1.188162088394165,
+    "tpp10_matched_p030_s20260910_d20260912": 1.1967363357543945,
+    "tpp10_matched_p030_s20260910_d20260913": 1.2038031816482544,
+    "tpp10_matched_p030_s20260910_d20260914": 1.2042909860610962,
+    "tpp10_unmatched_p030_s20260911": 1.1938754320144653,
+    "tpp10_matched_p030_s20260911_d20260912": 1.2014838457107544,
+    "tpp10_matched_p030_s20260911_d20260913": 1.1960041522979736,
+    "tpp10_matched_p030_s20260911_d20260914": 1.191821813583374,
+    "tpp10_target_p050_s20260910": 0.7942407727241516,
+    "tpp10_unmatched_p050_s20260910": 1.127394676208496,
+    "tpp10_matched_p050_s20260910_d20260912": 1.1596766710281372,
+    "tpp10_matched_p050_s20260910_d20260913": 1.1649473905563354,
+    "tpp10_matched_p050_s20260910_d20260914": 1.1544628143310547,
+    "tpp10_unmatched_p050_s20260911": 1.1253341436386108,
+    "tpp10_matched_p050_s20260911_d20260912": 1.1570158004760742,
+    "tpp10_matched_p050_s20260911_d20260913": 1.1571006774902344,
+    "tpp10_matched_p050_s20260911_d20260914": 1.1592200994491577,
+    "tpp10_target_p070_s20260910": 0.7843883633613586,
+    "tpp10_unmatched_p070_s20260910": 1.097289800643921,
+    "tpp10_matched_p070_s20260910_d20260912": 1.169268250465393,
+    "tpp10_matched_p070_s20260910_d20260913": 1.1704082489013672,
+    "tpp10_matched_p070_s20260910_d20260914": 1.157580852508545,
+    "tpp10_unmatched_p070_s20260911": 1.0934481620788574,
+    "tpp10_matched_p070_s20260911_d20260912": 1.170399785041809,
+    "tpp10_matched_p070_s20260911_d20260913": 1.1653521060943604,
+    "tpp10_matched_p070_s20260911_d20260914": 1.1696195602416992,
+    "tpp10_target_p090_s20260910": 0.7987733483314514,
+    "tpp10_unmatched_p090_s20260910": 1.0712764263153076,
+    "tpp10_matched_p090_s20260910_d20260912": 1.2180753946304321,
+    "tpp10_matched_p090_s20260910_d20260913": 1.2166931629180908,
+    "tpp10_matched_p090_s20260910_d20260914": 1.2111953496932983,
+    "tpp10_unmatched_p090_s20260911": 1.0738755464553833,
+    "tpp10_matched_p090_s20260911_d20260912": 1.224111795425415,
+    "tpp10_matched_p090_s20260911_d20260913": 1.225067138671875,
+    "tpp10_matched_p090_s20260911_d20260914": 1.2032636404037476,
+    "tpp10_target_p100_s20260910": 0.820745587348938,
+    "tpp10_unmatched_p100_s20260910": 1.0613559484481812,
+    "tpp10_matched_p100_s20260910_d20260912": 1.3144932985305786,
+    "tpp10_matched_p100_s20260910_d20260913": 1.3024628162384033,
+    "tpp10_matched_p100_s20260910_d20260914": 1.2785142660140991,
+    "tpp10_unmatched_p100_s20260911": 1.0621100664138794,
+    "tpp10_matched_p100_s20260911_d20260912": 1.302540898323059,
+    "tpp10_matched_p100_s20260911_d20260913": 1.3198044300079346,
+    "tpp10_matched_p100_s20260911_d20260914": 1.274735927581787
+  },
+  "metric": "eval/uncheatable_eval/macro_bpb",
+  "aggregation": "Equal arithmetic mean of the seven component BPBs",
+  "seq_len": 2048,
+  "max_eval_batches": null,
+  "code_sha256": {
+    "experiments/domain_phase_mix/evaluate_starcoder_tpp10_uncheatable.py": "68f7ffa6ca686613937f7b8b9cf0d63e9246a9644242705c970071a1e4ae2513",
+    "experiments/domain_phase_mix/prepare_starcoder_tpp10.py": "3dcd74598da46f09dc978ee0a6b0ddee62a820b6906c4c184bf9148883079105",
+    "experiments/domain_phase_mix/starcoder_tpp10.py": "1c7cc50019f3e99234fb7b3f5668ae2a07b9381ef1fcabfa1aa8011fe98d6473",
+    "lib/levanter/src/levanter/eval.py": "b67cc96335f667982a0fe43618215734140c28392be215a88177979c712dee2c",
+    "lib/levanter/src/levanter/checkpoint.py": "ef5b0ce804b76f95f55462cbbcd8fa6a5e608c2ac37d92320333a04af782f1e4",
+    "lib/levanter/src/levanter/trainer.py": "c45bd422f0ae23a4efd45610becaa8409d101b4bcaa396fca1e1348847eca03c",
+    "lib/levanter/src/levanter/data/text/datasets.py": "c3ea1ea1f03ac5b96f81c208ce81fd50d5ebd9a74c57cb31ec02619fb4188948",
+    "lib/levanter/src/levanter/data/text/formats.py": "cd9371c30025fa0ed2c9cb72215f1503e8d7ffd2e71a336866a2986f7126c529",
+    "lib/levanter/src/levanter/tokenizers.py": "c49f9f74dc25e683ee9dba413c4008ecbc78a4bac864cba4647a129d6eb0dcb3",
+    "lib/levanter/src/levanter/models/qwen.py": "241b086569a8aa23b3a006a4be3ebc9142c45cdda8eaef81a19dabc77526b66b",
+    "lib/levanter/src/levanter/models/llama.py": "f4ebbfbff8708d76e300d70e70c1393ff9553e46c251c38de3d71cd5b948de57",
+    "uv.lock": "347c4bb876ef55f60ecd5cf137d22016aaa742387717d20e296ca0ff2cc05dd5"
+  },
+  "tokenizer_pins": {
+    "tokenizer_repo": "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T",
+    "tokenizer_revision": "59f6f375b26bde864a6ca194a9a3044570490064",
+    "vocabulary_size": 32000,
+    "files_sha256": {
+      "sources.json": "9f9b80e55ca9d2d9decc3125336000713c81e941b8f4c08b61f898566259e44a",
+      "tokenizer_config.json": "f514e7c3008881b6ba7e6a0cdb44c71ce47dc335920dac143ae7bc788197e53a",
+      "special_tokens_map.json": "6fa06efa2785e450051989a6f8fb4416b10149ded485ddd3f127a40734f5cfd0",
+      "tokenizer.json": "bcd04f0eadf90287bd26e1a183ac487d8a141b09b06aecb7725bbdd343640f2e",
+      "tokenizer.model": "9e556afd44213b6bd1be2b850ebbbd98f5481437a8021afaf58ee7fb1818d347"
+    }
+  },
+  "paloma_tolerance": 5e-05,
+  "spec_sha256": "22791292a73b3ebcc4490c2f5ae3d355ed8f921bd145a3e26335dc5f015e42cf"
+}

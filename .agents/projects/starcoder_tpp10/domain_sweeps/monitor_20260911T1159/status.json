@@ -1,0 +1,23 @@
+{
+  "checked_at": "2026-09-11T12:04:28.355433+00:00",
+  "survey": {
+    "parent": "/calvinxu/tpp10-domain-sweeps",
+    "state": "running",
+    "wikipedia_raw": "verified complete",
+    "wikipedia_parent": "active, fresh GCS writes at 12:00 UTC",
+    "finemath_job": "running",
+    "finemath_task": "pending automatic retry after scheduler preemption",
+    "finemath_verified_parts": 3,
+    "finemath_verified_tokens": 35684352,
+    "training_complete": 0
+  },
+  "refinement": {
+    "parent": "/calvinxu/starcoder-tpp10-refinement-batch-recovery",
+    "state": "pending CPU capacity",
+    "retained_successes": 11,
+    "unfinished_points": 34,
+    "live_child_band_verified": false
+  },
+  "repairs": [],
+  "manual_resubmissions": 0
+}

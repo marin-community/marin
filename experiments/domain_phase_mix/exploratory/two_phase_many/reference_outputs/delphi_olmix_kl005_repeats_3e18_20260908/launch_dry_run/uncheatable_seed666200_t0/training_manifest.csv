@@ -1,0 +1,2 @@
+run_order,run_name,candidate_id,target,epoch_cap,aliases,run_id,data_seed,trainer_seed,train_steps,expected_checkpoint_step,tpu_type,tpu_region,tpu_zone,fit_panel_max_materialized_epoch,runtime_max_simulated_epoch
+0,olmixrp_uncheatable_seed666200_t0_olmix_u_kl0p05_cap04,olmix_u_kl0p05_cap04,uncheatable,4,olmix_u_kl0p05_cap04,7405000,666200,0,3007,3006,v6e-8,us-east5,us-east5-b,3.990833755246551,3.990833755246551

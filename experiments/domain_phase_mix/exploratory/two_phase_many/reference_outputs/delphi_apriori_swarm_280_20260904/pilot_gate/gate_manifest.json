@@ -1,0 +1,23 @@
+{
+  "created_at": "2026-09-06T02:58:07.688496+00:00",
+  "decision": "stop_after_pilot",
+  "input_sha256": {
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_apriori_swarm_280_20260904/pilot_materialization/heldout_results.csv": "8292b8c9762d9964be8112ff2235135f500b9bc0049d88425e922f16cf12bcc1",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_apriori_swarm_280_20260904/swarm_mixtures.csv": "c5ec2b0ae1b5c68dc44f6ede1a5caa1bd2918f5bfd9f6d0f23be508637856bd6"
+  },
+  "metric_sigmas_bpb": {
+    "table9": 0.008531955172603958,
+    "uncheatable": 0.0006355063959804627
+  },
+  "required_table9_pass_count": 2,
+  "rule": {
+    "continuation": "at least two of four targets pass on Table 9",
+    "decision_metric": "table9_macro_bpb",
+    "dose_monotonicity": "abs(mean quarter-pool delta) >= abs(mean half-pool delta)",
+    "same_sign": "quarter-pool paired deltas have the same nonzero sign in both blocks",
+    "sigma": "within-anchor residual SD of 3 proportional and 2 anchor-B full-support controls, pooled with 3 df",
+    "target_pass": "all three criteria at either anchor",
+    "threshold": "abs(mean quarter-pool paired delta over blocks 0 and 1) > 2*sigma"
+  },
+  "table9_pass_count": 0
+}

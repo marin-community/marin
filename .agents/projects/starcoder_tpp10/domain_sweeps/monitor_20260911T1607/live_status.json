@@ -1,0 +1,103 @@
+{
+  "checked_at": "2026-09-11T16:07:47.000395+00:00",
+  "new_refinement_completed": [],
+  "rows": [
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-cffa480f",
+      "state": "JOB_STATE_RUNNING",
+      "task_state_counts": {
+        "pending": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 1,
+      "pending_reason": "",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "run_name": "tpp10_matched_p080_s20260911_d20260914"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-e24265b9",
+      "state": "JOB_STATE_RUNNING",
+      "task_state_counts": {
+        "pending": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 1,
+      "pending_reason": "",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "run_name": "tpp10_target_p080_s20260910"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-aa2a4590",
+      "state": "JOB_STATE_RUNNING",
+      "task_state_counts": {
+        "running": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 2,
+      "pending_reason": "",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "run_name": "tpp10_target_p065_s20260910",
+      "last_training_progress": "[16:07:12] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-aa2a4590/0 attempt=2 | I20260911 16:07:09 139987065164608 tqdm_loggable.tqdm_logging Progress on:train 2.30kit/11.5kit rate:1.4it/s remaining:1:50:06 elapsed:20:12 postfix:loss=1.94",
+      "last_log": "[16:07:26] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-aa2a4590/0 attempt=2 | I20260911 16:07:25 139987065164608 levanter.eval paloma/dolma_100_programing_languages-tpp10 loss: 1.614"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-e7af7ef9",
+      "state": "JOB_STATE_RUNNING",
+      "task_state_counts": {
+        "running": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 3,
+      "pending_reason": "",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "run_name": "tpp10_target_p060_s20260910",
+      "last_training_progress": "[16:06:46] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-e7af7ef9/0 attempt=3 | I20260911 16:06:40 139945362375488 tqdm_loggable.tqdm_logging Progress on:train 6.98kit/11.5kit rate:1.4it/s remaining:54:44 elapsed:20:17 postfix:loss=2.25",
+      "last_log": "[16:06:46] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-e7af7ef9/0 attempt=3 | I20260911 16:06:43 139617750292160 levanter.checkpoint Deleted old checkpoint from gs://marin-us-central1/tmp/ttl=14d/checkpoints-temp/marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p060_s20260910/2026.09.09/checkpoints/step-6145 in 0.15 seconds"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d",
+      "state": "JOB_STATE_RUNNING",
+      "task_state_counts": {
+        "pending": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 7,
+      "pending_reason": "",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "run_name": "tpp10_target_p055_s20260910"
+    },
+    {
+      "job_id": "/calvinxu/tpp10-domain-sweeps",
+      "state": "JOB_STATE_RUNNING",
+      "task_state_counts": {
+        "running": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 0,
+      "pending_reason": "",
+      "priority_band": "PRIORITY_BAND_INTERACTIVE"
+    },
+    {
+      "job_id": "/calvinxu/tpp10-domain-sweeps/prepare_subset-1430c306",
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 0,
+      "pending_reason": "Scheduler: Insufficient CPU (need 2 cores, available 0 cores) - 3 worker(s)\nInsufficient memory (need 8.0GB, available 4.1GB) - 3 worker(s)\n(with constraints=['region', 'zone', 'preemptible'])\n\nAutoscaler: Unsatisfied autoscaler demand: no_capacity: cpu_vm_e2_highmem_2_ondemand-us-central1-a=at_max_slices",
+      "priority_band": "PRIORITY_BAND_INTERACTIVE"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery",
+      "state": "JOB_STATE_RUNNING",
+      "task_state_counts": {
+        "running": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 0,
+      "pending_reason": "",
+      "priority_band": "PRIORITY_BAND_INTERACTIVE"
+    }
+  ]
+}

@@ -1,0 +1,260 @@
+{
+  "summaries": {
+    "wikipedia": {
+      "math500": {
+        "verified_points": 8,
+        "complete_grid": true,
+        "minimum": {
+          "percent": 30,
+          "epochs": 4.768359375,
+          "loss": 3.0528039932250977,
+          "perplexity": 21.174634791296235,
+          "run_name": "tpp10_wikipedia_matched_p030_s20260910"
+        },
+        "tied_minima": [
+          {
+            "percent": 30,
+            "epochs": 4.768359375,
+            "loss": 3.0528039932250977,
+            "perplexity": 21.174634791296235,
+            "run_name": "tpp10_wikipedia_matched_p030_s20260910"
+          }
+        ],
+        "at_prespecified_grid_boundary": false,
+        "second_best": {
+          "percent": 20,
+          "epochs": 3.1619140625,
+          "loss": 3.085094690322876,
+          "perplexity": 21.869537577608774,
+          "run_name": "tpp10_wikipedia_matched_p020_s20260910"
+        },
+        "second_best_loss_gap": 0.03229069709777832,
+        "second_best_perplexity_gap": 0.6949027863125394,
+        "adjacent_grid_points": [
+          {
+            "percent": 20,
+            "epochs": 3.1619140625,
+            "status": "verified",
+            "loss_gap_from_minimum": 0.03229069709777832,
+            "perplexity_gap_from_minimum": 0.6949027863125394
+          },
+          {
+            "percent": 50,
+            "epochs": 7.937890625,
+            "status": "verified",
+            "loss_gap_from_minimum": 0.05314016342163086,
+            "perplexity_gap_from_minimum": 1.1556575280619086
+          }
+        ],
+        "interpretation": "Minimum among verified grid points. A boundary minimum does not establish an interior turnover or locate the optimum beyond the sampled range. One checkpoint per mixture; gaps have no seed uncertainty."
+      },
+      "gsm8k": {
+        "verified_points": 8,
+        "complete_grid": true,
+        "minimum": {
+          "percent": 20,
+          "epochs": 3.1619140625,
+          "loss": 2.9245293140411377,
+          "perplexity": 18.62545724518157,
+          "run_name": "tpp10_wikipedia_matched_p020_s20260910"
+        },
+        "tied_minima": [
+          {
+            "percent": 20,
+            "epochs": 3.1619140625,
+            "loss": 2.9245293140411377,
+            "perplexity": 18.62545724518157,
+            "run_name": "tpp10_wikipedia_matched_p020_s20260910"
+          }
+        ],
+        "at_prespecified_grid_boundary": false,
+        "second_best": {
+          "percent": 50,
+          "epochs": 7.937890625,
+          "loss": 2.9598138332366943,
+          "perplexity": 19.294379448957088,
+          "run_name": "tpp10_wikipedia_matched_p050_s20260910"
+        },
+        "second_best_loss_gap": 0.03528451919555664,
+        "second_best_perplexity_gap": 0.6689222037755194,
+        "adjacent_grid_points": [
+          {
+            "percent": 10,
+            "epochs": 1.5763671875,
+            "status": "verified",
+            "loss_gap_from_minimum": 0.06416964530944824,
+            "perplexity_gap_from_minimum": 1.2343699881383934
+          },
+          {
+            "percent": 30,
+            "epochs": 4.768359375,
+            "status": "verified",
+            "loss_gap_from_minimum": 0.06273889541625977,
+            "perplexity_gap_from_minimum": 1.2059758597373396
+          }
+        ],
+        "interpretation": "Minimum among verified grid points. A boundary minimum does not establish an interior turnover or locate the optimum beyond the sampled range. One checkpoint per mixture; gaps have no seed uncertainty."
+      }
+    },
+    "finemath_3plus": {
+      "math500": {
+        "verified_points": 8,
+        "complete_grid": true,
+        "minimum": {
+          "percent": 70,
+          "epochs": 11.098046875,
+          "loss": 2.0194246768951416,
+          "perplexity": 7.53398920849668,
+          "run_name": "tpp10_finemath_3plus_matched_p070_s20260910"
+        },
+        "tied_minima": [
+          {
+            "percent": 70,
+            "epochs": 11.098046875,
+            "loss": 2.0194246768951416,
+            "perplexity": 7.53398920849668,
+            "run_name": "tpp10_finemath_3plus_matched_p070_s20260910"
+          }
+        ],
+        "at_prespecified_grid_boundary": false,
+        "second_best": {
+          "percent": 50,
+          "epochs": 7.937890625,
+          "loss": 2.065347909927368,
+          "perplexity": 7.8880417483525225,
+          "run_name": "tpp10_finemath_3plus_matched_p050_s20260910"
+        },
+        "second_best_loss_gap": 0.04592323303222656,
+        "second_best_perplexity_gap": 0.35405253985584206,
+        "adjacent_grid_points": [
+          {
+            "percent": 50,
+            "epochs": 7.937890625,
+            "status": "verified",
+            "loss_gap_from_minimum": 0.04592323303222656,
+            "perplexity_gap_from_minimum": 0.35405253985584206
+          },
+          {
+            "percent": 100,
+            "epochs": 15.825,
+            "status": "verified",
+            "loss_gap_from_minimum": 0.07647895812988281,
+            "perplexity_gap_from_minimum": 0.598797513209715
+          }
+        ],
+        "interpretation": "Minimum among verified grid points. A boundary minimum does not establish an interior turnover or locate the optimum beyond the sampled range. One checkpoint per mixture; gaps have no seed uncertainty."
+      },
+      "gsm8k": {
+        "verified_points": 8,
+        "complete_grid": true,
+        "minimum": {
+          "percent": 70,
+          "epochs": 11.098046875,
+          "loss": 2.4371044635772705,
+          "perplexity": 11.439868184796492,
+          "run_name": "tpp10_finemath_3plus_matched_p070_s20260910"
+        },
+        "tied_minima": [
+          {
+            "percent": 70,
+            "epochs": 11.098046875,
+            "loss": 2.4371044635772705,
+            "perplexity": 11.439868184796492,
+            "run_name": "tpp10_finemath_3plus_matched_p070_s20260910"
+          }
+        ],
+        "at_prespecified_grid_boundary": false,
+        "second_best": {
+          "percent": 50,
+          "epochs": 7.937890625,
+          "loss": 2.488788366317749,
+          "perplexity": 12.046671121787156,
+          "run_name": "tpp10_finemath_3plus_matched_p050_s20260910"
+        },
+        "second_best_loss_gap": 0.051683902740478516,
+        "second_best_perplexity_gap": 0.6068029369906647,
+        "adjacent_grid_points": [
+          {
+            "percent": 50,
+            "epochs": 7.937890625,
+            "status": "verified",
+            "loss_gap_from_minimum": 0.051683902740478516,
+            "perplexity_gap_from_minimum": 0.6068029369906647
+          },
+          {
+            "percent": 100,
+            "epochs": 15.825,
+            "status": "verified",
+            "loss_gap_from_minimum": 0.12078523635864258,
+            "perplexity_gap_from_minimum": 1.4686794583524314
+          }
+        ],
+        "interpretation": "Minimum among verified grid points. A boundary minimum does not establish an interior turnover or locate the optimum beyond the sampled range. One checkpoint per mixture; gaps have no seed uncertainty."
+      }
+    }
+  },
+  "cross_choice_regrets": {
+    "math500": {
+      "status": "complete",
+      "comparisons": [
+        {
+          "evaluated_training_domain": "wikipedia",
+          "selection_training_domain": "finemath_3plus",
+          "selected_percent": 70,
+          "selected_epochs": 11.098046875,
+          "own_best_percent": 30,
+          "own_best_epochs": 4.768359375,
+          "loss_at_other_choice": 3.245333671569824,
+          "perplexity_at_other_choice": 25.670274072012607,
+          "loss_regret": 0.19252967834472656,
+          "perplexity_regret": 4.495639280716372,
+          "relative_perplexity_increase": 0.21231248260131919
+        },
+        {
+          "evaluated_training_domain": "finemath_3plus",
+          "selection_training_domain": "wikipedia",
+          "selected_percent": 30,
+          "selected_epochs": 4.768359375,
+          "own_best_percent": 70,
+          "own_best_epochs": 11.098046875,
+          "loss_at_other_choice": 2.181729555130005,
+          "perplexity_at_other_choice": 8.861619671971141,
+          "loss_regret": 0.16230487823486328,
+          "perplexity_regret": 1.3276304634744607,
+          "relative_perplexity_increase": 0.17621879016991238
+        }
+      ]
+    },
+    "gsm8k": {
+      "status": "complete",
+      "comparisons": [
+        {
+          "evaluated_training_domain": "wikipedia",
+          "selection_training_domain": "finemath_3plus",
+          "selected_percent": 70,
+          "selected_epochs": 11.098046875,
+          "own_best_percent": 20,
+          "own_best_epochs": 3.1619140625,
+          "loss_at_other_choice": 3.1810760498046875,
+          "perplexity_at_other_choice": 24.072642983188135,
+          "loss_regret": 0.2565467357635498,
+          "perplexity_regret": 5.447185738006567,
+          "relative_perplexity_increase": 0.2924591684542812
+        },
+        {
+          "evaluated_training_domain": "finemath_3plus",
+          "selection_training_domain": "wikipedia",
+          "selected_percent": 20,
+          "selected_epochs": 3.1619140625,
+          "own_best_percent": 70,
+          "own_best_epochs": 11.098046875,
+          "loss_at_other_choice": 2.6788089275360107,
+          "perplexity_at_other_choice": 14.567731734362782,
+          "loss_regret": 0.24170446395874023,
+          "perplexity_regret": 3.1278635495662908,
+          "relative_perplexity_increase": 0.27341779634517116
+        }
+      ]
+    }
+  }
+}

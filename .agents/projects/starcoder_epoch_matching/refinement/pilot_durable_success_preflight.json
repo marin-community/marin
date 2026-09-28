@@ -1,0 +1,67 @@
+{
+  "checked_at": "2026-09-09T04:34:50.095694+00:00",
+  "source": "Direct regional GCS .executor_status reads",
+  "all_ten_success": true,
+  "runs": [
+    {
+      "run_name": "epmatch_unmatched_c000_s20260711",
+      "status_uri": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_unmatched_c000_s20260711/2026.09.08/.executor_status",
+      "status": "SUCCESS",
+      "sha256": "e2a8aca48c5b24df14c6e0ab0b30df7ed50fa97bc22fd706c71a7eebe96a8b67"
+    },
+    {
+      "run_name": "epmatch_unmatched_c032_s20260711",
+      "status_uri": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_unmatched_c032_s20260711/2026.09.08/.executor_status",
+      "status": "SUCCESS",
+      "sha256": "e2a8aca48c5b24df14c6e0ab0b30df7ed50fa97bc22fd706c71a7eebe96a8b67"
+    },
+    {
+      "run_name": "epmatch_matched_c032_s20260711",
+      "status_uri": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_matched_c032_s20260711/2026.09.08/.executor_status",
+      "status": "SUCCESS",
+      "sha256": "e2a8aca48c5b24df14c6e0ab0b30df7ed50fa97bc22fd706c71a7eebe96a8b67"
+    },
+    {
+      "run_name": "epmatch_unmatched_c057_s20260711",
+      "status_uri": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_unmatched_c057_s20260711/2026.09.08/.executor_status",
+      "status": "SUCCESS",
+      "sha256": "e2a8aca48c5b24df14c6e0ab0b30df7ed50fa97bc22fd706c71a7eebe96a8b67"
+    },
+    {
+      "run_name": "epmatch_matched_c057_s20260711",
+      "status_uri": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_matched_c057_s20260711/2026.09.08/.executor_status",
+      "status": "SUCCESS",
+      "sha256": "e2a8aca48c5b24df14c6e0ab0b30df7ed50fa97bc22fd706c71a7eebe96a8b67"
+    },
+    {
+      "run_name": "epmatch_unmatched_c109_s20260711",
+      "status_uri": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_unmatched_c109_s20260711/2026.09.08/.executor_status",
+      "status": "SUCCESS",
+      "sha256": "e2a8aca48c5b24df14c6e0ab0b30df7ed50fa97bc22fd706c71a7eebe96a8b67"
+    },
+    {
+      "run_name": "epmatch_matched_c109_s20260711",
+      "status_uri": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_matched_c109_s20260711/2026.09.08/.executor_status",
+      "status": "SUCCESS",
+      "sha256": "e2a8aca48c5b24df14c6e0ab0b30df7ed50fa97bc22fd706c71a7eebe96a8b67"
+    },
+    {
+      "run_name": "epmatch_unmatched_c124_s20260711",
+      "status_uri": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_unmatched_c124_s20260711/2026.09.08/.executor_status",
+      "status": "SUCCESS",
+      "sha256": "e2a8aca48c5b24df14c6e0ab0b30df7ed50fa97bc22fd706c71a7eebe96a8b67"
+    },
+    {
+      "run_name": "epmatch_matched_c124_s20260711",
+      "status_uri": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_matched_c124_s20260711/2026.09.08/.executor_status",
+      "status": "SUCCESS",
+      "sha256": "e2a8aca48c5b24df14c6e0ab0b30df7ed50fa97bc22fd706c71a7eebe96a8b67"
+    },
+    {
+      "run_name": "epmatch_target_c124_s20260711",
+      "status_uri": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_target_c124_s20260711/2026.09.08/.executor_status",
+      "status": "SUCCESS",
+      "sha256": "e2a8aca48c5b24df14c6e0ab0b30df7ed50fa97bc22fd706c71a7eebe96a8b67"
+    }
+  ]
+}

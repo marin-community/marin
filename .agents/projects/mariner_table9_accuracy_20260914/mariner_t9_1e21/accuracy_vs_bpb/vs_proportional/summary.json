@@ -1,0 +1,156 @@
+{
+  "baseline": "proportional",
+  "candidate": "mariner",
+  "overall": {
+    "scored": 34,
+    "decided": 33,
+    "agree": 25,
+    "bpb_improved": 21,
+    "bpb_improved_and_accuracy_improved": 19,
+    "spearman": 0.7650114591291061,
+    "pearson": 0.8039909134760381
+  },
+  "by_group": {
+    "basic skills": {
+      "scored": 6,
+      "decided": 6,
+      "agree": 5,
+      "bpb_improved": 4,
+      "bpb_improved_and_accuracy_improved": 4,
+      "spearman": 0.8857142857142858,
+      "pearson": 0.8981543128481169
+    },
+    "code": {
+      "scored": 2,
+      "decided": 2,
+      "agree": 2,
+      "bpb_improved": 2,
+      "bpb_improved_and_accuracy_improved": 2
+    },
+    "math": {
+      "scored": 7,
+      "decided": 7,
+      "agree": 7,
+      "bpb_improved": 7,
+      "bpb_improved_and_accuracy_improved": 7,
+      "spearman": -0.6785714285714287,
+      "pearson": -0.5499361943223855
+    },
+    "mmlu": {
+      "scored": 4,
+      "decided": 4,
+      "agree": 2,
+      "bpb_improved": 2,
+      "bpb_improved_and_accuracy_improved": 2,
+      "spearman": 0.39999999999999997,
+      "pearson": 0.19417661796429297
+    },
+    "qa": {
+      "scored": 15,
+      "decided": 14,
+      "agree": 9,
+      "bpb_improved": 6,
+      "bpb_improved_and_accuracy_improved": 4,
+      "spearman": 0.43214285714285705,
+      "pearson": 0.3678823824765222
+    }
+  },
+  "native_macro_bpb": {
+    "proportional": 0.6730906490967455,
+    "mariner": 0.5893909587432079
+  },
+  "aggregate": {
+    "scored_components": 34,
+    "all_scored": {
+      "components": 34,
+      "accuracy_pct": {
+        "proportional": 42.928091958733845,
+        "mariner": 46.755512694028134
+      },
+      "bpb": {
+        "proportional": 0.7518069978942566,
+        "mariner": 0.6911658922746111
+      }
+    },
+    "basic skills": {
+      "components": 6,
+      "accuracy_pct": {
+        "proportional": 68.16585134155945,
+        "mariner": 78.51351910068733
+      },
+      "bpb": {
+        "proportional": 0.743475236778575,
+        "mariner": 0.5853576857530124
+      }
+    },
+    "code": {
+      "components": 2,
+      "accuracy_pct": {
+        "proportional": 6.248780487804878,
+        "mariner": 17.63658536585366
+      },
+      "bpb": {
+        "proportional": 0.5727839075288361,
+        "mariner": 0.4778141871280977
+      }
+    },
+    "math": {
+      "components": 7,
+      "accuracy_pct": {
+        "proportional": 3.716680028653942,
+        "mariner": 9.88895935435365
+      },
+      "bpb": {
+        "proportional": 0.6321269063190259,
+        "mariner": 0.5015707327393647
+      }
+    },
+    "mmlu": {
+      "components": 4,
+      "accuracy_pct": {
+        "proportional": 34.855925216797935,
+        "mariner": 36.75005936620367
+      },
+      "bpb": {
+        "proportional": 0.8986866654103621,
+        "mariner": 0.8630926629545429
+      }
+    },
+    "qa": {
+      "components": 15,
+      "accuracy_pct": {
+        "proportional": 58.17479976694767,
+        "mariner": 57.80734622105567
+      },
+      "bpb": {
+        "proportional": 0.7956922457867317,
+        "mariner": 0.8045666711712524
+      }
+    },
+    "unscored_bpb_only": {
+      "components": [
+        "mt_mbpp_bash",
+        "mt_mbpp_c",
+        "mt_mbpp_cpp",
+        "mt_mbpp_csharp",
+        "mt_mbpp_go",
+        "mt_mbpp_haskell",
+        "mt_mbpp_java",
+        "mt_mbpp_javascript",
+        "mt_mbpp_matlab",
+        "mt_mbpp_php",
+        "mt_mbpp_python",
+        "mt_mbpp_r",
+        "mt_mbpp_ruby",
+        "mt_mbpp_rust",
+        "mt_mbpp_scala",
+        "mt_mbpp_swift",
+        "mt_mbpp_typescript"
+      ],
+      "bpb": {
+        "proportional": 0.5156579515017236,
+        "mariner": 0.38584109168040126
+      }
+    }
+  }
+}

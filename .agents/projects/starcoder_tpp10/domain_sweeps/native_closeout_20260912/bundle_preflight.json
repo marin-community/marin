@@ -1,0 +1,39 @@
+{
+  "bundle_bytes": 24469357,
+  "bundle_sha256": "2b6de1d1a625adc35feeba1704f542ba9df21b29ac239dfe2a50c94454bfb7d4",
+  "verified_pins": {
+    "experiments/domain_phase_mix/evaluate_starcoder_tpp10_uncheatable.py": "e23c17714ba2fcc80c7733735d84ad867efdc10695557dbedef33f8e033e205d",
+    "experiments/domain_phase_mix/prepare_starcoder_tpp10.py": "3dcd74598da46f09dc978ee0a6b0ddee62a820b6906c4c184bf9148883079105",
+    "experiments/domain_phase_mix/starcoder_tpp10.py": "1c7cc50019f3e99234fb7b3f5668ae2a07b9381ef1fcabfa1aa8011fe98d6473",
+    "lib/levanter/src/levanter/eval.py": "0d7b85d886d748f97fa41e4e7e2afcf4ccd2d07bceba01ada5b8c9c306e4e64e",
+    "lib/levanter/src/levanter/checkpoint.py": "ef5b0ce804b76f95f55462cbbcd8fa6a5e608c2ac37d92320333a04af782f1e4",
+    "lib/levanter/src/levanter/trainer.py": "c45bd422f0ae23a4efd45610becaa8409d101b4bcaa396fca1e1348847eca03c",
+    "lib/levanter/src/levanter/data/text/datasets.py": "c3ea1ea1f03ac5b96f81c208ce81fd50d5ebd9a74c57cb31ec02619fb4188948",
+    "lib/levanter/src/levanter/data/text/formats.py": "cd9371c30025fa0ed2c9cb72215f1503e8d7ffd2e71a336866a2986f7126c529",
+    "lib/levanter/src/levanter/tokenizers.py": "c49f9f74dc25e683ee9dba413c4008ecbc78a4bac864cba4647a129d6eb0dcb3",
+    "lib/levanter/src/levanter/models/qwen.py": "241b086569a8aa23b3a006a4be3ebc9142c45cdda8eaef81a19dabc77526b66b",
+    "lib/levanter/src/levanter/models/llama.py": "f4ebbfbff8708d76e300d70e70c1393ff9553e46c251c38de3d71cd5b948de57",
+    "uv.lock": "347c4bb876ef55f60ecd5cf137d22016aaa742387717d20e296ca0ff2cc05dd5",
+    "experiments/domain_phase_mix/repair_tpp10_evaluation.py": "6708c00d9a68c082121610f89b847de3143879366d2d9297032b44db1074aa38",
+    ".agents/projects/starcoder_tpp10/domain_sweeps/repairs_20260911/legacy_levanter_eval.py": "b67cc96335f667982a0fe43618215734140c28392be215a88177979c712dee2c",
+    "lib/levanter/src/levanter/utils/stat_utils.py": "5ca79fea0edd5db0c9fb4abbb412902b6d640403f9f42a82f7f6b55f67b862e2",
+    "lib/levanter/src/levanter/utils/hf_utils.py": "a379f5786a23ba2603bb5354650d6bc0146bd7fbfc95dbd4e00939f4a44b367f",
+    ".agents/projects/starcoder_tpp10/domain_sweeps/target_completion_20260912/plan.json": "a1a497279517b75494a75eeb56d686704a2d2f564b99ac87e94a38f7f396bda2",
+    "experiments/domain_phase_mix/closeout_tpp10_native_results.py": "f1f14ff8d768ba9695836d8c677cd970d69efa0a9a9ad26d5a02256a4ae60fc3"
+  },
+  "includes": [
+    ".agents/projects/starcoder_tpp10/domain_sweeps/repairs_20260911/plan.json",
+    ".agents/projects/starcoder_tpp10/domain_sweeps/repairs_20260911/legacy_levanter_eval.py",
+    ".agents/projects/starcoder_tpp10/domain_sweeps/target_completion_20260912/plan.json",
+    "experiments/domain_phase_mix/tpp10_domain_sweeps_assets/*",
+    "experiments/domain_phase_mix/starcoder_tpp10_assets/*"
+  ],
+  "excludes": [
+    "^(checkpoints|cache|logs|wandb|tmp)/",
+    "^experiments/domain_phase_mix/exploratory/.*(?<!\\.py)$",
+    "^\\.agents/(?!projects/starcoder_tpp10/domain_sweeps/(repairs_20260911/(plan\\.json|legacy_levanter_eval\\.py)|target_completion_20260912/plan\\.json)$).*",
+    "^(docs|tests)/",
+    "^lib/[^/]+/tests/",
+    "^experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/"
+  ]
+}

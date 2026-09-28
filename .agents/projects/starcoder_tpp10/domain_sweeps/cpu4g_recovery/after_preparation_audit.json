@@ -1,0 +1,42 @@
+{
+  "status": "passed",
+  "caches": {
+    "wikipedia/raw": {
+      "path": "gs://marin-us-central1/tpp10_domain_sweeps/wikipedia/raw/2026.09.11",
+      "fingerprint": "5e2ac160",
+      "tokens": 190316544,
+      "receipt_sha256": "39ab782cfacf324b4e241b1b6c3bb972ae364686bc6e7dfa3521dc20b627fbb7"
+    },
+    "wikipedia/parent": {
+      "path": "gs://marin-us-central1/tpp10_domain_sweeps/wikipedia/parent/2026.09.11",
+      "fingerprint": "447ffaff",
+      "tokens": 190316544,
+      "receipt_sha256": "9807d1d7497443c32646af2a9c4b872ead0517166dfa559629f18439bd89cb2f"
+    },
+    "wikipedia/matched": {
+      "path": "gs://marin-us-central1/tpp10_domain_sweeps/wikipedia/matched/2026.09.11",
+      "fingerprint": "475c0f64",
+      "tokens": 10485760,
+      "receipt_sha256": "f376cc317ccb973d4a3ea175c288d94cf5f6eef572db0871da7884133d1e18c8"
+    },
+    "finemath_3plus/raw": {
+      "path": "gs://marin-us-central1/tpp10_domain_sweeps/finemath_3plus/raw/2026.09.11",
+      "fingerprint": "951e1108",
+      "tokens": 190316544,
+      "receipt_sha256": "71e3ebf004c319429ccbaa7d6c8f66ee48c7327c91fc265c9ed42f219fc81ff1"
+    },
+    "finemath_3plus/parent": {
+      "path": "gs://marin-us-central1/tpp10_domain_sweeps/finemath_3plus/parent/2026.09.11",
+      "fingerprint": "60e2a8fa",
+      "tokens": 190316544,
+      "receipt_sha256": "526b9de24d1edc258c6a7ad02cadadb872922715d768f1d88bfb296de9ab10e4"
+    },
+    "finemath_3plus/matched": {
+      "path": "gs://marin-us-central1/tpp10_domain_sweeps/finemath_3plus/matched/2026.09.11",
+      "fingerprint": "6d286890",
+      "tokens": 10485760,
+      "receipt_sha256": "7d49e62140539331eb9077f4f679f7ad839b4871024dad577c25bb4b9768d3a1"
+    }
+  },
+  "checked_at": "2026-09-11T21:29:18.022196+00:00"
+}

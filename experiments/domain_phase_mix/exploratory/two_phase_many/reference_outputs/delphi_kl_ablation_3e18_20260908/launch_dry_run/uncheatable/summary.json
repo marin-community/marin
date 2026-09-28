@@ -1,0 +1,33 @@
+{
+  "alias_map": {
+    "lwspu_u_kl0p005_cap06": "lwspu_u_kl0p005_cap06",
+    "lwspu_u_kl0p01_cap06": "lwspu_u_kl0p01_cap06",
+    "lwspu_u_kl0p025_cap06": "lwspu_u_kl0p025_cap06",
+    "lwspu_u_kl0p05_cap06": "lwspu_u_kl0p05_cap06",
+    "lwspu_u_kl0p075_cap06": "lwspu_u_kl0p075_cap06",
+    "lwspu_u_kl0p1_cap06": "lwspu_u_kl0p1_cap06",
+    "lwspu_u_kl0p2_cap06": "lwspu_u_kl0p2_cap06",
+    "lwspu_u_kl0p5_cap06": "lwspu_u_kl0p5_cap06"
+  },
+  "analysis_output_path": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/analysis-af9355",
+  "candidate_weights_path": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_kl_ablation_3e18_20260908/candidate_weights.csv",
+  "candidate_weights_sha256": "53b5f4b4c23cf9540e31cd9d5378b9350c0a61e2652d9d8512afff8e99953f3a",
+  "cap_scope": "whole training run",
+  "common_random_numbers": {
+    "data_seed": 666200,
+    "trainer_seed": 0
+  },
+  "experiment_name": "pinlin_calvin_xu/data_mixture/delphi_kl_ablation_3e18_20260908/uncheatable_seed666200",
+  "hardware": {
+    "region": "us-east5",
+    "tpu_type": "v6e-8",
+    "zone": "us-east5-b"
+  },
+  "inline_uncheatable_scheduled": true,
+  "native_table9_scheduled": true,
+  "nominal_cells": 8,
+  "policy_class": "single_phase_tied",
+  "runtime_distinct_trainings": 8,
+  "source_panel": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_augmented_swarm_3e18_20260714/source/fit_panel_table9_macro-4f283bacb4ef269c.csv",
+  "source_panel_sha256": "4f283bacb4ef269c396277cbd518ef74212a51741c909a1e1e9ace040751d507"
+}

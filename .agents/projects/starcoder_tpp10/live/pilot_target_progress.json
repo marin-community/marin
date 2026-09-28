@@ -1,0 +1,89 @@
+{
+  "observed_at": "2026-09-11T03:05:24.426067Z",
+  "rows": [
+    {
+      "run_name": "tpp10_target_p000_s20260910",
+      "percent": 0,
+      "state": "running",
+      "total_steps": 11491,
+      "url": "https://wandb.ai/marin-community/marin/runs/tpp10_target_p000_s20260910",
+      "last_step": 10564,
+      "last_timestamp": 1789095921.8174314,
+      "train_loss": 2.9228875637054443,
+      "summary_runtime": 7777.588517571,
+      "steps_per_second": null
+    },
+    {
+      "run_name": "tpp10_target_p010_s20260910",
+      "percent": 10,
+      "state": "running",
+      "total_steps": 11491,
+      "url": "https://wandb.ai/marin-community/marin/runs/tpp10_target_p010_s20260910",
+      "last_step": 10376,
+      "last_timestamp": 1789095920.33456,
+      "train_loss": 2.7965445518493652,
+      "summary_runtime": 7780.755629048,
+      "steps_per_second": null
+    },
+    {
+      "run_name": "tpp10_target_p030_s20260910",
+      "percent": 30,
+      "state": "running",
+      "total_steps": 11491,
+      "url": "https://wandb.ai/marin-community/marin/runs/tpp10_target_p030_s20260910",
+      "last_step": 8970,
+      "last_timestamp": 1789095920.248751,
+      "train_loss": 2.685100793838501,
+      "summary_runtime": 6681.115819004,
+      "steps_per_second": null
+    },
+    {
+      "run_name": "tpp10_target_p050_s20260910",
+      "percent": 50,
+      "state": "running",
+      "total_steps": 11491,
+      "url": "https://wandb.ai/marin-community/marin/runs/tpp10_target_p050_s20260910",
+      "last_step": 6416,
+      "last_timestamp": 1789095916.2573783,
+      "train_loss": 2.34797739982605,
+      "summary_runtime": 4774.459220331,
+      "steps_per_second": null
+    },
+    {
+      "run_name": "tpp10_target_p070_s20260910",
+      "percent": 70,
+      "state": "running",
+      "total_steps": 11491,
+      "url": "https://wandb.ai/marin-community/marin/runs/tpp10_target_p070_s20260910",
+      "last_step": 5788,
+      "last_timestamp": 1789095915.3629568,
+      "train_loss": 2.184246301651001,
+      "summary_runtime": 4295.070773263,
+      "steps_per_second": null
+    },
+    {
+      "run_name": "tpp10_target_p090_s20260910",
+      "percent": 90,
+      "state": "running",
+      "total_steps": 11491,
+      "url": "https://wandb.ai/marin-community/marin/runs/tpp10_target_p090_s20260910",
+      "last_step": 4389,
+      "last_timestamp": 1789095920.7668421,
+      "train_loss": 1.4264558553695679,
+      "summary_runtime": 3289.9443845,
+      "steps_per_second": null
+    },
+    {
+      "run_name": "tpp10_target_p100_s20260910",
+      "percent": 100,
+      "state": "finished",
+      "total_steps": 11491,
+      "url": "https://wandb.ai/marin-community/marin/runs/tpp10_target_p100_s20260910",
+      "last_step": 11490,
+      "last_timestamp": 1789013683.3884168,
+      "train_loss": 0.905732274055481,
+      "summary_runtime": 8575.145127348,
+      "steps_per_second": null
+    }
+  ]
+}

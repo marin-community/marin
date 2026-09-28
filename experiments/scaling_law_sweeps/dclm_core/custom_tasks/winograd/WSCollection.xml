@@ -1,0 +1,7000 @@
+<?xml version="1.0" encoding="ISO-8859-1"?>
+<?xml-stylesheet type="text/xsl" href="WSExample.xsl"?>
+
+<collection>
+
+
+<schema>
+<text>
+<txt1>
+The city councilmen refused the demonstrators a permit because</txt1>
+<pron> they </pron>
+<txt2> feared violence.
+</txt2>
+</text>
+<quote>
+<quote1></quote1>
+<pron>they </pron>
+<quote2>feared violence</quote2>
+</quote>
+<answers>
+<answer>The city councilmen </answer>
+<answer>The demonstrators </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> (Winograd 1972) </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+The city councilmen refused the demonstrators a permit because</txt1>
+<pron> they </pron>
+<txt2> advocated violence.
+</txt2>
+</text>
+<quote>
+<quote1></quote1>
+<pron>they </pron>
+<quote2>advocated violence</quote2>
+</quote>
+<answers>
+<answer>The city councilmen </answer>
+<answer>The demonstrators </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> (Winograd 1972) </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+The trophy doesn't fit into the brown suitcase because
+</txt1>
+<pron> it  </pron>
+<txt2> is too large.
+</txt2>
+</text>
+<quote>
+<pron>it </pron>
+<quote2> is too large</quote2>
+</quote>
+<answers>
+<answer>the trophy </answer>
+<answer>the suitcase </answer>
+</answers>
+<correctAnswer>A.  </correctAnswer>
+<source> Hector Levesque </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+The trophy doesn't fit into the brown suitcase because
+</txt1>
+<pron> it  </pron>
+<txt2> is too small.
+</txt2>
+</text>
+<quote>
+<pron>it </pron>
+<quote2> is too small</quote2>
+</quote>
+<answers>
+<answer>the trophy </answer>
+<answer>the suitcase </answer>
+</answers>
+<correctAnswer>B.  </correctAnswer>
+<source> Hector Levesque </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Joan made sure to thank Susan for all the help
+</txt1>
+<pron> she </pron>
+<txt2> had recieved.
+</txt2>
+</text>
+<quote>
+<pron> she </pron>
+<quote2>had received </quote2>
+</quote>
+<answers>
+<answer> Joan </answer>
+<answer> Susan  </answer>
+</answers>
+<correctAnswer> A.  </correctAnswer>
+<source> Hector Levesque </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Joan made sure to thank Susan for all the help
+</txt1>
+<pron> she </pron>
+<txt2> had given.
+</txt2>
+</text>
+<quote>
+<pron> she </pron>
+<quote2>had given </quote2>
+</quote>
+<answers>
+<answer> Joan </answer>
+<answer> Susan  </answer>
+</answers>
+<correctAnswer> B.  </correctAnswer>
+<source>Hector Levesque  </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Paul tried to call George on the phone, but
+</txt1>
+<pron> he </pron>
+<txt2> wasn't successful.
+</txt2>
+</text>
+<quote>
+<pron>he  </pron>
+<quote2> wasn't successful.</quote2>
+</quote>
+<answers>
+<answer> Paul </answer>
+<answer> George </answer>
+</answers>
+<correctAnswer> A. </correctAnswer>
+<source> Hector Levesque </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Paul tried to call George on the phone, but
+</txt1>
+<pron> he </pron>
+<txt2> wasn't available.
+</txt2>
+</text>
+<quote>
+<pron>he </pron>
+<quote2> wasn't available. </quote2>
+</quote>
+<answers>
+<answer> Paul </answer>
+<answer> George </answer>
+</answers>
+<correctAnswer> B. </correctAnswer>
+<source> Hector Levesque </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+The lawyer asked the witness a question, but
+</txt1>
+<pron> he </pron>
+<txt2>
+was reluctant to repeat it.
+</txt2>
+</text>
+<quote>
+<pron>he </pron>
+<quote2> was reluctant </quote2>
+</quote>
+<answers>
+<answer> the lawyer </answer>
+<answer> the witness </answer>
+</answers>
+<correctAnswer> A.  </correctAnswer>
+<source> Hector Levesque </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+The lawyer asked the witness a question, but
+</txt1>
+<pron> he </pron>
+<txt2>
+was reluctant to answer it.
+</txt2>
+</text>
+<quote>
+<pron>he </pron>
+<quote2> was reluctant </quote2>
+</quote>
+<answers>
+<answer> the lawyer </answer>
+<answer> the witness </answer>
+</answers>
+<correctAnswer> B.  </correctAnswer>
+<source> Hector Levesque </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+The delivery truck zoomed by the school bus because
+</txt1>
+<pron> it </pron>
+<txt2> was going so fast.
+</txt2>
+</text>
+<quote>
+<pron> it </pron>
+<quote2> was going so fast. </quote2>
+</quote>
+<answers>
+<answer> the delivery truck </answer>
+<answer> the school bus </answer>
+</answers>
+<correctAnswer> A.  </correctAnswer>
+<source> Hector Levesque </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+The delivery truck zoomed by the school bus because
+</txt1>
+<pron> it </pron>
+<txt2> was going so slow.
+</txt2>
+</text>
+<quote>
+<pron> it </pron>
+<quote2> was going so slow. </quote2>
+</quote>
+<answers>
+<answer> the delivery truck </answer>
+<answer> the school bus </answer>
+</answers>
+<correctAnswer> B.  </correctAnswer>
+<source> Hector Levesque </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Frank felt vindicated when his longtime rival Bill revealed that
+</txt1>
+<pron> he  </pron>
+<txt2>
+was the winner of the competition.</txt2>
+</text>
+<quote>
+<pron>he </pron>
+<quote2> was the winner </quote2>
+</quote>
+<answers>
+<answer> Frank </answer>
+<answer> Bill </answer>
+</answers>
+<correctAnswer> A.  </correctAnswer>
+<source> Hector Levesque </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Frank felt crushed when his longtime rival Bill revealed that
+</txt1>
+<pron> he  </pron>
+<txt2>
+was the winner of the competition.</txt2>
+</text>
+<quote>
+<pron>he </pron>
+<quote2> was the winner </quote2>
+</quote>
+<answers>
+<answer> Frank </answer>
+<answer> Bill </answer>
+</answers>
+<correctAnswer> B.  </correctAnswer>
+<source> Hector Levesque </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+The man couldn't lift his son because
+</txt1>
+<pron> he </pron>
+<txt2> was so weak.
+</txt2>
+</text>
+<quote>
+<pron>he </pron>
+<quote2>was so weak. </quote2>
+</quote>
+<answers>
+<answer> The man </answer>
+<answer> The son </answer>
+</answers>
+<correctAnswer> A. </correctAnswer>
+<source> Hector Levesque </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+The man couldn't lift his son because
+</txt1>
+<pron> he </pron>
+<txt2> was so heavy.
+</txt2>
+</text>
+<quote>
+<pron>he </pron>
+<quote2>was so heavy. </quote2>
+</quote>
+<answers>
+<answer> The man </answer>
+<answer> The son </answer>
+</answers>
+<correctAnswer> B. </correctAnswer>
+<source> Hector Levesque </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+The large ball crashed right through the table because
+</txt1>
+<pron> it </pron>
+<txt2>
+was made of steel.
+</txt2>
+</text>
+<quote>
+<pron>it </pron>
+<quote2>was made of steel.</quote2>
+</quote>
+<answers>
+<answer>The large ball </answer>
+<answer>The table </answer>
+</answers>
+<correctAnswer> A. </correctAnswer>
+<source> Hector Levesque </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+The large ball crashed right through the table because
+</txt1>
+<pron> it </pron>
+<txt2>
+was made of styrofoam.
+</txt2>
+</text>
+<quote>
+<pron>it </pron>
+<quote2>was made of styrofoam.</quote2>
+</quote>
+<answers>
+<answer>The large ball </answer>
+<answer>The table </answer>
+</answers>
+<correctAnswer> B. </correctAnswer>
+<source> Hector Levesque </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+John couldn't see the stage with Billy in front of him because
+</txt1>
+<pron> he </pron>
+<txt2> is so short.
+</txt2>
+</text>
+<quote>
+<pron>he </pron>
+<quote2>is so short.</quote2>
+</quote>
+<answers>
+<answer>John </answer>
+<answer>Billy </answer>
+</answers>
+<correctAnswer> A. </correctAnswer>
+<source> Hector Levesque </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+John couldn't see the stage with Billy in front of him because
+</txt1>
+<pron> he </pron>
+<txt2> is so tall.
+</txt2>
+</text>
+<quote>
+<pron>he </pron>
+<quote2>is so tall.</quote2>
+</quote>
+<answers>
+<answer>John </answer>
+<answer>Billy </answer>
+</answers>
+<correctAnswer> B. </correctAnswer>
+<source> Hector Levesque </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Tom threw his schoolbag down to Ray after
+</txt1>
+<pron> he </pron>
+<txt2>
+reached the top of the stairs.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron>he </pron>
+<quote2>
+reached the top of the stairs.
+</quote2>
+</quote>
+<answers>
+<answer>Tom </answer>
+<answer>Ray </answer>
+</answers>
+<correctAnswer> A </correctAnswer>
+<source> Hector Levesque </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Tom threw his schoolbag down to Ray after
+</txt1>
+<pron> he </pron>
+<txt2>
+reached the bottom of the stairs.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron>he </pron>
+<quote2>
+reached the bottom of the stairs.
+</quote2>
+</quote>
+<answers>
+<answer>Tom </answer>
+<answer>Ray </answer>
+</answers>
+<correctAnswer> B </correctAnswer>
+<source> Hector Levesque </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Although they ran at about the same speed, Sue beat Sally because
+</txt1>
+<pron> she </pron>
+<txt2>
+had such a good start.
+</txt2>
+</text>
+<quote>
+<pron> she </pron>
+<quote2>
+had such a good start.
+</quote2>
+</quote>
+<answers>
+<answer> Sue </answer>
+<answer> Sally </answer>
+</answers>
+<correctAnswer> A </correctAnswer>
+<source> Hector Levesque </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Although they ran at about the same speed, Sue beat Sally because
+</txt1>
+<pron> she </pron>
+<txt2>
+had such a bad start.
+</txt2>
+</text>
+<quote>
+<pron> she </pron>
+<quote2>
+had such a bad start.
+</quote2>
+</quote>
+<answers>
+<answer> Sue </answer>
+<answer> Sally </answer>
+</answers>
+<correctAnswer> B </correctAnswer>
+<source> Hector Levesque </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+The sculpture rolled off the shelf because
+</txt1>
+<pron> it </pron>
+<txt2>
+wasn't anchored.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> it </pron>
+<quote2>
+wasn't anchored.
+</quote2>
+</quote>
+<answers>
+<answer> The sculpture </answer>
+<answer> The shelf </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Hector Levesque </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+The sculpture rolled off the shelf because
+</txt1>
+<pron> it </pron>
+<txt2>
+wasn't level.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> it </pron>
+<quote2>
+wasn't level.
+</quote2>
+</quote>
+<answers>
+<answer> The sculpture </answer>
+<answer> The shelf </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Hector Levesque </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Sam's drawing was hung just above Tina's and
+</txt1>
+<pron> it </pron>
+<txt2>
+did look much better with another one below it.
+</txt2>
+</text>
+<quote>
+<pron> it </pron>
+<quote2>
+did look much better
+</quote2>
+</quote>
+<answers>
+<answer> Sam's drawing </answer>
+<answer> Tina's drawing </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Hector Levesque </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Sam's drawing was hung just above Tina's and
+</txt1>
+<pron> it </pron>
+<txt2>
+did look much better with another one above it.
+</txt2>
+</text>
+<quote>
+<pron> it </pron>
+<quote2>
+did look much better
+</quote2>
+</quote>
+<answers>
+<answer> Sam's drawing </answer>
+<answer> Tina's drawing </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Hector Levesque </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Anna did a lot better than her good friend Lucy on the test because
+</txt1>
+<pron> she </pron>
+<txt2>
+had studied so hard.
+</txt2>
+</text>
+<quote>
+<pron> she </pron>
+<quote2>
+had studied so hard.
+</quote2>
+</quote>
+<answers>
+<answer>Anna </answer>
+<answer>Lucy </answer>
+</answers>
+<correctAnswer> A </correctAnswer>
+<source> Hector Levesque </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Anna did a lot worse than her good friend Lucy on the test because
+</txt1>
+<pron> she </pron>
+<txt2>
+had studied so hard.
+</txt2>
+</text>
+<quote>
+<pron> she </pron>
+<quote2>
+had studied so hard.
+</quote2>
+</quote>
+<answers>
+<answer>Anna </answer>
+<answer>Lucy </answer>
+</answers>
+<correctAnswer> B </correctAnswer>
+<source> Hector Levesque </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+The firemen arrived after the police because
+</txt1>
+<pron> they </pron>
+<txt2>
+were coming from so far away.
+</txt2>
+</text>
+<quote>
+<pron> they </pron>
+<quote2>
+were coming from so far away.
+</quote2>
+</quote>
+<answers>
+<answer>The firemen </answer>
+<answer>The police </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Hector Levesque </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+The firemen arrived before the police because
+</txt1>
+<pron> they </pron>
+<txt2>
+were coming from so far away.
+</txt2>
+</text>
+<quote>
+<pron> they </pron>
+<quote2>
+were coming from so far away.
+</quote2>
+</quote>
+<answers>
+<answer>The firemen </answer>
+<answer>The police </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Hector Levesque </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+Frank was upset with Tom because the toaster
+</txt1>
+<pron> he </pron>
+<txt2>
+had bought from him didn't work.
+</txt2>
+</text>
+<quote>
+<pron>he </pron>
+<quote2>
+had bought
+</quote2>
+</quote>
+<answers>
+<answer> Frank </answer>
+<answer> Tom </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Hector Levesque </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Frank was upset with Tom because the toaster
+</txt1>
+<pron> he </pron>
+<txt2>
+had sold him didn't work.
+</txt2>
+</text>
+<quote>
+<pron>he </pron>
+<quote2>
+had sold
+</quote2>
+</quote>
+<answers>
+<answer> Frank </answer>
+<answer> Tom </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Hector Levesque </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Jim yelled at Kevin because
+</txt1>
+<pron> he </pron>
+<txt2> was so upset.
+</txt2>
+</text>
+<quote>
+<pron>he </pron>
+<quote2> was so upset.
+</quote2>
+</quote>
+<answers>
+<answer>Jim  </answer>
+<answer>Kevin  </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Hector Levesque </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Jim comforted Kevin because
+</txt1>
+<pron> he </pron>
+<txt2> was so upset.
+</txt2>
+</text>
+<quote>
+<pron>he </pron>
+<quote2> was so upset.
+</quote2>
+</quote>
+<answers>
+<answer>Jim  </answer>
+<answer>Kevin  </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Hector Levesque </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+The sack of potatoes had been placed above
+the bag of flour, so
+</txt1>
+<pron> it </pron>
+<txt2>
+had to be moved first.
+</txt2>
+</text>
+<quote>
+<pron>it </pron>
+<quote2>
+had to be moved first.
+</quote2>
+</quote>
+<answers>
+<answer> The sack of potatoes </answer>
+<answer> The bag of flour </answer>
+</answers>
+<correctAnswer> A </correctAnswer>
+<source> Hector Levesque </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+The sack of potatoes had been placed below
+the bag of flour, so
+</txt1>
+<pron> it </pron>
+<txt2>
+had to be moved first.
+</txt2>
+</text>
+<quote>
+<pron>it </pron>
+<quote2>
+had to be moved first.
+</quote2>
+</quote>
+<answers>
+<answer> The sack of potatoes </answer>
+<answer> The bag of flour </answer>
+</answers>
+<correctAnswer> B </correctAnswer>
+<source> Hector Levesque </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Pete envies Martin although
+</txt1>
+<pron> he </pron>
+<txt2>
+is very successful.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> he </pron>
+<quote2>
+is very successful.
+</quote2>
+</quote>
+<answers>
+<answer> Pete </answer>
+<answer> Martin </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Pete envies Martin because
+</txt1>
+<pron> he </pron>
+<txt2>
+is very successful.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> he </pron>
+<quote2>
+is very successful.
+</quote2>
+</quote>
+<answers>
+<answer> Pete </answer>
+<answer> Martin </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+The older students were bullying the younger ones, so we punished
+</txt1>
+<pron>them</pron><txt2>.</txt2>
+</text>
+<quote>
+<quote1>
+we punished
+</quote1>
+<pron>them</pron>
+</quote>
+<answers>
+<answer>The older students </answer>
+<answer>The younger students </answer>
+</answers>
+<correctAnswer> A </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+The older students were bullying the younger ones, so we rescued
+</txt1>
+<pron>them</pron><txt2>.</txt2>
+</text>
+<quote>
+<quote1>
+we rescued
+</quote1>
+<pron>them</pron>
+</quote>
+<answers>
+<answer>The older students </answer>
+<answer>The younger students </answer>
+</answers>
+<correctAnswer> B </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+I poured water from the bottle into the cup until
+</txt1>
+<pron> it </pron>
+<txt2> was empty.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> it </pron>
+<quote2> was empty
+</quote2>
+</quote>
+<answers>
+<answer> the bottle </answer>
+<answer> the cup </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+I poured water from the bottle into the cup until
+</txt1>
+<pron> it </pron>
+<txt2> was full.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> it </pron>
+<quote2> was full
+</quote2>
+</quote>
+<answers>
+<answer> the bottle </answer>
+<answer> the cup </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Susan knows all about Ann's personal problems because
+</txt1>
+<pron> she </pron>
+<txt2> is nosy.
+</txt2>
+</text>
+<quote>
+<pron> she </pron>
+<quote2> is nosy
+</quote2>
+</quote>
+<answers>
+<answer> Susan </answer>
+<answer> Ann </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Susan knows all about Ann's personal problems because
+</txt1>
+<pron> she </pron>
+<txt2> is indiscreet.
+</txt2>
+</text>
+<quote>
+<pron> she </pron>
+<quote2> is indiscreet
+</quote2>
+</quote>
+<answers>
+<answer> Susan </answer>
+<answer> Ann </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+Sid explained his theory to Mark but
+</txt1>
+<pron> he </pron>
+<txt2>
+couldn't convince him.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> he </pron>
+<quote2>
+couldn't convince him.
+</quote2>
+</quote>
+<answers>
+<answer>Sid  </answer>
+<answer>Mark </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Sid explained his theory to Mark but
+</txt1>
+<pron> he </pron>
+<txt2>
+couldn't understand him.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> he </pron>
+<quote2>
+couldn't understand him.
+</quote2>
+</quote>
+<answers>
+<answer>Sid  </answer>
+<answer>Mark </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+Susan knew that Ann's son had been in a car accident, so
+</txt1>
+<pron> she </pron>
+<txt2>
+told her about it.
+</txt2>
+</text>
+<quote>
+<pron>she </pron>
+<quote2> told
+</quote2>
+</quote>
+<answers>
+<answer> Susan </answer>
+<answer> Ann </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Susan knew that Ann's son had been in a car accident, because
+</txt1>
+<pron> she </pron>
+<txt2>
+told her about it.
+</txt2>
+</text>
+<quote>
+<pron>she </pron>
+<quote2> told
+</quote2>
+</quote>
+<answers>
+<answer> Susan </answer>
+<answer> Ann </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Joe's uncle can still beat him at tennis, even though
+</txt1>
+<pron> he  </pron>
+<txt2>
+is 30 years younger.
+</txt2>
+</text>
+<quote>
+<pron> he </pron>
+<quote2>
+is 30 years younger.
+</quote2>
+</quote>
+<answers>
+<answer> Joe </answer>
+<answer> Joe's uncle </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Joe's uncle can still beat him at tennis, even though
+</txt1>
+<pron> he  </pron>
+<txt2>
+is 30 years older.
+</txt2>
+</text>
+<quote>
+<pron> he </pron>
+<quote2>
+is 30 years older.
+</quote2>
+</quote>
+<answers>
+<answer> Joe </answer>
+<answer> Joe's uncle </answer>
+</answers>
+<correctAnswer>  B </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+The painting in Mark's living room shows an oak tree.
+</txt1>
+<pron> It </pron>
+<txt2>
+is to the right of the bookcase.
+</txt2>
+</text>
+<quote>
+<pron>it </pron>
+<quote2> is to the right
+</quote2>
+</quote>
+<answers>
+<answer> The painting </answer>
+<answer> The oak tree </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+The painting in Mark's living room shows an oak tree.
+</txt1>
+<pron> It </pron>
+<txt2>
+is to the right of a house.
+</txt2>
+</text>
+<quote>
+<pron>it </pron>
+<quote2> is to the right
+</quote2>
+</quote>
+<answers>
+<answer> The painting </answer>
+<answer> The oak tree </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+There is a gap in the wall. You can see the garden through
+</txt1>
+<pron> it</pron><txt2>.</txt2>
+</text>
+<quote>
+<quote1> through
+</quote1>
+<pron> it</pron>
+</quote>
+<answers>
+<answer> The gap </answer>
+<answer> The wall </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+There is a gap in the wall. You can see the garden behind
+</txt1>
+<pron> it</pron><txt2>.</txt2>
+</text>
+<quote>
+<quote1> behind
+</quote1>
+<pron> it</pron>
+</quote>
+<answers>
+<answer> The gap </answer>
+<answer> The wall </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+The drain is clogged with hair.
+</txt1>
+<pron> It </pron>
+<txt2>
+has to be cleaned.
+</txt2>
+</text>
+<quote>
+<pron> It </pron>
+<quote2>
+has to be cleaned.
+</quote2>
+</quote>
+<answers>
+<answer> The drain </answer>
+<answer> The hair </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+The drain is clogged with hair.
+</txt1>
+<pron> It </pron>
+<txt2>
+has to be removed.
+</txt2>
+</text>
+<quote>
+<pron> It </pron>
+<quote2>
+has to be removed.
+</quote2>
+</quote>
+<answers>
+<answer> The drain </answer>
+<answer> The hair </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+My meeting started at 4:00 and I needed to catch the train at 4:30,
+so there wasn't much time. Luckily,
+</txt1>
+<pron> it </pron>
+<txt2>
+was short, so it worked out.
+</txt2>
+</text>
+<quote>
+<pron> it </pron>
+<quote2> was short
+</quote2>
+</quote>
+<answers>
+<answer> The meeting </answer>
+<answer> The train </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+My meeting started at 4:00 and I needed to catch the train at 4:30,
+so there wasn't much time. Luckily,
+</txt1>
+<pron> it </pron>
+<txt2>
+was delayed, so it worked out.
+</txt2>
+</text>
+<quote>
+<pron> it </pron>
+<quote2> was delayed
+</quote2>
+</quote>
+<answers>
+<answer> The meeting </answer>
+<answer> The train </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+There is a pillar between me and the stage, and I can't see around
+</txt1>
+<pron> it</pron><txt2>.</txt2>
+</text>
+<quote>
+<quote1> see around
+</quote1>
+<pron> it </pron>
+</quote>
+<answers>
+<answer> The pillar </answer>
+<answer> The stage </answer>
+</answers>
+<correctAnswer>  A </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+There is a pillar between me and the stage, and I can't see
+</txt1>
+<pron> it</pron><txt2>.</txt2>
+</text>
+<quote>
+<quote1> see
+</quote1>
+<pron> it </pron>
+</quote>
+<answers>
+<answer> The pillar </answer>
+<answer> The stage </answer>
+</answers>
+<correctAnswer>  B </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+They broadcast an announcement, but a subway came into the
+station and I couldn't hear
+</txt1>
+<pron> it</pron><txt2>.</txt2>
+</text>
+<quote>
+<quote1> hear
+</quote1>
+<pron>it </pron>
+<quote2>
+</quote2>
+</quote>
+<answers>
+<answer>The announcement </answer>
+<answer>The subway </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+They broadcast an announcement, but a subway came into the
+station and I couldn't hear over
+</txt1>
+<pron> it</pron><txt2>.</txt2>
+</text>
+<quote>
+<quote1> hear over
+</quote1>
+<pron>it </pron>
+<quote2>
+</quote2>
+</quote>
+<answers>
+<answer>The announcement </answer>
+<answer>The subway </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+In the middle of the outdoor concert, the rain started falling, but
+</txt1>
+<pron> it </pron>
+<txt2>
+continued until 10.
+</txt2>
+</text>
+<quote>
+<pron> it </pron>
+<quote2> continued
+</quote2>
+</quote>
+<answers>
+<answer> The concert </answer>
+<answer> The rain </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+In the middle of the outdoor concert, the rain started falling, and
+</txt1>
+<pron> it </pron>
+<txt2>
+continued until 10.
+</txt2>
+</text>
+<quote>
+<pron> it </pron>
+<quote2> continued
+</quote2>
+</quote>
+<answers>
+<answer> The concert </answer>
+<answer> The rain </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+I used an old rag to clean the knife, and then I put
+</txt1>
+<pron> it </pron>
+<txt2>
+in the trash.
+</txt2>
+</text>
+<quote>
+<quote1> put
+</quote1>
+<pron> it </pron>
+<quote2>
+in the trash.
+</quote2>
+</quote>
+<answers>
+<answer>The rag </answer>
+<answer>The knife </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+I used an old rag to clean the knife, and then I put
+</txt1>
+<pron> it </pron>
+<txt2>
+in the drawer.
+</txt2>
+</text>
+<quote>
+<quote1> put
+</quote1>
+<pron> it </pron>
+<quote2>
+in the drawer.
+</quote2>
+</quote>
+<answers>
+<answer>The rag </answer>
+<answer>The knife </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Ann asked Mary what time the library closes, because
+</txt1>
+<pron> she </pron>
+<txt2>
+had forgotten.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> she </pron>
+<quote2>
+had forgotten.
+</quote2>
+</quote>
+<answers>
+<answer> Ann </answer>
+<answer> Mary </answer>
+</answers>
+<correctAnswer> A </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Ann asked Mary what time the library closes, but
+</txt1>
+<pron> she </pron>
+<txt2>
+had forgotten.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> she </pron>
+<quote2>
+had forgotten.
+</quote2>
+</quote>
+<answers>
+<answer> Ann </answer>
+<answer> Mary </answer>
+</answers>
+<correctAnswer> B </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+I took the water bottle out of the backpack so that
+</txt1>
+<pron> it </pron>
+<txt2> would be handy.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron>it </pron>
+<quote2> would be handy
+</quote2>
+</quote>
+<answers>
+<answer> The water bottle </answer>
+<answer> The backpack </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+I took the water bottle out of the backpack so that
+</txt1>
+<pron> it </pron>
+<txt2> would be lighter.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron>it </pron>
+<quote2> would be lighter
+</quote2>
+</quote>
+<answers>
+<answer> The water bottle </answer>
+<answer> The backpack </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+I couldn't put the pot on the shelf because
+</txt1>
+<pron> it </pron>
+<txt2>
+was too tall.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron>it </pron>
+<quote2>
+was too tall.
+</quote2>
+</quote>
+<answers>
+<answer>The pot </answer>
+<answer>The shelf </answer>
+</answers>
+<correctAnswer> A </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+I couldn't put the pot on the shelf because
+</txt1>
+<pron> it </pron>
+<txt2>
+was too high.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron>it </pron>
+<quote2>
+was too high.
+</quote2>
+</quote>
+<answers>
+<answer>The pot </answer>
+<answer>The shelf </answer>
+</answers>
+<correctAnswer> B </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+I'm sure that my map will show this building;
+</txt1>
+<pron>it  </pron>
+<txt2>
+is very good.
+</txt2>
+</text>
+<quote>
+<pron> it </pron>
+<quote2> is very good
+</quote2>
+</quote>
+<answers>
+<answer> The map </answer>
+<answer> The building </answer>
+</answers>
+<correctAnswer> A </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+I'm sure that my map will show this building;
+</txt1>
+<pron>it  </pron>
+<txt2>
+is very famous.
+</txt2>
+</text>
+<quote>
+<pron> it </pron>
+<quote2> is very famous
+</quote2>
+</quote>
+<answers>
+<answer> The map </answer>
+<answer> The building </answer>
+</answers>
+<correctAnswer> B </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+Bob paid for Charlie's college education.
+</txt1>
+<pron> He </pron>
+<txt2> is very generous.
+</txt2>
+</text>
+<quote>
+<pron>He </pron>
+<quote2> is very generous.
+</quote2>
+</quote>
+<answers>
+<answer> Bob </answer>
+<answer> Charlie </answer>
+</answers>
+<correctAnswer> A.  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Bob paid for Charlie's college education.
+</txt1>
+<pron> He </pron>
+<txt2> is very grateful.
+</txt2>
+</text>
+<quote>
+<pron>He </pron>
+<quote2> is very grateful.
+</quote2>
+</quote>
+<answers>
+<answer> Bob </answer>
+<answer> Charlie </answer>
+</answers>
+<correctAnswer> B.  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+
+<schema>
+<text>
+<txt1>
+Bob paid for Charlie's college education, but now Charlie acts as though
+it never happened.
+</txt1>
+<pron> He </pron>
+<txt2>
+is very hurt.
+</txt2>
+</text>
+<quote>
+<pron> He </pron>
+<quote2>
+is very hurt.
+</quote2>
+</quote>
+<answers>
+<answer> Bob </answer>
+<answer> Charlie </answer>
+</answers>
+<correctAnswer> A.  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Bob paid for Charlie's college education, but now Charlie acts as though
+it never happened.
+</txt1>
+<pron> He </pron>
+<txt2>
+is very ungrateful.
+</txt2>
+</text>
+<quote>
+<pron> He </pron>
+<quote2>
+is very ungrateful.
+</quote2>
+</quote>
+<answers>
+<answer> Bob </answer>
+<answer> Charlie </answer>
+</answers>
+<correctAnswer> B.  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+Bob was playing cards with Adam and was way ahead. If Adam hadn't had a
+sudden run of good luck,
+</txt1>
+<pron> he </pron>
+<txt2> would have won.
+</txt2>
+</text>
+<quote>
+<pron> he </pron>
+<quote2> would have won.
+</quote2>
+</quote>
+<answers>
+<answer> Bob </answer>
+<answer> Adam </answer>
+</answers>
+<correctAnswer> A </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Bob was playing cards with Adam and was way ahead. If Adam hadn't had a
+sudden run of good luck,
+</txt1>
+<pron> he </pron>
+<txt2> would have lost.
+</txt2>
+</text>
+<quote>
+<pron> he </pron>
+<quote2> would have lost.
+</quote2>
+</quote>
+<answers>
+<answer> Bob </answer>
+<answer> Adam </answer>
+</answers>
+<correctAnswer> B </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Adam can't leave work here until Bob arrives to replace him. If Bob had
+left home for work on time,
+</txt1>
+<pron> he </pron>
+<txt2>
+would be gone by this time.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> he </pron>
+<quote2>
+would be gone
+</quote2>
+</quote>
+<answers>
+<answer> Adam </answer>
+<answer> Bob </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Adam can't leave work here until Bob arrives to replace him. If Bob had
+left home for work on time,
+</txt1>
+<pron> he </pron>
+<txt2>
+would be here by this time.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> he </pron>
+<quote2>
+would be here
+</quote2>
+</quote>
+<answers>
+<answer> Adam </answer>
+<answer> Bob </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+If the con artist has succeeded in fooling Sam,
+</txt1>
+<pron> he </pron>
+<txt2>
+would have gotten a lot of money.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> he </pron>
+<quote2>
+would have gotten a lot of money.
+</quote2>
+</quote>
+<answers>
+<answer>The con artist </answer>
+<answer>Sam </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+If the con artist has succeeded in fooling Sam,
+</txt1>
+<pron> he </pron>
+<txt2>
+would have lost a lot of money.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> he </pron>
+<quote2>
+would have lost a lot of money.
+</quote2>
+</quote>
+<answers>
+<answer>The con artist </answer>
+<answer>Sam </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+It was a summer afternoon, and the dog was sitting in the middle of the
+lawn. After a while, it got up and moved to a spot under the tree,
+because
+</txt1>
+<pron> it </pron>
+<txt2>
+was hot. </txt2>
+</text>
+<quote>
+<pron>it </pron>
+<quote2> was hot
+</quote2>
+</quote>
+<answers>
+<answer>The dog </answer>
+<answer>The spot under the tree </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+It was a summer afternoon, and the dog was sitting in the middle of the
+lawn. After a while, it got up and moved to a spot under the tree,
+because
+</txt1>
+<pron> it </pron>
+<txt2>
+was cooler. </txt2>
+</text>
+<quote>
+<pron>it </pron>
+<quote2> was cooler
+</quote2>
+</quote>
+<answers>
+<answer>The dog </answer>
+<answer>The spot under the tree </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+The cat was lying by the mouse hole waiting for the mouse, but
+</txt1>
+<pron> it </pron>
+<txt2>
+was too impatient.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> it </pron>
+<quote2>
+was too impatient.
+</quote2>
+</quote>
+<answers>
+<answer>The cat </answer>
+<answer>The mouse </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+The cat was lying by the mouse hole waiting for the mouse, but
+</txt1>
+<pron> it </pron>
+<txt2>
+was too cautious.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> it </pron>
+<quote2>
+was too cautious.
+</quote2>
+</quote>
+<answers>
+<answer>The cat </answer>
+<answer>The mouse </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+Anne gave birth to a daughter last month.
+</txt1>
+<pron> She </pron>
+<txt2>
+is a very charming woman.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> She </pron>
+<quote2>
+is a very charming woman.
+</quote2>
+</quote>
+<answers>
+<answer> Anne </answer>
+<answer> Anne's daughter </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Anne gave birth to a daughter last month.
+</txt1>
+<pron> She </pron>
+<txt2>
+is a very charming baby.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> She </pron>
+<quote2>
+is a very charming baby.
+</quote2>
+</quote>
+<answers>
+<answer> Anne </answer>
+<answer> Anne's daughter </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+Alice tried frantically to stop her daughter from chatting at
+the party, leaving us to wonder why
+</txt1>
+<pron> she </pron>
+<txt2>
+was behaving so strangely.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> she </pron>
+<quote2>
+was behaving so strangely.
+</quote2>
+</quote>
+<answers>
+<answer> Alice</answer>
+<answer> Alice's daughter </answer>
+</answers>
+<correctAnswer>  A </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Alice tried frantically to stop her daughter from barking at
+the party, leaving us to wonder why
+</txt1>
+<pron> she </pron>
+<txt2>
+was behaving so strangely.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> she </pron>
+<quote2>
+was behaving so strangely.
+</quote2>
+</quote>
+<answers>
+<answer> Alice </answer>
+<answer> Alice's daughter </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+I saw Jim yelling at some guy in a military uniform with a huge red
+beard. I don't know why
+</txt1>
+<pron> he </pron>
+<txt2>
+was, but he looked very unhappy.
+</txt2>
+</text>
+<quote>
+<quote1>
+why
+</quote1>
+<pron> he </pron>
+<quote2>
+was
+</quote2>
+</quote>
+<answers>
+<answer> Jim </answer>
+<answer> the guy in uniform </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+I saw Jim yelling at some guy in a military uniform with a huge red
+beard. I don't know who
+</txt1>
+<pron> he </pron>
+<txt2>
+was, but he looked very unhappy.
+</txt2>
+</text>
+<quote>
+<quote1>
+who
+</quote1>
+<pron> he </pron>
+<quote2>
+was
+</quote2>
+</quote>
+<answers>
+<answer> Jim </answer>
+<answer> the guy in uniform </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+The fish ate the worm.
+</txt1>
+<pron> It </pron>
+<txt2>
+was hungry.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron>It </pron>
+<quote2>
+was hungry.
+</quote2>
+</quote>
+<answers>
+<answer>The fish </answer>
+<answer>The worm </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+The fish ate the worm.
+</txt1>
+<pron> It </pron>
+<txt2>
+was tasty.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron>It </pron>
+<quote2>
+was tasty.
+</quote2>
+</quote>
+<answers>
+<answer>The fish </answer>
+<answer>The worm </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+I was trying to open the lock with the key, but someone had filled the
+keyhole with chewing gum, and I couldn't get
+</txt1>
+<pron> it </pron>
+<txt2> in.
+</txt2>
+</text>
+<quote>
+<quote1> I couldn't get
+</quote1>
+<pron> it </pron>
+<quote2> in.
+</quote2>
+</quote>
+<answers>
+<answer> The key </answer>
+<answer> The chewing gum </answer>
+</answers>
+<correctAnswer> A </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+I was trying to open the lock with the key, but someone had filled the
+keyhole with chewing gum, and I couldn't get
+</txt1>
+<pron> it </pron>
+<txt2> out.
+</txt2>
+</text>
+<quote>
+<quote1> I couldn't get
+</quote1>
+<pron> it </pron>
+<quote2> out.
+</quote2>
+</quote>
+<answers>
+<answer> The key </answer>
+<answer> The chewing gum </answer>
+</answers>
+<correctAnswer> B </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+The dog chased the cat, which ran up a tree.
+</txt1>
+<pron> It  </pron>
+<txt2> waited at the bottom.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> It </pron>
+<quote2> waited
+</quote2>
+</quote>
+<answers>
+<answer> The dog </answer>
+<answer> The cat </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+The dog chased the cat, which ran up a tree.
+</txt1>
+<pron> It  </pron>
+<txt2> waited at the top.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> It </pron>
+<quote2> waited
+</quote2>
+</quote>
+<answers>
+<answer> The dog </answer>
+<answer> The cat </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+In the storm, the tree fell down and crashed through the roof of my
+house. Now, I have to get
+</txt1>
+<pron>  it </pron>
+<txt2>
+removed.
+</txt2>
+</text>
+<quote>
+<quote1> get
+</quote1>
+<pron> it </pron>
+<quote2>
+removed.
+</quote2>
+</quote>
+<answers>
+<answer> The tree </answer>
+<answer> The roof </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+In the storm, the tree fell down and crashed through the roof of my
+house. Now, I have to get
+</txt1>
+<pron>  it </pron>
+<txt2>
+repaired.
+</txt2>
+</text>
+<quote>
+<quote1> get
+</quote1>
+<pron> it </pron>
+<quote2>
+repaired.
+</quote2>
+</quote>
+<answers>
+<answer> The tree </answer>
+<answer> The roof </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+The customer walked into the bank and stabbed one of the tellers.
+</txt1>
+<pron> He </pron>
+<txt2>
+was immediately taken to the police station.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> He </pron>
+<quote2> was immediately taken
+</quote2>
+</quote>
+<answers>
+<answer> The customer </answer>
+<answer> The teller </answer>
+</answers>
+<correctAnswer> A. </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+The customer walked into the bank and stabbed one of the tellers.
+</txt1>
+<pron> He </pron>
+<txt2>
+was immediately taken to the hospital.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> He </pron>
+<quote2> was immediately taken
+</quote2>
+</quote>
+<answers>
+<answer> The customer </answer>
+<answer> The teller </answer>
+</answers>
+<correctAnswer> B. </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+John was doing research in the library when he heard a man humming and
+whistling.
+</txt1>
+<pron> He </pron>
+<txt2>
+was very annoyed.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron>He </pron>
+<quote2>
+was very annoyed.
+</quote2>
+</quote>
+<answers>
+<answer> John </answer>
+<answer> The man </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+John was doing research in the library when he heard a man humming and
+whistling.
+</txt1>
+<pron> He </pron>
+<txt2>
+was very annoying.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron>He </pron>
+<quote2>
+was very annoying.
+</quote2>
+</quote>
+<answers>
+<answer> John </answer>
+<answer> The man </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+John was jogging through the park when he saw a man juggling watermelons.
+</txt1>
+<pron> He </pron>
+<txt2>
+was very impressed.
+</txt2>
+</text>
+<quote>
+<pron>He </pron>
+<quote2>
+was very impressed.
+</quote2>
+</quote>
+<answers>
+<answer> John </answer>
+<answer> The juggler </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+John was jogging through the park when he saw a man juggling watermelons.
+</txt1>
+<pron> He </pron>
+<txt2>
+was very impressive.
+</txt2>
+</text>
+<quote>
+<pron>He </pron>
+<quote2>
+was very impressive.
+</quote2>
+</quote>
+<answers>
+<answer> John </answer>
+<answer> The juggler </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+Bob collapsed on the sidewalk. Soon he saw Carl coming to help.
+</txt1>
+<pron> He </pron>
+<txt2> was very ill.
+</txt2>
+</text>
+<quote>
+<pron>He </pron>
+<quote2>
+was very ill
+</quote2>
+</quote>
+<answers>
+<answer> Bob </answer>
+<answer> Carl </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Bob collapsed on the sidewalk. Soon he saw Carl coming to help.
+</txt1>
+<pron> He </pron>
+<txt2> was very concerned.
+</txt2>
+</text>
+<quote>
+<pron>He </pron>
+<quote2>
+was very concerned
+</quote2>
+</quote>
+<answers>
+<answer> Bob </answer>
+<answer> Carl </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+Sam and Amy are passionately in love, but Amy's parents are unhappy
+about it, because
+</txt1>
+<pron> they </pron>
+<txt2>
+are fifteen.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> they </pron>
+<quote2>
+are fifteen.
+</quote2>
+</quote>
+<answers>
+<answer> Sam and Amy </answer>
+<answer> Amy's parents </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Sam and Amy are passionately in love, but Amy's parents are unhappy
+about it, because
+</txt1>
+<pron> they </pron>
+<txt2>
+are snobs.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> they </pron>
+<quote2>
+are snobs.
+</quote2>
+</quote>
+<answers>
+<answer> Sam and Amy </answer>
+<answer> Amy's parents </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+Mark told Pete many lies about himself, which Pete included in his book.
+</txt1>
+<pron> He </pron>
+<txt2>
+should have been more  truthful.
+</txt2>
+</text>
+<quote>
+<pron>He </pron>
+<quote2>
+should have been more  truthful.
+</quote2>
+</quote>
+<answers>
+<answer> Mark </answer>
+<answer> Pete </answer>
+</answers>
+<correctAnswer> A </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Mark told Pete many lies about himself, which Pete included in his book.
+</txt1>
+<pron> He </pron>
+<txt2>
+should have been more  skeptical.
+</txt2>
+</text>
+<quote>
+<pron>He </pron>
+<quote2>
+should have been more skeptical.
+</quote2>
+</quote>
+<answers>
+<answer> Mark </answer>
+<answer> Pete </answer>
+</answers>
+<correctAnswer> B </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+Joe has sold his house and bought a new one a few miles away. He will
+be moving out of
+</txt1>
+<pron> it </pron>
+<txt2>
+on Thursday.
+</txt2>
+</text>
+<quote>
+<quote1>
+moving out of
+</quote1>
+<pron> it </pron>
+</quote>
+<answers>
+<answer> The old house </answer>
+<answer> The new house </answer>
+</answers>
+<correctAnswer> A </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Joe has sold his house and bought a new one a few miles away. He will
+be moving into
+</txt1>
+<pron> it </pron>
+<txt2>
+on Thursday.
+</txt2>
+</text>
+<quote>
+<quote1>
+moving into
+</quote1>
+<pron> it </pron>
+</quote>
+<answers>
+<answer> The old house </answer>
+<answer> The new house </answer>
+</answers>
+<correctAnswer> B </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+Many people start to read Paul's books and can't put them down.
+</txt1>
+<pron> They  </pron>
+<txt2>
+are gripped because Paul writes so well.
+</txt2>
+</text>
+<quote>
+<pron>They </pron>
+<quote2>
+are gripped
+</quote2>
+</quote>
+<answers>
+<answer> People </answer>
+<answer> Paul's books </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Many people start to read Paul's books and can't put them down.
+</txt1>
+<pron> They  </pron>
+<txt2>
+are popular because Paul writes so well.
+</txt2>
+</text>
+<quote>
+<pron>They </pron>
+<quote2>
+are popular
+</quote2>
+</quote>
+<answers>
+<answer> People </answer>
+<answer> Paul's books </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Mary took out her flute and played one of her favorite pieces. She
+has had
+</txt1>
+<pron> it  </pron>
+<txt2>
+since she was a child.
+</txt2>
+</text>
+<quote>
+<quote1>
+She has had
+</quote1>
+<pron> it </pron>
+</quote>
+<answers>
+<answer> The flute </answer>
+<answer> The piece </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Mary took out her flute and played one of her favorite pieces. She
+has loved
+</txt1>
+<pron> it  </pron>
+<txt2>
+since she was a child.
+</txt2>
+</text>
+<quote>
+<quote1>
+She has loved
+</quote1>
+<pron> it </pron>
+</quote>
+<answers>
+<answer> The flute </answer>
+<answer> The piece </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+Sam pulled up a chair to the piano, but
+</txt1>
+<pron> it </pron>
+<txt2>
+was broken, so he had to stand instead.
+</txt2>
+</text>
+<quote>
+<pron>it </pron>
+<quote2>
+was broken
+</quote2>
+</quote>
+<answers>
+<answer>The chair </answer>
+<answer>The piano </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Sam pulled up a chair to the piano, but
+</txt1>
+<pron> it </pron>
+<txt2>
+was broken, so he had to sing instead.
+</txt2>
+</text>
+<quote>
+<pron>it </pron>
+<quote2>
+was broken
+</quote2>
+</quote>
+<answers>
+<answer>The chair </answer>
+<answer>The piano </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+Since it was raining, I carried the newspaper in my backpack to keep
+</txt1>
+<pron> it </pron>
+<txt2> dry.
+</txt2>
+</text>
+<quote>
+<quote1> keep
+</quote1>
+<pron> it </pron>
+<quote2> dry
+</quote2>
+</quote>
+<answers>
+<answer> The newspaper </answer>
+<answer> The backpack </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Since it was raining, I carried the newspaper over my backpack to keep
+</txt1>
+<pron> it </pron>
+<txt2> dry.
+</txt2>
+</text>
+<quote>
+<quote1> keep
+</quote1>
+<pron> it </pron>
+<quote2> dry
+</quote2>
+</quote>
+<answers>
+<answer> The newspaper </answer>
+<answer> The backpack </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+Sara borrowed the book from the library because she needs it for an
+article she is working on. She reads
+</txt1>
+<pron> it </pron>
+<txt2>
+when she gets home from work.
+</txt2>
+</text>
+<quote>
+<quote1> She reads
+</quote1>
+<pron> it </pron>
+<quote2>
+</quote2>
+</quote>
+<answers>
+<answer> The book </answer>
+<answer> The article </answer>
+</answers>
+<correctAnswer>  A </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Sara borrowed the book from the library because she needs it for an
+article she is working on. She writes
+</txt1>
+<pron> it </pron>
+<txt2>
+when she gets home from work.
+</txt2>
+</text>
+<quote>
+<quote1> She writes
+</quote1>
+<pron> it </pron>
+<quote2>
+</quote2>
+</quote>
+<answers>
+<answer> The book </answer>
+<answer> The article </answer>
+</answers>
+<correctAnswer>  B </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+This morning, Joey built a sand castle on the beach, and put a toy
+flag in the highest tower, but this afternoon the tide
+knocked
+</txt1>
+<pron> it </pron>
+<txt2> down.
+</txt2>
+</text>
+<quote>
+<quote1> knocked
+</quote1>
+<pron> it </pron>
+<quote2> down
+</quote2>
+</quote>
+<answers>
+<answer> The sand castle </answer>
+<answer> The flag </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+This morning, Joey built a sand castle on the beach, and put a toy
+flag in the highest tower, but this afternoon the wind
+knocked
+</txt1>
+<pron> it </pron>
+<txt2> down.
+</txt2>
+</text>
+<quote>
+<quote1> knocked
+</quote1>
+<pron> it </pron>
+<quote2> down
+</quote2>
+</quote>
+<answers>
+<answer> The sand castle </answer>
+<answer> The flag </answer>
+</answers>
+<correctAnswer> B </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+Jane knocked on Susan's door, but there was no answer.
+</txt1>
+<pron> She </pron>
+<txt2> was disappointed.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> She </pron>
+<quote2> was disappointed.
+</quote2>
+</quote>
+<answers>
+<answer> Jane </answer>
+<answer> Susan </answer>
+</answers>
+<correctAnswer> A </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Jane knocked on Susan's door, but there was no answer.
+</txt1>
+<pron> She </pron>
+<txt2> was out.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> She </pron>
+<quote2> was out.
+</quote2>
+</quote>
+<answers>
+<answer> Jane </answer>
+<answer> Susan </answer>
+</answers>
+<correctAnswer> B </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+Jane knocked on the door, and Susan answered it.
+</txt1>
+<pron> She </pron>
+<txt2>
+invited her to come out.
+</txt2>
+</text>
+<quote>
+<pron> She </pron>
+<quote2> invited
+</quote2>
+</quote>
+<answers>
+<answer> Jane </answer>
+<answer> Susan </answer>
+</answers>
+<correctAnswer> A </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Jane knocked on the door, and Susan answered it.
+</txt1>
+<pron> She </pron>
+<txt2>
+invited her to come in.
+</txt2>
+</text>
+<quote>
+<pron> She </pron>
+<quote2> invited
+</quote2>
+</quote>
+<answers>
+<answer> Jane </answer>
+<answer> Susan </answer>
+</answers>
+<correctAnswer> B </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+Sam took French classes from Adam, because
+</txt1>
+<pron> he </pron>
+<txt2>
+was eager to speak it fluently.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron>he </pron>
+<quote2> was eager
+</quote2>
+</quote>
+<answers>
+<answer> Sam </answer>
+<answer> Adam </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Sam took French classes from Adam, because
+</txt1>
+<pron> he </pron>
+<txt2>
+was known to speak it fluently.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron>he </pron>
+<quote2> was known to speak it
+</quote2>
+</quote>
+<answers>
+<answer> Sam </answer>
+<answer> Adam </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+The path to the lake was blocked, so we couldn't use
+</txt1>
+<pron> it</pron><txt2>.</txt2>
+</text>
+<quote>
+<quote1>
+use
+</quote1>
+<pron> it </pron>
+</quote>
+<answers>
+<answer> The path </answer>
+<answer> The lake </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+The path to the lake was blocked, so we couldn't reach
+</txt1>
+<pron> it</pron><txt2>.</txt2>
+</text>
+<quote>
+<quote1>
+reach
+</quote1>
+<pron> it </pron>
+</quote>
+<answers>
+<answer> The path </answer>
+<answer> The lake </answer>
+</answers>
+<correctAnswer> B </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+The sun was covered by a thick cloud all morning, but luckily, by the time
+the picnic started,
+</txt1>
+<pron> it </pron>
+<txt2> was out.
+</txt2>
+</text>
+<quote>
+<pron> it </pron>
+<quote2> was out
+</quote2>
+</quote>
+<answers>
+<answer> The sun </answer>
+<answer> The cloud </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+The sun was covered by a thick cloud all morning, but luckily, by the time
+the picnic started,
+</txt1>
+<pron> it </pron>
+<txt2> was gone.
+</txt2>
+</text>
+<quote>
+<pron> it </pron>
+<quote2> was gone
+</quote2>
+</quote>
+<answers>
+<answer> The sun </answer>
+<answer> The cloud </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+We went to the lake, because a shark had been seen at the ocean beach, so
+</txt1>
+<pron> it </pron>
+<txt2>
+was a safer place to swim.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> it </pron>
+<quote2>
+was a safer place
+</quote2>
+</quote>
+<answers>
+<answer> The lake </answer>
+<answer> The ocean beach </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+We went to the lake, because a shark had been seen at the ocean beach, so
+</txt1>
+<pron> it </pron>
+<txt2>
+was a dangerous place to swim.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> it </pron>
+<quote2>
+was a dangerous place
+</quote2>
+</quote>
+<answers>
+<answer> The lake </answer>
+<answer> The ocean beach </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+
+<schema>
+<text>
+<txt1>
+Sam tried to paint a picture of shepherds with sheep, but
+</txt1>
+<pron> they </pron>
+<txt2>
+ended up looking more like golfers.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> they </pron>
+<quote2>
+ended up looking more like golfers.
+</quote2>
+</quote>
+<answers>
+<answer> The shepherds </answer>
+<answer> The sheep </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Sam tried to paint a picture of shepherds with sheep, but
+</txt1>
+<pron> they </pron>
+<txt2>
+ended up looking more like dogs.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> they </pron>
+<quote2>
+ended up looking more like dogs.
+</quote2>
+</quote>
+<answers>
+<answer> The shepherds </answer>
+<answer> The sheep </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+Mary tucked her daughter Anne into bed, so that
+</txt1>
+<pron> she </pron>
+<txt2> could work.
+</txt2>
+</text>
+<quote>
+<pron> she </pron>
+<quote2> could work
+</quote2>
+</quote>
+<answers>
+<answer> Mary </answer>
+<answer> Mary's daughter </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Mary tucked her daughter Anne into bed, so that
+</txt1>
+<pron> she </pron>
+<txt2> could sleep.
+</txt2>
+</text>
+<quote>
+<pron> she </pron>
+<quote2> could sleep.
+</quote2>
+</quote>
+<answers>
+<answer> Mary </answer>
+<answer> Mary's daughter </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+
+<schema>
+<text>
+<txt1>
+Fred and Alice had very warm down coats, but
+</txt1>
+<pron> they  </pron>
+<txt2>
+were not prepared for the cold in Alaska.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron>they </pron>
+<quote2>
+were not prepared
+</quote2>
+</quote>
+<answers>
+<answer>Fred and Alice </answer>
+<answer> coats </answer>
+</answers>
+<correctAnswer> A </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Fred and Alice had very warm down coats, but
+</txt1>
+<pron> they  </pron>
+<txt2>
+were not enough for the cold in Alaska.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron>they </pron>
+<quote2>
+were not enough
+</quote2>
+</quote>
+<answers>
+<answer>Fred and Alice </answer>
+<answer> coats </answer>
+</answers>
+<correctAnswer> B </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+Thomson visited Cooper's grave in 1765. At that date
+</txt1>
+<pron> he </pron>
+<txt2>
+had been travelling for five years.
+</txt2>
+</text>
+<quote>
+<pron>he </pron>
+<quote2> had been travelling
+</quote2>
+</quote>
+<answers>
+<answer> Thomson </answer>
+<answer> Cooper </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Thomson visited Cooper's grave in 1765. At that date
+</txt1>
+<pron> he </pron>
+<txt2>
+had been dead for five years.
+</txt2>
+</text>
+<quote>
+<pron>he </pron>
+<quote2> had been dead
+</quote2>
+</quote>
+<answers>
+<answer> Thomson </answer>
+<answer> Cooper </answer>
+</answers>
+<correctAnswer> B </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+Jackson was greatly influenced by Arnold, though
+</txt1>
+<pron> he </pron>
+<txt2>
+lived two centuries later.
+</txt2>
+</text>
+<quote>
+<pron> he </pron>
+<quote2>
+lived two centuries later.
+</quote2>
+</quote>
+<answers>
+<answer> Jackson </answer>
+<answer> Arnold </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Jackson was greatly influenced by Arnold, though
+</txt1>
+<pron> he </pron>
+<txt2>
+lived two centuries earlier.
+</txt2>
+</text>
+<quote>
+<pron> he </pron>
+<quote2>
+lived two centuries earlier.
+</quote2>
+</quote>
+<answers>
+<answer> Jackson </answer>
+<answer> Arnold </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+I can't cut that tree down with that axe;
+</txt1>
+<pron> it </pron>
+<txt2>
+is too thick.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron>it </pron>
+<quote2>
+is too thick.
+</quote2>
+</quote>
+<answers>
+<answer> The tree </answer>
+<answer> The axe </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+I can't cut that tree down with that axe;
+</txt1>
+<pron> it </pron>
+<txt2>
+is too small.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron>it </pron>
+<quote2>
+is too small.
+</quote2>
+</quote>
+<answers>
+<answer> The tree </answer>
+<answer> The axe </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+The foxes are getting in at night and attacking the chickens. I shall have
+to kill
+</txt1>
+<pron> them</pron><txt2>.</txt2>
+</text>
+<quote>
+<quote1>
+to kill
+</quote1>
+<pron> them </pron>
+</quote>
+<answers>
+<answer> The foxes </answer>
+<answer> The chickens </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+The foxes are getting in at night and attacking the chickens. I shall have
+to guard
+</txt1>
+<pron> them</pron><txt2>.</txt2>
+</text>
+<quote>
+<quote1>
+to guard
+</quote1>
+<pron> them </pron>
+</quote>
+<answers>
+<answer> The foxes </answer>
+<answer> The chickens </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+The foxes are getting in at night and attacking the chickens.
+</txt1>
+<pron> They </pron>
+<txt2>
+have gotten very bold.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> They </pron>
+<quote2>
+have gotten very bold.
+</quote2>
+</quote>
+<answers>
+<answer> The foxes </answer>
+<answer> The chickens </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+The foxes are getting in at night and attacking the chickens.
+</txt1>
+<pron> They </pron>
+<txt2>
+have gotten very nervous.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> They </pron>
+<quote2>
+have gotten very nervous.
+</quote2>
+</quote>
+<answers>
+<answer> The foxes </answer>
+<answer> The chickens </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Fred covered his eyes with his hands, because the wind was blowing sand
+around. He opened
+</txt1>
+<pron> them </pron>
+<txt2>
+when the wind stopped.
+</txt2>
+</text>
+<quote>
+<quote1>
+opened
+</quote1>
+<pron> them </pron>
+<quote2>
+</quote2>
+</quote>
+<answers>
+<answer> His eyes </answer>
+<answer> His hands </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Fred covered his eyes with his hands, because the wind was blowing sand
+around. He lowered
+</txt1>
+<pron> them </pron>
+<txt2>
+when the wind stopped.
+</txt2>
+</text>
+<quote>
+<quote1>
+lowered
+</quote1>
+<pron> them </pron>
+<quote2>
+</quote2>
+</quote>
+<answers>
+<answer> His eyes </answer>
+<answer> His hands </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+The actress used to be named Terpsichore, but she changed it to Tina a
+few years ago, because she figured
+</txt1>
+<pron>  it </pron>
+<txt2>
+was too hard to pronounce.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> it </pron>
+<quote2>
+was too hard
+</quote2>
+</quote>
+<answers>
+<answer> Terpsichore </answer>
+<answer> Tina </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+The actress used to be named Terpsichore, but she changed it to Tina a
+few years ago, because she figured
+</txt1>
+<pron>  it </pron>
+<txt2>
+was easier to pronounce.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> it </pron>
+<quote2>
+was easier
+</quote2>
+</quote>
+<answers>
+<answer> Terpsichore </answer>
+<answer> Tina </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Fred watched TV while George went out to buy groceries. After an hour
+</txt1>
+<pron>  he </pron>
+<txt2>
+got up.
+</txt2>
+</text>
+<quote>
+<pron> he </pron>
+<quote2>
+got up.
+</quote2>
+</quote>
+<answers>
+<answer> Fred </answer>
+<answer> George </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Fred watched TV while George went out to buy groceries. After an hour
+</txt1>
+<pron>  he </pron>
+<txt2>
+got back.
+</txt2>
+</text>
+<quote>
+<pron> he </pron>
+<quote2>
+got back.
+</quote2>
+</quote>
+<answers>
+<answer> Fred </answer>
+<answer> George </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+Fred was supposed to run the dishwasher, but he put it off,  because
+he wanted to watch TV. But the show turned out to be boring, so he
+changed his mind and turned
+</txt1>
+<pron> it </pron>
+<txt2> on.
+</txt2>
+</text>
+<quote>
+<quote1> turned
+</quote1>
+<pron> it </pron>
+<quote2> on
+</quote2>
+</quote>
+<answers>
+<answer> The dishwasher </answer>
+<answer> The TV </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Fred was supposed to run the dishwasher, but he put it off,  because
+he wanted to watch TV. But the show turned out to be boring, so he
+changed his mind and turned
+</txt1>
+<pron> it </pron>
+<txt2> off.
+</txt2>
+</text>
+<quote>
+<quote1> turned
+</quote1>
+<pron> it </pron>
+<quote2> off
+</quote2>
+</quote>
+<answers>
+<answer> The dishwasher </answer>
+<answer> The TV </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+Fred is the only man still alive who remembers my great-grandfather.
+</txt1>
+<pron> He </pron>
+<txt2>
+is a remarkable man.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron>He </pron>
+<quote2>
+is a remarkable man.
+</quote2>
+</quote>
+<answers>
+<answer> Fred </answer>
+<answer> My great-grandfather </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Fred is the only man still alive who remembers my great-grandfather.
+</txt1>
+<pron> He </pron>
+<txt2>
+was a remarkable man.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron>He </pron>
+<quote2>
+was a remarkable man.
+</quote2>
+</quote>
+<answers>
+<answer> Fred </answer>
+<answer> My great-grandfather </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+Fred is the only man alive who still remembers my father as an infant.
+When Fred first saw my father,
+</txt1>
+<pron> he </pron>
+<txt2>
+was twelve years old.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron>he </pron>
+<quote2>
+was twelve years old.
+</quote2>
+</quote>
+<answers>
+<answer>Fred </answer>
+<answer>My father </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Fred is the only man alive who still remembers my father as an infant.
+When Fred first saw my father,
+</txt1>
+<pron> he </pron>
+<txt2>
+was twelve months old.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron>he </pron>
+<quote2>
+was twelve months old.
+</quote2>
+</quote>
+<answers>
+<answer>Fred </answer>
+<answer>My father </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+In July, Kamtchatka declared war on Yakutsk. Since Yakutsk's army was much
+better equipped and ten times larger,
+</txt1>
+<pron> they </pron>
+<txt2>
+were defeated within weeks.
+</txt2>
+</text>
+<quote>
+<pron> they </pron>
+<quote2>
+were defeated
+</quote2>
+</quote>
+<answers>
+<answer> Kamchatka </answer>
+<answer> Yakutsk </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+In July, Kamtchatka declared war on Yakutsk. Since Yakutsk's army was much
+better equipped and ten times larger,
+</txt1>
+<pron> they </pron>
+<txt2>
+were victorious within weeks.
+</txt2>
+</text>
+<quote>
+<pron> they </pron>
+<quote2>
+were victorious
+</quote2>
+</quote>
+<answers>
+<answer> Kamchatka </answer>
+<answer> Yakutsk </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Look! There is a minnow swimming right below that duck!
+</txt1>
+<pron> It </pron>
+<txt2>
+had better get away to safety fast!
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> It </pron>
+<quote2>
+had better get away
+</quote2>
+</quote>
+<answers>
+<answer> The minnow </answer>
+<answer> The duck </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+Look! There is a shark swimming right below that duck!
+</txt1>
+<pron> It </pron>
+<txt2>
+had better get away to safety fast!
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> It </pron>
+<quote2>
+had better get away
+</quote2>
+</quote>
+<answers>
+<answer> The shark  </answer>
+<answer> The duck </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Archaeologists have concluded that humans lived in Laputa 20,000 years ago.
+</txt1>
+<pron> They </pron>
+<txt2>
+hunted for evidence on the river banks.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron>They </pron>
+<quote2>
+hunted for evidence
+</quote2>
+</quote>
+<answers>
+<answer> Archaeologists  </answer>
+<answer> Prehistoric humans  </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Archaeologists have concluded that humans lived in Laputa 20,000 years ago.
+</txt1>
+<pron> They </pron>
+<txt2>
+hunted for deer on the river banks.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron>They </pron>
+<quote2>
+hunted for deer
+</quote2>
+</quote>
+<answers>
+<answer> Archaeologists  </answer>
+<answer> Prehistoric humans  </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+The scientists are studying three species of fish that have recently
+been found living in the Indian Ocean.
+</txt1>
+<pron> They </pron>
+<txt2>
+began two years ago.
+</txt2>
+</text>
+<quote>
+<pron>They </pron>
+<quote2>
+began two years ago.
+</quote2>
+</quote>
+<answers>
+<answer> The scientists </answer>
+<answer> The fish </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+The scientists are studying three species of fish that have recently
+been found living in the Indian Ocean.
+</txt1>
+<pron> They </pron>
+<txt2>
+appeared two years ago.
+</txt2>
+</text>
+<quote>
+<pron>They </pron>
+<quote2>
+appeared two years ago.
+</quote2>
+</quote>
+<answers>
+<answer> The scientists </answer>
+<answer> The fish </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+
+<schema>
+<text>
+<txt1>
+The journalists interviewed the stars of the new movie.
+</txt1>
+<pron> They </pron>
+<txt2>
+were very persistent, so the interview lasted for a long time.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> They </pron>
+<quote2>
+were very persistent
+</quote2>
+</quote>
+<answers>
+<answer> The journalists </answer>
+<answer> The stars </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+The journalists interviewed the stars of the new movie.
+</txt1>
+<pron> They </pron>
+<txt2>
+were very cooperative, so the interview lasted for a long time.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> They </pron>
+<quote2>
+were very cooperative
+</quote2>
+</quote>
+<answers>
+<answer> The journalists </answer>
+<answer> The stars </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+The police arrested all of the gang members.
+</txt1>
+<pron> They </pron>
+<txt2>
+were trying to stop the drug trade in the neighborhood.
+</txt2>
+</text>
+<quote>
+<pron> They </pron>
+<quote2>
+were trying to stop the drug trade.
+</quote2>
+</quote>
+<answers>
+<answer> The police </answer>
+<answer> The gang members </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+The police arrested all of the gang members.
+</txt1>
+<pron> They </pron>
+<txt2>
+were trying to run the drug trade in the neighborhood.
+</txt2>
+</text>
+<quote>
+<pron> They </pron>
+<quote2>
+were trying to run the drug trade.
+</quote2>
+</quote>
+<answers>
+<answer> The police </answer>
+<answer> The gang members </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+I put the cake away in the refrigerator.
+</txt1>
+<pron> It </pron>
+<txt2>
+has a lot of butter in it.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> It </pron>
+<quote2>
+has a lot of butter
+</quote2>
+</quote>
+<answers>
+<answer> The cake </answer>
+<answer> The refrigerator </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+I put the cake away in the refrigerator.
+</txt1>
+<pron> It </pron>
+<txt2>
+has a lot of leftovers in it.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> It </pron>
+<quote2>
+has a lot of leftovers
+</quote2>
+</quote>
+<answers>
+<answer> The cake </answer>
+<answer> The refrigerator </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+Sam broke both his ankles and he's walking with crutches. But a month
+or so from now
+</txt1>
+<pron> they </pron>
+<txt2>
+should be better.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> they </pron>
+<quote2>
+should be better
+</quote2>
+</quote>
+<answers>
+<answer> The ankles </answer>
+<answer> The crutches </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Sam broke both his ankles and he's walking with crutches. But a month
+or so from now
+</txt1>
+<pron> they </pron>
+<txt2>
+should be unnecessary.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> they </pron>
+<quote2>
+should be unnecessary
+</quote2>
+</quote>
+<answers>
+<answer> The ankles </answer>
+<answer> The crutches </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+When the sponsors of the bill got to the town hall, they were surprised
+to find that the room was full of opponents.
+</txt1>
+<pron> They </pron>
+<txt2>
+were very much in the minority.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> They</pron>
+<quote2>
+were very much in the minority.
+</quote2>
+</quote>
+<answers>
+<answer> The sponsors </answer>
+<answer> The opponents </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+When the sponsors of the bill got to the town hall, they were surprised
+to find that the room was full of opponents.
+</txt1>
+<pron> They </pron>
+<txt2>
+were very much in the majority.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> They</pron>
+<quote2>
+were very much in the majority.
+</quote2>
+</quote>
+<answers>
+<answer> The sponsors </answer>
+<answer> The opponents </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Everyone really loved the oatmeal cookies; only a few people liked the
+chocolate chip cookies. Next time, we should make more of
+</txt1>
+<pron> them</pron><txt2>.</txt2>
+</text>
+<quote>
+<quote1> more of
+</quote1>
+<pron> them </pron>
+<quote2>
+</quote2>
+</quote>
+<answers>
+<answer> The oatmeal cookies </answer>
+<answer> The chocolate chip cookies </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Everyone really loved the oatmeal cookies; only a few people liked the
+chocolate chip cookies. Next time, we should make fewer of
+</txt1>
+<pron> them</pron><txt2>.</txt2>
+</text>
+<quote>
+<quote1> fewer of
+</quote1>
+<pron> them </pron>
+<quote2>
+</quote2>
+</quote>
+<answers>
+<answer> The oatmeal cookies </answer>
+<answer> The chocolate chip cookies </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+We had hoped to place copies of our newsletter on all the chairs in the
+auditorium, but there were simply not enough of
+</txt1>
+<pron> them</pron> <txt2>.</txt2>
+</text>
+<quote>
+<quote1>
+not enough of
+</quote1>
+<pron> them </pron>
+<quote2>
+</quote2>
+</quote>
+<answers>
+<answer>copies of the newsletter </answer>
+<answer>chairs  </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+We had hoped to place copies of our newsletter on all the chairs in the
+auditorium, but there were simply too many of
+</txt1>
+<pron> them</pron> <txt2>.</txt2>
+</text>
+<quote>
+<quote1>
+too many of
+</quote1>
+<pron> them </pron>
+<quote2>
+</quote2>
+</quote>
+<answers>
+<answer>copies of the newsletter </answer>
+<answer>chairs  </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+I stuck a pin through a carrot. When I pulled the pin out,
+</txt1>
+<pron>  it </pron>
+<txt2>
+left a hole.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> it </pron>
+<quote2>
+left a hole
+</quote2>
+</quote>
+<answers>
+<answer> The pin </answer>
+<answer> The carrot </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+I stuck a pin through a carrot. When I pulled the pin out,
+</txt1>
+<pron>  it </pron>
+<txt2>
+had a hole.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> it </pron>
+<quote2>
+had a hole
+</quote2>
+</quote>
+<answers>
+<answer> The pin </answer>
+<answer> The carrot </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+I couldn't find a spoon, so I tried using a pen to stir my
+coffee. But that turned out to be a bad idea, because
+</txt1>
+<pron> it </pron>
+<txt2>
+got full of coffee.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> it </pron>
+<quote2>
+got full of coffee.
+</quote2>
+</quote>
+<answers>
+<answer> The pen </answer>
+<answer> The coffee </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+I couldn't find a spoon, so I tried using a pen to stir my
+coffee. But that turned out to be a bad idea, because
+</txt1>
+<pron> it </pron>
+<txt2>
+got full of ink.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> it </pron>
+<quote2>
+got full of ink.
+</quote2>
+</quote>
+<answers>
+<answer> The pen </answer>
+<answer> The coffee </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Steve follows Fred's example in everything.
+</txt1>
+<pron> He </pron>
+<txt2>
+admires him hugely.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron>He </pron>
+<quote2>
+admires him hugely.
+</quote2>
+</quote>
+<answers>
+<answer>Steve  </answer>
+<answer>Fred  </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Steve follows Fred's example in everything.
+</txt1>
+<pron> He </pron>
+<txt2>
+influences him hugely.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron>He </pron>
+<quote2>
+influences him hugely.
+</quote2>
+</quote>
+<answers>
+<answer>Steve  </answer>
+<answer>Fred  </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+The table won't fit through the doorway because
+</txt1>
+<pron>  it </pron>
+<txt2>
+is too wide.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> it </pron>
+<quote2>
+is too wide.
+</quote2>
+</quote>
+<answers>
+<answer> The table </answer>
+<answer> The doorway </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+The table won't fit through the doorway because
+</txt1>
+<pron>  it </pron>
+<txt2>
+is too narrow.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> it </pron>
+<quote2>
+is too narrow.
+</quote2>
+</quote>
+<answers>
+<answer> The table </answer>
+<answer> The doorway </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+
+
+<schema>
+<text>
+<txt1>
+Grace was happy to trade me her sweater for my jacket. She thinks
+</txt1>
+<pron> it </pron>
+<txt2>
+looks dowdy on her.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> it </pron>
+<quote2>
+looks dowdy on her.
+</quote2>
+</quote>
+<answers>
+<answer> The sweater </answer>
+<answer> The jacket </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Grace was happy to trade me her sweater for my jacket. She thinks
+</txt1>
+<pron> it </pron>
+<txt2>
+looks great on her.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> it </pron>
+<quote2>
+looks great on her.
+</quote2>
+</quote>
+<answers>
+<answer> The sweater </answer>
+<answer> The jacket </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+John hired Bill to take care of
+</txt1>
+<pron> him</pron>
+<txt2>.</txt2>
+</text>
+<quote>
+<quote1> take care of
+</quote1>
+<pron>him</pron>
+</quote>
+<answers>
+<answer> John </answer>
+<answer> Bill </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ray Jackendoff </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+John hired himself out to Bill to take care of
+</txt1>
+<pron> him</pron>
+<txt2>.</txt2>
+</text>
+<quote>
+<quote1> take care of
+</quote1>
+<pron>him</pron>
+</quote>
+<answers>
+<answer> John </answer>
+<answer> Bill </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ray Jackendoff </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+John promised Bill to leave, so an hour later
+</txt1>
+<pron> he </pron>
+<txt2> left.
+</txt2>
+</text>
+<quote>
+<pron>he </pron>
+<quote2> left
+</quote2>
+</quote>
+<answers>
+<answer>John </answer>
+<answer>Bill </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ray Jackendoff </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+John ordered Bill to leave, so an hour later
+</txt1>
+<pron> he </pron>
+<txt2> left.
+</txt2>
+</text>
+<quote>
+<pron>he </pron>
+<quote2> left
+</quote2>
+</quote>
+<answers>
+<answer>John </answer>
+<answer>Bill </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ray Jackendoff </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Sam Goodman's biography of the Spartan general Xenophanes
+conveys a vivid sense of the difficulties
+</txt1>
+<pron> he </pron>
+<txt2>
+faced in his research.
+</txt2>
+</text>
+<quote>
+<quote1> difficulties
+</quote1>
+<pron> he </pron>
+<quote2> faced
+</quote2>
+</quote>
+<answers>
+<answer> Goodman </answer>
+<answer> Xenophanes </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Sam Goodman's biography of the Spartan general Xenophanes
+conveys a vivid sense of the difficulties
+</txt1>
+<pron> he </pron>
+<txt2>
+faced in his childhood.
+</txt2>
+</text>
+<quote>
+<quote1> difficulties
+</quote1>
+<pron> he </pron>
+<quote2> faced
+</quote2>
+</quote>
+<answers>
+<answer> Goodman </answer>
+<answer> Xenophanes </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Emma's mother had died long ago, and
+</txt1>
+<pron> her </pron>
+<txt2>
+education had been managed by an excellent woman as governess.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron>her </pron>
+<quote2> education
+</quote2>
+</quote>
+<answers>
+<answer> Emma </answer>
+<answer> Emma's mother </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis, adapted from Emma by Jane Austen </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Emma's mother had died long ago, and
+</txt1>
+<pron> her </pron>
+<txt2>
+place had been taken by an excellent woman as governess.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron>her </pron>
+<quote2> place
+</quote2>
+</quote>
+<answers>
+<answer> Emma </answer>
+<answer> Emma's mother </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis, adapted from Emma by Jane Austen </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Jane knocked on Susan's door but
+</txt1>
+<pron> she </pron>
+<txt2>
+did not get an answer.
+</txt2>
+</text>
+<quote>
+<pron> she </pron>
+<quote2>
+did not get an answer.
+</quote2>
+</quote>
+<answers>
+<answer> Jane </answer>
+<answer> Susan </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Jane knocked on Susan's door but
+</txt1>
+<pron> she </pron>
+<txt2>
+did not answer.
+</txt2>
+</text>
+<quote>
+<pron> she </pron>
+<quote2>
+did not answer.
+</quote2>
+</quote>
+<answers>
+<answer> Jane </answer>
+<answer> Susan </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Joe paid the detective after
+</txt1>
+<pron> he </pron>
+<txt2>
+received the final report on the case.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> he </pron>
+<quote2>
+received the final report
+</quote2>
+</quote>
+<answers>
+<answer> Joe </answer>
+<answer> the detective </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> David Bender </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Joe paid the detective after
+</txt1>
+<pron> he </pron>
+<txt2>
+delivered the final report on the case.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> he </pron>
+<quote2>
+delivered the final report
+</quote2>
+</quote>
+<answers>
+<answer> Joe </answer>
+<answer> the detective </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> David Bender </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Beth didn't get angry with Sally, who had cut her off, because
+</txt1>
+<pron> she </pron>
+<txt2>
+stopped and counted to ten.
+</txt2>
+</text>
+<quote>
+<pron>she </pron>
+<quote2> stopped
+</quote2>
+</quote>
+<answers>
+<answer> Beth </answer>
+<answer> Sally </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> David Bender </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Beth didn't get angry with Sally, who had cut her off, because
+</txt1>
+<pron> she </pron>
+<txt2>
+stopped and apologized.
+</txt2>
+</text>
+<quote>
+<pron>she </pron>
+<quote2> stopped
+</quote2>
+</quote>
+<answers>
+<answer> Beth </answer>
+<answer> Sally </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> David Bender </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Jim signaled the barman and gestured toward
+</txt1>
+<pron> his </pron>
+<txt2> empty glass
+</txt2>
+</text>
+<quote>
+<pron>his </pron>
+<quote2> empty glass
+</quote2>
+</quote>
+<answers>
+<answer> Jim </answer>
+<answer> The barman </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> David Bender </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Jim signaled the barman and gestured toward
+</txt1>
+<pron> his </pron>
+<txt2> bathroom key.
+</txt2>
+</text>
+<quote>
+<pron>his </pron>
+<quote2> bathroom key
+</quote2>
+</quote>
+<answers>
+<answer> Jim </answer>
+<answer> The barman </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> David Bender </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Dan took the rear seat while Bill claimed the front because
+</txt1>
+<pron> his </pron>
+<txt2>
+"Dibs!" was slow.
+</txt2>
+</text>
+<quote>
+<pron>his </pron>
+<quote2> "Dibs!"
+</quote2>
+</quote>
+<answers>
+<answer> Dan </answer>
+<answer> Bill </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> David Bender </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Dan took the rear seat while Bill claimed the front because
+</txt1>
+<pron> his </pron>
+<txt2>
+"Dibs!" was quicker.
+</txt2>
+</text>
+<quote>
+<pron>his </pron>
+<quote2> "Dibs!"
+</quote2>
+</quote>
+<answers>
+<answer> Dan </answer>
+<answer> Bill </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> David Bender </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Tom said "Check" to Ralph as he moved
+</txt1>
+<pron> his </pron>
+<txt2> bishop.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron>his </pron>
+<quote2> bishop
+</quote2>
+</quote>
+<answers>
+<answer> Tom </answer>
+<answer> Ralph </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> David Bender </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Tom said "Check" to Ralph as he took
+</txt1>
+<pron> his </pron>
+<txt2> bishop.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron>his </pron>
+<quote2> bishop
+</quote2>
+</quote>
+<answers>
+<answer> Tom </answer>
+<answer> Ralph </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> David Bender </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+As Andrea in the crop duster passed over Susan,
+</txt1>
+<pron> she </pron>
+<txt2>
+could see the landing strip.
+</txt2>
+</text>
+<quote>
+<pron>she </pron>
+<quote2> could see
+</quote2>
+</quote>
+<answers>
+<answer> Andrea </answer>
+<answer> Susan </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> David Bender </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+As Andrea in the crop duster passed over Susan,
+</txt1>
+<pron> she </pron>
+<txt2>
+could see the landing gear.
+</txt2>
+</text>
+<quote>
+<pron>she </pron>
+<quote2> could see
+</quote2>
+</quote>
+<answers>
+<answer> Andrea </answer>
+<answer> Susan </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> David Bender </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Tom gave Ralph a lift to school so
+</txt1>
+<pron> he </pron>
+<txt2>
+wouldn't have to drive alone.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> he </pron>
+<quote2>
+wouldn't have to drive alone.
+</quote2>
+</quote>
+<answers>
+<answer> Tom </answer>
+<answer> Ralph </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> David Bender </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Tom gave Ralph a lift to school so
+</txt1>
+<pron> he </pron>
+<txt2>
+wouldn't have to walk.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> he </pron>
+<quote2>
+wouldn't have to walk.
+</quote2>
+</quote>
+<answers>
+<answer> Tom </answer>
+<answer> Ralph </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> David Bender </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Bill passed the half-empty plate to John because
+</txt1>
+<pron> he </pron>
+<txt2>
+was full.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron>he </pron>
+<quote2>
+was full.
+</quote2>
+</quote>
+<answers>
+<answer>Bill </answer>
+<answer>John </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> David Bender </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Bill passed the half-empty plate to John because
+</txt1>
+<pron> he </pron>
+<txt2>
+was hungry.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron>he </pron>
+<quote2>
+was hungry
+</quote2>
+</quote>
+<answers>
+<answer>Bill </answer>
+<answer>John </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> David Bender </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+Bill passed the gameboy to John because
+</txt1>
+<pron> his </pron>
+<txt2>
+turn was over.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron>his </pron>
+<quote2>
+turn
+</quote2>
+</quote>
+<answers>
+<answer>Bill </answer>
+<answer>John </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> David Bender </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Bill passed the gameboy to John because
+</txt1>
+<pron> his </pron>
+<txt2>
+turn was next.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron>his </pron>
+<quote2>
+turn
+</quote2>
+</quote>
+<answers>
+<answer>Bill </answer>
+<answer>John </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> David Bender </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+The man lifted the boy onto
+</txt1>
+<pron> his </pron>
+<txt2>
+shoulders.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> his </pron>
+<quote2>
+shoulders
+</quote2>
+</quote>
+<answers>
+<answer> The man </answer>
+<answer> The boy </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> David Bender </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+The man lifted the boy onto
+</txt1>
+<pron> his </pron>
+<txt2>
+bunk bed.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron> his </pron>
+<quote2>
+bunk bed.
+</quote2>
+</quote>
+<answers>
+<answer> The man </answer>
+<answer> The boy </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> David Bender </source>
+</schema>
+
+
+
+<schema>
+<text>
+<txt1> Stretching
+</txt1>
+<pron> her </pron>
+<txt2>
+back, the woman smiled at the girl.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron>her </pron>
+<quote2> back
+</quote2>
+</quote>
+<answers>
+<answer> The woman </answer>
+<answer> The girl </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> David Bender </source>
+</schema>
+
+<schema>
+<text>
+<txt1> Patting
+</txt1>
+<pron> her </pron>
+<txt2>
+back, the woman smiled at the girl.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron>her </pron>
+<quote2> back
+</quote2>
+</quote>
+<answers>
+<answer> The woman </answer>
+<answer> The girl </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> David Bender </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Billy cried because Toby wouldn't accept
+</txt1>
+<pron> his </pron>
+<txt2> toy.
+</txt2>
+</text>
+<quote>
+<pron>his </pron>
+<quote2> toy
+</quote2>
+</quote>
+<answers>
+<answer> Billy </answer>
+<answer> Toby </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> David Bender </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Billy cried because Toby wouldn't share
+</txt1>
+<pron> his </pron>
+<txt2> toy.
+</txt2>
+</text>
+<quote>
+<pron>his </pron>
+<quote2> toy
+</quote2>
+</quote>
+<answers>
+<answer> Billy </answer>
+<answer> Toby </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> David Bender </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Lily spoke to Donna, breaking
+</txt1>
+<pron> her </pron>
+<txt2>
+silence.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron>her </pron>
+<quote2>
+silence.
+</quote2>
+</quote>
+<answers>
+<answer>Lily  </answer>
+<answer>Donna </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> David Bender </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Lily spoke to Donna, breaking
+</txt1>
+<pron> her </pron>
+<txt2>
+concentration.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron>her </pron>
+<quote2>
+concentration.
+</quote2>
+</quote>
+<answers>
+<answer>Lily  </answer>
+<answer>Donna </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> David Bender </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+When Tommy dropped his ice cream, Timmy giggled, so father gave
+</txt1>
+<pron> him </pron>
+<txt2>
+a sympathetic look.
+</txt2>
+</text>
+<quote>
+<quote1> gave
+</quote1>
+<pron> him </pron>
+</quote>
+<answers>
+<answer> Tommy </answer>
+<answer> Timmy </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> David Bender </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+When Tommy dropped his ice cream, Timmy giggled, so father gave
+</txt1>
+<pron> him </pron>
+<txt2>
+a stern look.
+</txt2>
+</text>
+<quote>
+<quote1> gave
+</quote1>
+<pron> him </pron>
+</quote>
+<answers>
+<answer> Tommy </answer>
+<answer> Timmy </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> David Bender </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+As Ollie carried Tommy up the long winding steps,
+</txt1>
+<pron> his </pron>
+<txt2>
+legs ached.
+</txt2>
+</text>
+<quote>
+<pron>his </pron>
+<quote2> legs ached.
+</quote2>
+</quote>
+<answers>
+<answer> Ollie </answer>
+<answer> Tommy </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> David Bender </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+As Ollie carried Tommy up the long winding steps,
+</txt1>
+<pron> his </pron>
+<txt2>
+legs dangled.
+</txt2>
+</text>
+<quote>
+<pron>his </pron>
+<quote2> legs dangled.
+</quote2>
+</quote>
+<answers>
+<answer> Ollie </answer>
+<answer> Tommy </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> David Bender </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+The father carried the sleeping boy in
+</txt1>
+<pron> his </pron>
+<txt2> arms
+</txt2>
+</text>
+<quote>
+<pron> his </pron>
+<quote2> arms
+</quote2>
+</quote>
+<answers>
+<answer> The father </answer>
+<answer> The boy </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> David Bender </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+The father carried the sleeping boy in
+</txt1>
+<pron> his </pron>
+<txt2> bassinet.
+</txt2>
+</text>
+<quote>
+<pron> his </pron>
+<quote2> bassinet.
+</quote2>
+</quote>
+<answers>
+<answer> The father </answer>
+<answer> The boy </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> David Bender </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+The woman held the girl against
+</txt1>
+<pron> her </pron>
+<txt2>chest
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron>her </pron>
+<quote2> chest.
+</quote2>
+</quote>
+<answers>
+<answer>The woman </answer>
+<answer>The girl </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> David Bender </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+The woman held the girl against
+</txt1>
+<pron> her </pron>
+<txt2> will.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron>her </pron>
+<quote2> will
+</quote2>
+</quote>
+<answers>
+<answer>The woman </answer>
+<answer>The girl </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> David Bender </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Pam's parents came home and found her having sex with her boyfriend, Paul.
+</txt1>
+<pron> They </pron>
+<txt2>
+were furious about it.
+</txt2>
+</text>
+<quote>
+<pron>They </pron>
+<quote2>
+were furious
+</quote2>
+</quote>
+<answers>
+<answer>Pam's parents </answer>
+<answer>Pam and Paul </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> David Bender </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Pam's parents came home and found her having sex with her boyfriend, Paul.
+</txt1>
+<pron> They </pron>
+<txt2>
+were embarrassed about it.
+</txt2>
+</text>
+<quote>
+<pron>They </pron>
+<quote2>
+were embarrassed
+</quote2>
+</quote>
+<answers>
+<answer>Pam's parents </answer>
+<answer>Pam and Paul </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> David Bender </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Dr. Adams informed Kate that
+</txt1>
+<pron> she </pron>
+<txt2>
+had retired and presented several options for future treatment.
+</txt2>
+</text>
+<quote>
+<pron>she </pron>
+<quote2>
+had retired
+</quote2>
+</quote>
+<answers>
+<answer> Dr. Adams </answer>
+<answer> Kate  </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> David Bender </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Dr. Adams informed Kate that
+</txt1>
+<pron> she </pron>
+<txt2>
+had cancer and presented several options for future treatment.
+</txt2>
+</text>
+<quote>
+<pron>she </pron>
+<quote2>
+had cancer
+</quote2>
+</quote>
+<answers>
+<answer> Dr. Adams </answer>
+<answer> Kate  </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> David Bender </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Dan had to stop Bill from toying with the injured bird.
+</txt1>
+<pron> He </pron>
+<txt2>
+is very compassionate.
+</txt2>
+</text>
+<quote>
+<pron>He </pron>
+<quote2>
+is very compassionate.
+</quote2>
+</quote>
+<answers>
+<answer>Dan </answer>
+<answer>Bill </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> David Bender </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Dan had to stop Bill from toying with the injured bird.
+</txt1>
+<pron> He </pron>
+<txt2>
+is very cruel.
+</txt2>
+</text>
+<quote>
+<pron>He </pron>
+<quote2>
+is very cruel.
+</quote2>
+</quote>
+<answers>
+<answer>Dan </answer>
+<answer>Bill </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> David Bender </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+George got free tickets to the play, but he gave them to Eric, even though
+</txt1>
+<pron> he </pron>
+<txt2>
+was particularly eager to see it.
+</txt2>
+</text>
+<quote>
+<pron>he </pron>
+<quote2>
+was particularly eager
+</quote2>
+</quote>
+<answers>
+<answer> George </answer>
+<answer> Eric </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> David Bender </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+George got free tickets to the play, but he gave them to Eric, because
+</txt1>
+<pron> he </pron>
+<txt2>
+was particularly eager to see it.
+</txt2>
+</text>
+<quote>
+<pron>he </pron>
+<quote2>
+was particularly eager
+</quote2>
+</quote>
+<answers>
+<answer> George </answer>
+<answer> Eric </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> David Bender </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+George got free tickets to the play, but he gave them to Eric, because
+</txt1>
+<pron> he </pron>
+<txt2>
+was not particularly eager to see it.
+</txt2>
+</text>
+<quote>
+<pron>he </pron>
+<quote2>
+was not particularly eager
+</quote2>
+</quote>
+<answers>
+<answer> George </answer>
+<answer> Eric </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> David Bender </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Jane gave Joan candy because
+</txt1>
+<pron> she </pron>
+<txt2>
+wasn't hungry.
+</txt2>
+</text>
+<quote>
+<pron>she </pron>
+<quote2>
+wasn't hungry.
+</quote2>
+</quote>
+<answers>
+<answer> Jane </answer>
+<answer> Joan </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source>
+"Linguistic Problems and Complexities"
+http://www.csi.uottawa.ca/tanka/files/complexities.html
+</source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Jane gave Joan candy because
+</txt1>
+<pron> she </pron>
+<txt2>
+was hungry.
+</txt2>
+</text>
+<quote>
+<pron>she </pron>
+<quote2>
+was hungry.
+</quote2>
+</quote>
+<answers>
+<answer> Jane </answer>
+<answer> Joan </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source>
+"Linguistic Problems and Complexities"
+http://www.csi.uottawa.ca/tanka/files/complexities.html
+</source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+I tried to paint a picture of an orchard, with lemons in the lemon trees,
+but
+</txt1>
+<pron> they </pron>
+<txt2>
+came out looking more like light bulbs.
+</txt2>
+</text>
+<quote>
+<pron> they </pron>
+<quote2> came out
+</quote2>
+</quote>
+<answers>
+<answer> lemons </answer>
+<answer> lemon trees </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+I tried to paint a picture of an orchard, with lemons in the lemon trees,
+but
+</txt1>
+<pron> they </pron>
+<txt2>
+came out looking more like telephone poles.
+</txt2>
+</text>
+<quote>
+<pron> they </pron>
+<quote2> came out
+</quote2>
+</quote>
+<answers>
+<answer> lemons </answer>
+<answer> lemon trees </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Ernest Davis </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+James asked Robert for a favor but
+</txt1>
+<pron> he </pron>
+<txt2> was refused.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron>he </pron>
+<quote2> was refused.
+</quote2>
+</quote>
+<answers>
+<answer> James </answer>
+<answer> Robert </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> From (Rahman and Ng 2012)</source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+James asked Robert for a favor but
+</txt1>
+<pron> he </pron>
+<txt2> refused.
+</txt2>
+</text>
+<quote>
+<quote1>
+</quote1>
+<pron>he </pron>
+<quote2> refused.
+</quote2>
+</quote>
+<answers>
+<answer> James </answer>
+<answer> Robert </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> From (Rahman and Ng 2012)</source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Kirilov ceded the presidency to Shatov because
+</txt1>
+<pron> he </pron>
+<txt2>
+was less popular.
+</txt2>
+</text>
+<quote>
+<pron> he </pron>
+<quote2>
+was less popular.
+</quote2>
+</quote>
+<answers>
+<answer> Kirilov </answer>
+<answer> Shatov </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Modified from (Rahman and Ng 2012) </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Kirilov ceded the presidency to Shatov because
+</txt1>
+<pron> he </pron>
+<txt2>
+was more popular.
+</txt2>
+</text>
+<quote>
+<pron> he </pron>
+<quote2>
+was more popular.
+</quote2>
+</quote>
+<answers>
+<answer> Kirilov </answer>
+<answer> Shatov </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Modified from (Rahman and Ng 2012) </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Emma did not pass the ball to Janie although
+</txt1>
+<pron> she </pron>
+<txt2>
+saw that she was open.
+</txt2>
+</text>
+<quote>
+<pron>she </pron>
+<quote2> saw
+</quote2>
+</quote>
+<answers>
+<answer> Emma </answer>
+<answer> Janie </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Modified from (Rahman and Ng 2012) </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Emma did not pass the ball to Janie although
+</txt1>
+<pron> she </pron>
+<txt2>
+was open.
+</txt2>
+</text>
+<quote>
+<pron>she </pron>
+<quote2> was open
+</quote2>
+</quote>
+<answers>
+<answer> Emma </answer>
+<answer> Janie </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Modified from (Rahman and Ng 2012) </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+I put the butterfly wing on the table and
+</txt1>
+<pron> it </pron>
+<txt2>
+broke.
+</txt2>
+</text>
+<quote>
+<pron> it </pron>
+<quote2>
+broke.
+</quote2>
+</quote>
+<answers>
+<answer>The butterfly wing </answer>
+<answer> The table </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> (Winograd 1971) </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+I put the heavy book on the table and
+</txt1>
+<pron> it </pron>
+<txt2>
+broke.
+</txt2>
+</text>
+<quote>
+<pron> it </pron>
+<quote2>
+broke.
+</quote2>
+</quote>
+<answers>
+<answer>The heavy book </answer>
+<answer> The table </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> (Winograd 1971) </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+Madonna fired her trainer because
+</txt1>
+<pron> she  </pron>
+<txt2> couldn't stand her boyfriend.
+</txt2>
+</text>
+<quote>
+<pron>she </pron>
+<quote2> couldn't stand
+</quote2>
+</quote>
+<answers>
+<answer> Madonna </answer>
+<answer> The trainer </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Modified from a headline in People Magazine
+http://www.people.com/article/madonna-fired-trainer-slept-with-boyfriend-manila-tour-stop
+</source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Madonna fired her trainer because
+</txt1>
+<pron> she  </pron>
+<txt2> slept with her boyfriend.
+</txt2>
+</text>
+<quote>
+<pron>she </pron>
+<quote2> slept
+</quote2>
+</quote>
+<answers>
+<answer> Madonna </answer>
+<answer> The trainer </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Modified from a headline in People Magazine
+http://www.people.com/article/madonna-fired-trainer-slept-with-boyfriend-manila-tour-stop
+</source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Madonna fired her trainer because she slept with
+</txt1>
+<pron> her  </pron>
+<txt2> boyfriend.
+</txt2>
+</text>
+<quote>
+<pron>her </pron>
+<quote2> boyfriend
+</quote2>
+</quote>
+<answers>
+<answer> Madonna </answer>
+<answer> The trainer </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Modified from a headline in People Magazine
+http://www.people.com/article/madonna-fired-trainer-slept-with-boyfriend-manila-tour-stop
+</source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Madonna fired her trainer because she couldn't stand
+</txt1>
+<pron> her  </pron>
+<txt2> boyfriend.
+</txt2>
+</text>
+<quote>
+<pron>her </pron>
+<quote2> boyfriend
+</quote2>
+</quote>
+<answers>
+<answer> Madonna </answer>
+<answer> The trainer </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Modified from a headline in People Magazine
+http://www.people.com/article/madonna-fired-trainer-slept-with-boyfriend-manila-tour-stop
+</source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Carol believed that Rebecca suspected that
+</txt1>
+<pron> she </pron>
+<txt2>
+had stolen the watch.
+</txt2>
+</text>
+<quote>
+<pron> she </pron>
+<quote2>
+had stolen the watch.
+</quote2>
+</quote>
+<answers>
+<answer> Carol </answer>
+<answer> Rebecca </answer>
+</answers>
+<correctAnswer> A  </correctAnswer>
+<source> Leora Morgenstern </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Carol believed that Rebecca regretted that
+</txt1>
+<pron> she </pron>
+<txt2>
+had stolen the watch.
+</txt2>
+</text>
+<quote>
+<pron> she </pron>
+<quote2>
+had stolen the watch.
+</quote2>
+</quote>
+<answers>
+<answer> Carol </answer>
+<answer> Rebecca </answer>
+</answers>
+<correctAnswer> B  </correctAnswer>
+<source> Leora Morgenstern </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+This book introduced Shakespeare to Ovid; it was a major influence on
+</txt1>
+<pron> his </pron>
+<txt2>  writing.
+</txt2>
+</text>
+<quote>
+<pron> his </pron>
+<quote2> writing.
+</quote2>
+</quote>
+<answers>
+<answer> Shakespeare </answer>
+<answer> Ovid </answer>
+</answers>
+<correctAnswer> A.  </correctAnswer>
+<source> Ernest Davis (coming out of a Facebook discussion with Michael
+Witbrock) </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+This book introduced Shakespeare to Goethe; it was a major influence on
+</txt1>
+<pron> his </pron>
+<txt2>  writing.
+</txt2>
+</text>
+<quote>
+<pron> his </pron>
+<quote2> writing.
+</quote2>
+</quote>
+<answers>
+<answer> Shakespeare </answer>
+<answer> Goethe </answer>
+</answers>
+<correctAnswer> B.  </correctAnswer>
+<source> Ernest Davis (coming out of a Facebook discussion with Michael
+Witbrock) </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+This book introduced Shakespeare to Ovid; it was a fine selection of
+</txt1>
+<pron> his </pron>
+<txt2>  writing.
+</txt2>
+</text>
+<quote>
+<pron> his </pron>
+<quote2> writing.
+</quote2>
+</quote>
+<answers>
+<answer> Shakespeare </answer>
+<answer> Ovid </answer>
+</answers>
+<correctAnswer> B.  </correctAnswer>
+<source> Ernest Davis (coming out of a Facebook discussion with Michael
+Witbrock) </source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+This book introduced Shakespeare to Goethe; it was a fine selection of
+</txt1>
+<pron> his </pron>
+<txt2>  writing.
+</txt2>
+</text>
+<quote>
+<pron> his </pron>
+<quote2> writing.
+</quote2>
+</quote>
+<answers>
+<answer> Shakespeare </answer>
+<answer> Goethe </answer>
+</answers>
+<correctAnswer> A.  </correctAnswer>
+<source> Ernest Davis (coming out of a Facebook discussion with Michael
+Witbrock) </source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Alice looked for her friend Jade in the crowd. Since
+</txt1>
+<pron> she </pron>
+<txt2>   always
+has good luck, Alice spotted her quickly.
+</txt2>
+</text>
+<quote>
+<pron> she </pron>
+<quote2> always has good luck.
+</quote2>
+</quote>
+<answers>
+<answer> Alice </answer>
+<answer> Jade </answer>
+</answers>
+<correctAnswer> A.  </correctAnswer>
+<source> Sabri Meeran and Ernest Davis
+</source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+Alice looked for her friend Jade in the crowd. Since
+</txt1>
+<pron> she </pron>
+<txt2>   always
+wears a red turban, Alice spotted her quickly.
+</txt2>
+</text>
+<quote>
+<pron> she </pron>
+<quote2> always wears a red turban
+</quote2>
+</quote>
+<answers>
+<answer> Alice </answer>
+<answer> Jade </answer>
+</answers>
+<correctAnswer> B.  </correctAnswer>
+<source> Sabri Meeran and Ernest Davis
+</source>
+</schema>
+
+
+<schema>
+<text>
+<txt1>
+During a game of tag, Ethan chased Luke because
+</txt1>
+<pron> he </pron>
+<txt2>   was "it".
+</txt2>
+</text>
+<quote>
+<pron> he </pron>
+<quote2> was "it".
+</quote2>
+</quote>
+<answers>
+<answer> Ethan </answer>
+<answer> Luke </answer>
+</answers>
+<correctAnswer> A.  </correctAnswer>
+<source> Sabri Meeran
+</source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+During a game of tag, Ethan ran from Luke because
+</txt1>
+<pron> he </pron>
+<txt2>   was "it".
+</txt2>
+</text>
+<quote>
+<pron> he </pron>
+<quote2> was "it".
+</quote2>
+</quote>
+<answers>
+<answer> Ethan </answer>
+<answer> Luke </answer>
+</answers>
+<correctAnswer> B.  </correctAnswer>
+<source> Sabri Meeran
+</source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+At the Loebner competition the judges couldn't figure out which respondents
+were the chatbots because
+</txt1>
+<pron> they </pron>
+<txt2>   were so stupid.
+</txt2>
+</text>
+<quote>
+<pron> they </pron>
+<quote2> were so stupid.
+</quote2>
+</quote>
+<answers>
+<answer> the judges </answer>
+<answer> the chatbots </answer>
+</answers>
+<correctAnswer> A.  </correctAnswer>
+<source> Sabri Meeran
+</source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+At the Loebner competition the judges couldn't figure out which respondents
+were the chatbots because
+</txt1>
+<pron> they </pron>
+<txt2>   were so advanced.
+</txt2>
+</text>
+<quote>
+<pron> they </pron>
+<quote2> were so advanced.
+</quote2>
+</quote>
+<answers>
+<answer> the judges </answer>
+<answer> the chatbots </answer>
+</answers>
+<correctAnswer> B.  </correctAnswer>
+<source> Sabri Meeran
+</source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+The user changed his password from "GrWQWu8JyC" to "willow-towered Canopy
+Huntertropic wrestles" as
+</txt1>
+<pron> it </pron>
+<txt2>   was easy to forget.
+</txt2>
+</text>
+<quote>
+<pron> it </pron>
+<quote2> was easy to forget.
+</quote2>
+</quote>
+<answers>
+<answer> GrWQWu8JyC </answer>
+<answer>willow-towered Canopy
+Huntertropic wrestles </answer>
+</answers>
+<correctAnswer> A.  </correctAnswer>
+<source> Sabri Meeran
+</source>
+</schema>
+
+<schema>
+<text>
+<txt1>
+The user changed his password from "GrWQWu8JyC" to "willow-towered Canopy
+Huntertropic wrestles" as
+</txt1>
+<pron> it </pron>
+<txt2>   was easy to remember.
+</txt2>
+</text>
+<quote>
+<pron> it </pron>
+<quote2> was easy to remember.
+</quote2>
+</quote>
+<answers>
+<answer> GrWQWu8JyC </answer>
+<answer>willow-towered Canopy
+Huntertropic wrestles </answer>
+</answers>
+<correctAnswer> B.  </correctAnswer>
+<source> Sabri Meeran
+</source>
+</schema>
+
+</collection>

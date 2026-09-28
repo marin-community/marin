@@ -1,0 +1,6 @@
+run_order,run_name,candidate_id,target,epoch_cap,aliases,run_id,data_seed,trainer_seed,train_steps,expected_checkpoint_step,tpu_type,tpu_region,tpu_zone,fit_panel_max_materialized_epoch,runtime_max_simulated_epoch
+0,cmp_table9_seed662009_t0_cmp_t9_quad_cap12,cmp_t9_quad_cap12,table9,12,cmp_t9_quad_cap12,7440100,662009,0,3007,3006,v6e-8,us-east5,us-east5-b,11.188181155520297,11.188175556616052
+1,cmp_table9_seed662009_t0_cmp_t9_spline_cap12,cmp_t9_spline_cap12,table9,12,cmp_t9_spline_cap12,7440101,662009,0,3007,3006,v6e-8,us-east5,us-east5-b,10.873024802010958,10.873019360820487
+2,cmp_table9_seed662009_t0_cmp_t9_lgbm_cap12,cmp_t9_lgbm_cap12,table9,12,cmp_t9_lgbm_cap12,7440102,662009,0,3007,3006,v6e-8,us-east5,us-east5-b,9.259169039169818,9.259164405601581
+3,cmp_table9_seed662009_t0_cmp_t9_krr_cap16,cmp_t9_krr_cap16,table9,16,cmp_t9_krr_cap16,7440103,662009,0,3007,3006,v6e-8,us-east5,us-east5-b,15.151367518641518,15.15135993643895
+4,cmp_table9_seed662009_t0_cmp_t9_mk1_cap08,cmp_t9_mk1_cap08,table9,8,cmp_t9_mk1_cap08,7440104,662009,0,3007,3006,v6e-8,us-east5,us-east5-b,7.643013333790328,7.643009508995288

@@ -1,0 +1,215 @@
+{
+  "design_sha256": "5b7ef54df7ba03726c0204efa53e6865050ee02d8c94767075758868ffc244a4",
+  "jax_version": "0.11.1",
+  "verification_scope": "Local allocator replay only; pinned runtime and actual cache remain prelaunch checks.",
+  "rows": [
+    {
+      "p": 0.0,
+      "proxy_starcoder_sequences": 0,
+      "target_starcoder_sequences": 0,
+      "matched_proxy_epochs": 0.0,
+      "target_epochs": 0.0,
+      "relative_epoch_error": null
+    },
+    {
+      "p": 0.0364194347695976,
+      "proxy_starcoder_sequences": 4901,
+      "target_starcoder_sequences": 130709,
+      "matched_proxy_epochs": 0.9572265625,
+      "target_epochs": 0.9561461259363296,
+      "relative_epoch_error": 0.0011299910488182796
+    },
+    {
+      "p": 0.05,
+      "proxy_starcoder_sequences": 6758,
+      "target_starcoder_sequences": 180165,
+      "matched_proxy_epochs": 1.319921875,
+      "target_epochs": 1.317920470505618,
+      "relative_epoch_error": 0.0015186079427191856
+    },
+    {
+      "p": 0.1,
+      "proxy_starcoder_sequences": 13511,
+      "target_starcoder_sequences": 360332,
+      "matched_proxy_epochs": 2.6388671875,
+      "target_epochs": 2.6358555711610485,
+      "relative_epoch_error": 0.0011425574192689414
+    },
+    {
+      "p": 0.1407040424010894,
+      "proxy_starcoder_sequences": 19082,
+      "target_starcoder_sequences": 508706,
+      "matched_proxy_epochs": 3.726953125,
+      "target_epochs": 3.721222495318352,
+      "relative_epoch_error": 0.001539985767810892
+    },
+    {
+      "p": 0.15,
+      "proxy_starcoder_sequences": 20342,
+      "target_starcoder_sequences": 542261,
+      "matched_proxy_epochs": 3.973046875,
+      "target_epochs": 3.966679833801498,
+      "relative_epoch_error": 0.0016051311084515074
+    },
+    {
+      "p": 0.17005,
+      "proxy_starcoder_sequences": 23061,
+      "target_starcoder_sequences": 614677,
+      "matched_proxy_epochs": 4.5041015625,
+      "target_epochs": 4.496408298220974,
+      "relative_epoch_error": 0.0017109799130274883
+    },
+    {
+      "p": 0.18,
+      "proxy_starcoder_sequences": 24385,
+      "target_starcoder_sequences": 650001,
+      "matched_proxy_epochs": 4.7626953125,
+      "target_epochs": 4.754806004213483,
+      "relative_epoch_error": 0.0016592282165719396
+    },
+    {
+      "p": 0.2,
+      "proxy_starcoder_sequences": 27103,
+      "target_starcoder_sequences": 722413,
+      "matched_proxy_epochs": 5.2935546875,
+      "target_epochs": 5.284505208333333,
+      "relative_epoch_error": 0.0017124553406431264
+    },
+    {
+      "p": 0.2405,
+      "proxy_starcoder_sequences": 32602,
+      "target_starcoder_sequences": 869012,
+      "matched_proxy_epochs": 6.367578125,
+      "target_epochs": 6.356887874531835,
+      "relative_epoch_error": 0.0016816798847427705
+    },
+    {
+      "p": 0.25,
+      "proxy_starcoder_sequences": 33927,
+      "target_starcoder_sequences": 904334,
+      "matched_proxy_epochs": 6.6263671875,
+      "target_epochs": 6.615270950374532,
+      "relative_epoch_error": 0.0016773669905145727
+    },
+    {
+      "p": 0.26,
+      "proxy_starcoder_sequences": 35453,
+      "target_starcoder_sequences": 944958,
+      "matched_proxy_epochs": 6.9244140625,
+      "target_epochs": 6.912438553370786,
+      "relative_epoch_error": 0.001732457950512245
+    },
+    {
+      "p": 0.3,
+      "proxy_starcoder_sequences": 40885,
+      "target_starcoder_sequences": 1089787,
+      "matched_proxy_epochs": 7.9853515625,
+      "target_epochs": 7.971873536985019,
+      "relative_epoch_error": 0.0016906973564558836
+    },
+    {
+      "p": 0.35,
+      "proxy_starcoder_sequences": 47711,
+      "target_starcoder_sequences": 1271716,
+      "matched_proxy_epochs": 9.3185546875,
+      "target_epochs": 9.302697799625468,
+      "relative_epoch_error": 0.001704547241679899
+    },
+    {
+      "p": 0.4,
+      "proxy_starcoder_sequences": 54469,
+      "target_starcoder_sequences": 1451873,
+      "matched_proxy_epochs": 10.6384765625,
+      "target_epochs": 10.620559749531836,
+      "relative_epoch_error": 0.001686993283847693
+    },
+    {
+      "p": 0.46,
+      "proxy_starcoder_sequences": 62553,
+      "target_starcoder_sequences": 1667355,
+      "matched_proxy_epochs": 12.2173828125,
+      "target_epochs": 12.196826720505618,
+      "relative_epoch_error": 0.0016853639446909874
+    },
+    {
+      "p": 0.5,
+      "proxy_starcoder_sequences": 68054,
+      "target_starcoder_sequences": 1813953,
+      "matched_proxy_epochs": 13.291796875,
+      "target_epochs": 13.269202071629213,
+      "relative_epoch_error": 0.0017028004584462852
+    },
+    {
+      "p": 0.54,
+      "proxy_starcoder_sequences": 73422,
+      "target_starcoder_sequences": 1957023,
+      "matched_proxy_epochs": 14.340234375,
+      "target_epochs": 14.315769838483146,
+      "relative_epoch_error": 0.0017089221741390936
+    },
+    {
+      "p": 0.55,
+      "proxy_starcoder_sequences": 74881,
+      "target_starcoder_sequences": 1995879,
+      "matched_proxy_epochs": 14.6251953125,
+      "target_epochs": 14.600004389044944,
+      "relative_epoch_error": 0.0017254051974093798
+    },
+    {
+      "p": 0.6,
+      "proxy_starcoder_sequences": 81635,
+      "target_starcoder_sequences": 2176036,
+      "matched_proxy_epochs": 15.9443359375,
+      "target_epochs": 15.917866338951312,
+      "relative_epoch_error": 0.0016628860919580823
+    },
+    {
+      "p": 0.65,
+      "proxy_starcoder_sequences": 88327,
+      "target_starcoder_sequences": 2354421,
+      "matched_proxy_epochs": 17.2513671875,
+      "target_epochs": 17.222765976123597,
+      "relative_epoch_error": 0.0016606630674802503
+    },
+    {
+      "p": 0.7,
+      "proxy_starcoder_sequences": 95145,
+      "target_starcoder_sequences": 2536343,
+      "matched_proxy_epochs": 18.5830078125,
+      "target_epochs": 18.5535390332397,
+      "relative_epoch_error": 0.0015883104138516568
+    },
+    {
+      "p": 0.75,
+      "proxy_starcoder_sequences": 101965,
+      "target_starcoder_sequences": 2718263,
+      "matched_proxy_epochs": 19.9150390625,
+      "target_epochs": 19.884297460205993,
+      "relative_epoch_error": 0.0015460240602178654
+    },
+    {
+      "p": 0.8,
+      "proxy_starcoder_sequences": 108720,
+      "target_starcoder_sequences": 2898421,
+      "matched_proxy_epochs": 21.234375,
+      "target_epochs": 21.202166725187265,
+      "relative_epoch_error": 0.0015191029874541684
+    },
+    {
+      "p": 0.9,
+      "proxy_starcoder_sequences": 122299,
+      "target_starcoder_sequences": 3260507,
+      "matched_proxy_epochs": 23.8865234375,
+      "target_epochs": 23.850852937734082,
+      "relative_epoch_error": 0.0014955649535486337
+    },
+    {
+      "p": 1.0,
+      "proxy_starcoder_sequences": 135680,
+      "target_starcoder_sequences": 3617280,
+      "matched_proxy_epochs": 26.5,
+      "target_epochs": 26.46067415730337,
+      "relative_epoch_error": 0.0014861995753716606
+    }
+  ]
+}

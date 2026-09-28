@@ -1,0 +1,72 @@
+[
+  {
+    "job": "/calvinxu/tpp10-bpb-repair",
+    "state": "running",
+    "resources": {
+      "cpu_millicores": 1000,
+      "memory_bytes": 4294967296,
+      "disk_bytes": 34359738368,
+      "device": null
+    },
+    "task_states": [
+      {
+        "task": "/calvinxu/tpp10-bpb-repair/0",
+        "state": "running",
+        "worker": "marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260905-0245-08c4ed91-worker-0",
+        "error": "",
+        "pending": "",
+        "usage": null
+      }
+    ]
+  },
+  {
+    "job": "/calvinxu/tpp10-bpb-repair/bpb-audit-proxy",
+    "state": "pending",
+    "resources": {
+      "cpu_millicores": 8000,
+      "memory_bytes": 34359738368,
+      "disk_bytes": 34359738368,
+      "device": {
+        "kind": "tpu",
+        "variant": "v5p-8",
+        "count": 4,
+        "topology": ""
+      }
+    },
+    "task_states": [
+      {
+        "task": "/calvinxu/tpp10-bpb-repair/bpb-audit-proxy/0",
+        "state": "pending",
+        "worker": "",
+        "error": "",
+        "pending": "",
+        "usage": null
+      }
+    ]
+  },
+  {
+    "job": "/calvinxu/tpp10-bpb-repair/bpb-audit-target",
+    "state": "pending",
+    "resources": {
+      "cpu_millicores": 8000,
+      "memory_bytes": 34359738368,
+      "disk_bytes": 34359738368,
+      "device": {
+        "kind": "tpu",
+        "variant": "v5p-8",
+        "count": 4,
+        "topology": ""
+      }
+    },
+    "task_states": [
+      {
+        "task": "/calvinxu/tpp10-bpb-repair/bpb-audit-target/0",
+        "state": "pending",
+        "worker": "",
+        "error": "",
+        "pending": "",
+        "usage": null
+      }
+    ]
+  }
+]

@@ -1,0 +1,72 @@
+{
+  "cases": [
+    {
+      "cap": 6,
+      "kappa": 0.25,
+      "target": "uncheatable"
+    },
+    {
+      "cap": 6,
+      "kappa": 0.5,
+      "target": "uncheatable"
+    },
+    {
+      "cap": 6,
+      "kappa": 1.0,
+      "target": "uncheatable"
+    },
+    {
+      "cap": 6,
+      "kappa": 0.25,
+      "target": "table9"
+    },
+    {
+      "cap": 6,
+      "kappa": 0.5,
+      "target": "table9"
+    },
+    {
+      "cap": 6,
+      "kappa": 1.0,
+      "target": "table9"
+    },
+    {
+      "cap": 8,
+      "kappa": 0.25,
+      "target": "table9"
+    },
+    {
+      "cap": 8,
+      "kappa": 0.5,
+      "target": "table9"
+    },
+    {
+      "cap": 8,
+      "kappa": 1.0,
+      "target": "table9"
+    }
+  ],
+  "inputs": {
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_coupling_followup_20260906/incumbent_coupling/reconstructed_heads/table9/fold_-1.npz": "e45626b5411200ac19d887cbc89b6eccd7642c3651b9696627970b38ea66f7c1",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_coupling_followup_20260906/incumbent_coupling/reconstructed_heads/uncheatable/fold_-1.npz": "646d4928b45dcdc90ea710e8b605b8e02295bf48ffe84975be971c211fae7194",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_coupling_validation_3e18_20260906/offline_materialization/policies.json": "98afe34a1ec3f19973361852582b5ce01a5aa2e3f5bc1895c5b80f5fb03ca247",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_coupling_validation_3e18_20260906/offline_materialization/protocol.json": "04c11e8f3370312a451dfa3bff2c26705a9e17610cb52a98ab4ef5f50fcef0a5",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_incumbent_coupled_optima_20260906/selected_policies.csv": "39f46008582a77861a82b386a6c2c7119175d7636c575d86325061c9001f7118",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_offline_selection_20260906/inputs/panel.npz": "d78a2484f6f89ab5439999a34770bbc84eabf7c31a49ddb87886004d7c4b3061",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_one_phase_weibull_softplus_epoch_cap_sweep_20260902/candidate_weights.csv": "6eb8fb151b1966330b1501f2e3a6e37812f44294803b8d5d46b054f6cdc928f0"
+  },
+  "kappa0_comparator_check": "Apply the same procedure to saved kappa0 continuous policies; compare old exact-DP counts",
+  "kl_coefficient": 0.0,
+  "max_exchange_steps": 8192,
+  "mixture_block_size": 2048,
+  "optimality": "No improving one-count transfer above the fixed tolerance; global optimum not certified",
+  "quantization": "Existing constrained_counts, then existing coupled-objective one-count exchange refinement",
+  "read_boundary": "Frozen surrogate heads, coordinates/inventory, continuous policies, and old mixture counts only",
+  "refine_tolerance": 1e-13,
+  "sources": {
+    "experiments/domain_phase_mix/exploratory/two_phase_many/materialize_delphi_coupling_runtime_20260906.py": "71730afd079be9b88a023e6f00d2444830a3ba773ecfa1d0b8bdd73017316d4c",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/materialize_delphi_one_phase_surrogate_challengers_20260831.py": "f581d563addde55de1b4c104083d4c7cfd0f5d4eaed1f411d0291a2576e05e07",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/select_delphi_phase0_prefix_candidates_20260824.py": "bbc20825030ec85fd817363b55b770b23f8139118751beaaad861718f513a837"
+  },
+  "version": 1
+}

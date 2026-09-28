@@ -1,0 +1,9 @@
+{
+  "uri": "gs://marin-us-central2/iris/marin/state/bundles/f6539dfd023cfbcbf16a872971538fbabe201f3c4b57daa0a151e508f7c93ed2",
+  "bundle_sha256": "f6539dfd023cfbcbf16a872971538fbabe201f3c4b57daa0a151e508f7c93ed2",
+  "size": 26133702,
+  "generation": 1788984991731216,
+  "crc32c": "VPNf6A==",
+  "checked_at": "2026-09-09T20:19:02.177025+00:00",
+  "scope": "Full submitted Iris workspace, infrastructure code bundle; experiment data remains in us-central1."
+}

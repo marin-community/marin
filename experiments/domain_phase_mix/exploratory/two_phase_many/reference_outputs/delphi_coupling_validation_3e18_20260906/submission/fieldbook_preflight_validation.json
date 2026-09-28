@@ -1,0 +1,56 @@
+{
+  "attrs": {},
+  "check_name": "frozen-nine-policy-launch-preflight",
+  "created_at": "2026-09-06T12:37:44Z",
+  "deleted_at": null,
+  "details": {
+    "actual_steps": 3007,
+    "actual_tokens": 1576534016,
+    "candidate_sha256": "e72d1f2c9b3acc6ffde470dbd05db7ed2cf50d5a8c28fddfcad0d5d547c0f241",
+    "canonical_final_fit_rows": 280,
+    "child_region": "us-east5",
+    "child_zone": "us-east5-b",
+    "data_seeds": {
+      "table9": 662009,
+      "uncheatable": 666200
+    },
+    "east5_safety": "pass",
+    "echo_prior_work": "403 access denied; local source and Fieldbook recipe verified",
+    "graph_preflight": "pass",
+    "kappa": [
+      0.25,
+      0.5,
+      1
+    ],
+    "kl": 0,
+    "parent_region": "us-east5",
+    "parent_zone": "us-east5-a",
+    "required_lint": "pass",
+    "review": "no blocking findings",
+    "scoped_typecheck": "pass",
+    "shared_launcher_tests_passed": 9,
+    "target_flops": 3e+18,
+    "targets": {
+      "table9": [
+        6,
+        8
+      ],
+      "uncheatable": [
+        6
+      ]
+    },
+    "tpu_type": "v6e-8",
+    "trainer_seed": 0,
+    "training_runs": 9
+  },
+  "entity_id": "exp_01m1vbajfrdebbsatntj4sm00z",
+  "entity_type": "experiment",
+  "expected_value": "Nine frozen cap-compliant policies at matched seeds; graph, lint, types and east5 safety pass",
+  "id": "val_01m1vbk0pqb7h3zgrrxzzwdx7p",
+  "measured_value": "All nine policies and train/evaluation pairs resolved; nine shared-launcher tests passed; graph construction skips submission",
+  "session_id": "ses_01m1vbbx1f5farfv5yc8x7kw03",
+  "source_artifact_id": null,
+  "source_job_id": null,
+  "status": "pass",
+  "updated_at": "2026-09-06T12:37:44Z"
+}

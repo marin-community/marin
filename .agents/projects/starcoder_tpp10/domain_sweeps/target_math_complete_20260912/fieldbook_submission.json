@@ -1,0 +1,76 @@
+{
+  "job": {
+    "attrs": {
+      "evaluation.spec_sha256": "c788d33ddd3b357a7f80de6ed1d5ecb632104e4beabd5cc0934d580ecac77d39"
+    },
+    "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+    "code_dirty": true,
+    "command": "uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources --cpu 1 --memory 4GB --disk 32GB --timeout 172800 --max-retries 0 --max-preemption-retries 0 --priority interactive --extra cpu --no-preemptible --region us-central1 --zone us-central1-a --job-name tpp10-target-math-completion --bundle-include .agents/projects/starcoder_tpp10/domain_sweeps/target_math_complete_20260912/spec.json --bundle-include 'experiments/domain_phase_mix/tpp10_domain_sweeps_assets/*' --bundle-include 'experiments/domain_phase_mix/starcoder_tpp10_assets/*' --exclude '^(checkpoints|cache|logs|wandb|tmp)/' --exclude '^experiments/domain_phase_mix/exploratory/.*(?<!\\.py)$' --exclude '^\\.agents/(?!projects/starcoder_tpp10/domain_sweeps/target_math_complete_20260912/spec\\.json$).*' --exclude '^(docs|tests)/' --exclude '^lib/[^/]+/tests/' --exclude '^experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/' -e MARIN_PREFIX gs://marin-us-central1 -- python -m experiments.domain_phase_mix.evaluate_tpp10_target_math_complete --spec .agents/projects/starcoder_tpp10/domain_sweeps/target_math_complete_20260912/spec.json --submit",
+    "created_at": "2026-09-12T21:09:43Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "external_id": null,
+    "external_system": null,
+    "failure_reason": null,
+    "finished_at": null,
+    "id": "job_01m2bq8ta6wg2w5d3bgjhkkxxs",
+    "launcher": "iris",
+    "name": "Four final FineMath target math evaluations",
+    "retry_of": null,
+    "run_id": null,
+    "started_at": null,
+    "status": "submitting",
+    "updated_at": "2026-09-12T21:09:43Z"
+  },
+  "spec_artifact": {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789247296.6807244,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/target_math_complete_20260912/spec.json",
+      "fieldbook.local_size_at_capture": 894831
+    },
+    "content_hash": null,
+    "created_at": "2026-09-12T21:09:42Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m2bq8s9230yz1td78b3598jz",
+    "job_id": null,
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-12T21:09:42Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/target_math_complete_20260912/spec.json"
+  },
+  "preflight_artifact": {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789247325.8711526,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/target_math_complete_20260912/bundle_preflight.json",
+      "fieldbook.local_size_at_capture": 3926
+    },
+    "content_hash": null,
+    "created_at": "2026-09-12T21:09:43Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m2bq8smydzx4t19dyqpcm50z",
+    "job_id": null,
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-12T21:09:43Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/target_math_complete_20260912/bundle_preflight.json"
+  },
+  "validation": {
+    "attrs": {},
+    "check_name": "target_math_completion.final_spec_and_bundle",
+    "created_at": "2026-09-12T21:09:43Z",
+    "deleted_at": null,
+    "details": {},
+    "entity_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "entity_type": "experiment",
+    "expected_value": "15 final target checkpoints; 11 reused math receipts; 4 new evaluations; frozen protocol and central1 bundle",
+    "id": "val_01m2bq8syrh8x9yjv00vgwgb5p",
+    "measured_value": "All checkpoints and source pins verified; 24.3 MB bundle; no omitted target requests",
+    "session_id": "ses_01m2bq5h7qy5ass2j3gwr7kn84",
+    "source_artifact_id": "art_01m2bq8smydzx4t19dyqpcm50z",
+    "source_job_id": null,
+    "status": "pass",
+    "updated_at": "2026-09-12T21:09:43Z"
+  }
+}

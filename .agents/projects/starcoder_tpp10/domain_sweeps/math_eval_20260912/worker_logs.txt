@@ -1,0 +1,35 @@
+[07:01:23] task=/calvinxu/tpp10-finemath-math-eval/finemath-math-proxies/0 attempt=0 |     make_global_array_for_leaf(leaf_index, _batchified_shape(Batch, item_leaf))
+[07:01:23] task=/calvinxu/tpp10-finemath-math-eval/finemath-math-proxies/0 attempt=0 | ^^^^^^^^^^^^^^^
+[07:01:23] task=/calvinxu/tpp10-finemath-math-eval/finemath-math-proxies/0 attempt=0 |   File "/app/lib/levanter/src/levanter/data/loader.py", line 407, in make_global_array_for_leaf
+[07:01:23] task=/calvinxu/tpp10-finemath-math-eval/finemath-math-proxies/0 attempt=0 |     raw_array = jax.make_array_from_callback(
+[07:01:23] task=/calvinxu/tpp10-finemath-math-eval/finemath-math-proxies/0 attempt=0 | ^^^^^^^^^^^^^^^
+[07:01:23] task=/calvinxu/tpp10-finemath-math-eval/finemath-math-proxies/0 attempt=0 |   File "/app/.venv/lib/python3.12/site-packages/jax/_src/array.py", line 796, in make_array_from_callback
+[07:01:23] task=/calvinxu/tpp10-finemath-math-eval/finemath-math-proxies/0 attempt=0 |     get_data(device_to_index_map[device]) for device in devices
+[07:01:23] task=/calvinxu/tpp10-finemath-math-eval/finemath-math-proxies/0 attempt=0 |   ^^^^^^^^^^^^^^^^^
+[07:01:23] task=/calvinxu/tpp10-finemath-math-eval/finemath-math-proxies/0 attempt=0 |   File "/app/.venv/lib/python3.12/site-packages/jax/_src/array.py", line 773, in get_data
+[07:01:23] task=/calvinxu/tpp10-finemath-math-eval/finemath-math-proxies/0 attempt=0 |     r = data_callback(index)
+[07:01:23] task=/calvinxu/tpp10-finemath-math-eval/finemath-math-proxies/0 attempt=0 |       ^^^^^^^^^^^^^^^^^
+[07:01:23] task=/calvinxu/tpp10-finemath-math-eval/finemath-math-proxies/0 attempt=0 |   File "/app/lib/levanter/src/levanter/data/loader.py", line 405, in get_data
+[07:01:23] task=/calvinxu/tpp10-finemath-math-eval/finemath-math-proxies/0 attempt=0 |     return get_local_data_for_leaf(indices, leaf_index)
+[07:01:23] task=/calvinxu/tpp10-finemath-math-eval/finemath-math-proxies/0 attempt=0 | ^^^^^^^^^^^
+[07:01:23] task=/calvinxu/tpp10-finemath-math-eval/finemath-math-proxies/0 attempt=0 |   File "/app/lib/levanter/src/levanter/data/loader.py", line 388, in get_local_data_for_leaf
+[07:01:23] task=/calvinxu/tpp10-finemath-math-eval/finemath-math-proxies/0 attempt=0 |     leaf_data = get_local_batch(begin, end)[leaf_index]
+[07:01:23] task=/calvinxu/tpp10-finemath-math-eval/finemath-math-proxies/0 attempt=0 | ^^^^^^^^^^^^^^^
+[07:01:23] task=/calvinxu/tpp10-finemath-math-eval/finemath-math-proxies/0 attempt=0 |   File "/app/lib/levanter/src/levanter/data/loader.py", line 375, in get_local_batch
+[07:01:23] task=/calvinxu/tpp10-finemath-math-eval/finemath-math-proxies/0 attempt=0 |     host_batch = _stack_tree_on_host(self.dl.batch_axis_name, local_data)
+[07:01:23] task=/calvinxu/tpp10-finemath-math-eval/finemath-math-proxies/0 attempt=0 | ^^^^^^^^^^^^^^^
+[07:01:23] task=/calvinxu/tpp10-finemath-math-eval/finemath-math-proxies/0 attempt=0 |   File "/app/lib/levanter/src/levanter/data/loader.py", line 583, in _stack_tree_on_host
+[07:01:23] task=/calvinxu/tpp10-finemath-math-eval/finemath-math-proxies/0 attempt=0 |     return jax.tree.map(_stack_leaves_on_host, *individual_datums, is_leaf=is_named_array)
+[07:01:23] task=/calvinxu/tpp10-finemath-math-eval/finemath-math-proxies/0 attempt=0 |       ^^^^^^^^^^^^^^^^^
+[07:01:23] task=/calvinxu/tpp10-finemath-math-eval/finemath-math-proxies/0 attempt=0 |   File "/app/.venv/lib/python3.12/site-packages/jax/_src/tree.py", line 156, in map
+[07:01:23] task=/calvinxu/tpp10-finemath-math-eval/finemath-math-proxies/0 attempt=0 |     return tree_util.tree_map(f, tree, *rest, is_leaf=is_leaf)
+[07:01:23] task=/calvinxu/tpp10-finemath-math-eval/finemath-math-proxies/0 attempt=0 |         ^^^^^^^^^^^^^^^^^
+[07:01:23] task=/calvinxu/tpp10-finemath-math-eval/finemath-math-proxies/0 attempt=0 |   File "/app/.venv/lib/python3.12/site-packages/jax/_src/tree_util.py", line 399, in tree_map
+[07:01:23] task=/calvinxu/tpp10-finemath-math-eval/finemath-math-proxies/0 attempt=0 |     raise (err('tree_map tree') if err is not None else e) from None
+[07:01:23] task=/calvinxu/tpp10-finemath-math-eval/finemath-math-proxies/0 attempt=0 |       ^^^^^^^^^^^^^^^^^
+[07:01:23] task=/calvinxu/tpp10-finemath-math-eval/finemath-math-proxies/0 attempt=0 | ValueError: pytree structure error: different types at key path
+[07:01:23] task=/calvinxu/tpp10-finemath-math-eval/finemath-math-proxies/0 attempt=0 |     tree_map tree[0].attn_mask.segment_ids
+[07:01:23] task=/calvinxu/tpp10-finemath-math-eval/finemath-math-proxies/0 attempt=0 | At that key path, the prefix pytree tree_map tree has a subtree of type
+[07:01:23] task=/calvinxu/tpp10-finemath-math-eval/finemath-math-proxies/0 attempt=0 |     <class 'NoneType'>
+[07:01:23] task=/calvinxu/tpp10-finemath-math-eval/finemath-math-proxies/0 attempt=0 | but at the same key path the full pytree has a subtree of different type
+[07:01:23] task=/calvinxu/tpp10-finemath-math-eval/finemath-math-proxies/0 attempt=0 |     <class 'tuple'>.

@@ -1,0 +1,46 @@
+{
+  "alias_map": {
+    "olmixq_t9_kl0_cap01": "olmixq_t9_kl0_cap01",
+    "olmixq_t9_kl0_cap04": "olmixq_t9_kl0_cap04",
+    "olmixq_t9_kl0_cap08": "olmixq_t9_kl0_cap08",
+    "olmixq_t9_kl0_cap12": "olmixq_t9_kl0_cap12",
+    "olmixq_t9_kl0_nocap_cap17": "olmixq_t9_kl0_nocap_cap17",
+    "olmixq_t9_kl0p005_cap04": "olmixq_t9_kl0p005_cap04",
+    "olmixq_t9_kl0p005_cap08": "olmixq_t9_kl0p005_cap08",
+    "olmixq_t9_kl0p005_cap12": "olmixq_t9_kl0p005_cap12",
+    "olmixq_t9_kl0p005_nocap_cap14": "olmixq_t9_kl0p005_nocap_cap14",
+    "olmixq_t9_kl0p01_cap04": "olmixq_t9_kl0p01_cap04",
+    "olmixq_t9_kl0p01_cap08": "olmixq_t9_kl0p01_cap08",
+    "olmixq_t9_kl0p01_cap12": "olmixq_t9_kl0p01_cap12",
+    "olmixq_t9_kl0p025_cap04": "olmixq_t9_kl0p025_cap04",
+    "olmixq_t9_kl0p025_cap08": "olmixq_t9_kl0p025_cap08",
+    "olmixq_t9_kl0p05_cap04": "olmixq_t9_kl0p05_cap04",
+    "olmixq_t9_kl0p05_cap08": "olmixq_t9_kl0p05_cap08",
+    "olmixq_t9_kl0p075_cap04": "olmixq_t9_kl0p075_cap04",
+    "olmixq_t9_kl0p075_cap08": "olmixq_t9_kl0p075_cap08",
+    "olmixq_t9_kl0p1_cap04": "olmixq_t9_kl0p1_cap04",
+    "olmixq_t9_kl0p2_cap04": "olmixq_t9_kl0p2_cap04",
+    "olmixq_t9_kl0p5_cap04": "olmixq_t9_kl0p5_cap04"
+  },
+  "analysis_output_path": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/analysis-af9355",
+  "candidate_weights_path": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_olmix_cap_kl_sweep_3e18_20260926/candidate_weights.csv",
+  "candidate_weights_sha256": "c138bfe222970d4b2cc3780d576f3667d0bcedf972c0aefd7b9bb3a0d4911e8c",
+  "cap_scope": "whole training run",
+  "common_random_numbers": {
+    "data_seed": 662009,
+    "trainer_seed": 0
+  },
+  "experiment_name": "pinlin_calvin_xu/data_mixture/delphi_olmix_cap_kl_sweep_3e18_20260926/table9_seed662009_t0",
+  "hardware": {
+    "region": "us-east5",
+    "tpu_type": "v5p-8",
+    "zone": "us-east5-a"
+  },
+  "inline_uncheatable_scheduled": true,
+  "native_table9_scheduled": true,
+  "nominal_cells": 21,
+  "policy_class": "single_phase_tied",
+  "runtime_distinct_trainings": 21,
+  "source_panel": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_augmented_swarm_3e18_20260714/source/fit_panel_table9_macro-4f283bacb4ef269c.csv",
+  "source_panel_sha256": "4f283bacb4ef269c396277cbd518ef74212a51741c909a1e1e9ace040751d507"
+}

@@ -1,0 +1,30 @@
+{
+  "authorization": "User approved 2 CPU / 4 GiB subset preparation; preserve exact data recipe and caches",
+  "change": "Only CPU subset-worker RAM changes at Fray dispatch; parent 2 CPU / 8 GiB and every TPU request stay unchanged",
+  "plan_sha256": "30fc30f1a7e618900a2f1dc40fe5650237b06ea979f2cedfcf8ca664c496114b",
+  "previous_parent": "/calvinxu/tpp10-domain-sweeps",
+  "new_parent": "/calvinxu/tpp10-domain-sweeps-cpu4g",
+  "validation": {
+    "lint": "passed",
+    "pyrefly": "0 errors",
+    "existing_survey_tests": "4 passed",
+    "wire_check": {
+      "passed": true,
+      "cpu_memory_gib_before": 8,
+      "cpu_memory_gib_after": 4,
+      "cpu": 2,
+      "other_cpu_wire_fields_equal": true,
+      "serialized_callable_sha256": "5e63507eef40afce5582b25e2cb5eae51747f018e3e62c1d57a97849aeaf18cf",
+      "original_request_unchanged": true,
+      "tpu_wire_request_identical": true
+    },
+    "plan_parity": {
+      "plan_sha256": "30fc30f1a7e618900a2f1dc40fe5650237b06ea979f2cedfcf8ca664c496114b",
+      "archived_plan_equal": true,
+      "training_runs": 28,
+      "verified_pins": 35,
+      "wrapper_sha256": "4caaa519ca87f21b25ba4d99d2cb7fd4f342e10bee489a3ef844b4614be5b04c"
+    }
+  },
+  "requires_before_submit": "Old survey tree terminal and no active data leases; CC review complete"
+}

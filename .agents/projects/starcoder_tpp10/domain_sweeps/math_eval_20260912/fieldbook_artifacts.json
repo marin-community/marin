@@ -1,0 +1,70 @@
+[
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789196024.2140787,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/math_eval_20260912/spec.json",
+      "fieldbook.local_size_at_capture": 195719
+    },
+    "content_hash": "sha256:60a6b89e48fb70e4b57eeaa877a84f2db2864d3ac07b146128c5d2c60cac46f4",
+    "created_at": "2026-09-12T06:57:57Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m2a6h5x3013cyjxe1evy29vv",
+    "job_id": null,
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-12T06:57:57Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/math_eval_20260912/spec.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789196150.7218757,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/math_eval_20260912/bundle_preflight.json",
+      "fieldbook.local_size_at_capture": 254
+    },
+    "content_hash": "sha256:cdfa4c82ca5d04e2000f81adc0d40d6dc5b87b473cdf6e91948851a7d9ef4eb8",
+    "created_at": "2026-09-12T06:57:58Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m2a6h69tfpqzh5ezt3sg2w46",
+    "job_id": null,
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-12T06:57:58Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/math_eval_20260912/bundle_preflight.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789195894.4649172,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/math_eval_20260912/candidate_payloads.json",
+      "fieldbook.local_size_at_capture": 2204
+    },
+    "content_hash": "sha256:457acc52a4749a46558c66599a956900122dde100294e355e676933e698f9de7",
+    "created_at": "2026-09-12T06:57:58Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m2a6h6qe7yh1s92e9d2ghkyt",
+    "job_id": null,
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-12T06:57:58Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/math_eval_20260912/candidate_payloads.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789195575.2040927,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/math_eval_20260912/archived_domain_minima.json",
+      "fieldbook.local_size_at_capture": 12101
+    },
+    "content_hash": "sha256:03a5d9177763d89608883c4cf2eaa5060bf89158433154acc25afbb5a150d91d",
+    "created_at": "2026-09-12T06:57:59Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m2a6h7emsqhhkvrh3bczrpz5",
+    "job_id": null,
+    "run_id": null,
+    "type": "metric-table",
+    "updated_at": "2026-09-12T06:57:59Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/math_eval_20260912/archived_domain_minima.json"
+  }
+]

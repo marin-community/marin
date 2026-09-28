@@ -1,0 +1,225 @@
+{
+  "name": "cpu_vm_e2_highmem_2_ondemand-us-central1-a",
+  "backend_id": "default",
+  "current_demand": 0,
+  "peak_demand": 6,
+  "backoff_until": {
+    "epoch_ms": "0"
+  },
+  "consecutive_failures": 0,
+  "last_scale_up": {
+    "epoch_ms": "1788818670187"
+  },
+  "last_scale_down": {
+    "epoch_ms": "1788688506913"
+  },
+  "slices": [
+    {
+      "slice_id": "marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260810-2115-ef0510dd",
+      "scale_group": "cpu_vm_e2_highmem_2_ondemand-us-central1-a",
+      "created_at": {
+        "epoch_ms": "1786396539802"
+      },
+      "vms": [
+        {
+          "vm_id": "marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260810-2115-ef0510dd-worker-0",
+          "state": "VM_STATE_READY",
+          "created_at": {
+            "epoch_ms": "1786396539802"
+          },
+          "state_changed_at": {
+            "epoch_ms": "1786396539802"
+          },
+          "worker_id": "marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260810-2115-ef0510dd-worker-0",
+          "worker_healthy": true,
+          "usability": "healthy",
+          "running_task_count": 7
+        }
+      ],
+      "error_message": "",
+      "last_active": {
+        "epoch_ms": "1789157620141"
+      },
+      "idle": false,
+      "state": "ready",
+      "degraded_slot_count": 0,
+      "capacity_status": "in_use"
+    },
+    {
+      "slice_id": "marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260812-2304-e9c97b24",
+      "scale_group": "cpu_vm_e2_highmem_2_ondemand-us-central1-a",
+      "created_at": {
+        "epoch_ms": "1786575874482"
+      },
+      "vms": [
+        {
+          "vm_id": "marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260812-2304-e9c97b24-worker-0",
+          "state": "VM_STATE_READY",
+          "created_at": {
+            "epoch_ms": "1786575874482"
+          },
+          "state_changed_at": {
+            "epoch_ms": "1786575874482"
+          },
+          "worker_id": "marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260812-2304-e9c97b24-worker-0",
+          "worker_healthy": true,
+          "usability": "healthy",
+          "running_task_count": 11
+        }
+      ],
+      "error_message": "",
+      "last_active": {
+        "epoch_ms": "1789157620141"
+      },
+      "idle": false,
+      "state": "ready",
+      "degraded_slot_count": 0,
+      "capacity_status": "in_use"
+    },
+    {
+      "slice_id": "marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260823-0805-961f1fc6",
+      "scale_group": "cpu_vm_e2_highmem_2_ondemand-us-central1-a",
+      "created_at": {
+        "epoch_ms": "1787472324926"
+      },
+      "vms": [
+        {
+          "vm_id": "marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260823-0805-961f1fc6-worker-0",
+          "state": "VM_STATE_READY",
+          "created_at": {
+            "epoch_ms": "1787472324926"
+          },
+          "state_changed_at": {
+            "epoch_ms": "1787472324926"
+          },
+          "worker_id": "marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260823-0805-961f1fc6-worker-0",
+          "worker_healthy": true,
+          "usability": "healthy",
+          "running_task_count": 11
+        }
+      ],
+      "error_message": "",
+      "last_active": {
+        "epoch_ms": "1789157620141"
+      },
+      "idle": false,
+      "state": "ready",
+      "degraded_slot_count": 0,
+      "capacity_status": "in_use"
+    },
+    {
+      "slice_id": "marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260825-0034-536a4e25",
+      "scale_group": "cpu_vm_e2_highmem_2_ondemand-us-central1-a",
+      "created_at": {
+        "epoch_ms": "1787618098264"
+      },
+      "vms": [
+        {
+          "vm_id": "marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260825-0034-536a4e25-worker-0",
+          "state": "VM_STATE_READY",
+          "created_at": {
+            "epoch_ms": "1787618098264"
+          },
+          "state_changed_at": {
+            "epoch_ms": "1787618098264"
+          },
+          "worker_id": "marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260825-0034-536a4e25-worker-0",
+          "worker_healthy": true,
+          "usability": "healthy",
+          "running_task_count": 2
+        }
+      ],
+      "error_message": "",
+      "last_active": {
+        "epoch_ms": "1789157620141"
+      },
+      "idle": false,
+      "state": "ready",
+      "degraded_slot_count": 0,
+      "capacity_status": "in_use"
+    },
+    {
+      "slice_id": "marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260905-0245-08c4ed91",
+      "scale_group": "cpu_vm_e2_highmem_2_ondemand-us-central1-a",
+      "created_at": {
+        "epoch_ms": "1788576305982"
+      },
+      "vms": [
+        {
+          "vm_id": "marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260905-0245-08c4ed91-worker-0",
+          "state": "VM_STATE_READY",
+          "created_at": {
+            "epoch_ms": "1788576305982"
+          },
+          "state_changed_at": {
+            "epoch_ms": "1788576305982"
+          },
+          "worker_id": "marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260905-0245-08c4ed91-worker-0",
+          "worker_healthy": true,
+          "usability": "healthy",
+          "running_task_count": 2
+        }
+      ],
+      "error_message": "",
+      "last_active": {
+        "epoch_ms": "1789157620141"
+      },
+      "idle": false,
+      "state": "ready",
+      "degraded_slot_count": 0,
+      "capacity_status": "in_use"
+    },
+    {
+      "slice_id": "marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6",
+      "scale_group": "cpu_vm_e2_highmem_2_ondemand-us-central1-a",
+      "created_at": {
+        "epoch_ms": "1788818670927"
+      },
+      "vms": [
+        {
+          "vm_id": "marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6-worker-0",
+          "state": "VM_STATE_READY",
+          "created_at": {
+            "epoch_ms": "1788818670927"
+          },
+          "state_changed_at": {
+            "epoch_ms": "1788818670927"
+          },
+          "worker_id": "marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6-worker-0",
+          "worker_healthy": true,
+          "usability": "healthy",
+          "running_task_count": 4
+        }
+      ],
+      "error_message": "",
+      "last_active": {
+        "epoch_ms": "1789157620141"
+      },
+      "idle": false,
+      "state": "ready",
+      "degraded_slot_count": 0,
+      "capacity_status": "in_use"
+    }
+  ],
+  "slice_state_counts": {
+    "initializing": 0,
+    "requesting": 0,
+    "booting": 0,
+    "failed": 0,
+    "ready": 6
+  },
+  "availability_status": "at_max_slices",
+  "availability_reason": "",
+  "blocked_until": {
+    "epoch_ms": "0"
+  },
+  "scale_up_cooldown_until": {
+    "epoch_ms": "0"
+  },
+  "idle_threshold_ms": "300000",
+  "device_type": "cpu",
+  "device_variant": "",
+  "quota_pool": "",
+  "allocation_tier": 0,
+  "region": "us-central1"
+}

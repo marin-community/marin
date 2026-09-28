@@ -1,0 +1,412 @@
+[
+  {
+    "candidate_id": "mp50_u_olmix_cap64",
+    "run_id": "run_01m2bt200qzwpa9ypxw0twh640",
+    "job": {
+      "attrs": {
+        "launch.parent_id": "/calvinxu/dm-delphi-3e18-path-midpoints-20260912",
+        "output.train_prefix": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_path_midpoints_3e18_20260912/uncheatable_seed666200_t0/mp50_uncheatable_seed666200_t0_mp50_u_olmix_cap64-60fafc"
+      },
+      "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+      "code_dirty": true,
+      "command": null,
+      "created_at": "2026-09-12T22:21:20Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+      "external_id": "/calvinxu/dm-delphi-3e18-path-midpoints-20260912/pinlin_calvin_xu-data_mixture-delphi_path_midpoints_3e18_20260912-uncheatable_seed666200_t0-mp50_uncheatable_seed666200_t0_mp50_u_olmix_cap64_6e259151-70295986",
+      "external_system": "iris",
+      "failure_reason": null,
+      "finished_at": null,
+      "id": "job_01m2bvby8wdp47w078b1vhwjrq",
+      "launcher": "iris",
+      "name": "mp50_u_olmix_cap64-train",
+      "retry_of": null,
+      "run_id": "run_01m2bt200qzwpa9ypxw0twh640",
+      "started_at": null,
+      "status": "queued",
+      "updated_at": "2026-09-12T22:21:20Z"
+    },
+    "link": {
+      "attrs": {},
+      "created_at": "2026-09-12T22:21:20Z",
+      "deleted_at": null,
+      "failure_reason": null,
+      "finished_at": null,
+      "job_id": "job_01m2bvby8wdp47w078b1vhwjrq",
+      "role": "train",
+      "run_id": "run_01m2bt200qzwpa9ypxw0twh640",
+      "started_at": null,
+      "status": "queued",
+      "updated_at": "2026-09-12T22:21:20Z"
+    }
+  },
+  {
+    "candidate_id": "mp50_u_quad_cap64",
+    "run_id": "run_01m2bt20ap3pe981m1qargfjkf",
+    "job": {
+      "attrs": {
+        "launch.parent_id": "/calvinxu/dm-delphi-3e18-path-midpoints-20260912",
+        "output.train_prefix": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_path_midpoints_3e18_20260912/uncheatable_seed666200_t0/mp50_uncheatable_seed666200_t0_mp50_u_quad_cap64-744be4"
+      },
+      "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+      "code_dirty": true,
+      "command": null,
+      "created_at": "2026-09-12T22:21:21Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+      "external_id": "/calvinxu/dm-delphi-3e18-path-midpoints-20260912/pinlin_calvin_xu-data_mixture-delphi_path_midpoints_3e18_20260912-uncheatable_seed666200_t0-mp50_uncheatable_seed666200_t0_mp50_u_quad_cap64_e88436d7-b518d369",
+      "external_system": "iris",
+      "failure_reason": null,
+      "finished_at": null,
+      "id": "job_01m2bvbyv5k541d0r88wn6hkc9",
+      "launcher": "iris",
+      "name": "mp50_u_quad_cap64-train",
+      "retry_of": null,
+      "run_id": "run_01m2bt20ap3pe981m1qargfjkf",
+      "started_at": null,
+      "status": "queued",
+      "updated_at": "2026-09-12T22:21:21Z"
+    },
+    "link": {
+      "attrs": {},
+      "created_at": "2026-09-12T22:21:21Z",
+      "deleted_at": null,
+      "failure_reason": null,
+      "finished_at": null,
+      "job_id": "job_01m2bvbyv5k541d0r88wn6hkc9",
+      "role": "train",
+      "run_id": "run_01m2bt20ap3pe981m1qargfjkf",
+      "started_at": null,
+      "status": "queued",
+      "updated_at": "2026-09-12T22:21:21Z"
+    }
+  },
+  {
+    "candidate_id": "mp50_u_spline_cap64",
+    "run_id": "run_01m2bt20m13etpn6x3m41vcy1n",
+    "job": {
+      "attrs": {
+        "launch.parent_id": "/calvinxu/dm-delphi-3e18-path-midpoints-20260912",
+        "output.train_prefix": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_path_midpoints_3e18_20260912/uncheatable_seed666200_t0/mp50_uncheatable_seed666200_t0_mp50_u_spline_cap64-d8bcb7"
+      },
+      "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+      "code_dirty": true,
+      "command": null,
+      "created_at": "2026-09-12T22:21:21Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+      "external_id": "/calvinxu/dm-delphi-3e18-path-midpoints-20260912/pinlin_calvin_xu-data_mixture-delphi_path_midpoints_3e18_20260912-uncheatable_seed666200_t0-mp50_uncheatable_seed666200_t0_mp50_u_spline_cap64_75ab08c6-9766dfe2",
+      "external_system": "iris",
+      "failure_reason": null,
+      "finished_at": null,
+      "id": "job_01m2bvbze9gdrxvxy2g6hhkaxr",
+      "launcher": "iris",
+      "name": "mp50_u_spline_cap64-train",
+      "retry_of": null,
+      "run_id": "run_01m2bt20m13etpn6x3m41vcy1n",
+      "started_at": null,
+      "status": "queued",
+      "updated_at": "2026-09-12T22:21:21Z"
+    },
+    "link": {
+      "attrs": {},
+      "created_at": "2026-09-12T22:21:21Z",
+      "deleted_at": null,
+      "failure_reason": null,
+      "finished_at": null,
+      "job_id": "job_01m2bvbze9gdrxvxy2g6hhkaxr",
+      "role": "train",
+      "run_id": "run_01m2bt20m13etpn6x3m41vcy1n",
+      "started_at": null,
+      "status": "queued",
+      "updated_at": "2026-09-12T22:21:22Z"
+    }
+  },
+  {
+    "candidate_id": "mp50_u_lgbm_cap64",
+    "run_id": "run_01m2bt20xjcm5j31jhk6cqg7df",
+    "job": {
+      "attrs": {
+        "launch.parent_id": "/calvinxu/dm-delphi-3e18-path-midpoints-20260912",
+        "output.train_prefix": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_path_midpoints_3e18_20260912/uncheatable_seed666200_t0/mp50_uncheatable_seed666200_t0_mp50_u_lgbm_cap64-ea4c6f"
+      },
+      "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+      "code_dirty": true,
+      "command": null,
+      "created_at": "2026-09-12T22:21:22Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+      "external_id": "/calvinxu/dm-delphi-3e18-path-midpoints-20260912/pinlin_calvin_xu-data_mixture-delphi_path_midpoints_3e18_20260912-uncheatable_seed666200_t0-mp50_uncheatable_seed666200_t0_mp50_u_lgbm_cap64_418d518c-706b0ec1",
+      "external_system": "iris",
+      "failure_reason": null,
+      "finished_at": null,
+      "id": "job_01m2bvc01p4jc8q1zdrxcjvbzr",
+      "launcher": "iris",
+      "name": "mp50_u_lgbm_cap64-train",
+      "retry_of": null,
+      "run_id": "run_01m2bt20xjcm5j31jhk6cqg7df",
+      "started_at": null,
+      "status": "queued",
+      "updated_at": "2026-09-12T22:21:22Z"
+    },
+    "link": {
+      "attrs": {},
+      "created_at": "2026-09-12T22:21:22Z",
+      "deleted_at": null,
+      "failure_reason": null,
+      "finished_at": null,
+      "job_id": "job_01m2bvc01p4jc8q1zdrxcjvbzr",
+      "role": "train",
+      "run_id": "run_01m2bt20xjcm5j31jhk6cqg7df",
+      "started_at": null,
+      "status": "queued",
+      "updated_at": "2026-09-12T22:21:22Z"
+    }
+  },
+  {
+    "candidate_id": "mp50_u_krr_cap64",
+    "run_id": "run_01m2bt216t4k13ff3y8m0cvn7e",
+    "job": {
+      "attrs": {
+        "launch.parent_id": "/calvinxu/dm-delphi-3e18-path-midpoints-20260912",
+        "output.train_prefix": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_path_midpoints_3e18_20260912/uncheatable_seed666200_t0/mp50_uncheatable_seed666200_t0_mp50_u_krr_cap64-e1a345"
+      },
+      "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+      "code_dirty": true,
+      "command": null,
+      "created_at": "2026-09-12T22:21:22Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+      "external_id": "/calvinxu/dm-delphi-3e18-path-midpoints-20260912/pinlin_calvin_xu-data_mixture-delphi_path_midpoints_3e18_20260912-uncheatable_seed666200_t0-mp50_uncheatable_seed666200_t0_mp50_u_krr_cap64_c6352e5e-61075395",
+      "external_system": "iris",
+      "failure_reason": null,
+      "finished_at": null,
+      "id": "job_01m2bvc0mggs8q3xxvsz0zrj2r",
+      "launcher": "iris",
+      "name": "mp50_u_krr_cap64-train",
+      "retry_of": null,
+      "run_id": "run_01m2bt216t4k13ff3y8m0cvn7e",
+      "started_at": null,
+      "status": "queued",
+      "updated_at": "2026-09-12T22:21:22Z"
+    },
+    "link": {
+      "attrs": {},
+      "created_at": "2026-09-12T22:21:22Z",
+      "deleted_at": null,
+      "failure_reason": null,
+      "finished_at": null,
+      "job_id": "job_01m2bvc0mggs8q3xxvsz0zrj2r",
+      "role": "train",
+      "run_id": "run_01m2bt216t4k13ff3y8m0cvn7e",
+      "started_at": null,
+      "status": "queued",
+      "updated_at": "2026-09-12T22:21:23Z"
+    }
+  },
+  {
+    "candidate_id": "mp50_t9_olmix_cap64",
+    "run_id": "run_01m2bt21fpxhgkvr84zcy8xm7r",
+    "job": {
+      "attrs": {
+        "launch.parent_id": "/calvinxu/dm-delphi-3e18-path-midpoints-20260912",
+        "output.train_prefix": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_path_midpoints_3e18_20260912/table9_seed662009_t0/mp50_table9_seed662009_t0_mp50_t9_olmix_cap64-ffe96f"
+      },
+      "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+      "code_dirty": true,
+      "command": null,
+      "created_at": "2026-09-12T22:21:23Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+      "external_id": "/calvinxu/dm-delphi-3e18-path-midpoints-20260912/pinlin_calvin_xu-data_mixture-delphi_path_midpoints_3e18_20260912-table9_seed662009_t0-mp50_table9_seed662009_t0_mp50_t9_olmix_cap64_c06895e2-edd6b0ec",
+      "external_system": "iris",
+      "failure_reason": null,
+      "finished_at": null,
+      "id": "job_01m2bvc1876zdezc1p2yzxmzxd",
+      "launcher": "iris",
+      "name": "mp50_t9_olmix_cap64-train",
+      "retry_of": null,
+      "run_id": "run_01m2bt21fpxhgkvr84zcy8xm7r",
+      "started_at": null,
+      "status": "queued",
+      "updated_at": "2026-09-12T22:21:23Z"
+    },
+    "link": {
+      "attrs": {},
+      "created_at": "2026-09-12T22:21:23Z",
+      "deleted_at": null,
+      "failure_reason": null,
+      "finished_at": null,
+      "job_id": "job_01m2bvc1876zdezc1p2yzxmzxd",
+      "role": "train",
+      "run_id": "run_01m2bt21fpxhgkvr84zcy8xm7r",
+      "started_at": null,
+      "status": "queued",
+      "updated_at": "2026-09-12T22:21:23Z"
+    }
+  },
+  {
+    "candidate_id": "mp50_t9_quad_cap64",
+    "run_id": "run_01m2bt21r9bv17m3dm72gdx6k2",
+    "job": {
+      "attrs": {
+        "launch.parent_id": "/calvinxu/dm-delphi-3e18-path-midpoints-20260912",
+        "output.train_prefix": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_path_midpoints_3e18_20260912/table9_seed662009_t0/mp50_table9_seed662009_t0_mp50_t9_quad_cap64-952b9c"
+      },
+      "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+      "code_dirty": true,
+      "command": null,
+      "created_at": "2026-09-12T22:21:24Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+      "external_id": "/calvinxu/dm-delphi-3e18-path-midpoints-20260912/pinlin_calvin_xu-data_mixture-delphi_path_midpoints_3e18_20260912-table9_seed662009_t0-mp50_table9_seed662009_t0_mp50_t9_quad_cap64_323b4415-68baa3cf",
+      "external_system": "iris",
+      "failure_reason": null,
+      "finished_at": null,
+      "id": "job_01m2bvc1v0t519k0c9rk4d4pcs",
+      "launcher": "iris",
+      "name": "mp50_t9_quad_cap64-train",
+      "retry_of": null,
+      "run_id": "run_01m2bt21r9bv17m3dm72gdx6k2",
+      "started_at": null,
+      "status": "queued",
+      "updated_at": "2026-09-12T22:21:24Z"
+    },
+    "link": {
+      "attrs": {},
+      "created_at": "2026-09-12T22:21:24Z",
+      "deleted_at": null,
+      "failure_reason": null,
+      "finished_at": null,
+      "job_id": "job_01m2bvc1v0t519k0c9rk4d4pcs",
+      "role": "train",
+      "run_id": "run_01m2bt21r9bv17m3dm72gdx6k2",
+      "started_at": null,
+      "status": "queued",
+      "updated_at": "2026-09-12T22:21:24Z"
+    }
+  },
+  {
+    "candidate_id": "mp50_t9_spline_cap64",
+    "run_id": "run_01m2bt220yt7e8z5nez53hz3f8",
+    "job": {
+      "attrs": {
+        "launch.parent_id": "/calvinxu/dm-delphi-3e18-path-midpoints-20260912",
+        "output.train_prefix": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_path_midpoints_3e18_20260912/table9_seed662009_t0/mp50_table9_seed662009_t0_mp50_t9_spline_cap64-fc675e"
+      },
+      "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+      "code_dirty": true,
+      "command": null,
+      "created_at": "2026-09-12T22:21:24Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+      "external_id": "/calvinxu/dm-delphi-3e18-path-midpoints-20260912/pinlin_calvin_xu-data_mixture-delphi_path_midpoints_3e18_20260912-table9_seed662009_t0-mp50_table9_seed662009_t0_mp50_t9_spline_cap64_99612977-b0d2f225",
+      "external_system": "iris",
+      "failure_reason": null,
+      "finished_at": null,
+      "id": "job_01m2bvc2fskvk5pcw2s40wh9z6",
+      "launcher": "iris",
+      "name": "mp50_t9_spline_cap64-train",
+      "retry_of": null,
+      "run_id": "run_01m2bt220yt7e8z5nez53hz3f8",
+      "started_at": null,
+      "status": "queued",
+      "updated_at": "2026-09-12T22:21:24Z"
+    },
+    "link": {
+      "attrs": {},
+      "created_at": "2026-09-12T22:21:24Z",
+      "deleted_at": null,
+      "failure_reason": null,
+      "finished_at": null,
+      "job_id": "job_01m2bvc2fskvk5pcw2s40wh9z6",
+      "role": "train",
+      "run_id": "run_01m2bt220yt7e8z5nez53hz3f8",
+      "started_at": null,
+      "status": "queued",
+      "updated_at": "2026-09-12T22:21:25Z"
+    }
+  },
+  {
+    "candidate_id": "mp50_t9_lgbm_cap64",
+    "run_id": "run_01m2bt22a65z5d2sym2rqnwfgk",
+    "job": {
+      "attrs": {
+        "launch.parent_id": "/calvinxu/dm-delphi-3e18-path-midpoints-20260912",
+        "output.train_prefix": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_path_midpoints_3e18_20260912/table9_seed662009_t0/mp50_table9_seed662009_t0_mp50_t9_lgbm_cap64-ff80e3"
+      },
+      "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+      "code_dirty": true,
+      "command": null,
+      "created_at": "2026-09-12T22:21:25Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+      "external_id": "/calvinxu/dm-delphi-3e18-path-midpoints-20260912/pinlin_calvin_xu-data_mixture-delphi_path_midpoints_3e18_20260912-table9_seed662009_t0-mp50_table9_seed662009_t0_mp50_t9_lgbm_cap64_559abee7-3f58bf9a",
+      "external_system": "iris",
+      "failure_reason": null,
+      "finished_at": null,
+      "id": "job_01m2bvc32d9fp2skpnyq9mdrbc",
+      "launcher": "iris",
+      "name": "mp50_t9_lgbm_cap64-train",
+      "retry_of": null,
+      "run_id": "run_01m2bt22a65z5d2sym2rqnwfgk",
+      "started_at": null,
+      "status": "queued",
+      "updated_at": "2026-09-12T22:21:25Z"
+    },
+    "link": {
+      "attrs": {},
+      "created_at": "2026-09-12T22:21:25Z",
+      "deleted_at": null,
+      "failure_reason": null,
+      "finished_at": null,
+      "job_id": "job_01m2bvc32d9fp2skpnyq9mdrbc",
+      "role": "train",
+      "run_id": "run_01m2bt22a65z5d2sym2rqnwfgk",
+      "started_at": null,
+      "status": "queued",
+      "updated_at": "2026-09-12T22:21:25Z"
+    }
+  },
+  {
+    "candidate_id": "mp50_t9_krr_cap64",
+    "run_id": "run_01m2bt22jd2znp46gqh89evwzy",
+    "job": {
+      "attrs": {
+        "launch.parent_id": "/calvinxu/dm-delphi-3e18-path-midpoints-20260912",
+        "output.train_prefix": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_path_midpoints_3e18_20260912/table9_seed662009_t0/mp50_table9_seed662009_t0_mp50_t9_krr_cap64-72ad8a"
+      },
+      "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+      "code_dirty": true,
+      "command": null,
+      "created_at": "2026-09-12T22:21:26Z",
+      "deleted_at": null,
+      "experiment_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+      "external_id": "/calvinxu/dm-delphi-3e18-path-midpoints-20260912/pinlin_calvin_xu-data_mixture-delphi_path_midpoints_3e18_20260912-table9_seed662009_t0-mp50_table9_seed662009_t0_mp50_t9_krr_cap64_1213bc18-9d105a52",
+      "external_system": "iris",
+      "failure_reason": null,
+      "finished_at": null,
+      "id": "job_01m2bvc3nchtm0ncnx84qsshtq",
+      "launcher": "iris",
+      "name": "mp50_t9_krr_cap64-train",
+      "retry_of": null,
+      "run_id": "run_01m2bt22jd2znp46gqh89evwzy",
+      "started_at": null,
+      "status": "queued",
+      "updated_at": "2026-09-12T22:21:26Z"
+    },
+    "link": {
+      "attrs": {},
+      "created_at": "2026-09-12T22:21:26Z",
+      "deleted_at": null,
+      "failure_reason": null,
+      "finished_at": null,
+      "job_id": "job_01m2bvc3nchtm0ncnx84qsshtq",
+      "role": "train",
+      "run_id": "run_01m2bt22jd2znp46gqh89evwzy",
+      "started_at": null,
+      "status": "queued",
+      "updated_at": "2026-09-12T22:21:26Z"
+    }
+  }
+]

@@ -1,0 +1,38 @@
+{
+  "checked_at": "2026-09-09T04:34:51.519382+00:00",
+  "source_command": ".agents/projects/starcoder_epoch_matching/planned_pilot_submission.txt",
+  "exclude_patterns": [
+    "^(checkpoints|logs|wandb)/",
+    "^experiments/domain_phase_mix/exploratory/.*(?<!\\.py)$",
+    "^\\.agents/(?!projects/starcoder_epoch_matching/reuse_audit\\.json$).*(?<!\\.py)$",
+    "^(docs|tests)/.*(?<!\\.py)$",
+    "^lib/[^/]+/tests/.*(?<!\\.py)$"
+  ],
+  "bundle_bytes": 25380079,
+  "bundle_mib": 24.20432949066162,
+  "under_25_mib": true,
+  "required_files_present": {
+    "uv.lock": true,
+    "pyproject.toml": true,
+    ".agents/projects/starcoder_epoch_matching/reuse_audit.json": true,
+    "experiments/domain_phase_mix/starcoder_epoch_matching_design_20260908.json": true,
+    "experiments/domain_phase_mix/launch_starcoder_epoch_matching.py": true,
+    "experiments/domain_phase_mix/starcoder_epoch_matching.py": true,
+    "experiments/domain_phase_mix/audit_starcoder_epoch_matching_indices.py": true
+  },
+  "excluded_python_files": [],
+  "source_sha256": {
+    "uv.lock": "347c4bb876ef55f60ecd5cf137d22016aaa742387717d20e296ca0ff2cc05dd5",
+    "pyproject.toml": "853bbaa517afee864dba527f6fbe7df6d3cd72c2117aa8e9ab2fce2918b6a8b8",
+    ".agents/projects/starcoder_epoch_matching/reuse_audit.json": "8e0f198a97cb9fcf630399580e0750f175eff2f136438e96d8a19e2442b09624",
+    "experiments/domain_phase_mix/starcoder_epoch_matching_design_20260908.json": "17703162656b08a0f5a693d71fef2b23d2484af9986167b0facda5420b1fda3c",
+    "experiments/domain_phase_mix/launch_starcoder_epoch_matching.py": "8810eb2da5525a29ff7ffd9866916279b91f762a72d6485be844f68f74a2ec52",
+    "experiments/domain_phase_mix/starcoder_epoch_matching.py": "1d090efbcba63baeb3c8330922969beb2e57c4388d9c74b557fba9f017924bac",
+    "experiments/domain_phase_mix/audit_starcoder_epoch_matching_indices.py": "22a490cd461fa5dfaf9451f60bef42b0407cabbca6c203f12bd25e4f15bea88a"
+  },
+  "credentials_present": {
+    "WANDB_API_KEY": true,
+    "HF_TOKEN": true
+  },
+  "limitation": "Measurement of current checkout while refinement implementation may still be changing; recheck final source hashes before submission."
+}

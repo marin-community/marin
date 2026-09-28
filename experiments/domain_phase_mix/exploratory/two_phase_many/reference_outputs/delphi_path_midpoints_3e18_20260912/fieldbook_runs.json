@@ -1,0 +1,262 @@
+[
+  {
+    "attrs": {
+      "design.baseline": "olmix",
+      "design.objective": "uncheatable",
+      "design.path_fraction": 0.5,
+      "training.data_seed": 666200,
+      "training.trainer_seed": 0
+    },
+    "created_at": "2026-09-12T21:58:26Z",
+    "deleted_at": null,
+    "description": "Seed-0 validation of rounded 50% MARINER-baseline blend in Figure 10",
+    "existed": false,
+    "experiment_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+    "experiment_ids": [
+      "exp_01m21f631n71w9xe9n6krpr2kw"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m2bt200qzwpa9ypxw0twh640",
+    "idempotency_key": "figure10-midpoint-20260912.mp50_u_olmix_cap64",
+    "kind": "datapoint",
+    "name": "mp50_u_olmix_cap64",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-12T21:58:26Z"
+  },
+  {
+    "attrs": {
+      "design.baseline": "quad",
+      "design.objective": "uncheatable",
+      "design.path_fraction": 0.5,
+      "training.data_seed": 666200,
+      "training.trainer_seed": 0
+    },
+    "created_at": "2026-09-12T21:58:26Z",
+    "deleted_at": null,
+    "description": "Seed-0 validation of rounded 50% MARINER-baseline blend in Figure 10",
+    "existed": false,
+    "experiment_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+    "experiment_ids": [
+      "exp_01m21f631n71w9xe9n6krpr2kw"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m2bt20ap3pe981m1qargfjkf",
+    "idempotency_key": "figure10-midpoint-20260912.mp50_u_quad_cap64",
+    "kind": "datapoint",
+    "name": "mp50_u_quad_cap64",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-12T21:58:26Z"
+  },
+  {
+    "attrs": {
+      "design.baseline": "spline",
+      "design.objective": "uncheatable",
+      "design.path_fraction": 0.5,
+      "training.data_seed": 666200,
+      "training.trainer_seed": 0
+    },
+    "created_at": "2026-09-12T21:58:26Z",
+    "deleted_at": null,
+    "description": "Seed-0 validation of rounded 50% MARINER-baseline blend in Figure 10",
+    "existed": false,
+    "experiment_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+    "experiment_ids": [
+      "exp_01m21f631n71w9xe9n6krpr2kw"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m2bt20m13etpn6x3m41vcy1n",
+    "idempotency_key": "figure10-midpoint-20260912.mp50_u_spline_cap64",
+    "kind": "datapoint",
+    "name": "mp50_u_spline_cap64",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-12T21:58:26Z"
+  },
+  {
+    "attrs": {
+      "design.baseline": "lgbm",
+      "design.objective": "uncheatable",
+      "design.path_fraction": 0.5,
+      "training.data_seed": 666200,
+      "training.trainer_seed": 0
+    },
+    "created_at": "2026-09-12T21:58:26Z",
+    "deleted_at": null,
+    "description": "Seed-0 validation of rounded 50% MARINER-baseline blend in Figure 10",
+    "existed": false,
+    "experiment_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+    "experiment_ids": [
+      "exp_01m21f631n71w9xe9n6krpr2kw"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m2bt20xjcm5j31jhk6cqg7df",
+    "idempotency_key": "figure10-midpoint-20260912.mp50_u_lgbm_cap64",
+    "kind": "datapoint",
+    "name": "mp50_u_lgbm_cap64",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-12T21:58:26Z"
+  },
+  {
+    "attrs": {
+      "design.baseline": "krr",
+      "design.objective": "uncheatable",
+      "design.path_fraction": 0.5,
+      "training.data_seed": 666200,
+      "training.trainer_seed": 0
+    },
+    "created_at": "2026-09-12T21:58:27Z",
+    "deleted_at": null,
+    "description": "Seed-0 validation of rounded 50% MARINER-baseline blend in Figure 10",
+    "existed": false,
+    "experiment_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+    "experiment_ids": [
+      "exp_01m21f631n71w9xe9n6krpr2kw"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m2bt216t4k13ff3y8m0cvn7e",
+    "idempotency_key": "figure10-midpoint-20260912.mp50_u_krr_cap64",
+    "kind": "datapoint",
+    "name": "mp50_u_krr_cap64",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-12T21:58:27Z"
+  },
+  {
+    "attrs": {
+      "design.baseline": "olmix",
+      "design.objective": "table9",
+      "design.path_fraction": 0.5,
+      "training.data_seed": 662009,
+      "training.trainer_seed": 0
+    },
+    "created_at": "2026-09-12T21:58:27Z",
+    "deleted_at": null,
+    "description": "Seed-0 validation of rounded 50% MARINER-baseline blend in Figure 10",
+    "existed": false,
+    "experiment_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+    "experiment_ids": [
+      "exp_01m21f631n71w9xe9n6krpr2kw"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m2bt21fpxhgkvr84zcy8xm7r",
+    "idempotency_key": "figure10-midpoint-20260912.mp50_t9_olmix_cap64",
+    "kind": "datapoint",
+    "name": "mp50_t9_olmix_cap64",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-12T21:58:27Z"
+  },
+  {
+    "attrs": {
+      "design.baseline": "quad",
+      "design.objective": "table9",
+      "design.path_fraction": 0.5,
+      "training.data_seed": 662009,
+      "training.trainer_seed": 0
+    },
+    "created_at": "2026-09-12T21:58:27Z",
+    "deleted_at": null,
+    "description": "Seed-0 validation of rounded 50% MARINER-baseline blend in Figure 10",
+    "existed": false,
+    "experiment_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+    "experiment_ids": [
+      "exp_01m21f631n71w9xe9n6krpr2kw"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m2bt21r9bv17m3dm72gdx6k2",
+    "idempotency_key": "figure10-midpoint-20260912.mp50_t9_quad_cap64",
+    "kind": "datapoint",
+    "name": "mp50_t9_quad_cap64",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-12T21:58:27Z"
+  },
+  {
+    "attrs": {
+      "design.baseline": "spline",
+      "design.objective": "table9",
+      "design.path_fraction": 0.5,
+      "training.data_seed": 662009,
+      "training.trainer_seed": 0
+    },
+    "created_at": "2026-09-12T21:58:28Z",
+    "deleted_at": null,
+    "description": "Seed-0 validation of rounded 50% MARINER-baseline blend in Figure 10",
+    "existed": false,
+    "experiment_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+    "experiment_ids": [
+      "exp_01m21f631n71w9xe9n6krpr2kw"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m2bt220yt7e8z5nez53hz3f8",
+    "idempotency_key": "figure10-midpoint-20260912.mp50_t9_spline_cap64",
+    "kind": "datapoint",
+    "name": "mp50_t9_spline_cap64",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-12T21:58:28Z"
+  },
+  {
+    "attrs": {
+      "design.baseline": "lgbm",
+      "design.objective": "table9",
+      "design.path_fraction": 0.5,
+      "training.data_seed": 662009,
+      "training.trainer_seed": 0
+    },
+    "created_at": "2026-09-12T21:58:28Z",
+    "deleted_at": null,
+    "description": "Seed-0 validation of rounded 50% MARINER-baseline blend in Figure 10",
+    "existed": false,
+    "experiment_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+    "experiment_ids": [
+      "exp_01m21f631n71w9xe9n6krpr2kw"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m2bt22a65z5d2sym2rqnwfgk",
+    "idempotency_key": "figure10-midpoint-20260912.mp50_t9_lgbm_cap64",
+    "kind": "datapoint",
+    "name": "mp50_t9_lgbm_cap64",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-12T21:58:28Z"
+  },
+  {
+    "attrs": {
+      "design.baseline": "krr",
+      "design.objective": "table9",
+      "design.path_fraction": 0.5,
+      "training.data_seed": 662009,
+      "training.trainer_seed": 0
+    },
+    "created_at": "2026-09-12T21:58:28Z",
+    "deleted_at": null,
+    "description": "Seed-0 validation of rounded 50% MARINER-baseline blend in Figure 10",
+    "existed": false,
+    "experiment_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+    "experiment_ids": [
+      "exp_01m21f631n71w9xe9n6krpr2kw"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m2bt22jd2znp46gqh89evwzy",
+    "idempotency_key": "figure10-midpoint-20260912.mp50_t9_krr_cap64",
+    "kind": "datapoint",
+    "name": "mp50_t9_krr_cap64",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-12T21:58:28Z"
+  }
+]

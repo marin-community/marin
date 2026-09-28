@@ -1,0 +1,3 @@
+run_order,run_name,candidate_id,target,epoch_cap,aliases,run_id,data_seed,trainer_seed,train_steps,expected_checkpoint_step,tpu_type,tpu_region,tpu_zone,fit_panel_max_materialized_epoch,runtime_max_simulated_epoch
+0,rgref_table9_seed662009_t0_rgref_t9_endpoint_cap64,rgref_t9_endpoint_cap64,table9,64,rgref_t9_endpoint_cap64,7470100,662009,0,3007,3006,v6e-8,us-east5,us-east5-b,9.698185257725877,9.698180404460647
+1,rgref_table9_seed662009_t0_rgref_t9_midpoint_cap64,rgref_t9_midpoint_cap64,table9,64,rgref_t9_midpoint_cap64,7470101,662009,0,3007,3006,v6e-8,us-east5,us-east5-b,8.223876809995577,8.223872694518885

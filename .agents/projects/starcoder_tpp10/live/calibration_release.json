@@ -1,0 +1,9 @@
+{
+  "approved": true,
+  "authorization_sha256": "13b6f6c35d7e4f6f5e3029b4cf1380b4e02679d93986732000fd7846e566b054",
+  "cache_audit_sha256": "c9d4f9e7f7d8c15ddfd4db14ae83b05c191cd3c157bfa8c375d9b132464793e6",
+  "plan_sha256": "bb1f21b75529a4f6c09130ed6c94778f301e0cb8c359e32eb0354fd21cd7d626",
+  "preparation_job": "/calvinxu/starcoder-tpp10-prepare",
+  "reviewer": "User authorized preparation and calibration on 2026-09-09 (Great, lets submit); Codex verifies the reviewed plan and completed cache audit.",
+  "stage": "calibration"
+}

@@ -1,0 +1,20 @@
+{
+  "baseline_rows": 280,
+  "bootstrap_draws": 2000,
+  "cross_block_augmented_rows": 298,
+  "external_augmented_rows": 317,
+  "external_coordinates": 247,
+  "git_commit": "dcb4102422cf3c338d67452bf197365c7526ad08",
+  "git_dirty": true,
+  "input_sha256": {
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_apriori_swarm_280_20260904/pilot_materialization/heldout_results.csv": "8292b8c9762d9964be8112ff2235135f500b9bc0049d88425e922f16cf12bcc1",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_apriori_swarm_280_20260904/pilot_materialization/table9_components.csv": "36ff15a8ce81cb01cebb975d72ae5c58d4b41b7684c783cd5a3c6a79de071973",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_apriori_swarm_280_20260904/swarm_mixtures.csv": "c5ec2b0ae1b5c68dc44f6ede1a5caa1bd2918f5bfd9f6d0f23be508637856bd6",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/single_phase_heldout_benchmark_20260902/manifest.json": "78a2f3ae2281f2ee9818aba414293f5631e3a72a6a85eb3c95b96077d170cfdb"
+  },
+  "model": "weibull_softplus_unscaled",
+  "panel": "delphi_3e18_39bucket",
+  "pilot_runs": 37,
+  "pilot_subsampled_runs": 32,
+  "target": "table9"
+}

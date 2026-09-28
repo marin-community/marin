@@ -31,14 +31,108 @@ from levanter.eval import (
     LossLabelSpec,
     TaggedEvaluator,
     cb_tagged_evaluate,
+    construct_log_dict,
 )
 from levanter.models.lm_model import LmExample
 from levanter.tracker import current_tracker
 from levanter.tracker.json_logger import JsonLoggerConfig
+from levanter.utils.hf_utils import byte_length_of_token
 from levanter.utils.tree_utils import inference_mode
 
 from levanter.testing.helpers import use_test_mesh
 from levanter.testing.toy_lm import ToyLmConfig, ToyLmHeadModel
+
+
+@pytest.mark.parametrize("batch_multiplier", [1, 2, 4])
+@pytest.mark.parametrize("other_first", [False, True])
+def test_tagged_bpb_is_total_bits_per_byte_across_batch_boundaries(
+    local_gpt2_tokenizer, batch_multiplier, other_first
+):
+    tokenizer = local_gpt2_tokenizer
+    byte_lengths = [byte_length_of_token(tokenizer, i) for i in range(len(tokenizer))]
+    one_byte = byte_lengths.index(1)
+    four_bytes = byte_lengths.index(4)
+    zero_bytes = byte_lengths.index(0)
+
+    def example(token, bits):
+        # The second position is masked: neither its loss nor bytes should count.
+        return (
+            jnp.array([token, four_bytes], dtype=jnp.int32),
+            jnp.array([1.0, 0.0]),
+            jnp.array([bits, 100.0]),
+        )
+
+    paloma = (
+        ListAsyncDataset([example(t, 1.0) for t in [one_byte, four_bytes, zero_bytes, one_byte]]),
+        ["suite/paloma"],
+    )
+    other = (ListAsyncDataset([example(four_bytes, 2.0)]), ["suite/other"])
+    datasets = [other, paloma] if other_first else [paloma, other]
+    batch_axis = Axis("batch", batch_multiplier * len(jax.devices()))
+
+    def loss_fn(_model, batch):
+        tokens, weights, bits = batch
+        return bits * jnp.log(2.0), weights, tokens
+
+    with use_test_mesh(tensor_parallelism=1) as mesh:
+        evaluator = TaggedEvaluator(
+            EvalBatch=batch_axis,
+            tagged_eval_sets=datasets,
+            loss_fn=loss_fn,
+            tokenizer=tokenizer,
+            device_mesh=mesh,
+            axis_mapping={batch_axis.name: ResourceAxis.DATA},
+        )
+        result = evaluator.evaluate(None)
+
+    # Four bits over six bytes, including the scored zero-byte special token.
+    assert result.tag_micro_bpb["suite/paloma"] == pytest.approx(4 / 6, abs=1e-6)
+    assert result.tag_micro_bpb["suite/other"] == pytest.approx(2 / 4, abs=1e-6)
+    assert result.micro_bpb == pytest.approx(6 / 10, abs=1e-6)
+    assert result.tag_micro_bpb["suite"] == pytest.approx(6 / 10, abs=1e-6)
+    assert result.tag_macro_bpb["suite"] == pytest.approx((4 / 6 + 2 / 4) / 2, abs=1e-6)
+    assert result.tag_micro_losses["suite/paloma"] == pytest.approx(np.log(2.0), abs=1e-6)
+    assert construct_log_dict(evaluator, result, 0.0, "eval")["eval/bpb_schema_version"] == 2
+
+
+@pytest.mark.parametrize("labeled", [False, True])
+def test_bpb_retains_zero_byte_label_losses(local_gpt2_tokenizer, labeled):
+    tokenizer = local_gpt2_tokenizer
+    byte_lengths = [byte_length_of_token(tokenizer, i) for i in range(len(tokenizer))]
+    zero, four = byte_lengths.index(0), byte_lengths.index(4)
+    batch_axis = Axis("batch", len(jax.devices()))
+    # Each label occupies its own whole batches, including a zero-byte batch.
+    examples = [jnp.array([token], dtype=jnp.int32) for token in [zero, four] for _ in range(batch_axis.size)]
+
+    def loss_fn(_model, batch):
+        return jnp.full_like(batch, np.log(2.0), dtype=jnp.float32), jnp.ones_like(batch), batch
+
+    with use_test_mesh(tensor_parallelism=1) as mesh:
+        if labeled:
+            evaluator = LabeledEvaluator(
+                EvalBatch=batch_axis,
+                eval_set=ListAsyncDataset(examples),
+                label_spec=LossLabelSpec(id_to_name={1: "all"}),
+                loss_fn=loss_fn,
+                tokenizer=tokenizer,
+                device_mesh=mesh,
+                axis_mapping={batch_axis.name: ResourceAxis.DATA},
+            )
+            value = evaluator.evaluate(None).label_bpb["all"]
+        else:
+            evaluator = TaggedEvaluator(
+                EvalBatch=batch_axis,
+                tagged_eval_sets=[
+                    (ListAsyncDataset(examples[: batch_axis.size]), ["parent/special"]),
+                    (ListAsyncDataset(examples[batch_axis.size :]), ["parent/text"]),
+                ],
+                loss_fn=loss_fn,
+                tokenizer=tokenizer,
+                device_mesh=mesh,
+                axis_mapping={batch_axis.name: ResourceAxis.DATA},
+            )
+            value = evaluator.evaluate(None).tag_micro_bpb["parent"]
+    assert value == pytest.approx(2 / 4, abs=1e-6)
 
 
 @pytest.mark.asyncio

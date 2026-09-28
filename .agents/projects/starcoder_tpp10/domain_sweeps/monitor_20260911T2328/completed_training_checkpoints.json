@@ -1,0 +1,512 @@
+{
+  "checked_at": "2026-09-11T23:33:07.538595+00:00",
+  "iris_training_complete_count": 8,
+  "artifact_finalized_count": 2,
+  "rows": [
+    {
+      "run_name": "tpp10_wikipedia_matched_p005_s20260910",
+      "arm": "matched",
+      "percent": 5,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32,
+      "domain": "wikipedia",
+      "tokens": 165937152,
+      "support_sequences": 5120,
+      "fingerprint": "30a8b417",
+      "output_path": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_matched_p005_s20260910/2026.09.11",
+      "artifact": {
+        "run_name": "tpp10_wikipedia_matched_p005_s20260910",
+        "status": "RUNNING",
+        "active_lease": null,
+        "expected_fingerprint": "30a8b417",
+        "record_fingerprint": null
+      },
+      "checkpoint_metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T21:51:47.633068",
+        "is_temporary": false
+      },
+      "checkpoint_metadata_sha256": "5d5292e2c18e25668bc86c2b9b246a524f090ea7879014594ef51b02a75a0962",
+      "permanent_final_metadata": true,
+      "macro_bpb": 1.5656018257141113,
+      "paloma_bpb": 1.7567861080169678,
+      "metrics": {
+        "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 1.7567861080169678,
+        "eval/uncheatable_eval/wikipedia_english/bpb": 1.4185682535171509,
+        "eval/uncheatable_eval/github_python/bpb": 1.9469980001449585,
+        "eval/uncheatable_eval/github_cpp/bpb": 1.9523645639419556,
+        "eval/uncheatable_eval/bbc_news/bpb": 1.345813274383545,
+        "eval/uncheatable_eval/arxiv_physics/bpb": 1.420432209968567,
+        "eval/uncheatable_eval/arxiv_computer_science/bpb": 1.288857340812683,
+        "eval/uncheatable_eval/ao3_english/bpb": 1.5861791372299194
+      },
+      "components": {
+        "wikipedia_english": 1.4185682535171509,
+        "github_python": 1.9469980001449585,
+        "github_cpp": 1.9523645639419556,
+        "bbc_news": 1.345813274383545,
+        "arxiv_physics": 1.420432209968567,
+        "arxiv_computer_science": 1.288857340812683,
+        "ao3_english": 1.5861791372299194
+      },
+      "runtime_receipts_match": true,
+      "domain_receipt_match": true,
+      "wandb_state": "finished",
+      "wandb_metric_deltas": {
+        "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 0.0,
+        "eval/uncheatable_eval/wikipedia_english/bpb": 0.0,
+        "eval/uncheatable_eval/github_python/bpb": 0.0,
+        "eval/uncheatable_eval/github_cpp/bpb": 0.0,
+        "eval/uncheatable_eval/bbc_news/bpb": 0.0,
+        "eval/uncheatable_eval/arxiv_physics/bpb": 0.0,
+        "eval/uncheatable_eval/arxiv_computer_science/bpb": 0.0,
+        "eval/uncheatable_eval/ao3_english/bpb": 0.0
+      },
+      "wandb_max_abs_delta": 0.0
+    },
+    {
+      "run_name": "tpp10_wikipedia_matched_p010_s20260910",
+      "arm": "matched",
+      "percent": 10,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32,
+      "domain": "wikipedia",
+      "tokens": 165937152,
+      "support_sequences": 5120,
+      "fingerprint": "8473c67d",
+      "output_path": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_matched_p010_s20260910/2026.09.11",
+      "artifact": {
+        "run_name": "tpp10_wikipedia_matched_p010_s20260910",
+        "status": "RUNNING",
+        "active_lease": null,
+        "expected_fingerprint": "8473c67d",
+        "record_fingerprint": null
+      },
+      "checkpoint_metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T21:58:41.918167",
+        "is_temporary": false
+      },
+      "checkpoint_metadata_sha256": "dc0ece607ec8a7ef1c0b9fdd2ef2ef50d7be937e453ea8464f00cef87efca5c1",
+      "permanent_final_metadata": true,
+      "macro_bpb": 1.5494235072817122,
+      "paloma_bpb": 1.7027891874313354,
+      "metrics": {
+        "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 1.7027891874313354,
+        "eval/uncheatable_eval/wikipedia_english/bpb": 1.4045321941375732,
+        "eval/uncheatable_eval/github_python/bpb": 1.9051553010940552,
+        "eval/uncheatable_eval/github_cpp/bpb": 1.8918997049331665,
+        "eval/uncheatable_eval/bbc_news/bpb": 1.3481346368789673,
+        "eval/uncheatable_eval/arxiv_physics/bpb": 1.4185062646865845,
+        "eval/uncheatable_eval/arxiv_computer_science/bpb": 1.293911337852478,
+        "eval/uncheatable_eval/ao3_english/bpb": 1.5838251113891602
+      },
+      "components": {
+        "wikipedia_english": 1.4045321941375732,
+        "github_python": 1.9051553010940552,
+        "github_cpp": 1.8918997049331665,
+        "bbc_news": 1.3481346368789673,
+        "arxiv_physics": 1.4185062646865845,
+        "arxiv_computer_science": 1.293911337852478,
+        "ao3_english": 1.5838251113891602
+      },
+      "runtime_receipts_match": true,
+      "domain_receipt_match": true,
+      "wandb_state": "finished",
+      "wandb_metric_deltas": {
+        "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 0.0,
+        "eval/uncheatable_eval/wikipedia_english/bpb": 0.0,
+        "eval/uncheatable_eval/github_python/bpb": 0.0,
+        "eval/uncheatable_eval/github_cpp/bpb": 0.0,
+        "eval/uncheatable_eval/bbc_news/bpb": 0.0,
+        "eval/uncheatable_eval/arxiv_physics/bpb": 0.0,
+        "eval/uncheatable_eval/arxiv_computer_science/bpb": 0.0,
+        "eval/uncheatable_eval/ao3_english/bpb": 0.0
+      },
+      "wandb_max_abs_delta": 0.0
+    },
+    {
+      "run_name": "tpp10_wikipedia_matched_p020_s20260910",
+      "arm": "matched",
+      "percent": 20,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32,
+      "domain": "wikipedia",
+      "tokens": 165937152,
+      "support_sequences": 5120,
+      "fingerprint": "2cca0d99",
+      "output_path": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_matched_p020_s20260910/2026.09.11",
+      "artifact": {
+        "run_name": "tpp10_wikipedia_matched_p020_s20260910",
+        "status": "RUNNING",
+        "active_lease": null,
+        "expected_fingerprint": "2cca0d99",
+        "record_fingerprint": null
+      },
+      "checkpoint_metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T22:14:00.032517",
+        "is_temporary": false
+      },
+      "checkpoint_metadata_sha256": "1003c5df40990564d88072017c4f825aafcff0dc39c766f9014a93eeadd447c5",
+      "permanent_final_metadata": true,
+      "macro_bpb": 1.534228801727295,
+      "paloma_bpb": 1.700461983680725,
+      "metrics": {
+        "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 1.700461983680725,
+        "eval/uncheatable_eval/wikipedia_english/bpb": 1.3821439743041992,
+        "eval/uncheatable_eval/github_python/bpb": 1.8782823085784912,
+        "eval/uncheatable_eval/github_cpp/bpb": 1.8564399480819702,
+        "eval/uncheatable_eval/bbc_news/bpb": 1.348142385482788,
+        "eval/uncheatable_eval/arxiv_physics/bpb": 1.4091945886611938,
+        "eval/uncheatable_eval/arxiv_computer_science/bpb": 1.2914674282073975,
+        "eval/uncheatable_eval/ao3_english/bpb": 1.5739309787750244
+      },
+      "components": {
+        "wikipedia_english": 1.3821439743041992,
+        "github_python": 1.8782823085784912,
+        "github_cpp": 1.8564399480819702,
+        "bbc_news": 1.348142385482788,
+        "arxiv_physics": 1.4091945886611938,
+        "arxiv_computer_science": 1.2914674282073975,
+        "ao3_english": 1.5739309787750244
+      },
+      "runtime_receipts_match": true,
+      "domain_receipt_match": true,
+      "wandb_state": "finished",
+      "wandb_metric_deltas": {
+        "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 0.0,
+        "eval/uncheatable_eval/wikipedia_english/bpb": 0.0,
+        "eval/uncheatable_eval/github_python/bpb": 0.0,
+        "eval/uncheatable_eval/github_cpp/bpb": 0.0,
+        "eval/uncheatable_eval/bbc_news/bpb": 0.0,
+        "eval/uncheatable_eval/arxiv_physics/bpb": 0.0,
+        "eval/uncheatable_eval/arxiv_computer_science/bpb": 0.0,
+        "eval/uncheatable_eval/ao3_english/bpb": 0.0
+      },
+      "wandb_max_abs_delta": 0.0
+    },
+    {
+      "run_name": "tpp10_wikipedia_matched_p030_s20260910",
+      "arm": "matched",
+      "percent": 30,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32,
+      "domain": "wikipedia",
+      "tokens": 165937152,
+      "support_sequences": 5120,
+      "fingerprint": "22b4d41f",
+      "output_path": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_matched_p030_s20260910/2026.09.11",
+      "artifact": {
+        "run_name": "tpp10_wikipedia_matched_p030_s20260910",
+        "status": "RUNNING",
+        "active_lease": null,
+        "expected_fingerprint": "22b4d41f",
+        "record_fingerprint": null
+      },
+      "checkpoint_metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T22:04:43.138137",
+        "is_temporary": false
+      },
+      "checkpoint_metadata_sha256": "4c324c5aeab9c34e0d6fc1bfd4c19254f2aa13d66e7d2a1c5d2db8955e3a36a4",
+      "permanent_final_metadata": true,
+      "macro_bpb": 1.531399437359401,
+      "paloma_bpb": 1.6833510398864746,
+      "metrics": {
+        "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 1.6833510398864746,
+        "eval/uncheatable_eval/wikipedia_english/bpb": 1.3662090301513672,
+        "eval/uncheatable_eval/github_python/bpb": 1.8786461353302002,
+        "eval/uncheatable_eval/github_cpp/bpb": 1.8470746278762817,
+        "eval/uncheatable_eval/bbc_news/bpb": 1.3515444993972778,
+        "eval/uncheatable_eval/arxiv_physics/bpb": 1.4062340259552002,
+        "eval/uncheatable_eval/arxiv_computer_science/bpb": 1.294748067855835,
+        "eval/uncheatable_eval/ao3_english/bpb": 1.575339674949646
+      },
+      "components": {
+        "wikipedia_english": 1.3662090301513672,
+        "github_python": 1.8786461353302002,
+        "github_cpp": 1.8470746278762817,
+        "bbc_news": 1.3515444993972778,
+        "arxiv_physics": 1.4062340259552002,
+        "arxiv_computer_science": 1.294748067855835,
+        "ao3_english": 1.575339674949646
+      },
+      "runtime_receipts_match": true,
+      "domain_receipt_match": true,
+      "wandb_state": "finished",
+      "wandb_metric_deltas": {
+        "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 0.0,
+        "eval/uncheatable_eval/wikipedia_english/bpb": 0.0,
+        "eval/uncheatable_eval/github_python/bpb": 0.0,
+        "eval/uncheatable_eval/github_cpp/bpb": 0.0,
+        "eval/uncheatable_eval/bbc_news/bpb": 0.0,
+        "eval/uncheatable_eval/arxiv_physics/bpb": 0.0,
+        "eval/uncheatable_eval/arxiv_computer_science/bpb": 0.0,
+        "eval/uncheatable_eval/ao3_english/bpb": 0.0
+      },
+      "wandb_max_abs_delta": 0.0
+    },
+    {
+      "run_name": "tpp10_wikipedia_matched_p050_s20260910",
+      "arm": "matched",
+      "percent": 50,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32,
+      "domain": "wikipedia",
+      "tokens": 165937152,
+      "support_sequences": 5120,
+      "fingerprint": "d3239fd4",
+      "output_path": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_matched_p050_s20260910/2026.09.11",
+      "artifact": {
+        "run_name": "tpp10_wikipedia_matched_p050_s20260910",
+        "status": "RUNNING",
+        "active_lease": null,
+        "expected_fingerprint": "d3239fd4",
+        "record_fingerprint": null
+      },
+      "checkpoint_metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T22:21:22.763888",
+        "is_temporary": false
+      },
+      "checkpoint_metadata_sha256": "1329ce07fd2896bc1f272453195a31b10a80aeeba8b0ab2238d635ee6ac545db",
+      "permanent_final_metadata": true,
+      "macro_bpb": 1.5400532994951521,
+      "paloma_bpb": 1.7074614763259888,
+      "metrics": {
+        "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 1.7074614763259888,
+        "eval/uncheatable_eval/wikipedia_english/bpb": 1.3574039936065674,
+        "eval/uncheatable_eval/github_python/bpb": 1.8661565780639648,
+        "eval/uncheatable_eval/github_cpp/bpb": 1.8709291219711304,
+        "eval/uncheatable_eval/bbc_news/bpb": 1.3643516302108765,
+        "eval/uncheatable_eval/arxiv_physics/bpb": 1.4154469966888428,
+        "eval/uncheatable_eval/arxiv_computer_science/bpb": 1.308849573135376,
+        "eval/uncheatable_eval/ao3_english/bpb": 1.5972352027893066
+      },
+      "components": {
+        "wikipedia_english": 1.3574039936065674,
+        "github_python": 1.8661565780639648,
+        "github_cpp": 1.8709291219711304,
+        "bbc_news": 1.3643516302108765,
+        "arxiv_physics": 1.4154469966888428,
+        "arxiv_computer_science": 1.308849573135376,
+        "ao3_english": 1.5972352027893066
+      },
+      "runtime_receipts_match": true,
+      "domain_receipt_match": true,
+      "wandb_state": "finished",
+      "wandb_metric_deltas": {
+        "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 0.2629302740097046,
+        "eval/uncheatable_eval/wikipedia_english/bpb": 0.10643374919891357,
+        "eval/uncheatable_eval/github_python/bpb": 0.20601129531860352,
+        "eval/uncheatable_eval/github_cpp/bpb": 0.24503815174102783,
+        "eval/uncheatable_eval/bbc_news/bpb": 0.1043773889541626,
+        "eval/uncheatable_eval/arxiv_physics/bpb": 0.08868145942687988,
+        "eval/uncheatable_eval/arxiv_computer_science/bpb": 0.08874070644378662,
+        "eval/uncheatable_eval/ao3_english/bpb": 0.10416305065155029
+      },
+      "wandb_max_abs_delta": 0.2629302740097046
+    },
+    {
+      "run_name": "tpp10_wikipedia_matched_p070_s20260910",
+      "arm": "matched",
+      "percent": 70,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32,
+      "domain": "wikipedia",
+      "tokens": 165937152,
+      "support_sequences": 5120,
+      "fingerprint": "5176efbf",
+      "output_path": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_matched_p070_s20260910/2026.09.11",
+      "artifact": {
+        "run_name": "tpp10_wikipedia_matched_p070_s20260910",
+        "status": "RUNNING",
+        "active_lease": null,
+        "expected_fingerprint": "5176efbf",
+        "record_fingerprint": null
+      },
+      "checkpoint_metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T22:28:16.057629",
+        "is_temporary": false
+      },
+      "checkpoint_metadata_sha256": "197fdddfee87ea5cee98370907e45d55b8952730ee16a74a4eb35cd92ac777fc",
+      "permanent_final_metadata": true,
+      "macro_bpb": 1.6050662994384766,
+      "paloma_bpb": 1.9056475162506104,
+      "metrics": {
+        "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 1.9056475162506104,
+        "eval/uncheatable_eval/wikipedia_english/bpb": 1.3702353239059448,
+        "eval/uncheatable_eval/github_python/bpb": 1.974386215209961,
+        "eval/uncheatable_eval/github_cpp/bpb": 2.0697646141052246,
+        "eval/uncheatable_eval/bbc_news/bpb": 1.3932247161865234,
+        "eval/uncheatable_eval/arxiv_physics/bpb": 1.4481010437011719,
+        "eval/uncheatable_eval/arxiv_computer_science/bpb": 1.344660997390747,
+        "eval/uncheatable_eval/ao3_english/bpb": 1.6350911855697632
+      },
+      "components": {
+        "wikipedia_english": 1.3702353239059448,
+        "github_python": 1.974386215209961,
+        "github_cpp": 2.0697646141052246,
+        "bbc_news": 1.3932247161865234,
+        "arxiv_physics": 1.4481010437011719,
+        "arxiv_computer_science": 1.344660997390747,
+        "ao3_english": 1.6350911855697632
+      },
+      "runtime_receipts_match": true,
+      "domain_receipt_match": true,
+      "wandb_state": "finished",
+      "wandb_metric_deltas": {
+        "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 0.0,
+        "eval/uncheatable_eval/wikipedia_english/bpb": 0.0,
+        "eval/uncheatable_eval/github_python/bpb": 0.0,
+        "eval/uncheatable_eval/github_cpp/bpb": 0.0,
+        "eval/uncheatable_eval/bbc_news/bpb": 0.0,
+        "eval/uncheatable_eval/arxiv_physics/bpb": 0.0,
+        "eval/uncheatable_eval/arxiv_computer_science/bpb": 0.0,
+        "eval/uncheatable_eval/ao3_english/bpb": 0.0
+      },
+      "wandb_max_abs_delta": 0.0
+    },
+    {
+      "run_name": "tpp10_wikipedia_matched_p100_s20260910",
+      "arm": "matched",
+      "percent": 100,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32,
+      "domain": "wikipedia",
+      "tokens": 165937152,
+      "support_sequences": 5120,
+      "fingerprint": "a853b1a5",
+      "output_path": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_matched_p100_s20260910/2026.09.11",
+      "artifact": {
+        "run_name": "tpp10_wikipedia_matched_p100_s20260910",
+        "status": "SUCCESS",
+        "active_lease": null,
+        "expected_fingerprint": "a853b1a5",
+        "record_fingerprint": "a853b1a5"
+      },
+      "checkpoint_metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T21:35:01.541634",
+        "is_temporary": false
+      },
+      "checkpoint_metadata_sha256": "878a054c387a78d3d2e4e79c112174ca013d20ef59ce67fef41fca4969b623ba",
+      "permanent_final_metadata": true,
+      "macro_bpb": 2.43960896560124,
+      "paloma_bpb": 4.31272029876709,
+      "metrics": {
+        "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 4.31272029876709,
+        "eval/uncheatable_eval/wikipedia_english/bpb": 1.4962642192840576,
+        "eval/uncheatable_eval/github_python/bpb": 4.0553364753723145,
+        "eval/uncheatable_eval/github_cpp/bpb": 4.886290073394775,
+        "eval/uncheatable_eval/bbc_news/bpb": 1.5414665937423706,
+        "eval/uncheatable_eval/arxiv_physics/bpb": 1.6663166284561157,
+        "eval/uncheatable_eval/arxiv_computer_science/bpb": 1.5657269954681396,
+        "eval/uncheatable_eval/ao3_english/bpb": 1.8658617734909058
+      },
+      "components": {
+        "wikipedia_english": 1.4962642192840576,
+        "github_python": 4.0553364753723145,
+        "github_cpp": 4.886290073394775,
+        "bbc_news": 1.5414665937423706,
+        "arxiv_physics": 1.6663166284561157,
+        "arxiv_computer_science": 1.5657269954681396,
+        "ao3_english": 1.8658617734909058
+      },
+      "runtime_receipts_match": true,
+      "domain_receipt_match": true,
+      "wandb_state": "finished",
+      "wandb_metric_deltas": {
+        "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 0.0,
+        "eval/uncheatable_eval/wikipedia_english/bpb": 0.0,
+        "eval/uncheatable_eval/github_python/bpb": 0.0,
+        "eval/uncheatable_eval/github_cpp/bpb": 0.0,
+        "eval/uncheatable_eval/bbc_news/bpb": 0.0,
+        "eval/uncheatable_eval/arxiv_physics/bpb": 0.0,
+        "eval/uncheatable_eval/arxiv_computer_science/bpb": 0.0,
+        "eval/uncheatable_eval/ao3_english/bpb": 0.0
+      },
+      "wandb_max_abs_delta": 0.0
+    },
+    {
+      "run_name": "tpp10_finemath_3plus_matched_p100_s20260910",
+      "arm": "matched",
+      "percent": 100,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32,
+      "domain": "finemath_3plus",
+      "tokens": 165937152,
+      "support_sequences": 5120,
+      "fingerprint": "5a5a6129",
+      "output_path": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_matched_p100_s20260910/2026.09.11",
+      "artifact": {
+        "run_name": "tpp10_finemath_3plus_matched_p100_s20260910",
+        "status": "SUCCESS",
+        "active_lease": null,
+        "expected_fingerprint": "5a5a6129",
+        "record_fingerprint": "5a5a6129"
+      },
+      "checkpoint_metadata": {
+        "step": 2531,
+        "timestamp": "2026-09-11T21:41:51.641272",
+        "is_temporary": false
+      },
+      "checkpoint_metadata_sha256": "a3b32d4f7287f8caa5a28d4d3c1c7fbcc1a47974eac31721e62d45c2072cf697",
+      "permanent_final_metadata": true,
+      "macro_bpb": 2.005307572228568,
+      "paloma_bpb": 1.9834128618240356,
+      "metrics": {
+        "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 1.9834128618240356,
+        "eval/uncheatable_eval/wikipedia_english/bpb": 2.2414400577545166,
+        "eval/uncheatable_eval/github_python/bpb": 2.193598508834839,
+        "eval/uncheatable_eval/github_cpp/bpb": 2.204226493835449,
+        "eval/uncheatable_eval/bbc_news/bpb": 2.041956901550293,
+        "eval/uncheatable_eval/arxiv_physics/bpb": 1.6256176233291626,
+        "eval/uncheatable_eval/arxiv_computer_science/bpb": 1.6118100881576538,
+        "eval/uncheatable_eval/ao3_english/bpb": 2.1185033321380615
+      },
+      "components": {
+        "wikipedia_english": 2.2414400577545166,
+        "github_python": 2.193598508834839,
+        "github_cpp": 2.204226493835449,
+        "bbc_news": 2.041956901550293,
+        "arxiv_physics": 1.6256176233291626,
+        "arxiv_computer_science": 1.6118100881576538,
+        "ao3_english": 2.1185033321380615
+      },
+      "runtime_receipts_match": true,
+      "domain_receipt_match": true,
+      "wandb_state": "finished",
+      "wandb_metric_deltas": {
+        "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 0.0,
+        "eval/uncheatable_eval/wikipedia_english/bpb": 0.0,
+        "eval/uncheatable_eval/github_python/bpb": 0.0,
+        "eval/uncheatable_eval/github_cpp/bpb": 0.0,
+        "eval/uncheatable_eval/bbc_news/bpb": 0.0,
+        "eval/uncheatable_eval/arxiv_physics/bpb": 0.0,
+        "eval/uncheatable_eval/arxiv_computer_science/bpb": 0.0,
+        "eval/uncheatable_eval/ao3_english/bpb": 0.0
+      },
+      "wandb_max_abs_delta": 0.0
+    }
+  ],
+  "caveat": "Read-only inventory; no incomplete executor record is promoted."
+}

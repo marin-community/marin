@@ -1,0 +1,16 @@
+{
+  "alone": {
+    "paloma_bpb": 0.4000000059604645,
+    "paloma_loss": 0.6931471824645996
+  },
+  "after_other_dataset": {
+    "paloma_bpb": 0.625,
+    "paloma_loss": 0.6931471824645996
+  },
+  "correct_global_bpb": 0.4,
+  "fixed_bits_per_example": 1,
+  "bytes_per_example": [
+    1,
+    4
+  ]
+}

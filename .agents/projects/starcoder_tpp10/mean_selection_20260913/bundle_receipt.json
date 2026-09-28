@@ -1,0 +1,18 @@
+{
+  "sha256": "710e54353e0f7f39b06776015b114b6a7fbe3d15df0755e943b2f2ee8d2e71fa",
+  "size_bytes": 24306412,
+  "files": 4541,
+  "verified_source_pins": 29,
+  "plan_sha256": "2d8de87ec6b975ef757c5994cb610bb7d9386dfbefc2aac264e8e8c2991b0bf1",
+  "includes": [
+    ".agents/projects/starcoder_tpp10/mean_selection_20260913/plan.json",
+    "experiments/domain_phase_mix/starcoder_tpp10_assets/*"
+  ],
+  "excludes": [
+    "^(checkpoints|cache|logs|wandb|tmp)/",
+    "^experiments/domain_phase_mix/exploratory/.*(?<!\\.py)$",
+    "^\\.agents/(?!projects/starcoder_tpp10/mean_selection_20260913/plan\\.json$).*",
+    "^(docs|tests)/",
+    "^lib/[^/]+/tests/"
+  ]
+}

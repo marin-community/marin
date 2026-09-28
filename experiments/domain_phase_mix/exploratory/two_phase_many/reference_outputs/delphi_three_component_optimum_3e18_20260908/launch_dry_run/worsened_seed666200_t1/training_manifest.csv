@@ -1,0 +1,2 @@
+run_order,run_name,candidate_id,target,epoch_cap,aliases,run_id,data_seed,trainer_seed,train_steps,expected_checkpoint_step,tpu_type,tpu_region,tpu_zone,fit_panel_max_materialized_epoch,runtime_max_simulated_epoch
+0,lwspuw3_worsened_seed666200_t1_lwspu_w3_snc_cap06,lwspu_w3_snc_cap06,uncheatable_worsened,6,lwspu_w3_snc_cap06,7406010,666200,1,3007,3006,v6e-8,us-east5,us-east5-b,5.63081809398967,5.630815276157987

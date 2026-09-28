@@ -1,0 +1,87 @@
+{
+  "canary_metrics.csv": {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789072695.885164,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/canary_metrics.csv",
+      "fieldbook.local_size_at_capture": 650
+    },
+    "content_hash": "sha256:030d35d3d4d6989e29d131755d39d4ff0b8e3fa44e624d769333c2a154644b33",
+    "created_at": "2026-09-10T20:43:40Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m26gzntk111xzrdp3bkjaq6d",
+    "job_id": null,
+    "run_id": null,
+    "type": "metric-table",
+    "updated_at": "2026-09-10T20:44:24Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/canary_metrics.csv"
+  },
+  "canary_trace_summary.json": {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789072920.168425,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/canary_trace_summary.json",
+      "fieldbook.local_size_at_capture": 7477
+    },
+    "content_hash": "sha256:560e0ad766130a6d3b94908f77f9799c0c1a37ac45a8787c7c756e33aaa4b3f9",
+    "created_at": "2026-09-10T20:44:25Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m26h111aqrkc3mt6b33cey48",
+    "job_id": null,
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-10T20:44:25Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/canary_trace_summary.json"
+  },
+  "canary_optimizer_traces.png": {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789072921.3250847,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/canary_optimizer_traces.png",
+      "fieldbook.local_size_at_capture": 285342
+    },
+    "content_hash": "sha256:f565825e9e9bb581de5b9c8b1aed3f4f661cd70c5fb0134be34ce2d0e06dec74",
+    "created_at": "2026-09-10T20:44:25Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m26h11a8f476xjvbdtkkd1j5",
+    "job_id": null,
+    "run_id": null,
+    "type": "plot",
+    "updated_at": "2026-09-10T20:44:25Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/canary_optimizer_traces.png"
+  },
+  "canary_optimizer_review.md": {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789072996.7981427,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/canary_optimizer_review.md",
+      "fieldbook.local_size_at_capture": 2239
+    },
+    "content_hash": "sha256:dd50826caf8a6e2139fb78bc942c8516ae77224d53b369ebe7feede7543eac4b",
+    "created_at": "2026-09-10T20:44:25Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m26h11m9sr7p8nff42cqdxt9",
+    "job_id": null,
+    "run_id": null,
+    "type": "report",
+    "updated_at": "2026-09-10T20:44:25Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/canary_optimizer_review.md"
+  },
+  "canary_ondemand_completion.csv": {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789072703.80074,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/canary_ondemand_completion.csv",
+      "fieldbook.local_size_at_capture": 316
+    },
+    "content_hash": "sha256:6932d6b4829d9093bfc1e76dadb1547c647d4f4f6f6805d0814ffdf04becd6a0",
+    "created_at": "2026-09-10T20:44:25Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m26h11y1eaa8enxpqjc72tya",
+    "job_id": null,
+    "run_id": null,
+    "type": "log",
+    "updated_at": "2026-09-10T20:44:25Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/canary_ondemand_completion.csv"
+  }
+}

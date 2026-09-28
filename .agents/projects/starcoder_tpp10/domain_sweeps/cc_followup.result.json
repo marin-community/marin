@@ -1,0 +1,68 @@
+{
+  "is_error": false,
+  "duration_api_ms": 71397,
+  "num_turns": 5,
+  "stop_reason": "end_turn",
+  "session_id": "875daf68-2b08-47ac-ba7f-77294cb92faa",
+  "total_cost_usd": 3.3150385,
+  "usage": {
+    "input_tokens": 6,
+    "cache_creation_input_tokens": 287634,
+    "cache_read_input_tokens": 605537,
+    "output_tokens": 5436,
+    "output_tokens_details": {
+      "thinking_tokens": 2946
+    },
+    "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+    },
+    "service_tier": "standard",
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 287634,
+      "ephemeral_5m_input_tokens": 0
+    },
+    "inference_geo": "not_available",
+    "iterations": [
+      {
+        "input_tokens": 2,
+        "output_tokens": 4699,
+        "cache_read_input_tokens": 300712,
+        "cache_creation_input_tokens": 4642,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 4642
+        },
+        "type": "message"
+      }
+    ],
+    "speed": "standard"
+  },
+  "modelUsage": {
+    "claude-opus-5[1m]": {
+      "inputTokens": 6,
+      "outputTokens": 5436,
+      "cacheReadInputTokens": 605537,
+      "cacheCreationInputTokens": 287634,
+      "webSearchRequests": 0,
+      "costUSD": 3.3150385,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 64000,
+      "canonicalModel": "claude-opus-5",
+      "provider": "firstParty"
+    }
+  },
+  "permission_denials": [],
+  "terminal_reason": "completed",
+  "fast_mode_state": "off",
+  "fast_mode_disabled_reason": "sdk_opt_in_required",
+  "subtype": "success",
+  "api_error_status": null,
+  "result": "## Verification of targeted fixes\n\nAll four applied fixes verify against the code, and the requested extras are present.\n\n**Fix 2 \u2014 evaluation-population parity (closed).** `validate_evaluation_population` compares exact `sources` and `tokenizer_pins` between `evaluation.json` and `control_evaluation.json` (`launch:181-186`), invoked at plan build (`:115`) and again at submit (`:296`). `prepare_controls` additionally asserts the caches actually built from the control spec equal `preparation.evaluation_paths()` (`:264-265`), and `submit` re-checks the training-side paths against the frozen plan (`:305-307`). The chain is closed: identical sources and pins \u2192 identical `cache_identity` \u2192 identical resolved paths on both sides.\n\n**Fix 3 \u2014 evaluation tags (closed, and API-correct).** `tagged_eval_sets(Pos) -> list[tuple[AsyncDataset, list[str]]]` (`datasets.py:1542`) with `tags = (component.tags or []) + [name]`, so the unpacking in `validate_evaluation_tags` (`launch:192`) is right and the component name is always a tag. The expected set resolves correctly: `PRIMARY_METRIC.removeprefix(\"eval/\").removesuffix(\"/bpb\")` yields `paloma/dolma_100_programing_languages-tpp10`, which is exactly the frozen component name (`prepare_starcoder_tpp10.py:327`), and the seven `uncheatable_eval/<c>` keys match `final_metrics`' `eval/uncheatable_eval/<c>/bpb` (`launch:204`). `async_len()` is resolved per set and zero-length sets are rejected (`:197`). The test is a real local-cache exercise, not a mock: it writes eight `/validation` caches through `old_data.write_part` and asserts `validate_evaluation_tags(...) == {name: 4 for name in expected}` (`test:99-117`). Production GCS resolution is separately covered because `submit` runs the same function on the materialized config at `experiment.PREFIX` (`:308-310`) after the caches are built and path-verified. This is exactly the pre-training gate that was missing.\n\n**Fix 4 \u2014 parquet memory (closed).** `check_parquet_memory` reads `metadata.row_group(i).total_byte_size` from the footer and rejects anything above `512 * MIB` (`prepare:72-77, 35`), called after the text-column check and before `iter_batches` (`:100`). Tested in both directions (`test:35-37`). Note `total_byte_size` covers all columns, so bounding it over-counts what the `text`-only projection decodes \u2014 conservative in the correct direction, and at `ram=\"8g\"` a 512 MiB row group leaves headroom.\n\n**Requested extras \u2014 all present.** Frozen tokenizer implementation hash now checked in `prepare_parquet` (`:121-122`), matching `original.prepare_raw:191-192`. Raw design receipt now checked for every step including `/raw` (`prepare:268-269`). Reviewer requirement restored (`launch:290-295`). The frozen-cache audit is captured rather than discarded and persisted into `preflight.json` under `frozen_data`, alongside `evaluation_populations` (`:299, 314-323`).\n\n**Hardware finding 1 \u2014 withdrawn for TPU, applied for CPU.** The correction is right and I accept it. `ResourceConfig.preemptible` defaults to `True` (`fray/types.py:438`), but if `marin.yaml:214` provisions only preemptible central1 v5p workers and `iris_backend.py:138` emits a constraint only when the flag is false, then setting `preemptible=False` on the TPU config would make all 28 runs unschedulable \u2014 a correctness argument, not a preference. Since `remote()` exposes no priority/timeout/retry parameters, those belong on the parent job command, which is where they are pinned (`--priority interactive --no-preemptible --timeout 172800 --max-retries 0 --max-preemption-retries 0`), with children inheriting the band. The half I can verify directly is applied: `preemptible=False` is now on the data children's `CPU` config (`prepare:34`) and correctly absent from `TPU` (`launch:34`). I did not open the three infra files and am taking those line references as stated. No infrastructure API edits are warranted; my original finding over-scoped a coordinator requirement onto TPU children.\n\n**Controls / duplicate evaluation \u2014 acceptable as documented.** `prepare_controls` uses the identical immutable spec and the same `result_path(spec, request)` namespace, guarded by `verified_result` (`launch:275`). Results are content-addressed by `spec_sha256` and revalidated against fingerprint and checkpoint metadata (`evaluate:167-179`), so a concurrent Figure-5 evaluator writing the same two files is idempotent and involves no training. Preferring its outputs when available and documenting the possible duplicate is the right disposition.\n\n**Remaining nits (non-gating).** `validate_evaluation_tags`' message prints `expected - populations.keys()`, which is empty when the failure is an empty-but-present set \u2014 cosmetic. `prepare_controls` runs concurrently with the 26-run batch (`:335-340`), so the two p=0 control evaluations contend for TPU; intentional and cheap. `remaining` uses `row not in [...]` (`:327`), O(n\u00b2) on 28 rows.\n\n**Verdict: clear to submit.** Fixes 2, 3 and 4 are correctly implemented and genuinely exercised; the extras are in place; blocker 1 is resolved as a scoping error on my part. Proceed with regional cache preparation, then the two included matched-p100 runs as the execution gate before releasing the remaining 26. Manual reruns only after the old job tree is terminal, preserving exact artifacts. No scientific changes, no extra arms, artifacts and manuscript untouched.",
+  "ttft_ms": 4585,
+  "ttft_stream_ms": 3777,
+  "time_to_request_ms": 63,
+  "type": "result",
+  "duration_ms": 71602,
+  "uuid": "e820e2f0-9f0e-4b2f-9305-139010d5bd28"
+}

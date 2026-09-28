@@ -1,0 +1,77 @@
+{
+  "repair_sha256": "6c7f6700b8cbf69e363a07ba5e3d3ecfb98c55aa1dd429dce936007b91b5983b",
+  "completion_sha256": "a2460bd0d1331717edde775ea9295b2eb49658106b7e2d1663fbd2a8a46f6d1b",
+  "wrapper_sha256": "f1f14ff8d768ba9695836d8c677cd970d69efa0a9a9ad26d5a02256a4ae60fc3",
+  "source_resolutions": [
+    {
+      "run_name": "tpp10_finemath_3plus_target_p030_s20260910",
+      "original_job": "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_target_p030_s20260910",
+      "completed_job": "/calvinxu/tpp10-finemath-target-completion/tpp10_finemath_3plus_target_p030_s20260910"
+    },
+    {
+      "run_name": "tpp10_finemath_3plus_target_p050_s20260910",
+      "original_job": "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_target_p050_s20260910",
+      "completed_job": "/calvinxu/tpp10-finemath-target-completion/tpp10_finemath_3plus_target_p050_s20260910"
+    },
+    {
+      "run_name": "tpp10_finemath_3plus_target_p070_s20260910",
+      "original_job": "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_target_p070_s20260910",
+      "completed_job": "/calvinxu/tpp10-finemath-target-completion/tpp10_finemath_3plus_target_p070_s20260910"
+    },
+    {
+      "run_name": "tpp10_finemath_3plus_target_p100_s20260910",
+      "original_job": "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_target_p100_s20260910",
+      "completed_job": "/calvinxu/tpp10-finemath-target-completion/tpp10_finemath_3plus_target_p100_s20260910"
+    }
+  ],
+  "terminal_trees": {
+    "/calvinxu/tpp10-domain-sweeps-cpu4g": {
+      "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_target_p100_s20260910": "killed",
+      "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_target_p070_s20260910": "killed",
+      "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_target_p050_s20260910": "killed",
+      "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_target_p030_s20260910": "killed",
+      "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_target_p020_s20260910": "succeeded",
+      "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_target_p010_s20260910": "succeeded",
+      "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_matched_p070_s20260910": "succeeded",
+      "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_target_p005_s20260910": "succeeded",
+      "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_matched_p050_s20260910": "succeeded",
+      "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_matched_p030_s20260910": "succeeded",
+      "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_matched_p020_s20260910": "succeeded",
+      "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_matched_p010_s20260910": "succeeded",
+      "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_matched_p005_s20260910": "succeeded",
+      "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_wikipedia_target_p100_s20260910": "succeeded",
+      "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_wikipedia_target_p050_s20260910": "succeeded",
+      "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_wikipedia_target_p070_s20260910": "succeeded",
+      "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_wikipedia_target_p030_s20260910": "succeeded",
+      "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_wikipedia_target_p020_s20260910": "succeeded",
+      "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_wikipedia_target_p010_s20260910": "succeeded",
+      "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_wikipedia_target_p005_s20260910": "succeeded",
+      "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_wikipedia_matched_p070_s20260910": "succeeded",
+      "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_wikipedia_matched_p050_s20260910": "succeeded",
+      "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_wikipedia_matched_p030_s20260910": "succeeded",
+      "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_wikipedia_matched_p020_s20260910": "succeeded",
+      "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_wikipedia_matched_p010_s20260910": "succeeded",
+      "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_wikipedia_matched_p005_s20260910": "succeeded",
+      "/calvinxu/tpp10-domain-sweeps-cpu4g/domain-survey-p0-target": "failed",
+      "/calvinxu/tpp10-domain-sweeps-cpu4g/domain-survey-p0-unmatched": "failed",
+      "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_matched_p100_s20260910": "succeeded",
+      "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_wikipedia_matched_p100_s20260910": "succeeded",
+      "/calvinxu/tpp10-domain-sweeps-cpu4g/prepare_subset-1a60a898": "succeeded",
+      "/calvinxu/tpp10-domain-sweeps-cpu4g": "failed"
+    },
+    "/calvinxu/tpp10-finemath-target-completion": {
+      "/calvinxu/tpp10-finemath-target-completion/tpp10_finemath_3plus_target_p100_s20260910": "succeeded",
+      "/calvinxu/tpp10-finemath-target-completion/tpp10_finemath_3plus_target_p070_s20260910": "succeeded",
+      "/calvinxu/tpp10-finemath-target-completion/tpp10_finemath_3plus_target_p050_s20260910": "succeeded",
+      "/calvinxu/tpp10-finemath-target-completion/tpp10_finemath_3plus_target_p030_s20260910": "succeeded",
+      "/calvinxu/tpp10-finemath-target-completion": "succeeded"
+    }
+  },
+  "counts_sha256": "7c7258e80208b230394cbee4ce1f41436d6c248d5d02e4ad86d24d05b5c32f4a",
+  "reused_audits": [
+    "tpp10_target_p000_s20260910",
+    "tpp10_unmatched_p000_s20260910",
+    "tpp10_wikipedia_matched_p050_s20260910"
+  ],
+  "closeout_sha256": "b0ac18e7a714883122f392d8592b1cb38c2e5f3fd9d1c213c4888a90a01e2bf9"
+}

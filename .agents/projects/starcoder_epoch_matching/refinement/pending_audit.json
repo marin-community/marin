@@ -1,0 +1,18 @@
+{
+  "status": "passed",
+  "selected_artifacts": 20,
+  "reused_pilot_artifacts": 10,
+  "pending_training_runs": 10,
+  "pending_run_names": [
+    "epmatch_unmatched_c043_s20260711",
+    "epmatch_matched_c043_s20260711",
+    "epmatch_unmatched_c079_s20260711",
+    "epmatch_matched_c079_s20260711",
+    "epmatch_unmatched_c088_s20260711",
+    "epmatch_matched_c088_s20260711",
+    "epmatch_unmatched_c100_s20260711",
+    "epmatch_matched_c100_s20260711",
+    "epmatch_unmatched_c119_s20260711",
+    "epmatch_matched_c119_s20260711"
+  ]
+}

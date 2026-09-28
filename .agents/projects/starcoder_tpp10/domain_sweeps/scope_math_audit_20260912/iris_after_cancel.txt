@@ -1,0 +1,33 @@
+JOB ID                                                                           STATE      SUBMITTED                         REASON
+/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_target_p100_s20260910   killed     2026-09-11T21:42:44.124000+00:00  Terminated by user
+/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_target_p070_s20260910   killed     2026-09-11T21:42:43.333000+00:00  Terminated by user
+/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_target_p050_s20260910   killed     2026-09-11T21:42:42.980000+00:00  Terminated by user
+/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_target_p030_s20260910   killed     2026-09-11T21:42:42.734000+00:00  Terminated by user
+/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_target_p020_s20260910   succeeded  2026-09-11T21:42:42.230000+00:00
+/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_target_p010_s20260910   succeeded  2026-09-11T21:42:42.149000+00:00
+/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_matched_p070_s20260910  succeeded  2026-09-11T21:42:42.065000+00:00
+/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_target_p005_s20260910   succeeded  2026-09-11T21:42:41.996000+00:00
+/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_matched_p050_s20260910  succeeded  2026-09-11T21:42:40.420000+00:00
+/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_matched_p030_s20260910  succeeded  2026-09-11T21:42:39.569000+00:00
+/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_matched_p020_s20260910  succeeded  2026-09-11T21:42:39.171000+00:00
+/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_matched_p010_s20260910  succeeded  2026-09-11T21:42:39.020000+00:00
+/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_matched_p005_s20260910  succeeded  2026-09-11T21:42:38.826000+00:00
+/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_wikipedia_target_p100_s20260910        succeeded  2026-09-11T21:42:38.035000+00:00
+/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_wikipedia_target_p050_s20260910        succeeded  2026-09-11T21:42:37.808000+00:00
+/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_wikipedia_target_p070_s20260910        succeeded  2026-09-11T21:42:37.675000+00:00
+/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_wikipedia_target_p030_s20260910        succeeded  2026-09-11T21:42:36.655000+00:00
+/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_wikipedia_target_p020_s20260910        succeeded  2026-09-11T21:42:36.228000+00:00
+/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_wikipedia_target_p010_s20260910        succeeded  2026-09-11T21:42:35.467000+00:00
+/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_wikipedia_target_p005_s20260910        succeeded  2026-09-11T21:42:35.434000+00:00
+/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_wikipedia_matched_p070_s20260910       succeeded  2026-09-11T21:42:34.489000+00:00
+/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_wikipedia_matched_p050_s20260910       succeeded  2026-09-11T21:42:34.079000+00:00
+/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_wikipedia_matched_p030_s20260910       succeeded  2026-09-11T21:42:33.387000+00:00
+/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_wikipedia_matched_p020_s20260910       succeeded  2026-09-11T21:42:32.734000+00:00
+/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_wikipedia_matched_p010_s20260910       succeeded  2026-09-11T21:42:32.313000+00:00
+/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_wikipedia_matched_p005_s20260910       succeeded  2026-09-11T21:42:31.701000+00:00
+/calvinxu/tpp10-domain-sweeps-cpu4g/domain-survey-p0-target                      failed     2026-09-11T21:42:29.538000+00:00  Cumulative failed task attempts exceeded max_task_failures: ...
+/calvinxu/tpp10-domain-sweeps-cpu4g/domain-survey-p0-unmatched                   failed     2026-09-11T21:42:29.391000+00:00  Cumulative failed task attempts exceeded max_task_failures: ...
+/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_matched_p100_s20260910  succeeded  2026-09-11T21:28:51.030000+00:00
+/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_wikipedia_matched_p100_s20260910       succeeded  2026-09-11T21:28:49.383000+00:00
+/calvinxu/tpp10-domain-sweeps-cpu4g/prepare_subset-1a60a898                      succeeded  2026-09-11T21:26:02.017000+00:00
+/calvinxu/tpp10-domain-sweeps-cpu4g                                              failed     2026-09-11T21:24:43.480000+00:00  Cumulative failed task attempts exceeded max_task_failures: ...

@@ -1,0 +1,1775 @@
+{
+  "schema_version": 1,
+  "version": "2026.09.09",
+  "primary_metric": "eval/paloma/dolma_100_programing_languages-tpp10/bpb",
+  "models": {
+    "unmatched": {
+      "parameters": 16587008,
+      "steps": 2532,
+      "tokens": 165937152,
+      "tpp": 10.00404364669023,
+      "batch_size": 32,
+      "training_flops": 2.4908860401647616e+16
+    },
+    "target": {
+      "parameters": 301241344,
+      "steps": 11491,
+      "tokens": 3012296704,
+      "tpp": 9.99961248347106,
+      "batch_size": 128,
+      "training_flops": 6.66390282503612e+18
+    }
+  },
+  "tokenizer_pins": {
+    "tokenizer_repo": "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T",
+    "tokenizer_revision": "59f6f375b26bde864a6ca194a9a3044570490064",
+    "vocabulary_size": 32000,
+    "files_sha256": {
+      "sources.json": "9f9b80e55ca9d2d9decc3125336000713c81e941b8f4c08b61f898566259e44a",
+      "tokenizer_config.json": "f514e7c3008881b6ba7e6a0cdb44c71ce47dc335920dac143ae7bc788197e53a",
+      "special_tokens_map.json": "6fa06efa2785e450051989a6f8fb4416b10149ded485ddd3f127a40734f5cfd0",
+      "tokenizer.json": "bcd04f0eadf90287bd26e1a183ac487d8a141b09b06aecb7725bbdd343640f2e",
+      "tokenizer.model": "9e556afd44213b6bd1be2b850ebbbd98f5481437a8021afaf58ee7fb1818d347"
+    }
+  },
+  "source_code_sha256": {
+    "starcoder_tpp10.py": "5d22bd8d498e8e4cf1d6e9512c481558b299385cbb1d9722ae84aa8c3d17d0fe",
+    "starcoder_epoch_matching.py": "29dac8e4085591732c329fe6a238f07cb4e02cdc6198ce344d4ab8b599619085"
+  },
+  "subset_indices_sha256": {
+    "20260912": "a81b955764104337b0a47602f2c422177b12fce2931d4c08608552487be5997b",
+    "20260913": "90492ec9f9bea3e9363da05a0a15367e2f9dae55fdb76e64539cb62861ae3ebf",
+    "20260914": "53c1921771cf837c72341f0567eeaeeeb899601feac09f3f5bf88b5e37a165c1"
+  },
+  "parent_permutation_sha256": "11f9991e96ba8f09d9ff50bf060a0ecd4a604d1d81d1ced2505f0cb96264c5e1",
+  "parent_sequences": 92928,
+  "matched_sequences": 5120,
+  "web_sequences": {
+    "hq_actual": 167655,
+    "hq_synth": 463341,
+    "medium_high": 152695,
+    "medium": 605985,
+    "medium_low": 267267,
+    "low_actual": 120366
+  },
+  "pilot_grid": [
+    0,
+    10,
+    30,
+    50,
+    70,
+    90,
+    100
+  ],
+  "dense_grid": [
+    0,
+    5,
+    10,
+    15,
+    20,
+    25,
+    30,
+    35,
+    40,
+    45,
+    50,
+    55,
+    60,
+    65,
+    70,
+    75,
+    80,
+    85,
+    90,
+    95,
+    100
+  ],
+  "runs": [
+    {
+      "run_name": "tpp10_target_p000_s20260910",
+      "arm": "target",
+      "percent": 0,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 11491,
+      "batch_size": 128
+    },
+    {
+      "run_name": "tpp10_unmatched_p000_s20260910",
+      "arm": "unmatched",
+      "percent": 0,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_unmatched_p000_s20260911",
+      "arm": "unmatched",
+      "percent": 0,
+      "trainer_seed": 20260911,
+      "subset_seed": null,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_target_p005_s20260910",
+      "arm": "target",
+      "percent": 5,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 11491,
+      "batch_size": 128
+    },
+    {
+      "run_name": "tpp10_unmatched_p005_s20260910",
+      "arm": "unmatched",
+      "percent": 5,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p005_s20260910_d20260912",
+      "arm": "matched",
+      "percent": 5,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p005_s20260910_d20260913",
+      "arm": "matched",
+      "percent": 5,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260913,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p005_s20260910_d20260914",
+      "arm": "matched",
+      "percent": 5,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260914,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_unmatched_p005_s20260911",
+      "arm": "unmatched",
+      "percent": 5,
+      "trainer_seed": 20260911,
+      "subset_seed": null,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p005_s20260911_d20260912",
+      "arm": "matched",
+      "percent": 5,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p005_s20260911_d20260913",
+      "arm": "matched",
+      "percent": 5,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260913,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p005_s20260911_d20260914",
+      "arm": "matched",
+      "percent": 5,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260914,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_target_p010_s20260910",
+      "arm": "target",
+      "percent": 10,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 11491,
+      "batch_size": 128
+    },
+    {
+      "run_name": "tpp10_unmatched_p010_s20260910",
+      "arm": "unmatched",
+      "percent": 10,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p010_s20260910_d20260912",
+      "arm": "matched",
+      "percent": 10,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p010_s20260910_d20260913",
+      "arm": "matched",
+      "percent": 10,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260913,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p010_s20260910_d20260914",
+      "arm": "matched",
+      "percent": 10,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260914,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_unmatched_p010_s20260911",
+      "arm": "unmatched",
+      "percent": 10,
+      "trainer_seed": 20260911,
+      "subset_seed": null,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p010_s20260911_d20260912",
+      "arm": "matched",
+      "percent": 10,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p010_s20260911_d20260913",
+      "arm": "matched",
+      "percent": 10,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260913,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p010_s20260911_d20260914",
+      "arm": "matched",
+      "percent": 10,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260914,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_target_p015_s20260910",
+      "arm": "target",
+      "percent": 15,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 11491,
+      "batch_size": 128
+    },
+    {
+      "run_name": "tpp10_unmatched_p015_s20260910",
+      "arm": "unmatched",
+      "percent": 15,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p015_s20260910_d20260912",
+      "arm": "matched",
+      "percent": 15,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p015_s20260910_d20260913",
+      "arm": "matched",
+      "percent": 15,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260913,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p015_s20260910_d20260914",
+      "arm": "matched",
+      "percent": 15,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260914,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_unmatched_p015_s20260911",
+      "arm": "unmatched",
+      "percent": 15,
+      "trainer_seed": 20260911,
+      "subset_seed": null,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p015_s20260911_d20260912",
+      "arm": "matched",
+      "percent": 15,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p015_s20260911_d20260913",
+      "arm": "matched",
+      "percent": 15,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260913,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p015_s20260911_d20260914",
+      "arm": "matched",
+      "percent": 15,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260914,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_target_p020_s20260910",
+      "arm": "target",
+      "percent": 20,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 11491,
+      "batch_size": 128
+    },
+    {
+      "run_name": "tpp10_unmatched_p020_s20260910",
+      "arm": "unmatched",
+      "percent": 20,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p020_s20260910_d20260912",
+      "arm": "matched",
+      "percent": 20,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p020_s20260910_d20260913",
+      "arm": "matched",
+      "percent": 20,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260913,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p020_s20260910_d20260914",
+      "arm": "matched",
+      "percent": 20,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260914,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_unmatched_p020_s20260911",
+      "arm": "unmatched",
+      "percent": 20,
+      "trainer_seed": 20260911,
+      "subset_seed": null,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p020_s20260911_d20260912",
+      "arm": "matched",
+      "percent": 20,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p020_s20260911_d20260913",
+      "arm": "matched",
+      "percent": 20,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260913,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p020_s20260911_d20260914",
+      "arm": "matched",
+      "percent": 20,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260914,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_target_p025_s20260910",
+      "arm": "target",
+      "percent": 25,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 11491,
+      "batch_size": 128
+    },
+    {
+      "run_name": "tpp10_unmatched_p025_s20260910",
+      "arm": "unmatched",
+      "percent": 25,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p025_s20260910_d20260912",
+      "arm": "matched",
+      "percent": 25,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p025_s20260910_d20260913",
+      "arm": "matched",
+      "percent": 25,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260913,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p025_s20260910_d20260914",
+      "arm": "matched",
+      "percent": 25,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260914,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_unmatched_p025_s20260911",
+      "arm": "unmatched",
+      "percent": 25,
+      "trainer_seed": 20260911,
+      "subset_seed": null,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p025_s20260911_d20260912",
+      "arm": "matched",
+      "percent": 25,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p025_s20260911_d20260913",
+      "arm": "matched",
+      "percent": 25,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260913,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p025_s20260911_d20260914",
+      "arm": "matched",
+      "percent": 25,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260914,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_target_p030_s20260910",
+      "arm": "target",
+      "percent": 30,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 11491,
+      "batch_size": 128
+    },
+    {
+      "run_name": "tpp10_unmatched_p030_s20260910",
+      "arm": "unmatched",
+      "percent": 30,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p030_s20260910_d20260912",
+      "arm": "matched",
+      "percent": 30,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p030_s20260910_d20260913",
+      "arm": "matched",
+      "percent": 30,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260913,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p030_s20260910_d20260914",
+      "arm": "matched",
+      "percent": 30,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260914,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_unmatched_p030_s20260911",
+      "arm": "unmatched",
+      "percent": 30,
+      "trainer_seed": 20260911,
+      "subset_seed": null,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p030_s20260911_d20260912",
+      "arm": "matched",
+      "percent": 30,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p030_s20260911_d20260913",
+      "arm": "matched",
+      "percent": 30,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260913,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p030_s20260911_d20260914",
+      "arm": "matched",
+      "percent": 30,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260914,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_target_p035_s20260910",
+      "arm": "target",
+      "percent": 35,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 11491,
+      "batch_size": 128
+    },
+    {
+      "run_name": "tpp10_unmatched_p035_s20260910",
+      "arm": "unmatched",
+      "percent": 35,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p035_s20260910_d20260912",
+      "arm": "matched",
+      "percent": 35,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p035_s20260910_d20260913",
+      "arm": "matched",
+      "percent": 35,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260913,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p035_s20260910_d20260914",
+      "arm": "matched",
+      "percent": 35,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260914,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_unmatched_p035_s20260911",
+      "arm": "unmatched",
+      "percent": 35,
+      "trainer_seed": 20260911,
+      "subset_seed": null,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p035_s20260911_d20260912",
+      "arm": "matched",
+      "percent": 35,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p035_s20260911_d20260913",
+      "arm": "matched",
+      "percent": 35,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260913,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p035_s20260911_d20260914",
+      "arm": "matched",
+      "percent": 35,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260914,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_target_p040_s20260910",
+      "arm": "target",
+      "percent": 40,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 11491,
+      "batch_size": 128
+    },
+    {
+      "run_name": "tpp10_unmatched_p040_s20260910",
+      "arm": "unmatched",
+      "percent": 40,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p040_s20260910_d20260912",
+      "arm": "matched",
+      "percent": 40,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p040_s20260910_d20260913",
+      "arm": "matched",
+      "percent": 40,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260913,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p040_s20260910_d20260914",
+      "arm": "matched",
+      "percent": 40,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260914,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_unmatched_p040_s20260911",
+      "arm": "unmatched",
+      "percent": 40,
+      "trainer_seed": 20260911,
+      "subset_seed": null,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p040_s20260911_d20260912",
+      "arm": "matched",
+      "percent": 40,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p040_s20260911_d20260913",
+      "arm": "matched",
+      "percent": 40,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260913,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p040_s20260911_d20260914",
+      "arm": "matched",
+      "percent": 40,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260914,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_target_p045_s20260910",
+      "arm": "target",
+      "percent": 45,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 11491,
+      "batch_size": 128
+    },
+    {
+      "run_name": "tpp10_unmatched_p045_s20260910",
+      "arm": "unmatched",
+      "percent": 45,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p045_s20260910_d20260912",
+      "arm": "matched",
+      "percent": 45,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p045_s20260910_d20260913",
+      "arm": "matched",
+      "percent": 45,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260913,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p045_s20260910_d20260914",
+      "arm": "matched",
+      "percent": 45,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260914,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_unmatched_p045_s20260911",
+      "arm": "unmatched",
+      "percent": 45,
+      "trainer_seed": 20260911,
+      "subset_seed": null,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p045_s20260911_d20260912",
+      "arm": "matched",
+      "percent": 45,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p045_s20260911_d20260913",
+      "arm": "matched",
+      "percent": 45,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260913,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p045_s20260911_d20260914",
+      "arm": "matched",
+      "percent": 45,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260914,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_target_p050_s20260910",
+      "arm": "target",
+      "percent": 50,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 11491,
+      "batch_size": 128
+    },
+    {
+      "run_name": "tpp10_unmatched_p050_s20260910",
+      "arm": "unmatched",
+      "percent": 50,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p050_s20260910_d20260912",
+      "arm": "matched",
+      "percent": 50,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p050_s20260910_d20260913",
+      "arm": "matched",
+      "percent": 50,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260913,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p050_s20260910_d20260914",
+      "arm": "matched",
+      "percent": 50,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260914,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_unmatched_p050_s20260911",
+      "arm": "unmatched",
+      "percent": 50,
+      "trainer_seed": 20260911,
+      "subset_seed": null,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p050_s20260911_d20260912",
+      "arm": "matched",
+      "percent": 50,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p050_s20260911_d20260913",
+      "arm": "matched",
+      "percent": 50,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260913,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p050_s20260911_d20260914",
+      "arm": "matched",
+      "percent": 50,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260914,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_target_p055_s20260910",
+      "arm": "target",
+      "percent": 55,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 11491,
+      "batch_size": 128
+    },
+    {
+      "run_name": "tpp10_unmatched_p055_s20260910",
+      "arm": "unmatched",
+      "percent": 55,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p055_s20260910_d20260912",
+      "arm": "matched",
+      "percent": 55,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p055_s20260910_d20260913",
+      "arm": "matched",
+      "percent": 55,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260913,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p055_s20260910_d20260914",
+      "arm": "matched",
+      "percent": 55,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260914,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_unmatched_p055_s20260911",
+      "arm": "unmatched",
+      "percent": 55,
+      "trainer_seed": 20260911,
+      "subset_seed": null,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p055_s20260911_d20260912",
+      "arm": "matched",
+      "percent": 55,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p055_s20260911_d20260913",
+      "arm": "matched",
+      "percent": 55,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260913,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p055_s20260911_d20260914",
+      "arm": "matched",
+      "percent": 55,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260914,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_target_p060_s20260910",
+      "arm": "target",
+      "percent": 60,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 11491,
+      "batch_size": 128
+    },
+    {
+      "run_name": "tpp10_unmatched_p060_s20260910",
+      "arm": "unmatched",
+      "percent": 60,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p060_s20260910_d20260912",
+      "arm": "matched",
+      "percent": 60,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p060_s20260910_d20260913",
+      "arm": "matched",
+      "percent": 60,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260913,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p060_s20260910_d20260914",
+      "arm": "matched",
+      "percent": 60,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260914,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_unmatched_p060_s20260911",
+      "arm": "unmatched",
+      "percent": 60,
+      "trainer_seed": 20260911,
+      "subset_seed": null,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p060_s20260911_d20260912",
+      "arm": "matched",
+      "percent": 60,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p060_s20260911_d20260913",
+      "arm": "matched",
+      "percent": 60,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260913,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p060_s20260911_d20260914",
+      "arm": "matched",
+      "percent": 60,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260914,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_target_p065_s20260910",
+      "arm": "target",
+      "percent": 65,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 11491,
+      "batch_size": 128
+    },
+    {
+      "run_name": "tpp10_unmatched_p065_s20260910",
+      "arm": "unmatched",
+      "percent": 65,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p065_s20260910_d20260912",
+      "arm": "matched",
+      "percent": 65,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p065_s20260910_d20260913",
+      "arm": "matched",
+      "percent": 65,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260913,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p065_s20260910_d20260914",
+      "arm": "matched",
+      "percent": 65,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260914,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_unmatched_p065_s20260911",
+      "arm": "unmatched",
+      "percent": 65,
+      "trainer_seed": 20260911,
+      "subset_seed": null,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p065_s20260911_d20260912",
+      "arm": "matched",
+      "percent": 65,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p065_s20260911_d20260913",
+      "arm": "matched",
+      "percent": 65,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260913,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p065_s20260911_d20260914",
+      "arm": "matched",
+      "percent": 65,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260914,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_target_p070_s20260910",
+      "arm": "target",
+      "percent": 70,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 11491,
+      "batch_size": 128
+    },
+    {
+      "run_name": "tpp10_unmatched_p070_s20260910",
+      "arm": "unmatched",
+      "percent": 70,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p070_s20260910_d20260912",
+      "arm": "matched",
+      "percent": 70,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p070_s20260910_d20260913",
+      "arm": "matched",
+      "percent": 70,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260913,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p070_s20260910_d20260914",
+      "arm": "matched",
+      "percent": 70,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260914,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_unmatched_p070_s20260911",
+      "arm": "unmatched",
+      "percent": 70,
+      "trainer_seed": 20260911,
+      "subset_seed": null,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p070_s20260911_d20260912",
+      "arm": "matched",
+      "percent": 70,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p070_s20260911_d20260913",
+      "arm": "matched",
+      "percent": 70,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260913,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p070_s20260911_d20260914",
+      "arm": "matched",
+      "percent": 70,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260914,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_target_p075_s20260910",
+      "arm": "target",
+      "percent": 75,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 11491,
+      "batch_size": 128
+    },
+    {
+      "run_name": "tpp10_unmatched_p075_s20260910",
+      "arm": "unmatched",
+      "percent": 75,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p075_s20260910_d20260912",
+      "arm": "matched",
+      "percent": 75,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p075_s20260910_d20260913",
+      "arm": "matched",
+      "percent": 75,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260913,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p075_s20260910_d20260914",
+      "arm": "matched",
+      "percent": 75,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260914,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_unmatched_p075_s20260911",
+      "arm": "unmatched",
+      "percent": 75,
+      "trainer_seed": 20260911,
+      "subset_seed": null,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p075_s20260911_d20260912",
+      "arm": "matched",
+      "percent": 75,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p075_s20260911_d20260913",
+      "arm": "matched",
+      "percent": 75,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260913,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p075_s20260911_d20260914",
+      "arm": "matched",
+      "percent": 75,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260914,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_target_p080_s20260910",
+      "arm": "target",
+      "percent": 80,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 11491,
+      "batch_size": 128
+    },
+    {
+      "run_name": "tpp10_unmatched_p080_s20260910",
+      "arm": "unmatched",
+      "percent": 80,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p080_s20260910_d20260912",
+      "arm": "matched",
+      "percent": 80,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p080_s20260910_d20260913",
+      "arm": "matched",
+      "percent": 80,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260913,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p080_s20260910_d20260914",
+      "arm": "matched",
+      "percent": 80,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260914,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_unmatched_p080_s20260911",
+      "arm": "unmatched",
+      "percent": 80,
+      "trainer_seed": 20260911,
+      "subset_seed": null,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p080_s20260911_d20260912",
+      "arm": "matched",
+      "percent": 80,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p080_s20260911_d20260913",
+      "arm": "matched",
+      "percent": 80,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260913,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p080_s20260911_d20260914",
+      "arm": "matched",
+      "percent": 80,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260914,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_target_p085_s20260910",
+      "arm": "target",
+      "percent": 85,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 11491,
+      "batch_size": 128
+    },
+    {
+      "run_name": "tpp10_unmatched_p085_s20260910",
+      "arm": "unmatched",
+      "percent": 85,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p085_s20260910_d20260912",
+      "arm": "matched",
+      "percent": 85,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p085_s20260910_d20260913",
+      "arm": "matched",
+      "percent": 85,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260913,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p085_s20260910_d20260914",
+      "arm": "matched",
+      "percent": 85,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260914,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_unmatched_p085_s20260911",
+      "arm": "unmatched",
+      "percent": 85,
+      "trainer_seed": 20260911,
+      "subset_seed": null,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p085_s20260911_d20260912",
+      "arm": "matched",
+      "percent": 85,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p085_s20260911_d20260913",
+      "arm": "matched",
+      "percent": 85,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260913,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p085_s20260911_d20260914",
+      "arm": "matched",
+      "percent": 85,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260914,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_target_p090_s20260910",
+      "arm": "target",
+      "percent": 90,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 11491,
+      "batch_size": 128
+    },
+    {
+      "run_name": "tpp10_unmatched_p090_s20260910",
+      "arm": "unmatched",
+      "percent": 90,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p090_s20260910_d20260912",
+      "arm": "matched",
+      "percent": 90,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p090_s20260910_d20260913",
+      "arm": "matched",
+      "percent": 90,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260913,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p090_s20260910_d20260914",
+      "arm": "matched",
+      "percent": 90,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260914,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_unmatched_p090_s20260911",
+      "arm": "unmatched",
+      "percent": 90,
+      "trainer_seed": 20260911,
+      "subset_seed": null,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p090_s20260911_d20260912",
+      "arm": "matched",
+      "percent": 90,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p090_s20260911_d20260913",
+      "arm": "matched",
+      "percent": 90,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260913,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p090_s20260911_d20260914",
+      "arm": "matched",
+      "percent": 90,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260914,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_target_p095_s20260910",
+      "arm": "target",
+      "percent": 95,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 11491,
+      "batch_size": 128
+    },
+    {
+      "run_name": "tpp10_unmatched_p095_s20260910",
+      "arm": "unmatched",
+      "percent": 95,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p095_s20260910_d20260912",
+      "arm": "matched",
+      "percent": 95,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p095_s20260910_d20260913",
+      "arm": "matched",
+      "percent": 95,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260913,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p095_s20260910_d20260914",
+      "arm": "matched",
+      "percent": 95,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260914,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_unmatched_p095_s20260911",
+      "arm": "unmatched",
+      "percent": 95,
+      "trainer_seed": 20260911,
+      "subset_seed": null,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p095_s20260911_d20260912",
+      "arm": "matched",
+      "percent": 95,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p095_s20260911_d20260913",
+      "arm": "matched",
+      "percent": 95,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260913,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p095_s20260911_d20260914",
+      "arm": "matched",
+      "percent": 95,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260914,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_target_p100_s20260910",
+      "arm": "target",
+      "percent": 100,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 11491,
+      "batch_size": 128
+    },
+    {
+      "run_name": "tpp10_unmatched_p100_s20260910",
+      "arm": "unmatched",
+      "percent": 100,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p100_s20260910_d20260912",
+      "arm": "matched",
+      "percent": 100,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p100_s20260910_d20260913",
+      "arm": "matched",
+      "percent": 100,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260913,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p100_s20260910_d20260914",
+      "arm": "matched",
+      "percent": 100,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260914,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_unmatched_p100_s20260911",
+      "arm": "unmatched",
+      "percent": 100,
+      "trainer_seed": 20260911,
+      "subset_seed": null,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p100_s20260911_d20260912",
+      "arm": "matched",
+      "percent": 100,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260912,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p100_s20260911_d20260913",
+      "arm": "matched",
+      "percent": 100,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260913,
+      "total_steps": 2532,
+      "batch_size": 32
+    },
+    {
+      "run_name": "tpp10_matched_p100_s20260911_d20260914",
+      "arm": "matched",
+      "percent": 100,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260914,
+      "total_steps": 2532,
+      "batch_size": 32
+    }
+  ],
+  "calibration_runs": [
+    {
+      "run_name": "tpp10_unmatched_p050_s20260910_b128",
+      "arm": "unmatched",
+      "percent": 50,
+      "trainer_seed": 20260910,
+      "subset_seed": null,
+      "total_steps": 633,
+      "batch_size": 128
+    },
+    {
+      "run_name": "tpp10_matched_p050_s20260910_d20260912_b128",
+      "arm": "matched",
+      "percent": 50,
+      "trainer_seed": 20260910,
+      "subset_seed": 20260912,
+      "total_steps": 633,
+      "batch_size": 128
+    },
+    {
+      "run_name": "tpp10_unmatched_p050_s20260911_b128",
+      "arm": "unmatched",
+      "percent": 50,
+      "trainer_seed": 20260911,
+      "subset_seed": null,
+      "total_steps": 633,
+      "batch_size": 128
+    },
+    {
+      "run_name": "tpp10_matched_p050_s20260911_d20260912_b128",
+      "arm": "matched",
+      "percent": 50,
+      "trainer_seed": 20260911,
+      "subset_seed": 20260912,
+      "total_steps": 633,
+      "batch_size": 128
+    }
+  ],
+  "design_sha256": "c40b16e5630b68da2467e40154a467d813837d08eaa99473f2ba82cf6ae47527"
+}

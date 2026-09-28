@@ -1,0 +1,1000 @@
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + platformdirs==4.5.1
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + playwright==1.57.0
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + plotly==6.5.1
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + pluggy==1.6.0
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + polars==1.42.1
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + polars-runtime-32==1.42.1
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + prometheus-client==0.24.1
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + propcache==0.4.1
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + proto-plus==1.27.0
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + protobuf==6.33.6
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + psutil==7.2.2
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + pulumi==3.256.0
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + pulumi-cloudflare==6.15.0
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + pulumi-command==1.2.1
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + pulumi-coreweave==1.0.2
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + pulumi-docker-build==0.0.15
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + pulumi-gcp==9.23.0
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + pulumi-github==6.13.1
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + pulumi-kubernetes==4.30.0
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + py-rust-stemmers==0.1.8
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + pyarrow==23.0.1
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + pyasn1==0.6.4
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + pyasn1-modules==0.4.2
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + pybind11==3.0.1
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + pycparser==2.23
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + pydantic==2.12.5
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + pydantic-core==2.41.5
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + pydantic-settings==2.14.2
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + pyee==13.0.0
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + pygments==2.19.2
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + pyjwt==2.13.0
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + pyparsing==3.3.1
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + pyqwest==0.6.1
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + pytest==9.0.3
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + pytest-timeout==2.4.0
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + python-dateutil==2.9.0.post0
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + python-dotenv==1.2.2
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + python-multipart==0.0.31
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + pytimeparse==1.1.8
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + pytz==2025.2
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + pyyaml==6.0.3
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + referencing==0.37.0
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + regex==2026.1.14
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + requests==2.33.1
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + requests-oauthlib==2.0.0
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + resiliparse==0.17.2
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + rich==14.2.0
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + rpds-py==0.30.0
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + rsa==4.9.1
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + s3fs==2026.1.0
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + safetensors==0.6.2
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + scikit-learn==1.8.0
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + scipy==1.17.0
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + scramp==1.4.17
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + seaborn==0.13.2
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + semver==3.0.4
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + sentry-sdk==2.49.0
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + setuptools==83.0.0
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + shellingham==1.5.4
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + simplejson==3.20.2
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + six==1.17.0
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + smmap==5.0.2
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + sniffio==1.3.1
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + soupsieve==2.8.4
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + sqlalchemy==2.0.46
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + sse-starlette==3.1.2
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + starlette==1.3.1
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + substrait==0.24.2
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + sympy==1.13.3
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + tabulate==0.9.0
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + tblib==3.2.2
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + tensorstore==0.1.84
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + threadpoolctl==3.6.0
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + tokenizers==0.22.2
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + toml==0.10.2
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + toolz==1.1.0
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + torch==2.11.0+cpu
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + torchvision==0.26.0+cpu
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + tqdm==4.67.1
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + tqdm-loggable==0.2
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + transformers==5.12.1
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + treescope==0.1.10
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + truststore==0.10.4
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + typer==0.21.1
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + typing-extensions==4.15.0
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + typing-inspect==0.9.0
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + typing-inspection==0.4.2
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + tzdata==2025.3
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + uritemplate==4.2.0
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + urllib3==2.7.0
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + uvicorn==0.40.0
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + uvloop==0.22.1
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + vortex-data==0.61.0
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + wadler-lindig==0.1.7
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + wandb==0.26.0
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + watchdog==6.0.0
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + watchfiles==1.1.1
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + websocket-client==1.9.0
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + websockets==15.0.1
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + wrapt==1.17.3
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + xxhash==3.6.0
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + yarl==1.22.0
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + zipp==3.23.0
+[21:35:10] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + zstandard==0.25.0
+[21:35:11] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 | [iris setup] step 2/2
+[21:35:11] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 | installing iris runtime deps
+[21:35:11] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 | Resolved 14 packages in 98ms
+[21:35:11] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 | Installed 5 packages in 10ms
+[21:35:11] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + linkify-it-py==2.2.0
+[21:35:11] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + mdit-py-plugins==0.6.1
+[21:35:11] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + memray==1.20.0
+[21:35:11] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + py-spy==0.4.2
+[21:35:11] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 |  + textual==8.2.8
+[21:36:25] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 | {"plan_sha256": "99ca724bc3bde33e80afb07373e47ddc0d7e44f22e15cd41da3daa3de2f4ef40", "percents": [40, 55, 60, 65, 80], "training_flops": 3.4315868541246505e+19}
+[21:37:17] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 | {"selected": 45, "pending": 5, "plan_uri": "gs://marin-us-central1/experiments/starcoder_tpp10/99ca724bc3bde33e80afb07373e47ddc0d7e44f22e15cd41da3daa3de2f4ef40/plan.json"}
+[21:37:17] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 | I20260912 21:37:16 139773877584704 marin.execution.step_runner Skip starcoder_tpp10/hq_actual_a04adcd7: already succeeded (pruned subtree)
+[21:37:17] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 | I20260912 21:37:16 139773877584704 marin.execution.step_runner Skip starcoder_tpp10/hq_synth_0f699a53: already succeeded (pruned subtree)
+[21:37:17] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 | I20260912 21:37:17 139773877584704 marin.execution.step_runner Skip starcoder_tpp10/medium_high_d10d2419: already succeeded (pruned subtree)
+[21:37:17] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 | I20260912 21:37:17 139773877584704 marin.execution.step_runner Skip starcoder_tpp10/medium_936ad640: already succeeded (pruned subtree)
+[21:37:17] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 | I20260912 21:37:17 139773877584704 marin.execution.step_runner Skip starcoder_tpp10/medium_low_d07e2fcc: already succeeded (pruned subtree)
+[21:37:17] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 | I20260912 21:37:17 139773877584704 marin.execution.step_runner Skip starcoder_tpp10/low_actual_110cadf3: already succeeded (pruned subtree)
+[21:37:24] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 | I20260912 21:37:17 139773877584704 marin.execution.step_runner Skip starcoder_tpp10/parent_b24e5ffc: already succeeded (pruned subtree)
+[21:37:24] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 | I20260912 21:37:18 139773877584704 marin.execution.step_runner Skip paloma/dolma_100_programing_languages-tpp10_fa07f024: already succeeded (pruned subtree)
+[21:37:24] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 | I20260912 21:37:18 139773877584704 marin.execution.step_runner Step = checkpoints/starcoder_tpp10/tpp10_target_p055_s20260910_85233235	Params = {'fingerprint': '650ffe00', 'version': '2026.09.09', 'result_type': 'marin.training.training.LevanterCheckpoint', 'deps': ['starcoder_tpp10/hq_actual@2026.09.09', 'starcoder_tpp10/hq_synth@2026.09.09', 'starcoder_tpp10/medium_high@2026.09.09', 'starcoder_tpp10/medium@2026.09.09', 'starcoder_tpp10/medium_low@2026.09.09', 'starcoder_tpp10/low_actual@2026.09.09', 'starcoder_tpp10/parent@2026.09.09', 'paloma/dolma_100_programing_languages-tpp10@2026.09.09'], 'expected_fingerprint': '650ffe00'}	Output_path = gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p055_s20260910/2026.09.09
+[21:37:24] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 | I20260912 21:37:18 139773877584704 marin.execution.step_runner Step = checkpoints/starcoder_tpp10/tpp10_target_p060_s20260910_965c36b8	Params = {'fingerprint': '1e801f9f', 'version': '2026.09.09', 'result_type': 'marin.training.training.LevanterCheckpoint', 'deps': ['starcoder_tpp10/hq_actual@2026.09.09', 'starcoder_tpp10/hq_synth@2026.09.09', 'starcoder_tpp10/medium_high@2026.09.09', 'starcoder_tpp10/medium@2026.09.09', 'starcoder_tpp10/medium_low@2026.09.09', 'starcoder_tpp10/low_actual@2026.09.09', 'starcoder_tpp10/parent@2026.09.09', 'paloma/dolma_100_programing_languages-tpp10@2026.09.09'], 'expected_fingerprint': '1e801f9f'}	Output_path = gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p060_s20260910/2026.09.09
+[21:37:24] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 | I20260912 21:37:18 139773877584704 marin.execution.step_runner Step = checkpoints/starcoder_tpp10/tpp10_target_p065_s20260910_944ac3ef	Params = {'fingerprint': '97b113a1', 'version': '2026.09.09', 'result_type': 'marin.training.training.LevanterCheckpoint', 'deps': ['starcoder_tpp10/hq_actual@2026.09.09', 'starcoder_tpp10/hq_synth@2026.09.09', 'starcoder_tpp10/medium_high@2026.09.09', 'starcoder_tpp10/medium@2026.09.09', 'starcoder_tpp10/medium_low@2026.09.09', 'starcoder_tpp10/low_actual@2026.09.09', 'starcoder_tpp10/parent@2026.09.09', 'paloma/dolma_100_programing_languages-tpp10@2026.09.09'], 'expected_fingerprint': '97b113a1'}	Output_path = gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p065_s20260910/2026.09.09
+[21:37:24] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 | I20260912 21:37:18 139763361228480 marin.execution.step_status [/calvinxu/starcoder-tpp10-refinement-interactive/0:0 (marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6-139763361228480)] Status checkpoints/starcoder_tpp10/tpp10_target_p055_s20260910_85233235: RUNNING
+[21:37:24] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 | I20260912 21:37:18 139763361228480 marin.execution.step_status [/calvinxu/starcoder-tpp10-refinement-interactive/0:0 (marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6-139763361228480)] Step checkpoints/starcoder_tpp10/tpp10_target_p055_s20260910_85233235 has no active lock, taking over.
+[21:37:24] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 | I20260912 21:37:18 139763361228480 marin.execution.step_status [/calvinxu/starcoder-tpp10-refinement-interactive/0:0 (marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6-139763361228480)] Attempting to acquire lock for checkpoints/starcoder_tpp10/tpp10_target_p055_s20260910_85233235
+[21:37:24] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 | I20260912 21:37:18 139773877584704 marin.execution.step_runner Step = checkpoints/starcoder_tpp10/tpp10_target_p080_s20260910_53c4c306	Params = {'fingerprint': '4ab6f469', 'version': '2026.09.09', 'result_type': 'marin.training.training.LevanterCheckpoint', 'deps': ['starcoder_tpp10/hq_actual@2026.09.09', 'starcoder_tpp10/hq_synth@2026.09.09', 'starcoder_tpp10/medium_high@2026.09.09', 'starcoder_tpp10/medium@2026.09.09', 'starcoder_tpp10/medium_low@2026.09.09', 'starcoder_tpp10/low_actual@2026.09.09', 'starcoder_tpp10/parent@2026.09.09', 'paloma/dolma_100_programing_languages-tpp10@2026.09.09'], 'expected_fingerprint': '4ab6f469'}	Output_path = gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p080_s20260910/2026.09.09
+[21:37:24] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 | I20260912 21:37:18 139763352835776 marin.execution.step_status [/calvinxu/starcoder-tpp10-refinement-interactive/0:0 (marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6-139763352835776)] Status checkpoints/starcoder_tpp10/tpp10_target_p060_s20260910_965c36b8: RUNNING
+[21:37:24] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 | I20260912 21:37:18 139763352835776 marin.execution.step_status [/calvinxu/starcoder-tpp10-refinement-interactive/0:0 (marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6-139763352835776)] Step checkpoints/starcoder_tpp10/tpp10_target_p060_s20260910_965c36b8 has no active lock, taking over.
+[21:37:24] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 | I20260912 21:37:18 139763352835776 marin.execution.step_status [/calvinxu/starcoder-tpp10-refinement-interactive/0:0 (marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6-139763352835776)] Attempting to acquire lock for checkpoints/starcoder_tpp10/tpp10_target_p060_s20260910_965c36b8
+[21:37:24] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 | I20260912 21:37:18 139763000538816 marin.execution.step_status [/calvinxu/starcoder-tpp10-refinement-interactive/0:0 (marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6-139763000538816)] Status checkpoints/starcoder_tpp10/tpp10_target_p065_s20260910_944ac3ef: RUNNING
+[21:37:24] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 | I20260912 21:37:18 139763000538816 marin.execution.step_status [/calvinxu/starcoder-tpp10-refinement-interactive/0:0 (marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6-139763000538816)] Step checkpoints/starcoder_tpp10/tpp10_target_p065_s20260910_944ac3ef has no active lock, taking over.
+[21:37:24] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 | I20260912 21:37:18 139763000538816 marin.execution.step_status [/calvinxu/starcoder-tpp10-refinement-interactive/0:0 (marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6-139763000538816)] Attempting to acquire lock for checkpoints/starcoder_tpp10/tpp10_target_p065_s20260910_944ac3ef
+[21:37:24] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 | I20260912 21:37:18 139763361228480 marin.execution.step_status [/calvinxu/starcoder-tpp10-refinement-interactive/0:0 (marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6-139763361228480)] Acquired lock for checkpoints/starcoder_tpp10/tpp10_target_p055_s20260910_85233235
+[21:37:24] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 | I20260912 21:37:19 139763352835776 marin.execution.step_status [/calvinxu/starcoder-tpp10-refinement-interactive/0:0 (marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6-139763352835776)] Acquired lock for checkpoints/starcoder_tpp10/tpp10_target_p060_s20260910_965c36b8
+[21:37:24] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 | I20260912 21:37:19 139762992146112 marin.execution.step_status [/calvinxu/starcoder-tpp10-refinement-interactive/0:0 (marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6-139762992146112)] Status checkpoints/starcoder_tpp10/tpp10_target_p080_s20260910_53c4c306: RUNNING
+[21:37:24] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 | I20260912 21:37:19 139762992146112 marin.execution.step_status [/calvinxu/starcoder-tpp10-refinement-interactive/0:0 (marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6-139762992146112)] Step checkpoints/starcoder_tpp10/tpp10_target_p080_s20260910_53c4c306 has no active lock, taking over.
+[21:37:24] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 | I20260912 21:37:19 139762992146112 marin.execution.step_status [/calvinxu/starcoder-tpp10-refinement-interactive/0:0 (marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6-139762992146112)] Attempting to acquire lock for checkpoints/starcoder_tpp10/tpp10_target_p080_s20260910_53c4c306
+[21:37:24] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 | I20260912 21:37:19 139763000538816 marin.execution.step_status [/calvinxu/starcoder-tpp10-refinement-interactive/0:0 (marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6-139763000538816)] Acquired lock for checkpoints/starcoder_tpp10/tpp10_target_p065_s20260910_944ac3ef
+[21:37:24] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 | I20260912 21:37:19 139773877584704 marin.execution.step_runner Skip starcoder_tpp10/subset_20260914_1dc4df4a: already succeeded (pruned subtree)
+[21:37:24] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 | I20260912 21:37:19 139773877584704 marin.execution.step_runner Step = checkpoints/starcoder_tpp10/tpp10_matched_p080_s20260911_d20260914_ff3511be	Params = {'fingerprint': 'f310450f', 'version': '2026.09.09', 'result_type': 'marin.training.training.LevanterCheckpoint', 'deps': ['starcoder_tpp10/hq_actual@2026.09.09', 'starcoder_tpp10/hq_synth@2026.09.09', 'starcoder_tpp10/medium_high@2026.09.09', 'starcoder_tpp10/medium@2026.09.09', 'starcoder_tpp10/medium_low@2026.09.09', 'starcoder_tpp10/low_actual@2026.09.09', 'starcoder_tpp10/subset_20260914@2026.09.09', 'paloma/dolma_100_programing_languages-tpp10@2026.09.09'], 'expected_fingerprint': 'f310450f'}	Output_path = gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_matched_p080_s20260911_d20260914/2026.09.09
+[21:37:24] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 | I20260912 21:37:19 139762992146112 marin.execution.step_status [/calvinxu/starcoder-tpp10-refinement-interactive/0:0 (marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6-139762992146112)] Acquired lock for checkpoints/starcoder_tpp10/tpp10_target_p080_s20260910_53c4c306
+[21:37:24] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 | I20260912 21:37:19 139762958575296 marin.execution.step_status [/calvinxu/starcoder-tpp10-refinement-interactive/0:0 (marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6-139762958575296)] Status checkpoints/starcoder_tpp10/tpp10_matched_p080_s20260911_d20260914_ff3511be: RUNNING
+[21:37:24] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 | I20260912 21:37:19 139762958575296 marin.execution.step_status [/calvinxu/starcoder-tpp10-refinement-interactive/0:0 (marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6-139762958575296)] Step checkpoints/starcoder_tpp10/tpp10_matched_p080_s20260911_d20260914_ff3511be has no active lock, taking over.
+[21:37:24] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 | I20260912 21:37:19 139762958575296 marin.execution.step_status [/calvinxu/starcoder-tpp10-refinement-interactive/0:0 (marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6-139762958575296)] Attempting to acquire lock for checkpoints/starcoder_tpp10/tpp10_matched_p080_s20260911_d20260914_ff3511be
+[21:37:24] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 | I20260912 21:37:19 139763361228480 fray.current_client current_client: using Iris backend (auto-detected)
+[21:37:24] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 | I20260912 21:37:20 139763352835776 fray.current_client current_client: using Iris backend (auto-detected)
+[21:37:24] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 | I20260912 21:37:20 139762958575296 marin.execution.step_status [/calvinxu/starcoder-tpp10-refinement-interactive/0:0 (marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6-139762958575296)] Acquired lock for checkpoints/starcoder_tpp10/tpp10_matched_p080_s20260911_d20260914_ff3511be
+[21:37:24] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 | I20260912 21:37:20 139763000538816 fray.current_client current_client: using Iris backend (auto-detected)
+[21:37:24] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 | I20260912 21:37:20 139762992146112 fray.current_client current_client: using Iris backend (auto-detected)
+[21:37:24] task=/calvinxu/starcoder-tpp10-refinement-interactive/0 attempt=0 | I20260912 21:37:20 139762958575296 fray.current_client current_client: using Iris backend (auto-detected)
+[21:38:01] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 | [iris setup] step 1/2
+[21:38:01] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 | syncing deps
+[21:38:01] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 | [iris setup] step 1/2
+[21:38:01] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 | syncing deps
+[21:38:01] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | [iris setup] step 1/2
+[21:38:01] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | syncing deps
+[21:38:01] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 | [iris setup] step 1/2
+[21:38:01] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 | syncing deps
+[21:38:01] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 | [iris setup] step 1/2
+[21:38:01] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 | syncing deps
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 | Using CPython 3.12.14 interpreter at: /usr/local/bin/python3.12
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 | Creating virtual environment at: .venv
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |    Building marin-core @ file:///app/lib/marin
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |    Building marin-deploy @ file:///app/infra/deploy
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |    Building marin-ducky @ file:///app/lib/ducky
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |    Building marin-dupekit @ file:///app/lib/dupekit
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |    Building marin-finelog @ file:///app/lib/finelog
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |    Building marin-finestore @ file:///app/lib/finestore
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |    Building marin-fray @ file:///app/lib/fray
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |    Building marin-haliax @ file:///app/lib/haliax
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |    Building marin-iac @ file:///app/infra/pulumi
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |    Building marin-iris @ file:///app/lib/iris
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |    Building marin-levanter @ file:///app/lib/levanter
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |    Building marin-marina @ file:///app/infra/marina
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |    Building marin-rigging @ file:///app/lib/rigging
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |    Building marin-root @ file:///app
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |    Building marin-zephyr @ file:///app/lib/zephyr
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 | Downloading resiliparse
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  Downloaded resiliparse
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |       Built marin-levanter @ file:///app/lib/levanter
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 | Using CPython 3.12.14 interpreter at: /usr/local/bin/python3.12
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 | Creating virtual environment at: .venv
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |    Building marin-core @ file:///app/lib/marin
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |    Building marin-deploy @ file:///app/infra/deploy
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |    Building marin-ducky @ file:///app/lib/ducky
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |    Building marin-dupekit @ file:///app/lib/dupekit
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |    Building marin-finelog @ file:///app/lib/finelog
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |    Building marin-finestore @ file:///app/lib/finestore
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |    Building marin-fray @ file:///app/lib/fray
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |    Building marin-haliax @ file:///app/lib/haliax
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |    Building marin-iac @ file:///app/infra/pulumi
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |    Building marin-iris @ file:///app/lib/iris
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |    Building marin-levanter @ file:///app/lib/levanter
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |    Building marin-marina @ file:///app/infra/marina
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |    Building marin-rigging @ file:///app/lib/rigging
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |    Building marin-root @ file:///app
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |    Building marin-zephyr @ file:///app/lib/zephyr
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 | Downloading resiliparse
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  Downloaded resiliparse
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |       Built marin-levanter @ file:///app/lib/levanter
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | Using CPython 3.12.14 interpreter at: /usr/local/bin/python3.12
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | Creating virtual environment at: .venv
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 |    Building marin-deploy @ file:///app/infra/deploy
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 |    Building marin-dupekit @ file:///app/lib/dupekit
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 |    Building marin-finelog @ file:///app/lib/finelog
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 |    Building marin-finestore @ file:///app/lib/finestore
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 |    Building marin-fray @ file:///app/lib/fray
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 |    Building marin-haliax @ file:///app/lib/haliax
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 |    Building marin-iac @ file:///app/infra/pulumi
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 |    Building marin-iris @ file:///app/lib/iris
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 |    Building marin-levanter @ file:///app/lib/levanter
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 |    Building marin-marina @ file:///app/infra/marina
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 |    Building marin-rigging @ file:///app/lib/rigging
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 |    Building marin-root @ file:///app
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 |    Building marin-zephyr @ file:///app/lib/zephyr
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 |    Building marin-core @ file:///app/lib/marin
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 |    Building marin-ducky @ file:///app/lib/ducky
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | Downloading aiohttp (1.7MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | Downloading cryptography (4.5MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | Downloading kubernetes (4.4MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | Downloading kiwisolver (1.4MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | Downloading libtpu (206.5MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | Downloading pulumi-cloudflare (2.5MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | Downloading google-cloud-compute (4.0MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | Downloading pulumi-kubernetes (3.0MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | Downloading playwright (43.8MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | Downloading pulumi-gcp (11.8MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | Downloading marin-finelog-server (41.2MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | Downloading anthropic (1.2MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | Downloading onnxruntime (22.1MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | Downloading fonttools (4.7MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | Downloading jax (3.1MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | Downloading jaxlib (83.8MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | Downloading debugpy (4.1MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | Downloading matplotlib (8.3MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | Downloading resiliparse
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 |       Built marin-levanter @ file:///app/lib/levanter
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 | Using CPython 3.12.14 interpreter at: /usr/local/bin/python3.12
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 | Creating virtual environment at: .venv
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 |    Building marin-deploy @ file:///app/infra/deploy
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 |    Building marin-dupekit @ file:///app/lib/dupekit
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 |    Building marin-finelog @ file:///app/lib/finelog
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 |    Building marin-finestore @ file:///app/lib/finestore
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 |    Building marin-fray @ file:///app/lib/fray
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 |    Building marin-haliax @ file:///app/lib/haliax
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 |    Building marin-iac @ file:///app/infra/pulumi
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 |    Building marin-levanter @ file:///app/lib/levanter
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 |    Building marin-iris @ file:///app/lib/iris
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 |    Building marin-marina @ file:///app/infra/marina
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 |    Building marin-rigging @ file:///app/lib/rigging
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 |    Building marin-root @ file:///app
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 |    Building marin-zephyr @ file:///app/lib/zephyr
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 |    Building marin-core @ file:///app/lib/marin
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 |    Building marin-ducky @ file:///app/lib/ducky
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 | Downloading kiwisolver (1.4MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 | Downloading marin-finelog-server (41.2MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 | Downloading jaxlib (83.8MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 | Downloading cryptography (4.5MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 | Downloading matplotlib (8.3MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 | Downloading debugpy (4.1MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 | Downloading pulumi-cloudflare (2.5MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 | Downloading playwright (43.8MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 | Downloading kubernetes (4.4MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 | Downloading anthropic (1.2MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 | Downloading aiohttp (1.7MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 | Downloading libtpu (206.5MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 | Downloading jax (3.1MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 | Downloading pulumi-kubernetes (3.0MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 | Downloading google-cloud-compute (4.0MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 | Downloading fonttools (4.7MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 | Downloading onnxruntime (22.1MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 | Downloading pulumi-gcp (11.8MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 | Downloading resiliparse
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 |       Built marin-levanter @ file:///app/lib/levanter
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 | Using CPython 3.12.14 interpreter at: /usr/local/bin/python3.12
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 | Creating virtual environment at: .venv
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 |    Building marin-deploy @ file:///app/infra/deploy
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 |    Building marin-dupekit @ file:///app/lib/dupekit
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 |    Building marin-finelog @ file:///app/lib/finelog
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 |    Building marin-finestore @ file:///app/lib/finestore
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 |    Building marin-fray @ file:///app/lib/fray
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 |    Building marin-haliax @ file:///app/lib/haliax
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 |    Building marin-iris @ file:///app/lib/iris
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 |    Building marin-iac @ file:///app/infra/pulumi
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 |    Building marin-levanter @ file:///app/lib/levanter
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 |    Building marin-marina @ file:///app/infra/marina
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 |    Building marin-rigging @ file:///app/lib/rigging
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 |    Building marin-root @ file:///app
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 |    Building marin-zephyr @ file:///app/lib/zephyr
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 |    Building marin-core @ file:///app/lib/marin
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 |    Building marin-ducky @ file:///app/lib/ducky
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 | Downloading kubernetes (4.4MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 | Downloading cryptography (4.5MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 | Downloading anthropic (1.2MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 | Downloading pulumi-kubernetes (3.0MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 | Downloading aiohttp (1.7MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 | Downloading kiwisolver (1.4MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 | Downloading jaxlib (83.8MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 | Downloading libtpu (206.5MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 | Downloading fonttools (4.7MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 | Downloading jax (3.1MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 | Downloading google-cloud-compute (4.0MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 | Downloading onnxruntime (22.1MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 | Downloading marin-finelog-server (41.2MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 | Downloading debugpy (4.1MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 | Downloading matplotlib (8.3MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 | Downloading pulumi-gcp (11.8MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 | Downloading pulumi-cloudflare (2.5MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 | Downloading playwright (43.8MiB)
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 | Downloading resiliparse
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 |       Built marin-levanter @ file:///app/lib/levanter
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |       Built marin-marina @ file:///app/infra/marina
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |       Built marin-haliax @ file:///app/lib/haliax
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |       Built marin-dupekit @ file:///app/lib/dupekit
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |       Built marin-ducky @ file:///app/lib/ducky
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |       Built marin-deploy @ file:///app/infra/deploy
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |       Built marin-finestore @ file:///app/lib/finestore
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |       Built marin-fray @ file:///app/lib/fray
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |       Built marin-finelog @ file:///app/lib/finelog
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |       Built marin-iac @ file:///app/infra/pulumi
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |       Built marin-zephyr @ file:///app/lib/zephyr
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |       Built marin-core @ file:///app/lib/marin
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |       Built marin-rigging @ file:///app/lib/rigging
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |       Built marin-iris @ file:///app/lib/iris
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |       Built marin-root @ file:///app
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 | Prepared 18 packages in 893ms
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |       Built marin-marina @ file:///app/infra/marina
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |       Built marin-haliax @ file:///app/lib/haliax
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |       Built marin-dupekit @ file:///app/lib/dupekit
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |       Built marin-deploy @ file:///app/infra/deploy
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |       Built marin-fray @ file:///app/lib/fray
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |       Built marin-finestore @ file:///app/lib/finestore
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |       Built marin-ducky @ file:///app/lib/ducky
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |       Built marin-finelog @ file:///app/lib/finelog
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |       Built marin-zephyr @ file:///app/lib/zephyr
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |       Built marin-iac @ file:///app/infra/pulumi
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |       Built marin-core @ file:///app/lib/marin
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |       Built marin-rigging @ file:///app/lib/rigging
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |       Built marin-iris @ file:///app/lib/iris
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |       Built marin-root @ file:///app
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 | Prepared 18 packages in 908ms
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 |  Downloaded resiliparse
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 |  Downloaded kiwisolver
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 |  Downloaded aiohttp
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 |       Built marin-marina @ file:///app/infra/marina
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 |       Built marin-haliax @ file:///app/lib/haliax
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 |       Built marin-deploy @ file:///app/infra/deploy
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 |       Built marin-finestore @ file:///app/lib/finestore
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 |       Built marin-fray @ file:///app/lib/fray
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 |       Built marin-ducky @ file:///app/lib/ducky
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 |       Built marin-dupekit @ file:///app/lib/dupekit
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 |       Built marin-zephyr @ file:///app/lib/zephyr
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 |       Built marin-iac @ file:///app/infra/pulumi
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 |       Built marin-finelog @ file:///app/lib/finelog
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 |       Built marin-core @ file:///app/lib/marin
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 |       Built marin-rigging @ file:///app/lib/rigging
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 |       Built marin-iris @ file:///app/lib/iris
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 |       Built marin-root @ file:///app
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 |  Downloaded resiliparse
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 |  Downloaded kiwisolver
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 |  Downloaded aiohttp
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 |       Built marin-marina @ file:///app/infra/marina
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 |       Built marin-haliax @ file:///app/lib/haliax
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 |       Built marin-deploy @ file:///app/infra/deploy
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 |       Built marin-dupekit @ file:///app/lib/dupekit
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 |       Built marin-ducky @ file:///app/lib/ducky
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 |       Built marin-finestore @ file:///app/lib/finestore
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 |       Built marin-zephyr @ file:///app/lib/zephyr
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 |       Built marin-fray @ file:///app/lib/fray
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 |       Built marin-iac @ file:///app/infra/pulumi
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 |       Built marin-finelog @ file:///app/lib/finelog
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 |       Built marin-rigging @ file:///app/lib/rigging
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 |       Built marin-core @ file:///app/lib/marin
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 |       Built marin-iris @ file:///app/lib/iris
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 |       Built marin-root @ file:///app
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 |  Downloaded resiliparse
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 |  Downloaded kiwisolver
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 |  Downloaded aiohttp
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 |       Built marin-marina @ file:///app/infra/marina
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 |       Built marin-haliax @ file:///app/lib/haliax
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 |       Built marin-ducky @ file:///app/lib/ducky
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 |       Built marin-finestore @ file:///app/lib/finestore
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 |       Built marin-deploy @ file:///app/infra/deploy
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 |       Built marin-fray @ file:///app/lib/fray
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 |       Built marin-dupekit @ file:///app/lib/dupekit
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 |       Built marin-zephyr @ file:///app/lib/zephyr
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 |       Built marin-finelog @ file:///app/lib/finelog
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 |       Built marin-iac @ file:///app/infra/pulumi
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 |       Built marin-rigging @ file:///app/lib/rigging
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 |       Built marin-core @ file:///app/lib/marin
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 |       Built marin-iris @ file:///app/lib/iris
+[21:38:02] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 |       Built marin-root @ file:///app
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 | [iris setup] step 2/2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 | installing iris runtime deps
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 | Installed 273 packages in 157ms
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + absl-py==2.3.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + aiobotocore==2.26.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + aiofiles==24.1.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + aiohappyeyeballs==2.6.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + aiohttp==3.14.3
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + aioitertools==0.13.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + aiosignal==1.4.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + annotated-doc==0.0.4
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + annotated-types==0.7.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + anthropic==1.3.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + anyio==4.12.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + aqtp==0.9.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + asn1crypto==1.5.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + async-lru==2.0.5
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + attrs==25.4.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + backports-zstd==1.6.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + beautifulsoup4==4.14.3
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + botocore==1.41.5
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + braceexpand==0.1.7
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + certifi==2026.1.4
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + cffi==2.0.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + charset-normalizer==3.4.4
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + chex==0.1.91
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + click==8.3.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + cloud-sql-python-connector==1.22.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + cloudpickle==3.1.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + connect-python==0.9.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + contourpy==1.3.3
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + cryptography==50.0.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + cycler==0.12.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + dataclasses-json==0.6.7
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + datasets==4.8.5
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + debugpy==1.8.19
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + decorator==5.2.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + deepdiff==9.0.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + dill==0.4.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + distro==1.9.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + dnspython==2.8.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + docstring-parser==0.18.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + draccus==0.11.6
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + duckdb==1.5.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + durationpy==0.10
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + einops==0.8.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + equinox==0.13.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + etils==1.13.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + fastapi==0.136.3
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + fastembed==0.8.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + fasttext-wheel==0.9.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + filelock==3.20.3
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + flatbuffers==25.12.19
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + flax==0.12.4
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + fonttools==4.61.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + frozenlist==1.8.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + fsspec==2026.1.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + gcsfs==2026.1.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + gitdb==4.0.12
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + gitpython==3.1.58
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + google-api-core==2.34.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + google-api-python-client==2.188.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + google-auth==2.47.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + google-auth-httplib2==0.3.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + google-auth-oauthlib==1.2.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + google-cloud-compute==1.51.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + google-cloud-core==2.5.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + google-cloud-kms==3.16.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + google-cloud-secret-manager==2.29.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + google-cloud-storage==3.8.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + google-cloud-storage-control==1.11.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + google-cloud-tpu==1.26.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + google-crc32c==1.8.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + google-resumable-media==2.8.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + googleapis-common-protos==1.72.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + greenlet==3.3.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + grpc-google-iam-v1==0.14.3
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + grpcio==1.76.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + grpcio-status==1.76.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + h11==0.16.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + hf-xet==1.5.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + httpcore==1.0.9
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + httpcore2==2.12.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + httplib2==0.32.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + httptools==0.7.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + httpx==0.28.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + httpx-sse==0.4.3
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + httpx2==2.12.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + huggingface-hub==1.21.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + humanfriendly==10.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + humanize==4.15.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + idna==3.19
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + immutabledict==4.3.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + importlib-metadata==8.5.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + importlib-resources==6.5.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + iniconfig==2.3.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + jax==0.11.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + jaxlib==0.11.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + jaxopt==0.8.5
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + jaxtyping==0.3.5
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + jinja2==3.1.6
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + jiter==0.11.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + jmespath==1.0.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + jmp==0.0.4
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + joblib==1.5.3
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + jsonschema==4.23.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + jsonschema-specifications==2025.9.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + kiwisolver==1.4.9
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + kubernetes==36.0.3
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + lenses==1.2.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + libtpu==0.0.46
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + loguru==0.7.3
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + marin-core==0.2.0 (from file:///app/lib/marin)
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + marin-deploy==0.0.0 (from file:///app/infra/deploy)
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + marin-ducky==0.1.0 (from file:///app/lib/ducky)
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + marin-dupekit==0.1.2 (from file:///app/lib/dupekit)
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + marin-dupekit-native==0.1.6.dev31131847556
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + marin-finelog==0.2.11 (from file:///app/lib/finelog)
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + marin-finelog-server==0.2.46.dev33324331711
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + marin-finestore==0.1.0 (from file:///app/lib/finestore)
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + marin-fray==0.2.0 (from file:///app/lib/fray)
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + marin-haliax==0.2.0 (from file:///app/lib/haliax)
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + marin-iac==0.0.0 (from file:///app/infra/pulumi)
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + marin-iris==0.2.0 (from file:///app/lib/iris)
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + marin-iris-native==0.1.6.dev31131847556
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + marin-levanter==0.2.0 (from file:///app/lib/levanter)
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + marin-marina==0.1.0 (from file:///app/infra/marina)
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + marin-rigging==0.2.0 (from file:///app/lib/rigging)
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + marin-root==0.1.0 (from file:///app)
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + marin-zephyr==0.2.0 (from file:///app/lib/zephyr)
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + markdown-it-py==4.0.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + markdownify==1.2.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + markupsafe==3.0.3
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + marshmallow==3.26.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + matplotlib==3.10.8
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + mcp==1.28.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + mdurl==0.1.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + mergedeep==1.3.4
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + ml-dtypes==0.5.4
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + mmh3==5.3.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + mpmath==1.3.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + msgpack==1.2.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + msgspec==0.20.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + multidict==6.7.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + multiprocess==0.70.16
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + mypy-extensions==1.1.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + narwhals==2.15.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + nest-asyncio==1.6.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + networkx==3.6.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + numpy==2.3.5
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + oauthlib==3.3.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + onnxruntime==1.29.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + openai==2.24.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + opentelemetry-api==1.39.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + opentelemetry-exporter-otlp-proto-common==1.39.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + opentelemetry-exporter-otlp-proto-grpc==1.39.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + opentelemetry-instrumentation==0.60b1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + opentelemetry-instrumentation-grpc==0.60b1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + opentelemetry-proto==1.39.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + opentelemetry-sdk==1.39.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + opentelemetry-semantic-conventions==0.60b1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + opt-einsum==3.4.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + optax==0.2.6
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + orbax-checkpoint==0.11.31
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + orbax-export==0.0.8
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + orderly-set==5.5.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + packaging==26.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + pandas==2.2.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + parver==1.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + pg8000==1.31.5
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + pgvector==0.5.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + pillow==12.3.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + platformdirs==4.5.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + playwright==1.57.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + plotly==6.5.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + pluggy==1.6.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + polars==1.42.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + polars-runtime-32==1.42.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + prometheus-client==0.24.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + propcache==0.4.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + proto-plus==1.27.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + protobuf==6.33.6
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + psutil==7.2.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + pulumi==3.256.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + pulumi-cloudflare==6.15.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + pulumi-command==1.2.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + pulumi-coreweave==1.0.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + pulumi-docker-build==0.0.15
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + pulumi-gcp==9.23.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + pulumi-github==6.13.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + pulumi-kubernetes==4.30.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + py-rust-stemmers==0.1.8
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + pyarrow==23.0.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + pyasn1==0.6.4
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + pyasn1-modules==0.4.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + pybind11==3.0.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + pycparser==2.23
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + pydantic==2.12.5
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + pydantic-core==2.41.5
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + pydantic-settings==2.14.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + pyee==13.0.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + pygments==2.19.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + pyjwt==2.13.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + pyparsing==3.3.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + pyqwest==0.6.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + pytest==9.0.3
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + pytest-timeout==2.4.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + python-dateutil==2.9.0.post0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + python-dotenv==1.2.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + python-multipart==0.0.31
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + pytimeparse==1.1.8
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + pytz==2025.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + pyyaml==6.0.3
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + referencing==0.37.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + regex==2026.1.14
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + requests==2.33.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + requests-oauthlib==2.0.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + resiliparse==0.17.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + rich==14.2.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + rpds-py==0.30.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + rsa==4.9.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + s3fs==2026.1.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + safetensors==0.6.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + scikit-learn==1.8.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + scipy==1.17.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + scramp==1.4.17
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + seaborn==0.13.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + semver==3.0.4
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + sentry-sdk==2.49.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + setuptools==83.0.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + shellingham==1.5.4
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + simplejson==3.20.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + six==1.17.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + smmap==5.0.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + sniffio==1.3.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + soupsieve==2.8.4
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + sqlalchemy==2.0.46
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + sse-starlette==3.1.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + starlette==1.3.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + substrait==0.24.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + sympy==1.13.3
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + tabulate==0.9.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + tblib==3.2.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + tensorstore==0.1.84
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + threadpoolctl==3.6.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + tokenizers==0.22.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + toml==0.10.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + toolz==1.1.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + torch==2.11.0+cpu
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + torchvision==0.26.0+cpu
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + tqdm==4.67.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + tqdm-loggable==0.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + transformers==5.12.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + treescope==0.1.10
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + truststore==0.10.4
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + typer==0.21.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + typing-extensions==4.15.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + typing-inspect==0.9.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + typing-inspection==0.4.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + tzdata==2025.3
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + uritemplate==4.2.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + urllib3==2.7.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + uvicorn==0.40.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + uvloop==0.22.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + vortex-data==0.61.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + wadler-lindig==0.1.7
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + wandb==0.26.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + watchdog==6.0.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + watchfiles==1.1.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + websocket-client==1.9.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + websockets==15.0.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + wrapt==1.17.3
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + xxhash==3.6.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + yarl==1.22.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + zipp==3.23.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + zstandard==0.25.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 | Resolved 14 packages in 77ms
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 | Installed 5 packages in 11ms
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + linkify-it-py==2.2.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + mdit-py-plugins==0.6.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + memray==1.20.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + py-spy==0.4.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 |  + textual==8.2.8
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 | [iris setup] step 2/2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 | installing iris runtime deps
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 | Installed 273 packages in 113ms
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + absl-py==2.3.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + aiobotocore==2.26.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + aiofiles==24.1.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + aiohappyeyeballs==2.6.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + aiohttp==3.14.3
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + aioitertools==0.13.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + aiosignal==1.4.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + annotated-doc==0.0.4
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + annotated-types==0.7.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + anthropic==1.3.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + anyio==4.12.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + aqtp==0.9.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + asn1crypto==1.5.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + async-lru==2.0.5
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + attrs==25.4.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + backports-zstd==1.6.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + beautifulsoup4==4.14.3
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + botocore==1.41.5
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + braceexpand==0.1.7
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + certifi==2026.1.4
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + cffi==2.0.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + charset-normalizer==3.4.4
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + chex==0.1.91
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + click==8.3.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + cloud-sql-python-connector==1.22.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + cloudpickle==3.1.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + connect-python==0.9.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + contourpy==1.3.3
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + cryptography==50.0.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + cycler==0.12.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + dataclasses-json==0.6.7
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + datasets==4.8.5
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + debugpy==1.8.19
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + decorator==5.2.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + deepdiff==9.0.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + dill==0.4.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + distro==1.9.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + dnspython==2.8.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + docstring-parser==0.18.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + draccus==0.11.6
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + duckdb==1.5.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + durationpy==0.10
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + einops==0.8.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + equinox==0.13.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + etils==1.13.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + fastapi==0.136.3
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + fastembed==0.8.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + fasttext-wheel==0.9.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + filelock==3.20.3
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + flatbuffers==25.12.19
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + flax==0.12.4
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + fonttools==4.61.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + frozenlist==1.8.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + fsspec==2026.1.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + gcsfs==2026.1.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + gitdb==4.0.12
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + gitpython==3.1.58
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + google-api-core==2.34.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + google-api-python-client==2.188.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + google-auth==2.47.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + google-auth-httplib2==0.3.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + google-auth-oauthlib==1.2.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + google-cloud-compute==1.51.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + google-cloud-core==2.5.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + google-cloud-kms==3.16.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + google-cloud-secret-manager==2.29.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + google-cloud-storage==3.8.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + google-cloud-storage-control==1.11.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + google-cloud-tpu==1.26.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + google-crc32c==1.8.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + google-resumable-media==2.8.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + googleapis-common-protos==1.72.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + greenlet==3.3.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + grpc-google-iam-v1==0.14.3
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + grpcio==1.76.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + grpcio-status==1.76.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + h11==0.16.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + hf-xet==1.5.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + httpcore==1.0.9
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + httpcore2==2.12.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + httplib2==0.32.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + httptools==0.7.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + httpx==0.28.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + httpx-sse==0.4.3
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + httpx2==2.12.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + huggingface-hub==1.21.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + humanfriendly==10.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + humanize==4.15.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + idna==3.19
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + immutabledict==4.3.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + importlib-metadata==8.5.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + importlib-resources==6.5.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + iniconfig==2.3.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + jax==0.11.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + jaxlib==0.11.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + jaxopt==0.8.5
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + jaxtyping==0.3.5
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + jinja2==3.1.6
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + jiter==0.11.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + jmespath==1.0.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + jmp==0.0.4
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + joblib==1.5.3
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + jsonschema==4.23.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + jsonschema-specifications==2025.9.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + kiwisolver==1.4.9
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + kubernetes==36.0.3
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + lenses==1.2.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + libtpu==0.0.46
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + loguru==0.7.3
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + marin-core==0.2.0 (from file:///app/lib/marin)
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + marin-deploy==0.0.0 (from file:///app/infra/deploy)
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + marin-ducky==0.1.0 (from file:///app/lib/ducky)
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + marin-dupekit==0.1.2 (from file:///app/lib/dupekit)
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + marin-dupekit-native==0.1.6.dev31131847556
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + marin-finelog==0.2.11 (from file:///app/lib/finelog)
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + marin-finelog-server==0.2.46.dev33324331711
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + marin-finestore==0.1.0 (from file:///app/lib/finestore)
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + marin-fray==0.2.0 (from file:///app/lib/fray)
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + marin-haliax==0.2.0 (from file:///app/lib/haliax)
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + marin-iac==0.0.0 (from file:///app/infra/pulumi)
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + marin-iris==0.2.0 (from file:///app/lib/iris)
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + marin-iris-native==0.1.6.dev31131847556
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + marin-levanter==0.2.0 (from file:///app/lib/levanter)
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + marin-marina==0.1.0 (from file:///app/infra/marina)
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + marin-rigging==0.2.0 (from file:///app/lib/rigging)
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + marin-root==0.1.0 (from file:///app)
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + marin-zephyr==0.2.0 (from file:///app/lib/zephyr)
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + markdown-it-py==4.0.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + markdownify==1.2.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + markupsafe==3.0.3
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + marshmallow==3.26.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + matplotlib==3.10.8
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + mcp==1.28.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + mdurl==0.1.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + mergedeep==1.3.4
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + ml-dtypes==0.5.4
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + mmh3==5.3.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + mpmath==1.3.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + msgpack==1.2.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + msgspec==0.20.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + multidict==6.7.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + multiprocess==0.70.16
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + mypy-extensions==1.1.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + narwhals==2.15.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + nest-asyncio==1.6.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + networkx==3.6.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + numpy==2.3.5
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + oauthlib==3.3.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + onnxruntime==1.29.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + openai==2.24.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + opentelemetry-api==1.39.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + opentelemetry-exporter-otlp-proto-common==1.39.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + opentelemetry-exporter-otlp-proto-grpc==1.39.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + opentelemetry-instrumentation==0.60b1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + opentelemetry-instrumentation-grpc==0.60b1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + opentelemetry-proto==1.39.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + opentelemetry-sdk==1.39.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + opentelemetry-semantic-conventions==0.60b1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + opt-einsum==3.4.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + optax==0.2.6
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + orbax-checkpoint==0.11.31
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + orbax-export==0.0.8
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + orderly-set==5.5.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + packaging==26.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + pandas==2.2.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + parver==1.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + pg8000==1.31.5
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + pgvector==0.5.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + pillow==12.3.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + platformdirs==4.5.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + playwright==1.57.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + plotly==6.5.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + pluggy==1.6.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + polars==1.42.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + polars-runtime-32==1.42.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + prometheus-client==0.24.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + propcache==0.4.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + proto-plus==1.27.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + protobuf==6.33.6
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + psutil==7.2.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + pulumi==3.256.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + pulumi-cloudflare==6.15.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + pulumi-command==1.2.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + pulumi-coreweave==1.0.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + pulumi-docker-build==0.0.15
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + pulumi-gcp==9.23.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + pulumi-github==6.13.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + pulumi-kubernetes==4.30.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + py-rust-stemmers==0.1.8
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + pyarrow==23.0.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + pyasn1==0.6.4
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + pyasn1-modules==0.4.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + pybind11==3.0.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + pycparser==2.23
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + pydantic==2.12.5
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + pydantic-core==2.41.5
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + pydantic-settings==2.14.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + pyee==13.0.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + pygments==2.19.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + pyjwt==2.13.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + pyparsing==3.3.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + pyqwest==0.6.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + pytest==9.0.3
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + pytest-timeout==2.4.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + python-dateutil==2.9.0.post0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + python-dotenv==1.2.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + python-multipart==0.0.31
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + pytimeparse==1.1.8
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + pytz==2025.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + pyyaml==6.0.3
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + referencing==0.37.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + regex==2026.1.14
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + requests==2.33.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + requests-oauthlib==2.0.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + resiliparse==0.17.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + rich==14.2.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + rpds-py==0.30.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + rsa==4.9.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + s3fs==2026.1.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + safetensors==0.6.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + scikit-learn==1.8.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + scipy==1.17.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + scramp==1.4.17
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + seaborn==0.13.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + semver==3.0.4
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + sentry-sdk==2.49.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + setuptools==83.0.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + shellingham==1.5.4
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + simplejson==3.20.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + six==1.17.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + smmap==5.0.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + sniffio==1.3.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + soupsieve==2.8.4
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + sqlalchemy==2.0.46
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + sse-starlette==3.1.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + starlette==1.3.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + substrait==0.24.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + sympy==1.13.3
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + tabulate==0.9.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + tblib==3.2.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + tensorstore==0.1.84
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + threadpoolctl==3.6.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + tokenizers==0.22.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + toml==0.10.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + toolz==1.1.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + torch==2.11.0+cpu
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + torchvision==0.26.0+cpu
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + tqdm==4.67.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + tqdm-loggable==0.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + transformers==5.12.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + treescope==0.1.10
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + truststore==0.10.4
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + typer==0.21.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + typing-extensions==4.15.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + typing-inspect==0.9.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + typing-inspection==0.4.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + tzdata==2025.3
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + uritemplate==4.2.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + urllib3==2.7.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + uvicorn==0.40.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + uvloop==0.22.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + vortex-data==0.61.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + wadler-lindig==0.1.7
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + wandb==0.26.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + watchdog==6.0.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + watchfiles==1.1.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + websocket-client==1.9.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + websockets==15.0.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + wrapt==1.17.3
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + xxhash==3.6.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + yarl==1.22.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + zipp==3.23.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + zstandard==0.25.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 | Resolved 14 packages in 85ms
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 | Installed 5 packages in 11ms
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + linkify-it-py==2.2.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + mdit-py-plugins==0.6.1
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + memray==1.20.0
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + py-spy==0.4.2
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 |  + textual==8.2.8
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 |  Downloaded pulumi-cloudflare
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 |  Downloaded jax
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 |  Downloaded pulumi-kubernetes
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 |  Downloaded debugpy
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 |  Downloaded fonttools
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 |  Downloaded cryptography
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 |  Downloaded google-cloud-compute
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 |  Downloaded pulumi-cloudflare
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 |  Downloaded jax
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 |  Downloaded pulumi-kubernetes
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 |  Downloaded debugpy
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 |  Downloaded fonttools
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 |  Downloaded google-cloud-compute
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 |  Downloaded cryptography
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 |  Downloaded pulumi-cloudflare
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 |  Downloaded jax
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 |  Downloaded pulumi-kubernetes
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 |  Downloaded debugpy
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 |  Downloaded fonttools
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 |  Downloaded cryptography
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 |  Downloaded google-cloud-compute
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 |  Downloaded matplotlib
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 |  Downloaded anthropic
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 |  Downloaded matplotlib
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 |  Downloaded anthropic
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 |  Downloaded matplotlib
+[21:38:03] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 |  Downloaded kubernetes
+[21:38:04] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 |  Downloaded anthropic
+[21:38:04] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 |  Downloaded pulumi-gcp
+[21:38:04] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad/0 attempt=0 |  Downloaded onnxruntime
+[21:38:04] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 |  Downloaded marin-finelog-server
+[21:38:05] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 |  Downloaded marin-finelog-server
+[21:38:05] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 |  Downloaded kubernetes
+[21:38:05] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 |  Downloaded onnxruntime
+[21:38:05] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 |  Downloaded playwright
+[21:38:05] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 |  Downloaded kubernetes
+[21:38:05] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 |  Downloaded onnxruntime
+[21:38:05] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 |  Downloaded playwright

@@ -1,0 +1,16 @@
+{
+ "checkpoint": "unimax8_1e21-d685cd",
+ "plan": "plan_euw4",
+ "region": "europe-west4",
+ "task": "mt_mbpp_swift",
+ "valid_documents": 483,
+ "documents": 500,
+ "passed": 54,
+ "pass@1": 0.11180124223602485,
+ "tests_sha256": "d79a7de409a7d4c4289dc250ea4c58cbed895ec4245f79ae781426262a192005",
+ "generation_artifact": {
+  "sha256": "f6ff107406d82a90554d89746e5d05ee2f9ab6ef3bada56ece6d161f232a2a9b",
+  "size": 103077
+ },
+ "generation_root": "gs://marin-eu-west4/experiments/table9_accuracy_20260914/unimax8_1e21-d685cd/mt_mbpp_swift/863bcde98d40f2f3df24f4e9f6e6924923f2a32910327bf8a54c78dcc84ab09c"
+}

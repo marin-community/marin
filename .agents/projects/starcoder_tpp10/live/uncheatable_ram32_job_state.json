@@ -1,0 +1,20 @@
+[
+  {
+    "id": "/calvinxu/starcoder-tpp10-uncheatable-ram32/tpp10-uncheatable-target",
+    "state": "pending",
+    "pending": "Scheduler: Insufficient TPUs (need 4, available 0) - 4 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: Unsatisfied autoscaler demand: tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity",
+    "error": ""
+  },
+  {
+    "id": "/calvinxu/starcoder-tpp10-uncheatable-ram32/tpp10-uncheatable-proxy",
+    "state": "pending",
+    "pending": "Scheduler: Insufficient TPUs (need 4, available 0) - 4 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: Unsatisfied autoscaler demand: tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity",
+    "error": ""
+  },
+  {
+    "id": "/calvinxu/starcoder-tpp10-uncheatable-ram32",
+    "state": "running",
+    "pending": "",
+    "error": ""
+  }
+]

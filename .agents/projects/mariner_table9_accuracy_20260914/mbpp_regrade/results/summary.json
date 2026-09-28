@@ -1,0 +1,312 @@
+{
+ "categories": {
+  "Proportional": {
+   "no_compatible_function": 136,
+   "named": 37,
+   "bound": 305,
+   "syntax_error": 20,
+   "multi_name_test": 2
+  },
+  "UniMax-8": {
+   "no_compatible_function": 104,
+   "named": 46,
+   "bound": 329,
+   "syntax_error": 19,
+   "multi_name_test": 2
+  },
+  "MARINER": {
+   "bound": 331,
+   "named": 55,
+   "no_compatible_function": 100,
+   "syntax_error": 12,
+   "multi_name_test": 2
+  },
+  "Olmix": {
+   "bound": 334,
+   "syntax_error": 8,
+   "named": 47,
+   "no_compatible_function": 109,
+   "multi_name_test": 2
+  }
+ },
+ "bootstrap": {
+  "frozen": {
+   "pass@1": {
+    "Proportional": {
+     "mean": 0.008,
+     "ci95": [
+      0.002,
+      0.016
+     ],
+     "se": 0.003952459062406592
+    },
+    "UniMax-8": {
+     "mean": 0.018,
+     "ci95": [
+      0.008,
+      0.03
+     ],
+     "se": 0.005995896166545915
+    },
+    "Olmix": {
+     "mean": 0.03,
+     "ci95": [
+      0.016,
+      0.046
+     ],
+     "se": 0.007568838153904469
+    },
+    "MARINER": {
+     "mean": 0.046,
+     "ci95": [
+      0.028,
+      0.066
+     ],
+     "se": 0.009326904086565918
+    }
+   },
+   "differences": {
+    "UniMax-8 - Proportional": {
+     "mean": 0.009999999999999998,
+     "ci95": [
+      -0.002,
+      0.022
+     ],
+     "p_leq_0": 0.0611
+    },
+    "Olmix - Proportional": {
+     "mean": 0.022,
+     "ci95": [
+      0.01,
+      0.036
+     ],
+     "p_leq_0": 0.0
+    },
+    "MARINER - Proportional": {
+     "mean": 0.038,
+     "ci95": [
+      0.022,
+      0.056
+     ],
+     "p_leq_0": 0.0
+    },
+    "Olmix - UniMax-8": {
+     "mean": 0.012,
+     "ci95": [
+      0.0,
+      0.025999999999999995
+     ],
+     "p_leq_0": 0.0345
+    },
+    "MARINER - UniMax-8": {
+     "mean": 0.028,
+     "ci95": [
+      0.014,
+      0.044
+     ],
+     "p_leq_0": 0.0
+    },
+    "MARINER - Olmix": {
+     "mean": 0.016,
+     "ci95": [
+      0.0020000000000000018,
+      0.03
+     ],
+     "p_leq_0": 0.0123
+    }
+   }
+  },
+  "regraded": {
+   "pass@1": {
+    "Proportional": {
+     "mean": 0.064,
+     "ci95": [
+      0.044,
+      0.086
+     ],
+     "se": 0.010961488220127776
+    },
+    "UniMax-8": {
+     "mean": 0.142,
+     "ci95": [
+      0.112,
+      0.174
+     ],
+     "se": 0.015706100475929727
+    },
+    "Olmix": {
+     "mean": 0.152,
+     "ci95": [
+      0.122,
+      0.184
+     ],
+     "se": 0.01612919107581034
+    },
+    "MARINER": {
+     "mean": 0.182,
+     "ci95": [
+      0.148,
+      0.216
+     ],
+     "se": 0.017213694119508457
+    }
+   },
+   "differences": {
+    "UniMax-8 - Proportional": {
+     "mean": 0.07799999999999999,
+     "ci95": [
+      0.05,
+      0.10600000000000001
+     ],
+     "p_leq_0": 0.0
+    },
+    "Olmix - Proportional": {
+     "mean": 0.088,
+     "ci95": [
+      0.06199999999999999,
+      0.11600000000000002
+     ],
+     "p_leq_0": 0.0
+    },
+    "MARINER - Proportional": {
+     "mean": 0.118,
+     "ci95": [
+      0.088,
+      0.14800000000000002
+     ],
+     "p_leq_0": 0.0
+    },
+    "Olmix - UniMax-8": {
+     "mean": 0.010000000000000009,
+     "ci95": [
+      -0.018000000000000016,
+      0.038000000000000006
+     ],
+     "p_leq_0": 0.27
+    },
+    "MARINER - UniMax-8": {
+     "mean": 0.04000000000000001,
+     "ci95": [
+      0.011999999999999983,
+      0.068
+     ],
+     "p_leq_0": 0.0035
+    },
+    "MARINER - Olmix": {
+     "mean": 0.03,
+     "ci95": [
+      0.0020000000000000018,
+      0.057999999999999996
+     ],
+     "p_leq_0": 0.0238
+    }
+   }
+  },
+  "regraded_first_tie": {
+   "pass@1": {
+    "Proportional": {
+     "mean": 0.064,
+     "ci95": [
+      0.044,
+      0.086
+     ],
+     "se": 0.010961488220127776
+    },
+    "UniMax-8": {
+     "mean": 0.142,
+     "ci95": [
+      0.112,
+      0.174
+     ],
+     "se": 0.015706100475929727
+    },
+    "Olmix": {
+     "mean": 0.152,
+     "ci95": [
+      0.122,
+      0.184
+     ],
+     "se": 0.01612919107581034
+    },
+    "MARINER": {
+     "mean": 0.182,
+     "ci95": [
+      0.148,
+      0.216
+     ],
+     "se": 0.017213694119508457
+    }
+   },
+   "differences": {
+    "UniMax-8 - Proportional": {
+     "mean": 0.07799999999999999,
+     "ci95": [
+      0.05,
+      0.10600000000000001
+     ],
+     "p_leq_0": 0.0
+    },
+    "Olmix - Proportional": {
+     "mean": 0.088,
+     "ci95": [
+      0.06199999999999999,
+      0.11600000000000002
+     ],
+     "p_leq_0": 0.0
+    },
+    "MARINER - Proportional": {
+     "mean": 0.118,
+     "ci95": [
+      0.088,
+      0.14800000000000002
+     ],
+     "p_leq_0": 0.0
+    },
+    "Olmix - UniMax-8": {
+     "mean": 0.010000000000000009,
+     "ci95": [
+      -0.018000000000000016,
+      0.038000000000000006
+     ],
+     "p_leq_0": 0.27
+    },
+    "MARINER - UniMax-8": {
+     "mean": 0.04000000000000001,
+     "ci95": [
+      0.011999999999999983,
+      0.068
+     ],
+     "p_leq_0": 0.0035
+    },
+    "MARINER - Olmix": {
+     "mean": 0.03,
+     "ci95": [
+      0.0020000000000000018,
+      0.057999999999999996
+     ],
+     "p_leq_0": 0.0238
+    }
+   }
+  }
+ },
+ "controls": {
+  "reproduce_named": {
+   "n": 40,
+   "matches_frozen": 40
+  },
+  "reference_as_released": {
+   "n": 498,
+   "passed": 498
+  },
+  "reference_renamed": {
+   "bound": 498,
+   "passed": 498,
+   "passed_where_released_passes": 498,
+   "released_passes": 498
+  },
+  "negative_shuffled": {
+   "n": 198,
+   "passed": 0
+  }
+ }
+}

@@ -1,0 +1,24 @@
+{
+  "status": "passed",
+  "raw_wikipedia_tokens": 190316544,
+  "shard_tokens": [
+    95158272,
+    95158272
+  ],
+  "fingerprint": "5e2ac160",
+  "recipe_sha256": "81af73b910676fac8eeccffd1b2d652f6ca53562693fb146475b2ec79a90c27e",
+  "checks": [
+    "artifact fingerprint",
+    "exact frozen recipe incl source generations and quotas",
+    "design identity",
+    "finished cache ledger",
+    "tokenizer metadata",
+    "per-shard and total token counts"
+  ],
+  "remaining": [
+    "parent permutation",
+    "matched subset",
+    "FineMath preparation",
+    "training and evaluation"
+  ]
+}

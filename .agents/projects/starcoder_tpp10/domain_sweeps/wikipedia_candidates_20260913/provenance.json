@@ -1,0 +1,26 @@
+{
+  "sources": {
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/native_closeout_20260912/plots/curves.json": "7420a579400a8ffcc3b592d6e118e3218c99a91d5aaf0083aa5c1302bdb4d770",
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/native_closeout_20260912/plots/corrected_results.json": "d4020881e2774831f173533ef5f2a749983b6402e7b5ee989e924c736113cce0",
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/target_math_complete_20260912/results/c788d33ddd3b357a7f80de6ed1d5ecb632104e4beabd5cc0934d580ecac77d39/receipt.json": "7f0994dc178adb4663621389a8895cd3df7505ceec90d4d55ff38c939e610f47",
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/wikipedia_candidates_20260913/plot_candidates.py": "241536ccacedb606078161646f1093d7ac9cdd206b0567782c3f4760c51875b4"
+  },
+  "benchmark_views": 11,
+  "curve_count": 22,
+  "points": 176,
+  "transformation": "100 * (value / min(value for same benchmark and scale) - 1)",
+  "source_units": [
+    "corrected BPB",
+    "reference-solution perplexity"
+  ],
+  "raw_view": "full linear y range",
+  "excess_view_ymax_percent": 5,
+  "new_evaluations": false,
+  "smoothing": false,
+  "outputs": {
+    "wikipedia_benchmark_candidates.pdf": "5c8500eda74eecf87c13b84b2d55090187ab062766f8cacb3e2ec4e6a88be27e",
+    "points.csv": "666e127e592429542b8a0638d6ee9a4f53a82fed70fec1000632bbb9df4fbec0",
+    "minima.csv": "3466873a7b5f3d2004bca330a7f1cb6882608b61e740b7b1fb95f6502b3eb6be",
+    "language_candidates.png": "e7fbe72b0963fcd4e259d6eeb2ceb155b3d24b0a6c463733ba32f36b7cd46142"
+  }
+}

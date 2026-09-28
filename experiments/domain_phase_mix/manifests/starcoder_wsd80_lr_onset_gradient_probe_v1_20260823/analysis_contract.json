@@ -1,0 +1,58 @@
+{
+  "endpoint_metrics_read": false,
+  "identification_checks": {
+    "decay_arm_reliability_is_advisory": true,
+    "frozen_learning_rates_are_checked_against_restored_optimizer_state": true,
+    "low_reliability_interpretation": "primary inconclusive",
+    "pipeline_health_reliability_gate_arms": [
+      "no_decay"
+    ],
+    "reference_first_batch_hash_is_constant_across_arms_and_checkpoints": true,
+    "split_half_reliability_threshold": 0.5,
+    "state_identity_partition_is_frozen_per_seed_checkpoint": true
+  },
+  "multiplicity": "Holm family-wise correction across the four secondary tests only",
+  "primary_contrast": "no_decay_minus_decay_0p60_at_final_checkpoint, paired within training seed",
+  "primary_json_path": "noise_corrected_source_gradient_statistics.projected.trunk.disattenuated_cosine",
+  "primary_statistic": "split-half disattenuated cosine between mean heldout StarCoder and frozen Nemotron raw gradients, restricted to the projected trainable trunk geometry used by the existing onset artifact",
+  "primary_test": "two-sided exact Wilcoxon signed-rank test across 8 paired training seeds at alpha=0.05",
+  "question": "Does raw StarCoder-Nemotron gradient-cosine decline follow LR-decay onset?",
+  "reference_panel": {
+    "blocks_per_half": 16,
+    "half_sequence_offsets": [
+      0,
+      1024
+    ],
+    "halves": [
+      "half_a",
+      "half_b"
+    ],
+    "halves_are_non_overlapping_within_each_seed": true,
+    "optimizer_update_draws_per_half": 4,
+    "paired_by_training_seed": true,
+    "panel_sequence_count": 2048,
+    "sequence_set_ids_shared_across_arms_and_checkpoints": true,
+    "sequences_per_block": 64,
+    "sources": [
+      "starcoder_excluded_global",
+      "nemotron_aggregate"
+    ]
+  },
+  "schema_version": "2026-08-23-starcoder-wsd80-lr-onset-probe-v1",
+  "secondary_family": [
+    "matched_decay_fraction_0p5: decay_0p60@0p80T vs decay_0p80@0p90T vs decay_0p90@0p95T",
+    "matched_time_0p90T: all four arms",
+    "onset_anchored_0p90: (0p90T-final) vs the same no_decay window",
+    "no_decay_stability: 0p55T-final"
+  ],
+  "secondary_statistic": "projected-trunk cosine between corrected optimizer updates, descriptive only when realized LR is below 1e-3 of peak",
+  "secondary_time_axes": [
+    "normalized_training_time",
+    "steps_since_decay_onset",
+    "fraction_of_decay_elapsed",
+    "restored_learning_rate_ratio",
+    "cumulative_learning_rate"
+  ],
+  "uncorrected_primary_json_path": "combined_source_gradient_statistics.projected.trunk.cosine",
+  "unprojected_sensitivity_json_path": "noise_corrected_source_gradient_statistics.raw.trunk.disattenuated_cosine"
+}

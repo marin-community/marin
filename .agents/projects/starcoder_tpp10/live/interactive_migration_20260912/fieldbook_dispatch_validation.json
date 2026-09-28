@@ -1,0 +1,36 @@
+{
+  "artifact": {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789249180.3075147,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/interactive_migration_20260912/live_dispatch.json",
+      "fieldbook.local_size_at_capture": 6112
+    },
+    "content_hash": null,
+    "created_at": "2026-09-12T21:40:51Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m2bs1tcy6t6qy7af8ndxrjrz",
+    "job_id": null,
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-12T21:40:51Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/interactive_migration_20260912/live_dispatch.json"
+  },
+  "validation": {
+    "attrs": {},
+    "check_name": "interactive_migration.actual_child_dispatch",
+    "created_at": "2026-09-12T21:40:52Z",
+    "deleted_at": null,
+    "details": {},
+    "entity_id": "job_01m2brkhtb9efqaha5s1c4q57b",
+    "entity_type": "job",
+    "expected_value": "Exactly five original unfinished recipes, interactive priority, central1 TPU workers",
+    "id": "val_01m2bs1tn38m1ckw3xp3f0c91h",
+    "measured_value": "Five original recipe fingerprints dispatched; all five INTERACTIVE and BUILDING on assigned central1 v5p-8 workers; restoration not yet verified",
+    "session_id": "ses_01m2brcsm6qqm90rgm8w9h989a",
+    "source_artifact_id": "art_01m2bs1tcy6t6qy7af8ndxrjrz",
+    "source_job_id": null,
+    "status": "pass",
+    "updated_at": "2026-09-12T21:40:52Z"
+  }
+}

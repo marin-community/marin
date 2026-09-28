@@ -1,0 +1,28 @@
+{
+  "files": [
+    {
+      "path": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/metric_bridge/legacy_endpoint_metric_histories.json",
+      "sha256": "d6de97417a62bff2df4ccb805bca4181467c3aad9f7d9d22117c50bbd0ac80fa"
+    },
+    {
+      "path": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/metric_bridge/metric_bridge_audit.json",
+      "sha256": "a655233575903a4d3c4b41699c93889967155334cfa57277bf9e9638335400a8"
+    },
+    {
+      "path": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/metric_bridge/uncheatable_prediction_errors.json",
+      "sha256": "fa61f88d2d575664c2ca41447a0a8ab19a4ca775726828d48d862b0d52da01b4"
+    },
+    {
+      "path": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/metric_bridge/METHODOLOGY.md",
+      "sha256": "b54789fb23a278cd7d9523f94aad846e4ee6bec5a75e7ac46a67c921c9a40419"
+    },
+    {
+      "path": "/Users/calvinxu/Projects/Work/Marin/marin/.experiments/artifacts/status_refresh_20260913_1404/midpoints.json",
+      "sha256": "4c919595f683421c56dd3bf593f80c1d2b688bc578d13e0bcf469a5339129f7f"
+    },
+    {
+      "path": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_frozen_procedure_validation_3e18_20260908/fits/fit_uncheatable.json",
+      "sha256": "14093a111eb5c34cd89eee827d844c139b36fa8e74dd9eb2a521d77d52f148d5"
+    }
+  ]
+}

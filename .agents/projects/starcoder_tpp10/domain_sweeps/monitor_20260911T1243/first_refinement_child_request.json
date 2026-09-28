@@ -1,0 +1,59 @@
+{
+  "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d",
+  "request": {
+    "resources": {
+      "cpu_millicores": 104000,
+      "memory_bytes": "240518168576",
+      "device": {
+        "tpu": {
+          "variant": "v5p-8",
+          "count": 4
+        }
+      },
+      "disk_bytes": "53687091200"
+    },
+    "bundle_id": "3655dd72d95b64c91b0b39341b27308cead8f5a24402128694032f1390067246",
+    "constraints": [
+      {
+        "key": "device-type",
+        "op": "CONSTRAINT_OP_EQ",
+        "value": {
+          "string_value": "tpu"
+        },
+        "mode": "CONSTRAINT_MODE_REQUIRED"
+      },
+      {
+        "key": "device-variant",
+        "op": "CONSTRAINT_OP_EQ",
+        "value": {
+          "string_value": "v5p-8"
+        },
+        "mode": "CONSTRAINT_MODE_REQUIRED"
+      },
+      {
+        "key": "region",
+        "op": "CONSTRAINT_OP_EQ",
+        "value": {
+          "string_value": "us-central1"
+        },
+        "mode": "CONSTRAINT_MODE_REQUIRED"
+      },
+      {
+        "key": "zone",
+        "op": "CONSTRAINT_OP_EQ",
+        "value": {
+          "string_value": "us-central1-a"
+        },
+        "mode": "CONSTRAINT_MODE_REQUIRED"
+      }
+    ],
+    "priority_band": "PRIORITY_BAND_BATCH"
+  },
+  "job": {
+    "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d",
+    "state": "JOB_STATE_PENDING",
+    "task_state_counts": {
+      "pending": 1
+    }
+  }
+}

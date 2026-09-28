@@ -785,6 +785,27 @@ def test_remote_resources_dispatch_uses_device_extra(tmp_path: Path, fray_client
     _assert_single_submit_extras(_run_step_with_submit_spy(step, fray_client), ["gpu"])
 
 
+def test_remote_retry_policy_reaches_the_job_request(tmp_path: Path, fray_client):
+    """The wrapper's failure budget is what lets a multi-host run survive a sibling preemption."""
+    resources = ResourceConfig.with_gpu("H100", count=8)
+
+    @remote(resources=resources, max_retries_failure=2, max_task_failures=4)
+    def my_step(output_path: str) -> Artifact:
+        return Artifact(path=output_path)
+
+    remote_step = StepSpec(name="remote_retry_step", override_output_path=tmp_path.as_posix(), fn=my_step)
+    explicit_step = StepSpec(
+        name="explicit_resources_retry_step",
+        override_output_path=(tmp_path / "explicit").as_posix(),
+        fn=my_step,
+        resources=resources,
+    )
+    for step in (remote_step, explicit_step):
+        spy = _run_step_with_submit_spy(step, fray_client)
+        assert len(spy.requests) == 1
+        assert (spy.requests[0].max_retries_failure, spy.requests[0].max_task_failures) == (2, 4)
+
+
 def test_remote_dependency_groups_can_override_device_extra(tmp_path: Path, fray_client):
     resources = ResourceConfig.with_gpu("H100", count=8)
 

@@ -1,0 +1,177 @@
+[
+  {
+    "attrs": {
+      "marin.callable_sha256": "2e960bca6d5345e57cb2cb665c9c449d1c44fc7e7f283bcab7048a09f19f8b87",
+      "marin.priority": "batch"
+    },
+    "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+    "code_dirty": true,
+    "command": null,
+    "created_at": "2026-09-11T12:49:46Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "external_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-e7af7ef9",
+    "external_system": "iris",
+    "failure_reason": null,
+    "finished_at": null,
+    "id": "job_01m2888mrajkpcrmvtv46xttkj",
+    "launcher": "iris",
+    "name": "verified_training-e7af7ef9",
+    "retry_of": "job_01m27nb31f97q9tee2a13h3fkb",
+    "run_id": "run_01m27mpv1b6nrwtved53w0qbdd",
+    "started_at": null,
+    "status": "queued",
+    "updated_at": "2026-09-11T16:29:00Z"
+  },
+  {
+    "attrs": {},
+    "created_at": "2026-09-11T12:49:46Z",
+    "deleted_at": null,
+    "failure_reason": null,
+    "finished_at": null,
+    "job_id": "job_01m2888mrajkpcrmvtv46xttkj",
+    "role": "train",
+    "run_id": "run_01m27mpv1b6nrwtved53w0qbdd",
+    "started_at": null,
+    "status": "queued",
+    "updated_at": "2026-09-11T16:29:01Z"
+  },
+  {
+    "attrs": {
+      "marin.callable_sha256": "fdd36a93872710d60185f5f894ecaabb44ab01fbf590f5ae65776553bba66d17",
+      "marin.priority": "batch"
+    },
+    "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+    "code_dirty": true,
+    "command": null,
+    "created_at": "2026-09-11T12:49:38Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "external_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-aa2a4590",
+    "external_system": "iris",
+    "failure_reason": null,
+    "finished_at": null,
+    "id": "job_01m2888dcrv7n6qc7s7h613p9q",
+    "launcher": "iris",
+    "name": "verified_training-aa2a4590",
+    "retry_of": "job_01m27nbbgjkw62gnda5yeye0nt",
+    "run_id": "run_01m27mpxta54khxb3s64prvpbb",
+    "started_at": null,
+    "status": "queued",
+    "updated_at": "2026-09-11T16:29:01Z"
+  },
+  {
+    "attrs": {},
+    "created_at": "2026-09-11T12:49:38Z",
+    "deleted_at": null,
+    "failure_reason": null,
+    "finished_at": null,
+    "job_id": "job_01m2888dcrv7n6qc7s7h613p9q",
+    "role": "train",
+    "run_id": "run_01m27mpxta54khxb3s64prvpbb",
+    "started_at": null,
+    "status": "queued",
+    "updated_at": "2026-09-11T16:29:01Z"
+  },
+  {
+    "attrs": {},
+    "author": null,
+    "body": "No new endpoints. All five unfinished refinement TPU tasks are pending after native preemption, despite Iris job RUNNING states; failure counts remain zero. Saved temporary target checkpoints were independently verified at p55 step 10759, p60 step 6958 and p65 step 2283. Both interactive CPU coordinators are live. Final FineMath matched-subset preparation is CPU-capacity queued and no new-domain training has started. No manual repair, resubmission or scientific change. Notification suppressed for queueing and unchanged completion counts.",
+    "body_format": "markdown",
+    "created_at": "2026-09-11T16:29:01Z",
+    "deleted_at": null,
+    "entity_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "entity_type": "experiment",
+    "id": "note_01m28mt42bd1y5nhg85xgfs98a",
+    "note_type": "checkpoint",
+    "resolved_at": null,
+    "status": "open",
+    "title": "Quiet monitor: refinement remains 40/45; unfinished tasks queued",
+    "updated_at": "2026-09-11T16:29:01Z"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789144024.7730043,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/monitor_20260911T1626/live_status.json",
+      "fieldbook.local_size_at_capture": 3260
+    },
+    "content_hash": "sha256:254606b4b530b30eafb558dda3efa49889a5087957e1159f9bae1f240a4ac80c",
+    "created_at": "2026-09-11T16:29:02Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m28mt4eefrbzhe3e4mxz1sn4",
+    "job_id": null,
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-11T16:29:02Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/monitor_20260911T1626/live_status.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789144074.3423085,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/monitor_20260911T1626/requeued_target_checkpoints.json",
+      "fieldbook.local_size_at_capture": 2227
+    },
+    "content_hash": "sha256:4a07fd3c016c2c402de066198a6495a5f1c216475c901392cbfd5f454fbb9a08",
+    "created_at": "2026-09-11T16:29:02Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m28mt4pxxf49hpammkfmy9cd",
+    "job_id": null,
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-11T16:29:02Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/monitor_20260911T1626/requeued_target_checkpoints.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789144140.224496,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/monitor_20260911T1626/status.json",
+      "fieldbook.local_size_at_capture": 2700
+    },
+    "content_hash": "sha256:a4424bac7f7196806a4577bb1a7d55af52b66943b8f08c9b8d8cb4c022c32a07",
+    "created_at": "2026-09-11T16:29:02Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m28mt500cszpzydj6sga7s1s",
+    "job_id": null,
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-11T16:29:02Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/monitor_20260911T1626/status.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789144140.2246094,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/post_submission_status.json",
+      "fieldbook.local_size_at_capture": 2700
+    },
+    "content_hash": "sha256:a4424bac7f7196806a4577bb1a7d55af52b66943b8f08c9b8d8cb4c022c32a07",
+    "created_at": "2026-09-11T11:22:41Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m283961sm11n8j3fxffszns6",
+    "job_id": null,
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-11T16:29:03Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/post_submission_status.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789144140.2249756,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/HANDOFF.md",
+      "fieldbook.local_size_at_capture": 8126
+    },
+    "content_hash": "sha256:4fff23e6fe83223f2ffd7c0582ef36029e2f59f92f5ec368fa549f3541abc359",
+    "created_at": "2026-09-11T11:20:27Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m28353vf9qqwr0bn6rh2vaw5",
+    "job_id": null,
+    "run_id": null,
+    "type": "report",
+    "updated_at": "2026-09-11T16:29:03Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/HANDOFF.md"
+  }
+]

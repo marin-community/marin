@@ -1,0 +1,92 @@
+[
+  {
+    "attrs": {
+      "marin.stage": "wikipedia_parent_materialization"
+    },
+    "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+    "code_dirty": true,
+    "command": null,
+    "created_at": "2026-09-11T12:04:28Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "external_id": "/calvinxu/tpp10-domain-sweeps/prepare_parent-219e0a84",
+    "external_system": "iris",
+    "failure_reason": null,
+    "finished_at": null,
+    "id": "job_01m285npvzrz2xd4rzfr2yp4rb",
+    "launcher": "iris",
+    "name": "prepare_parent-219e0a84",
+    "retry_of": null,
+    "run_id": null,
+    "started_at": null,
+    "status": "running",
+    "updated_at": "2026-09-11T12:04:28Z"
+  },
+  {
+    "attrs": {},
+    "author": null,
+    "body": "FineMath did not hang: Iris reports the job RUNNING, but its sole task is PENDING after TaskRetryScheduled at 11:42:49 UTC, preempted by the Wikipedia parent-materialization job. Automatic retry remains queued for CPU capacity; no duplicate submission or manual restart was performed. Independently verified three finished FineMath parts against their exact recipes/source generations, tokenizer metadata and completed cache ledgers: 11,894,784 tokens each, 35,684,352 total. The fourth part is incomplete and will be rebuilt by the existing resumable writer. Wikipedia parent construction is active and wrote fresh cache objects at 12:00 UTC. The refinement recovery coordinator is still CPU-capacity queued. No new-domain training has started. Echo incident publication is unavailable: the required prior-work search returns HTTP403; this monitoring checkpoint records the evidence in Fieldbook without changing cluster state.",
+    "body_format": "markdown",
+    "created_at": "2026-09-11T12:04:28Z",
+    "deleted_at": null,
+    "entity_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "entity_type": "experiment",
+    "id": "note_01m285nq4z7ma29za2pqgw2t8a",
+    "note_type": "checkpoint",
+    "resolved_at": null,
+    "status": "open",
+    "title": "FineMath task queued after preemption; three completed parts preserved",
+    "updated_at": "2026-09-11T12:04:28Z"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789128208.9938264,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/monitor_20260911T1159/finemath_completed_parts.json",
+      "fieldbook.local_size_at_capture": 1512
+    },
+    "content_hash": "sha256:bbd4649d1afbe978e414651adec6b421673cffe31315690392657ac103402ae2",
+    "created_at": "2026-09-11T12:04:29Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m285nqejx75fanzkgqx4vayf",
+    "job_id": null,
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-11T12:04:29Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/monitor_20260911T1159/finemath_completed_parts.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789128268.3557606,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/monitor_20260911T1159/status.json",
+      "fieldbook.local_size_at_capture": 733
+    },
+    "content_hash": "sha256:caf180d3387af9694cb3d4638a289488ea7eb1ef2b2047f1bced442eb1f641b7",
+    "created_at": "2026-09-11T12:04:29Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m285nqqep36e7jxbnxry7bhj",
+    "job_id": null,
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-11T12:04:29Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/monitor_20260911T1159/status.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789128268.3567152,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/CC_CHANGES.md",
+      "fieldbook.local_size_at_capture": 5564
+    },
+    "content_hash": "sha256:ee184085aa91dd0d392c874408b28123ceb453ee8cbbcb6888664771133ba653",
+    "created_at": "2026-09-11T11:20:27Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m28353jzk1j9e9e0yxzpthww",
+    "job_id": null,
+    "run_id": null,
+    "type": "report",
+    "updated_at": "2026-09-11T12:04:29Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/CC_CHANGES.md"
+  }
+]

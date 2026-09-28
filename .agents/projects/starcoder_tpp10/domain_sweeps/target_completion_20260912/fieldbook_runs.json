@@ -1,0 +1,38 @@
+[
+  {
+    "experiment_ids": [
+      "exp_01m23ddmn78breygyvkkpzyrq8"
+    ],
+    "id": "run_01m282e802bn0z14qb1whz7hb5",
+    "name": "tpp10_finemath_3plus_target_p030_s20260910",
+    "status": "active",
+    "updated_at": "2026-09-11T11:07:58Z"
+  },
+  {
+    "experiment_ids": [
+      "exp_01m23ddmn78breygyvkkpzyrq8"
+    ],
+    "id": "run_01m282e890rabs0ttghv2ena7m",
+    "name": "tpp10_finemath_3plus_target_p050_s20260910",
+    "status": "active",
+    "updated_at": "2026-09-11T11:07:58Z"
+  },
+  {
+    "experiment_ids": [
+      "exp_01m23ddmn78breygyvkkpzyrq8"
+    ],
+    "id": "run_01m282e8n76khqwmzkyy0dr1hj",
+    "name": "tpp10_finemath_3plus_target_p070_s20260910",
+    "status": "active",
+    "updated_at": "2026-09-11T11:07:59Z"
+  },
+  {
+    "experiment_ids": [
+      "exp_01m23ddmn78breygyvkkpzyrq8"
+    ],
+    "id": "run_01m282e8y00xtx0zzgbv90zxpc",
+    "name": "tpp10_finemath_3plus_target_p100_s20260910",
+    "status": "active",
+    "updated_at": "2026-09-11T11:07:59Z"
+  }
+]

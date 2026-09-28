@@ -1,0 +1,9 @@
+{
+  "uri": "gs://marin-us-central2/iris/marin/state/bundles/09418b0bae89f8b13d34144ba4314e90bdb7c7be3bbe5861ab9b1e85e061be9f",
+  "bundle_sha256": "09418b0bae89f8b13d34144ba4314e90bdb7c7be3bbe5861ab9b1e85e061be9f",
+  "size": 26203084,
+  "generation": "1789030886938880",
+  "crc32c": "dwrtPg==",
+  "checked_at": "2026-09-10T09:03:00.858987Z",
+  "scope": "Full recovery workspace bundle; experiment data and parent/child placement are central1."
+}

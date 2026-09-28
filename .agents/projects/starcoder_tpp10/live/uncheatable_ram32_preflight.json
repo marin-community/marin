@@ -1,0 +1,24 @@
+{
+  "spec_sha256": "9417770a83fe5a1b30811e6f3c10cc91295e8d984df306a65a128de876312dca",
+  "checkpoint_count": 57,
+  "cache_tokens": {
+    "wikipedia_english": 687820,
+    "github_python": 1291575,
+    "github_cpp": 1330112,
+    "bbc_news": 912123,
+    "arxiv_physics": 1233592,
+    "arxiv_computer_science": 1098236,
+    "ao3_english": 1256986
+  },
+  "pytest": "14 passed in 43.10s",
+  "repository_lint": "passed",
+  "evaluator_pyrefly_errors": 0,
+  "evaluator_resources": {
+    "cpu": 8,
+    "ram_gib": 32,
+    "disk_gib": 32,
+    "tpu": "v5p-8"
+  },
+  "state": "Regional caches complete; both TPU evaluators queued for devices",
+  "raw_read_region": "us-central1-a"
+}

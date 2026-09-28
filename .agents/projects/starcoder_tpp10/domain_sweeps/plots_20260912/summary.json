@@ -1,0 +1,83 @@
+{
+  "metric": "eval/uncheatable_eval/macro_bpb",
+  "minima": [
+    {
+      "domain": "wikipedia",
+      "arm": "matched",
+      "minimum_percent": 30,
+      "minimum_epochs": 4.768359375,
+      "minimum_bpb": 1.5309239335318772,
+      "missing_percent": [],
+      "scope": "observed full-grid minimum",
+      "delta_bpb_from_minimum": {
+        "0": 0.08955266997611844,
+        "5": 0.03420385295961448,
+        "10": 0.018036377849315333,
+        "20": 0.0028309324790982693,
+        "30": 0.0,
+        "50": 0.008629994755615877,
+        "70": 0.07359641987826104,
+        "100": 0.907858196393049
+      }
+    },
+    {
+      "domain": "finemath_3plus",
+      "arm": "matched",
+      "minimum_percent": 30,
+      "minimum_epochs": 4.768359375,
+      "minimum_bpb": 1.4938686824378231,
+      "missing_percent": [],
+      "scope": "observed full-grid minimum",
+      "delta_bpb_from_minimum": {
+        "0": 0.1266079210701725,
+        "5": 0.04946211996763594,
+        "10": 0.029375250041541845,
+        "20": 0.004938179631130524,
+        "30": 0.0,
+        "50": 0.0179676511943081,
+        "70": 0.0636133833654624,
+        "100": 0.5107432701922239
+      }
+    },
+    {
+      "domain": "wikipedia",
+      "arm": "target",
+      "minimum_percent": 30,
+      "minimum_epochs": 4.7684551480716255,
+      "minimum_bpb": 1.1131834455746554,
+      "missing_percent": [],
+      "scope": "observed full-grid minimum",
+      "delta_bpb_from_minimum": {
+        "0": 0.06999831712065707,
+        "5": 0.022866557597799098,
+        "10": 0.012870714682756912,
+        "20": 0.0005047785139074001,
+        "30": 0.0,
+        "50": 0.003572395626765923,
+        "70": 0.01360850391026136,
+        "100": 0.5809540685363821
+      }
+    },
+    {
+      "domain": "finemath_3plus",
+      "arm": "target",
+      "minimum_percent": 20,
+      "minimum_epochs": 3.1609740874655645,
+      "minimum_bpb": 1.090937151779031,
+      "missing_percent": [
+        30,
+        50,
+        70,
+        100
+      ],
+      "scope": "lowest completed point",
+      "delta_bpb_from_minimum": {
+        "0": 0.09224461091628156,
+        "5": 0.025340769965122245,
+        "10": 0.010876204479412399,
+        "20": 0.0
+      }
+    }
+  ],
+  "scope": "One trainer seed; observed grid values, without fitted curves."
+}

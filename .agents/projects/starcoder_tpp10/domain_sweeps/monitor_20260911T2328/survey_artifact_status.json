@@ -1,0 +1,198 @@
+[
+  {
+    "run_name": "tpp10_wikipedia_matched_p005_s20260910",
+    "status": "RUNNING",
+    "active_lease": null,
+    "expected_fingerprint": "30a8b417",
+    "record_fingerprint": null
+  },
+  {
+    "run_name": "tpp10_wikipedia_matched_p010_s20260910",
+    "status": "RUNNING",
+    "active_lease": null,
+    "expected_fingerprint": "8473c67d",
+    "record_fingerprint": null
+  },
+  {
+    "run_name": "tpp10_wikipedia_matched_p020_s20260910",
+    "status": "RUNNING",
+    "active_lease": null,
+    "expected_fingerprint": "2cca0d99",
+    "record_fingerprint": null
+  },
+  {
+    "run_name": "tpp10_wikipedia_matched_p030_s20260910",
+    "status": "RUNNING",
+    "active_lease": null,
+    "expected_fingerprint": "22b4d41f",
+    "record_fingerprint": null
+  },
+  {
+    "run_name": "tpp10_wikipedia_matched_p050_s20260910",
+    "status": "RUNNING",
+    "active_lease": null,
+    "expected_fingerprint": "d3239fd4",
+    "record_fingerprint": null
+  },
+  {
+    "run_name": "tpp10_wikipedia_matched_p070_s20260910",
+    "status": "RUNNING",
+    "active_lease": null,
+    "expected_fingerprint": "5176efbf",
+    "record_fingerprint": null
+  },
+  {
+    "run_name": "tpp10_wikipedia_matched_p100_s20260910",
+    "status": "SUCCESS",
+    "active_lease": null,
+    "expected_fingerprint": "a853b1a5",
+    "record_fingerprint": "a853b1a5"
+  },
+  {
+    "run_name": "tpp10_wikipedia_target_p005_s20260910",
+    "status": "RUNNING",
+    "active_lease": "/calvinxu/tpp10-domain-sweeps-cpu4g/0:0 (marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6-140182271477440)",
+    "expected_fingerprint": "54246867",
+    "record_fingerprint": null
+  },
+  {
+    "run_name": "tpp10_wikipedia_target_p010_s20260910",
+    "status": "RUNNING",
+    "active_lease": "/calvinxu/tpp10-domain-sweeps-cpu4g/0:0 (marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6-140182263084736)",
+    "expected_fingerprint": "bbe58448",
+    "record_fingerprint": null
+  },
+  {
+    "run_name": "tpp10_wikipedia_target_p020_s20260910",
+    "status": "RUNNING",
+    "active_lease": "/calvinxu/tpp10-domain-sweeps-cpu4g/0:0 (marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6-140182246299328)",
+    "expected_fingerprint": "79ebc3c2",
+    "record_fingerprint": null
+  },
+  {
+    "run_name": "tpp10_wikipedia_target_p030_s20260910",
+    "status": "RUNNING",
+    "active_lease": "/calvinxu/tpp10-domain-sweeps-cpu4g/0:0 (marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6-140182229513920)",
+    "expected_fingerprint": "c25c16fa",
+    "record_fingerprint": null
+  },
+  {
+    "run_name": "tpp10_wikipedia_target_p050_s20260910",
+    "status": "RUNNING",
+    "active_lease": "/calvinxu/tpp10-domain-sweeps-cpu4g/0:0 (marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6-140182212728512)",
+    "expected_fingerprint": "88a32a5c",
+    "record_fingerprint": null
+  },
+  {
+    "run_name": "tpp10_wikipedia_target_p070_s20260910",
+    "status": "RUNNING",
+    "active_lease": "/calvinxu/tpp10-domain-sweeps-cpu4g/0:0 (marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6-140182195943104)",
+    "expected_fingerprint": "021fb1cb",
+    "record_fingerprint": null
+  },
+  {
+    "run_name": "tpp10_wikipedia_target_p100_s20260910",
+    "status": "RUNNING",
+    "active_lease": "/calvinxu/tpp10-domain-sweeps-cpu4g/0:0 (marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6-140182179157696)",
+    "expected_fingerprint": "12f413d5",
+    "record_fingerprint": null
+  },
+  {
+    "run_name": "tpp10_finemath_3plus_matched_p005_s20260910",
+    "status": "RUNNING",
+    "active_lease": "/calvinxu/tpp10-domain-sweeps-cpu4g/0:0 (marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6-140182162372288)",
+    "expected_fingerprint": "22cd3e74",
+    "record_fingerprint": null
+  },
+  {
+    "run_name": "tpp10_finemath_3plus_matched_p010_s20260910",
+    "status": "RUNNING",
+    "active_lease": "/calvinxu/tpp10-domain-sweeps-cpu4g/0:0 (marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6-140182145586880)",
+    "expected_fingerprint": "0ba80871",
+    "record_fingerprint": null
+  },
+  {
+    "run_name": "tpp10_finemath_3plus_matched_p020_s20260910",
+    "status": "RUNNING",
+    "active_lease": "/calvinxu/tpp10-domain-sweeps-cpu4g/0:0 (marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6-140182128801472)",
+    "expected_fingerprint": "0a03b570",
+    "record_fingerprint": null
+  },
+  {
+    "run_name": "tpp10_finemath_3plus_matched_p030_s20260910",
+    "status": "RUNNING",
+    "active_lease": "/calvinxu/tpp10-domain-sweeps-cpu4g/0:0 (marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6-140182112016064)",
+    "expected_fingerprint": "ecb1661f",
+    "record_fingerprint": null
+  },
+  {
+    "run_name": "tpp10_finemath_3plus_matched_p050_s20260910",
+    "status": "RUNNING",
+    "active_lease": "/calvinxu/tpp10-domain-sweeps-cpu4g/0:0 (marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6-140182095230656)",
+    "expected_fingerprint": "f1aac662",
+    "record_fingerprint": null
+  },
+  {
+    "run_name": "tpp10_finemath_3plus_matched_p070_s20260910",
+    "status": "RUNNING",
+    "active_lease": "/calvinxu/tpp10-domain-sweeps-cpu4g/0:0 (marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6-140182078445248)",
+    "expected_fingerprint": "d7f2adfb",
+    "record_fingerprint": null
+  },
+  {
+    "run_name": "tpp10_finemath_3plus_matched_p100_s20260910",
+    "status": "SUCCESS",
+    "active_lease": null,
+    "expected_fingerprint": "5a5a6129",
+    "record_fingerprint": "5a5a6129"
+  },
+  {
+    "run_name": "tpp10_finemath_3plus_target_p005_s20260910",
+    "status": "RUNNING",
+    "active_lease": "/calvinxu/tpp10-domain-sweeps-cpu4g/0:0 (marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6-140182053267136)",
+    "expected_fingerprint": "cd15f7bd",
+    "record_fingerprint": null
+  },
+  {
+    "run_name": "tpp10_finemath_3plus_target_p010_s20260910",
+    "status": "RUNNING",
+    "active_lease": "/calvinxu/tpp10-domain-sweeps-cpu4g/0:0 (marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6-140182044874432)",
+    "expected_fingerprint": "cddbbe61",
+    "record_fingerprint": null
+  },
+  {
+    "run_name": "tpp10_finemath_3plus_target_p020_s20260910",
+    "status": "RUNNING",
+    "active_lease": "/calvinxu/tpp10-domain-sweeps-cpu4g/0:0 (marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6-140182028089024)",
+    "expected_fingerprint": "eac63280",
+    "record_fingerprint": null
+  },
+  {
+    "run_name": "tpp10_finemath_3plus_target_p030_s20260910",
+    "status": "RUNNING",
+    "active_lease": "/calvinxu/tpp10-domain-sweeps-cpu4g/0:0 (marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6-140182011303616)",
+    "expected_fingerprint": "c1a0bf9e",
+    "record_fingerprint": null
+  },
+  {
+    "run_name": "tpp10_finemath_3plus_target_p050_s20260910",
+    "status": "RUNNING",
+    "active_lease": "/calvinxu/tpp10-domain-sweeps-cpu4g/0:0 (marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6-140181994518208)",
+    "expected_fingerprint": "ccaa1599",
+    "record_fingerprint": null
+  },
+  {
+    "run_name": "tpp10_finemath_3plus_target_p070_s20260910",
+    "status": "RUNNING",
+    "active_lease": "/calvinxu/tpp10-domain-sweeps-cpu4g/0:0 (marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6-140181977732800)",
+    "expected_fingerprint": "066c48ff",
+    "record_fingerprint": null
+  },
+  {
+    "run_name": "tpp10_finemath_3plus_target_p100_s20260910",
+    "status": "RUNNING",
+    "active_lease": "/calvinxu/tpp10-domain-sweeps-cpu4g/0:0 (marin-cpu-vm-e2-highmem-2-ondemand-us-ce-20260907-2204-845b20a6-140181960947392)",
+    "expected_fingerprint": "9c2ae241",
+    "record_fingerprint": null
+  }
+]

@@ -1,0 +1,87 @@
+{
+  "pilot_measurements.csv": {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1788927357.5958056,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/pilot_measurements.csv",
+      "fieldbook.local_size_at_capture": 2013
+    },
+    "content_hash": "sha256:9e89c2042b8619e9c5095d1b3986c95aeccad85f0d21a34bf6b1e588868017be",
+    "created_at": "2026-09-09T04:18:10Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+    "id": "art_01m2266eb6kfk1v403xp9q71wc",
+    "job_id": null,
+    "run_id": null,
+    "type": "metric-table",
+    "updated_at": "2026-09-09T04:18:10Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/pilot_measurements.csv"
+  },
+  "pilot_results/analysis.json": {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1788927367.7765481,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/pilot_results/analysis.json",
+      "fieldbook.local_size_at_capture": 5390
+    },
+    "content_hash": "sha256:6d74b3f327f2c6b2006cca88aeddd44688bc52a655fd5a3196046bd846af98fd",
+    "created_at": "2026-09-09T04:18:10Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+    "id": "art_01m2266emc3dg3gjd431vmjas3",
+    "job_id": null,
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-09T04:18:10Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/pilot_results/analysis.json"
+  },
+  "pilot_completion_snapshot.json": {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1788927417.7033067,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/pilot_completion_snapshot.json",
+      "fieldbook.local_size_at_capture": 23882
+    },
+    "content_hash": "sha256:45d71008ecafc81689fc46793238fd01a87c2139f19aa4d013a96bc58c196499",
+    "created_at": "2026-09-09T04:18:10Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+    "id": "art_01m2266exgy2z4v2hq3ag913tn",
+    "job_id": null,
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-09T04:18:10Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/pilot_completion_snapshot.json"
+  },
+  "pilot_results/curves.png": {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1788927368.6742237,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/pilot_results/curves.png",
+      "fieldbook.local_size_at_capture": 73162
+    },
+    "content_hash": "sha256:cd9a8e9982ecede38fef79f5d79fab1b03c25e4580c9c991e282c86b7464b5c3",
+    "created_at": "2026-09-09T04:18:11Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+    "id": "art_01m2266f6eaem10z7wh5peeyt3",
+    "job_id": null,
+    "run_id": null,
+    "type": "plot",
+    "updated_at": "2026-09-09T04:18:11Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/pilot_results/curves.png"
+  },
+  "pilot_results/excess_curves.png": {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1788927368.832825,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/pilot_results/excess_curves.png",
+      "fieldbook.local_size_at_capture": 80306
+    },
+    "content_hash": "sha256:17fbd12e66e830229cd8aae71d3213a024af73191c88f0a7d306f3134d00302c",
+    "created_at": "2026-09-09T04:18:11Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+    "id": "art_01m2266ff0r772vaxpmcrgvw0h",
+    "job_id": null,
+    "run_id": null,
+    "type": "plot",
+    "updated_at": "2026-09-09T04:18:11Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/pilot_results/excess_curves.png"
+  }
+}

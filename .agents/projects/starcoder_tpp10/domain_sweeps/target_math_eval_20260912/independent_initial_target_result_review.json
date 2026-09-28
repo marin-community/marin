@@ -1,0 +1,265 @@
+{
+  "status": "pass",
+  "checked_at": "2026-09-12T08:24:47.294721+00:00",
+  "spec_sha256": "66f74c1e8f6f2f360270726605acdead4e1afbd211590e2fa24dbf094b8adc6e",
+  "receipt_sha256": "883ea500b22b53a7cd157174f7034a53498c2206c34f1d5f904ba773f678ca05",
+  "unique_target_checkpoints": 11,
+  "displayed_target_points": 12,
+  "verified_target_receipts": [
+    {
+      "run_name": "tpp10_target_p000_s20260910",
+      "checkpoint": "gs://marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p000_s20260910/2026.09.09/checkpoints/step-11490",
+      "metadata_sha256": "ad70eb43511b131848fd20de092a1ad0a6400dfbd8dbcaf03c7acace04f1d4b1",
+      "paloma_absolute_delta": 7.152557373046875e-07,
+      "population_sha256": "0b8b22970794a9bedb4f0cb55bb5643c38f9d9bf43e7c19c0bb6aec1f59376eb",
+      "canonical_result_sha256": "8823184eef9ac4202918b8a28eb38d6f04b0f677aa6f12977893b670ee6e6d27",
+      "displayed_copies": 2,
+      "perplexity": {
+        "math500": 8.645693523573724,
+        "gsm8k": 7.988465095664273
+      }
+    },
+    {
+      "run_name": "tpp10_wikipedia_target_p005_s20260910",
+      "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_target_p005_s20260910/2026.09.11/checkpoints/step-11490",
+      "metadata_sha256": "f756ae6566139dbc02418a6be737dabb293dcf654980fc9264842463115cac1d",
+      "paloma_absolute_delta": 0.0,
+      "population_sha256": "0b8b22970794a9bedb4f0cb55bb5643c38f9d9bf43e7c19c0bb6aec1f59376eb",
+      "canonical_result_sha256": "787e55f6870ff0cf750862137d59ce57ed00538e19c64c44fc6eeed64a8c0272",
+      "displayed_copies": 1,
+      "perplexity": {
+        "math500": 8.197776843538096,
+        "gsm8k": 7.7237745723323785
+      }
+    },
+    {
+      "run_name": "tpp10_wikipedia_target_p010_s20260910",
+      "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_target_p010_s20260910/2026.09.11/checkpoints/step-11490",
+      "metadata_sha256": "b7d23a133c682197ada827292a0b88c1a27be2f7ba1821f905ec57a73ab33ba3",
+      "paloma_absolute_delta": 0.0,
+      "population_sha256": "0b8b22970794a9bedb4f0cb55bb5643c38f9d9bf43e7c19c0bb6aec1f59376eb",
+      "canonical_result_sha256": "d0314b51fc0246d1f91afb59ef797d4ce9b24cfb2de018292cc5734dc2bc41c5",
+      "displayed_copies": 1,
+      "perplexity": {
+        "math500": 8.105457834697065,
+        "gsm8k": 7.756121620306826
+      }
+    },
+    {
+      "run_name": "tpp10_wikipedia_target_p020_s20260910",
+      "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_target_p020_s20260910/2026.09.11/checkpoints/step-11490",
+      "metadata_sha256": "6daee657cb383a0be19037c46bbe4234de43c6f0b127982c1954ca7aea6516a9",
+      "paloma_absolute_delta": 4.76837158203125e-07,
+      "population_sha256": "0b8b22970794a9bedb4f0cb55bb5643c38f9d9bf43e7c19c0bb6aec1f59376eb",
+      "canonical_result_sha256": "2ad670c3ddb552105b151dc8ce4d42f28d6ea93ea1207c90acb061870f0b61a2",
+      "displayed_copies": 1,
+      "perplexity": {
+        "math500": 7.887541509797417,
+        "gsm8k": 7.6110115765796875
+      }
+    },
+    {
+      "run_name": "tpp10_wikipedia_target_p030_s20260910",
+      "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_target_p030_s20260910/2026.09.11/checkpoints/step-11490",
+      "metadata_sha256": "0e8191f28430b1ea7d0958b386f499dd6db397a0dc11993d9614238f46128889",
+      "paloma_absolute_delta": 1.1920928955078125e-07,
+      "population_sha256": "0b8b22970794a9bedb4f0cb55bb5643c38f9d9bf43e7c19c0bb6aec1f59376eb",
+      "canonical_result_sha256": "fa433f84131799561853c53d70dccfd1e62e45a4e21f7ecc3b786d6d34620710",
+      "displayed_copies": 1,
+      "perplexity": {
+        "math500": 7.8907202567390655,
+        "gsm8k": 7.77411301442898
+      }
+    },
+    {
+      "run_name": "tpp10_wikipedia_target_p050_s20260910",
+      "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_target_p050_s20260910/2026.09.11/checkpoints/step-11490",
+      "metadata_sha256": "3e0c5adf746121142d85921509b00117aafc3934e6ac28d78cc2eb40d2c3b063",
+      "paloma_absolute_delta": 3.5762786865234375e-07,
+      "population_sha256": "0b8b22970794a9bedb4f0cb55bb5643c38f9d9bf43e7c19c0bb6aec1f59376eb",
+      "canonical_result_sha256": "c41fc30ad1ad4ae1f96b6d9578c44bca5d90be4826965b28572cf0734c633f47",
+      "displayed_copies": 1,
+      "perplexity": {
+        "math500": 7.832023167983709,
+        "gsm8k": 8.148346610329602
+      }
+    },
+    {
+      "run_name": "tpp10_wikipedia_target_p070_s20260910",
+      "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_target_p070_s20260910/2026.09.11/checkpoints/step-11490",
+      "metadata_sha256": "6819169836ce9e27cb76fc641c99521bc7f03e355828a1c3c5ebe9ea40d5518b",
+      "paloma_absolute_delta": 1.1920928955078125e-07,
+      "population_sha256": "0b8b22970794a9bedb4f0cb55bb5643c38f9d9bf43e7c19c0bb6aec1f59376eb",
+      "canonical_result_sha256": "f7e05800e93366b20f28ad1187a03a5ec2f8eb5442e52af5495cb3b41f637b59",
+      "displayed_copies": 1,
+      "perplexity": {
+        "math500": 8.236367176273847,
+        "gsm8k": 7.9932889949487
+      }
+    },
+    {
+      "run_name": "tpp10_wikipedia_target_p100_s20260910",
+      "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_wikipedia_target_p100_s20260910/2026.09.11/checkpoints/step-11490",
+      "metadata_sha256": "bff031acfc62b6e5c495b9b8f5e814c153b416877e31b32259e90c4cdf577fce",
+      "paloma_absolute_delta": 9.5367431640625e-07,
+      "population_sha256": "0b8b22970794a9bedb4f0cb55bb5643c38f9d9bf43e7c19c0bb6aec1f59376eb",
+      "canonical_result_sha256": "e34af17da6b8a8d711e6cc24bc928a625eca708a5c8647e2c29418f3f0b10add",
+      "displayed_copies": 1,
+      "perplexity": {
+        "math500": 16.02913275229814,
+        "gsm8k": 58.21342516817411
+      }
+    },
+    {
+      "run_name": "tpp10_finemath_3plus_target_p005_s20260910",
+      "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_target_p005_s20260910/2026.09.11/checkpoints/step-11490",
+      "metadata_sha256": "5875919f0f875c2dbba9eb8835abbfb35004b6dd63eef72f79e0bd7714726e41",
+      "paloma_absolute_delta": 4.76837158203125e-07,
+      "population_sha256": "0b8b22970794a9bedb4f0cb55bb5643c38f9d9bf43e7c19c0bb6aec1f59376eb",
+      "canonical_result_sha256": "252b0927c730bdf3d16956c20c09df814e4813d6b359ae4e8893d1eecf974243",
+      "displayed_copies": 1,
+      "perplexity": {
+        "math500": 5.4986610058003675,
+        "gsm8k": 6.033384960513381
+      }
+    },
+    {
+      "run_name": "tpp10_finemath_3plus_target_p010_s20260910",
+      "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_target_p010_s20260910/2026.09.11/checkpoints/step-11490",
+      "metadata_sha256": "8ff37f000f7a454284cd122e1a677cfd73657b06be68340dbaea741e07953e39",
+      "paloma_absolute_delta": 3.5762786865234375e-07,
+      "population_sha256": "0b8b22970794a9bedb4f0cb55bb5643c38f9d9bf43e7c19c0bb6aec1f59376eb",
+      "canonical_result_sha256": "dce8dc8f87613c999ce19f14d7e942638671443b27eb83472da0a3222755c1a8",
+      "displayed_copies": 1,
+      "perplexity": {
+        "math500": 4.92561628547383,
+        "gsm8k": 5.811804758867895
+      }
+    },
+    {
+      "run_name": "tpp10_finemath_3plus_target_p020_s20260910",
+      "checkpoint": "gs://marin-us-central1/checkpoints/tpp10_domain_sweeps/tpp10_finemath_3plus_target_p020_s20260910/2026.09.11/checkpoints/step-11490",
+      "metadata_sha256": "1e0272d71f9ce2b9d917a83404a839808eb7249cafc2263bd61bdcdda00325fd",
+      "paloma_absolute_delta": 1.1920928955078125e-07,
+      "population_sha256": "0b8b22970794a9bedb4f0cb55bb5643c38f9d9bf43e7c19c0bb6aec1f59376eb",
+      "canonical_result_sha256": "19448fb35d9f6dadcf5fd1e1c6a8939dd156d6b74bae7e127588e1451da42cbb",
+      "displayed_copies": 1,
+      "perplexity": {
+        "math500": 4.461627802564154,
+        "gsm8k": 5.202236457670119
+      }
+    }
+  ],
+  "maximum_target_paloma_absolute_delta": 9.5367431640625e-07,
+  "paloma_tolerance": 5e-05,
+  "population_counts": {
+    "math500": {
+      "problems": 500,
+      "windows": 500,
+      "scored_tokens": 112697,
+      "long_problems": 0,
+      "max_problem_tokens": 1614,
+      "tokenized_sha256": "4826e8b1577801ca2703e0c5ba6c47745c71754ee36b389c6e86824003316d12"
+    },
+    "gsm8k": {
+      "problems": 1319,
+      "windows": 1319,
+      "scored_tokens": 173832,
+      "long_problems": 0,
+      "max_problem_tokens": 575,
+      "tokenized_sha256": "d979b3bab480eb8229eb811ae77b1761a92b4a2e8d07b986ba90020db4e9c529"
+    }
+  },
+  "readouts": {
+    "wikipedia/matched": {
+      "math500": {
+        "points": 8,
+        "complete_grid": true,
+        "percent": 30,
+        "epochs": 4.768359375,
+        "perplexity": 21.174634791296235,
+        "next_best_loss_gap": 0.03229069709777832,
+        "description": "observed grid minimum"
+      },
+      "gsm8k": {
+        "points": 8,
+        "complete_grid": true,
+        "percent": 20,
+        "epochs": 3.1619140625,
+        "perplexity": 18.62545724518157,
+        "next_best_loss_gap": 0.03528451919555664,
+        "description": "observed grid minimum"
+      }
+    },
+    "wikipedia/target": {
+      "math500": {
+        "points": 8,
+        "complete_grid": true,
+        "percent": 50,
+        "epochs": 7.937187930440771,
+        "perplexity": 7.832023167983709,
+        "next_best_loss_gap": 0.007063627243041992,
+        "description": "observed grid minimum"
+      },
+      "gsm8k": {
+        "points": 8,
+        "complete_grid": true,
+        "percent": 20,
+        "epochs": 3.1609740874655645,
+        "perplexity": 7.6110115765796875,
+        "next_best_loss_gap": 0.014707088470458984,
+        "description": "observed grid minimum"
+      }
+    },
+    "finemath_3plus/matched": {
+      "math500": {
+        "points": 8,
+        "complete_grid": true,
+        "percent": 70,
+        "epochs": 11.098046875,
+        "perplexity": 7.53398920849668,
+        "next_best_loss_gap": 0.04592323303222656,
+        "description": "observed grid minimum"
+      },
+      "gsm8k": {
+        "points": 8,
+        "complete_grid": true,
+        "percent": 70,
+        "epochs": 11.098046875,
+        "perplexity": 11.439868184796492,
+        "next_best_loss_gap": 0.051683902740478516,
+        "description": "observed grid minimum"
+      }
+    },
+    "finemath_3plus/target": {
+      "math500": {
+        "points": 4,
+        "complete_grid": false,
+        "percent": 20,
+        "epochs": 3.1609740874655645,
+        "perplexity": 4.461627802564154,
+        "next_best_loss_gap": 0.09893572330474854,
+        "description": "lowest observed; incomplete grid"
+      },
+      "gsm8k": {
+        "points": 4,
+        "complete_grid": false,
+        "percent": 20,
+        "epochs": 3.1609740874655645,
+        "perplexity": 5.202236457670119,
+        "next_best_loss_gap": 0.1108025312423706,
+        "description": "lowest observed; incomplete grid"
+      }
+    }
+  },
+  "figure_sha256": {
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/target_math_eval_20260912/results/66f74c1e8f6f2f360270726605acdead4e1afbd211590e2fa24dbf094b8adc6e/math_likelihood_proxy_target.png": "1e2cdf4b971526ca220fd13dee21ca5a25e6067065eb69acfb088bcc3221ade1",
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/target_math_eval_20260912/results/66f74c1e8f6f2f360270726605acdead4e1afbd211590e2fa24dbf094b8adc6e/math_likelihood_proxy_target.pdf": "0a2ee786725a5770ea11c8c3d81ee42396508f4fee783364e9ed3d880f7bad30"
+  },
+  "visual_review": "All four panels inspected; point coverage, scale-specific curves and minimum annotations agree. FineMath targets stop at20percent and are explicitly marked incomplete; no clipped labels or obscured points observed.",
+  "limitations": [
+    "FineMath target observed range ends at3.160974epochs; its complete-grid optimum is unknown.",
+    "Single-seed grid minima; no fitted curves or uncertainty estimates.",
+    "Wikipedia target MATH500 minimum is shallow: next-best20percent differs by0.0070636272NLL."
+  ]
+}

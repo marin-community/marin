@@ -1,0 +1,14 @@
+{
+  "status": "passed",
+  "scope": "Local synthetic shards through the real consolidation and training cache reader; no remote preparation.",
+  "tokens": 4096,
+  "sequences": 2,
+  "observed_tokens": [
+    [
+      10
+    ],
+    [
+      11
+    ]
+  ]
+}

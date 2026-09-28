@@ -1,0 +1,16 @@
+{
+  "size_bytes": 24146010,
+  "sha256": "d251569f1fea6d484253cda7f9945dda8c9a4632541aa8c32888db8c627a2735",
+  "verified_pins": 28,
+  "extra_includes": [
+    ".agents/projects/starcoder_tpp10/releases/refinement.json"
+  ],
+  "excludes": [
+    "^(checkpoints|logs|wandb)/",
+    "^experiments/domain_phase_mix/exploratory/.*(?<!\\.py)$",
+    "^\\.agents/(?!projects/starcoder_tpp10/releases/).*",
+    "^(docs|tests)/",
+    "^lib/[^/]+/tests/",
+    "^experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/"
+  ]
+}

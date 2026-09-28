@@ -1,0 +1,13 @@
+{
+  "collected_utc": "2026-09-13T14:23:04.978344+00:00",
+  "training_count": 10,
+  "evaluation_count": 10,
+  "checkpoint_step": 3006,
+  "all_permanent": true,
+  "uncheatable_component_count": 7,
+  "table9_component_count": 51,
+  "native_leaf_task_count": 104,
+  "frozen_prediction_sha256": "e0cbf8d7876691575002bbd920741cbc1aaa2ba1bcefe189b1283d0131fa181d",
+  "metrics_comparability": "OBE native scoring unchanged; raw Uncheatable schema2 aggregate differs from frozen objective; bridge required.",
+  "training_or_model_refit": false
+}

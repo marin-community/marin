@@ -1,0 +1,13 @@
+{
+  "wandb_run": "marin-community/marin/epmatch_unmatched_c000_s20260711",
+  "file": "requirements.txt",
+  "local_path": ".agents/projects/starcoder_epoch_matching/pilot_runtime_metadata/requirements.txt",
+  "bytes": 5354,
+  "sha256": "389ac7accad56fb3b644a7e4fbaab94a2ea0b3900d041efeae005d0ae35f09d1",
+  "versions": [
+    "libtpu==0.0.46",
+    "numpy==2.3.5",
+    "jaxlib==0.11.1",
+    "jax==0.11.1"
+  ]
+}

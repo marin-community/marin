@@ -1,0 +1,254 @@
+[
+  {
+    "attrs": {
+      "policy.epoch_cap": 6,
+      "policy.kappa": 0.25,
+      "policy.kl": 0,
+      "policy.target": "uncheatable",
+      "training.data_seed": 666200,
+      "training.target_flops": 3e+18,
+      "training.trainer_seed": 0
+    },
+    "created_at": "2026-09-06T12:34:04Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": true,
+    "experiment_id": "exp_01m1vbajfrdebbsatntj4sm00z",
+    "experiment_ids": [
+      "exp_01m1vbajfrdebbsatntj4sm00z"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m1vbca39pazs3b9y1dr21ka7",
+    "idempotency_key": "delphi-coupling-validation-20260906.cwspu_u_k025_cap06",
+    "kind": "datapoint",
+    "name": "cwspu_u_k025_cap06",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-06T12:34:04Z"
+  },
+  {
+    "attrs": {
+      "policy.epoch_cap": 6,
+      "policy.kappa": 0.5,
+      "policy.kl": 0,
+      "policy.target": "uncheatable",
+      "training.data_seed": 666200,
+      "training.target_flops": 3e+18,
+      "training.trainer_seed": 0
+    },
+    "created_at": "2026-09-06T12:34:32Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m1vbajfrdebbsatntj4sm00z",
+    "experiment_ids": [
+      "exp_01m1vbajfrdebbsatntj4sm00z"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m1vbd4zqgkabsx74vr3vg1ac",
+    "idempotency_key": "delphi-coupling-validation-20260906.cwspu_u_k05_cap06",
+    "kind": "datapoint",
+    "name": "cwspu_u_k05_cap06",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-06T12:34:32Z"
+  },
+  {
+    "attrs": {
+      "policy.epoch_cap": 6,
+      "policy.kappa": 1,
+      "policy.kl": 0,
+      "policy.target": "uncheatable",
+      "training.data_seed": 666200,
+      "training.target_flops": 3e+18,
+      "training.trainer_seed": 0
+    },
+    "created_at": "2026-09-06T12:34:32Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m1vbajfrdebbsatntj4sm00z",
+    "experiment_ids": [
+      "exp_01m1vbajfrdebbsatntj4sm00z"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m1vbd526m7z3xan5tnxn8q9y",
+    "idempotency_key": "delphi-coupling-validation-20260906.cwspu_u_k1_cap06",
+    "kind": "datapoint",
+    "name": "cwspu_u_k1_cap06",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-06T12:34:32Z"
+  },
+  {
+    "attrs": {
+      "policy.epoch_cap": 6,
+      "policy.kappa": 0.25,
+      "policy.kl": 0,
+      "policy.target": "table9",
+      "training.data_seed": 662009,
+      "training.target_flops": 3e+18,
+      "training.trainer_seed": 0
+    },
+    "created_at": "2026-09-06T12:34:32Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m1vbajfrdebbsatntj4sm00z",
+    "experiment_ids": [
+      "exp_01m1vbajfrdebbsatntj4sm00z"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m1vbd550bcyyx0s3q3k7wgkg",
+    "idempotency_key": "delphi-coupling-validation-20260906.cwspu_t9_k025_cap06",
+    "kind": "datapoint",
+    "name": "cwspu_t9_k025_cap06",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-06T12:34:32Z"
+  },
+  {
+    "attrs": {
+      "policy.epoch_cap": 6,
+      "policy.kappa": 0.5,
+      "policy.kl": 0,
+      "policy.target": "table9",
+      "training.data_seed": 662009,
+      "training.target_flops": 3e+18,
+      "training.trainer_seed": 0
+    },
+    "created_at": "2026-09-06T12:34:32Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m1vbajfrdebbsatntj4sm00z",
+    "experiment_ids": [
+      "exp_01m1vbajfrdebbsatntj4sm00z"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m1vbd57tcrvyhsfgb9ccmakq",
+    "idempotency_key": "delphi-coupling-validation-20260906.cwspu_t9_k05_cap06",
+    "kind": "datapoint",
+    "name": "cwspu_t9_k05_cap06",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-06T12:34:32Z"
+  },
+  {
+    "attrs": {
+      "policy.epoch_cap": 6,
+      "policy.kappa": 1,
+      "policy.kl": 0,
+      "policy.target": "table9",
+      "training.data_seed": 662009,
+      "training.target_flops": 3e+18,
+      "training.trainer_seed": 0
+    },
+    "created_at": "2026-09-06T12:34:32Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m1vbajfrdebbsatntj4sm00z",
+    "experiment_ids": [
+      "exp_01m1vbajfrdebbsatntj4sm00z"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m1vbd5akc909f1xesfdrmscj",
+    "idempotency_key": "delphi-coupling-validation-20260906.cwspu_t9_k1_cap06",
+    "kind": "datapoint",
+    "name": "cwspu_t9_k1_cap06",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-06T12:34:32Z"
+  },
+  {
+    "attrs": {
+      "policy.epoch_cap": 8,
+      "policy.kappa": 0.25,
+      "policy.kl": 0,
+      "policy.target": "table9",
+      "training.data_seed": 662009,
+      "training.target_flops": 3e+18,
+      "training.trainer_seed": 0
+    },
+    "created_at": "2026-09-06T12:34:32Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m1vbajfrdebbsatntj4sm00z",
+    "experiment_ids": [
+      "exp_01m1vbajfrdebbsatntj4sm00z"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m1vbd5demaqcvabn8576187r",
+    "idempotency_key": "delphi-coupling-validation-20260906.cwspu_t9_k025_cap08",
+    "kind": "datapoint",
+    "name": "cwspu_t9_k025_cap08",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-06T12:34:32Z"
+  },
+  {
+    "attrs": {
+      "policy.epoch_cap": 8,
+      "policy.kappa": 0.5,
+      "policy.kl": 0,
+      "policy.target": "table9",
+      "training.data_seed": 662009,
+      "training.target_flops": 3e+18,
+      "training.trainer_seed": 0
+    },
+    "created_at": "2026-09-06T12:34:32Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m1vbajfrdebbsatntj4sm00z",
+    "experiment_ids": [
+      "exp_01m1vbajfrdebbsatntj4sm00z"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m1vbd5g7sqybh6f6wtaqbkjd",
+    "idempotency_key": "delphi-coupling-validation-20260906.cwspu_t9_k05_cap08",
+    "kind": "datapoint",
+    "name": "cwspu_t9_k05_cap08",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-06T12:34:32Z"
+  },
+  {
+    "attrs": {
+      "policy.epoch_cap": 8,
+      "policy.kappa": 1,
+      "policy.kl": 0,
+      "policy.target": "table9",
+      "training.data_seed": 662009,
+      "training.target_flops": 3e+18,
+      "training.trainer_seed": 0
+    },
+    "created_at": "2026-09-06T12:34:32Z",
+    "deleted_at": null,
+    "description": null,
+    "existed": false,
+    "experiment_id": "exp_01m1vbajfrdebbsatntj4sm00z",
+    "experiment_ids": [
+      "exp_01m1vbajfrdebbsatntj4sm00z"
+    ],
+    "external_id": null,
+    "external_system": null,
+    "id": "run_01m1vbd5js1hp19bttd5jekr02",
+    "idempotency_key": "delphi-coupling-validation-20260906.cwspu_t9_k1_cap08",
+    "kind": "datapoint",
+    "name": "cwspu_t9_k1_cap08",
+    "parent_run_id": null,
+    "status": "active",
+    "updated_at": "2026-09-06T12:34:32Z"
+  }
+]

@@ -1,0 +1,538 @@
+{
+  "schema_version": 1,
+  "region": "us-east5",
+  "zone": "us-east5-b",
+  "tpu_type": "v6e-4",
+  "max_length": 8192,
+  "batch_size": 8,
+  "requests_uri": "gs://marin-us-east5/raw/eval-datasets/table9_accuracy/20260914/707a2ddb4e9bf36a923660d364b453c2871f06e531dcc3c3e324ecf89c9d0bc5",
+  "request_manifest": {
+    "schema_version": 1,
+    "kind": "mt_mbpp_signature",
+    "native_request_set": "gs://marin-us-east5/raw/eval-datasets/olmo_base_eval_table9/v2",
+    "sources": {
+      "google-research-datasets/mbpp": "4bb6404fdc6cacfda99d4ac4205087b89d32030c",
+      "allenai/multilingual_mbpp": "c86b037e7d20e705f3595b1cbb9db993681ca181"
+    },
+    "prompt_format": {
+      "signature_line": "Function signature: `{signature}`",
+      "shots": 3
+    },
+    "tasks": {
+      "mt_mbpp_bash": {
+        "count": 500,
+        "metric": "pass@1",
+        "task_spec": "mt_mbpp_bash:signature",
+        "generation": {
+          "max_gen_toks": 1024,
+          "temperature": 0.0,
+          "seed": 0,
+          "n": 1,
+          "until": [
+            "```"
+          ]
+        },
+        "file": "mt_mbpp_bash.json.gz",
+        "sha256": "b028d52816b37b44a26446639cfed8151ca90c7794a9047d784329991f17a9ad",
+        "size": 71648
+      },
+      "mt_mbpp_c": {
+        "count": 500,
+        "metric": "pass@1",
+        "task_spec": "mt_mbpp_c:signature",
+        "generation": {
+          "max_gen_toks": 1024,
+          "temperature": 0.0,
+          "seed": 0,
+          "n": 1,
+          "until": [
+            "```"
+          ]
+        },
+        "file": "mt_mbpp_c.json.gz",
+        "sha256": "a89de6c55f558d74c13979166006f2ff2fadc32acf54960ba422c2c1c37f7a36",
+        "size": 91418
+      },
+      "mt_mbpp_cpp": {
+        "count": 500,
+        "metric": "pass@1",
+        "task_spec": "mt_mbpp_cpp:signature",
+        "generation": {
+          "max_gen_toks": 1024,
+          "temperature": 0.0,
+          "seed": 0,
+          "n": 1,
+          "until": [
+            "```"
+          ]
+        },
+        "file": "mt_mbpp_cpp.json.gz",
+        "sha256": "28383c6ca8523e74f2f43de1e177bbb93ea9481fd6011f4305e0432b9d00fa98",
+        "size": 76491
+      },
+      "mt_mbpp_csharp": {
+        "count": 500,
+        "metric": "pass@1",
+        "task_spec": "mt_mbpp_csharp:signature",
+        "generation": {
+          "max_gen_toks": 1024,
+          "temperature": 0.0,
+          "seed": 0,
+          "n": 1,
+          "until": [
+            "```"
+          ]
+        },
+        "file": "mt_mbpp_csharp.json.gz",
+        "sha256": "af961ad4b7940d09b6db150d89cf6b83d2a0c8ac9bab40be1a7a11eed0b1541e",
+        "size": 77732
+      },
+      "mt_mbpp_go": {
+        "count": 500,
+        "metric": "pass@1",
+        "task_spec": "mt_mbpp_go:signature",
+        "generation": {
+          "max_gen_toks": 1024,
+          "temperature": 0.0,
+          "seed": 0,
+          "n": 1,
+          "until": [
+            "```"
+          ]
+        },
+        "file": "mt_mbpp_go.json.gz",
+        "sha256": "2383636f37e7bb4d047efbb6582f4236ed2c860d849c0989d09050d762a01224",
+        "size": 75871
+      },
+      "mt_mbpp_haskell": {
+        "count": 500,
+        "metric": "pass@1",
+        "task_spec": "mt_mbpp_haskell:signature",
+        "generation": {
+          "max_gen_toks": 1024,
+          "temperature": 0.0,
+          "seed": 0,
+          "n": 1,
+          "until": [
+            "```"
+          ]
+        },
+        "file": "mt_mbpp_haskell.json.gz",
+        "sha256": "0238dcd69f2f55b834340958c350513137080b5514d193c2f12d1d32d3cb4dff",
+        "size": 65084
+      },
+      "mt_mbpp_java": {
+        "count": 500,
+        "metric": "pass@1",
+        "task_spec": "mt_mbpp_java:signature",
+        "generation": {
+          "max_gen_toks": 1024,
+          "temperature": 0.0,
+          "seed": 0,
+          "n": 1,
+          "until": [
+            "```"
+          ]
+        },
+        "file": "mt_mbpp_java.json.gz",
+        "sha256": "be52d54db15f41cfe4fd68ad308a337f893ae389aa07de8732062e4196a46a76",
+        "size": 80350
+      },
+      "mt_mbpp_javascript": {
+        "count": 500,
+        "metric": "pass@1",
+        "task_spec": "mt_mbpp_javascript:signature",
+        "generation": {
+          "max_gen_toks": 1024,
+          "temperature": 0.0,
+          "seed": 0,
+          "n": 1,
+          "until": [
+            "```"
+          ]
+        },
+        "file": "mt_mbpp_javascript.json.gz",
+        "sha256": "44a39bc35ae4eeaf022e09d53521f4773247a40463faeaf81b48398b53845015",
+        "size": 71700
+      },
+      "mt_mbpp_matlab": {
+        "count": 500,
+        "metric": "pass@1",
+        "task_spec": "mt_mbpp_matlab:signature",
+        "generation": {
+          "max_gen_toks": 1024,
+          "temperature": 0.0,
+          "seed": 0,
+          "n": 1,
+          "until": [
+            "```"
+          ]
+        },
+        "file": "mt_mbpp_matlab.json.gz",
+        "sha256": "ed9d9bc0c592a3e361bf75fd537f8f2615484baf0c7782959f298c04e75ef505",
+        "size": 61566
+      },
+      "mt_mbpp_php": {
+        "count": 500,
+        "metric": "pass@1",
+        "task_spec": "mt_mbpp_php:signature",
+        "generation": {
+          "max_gen_toks": 1024,
+          "temperature": 0.0,
+          "seed": 0,
+          "n": 1,
+          "until": [
+            "```"
+          ]
+        },
+        "file": "mt_mbpp_php.json.gz",
+        "sha256": "4e3c91e09c8232fe34c8a130d9f74a203c17b3d3e53b9ced4739d1c0924e5621",
+        "size": 65225
+      },
+      "mt_mbpp_python": {
+        "count": 500,
+        "metric": "pass@1",
+        "task_spec": "mt_mbpp_python:signature",
+        "generation": {
+          "max_gen_toks": 1024,
+          "temperature": 0.0,
+          "seed": 0,
+          "n": 1,
+          "until": [
+            "```"
+          ]
+        },
+        "file": "mt_mbpp_python.json.gz",
+        "sha256": "1656fdbf9dc7e015890f0a75892b27be8a90ef5bf4b792c97c86ee717417475e",
+        "size": 58638
+      },
+      "mt_mbpp_r": {
+        "count": 500,
+        "metric": "pass@1",
+        "task_spec": "mt_mbpp_r:signature",
+        "generation": {
+          "max_gen_toks": 1024,
+          "temperature": 0.0,
+          "seed": 0,
+          "n": 1,
+          "until": [
+            "```"
+          ]
+        },
+        "file": "mt_mbpp_r.json.gz",
+        "sha256": "206637b71d7dabacb34cb827f10ed3d3f685a046928f7b6dd08d1bb527b933f4",
+        "size": 60140
+      },
+      "mt_mbpp_ruby": {
+        "count": 500,
+        "metric": "pass@1",
+        "task_spec": "mt_mbpp_ruby:signature",
+        "generation": {
+          "max_gen_toks": 1024,
+          "temperature": 0.0,
+          "seed": 0,
+          "n": 1,
+          "until": [
+            "```"
+          ]
+        },
+        "file": "mt_mbpp_ruby.json.gz",
+        "sha256": "f6937e14e440f07f2d9eb7b66c154917809a6afda90cd10732540b0116926090",
+        "size": 54667
+      },
+      "mt_mbpp_rust": {
+        "count": 500,
+        "metric": "pass@1",
+        "task_spec": "mt_mbpp_rust:signature",
+        "generation": {
+          "max_gen_toks": 1024,
+          "temperature": 0.0,
+          "seed": 0,
+          "n": 1,
+          "until": [
+            "```"
+          ]
+        },
+        "file": "mt_mbpp_rust.json.gz",
+        "sha256": "b1936c201db6aca27257800ae7795ce7048a19c4324bf3cb6e83621feef55386",
+        "size": 71854
+      },
+      "mt_mbpp_scala": {
+        "count": 500,
+        "metric": "pass@1",
+        "task_spec": "mt_mbpp_scala:signature",
+        "generation": {
+          "max_gen_toks": 1024,
+          "temperature": 0.0,
+          "seed": 0,
+          "n": 1,
+          "until": [
+            "```"
+          ]
+        },
+        "file": "mt_mbpp_scala.json.gz",
+        "sha256": "9af0c8c2fffb123650d34e8027880f0dda3158c9671759b2091b7c041521f8ce",
+        "size": 66340
+      },
+      "mt_mbpp_swift": {
+        "count": 500,
+        "metric": "pass@1",
+        "task_spec": "mt_mbpp_swift:signature",
+        "generation": {
+          "max_gen_toks": 1024,
+          "temperature": 0.0,
+          "seed": 0,
+          "n": 1,
+          "until": [
+            "```"
+          ]
+        },
+        "file": "mt_mbpp_swift.json.gz",
+        "sha256": "3a678504ec164d6a16c1f9abba1dc2543f10e417272720b2a15b657bae1b6535",
+        "size": 81772
+      },
+      "mt_mbpp_typescript": {
+        "count": 500,
+        "metric": "pass@1",
+        "task_spec": "mt_mbpp_typescript:signature",
+        "generation": {
+          "max_gen_toks": 1024,
+          "temperature": 0.0,
+          "seed": 0,
+          "n": 1,
+          "until": [
+            "```"
+          ]
+        },
+        "file": "mt_mbpp_typescript.json.gz",
+        "sha256": "0faaa5bf301f7d217f3da0ecf0f4807d43e654f9898e81ac6bf9b6aed7913a92",
+        "size": 79347
+      }
+    }
+  },
+  "output_root": "gs://marin-us-east5/experiments/table9_accuracy_20260914",
+  "rows": [
+    {
+      "name": "proportional_1e21-2f1a48",
+      "method": "Proportional",
+      "checkpoint_uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/proportional_1e21-2f1a48/hf/step-22056",
+      "checkpoint_step": 22056,
+      "checkpoint_files": {
+        "chat_template.jinja": {
+          "size": 5112,
+          "generation": "1782589801243300",
+          "crc32c": "jSXcIQ=="
+        },
+        "config.json": {
+          "size": 2561,
+          "generation": "1782589801255621",
+          "crc32c": "/apMrQ=="
+        },
+        "model-00001-of-00003.safetensors": {
+          "size": 4933674712,
+          "generation": "1782589695412775",
+          "crc32c": "sbpiJA=="
+        },
+        "model-00002-of-00003.safetensors": {
+          "size": 4928580272,
+          "generation": "1782589754319623",
+          "crc32c": "FrFlug=="
+        },
+        "model-00003-of-00003.safetensors": {
+          "size": 3670220688,
+          "generation": "1782589799131671",
+          "crc32c": "1/A8Vg=="
+        },
+        "model.safetensors.index.json": {
+          "size": 22613,
+          "generation": "1782589801246980",
+          "crc32c": "kQyzZw=="
+        },
+        "special_tokens_map.json": {
+          "size": 301,
+          "generation": "1782589801248063",
+          "crc32c": "3GMMKA=="
+        },
+        "tokenizer.json": {
+          "size": 17209892,
+          "generation": "1782589801450161",
+          "crc32c": "cv2h3Q=="
+        },
+        "tokenizer_config.json": {
+          "size": 44004,
+          "generation": "1782589801249936",
+          "crc32c": "RvZI5A=="
+        }
+      },
+      "source_training_experiment": "exp_01kvvvv6zxrf0j7tkp4f7k6y66",
+      "source_export_audit_sha256": "9f776b33a68c1bb9ef7501325a804ade9c4bc886030fe1665181b5d797bfa8d7",
+      "training_metadata": {
+        "sha256": "a0503a9ce5f21d0a9d59c45f3a55ecdd007bcb79a2601921e58ce898a8e1ab3b",
+        "data": {
+          "step": 22056,
+          "timestamp": "2026-06-27T19:46:02.274098",
+          "is_temporary": false
+        }
+      }
+    },
+    {
+      "name": "unimax8_1e21-d685cd",
+      "method": "UniMax-8",
+      "checkpoint_uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/unimax8_1e21-d685cd/hf/step-22056",
+      "checkpoint_step": 22056,
+      "checkpoint_files": {
+        "chat_template.jinja": {
+          "size": 5112,
+          "generation": "1782618883730232",
+          "crc32c": "jSXcIQ=="
+        },
+        "config.json": {
+          "size": 2561,
+          "generation": "1782618883747415",
+          "crc32c": "/apMrQ=="
+        },
+        "model-00001-of-00003.safetensors": {
+          "size": 4933674712,
+          "generation": "1782618776846905",
+          "crc32c": "ETmBbg=="
+        },
+        "model-00002-of-00003.safetensors": {
+          "size": 4928580272,
+          "generation": "1782618835132437",
+          "crc32c": "d7ZeUA=="
+        },
+        "model-00003-of-00003.safetensors": {
+          "size": 3670220688,
+          "generation": "1782618879402705",
+          "crc32c": "EZ78jQ=="
+        },
+        "model.safetensors.index.json": {
+          "size": 22613,
+          "generation": "1782618883749904",
+          "crc32c": "kQyzZw=="
+        },
+        "special_tokens_map.json": {
+          "size": 301,
+          "generation": "1782618883742944",
+          "crc32c": "3GMMKA=="
+        },
+        "tokenizer.json": {
+          "size": 17209892,
+          "generation": "1782618883930086",
+          "crc32c": "cv2h3Q=="
+        },
+        "tokenizer_config.json": {
+          "size": 44004,
+          "generation": "1782618883742421",
+          "crc32c": "RvZI5A=="
+        }
+      },
+      "source_training_experiment": "exp_01kvvvv6zxrf0j7tkp4f7k6y66",
+      "source_export_audit_sha256": "9f776b33a68c1bb9ef7501325a804ade9c4bc886030fe1665181b5d797bfa8d7",
+      "training_metadata": {
+        "sha256": "0cfb6429a5f48a682e075ffb235ef43bbbd8e7ef87365304ac9a0b2374c71bd8",
+        "data": {
+          "step": 22056,
+          "timestamp": "2026-06-28T03:50:42.429198",
+          "is_temporary": false
+        }
+      }
+    },
+    {
+      "name": "lwspu_t9_snc_cap08_1e21-e8e9d7",
+      "method": "MARINER",
+      "checkpoint_uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_frozen_procedure_scaling_v6e_20260908/lwspu_t9_snc_cap08_1e21_seed662005-e8e9d7/hf/step-22056",
+      "checkpoint_step": 22056,
+      "checkpoint_files": {
+        "chat_template.jinja": {
+          "size": 5112,
+          "generation": "1790007480232413",
+          "crc32c": "jSXcIQ=="
+        },
+        "config.json": {
+          "size": 1821,
+          "generation": "1790007480241146",
+          "crc32c": "Ed+/cg=="
+        },
+        "model-00001-of-00003.safetensors": {
+          "size": 4933674712,
+          "generation": "1790007383078511",
+          "crc32c": "qupuCQ=="
+        },
+        "model-00002-of-00003.safetensors": {
+          "size": 4928580272,
+          "generation": "1790007437288569",
+          "crc32c": "83zEQw=="
+        },
+        "model-00003-of-00003.safetensors": {
+          "size": 3670220688,
+          "generation": "1790007478732358",
+          "crc32c": "S8O2hg=="
+        },
+        "model.safetensors.index.json": {
+          "size": 22613,
+          "generation": "1790007480237781",
+          "crc32c": "kQyzZw=="
+        },
+        "tokenizer.json": {
+          "size": 17209892,
+          "generation": "1790007480435310",
+          "crc32c": "cv2h3Q=="
+        },
+        "tokenizer_config.json": {
+          "size": 5614,
+          "generation": "1790007480237451",
+          "crc32c": "IMLwKQ=="
+        }
+      },
+      "source_training_experiment": "exp_01m1zy8yths4dqp5bgc0ffzztp",
+      "training_metadata": {
+        "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_frozen_procedure_scaling_v6e_20260908/lwspu_t9_snc_cap08_1e21_seed662005-e8e9d7/checkpoints/step-22056/metadata.json",
+        "sha256": "1fb48e68f861760317a0d4a4f3879b1567545efa7add8f28ddac36c1770893e8",
+        "data": {
+          "step": 22056,
+          "timestamp": "2026-09-21T16:15:05.060643",
+          "is_temporary": false
+        }
+      }
+    }
+  ],
+  "source_pins": {
+    "experiments/domain_phase_mix/evaluate_mariner_ladder_accuracy.py": "ab3e74fa50c178fef4a3e329a1ed7c6dfc8e79814caca42de26de83390b409d5",
+    "experiments/evals/olmo_base_easy_overlap.py": "39a848b00eec01dfb7863280ecbd1ffa308530d66c406c459677b561849a7347",
+    "lib/levanter/src/levanter/eval_harness.py": "d454065391d35370cc926ff5cff46b21d89eb7ea8c88cc7c1a716bde31a33696",
+    "lib/levanter/src/levanter/eval_harness_config.py": "03daa3b2d4a2600fba71f463569912c578b02d297a356fda1465754254ae4a28",
+    "lib/levanter/src/levanter/eval_harness_metrics.py": "4ab5fa4d5efa8fe04f0e58849e3a8f83c4ca749af99c1fbcbbc6f01b0a0b2931",
+    "lib/levanter/src/levanter/data/packing.py": "61b3e1af1b60f6205038ede06fe367e326add2bc663c5d598839fb8b06590046",
+    "lib/levanter/src/levanter/data/loader.py": "1d723d290add5812bbb44fe2e3d0a0532c4d13538b5d5ad37a540fbc888ebea9",
+    "lib/levanter/src/levanter/utils/jax_utils.py": "fadbfc228b71898d477268cde932cc0e6ef6b10e03b30d9fd01d46e20a62021a",
+    "lib/levanter/src/levanter/utils/background_iterable.py": "974a2bfdfedf80b995c8af5d5b2c4d268951ef8d5c8e7573d43360ed315665fd",
+    "lib/levanter/src/levanter/models/qwen.py": "241b086569a8aa23b3a006a4be3ebc9142c45cdda8eaef81a19dabc77526b66b",
+    "lib/levanter/src/levanter/models/llama.py": "f4ebbfbff8708d76e300d70e70c1393ff9553e46c251c38de3d71cd5b948de57",
+    "lib/levanter/src/levanter/compat/hf_checkpoints.py": "0bedd25779e7adb1070e8afd116131cb3cb4346c3e9179d1847ed9ec91fba9a5",
+    "lib/levanter/src/levanter/tokenizers.py": "c49f9f74dc25e683ee9dba413c4008ecbc78a4bac864cba4647a129d6eb0dcb3",
+    "lib/levanter/src/levanter/trainer.py": "83f6046e2179a1c4e4c48883f1f4747c44b457ef977ecb27c12f7a954b261adb",
+    "lib/levanter/src/levanter/distributed.py": "e96cccd01287e9a6e6c4fdf94811250d0ed498148be1d7495d159b9871b80123",
+    "lib/marin/src/marin/evaluation/eval_dataset_cache.py": "11a2e9194458bf041cc46cee5f0f9f708ab98792e170cb29c7e6e7e5e0d2c9f7",
+    "lib/marin/src/marin/evaluation/evaluation_config.py": "44b74bac25cd17b17e6016a6e315b367b3cf557c8e2d1bb307869aac0d8b3e5a",
+    "lib/marin/src/marin/execution/remote.py": "23e8517a4d315180adfe085fc2539a76662a79babab33e12ee6a187224064f60",
+    "lib/marin/src/marin/training/run_environment.py": "3e1b0cca3563df838b178254f76ace751521e3fb829de22cd40220ffaea41151",
+    "uv.lock": "ebcf703a0c2883942457cc30c6df502c982237a535a4bcd8a6e30ea0a3ffcc7c",
+    "experiments/domain_phase_mix/evaluate_table9_accuracy.py": "782dc1e5a846201e062bbfcb29b1dc6959ab57dbe30a57eecf6d0b2d4625f576",
+    "lib/marin/src/marin/evaluation/olmo_base_eval/accuracy.py": "d2dd777eefe9d6ff6574f1c8f0985ebe350db5df0131f4a5ad10716576cd375f",
+    "lib/marin/src/marin/evaluation/olmo_base_eval/bpb.py": "4705199f5e9fa23bc582cb159b4ebf88930bf1ffef7a1a7b6cd2475777560a82",
+    "experiments/domain_phase_mix/mt_mbpp_exec/prompts.py": "76a94b17b65f8def1a8b022fd56fac6cdbd89986b3b346ddc86e1fb3602d5c41",
+    "lib/levanter/src/levanter/model_loading.py": "3050c332fe5d82cbb73fd16b3b23d18d04b4efde17d2d31051ef3d76f1eadce8",
+    "lib/levanter/src/levanter/inference/engine.py": "8892fcfc5864630d18ef827c89d90fa4c3a310aab129f650d74e6fb0d8282a17",
+    "lib/levanter/src/levanter/layers/attention.py": "5a81eb9a0b04a904e7f748addc2fbb48eb46bc0ec4d8317ece162ff9ef5e62e0",
+    "lib/levanter/src/levanter/layers/kv_cache.py": "3efb8c6a1f9e95ae60919db6e4b2470c0719b1254413990463a3826c3829bd95"
+  },
+  "runtime_versions": {
+    "lm-eval": "0.4.10",
+    "datasets": "4.8.5",
+    "transformers": "5.12.1",
+    "jax": "0.11.1",
+    "jaxlib": "0.11.1"
+  },
+  "lm_eval_revision": "f7d0b116146bd616b59d0b991549120f197369a4"
+}

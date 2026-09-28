@@ -1,0 +1,21 @@
+{
+ "approved": true,
+ "reviewer": "User authorized in chat on 2026-09-19 ('resubmit rcQA') after the diagnosis of the two truncated part2/00038_* shards and the data-only repin (plan c8051ae1\u2026).",
+ "plan_sha256": "c8051ae17146a6444174e9374c681fc19360297076ca4c220780f98081883786",
+ "approved_at": "2026-09-19T23:05:14Z",
+ "scope": "Eight single-seed wiki_to_rcqa matched-proxy points on the frozen TPP-10 grid (p = 0, 5, 10, 20, 30, 50, 70, 100 percent), one matched subset (seed 20260912), the p=100 point first as the execution check, then the remaining seven. No target arm, no unmatched arm, no replicates, no refinement. The p=0 point is retrained so the held-out rcQA stream is scored on every point.",
+ "pool": "190,316,544-token parent packed from 1400 pinned Dolmino-pool wiki_to_rcqa zstd shards in four groups of 350 (seeded selection rule of the earlier domains; two shards with unterminated zstd frames, part2/00038_f285 and part2/00038_f271, replaced in place by the next intact files in the ranking, part1/00010_f270 and part3/00051_f226), frozen parent permutation, one nested 10,485,760-token matched subset; identical geometry, tokenizer, optimizer, allocator and Nemotron-CC blend to the other sweeps.",
+ "evaluation": "Seven Uncheatable components (existing caches), Paloma programming languages (frozen), the instruction sweep's five QA-format document sets (existing caches), and a 4,194,304-token held-out rcQA stream from 32 further pinned shards; all scored at the final step with max_eval_batches=None. On-target candidates: the five QA sets, the held-out rcQA stream, and Uncheatable Wikipedia English.",
+ "parent_priority": "interactive",
+ "parent_preemptible": false,
+ "parent_timeout": 172800,
+ "parent_failure_retries": 0,
+ "parent_preemption_retries": 0,
+ "child_policy": "Preparation CPU tasks at 2 CPU / 4 GiB; regional v5p-8 workers in us-central1-a, inherited interactive band; existing Fray zero task-failure retries and preemption recovery.",
+ "manual_resume": "Only after the old parent and descendants are terminal and leases are absent or expired; exact successful artifacts are skipped and unfinished recipes resumed by resubmitting the same plan and release.",
+ "previous_attempt": {
+  "job": "/calvinxu/tpp10-rcqa-proxy-sweep",
+  "plan_sha256": "41a8f6ed5f282e07a5584925320ce93d3a3c9bee219bd3739de2e36e0aceb53b",
+  "outcome": "pool step failed at 21:57 UTC on a truncated shard (JSONDecodeError after 904 records of part2/00038_f285); held-out stream cache succeeded and is reused"
+ }
+}

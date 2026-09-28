@@ -1,0 +1,1722 @@
+[
+  {
+    "attrs": {},
+    "author": null,
+    "body": "User approved reducing the final subset preparation request from 2 CPU/8 GiB to 2 CPU/4 GiB. Recovery wrapper changes only dispatch-time CPU RAM, preserving the original plan, all 28 training identities, seeds, data pins, TPU resources and five successful caches. Local wire conversion is identical except memory; 4 survey tests, lint and Pyrefly pass. CC review f3b8b8a7-5835-483c-8cad-271f12389b1f found no blocker. Stop the old survey tree, verify terminal attempts and expired/absent data leases, then submit the documented retry. StarCoder refinement stays on its current parent.",
+    "body_format": "markdown",
+    "created_at": "2026-09-11T21:18:21Z",
+    "deleted_at": null,
+    "entity_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "entity_type": "experiment",
+    "id": "note_01m295bx17cknevzfmt5ed26dd",
+    "note_type": "decision",
+    "resolved_at": null,
+    "status": "open",
+    "title": "Approved 4 GiB CPU preparation recovery",
+    "updated_at": "2026-09-11T21:18:21Z"
+  },
+  {
+    "attrs": {
+      "marin.cpu_prep_memory_gib": 4,
+      "marin.plan_sha256": "30fc30f1a7e618900a2f1dc40fe5650237b06ea979f2cedfcf8ca664c496114b",
+      "marin.region": "us-central1",
+      "marin.zone": "us-central1-a"
+    },
+    "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+    "code_dirty": true,
+    "command": "uv run iris --config lib/iris/config/marin.yaml job run --no-wait \\\n  --enable-extra-resources --cpu 2 --memory 8GB --disk 32GB --timeout 172800 \\\n  --max-retries 0 --max-preemption-retries 0 --priority interactive \\\n  --extra cpu --no-preemptible --region us-central1 --zone us-central1-a \\\n  --job-name tpp10-domain-sweeps-cpu4g \\\n  --bundle-include .agents/projects/starcoder_tpp10/domain_sweeps/plan.json \\\n  --bundle-include .agents/projects/starcoder_tpp10/domain_sweeps/release.json \\\n  --bundle-include 'experiments/domain_phase_mix/tpp10_domain_sweeps_assets/*' \\\n  --exclude '^(checkpoints|logs|wandb)/' \\\n  --exclude '^experiments/domain_phase_mix/exploratory/.*(?<!\\.py)$' \\\n  --exclude '^\\.agents/(?!projects/starcoder_tpp10/domain_sweeps/(plan|release)\\.json$).*' \\\n  --exclude '^(docs|tests)/' \\\n  --exclude '^lib/[^/]+/tests/' \\\n  --exclude '^experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/' \\\n  -e MARIN_PREFIX gs://marin-us-central1 \\\n  -e WANDB_API_KEY \"$WANDB_API_KEY\" \\\n  -- python -m experiments.domain_phase_mix.resume_tpp10_domain_sweeps \\\n  --plan .agents/projects/starcoder_tpp10/domain_sweeps/plan.json \\\n  --release .agents/projects/starcoder_tpp10/domain_sweeps/release.json --submit\n",
+    "created_at": "2026-09-11T21:18:22Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "external_id": "/calvinxu/tpp10-domain-sweeps-cpu4g",
+    "external_system": "iris",
+    "failure_reason": null,
+    "finished_at": null,
+    "id": "job_01m295bxqrsneazvbk5f8f95nk",
+    "launcher": "iris",
+    "name": "tpp10-domain-sweeps-cpu4g",
+    "retry_of": "job_01m282e98jx2e0wv6p67gawx0p",
+    "run_id": null,
+    "started_at": null,
+    "status": "submitting",
+    "updated_at": "2026-09-11T21:18:22Z"
+  },
+  {
+    "attrs": {
+      "marin.plan_sha256": "30fc30f1a7e618900a2f1dc40fe5650237b06ea979f2cedfcf8ca664c496114b",
+      "marin.priority": "interactive",
+      "marin.region": "us-central1",
+      "marin.zone": "us-central1-a"
+    },
+    "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+    "code_dirty": true,
+    "command": "uv run iris --config lib/iris/config/marin.yaml job run --no-wait \\\n  --enable-extra-resources --cpu 2 --memory 8GB --disk 32GB --timeout 172800 \\\n  --max-retries 0 --max-preemption-retries 0 --priority interactive \\\n  --extra cpu --no-preemptible --region us-central1 --zone us-central1-a \\\n  --job-name tpp10-domain-sweeps \\\n  --bundle-include .agents/projects/starcoder_tpp10/domain_sweeps/plan.json \\\n  --bundle-include .agents/projects/starcoder_tpp10/domain_sweeps/release.json \\\n  --bundle-include 'experiments/domain_phase_mix/tpp10_domain_sweeps_assets/*' \\\n  --exclude '^(checkpoints|logs|wandb)/' \\\n  --exclude '^experiments/domain_phase_mix/exploratory/.*(?<!\\.py)$' \\\n  --exclude '^\\.agents/(?!projects/starcoder_tpp10/domain_sweeps/(plan|release)\\.json$).*' \\\n  --exclude '^(docs|tests)/' \\\n  --exclude '^lib/[^/]+/tests/' \\\n  --exclude '^experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/' \\\n  -e MARIN_PREFIX gs://marin-us-central1 \\\n  -e WANDB_API_KEY \"$WANDB_API_KEY\" \\\n  -- python -m experiments.domain_phase_mix.launch_tpp10_domain_sweeps \\\n  --plan .agents/projects/starcoder_tpp10/domain_sweeps/plan.json \\\n  --release .agents/projects/starcoder_tpp10/domain_sweeps/release.json --submit\n",
+    "created_at": "2026-09-11T11:07:59Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "external_id": "/calvinxu/tpp10-domain-sweeps",
+    "external_system": "iris",
+    "failure_reason": "Authorized recovery of final subset at 4 GiB RAM; original data recipes and completed caches retained",
+    "finished_at": "2026-09-11T21:22:21Z",
+    "id": "job_01m282e98jx2e0wv6p67gawx0p",
+    "launcher": "iris",
+    "name": "tpp10-domain-sweeps",
+    "retry_of": null,
+    "run_id": null,
+    "started_at": null,
+    "status": "killed",
+    "updated_at": "2026-09-11T21:23:19Z"
+  },
+  {
+    "attrs": {
+      "marin.stage": "finemath_matched_materialization"
+    },
+    "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+    "code_dirty": true,
+    "command": null,
+    "created_at": "2026-09-11T12:49:23Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "external_id": "/calvinxu/tpp10-domain-sweeps/prepare_subset-1430c306",
+    "external_system": "iris",
+    "failure_reason": "Authorized recovery of final subset at 4 GiB RAM; original data recipes and completed caches retained",
+    "finished_at": "2026-09-11T21:22:21Z",
+    "id": "job_01m2887yt8rc0c6eh46xrsaw8f",
+    "launcher": "iris",
+    "name": "prepare_subset-1430c306",
+    "retry_of": null,
+    "run_id": null,
+    "started_at": null,
+    "status": "killed",
+    "updated_at": "2026-09-11T21:23:20Z"
+  },
+  {
+    "attrs": {
+      "marin.cpu_prep_memory_gib": 4,
+      "marin.plan_sha256": "30fc30f1a7e618900a2f1dc40fe5650237b06ea979f2cedfcf8ca664c496114b",
+      "marin.region": "us-central1",
+      "marin.zone": "us-central1-a"
+    },
+    "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+    "code_dirty": true,
+    "command": "uv run iris --config lib/iris/config/marin.yaml job run --no-wait \\\n  --enable-extra-resources --cpu 2 --memory 8GB --disk 32GB --timeout 172800 \\\n  --max-retries 0 --max-preemption-retries 0 --priority interactive \\\n  --extra cpu --no-preemptible --region us-central1 --zone us-central1-a \\\n  --job-name tpp10-domain-sweeps-cpu4g \\\n  --bundle-include .agents/projects/starcoder_tpp10/domain_sweeps/plan.json \\\n  --bundle-include .agents/projects/starcoder_tpp10/domain_sweeps/release.json \\\n  --bundle-include 'experiments/domain_phase_mix/tpp10_domain_sweeps_assets/*' \\\n  --exclude '^(checkpoints|logs|wandb)/' \\\n  --exclude '^experiments/domain_phase_mix/exploratory/.*(?<!\\.py)$' \\\n  --exclude '^\\.agents/(?!projects/starcoder_tpp10/domain_sweeps/(plan|release)\\.json$).*' \\\n  --exclude '^(docs|tests)/' \\\n  --exclude '^lib/[^/]+/tests/' \\\n  --exclude '^experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/' \\\n  -e MARIN_PREFIX gs://marin-us-central1 \\\n  -e WANDB_API_KEY \"$WANDB_API_KEY\" \\\n  -- python -m experiments.domain_phase_mix.resume_tpp10_domain_sweeps \\\n  --plan .agents/projects/starcoder_tpp10/domain_sweeps/plan.json \\\n  --release .agents/projects/starcoder_tpp10/domain_sweeps/release.json --submit\n",
+    "created_at": "2026-09-11T21:18:22Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "external_id": "/calvinxu/tpp10-domain-sweeps-cpu4g",
+    "external_system": "iris",
+    "failure_reason": null,
+    "finished_at": null,
+    "id": "job_01m295bxqrsneazvbk5f8f95nk",
+    "launcher": "iris",
+    "name": "tpp10-domain-sweeps-cpu4g",
+    "retry_of": "job_01m282e98jx2e0wv6p67gawx0p",
+    "run_id": null,
+    "started_at": null,
+    "status": "queued",
+    "updated_at": "2026-09-11T21:25:26Z"
+  },
+  {
+    "attrs": {
+      "marin.cpu_prep_memory_gib": 4,
+      "marin.plan_sha256": "30fc30f1a7e618900a2f1dc40fe5650237b06ea979f2cedfcf8ca664c496114b",
+      "marin.region": "us-central1",
+      "marin.zone": "us-central1-a"
+    },
+    "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+    "code_dirty": true,
+    "command": "uv run iris --config lib/iris/config/marin.yaml job run --no-wait \\\n  --enable-extra-resources --cpu 2 --memory 8GB --disk 32GB --timeout 172800 \\\n  --max-retries 0 --max-preemption-retries 0 --priority interactive \\\n  --extra cpu --no-preemptible --region us-central1 --zone us-central1-a \\\n  --job-name tpp10-domain-sweeps-cpu4g \\\n  --bundle-include .agents/projects/starcoder_tpp10/domain_sweeps/plan.json \\\n  --bundle-include .agents/projects/starcoder_tpp10/domain_sweeps/release.json \\\n  --bundle-include 'experiments/domain_phase_mix/tpp10_domain_sweeps_assets/*' \\\n  --exclude '^(checkpoints|logs|wandb)/' \\\n  --exclude '^experiments/domain_phase_mix/exploratory/.*(?<!\\.py)$' \\\n  --exclude '^\\.agents/(?!projects/starcoder_tpp10/domain_sweeps/(plan|release)\\.json$).*' \\\n  --exclude '^(docs|tests)/' \\\n  --exclude '^lib/[^/]+/tests/' \\\n  --exclude '^experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/' \\\n  -e MARIN_PREFIX gs://marin-us-central1 \\\n  -e WANDB_API_KEY \"$WANDB_API_KEY\" \\\n  -- python -m experiments.domain_phase_mix.resume_tpp10_domain_sweeps \\\n  --plan .agents/projects/starcoder_tpp10/domain_sweeps/plan.json \\\n  --release .agents/projects/starcoder_tpp10/domain_sweeps/release.json --submit\n",
+    "created_at": "2026-09-11T21:18:22Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "external_id": "/calvinxu/tpp10-domain-sweeps-cpu4g",
+    "external_system": "iris",
+    "failure_reason": null,
+    "finished_at": null,
+    "id": "job_01m295bxqrsneazvbk5f8f95nk",
+    "launcher": "iris",
+    "name": "tpp10-domain-sweeps-cpu4g",
+    "retry_of": "job_01m282e98jx2e0wv6p67gawx0p",
+    "run_id": null,
+    "started_at": null,
+    "status": "running",
+    "updated_at": "2026-09-11T21:29:22Z"
+  },
+  {
+    "attrs": {
+      "marin.artifact_fingerprint": "6d286890",
+      "marin.cpu_prep_memory_gib": 4
+    },
+    "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+    "code_dirty": true,
+    "command": null,
+    "created_at": "2026-09-11T21:29:22Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "external_id": "/calvinxu/tpp10-domain-sweeps-cpu4g/prepare_subset-1a60a898",
+    "external_system": "iris",
+    "failure_reason": null,
+    "finished_at": null,
+    "id": "job_01m29602mp1kcnp0vjenxx4s80",
+    "launcher": "iris",
+    "name": "FineMath matched subset 4 GiB recovery",
+    "retry_of": "job_01m2887yt8rc0c6eh46xrsaw8f",
+    "run_id": null,
+    "started_at": null,
+    "status": "succeeded",
+    "updated_at": "2026-09-11T21:29:22Z"
+  },
+  [
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m282e8n76khqwmzkyy0dr1hj",
+      "name": "tpp10_finemath_3plus_target_p070_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-11T11:07:59Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m282e8y00xtx0zzgbv90zxpc",
+      "name": "tpp10_finemath_3plus_target_p100_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-11T11:07:59Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m282e802bn0z14qb1whz7hb5",
+      "name": "tpp10_finemath_3plus_target_p030_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-11T11:07:58Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m282e890rabs0ttghv2ena7m",
+      "name": "tpp10_finemath_3plus_target_p050_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-11T11:07:58Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m282e6y0vpgw04vrywa27mwn",
+      "name": "tpp10_finemath_3plus_target_p005_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-11T11:07:57Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m282e7ah0bvyrajxhc7tr20y",
+      "name": "tpp10_finemath_3plus_target_p010_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-11T11:07:57Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m282e7kwe8a3x4gdfcn1znmv",
+      "name": "tpp10_finemath_3plus_target_p020_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-11T11:07:57Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m282e5zdcf4pz1gnhw5qdprn",
+      "name": "tpp10_finemath_3plus_matched_p050_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-11T11:07:56Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m282e67vf92y6gjgmgpn4gpx",
+      "name": "tpp10_finemath_3plus_matched_p070_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-11T11:07:56Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m282e6n4n9p9ycbwcsy302tz",
+      "name": "tpp10_finemath_3plus_matched_p100_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-11T11:07:56Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m282e50evfq0xhknh0get2eb",
+      "name": "tpp10_finemath_3plus_matched_p010_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-11T11:07:55Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m282e5cry942rz4qfjxcjqn8",
+      "name": "tpp10_finemath_3plus_matched_p020_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-11T11:07:55Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m282e5n1dx822dc3pqbnx8q1",
+      "name": "tpp10_finemath_3plus_matched_p030_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-11T11:07:55Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m282e3spqeadj7aw0n0y6qye",
+      "name": "tpp10_wikipedia_target_p050_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-11T11:07:54Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m282e42rh3w9c5dtvsh55j6v",
+      "name": "tpp10_wikipedia_target_p070_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-11T11:07:54Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m282e4bq8g3k2zaevr4w3yz7",
+      "name": "tpp10_wikipedia_target_p100_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-11T11:07:54Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m282e4m6vdnwwmk9fskmybzb",
+      "name": "tpp10_finemath_3plus_matched_p005_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-11T11:07:54Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m282e2twrkapjf6b96xfpgyf",
+      "name": "tpp10_wikipedia_target_p010_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-11T11:07:53Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m282e37h7qzxy4q27ynqs31f",
+      "name": "tpp10_wikipedia_target_p020_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-11T11:07:53Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m282e3fyecqczanqc9m66c7s",
+      "name": "tpp10_wikipedia_target_p030_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-11T11:07:53Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m282e1z4r5bwpeynph01pdex",
+      "name": "tpp10_wikipedia_matched_p070_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-11T11:07:52Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m282e28vgv6zk13g9qjvr4rt",
+      "name": "tpp10_wikipedia_matched_p100_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-11T11:07:52Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m282e2jvnbsazz79bpf609yd",
+      "name": "tpp10_wikipedia_target_p005_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-11T11:07:52Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m282e10v365eg5m92450126c",
+      "name": "tpp10_wikipedia_matched_p020_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-11T11:07:51Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m282e1a1qj84eyhs2tpvfnvd",
+      "name": "tpp10_wikipedia_matched_p030_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-11T11:07:51Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m282e1jq43rt2ejhhf6nqpb7",
+      "name": "tpp10_wikipedia_matched_p050_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-11T11:07:51Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m282e0ncm05y19ragxp559sa",
+      "name": "tpp10_wikipedia_matched_p010_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-11T11:07:50Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m282d7e5hsbvm8ctksnf4nev",
+      "name": "tpp10_wikipedia_matched_p005_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-11T11:07:24Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m27mq30yq05gy5dfxx7jhdpe",
+      "name": "tpp10_matched_p080_s20260911_d20260914",
+      "status": "active",
+      "updated_at": "2026-09-11T07:08:08Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m27mq2bnnta1cs169wxf13pd",
+      "name": "tpp10_matched_p080_s20260911_d20260912",
+      "status": "active",
+      "updated_at": "2026-09-11T07:08:07Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m27mq2rjch3arcmj8d6kw7g2",
+      "name": "tpp10_matched_p080_s20260911_d20260913",
+      "status": "active",
+      "updated_at": "2026-09-11T07:08:07Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m27mq12b0b4a6882ggxjjd1q",
+      "name": "tpp10_matched_p080_s20260910_d20260912",
+      "status": "active",
+      "updated_at": "2026-09-11T07:08:06Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m27mq1c8rywwk290bnwnx5ez",
+      "name": "tpp10_matched_p080_s20260910_d20260913",
+      "status": "active",
+      "updated_at": "2026-09-11T07:08:06Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m27mq1p4hn04t256tcymbhf8",
+      "name": "tpp10_matched_p080_s20260910_d20260914",
+      "status": "active",
+      "updated_at": "2026-09-11T07:08:06Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m27mq1ybnwy2hcascsrmzg6x",
+      "name": "tpp10_unmatched_p080_s20260911",
+      "status": "active",
+      "updated_at": "2026-09-11T07:08:06Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m27mq04hgaaqg5aavqxymdmn",
+      "name": "tpp10_matched_p065_s20260911_d20260914",
+      "status": "active",
+      "updated_at": "2026-09-11T07:08:05Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m27mq0dnp8akz8698eszx60r",
+      "name": "tpp10_target_p080_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-11T07:08:05Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m27mq0t8cd5zp00z91yqyzjk",
+      "name": "tpp10_unmatched_p080_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-11T07:08:05Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m27mpz7y8g43hnqwhtgmwhkp",
+      "name": "tpp10_unmatched_p065_s20260911",
+      "status": "active",
+      "updated_at": "2026-09-11T07:08:04Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m27mpzg5gaqb816ca96vf141",
+      "name": "tpp10_matched_p065_s20260911_d20260912",
+      "status": "active",
+      "updated_at": "2026-09-11T07:08:04Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m27mpzwafm8f7m7zxtyzz8m9",
+      "name": "tpp10_matched_p065_s20260911_d20260913",
+      "status": "active",
+      "updated_at": "2026-09-11T07:08:04Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m27mpy2rypn9gm39jnnzkx61",
+      "name": "tpp10_unmatched_p065_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-11T07:08:03Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m27mpycfwb8e4qn4c4c5dpbz",
+      "name": "tpp10_matched_p065_s20260910_d20260912",
+      "status": "active",
+      "updated_at": "2026-09-11T07:08:03Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m27mpyp0tsgbt3e1ymbbx368",
+      "name": "tpp10_matched_p065_s20260910_d20260913",
+      "status": "active",
+      "updated_at": "2026-09-11T07:08:03Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m27mpyyr3rj1zmrfq0yygrm7",
+      "name": "tpp10_matched_p065_s20260910_d20260914",
+      "status": "active",
+      "updated_at": "2026-09-11T07:08:03Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m27mpx8aebv8c96phmdf5eme",
+      "name": "tpp10_matched_p060_s20260911_d20260913",
+      "status": "active",
+      "updated_at": "2026-09-11T07:08:02Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m27mpxhrg4d3sah8g2tfrs95",
+      "name": "tpp10_matched_p060_s20260911_d20260914",
+      "status": "active",
+      "updated_at": "2026-09-11T07:08:02Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m27mpxta54khxb3s64prvpbb",
+      "name": "tpp10_target_p065_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-11T07:08:02Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m27mpw5j2bb64ckbtrpj6jw4",
+      "name": "tpp10_matched_p060_s20260910_d20260914",
+      "status": "active",
+      "updated_at": "2026-09-11T07:08:01Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m27mpwj3179ymj4j2m6rq9f3",
+      "name": "tpp10_unmatched_p060_s20260911",
+      "status": "active",
+      "updated_at": "2026-09-11T07:08:01Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m27mpwynyj8tzazgw4edd5w0",
+      "name": "tpp10_matched_p060_s20260911_d20260912",
+      "status": "active",
+      "updated_at": "2026-09-11T07:08:01Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m27mpvb0gh16q75n2328pfvj",
+      "name": "tpp10_unmatched_p060_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-11T07:08:00Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m27mpvknzr8sn09vg0f6kyhj",
+      "name": "tpp10_matched_p060_s20260910_d20260912",
+      "status": "active",
+      "updated_at": "2026-09-11T07:08:00Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m27mpvw7bp215y10qy96zx6t",
+      "name": "tpp10_matched_p060_s20260910_d20260913",
+      "status": "active",
+      "updated_at": "2026-09-11T07:08:00Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m27mpt63arefq39fhvc0gd88",
+      "name": "tpp10_matched_p055_s20260911_d20260912",
+      "status": "active",
+      "updated_at": "2026-09-11T07:07:59Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m27mptfrshcsm9wb5q3587h6",
+      "name": "tpp10_matched_p055_s20260911_d20260913",
+      "status": "active",
+      "updated_at": "2026-09-11T07:07:59Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m27mptrbsqwxgz6cpqvsfx49",
+      "name": "tpp10_matched_p055_s20260911_d20260914",
+      "status": "active",
+      "updated_at": "2026-09-11T07:07:59Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m27mpv1b6nrwtved53w0qbdd",
+      "name": "tpp10_target_p060_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-11T07:07:59Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m27mps6ssjtrm13ebva60hxj",
+      "name": "tpp10_matched_p055_s20260910_d20260913",
+      "status": "active",
+      "updated_at": "2026-09-11T07:07:58Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m27mpskbntq6p8pwzybqsp4p",
+      "name": "tpp10_matched_p055_s20260910_d20260914",
+      "status": "active",
+      "updated_at": "2026-09-11T07:07:58Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m27mpsxn7szt4wzbmy6vb5sp",
+      "name": "tpp10_unmatched_p055_s20260911",
+      "status": "active",
+      "updated_at": "2026-09-11T07:07:58Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m27mprdmnq7716cf7as9t2zy",
+      "name": "tpp10_target_p055_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-11T07:07:57Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m27mprnw2jjc1e4fyz9v0jzj",
+      "name": "tpp10_unmatched_p055_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-11T07:07:57Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m27mpry12pp5b4jvdae7e9jr",
+      "name": "tpp10_matched_p055_s20260910_d20260912",
+      "status": "active",
+      "updated_at": "2026-09-11T07:07:57Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m27mpqbhwt96zpzpms7r9qzn",
+      "name": "tpp10_matched_p040_s20260911_d20260912",
+      "status": "active",
+      "updated_at": "2026-09-11T07:07:56Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m27mpqr7bqk80crwrqw6fbs2",
+      "name": "tpp10_matched_p040_s20260911_d20260913",
+      "status": "active",
+      "updated_at": "2026-09-11T07:07:56Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m27mpr4q1jdwt0w07szrqqb3",
+      "name": "tpp10_matched_p040_s20260911_d20260914",
+      "status": "active",
+      "updated_at": "2026-09-11T07:07:56Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m27mpp851cyj5pmfrf5css0x",
+      "name": "tpp10_matched_p040_s20260910_d20260913",
+      "status": "active",
+      "updated_at": "2026-09-11T07:07:55Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m27mpph5ksfw7g6bhvvradk3",
+      "name": "tpp10_matched_p040_s20260910_d20260914",
+      "status": "active",
+      "updated_at": "2026-09-11T07:07:55Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m27mppy79f6fqmpf9m3dcrns",
+      "name": "tpp10_unmatched_p040_s20260911",
+      "status": "active",
+      "updated_at": "2026-09-11T07:07:55Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m27mpnase06s9x0q3yf5m9jz",
+      "name": "tpp10_target_p040_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-11T07:07:54Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m27mpnq1qvd9ncsmc6wt1rjt",
+      "name": "tpp10_unmatched_p040_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-11T07:07:54Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m27mpnz88tvpqepqwnfc79x9",
+      "name": "tpp10_matched_p040_s20260910_d20260912",
+      "status": "active",
+      "updated_at": "2026-09-11T07:07:54Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26ra63cgatc9qkk1b0nn1y7",
+      "name": "tpp10_matched_p100_s20260911_d20260913",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:45Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26ra6cpyj6jq74spnewxzdr",
+      "name": "tpp10_matched_p100_s20260911_d20260914",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:45Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26ra59qk67c44f429h7wn7z",
+      "name": "tpp10_matched_p100_s20260910_d20260914",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:44Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26ra5j1gf0f4yc2a31qpfdb",
+      "name": "tpp10_unmatched_p100_s20260911",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:44Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26ra5v4gcxaytyrqq5g7zqd",
+      "name": "tpp10_matched_p100_s20260911_d20260912",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:44Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26ra41p0rcxmh9vmytv9vgm",
+      "name": "tpp10_matched_p090_s20260911_d20260912",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:43Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26ra4akg6bjjefepmsbsar6",
+      "name": "tpp10_matched_p090_s20260911_d20260913",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:43Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26ra4nzbagygd1cp6vtat0s",
+      "name": "tpp10_matched_p090_s20260911_d20260914",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:43Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26ra4y75x369tqbpah5cz89",
+      "name": "tpp10_matched_p100_s20260910_d20260913",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:43Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26ra34yn7z31jg21vfxjfpf",
+      "name": "tpp10_matched_p090_s20260910_d20260914",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:42Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26ra3sr570k5gp44r4yf5cb",
+      "name": "tpp10_unmatched_p090_s20260911",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:42Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26ra28s9atj0hwxczmwdmn7",
+      "name": "tpp10_unmatched_p090_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:41Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26ra2h1tx43va0748a695cy",
+      "name": "tpp10_matched_p090_s20260910_d20260912",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:41Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26ra2sj99y34ysmcev31kax",
+      "name": "tpp10_matched_p090_s20260910_d20260913",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:41Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26ra14rn0s9ah1cx06x9ce7",
+      "name": "tpp10_matched_p070_s20260911_d20260912",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:40Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26ra1cn8sbjhxhvkvs8yy14",
+      "name": "tpp10_matched_p070_s20260911_d20260913",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:40Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26ra1rjcank7v9qg8ts7bej",
+      "name": "tpp10_matched_p070_s20260911_d20260914",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:40Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26ra20nqa17k8hmshrwvfy5",
+      "name": "tpp10_target_p090_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:40Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26ra06v0b5n0nz89vmpb370",
+      "name": "tpp10_matched_p070_s20260910_d20260913",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:39Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26ra0f9abapw7h727mkqc6j",
+      "name": "tpp10_matched_p070_s20260910_d20260914",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:39Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26ra0s6952vpggxbq8aqrbx",
+      "name": "tpp10_unmatched_p070_s20260911",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:39Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26r9z87dk4brfq5rmfkswye",
+      "name": "tpp10_target_p070_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:38Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26r9zkm3qdhrpv0dfsjn1wj",
+      "name": "tpp10_unmatched_p070_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:38Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26r9zvpb563svss31nywaxq",
+      "name": "tpp10_matched_p070_s20260910_d20260912",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:38Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26r9y5pm8yh3y34mgztqfsx",
+      "name": "tpp10_matched_p050_s20260910_d20260913",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:37Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26r9ydyyp6bse69zrcvmt69",
+      "name": "tpp10_matched_p050_s20260910_d20260914",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:37Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26r9ypcxhha9hhdp372318h",
+      "name": "tpp10_matched_p050_s20260911_d20260913",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:37Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26r9yyyev22wvyq75drhmnq",
+      "name": "tpp10_matched_p050_s20260911_d20260914",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:37Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26r9x96zw9wjpanz35xt6ws",
+      "name": "tpp10_matched_p030_s20260911_d20260913",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:36Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26r9xn2c0rpa7prmrkfx2vg",
+      "name": "tpp10_matched_p030_s20260911_d20260914",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:36Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26r9xxny8kq6g9anedqf8ac",
+      "name": "tpp10_target_p050_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:36Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26r9wcnmvp8ct1dvdcgndyf",
+      "name": "tpp10_unmatched_p030_s20260911",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:35Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26r9x0snvnf2xh8ngkpwk22",
+      "name": "tpp10_matched_p030_s20260911_d20260912",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:35Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26r9vfjbksp07xb5hwn8f1j",
+      "name": "tpp10_matched_p030_s20260910_d20260912",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:34Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26r9vrw7h4hthm1fa7hkgr1",
+      "name": "tpp10_matched_p030_s20260910_d20260913",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:34Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26r9w49gky01ebjfxr978vc",
+      "name": "tpp10_matched_p030_s20260910_d20260914",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:34Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26r9tevxagjvnrwnjenjgzz",
+      "name": "tpp10_matched_p010_s20260911_d20260914",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:33Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26r9tqe3dxm3t04tjv0am46",
+      "name": "tpp10_target_p030_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:33Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26r9v3h1mfhq3933rhy9qd3",
+      "name": "tpp10_unmatched_p030_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:33Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26r9se9sar7j8nw86e13rkh",
+      "name": "tpp10_unmatched_p010_s20260911",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:32Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26r9spzr58v66pt8b86s80b",
+      "name": "tpp10_matched_p010_s20260911_d20260912",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:32Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26r9t2we3ty3zdtxe2jpv3e",
+      "name": "tpp10_matched_p010_s20260911_d20260913",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:32Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26r9re317vzkv4tfd8459mr",
+      "name": "tpp10_matched_p010_s20260910_d20260912",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:31Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26r9rpz6wbkhk5z5b2heky6",
+      "name": "tpp10_matched_p010_s20260910_d20260913",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:31Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26r9s22t64x0cbh3ygrj1yg",
+      "name": "tpp10_matched_p010_s20260910_d20260914",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:31Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26r9qgjckkbyph4pwwek9b9",
+      "name": "tpp10_unmatched_p000_s20260911",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:30Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26r9qsa4shn2pwaf2jc1893",
+      "name": "tpp10_target_p010_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:30Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26r9r2caqsdsm841c3tysvg",
+      "name": "tpp10_unmatched_p010_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:30Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26r9pxwcfhkcf2235qsattk",
+      "name": "tpp10_target_p000_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:29Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m26r9q6r8tfwn5yyfncvwvw8",
+      "name": "tpp10_unmatched_p000_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-10T22:51:29Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m24e80g20ytz5q6svvyeayny",
+      "name": "tpp10_target_p100_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-10T01:17:19Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m24e80sba2fhm6bw4z584d2e",
+      "name": "tpp10_unmatched_p100_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-10T01:17:19Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m24e812c8hzgjhsxjbbnagsw",
+      "name": "tpp10_matched_p100_s20260910_d20260912",
+      "status": "active",
+      "updated_at": "2026-09-10T01:17:19Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m23x3vedrgetr7703tf4aqz4",
+      "name": "tpp10_unmatched_p050_s20260911_b128",
+      "status": "active",
+      "updated_at": "2026-09-09T20:17:57Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m23x3vps73arj78djdbg11dk",
+      "name": "tpp10_matched_p050_s20260911_d20260912_b128",
+      "status": "active",
+      "updated_at": "2026-09-09T20:17:57Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m23x3tcr23jc93zwydghpjhg",
+      "name": "tpp10_unmatched_p050_s20260911",
+      "status": "active",
+      "updated_at": "2026-09-09T20:17:56Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m23x3tnavn911yc7wxnvdt5h",
+      "name": "tpp10_matched_p050_s20260911_d20260912",
+      "status": "active",
+      "updated_at": "2026-09-09T20:17:56Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m23x3txmynwsk6tbytntctq6",
+      "name": "tpp10_unmatched_p050_s20260910_b128",
+      "status": "active",
+      "updated_at": "2026-09-09T20:17:56Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m23x3v62h0qrh4vdfjs5e389",
+      "name": "tpp10_matched_p050_s20260910_d20260912_b128",
+      "status": "active",
+      "updated_at": "2026-09-09T20:17:56Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m23x3t4aryrceke6mcvx62wh",
+      "name": "tpp10_matched_p050_s20260910_d20260912",
+      "status": "active",
+      "updated_at": "2026-09-09T20:17:55Z"
+    },
+    {
+      "experiment_ids": [
+        "exp_01m23ddmn78breygyvkkpzyrq8"
+      ],
+      "id": "run_01m23x35xcmrgr41k46a2hk7h3",
+      "name": "tpp10_unmatched_p050_s20260910",
+      "status": "active",
+      "updated_at": "2026-09-09T20:17:35Z"
+    }
+  ],
+  {
+    "attrs": {
+      "marin.config_fingerprint": "a853b1a5",
+      "marin.parent_job": "/calvinxu/tpp10-domain-sweeps-cpu4g"
+    },
+    "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+    "code_dirty": true,
+    "command": null,
+    "created_at": "2026-09-11T21:31:19Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "external_id": "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_wikipedia_matched_p100_s20260910",
+    "external_system": "iris",
+    "failure_reason": null,
+    "finished_at": null,
+    "id": "job_01m2963m6vb809yjtj2tpejv81",
+    "launcher": "iris",
+    "name": "tpp10_wikipedia_matched_p100_s20260910",
+    "retry_of": null,
+    "run_id": "run_01m282e28vgv6zk13g9qjvr4rt",
+    "started_at": null,
+    "status": "running",
+    "updated_at": "2026-09-11T21:31:19Z"
+  },
+  {
+    "attrs": {},
+    "created_at": "2026-09-11T21:31:19Z",
+    "deleted_at": null,
+    "failure_reason": null,
+    "finished_at": null,
+    "job_id": "job_01m2963m6vb809yjtj2tpejv81",
+    "role": "train",
+    "run_id": "run_01m282e28vgv6zk13g9qjvr4rt",
+    "started_at": null,
+    "status": "running",
+    "updated_at": "2026-09-11T21:31:19Z"
+  },
+  {
+    "attrs": {
+      "marin.config_fingerprint": "5a5a6129",
+      "marin.parent_job": "/calvinxu/tpp10-domain-sweeps-cpu4g"
+    },
+    "code_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+    "code_dirty": true,
+    "command": null,
+    "created_at": "2026-09-11T21:31:19Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "external_id": "/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_matched_p100_s20260910",
+    "external_system": "iris",
+    "failure_reason": null,
+    "finished_at": null,
+    "id": "job_01m2963mzgey2g8wjmdcrvy2c6",
+    "launcher": "iris",
+    "name": "tpp10_finemath_3plus_matched_p100_s20260910",
+    "retry_of": null,
+    "run_id": "run_01m282e6n4n9p9ycbwcsy302tz",
+    "started_at": null,
+    "status": "queued",
+    "updated_at": "2026-09-11T21:31:19Z"
+  },
+  {
+    "attrs": {},
+    "created_at": "2026-09-11T21:31:19Z",
+    "deleted_at": null,
+    "failure_reason": null,
+    "finished_at": null,
+    "job_id": "job_01m2963mzgey2g8wjmdcrvy2c6",
+    "role": "train",
+    "run_id": "run_01m282e6n4n9p9ycbwcsy302tz",
+    "started_at": null,
+    "status": "queued",
+    "updated_at": "2026-09-11T21:31:20Z"
+  },
+  {
+    "attrs": {},
+    "author": null,
+    "body": "Approved 4 GiB recovery completed final FineMath subset successfully. All six caches pass original recipe/tokenizer/length/index/fingerprint checks; five previous successes retained. Live subset request was 2 CPU/4 GiB, non-preemptible, interactive central1-a; Finelog peak 1.3701 GiB in 11 samples. Original plan 30fc30f1a7e618900a2f1dc40fe5650237b06ea979f2cedfcf8ca664c496114b and all TPU settings unchanged. New parent /calvinxu/tpp10-domain-sweeps-cpu4g. Wikipedia p100 initial training check acquired TPU and loaded first batch; FineMath p100 queued for TPU capacity; remaining26 remain gated on these two checks. No survey endpoint yet. Original survey tree is terminal and leases were cleared before launch. CC found no blocker, four survey tests and lint/Pyrefly/wire checks passed. Handoff, CC change list and scratch monitoring state updated. Existing heartbeat was found PAUSED and its status was preserved while updating the root. Prior Echo publication attempt failed HTTP403; durable research receipts are attached.",
+    "body_format": "markdown",
+    "created_at": "2026-09-11T21:32:43Z",
+    "deleted_at": null,
+    "entity_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "entity_type": "experiment",
+    "id": "note_01m29666chggjcv03cf5x9y3he",
+    "note_type": "checkpoint",
+    "resolved_at": null,
+    "status": "open",
+    "title": "CPU subset recovery verified; initial survey training released",
+    "updated_at": "2026-09-11T21:32:43Z"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789161455.659178,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/cpu4g_recovery/recovery_spec.json",
+      "fieldbook.local_size_at_capture": 1304
+    },
+    "content_hash": "sha256:b12fe16109cb21cabad4f9ea533cf19f8a5ad62e02e80832d4bf446cdff044db",
+    "created_at": "2026-09-11T21:32:43Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m29666pqx9e73zmcbrdcw41r",
+    "job_id": "job_01m295bxqrsneazvbk5f8f95nk",
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-11T21:32:43Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/cpu4g_recovery/recovery_spec.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789161260.012918,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/cpu4g_recovery/submit.sh",
+      "fieldbook.local_size_at_capture": 1240
+    },
+    "content_hash": "sha256:fe4669d1fc431d2af5cc6e2ff56d538734b871a8a503456a6d8a2bc70e79fc92",
+    "created_at": "2026-09-11T21:32:43Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m296672pt7z9w13zcdknbmhh",
+    "job_id": "job_01m295bxqrsneazvbk5f8f95nk",
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-11T21:32:43Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/cpu4g_recovery/submit.sh"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789161466.1019652,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/cpu4g_recovery/CC_REVIEW.md",
+      "fieldbook.local_size_at_capture": 4340
+    },
+    "content_hash": "sha256:7479c085c53d4dd25b69f6dd00bd46d2e0ccafd27d3c3167081a6c8ab641576e",
+    "created_at": "2026-09-11T21:32:44Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m29667bd2f2jv40a9fm376r4",
+    "job_id": "job_01m295bxqrsneazvbk5f8f95nk",
+    "run_id": null,
+    "type": "report",
+    "updated_at": "2026-09-11T21:32:44Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/cpu4g_recovery/CC_REVIEW.md"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789161422.4004145,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/cpu4g_recovery/wire_validation.json",
+      "fieldbook.local_size_at_capture": 307
+    },
+    "content_hash": "sha256:0b7d5794165ad6c055e78886ae212e4d99126c596df06e672248ae7dfc0ac574",
+    "created_at": "2026-09-11T21:32:44Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m29667p2f53m6ffsk9cewxx7",
+    "job_id": "job_01m295bxqrsneazvbk5f8f95nk",
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-11T21:32:44Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/cpu4g_recovery/wire_validation.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789161260.0127864,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/cpu4g_recovery/bundle_preflight.json",
+      "fieldbook.local_size_at_capture": 775
+    },
+    "content_hash": "sha256:6f6a4e15fe50b077e62233bac448b73828c7d4526c5c54684828bfd8d684d5b1",
+    "created_at": "2026-09-11T21:32:44Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m29667yb10h43xvr9h30ambk",
+    "job_id": "job_01m295bxqrsneazvbk5f8f95nk",
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-11T21:32:44Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/cpu4g_recovery/bundle_preflight.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789161866.3024027,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/cpu4g_recovery/after_cancel_data_status.json",
+      "fieldbook.local_size_at_capture": 1738
+    },
+    "content_hash": "sha256:93980017b7c1a3325f2ca9f5ba2b886edc084f2fd21aa4b89aa51ab6195f65e2",
+    "created_at": "2026-09-11T21:32:45Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m296687aybs2qewh2ca8wa2c",
+    "job_id": "job_01m295bxqrsneazvbk5f8f95nk",
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-11T21:32:45Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/cpu4g_recovery/after_cancel_data_status.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789162158.023107,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/cpu4g_recovery/after_preparation_audit.json",
+      "fieldbook.local_size_at_capture": 1747
+    },
+    "content_hash": "sha256:760fcf06577d6e1ff5d5ea263c509dafe52ae726010aebc5422125fe19486cfc",
+    "created_at": "2026-09-11T21:32:45Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m29668fzrvh99tp574qdckrs",
+    "job_id": "job_01m295bxqrsneazvbk5f8f95nk",
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-11T21:32:45Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/cpu4g_recovery/after_preparation_audit.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789162097.0127735,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/cpu4g_recovery/live_dispatch.json",
+      "fieldbook.local_size_at_capture": 2761
+    },
+    "content_hash": "sha256:2f29c2ca115c1dddaaff02d3840ad2e4af4e597ed3a5f11515afccea57a13c67",
+    "created_at": "2026-09-11T21:32:45Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m29668s6xectqhgm3ej4qzhf",
+    "job_id": "job_01m295bxqrsneazvbk5f8f95nk",
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-11T21:32:45Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/cpu4g_recovery/live_dispatch.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789162214.1727858,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/cpu4g_recovery/initial_training_checks.json",
+      "fieldbook.local_size_at_capture": 4260
+    },
+    "content_hash": "sha256:8d21f843bdc5fcec614ba30f79a85c98b17b68df9669c0b66e2abec436f79a1b",
+    "created_at": "2026-09-11T21:32:46Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m296694vggagc1an521snq3t",
+    "job_id": "job_01m295bxqrsneazvbk5f8f95nk",
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-11T21:32:46Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/cpu4g_recovery/initial_training_checks.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789162287.027862,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/cpu4g_recovery/live_preflight.json",
+      "fieldbook.local_size_at_capture": 21302
+    },
+    "content_hash": "sha256:17d8728a5705b407698f9621842e678a38a69e5a8f4d31ba6a99295638231d6f",
+    "created_at": "2026-09-11T21:32:46Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m29669dyz67f8nfret4fvgbz",
+    "job_id": "job_01m295bxqrsneazvbk5f8f95nk",
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-11T21:32:46Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/cpu4g_recovery/live_preflight.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789162226.7261994,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/cpu4g_recovery/prep_memory.jsonl",
+      "fieldbook.local_size_at_capture": 276
+    },
+    "content_hash": "sha256:3ba3576ec31ac73cbebc8d66cbb5416c74415a983e6c795578cffbce50e2020c",
+    "created_at": "2026-09-11T21:32:46Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m29669xevzy0cypfazfemzg7",
+    "job_id": "job_01m295bxqrsneazvbk5f8f95nk",
+    "run_id": null,
+    "type": "metric-table",
+    "updated_at": "2026-09-11T21:32:46Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/cpu4g_recovery/prep_memory.jsonl"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789161883.6059783,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/cpu4g_recovery/submitted.txt",
+      "fieldbook.local_size_at_capture": 1332
+    },
+    "content_hash": "sha256:37c2a08b86b935194b3e6265cf1788ab0e5f440f9fe914592451ffdeff370c25",
+    "created_at": "2026-09-11T21:32:47Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m2966a8qr14wrxvavqmqkjv8",
+    "job_id": "job_01m295bxqrsneazvbk5f8f95nk",
+    "run_id": null,
+    "type": "log",
+    "updated_at": "2026-09-11T21:32:47Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/cpu4g_recovery/submitted.txt"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789162330.384067,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/HANDOFF.md",
+      "fieldbook.local_size_at_capture": 10631
+    },
+    "content_hash": "sha256:a211645c3688c959e4bd6e94354bb7fcfa6c4b601f8e7ae409c16451edbdc527",
+    "created_at": "2026-09-11T11:20:27Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m28353vf9qqwr0bn6rh2vaw5",
+    "job_id": "job_01m295bxqrsneazvbk5f8f95nk",
+    "run_id": null,
+    "type": "report",
+    "updated_at": "2026-09-11T21:32:47Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/HANDOFF.md"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789162330.3842232,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/CC_CHANGES.md",
+      "fieldbook.local_size_at_capture": 17922
+    },
+    "content_hash": "sha256:7366aee471c00ec29af851a1bcb2e3d162fbe8722ff3cd7864fdc1bef20c7fa4",
+    "created_at": "2026-09-11T11:20:27Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m28353jzk1j9e9e0yxzpthww",
+    "job_id": "job_01m295bxqrsneazvbk5f8f95nk",
+    "run_id": null,
+    "type": "report",
+    "updated_at": "2026-09-11T21:32:47Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/CC_CHANGES.md"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789162330.3839016,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/post_submission_status.json",
+      "fieldbook.local_size_at_capture": 4790
+    },
+    "content_hash": "sha256:e4e3646597c3c0a9b6148e1607d6ffaaf1f2d089fa2db4ba22d655685b1eea42",
+    "created_at": "2026-09-11T11:22:41Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m283961sm11n8j3fxffszns6",
+    "job_id": "job_01m295bxqrsneazvbk5f8f95nk",
+    "run_id": null,
+    "type": "report",
+    "updated_at": "2026-09-11T21:32:48Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/post_submission_status.json"
+  }
+]

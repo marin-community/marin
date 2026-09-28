@@ -1,0 +1,142 @@
+{
+  "report": {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789312440.5814075,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/regmix_official_rerun_20260913/REPORT.md",
+      "fieldbook.local_size_at_capture": 7867
+    },
+    "content_hash": "sha256:e108bd584f947c21a0ab43212294a6bdd76671e1f0a8c2f94f572c79cb46cd13",
+    "created_at": "2026-09-13T15:14:01Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+    "id": "art_01m2dna6wnmzjs80y5sxa7bnda",
+    "job_id": null,
+    "run_id": null,
+    "type": "report",
+    "updated_at": "2026-09-13T15:14:01Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/regmix_official_rerun_20260913/REPORT.md"
+  },
+  "verification": {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789312034.887861,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/regmix_official_rerun_20260913/independent_verification/verification.json",
+      "fieldbook.local_size_at_capture": 840
+    },
+    "content_hash": "sha256:87c9da9edd0e4d0ede177fc4141553daa11d7af1c05f3519de706223fa5ca91d",
+    "created_at": "2026-09-13T15:14:01Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+    "id": "art_01m2dna75kdca4he0m0fg6wgxa",
+    "job_id": null,
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-13T15:14:01Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/regmix_official_rerun_20260913/independent_verification/verification.json"
+  },
+  "handoff": {
+    "experiment": {
+      "attrs": {
+        "paper.section": "app:response-ablations",
+        "protocol.folds": "five outer, three inner, mixture-blocked, seeds as the frozen procedure"
+      },
+      "created_at": "2026-09-08T21:36:01Z",
+      "deleted_at": null,
+      "description": "Reviewer/PI request (review_feedback_2026-09-08_reader_pi_iclr.md, Major concern 1 and PI item 7): a credible generic non-monotone surrogate fitted and selected under MARINER's protocol, judged on out-of-fold rank correlation, retrospective-bank selection regret and optimism, then its optimized proposals trained at 3e18 on the shared validation panel. Prespecified 2026-09-08 (Calvin + CC): primary = additive quadratic in log-epochs with signed ridge coefficients under MARINER's floor and log link; 1b = identity-link twin; secondary = additive natural cubic spline in log-epochs (three interior knots) under the same floor/link; secondary = kernel ridge regression on the simplex with the Hellinger kernel. RegMix-style trees excluded unless a reviewer asks. Offline runs tonight (2026-09-08); the primary comparator's proposals are validated at 3e18 regardless of offline metrics (three trainer seeds at data seeds 666200/662009, six runs).",
+      "id": "exp_01m21f631n71w9xe9n6krpr2kw",
+      "idempotency_key": "delphi-nonlinear-comparators-20260908",
+      "name": "Conventional nonlinear comparators for MARINER",
+      "status": "active",
+      "tags": [
+        "3e18",
+        "comparator",
+        "delphi",
+        "nonlinear-baseline"
+      ],
+      "updated_at": "2026-09-08T21:36:01Z"
+    },
+    "freshness": {
+      "checkpoint_status": "current",
+      "drifted_artifact_count": 2,
+      "drifted_artifacts": [
+        {
+          "captured": {
+            "fieldbook.local_mtime_at_capture": 1789097866.8532562,
+            "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_comparator_proposals_3e18_20260909/paired_results.csv",
+            "fieldbook.local_size_at_capture": 1925
+          },
+          "drift_kind": "mtime_size",
+          "id": "art_01m2795736y5t7axgq9td204n5",
+          "observed": {
+            "fieldbook.local_mtime_at_capture": 1789163325.4844897,
+            "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_comparator_proposals_3e18_20260909/paired_results.csv",
+            "fieldbook.local_size_at_capture": 2550
+          },
+          "suggested_action": "Run `fieldbook artifact refresh-local` or regenerate the artifact.",
+          "type": "metric-table",
+          "uri": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_comparator_proposals_3e18_20260909/paired_results.csv"
+        },
+        {
+          "captured": {
+            "fieldbook.local_mtime_at_capture": 1789098029.4084535,
+            "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_comparator_proposals_3e18_20260909/diagnostics/calibration.pdf",
+            "fieldbook.local_size_at_capture": 136463
+          },
+          "drift_kind": "missing_file",
+          "id": "art_01m27957casj5czvr0n01ajfsm",
+          "observed": {},
+          "suggested_action": "Run `fieldbook artifact refresh-local` or regenerate the artifact.",
+          "type": "plot",
+          "uri": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_comparator_proposals_3e18_20260909/diagnostics/calibration.pdf"
+        }
+      ],
+      "handoff_status": "current",
+      "last_checkpoint_at": "2026-09-13T14:56:49Z",
+      "last_handoff_at": "2026-09-13T14:56:49Z",
+      "since_last_checkpoint_hours": 0.2869063725,
+      "since_last_handoff_hours": 0.2869063725,
+      "stale_validation_count": 2,
+      "stale_validations": [
+        {
+          "check_name": "comparator_proposals_measured_vs_mariner",
+          "entity_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+          "entity_type": "experiment",
+          "id": "val_01m2795jtz4m7mgtqg74c0zq9p",
+          "source_artifact_id": "art_01m2795736y5t7axgq9td204n5",
+          "source_drifted": true,
+          "source_updated_at": "2026-09-11T03:46:08Z",
+          "status": "pass",
+          "updated_at": "2026-09-11T03:46:20Z"
+        },
+        {
+          "check_name": "durable_output_refresh_20260911_0200",
+          "entity_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+          "entity_type": "experiment",
+          "id": "val_01m274aevrhnf95vtk1wdzxdb9",
+          "source_artifact_id": "art_01m274acgqwa66n942db0qw4gy",
+          "source_drifted": false,
+          "source_updated_at": "2026-09-11T02:21:40Z",
+          "status": "pass",
+          "updated_at": "2026-09-11T02:21:37Z"
+        }
+      ]
+    },
+    "note": {
+      "attrs": {
+        "session_id": "ses_01m2dmgesd1hjdyahqek5axthv"
+      },
+      "author": null,
+      "body": "# Official RegMix replay changes both validation paths\n\nExecuting the released regression and proposal cells on the existing Qwen3 360M/1.6B-token swarm (nominally 3e18 training FLOPs per run) produces different RegMix endpoints for both objectives. The corresponding 50% MARINER\u2013RegMix blends also change substantially. Existing endpoint and midpoint measurements cannot be relabeled as measurements of these new mixtures.\n\nIf the paper adopts this reference procedure, validate its two endpoints and two midpoints, initially with the same data seeds and trainer seed 0 used for the existing RegMix paths. Keep the current measurements as results for the adapted baseline. No training has been submitted in this replay.\n\n## Mixture changes\n\nTotal variation is half the sum of absolute changes in bucket weights; it is the fraction of mixture mass reassigned. Distances below compare runtime-rounded mixtures against the old trained ones.\n\n| Objective | New endpoint | New midpoint | Sampler-only endpoint | Component-head endpoint |\n|---|---:|---:|---:|---:|\n| Uncheatable | 48.68% | 24.32% | 47.02% | 45.85% |\n| OlmoBaseEval Easy | 47.51% | 23.88% | 48.44% | 48.54% |\n\nThe sampler-only diagnostic retains the old frozen trees and substitutes the reference candidate distribution, count, RNG and top-128 averaging. The component-head diagnostic applies reference fitting separately to the former 7/51 component responses and aggregates them with the frozen weights. Both diagnostics produce large changes, so the primary result is not contingent on switching to direct aggregate heads. The diagnostics do not independently apportion the effects of each protocol change.\n\n![Predictions along old and recomputed RegMix paths](official_replay_paths.png)\n\nGold points are existing trainer-seed-0 measurements. Each right panel uses a different endpoint mixture from the left panel. Only its MARINER endpoint has a measurement; its other predictions are unvalidated.\n\n## What was reproduced\n\nThe source is the [official notebook at commit dd9d1c3](https://github.com/sail-sg/regmix/blob/dd9d1c3b2d7c1756b1a90f0ad7603068e9856cc6/regression_fitting/regression.ipynb). Fitting cell 13 and averaging cell 18 execute unchanged. Candidate cell 16 executes with only the dataset-specific prior literal replaced.\n\n- Raw mixture weights and raw responses; no standardization, floor or log link.\n- LightGBM learning rate 0.01, seed 42, up to 1,000 iterations, default leaf settings, and early stopping after three rounds without improvement, monitoring the notebook's L1 and L2 metrics.\n- The early-stopped model is retained. There is no full-data refit.\n- The candidate pool has 100,000 draws using legacy NumPy seed 42 and corpus-token proportions as Dirichlet concentrations. The proposal averages the 128 lowest-predicted candidates. No polish or best-candidate safeguard is added.\n\nThe notebook provides separate 512-training and 256-validation CSVs but no split algorithm. Our replacement dataset therefore uses a prespecified random 187/93 split of the 280 existing designs, with the proportional anchor in training. The 93 validation outcomes are used for early stopping and are not independent evaluation data. No extra calibration repeats, retrospective-bank outcomes or prospective validation outcomes enter fitting. The primary response columns are the two scalar objectives: Uncheatable combines seven component BPBs with its frozen task weights, and OlmoBaseEval Easy averages 51 component BPBs. The secondary sensitivity fits each component separately before applying those same weights.\n\nOther necessary data/runtime adaptations are the 39-bucket token prior, exact archived weights instead of the original collector's five-decimal exports, and downstream rounding to the existing 1/2048 sampler grid. The repository has no regression environment lock. This is source-exact execution on substituted inputs, not a claim to reproduce historical library behavior. Versions are pinned in the script and recorded in `input_manifest.json` (LightGBM 4.7.0, NumPy 2.3.5).\n\nIndependent verification refitted both primary heads from the saved input CSVs using the original cell. Model text, all 100,000 candidate predictions and top-128 indices match exactly. Best iterations are 460 for Uncheatable and 170 for the suite. See `independent_verification/verification.json`.\n\n## Predictions do not establish an improvement\n\nThe reference objective fits are more pessimistic than the old fits at the three previously measured mixtures per objective. This comparison uses the same seed-0 measurements, and is a retrospective calibration check. Uncheatable retains the seven frozen task weights: the new midpoint evaluation computes component BPB as total loss bits divided by scored bytes, while the historical endpoints use the earlier batch-averaged component estimator. Across 98 saved evaluations, the largest observed estimator difference was 0.000054 BPB in the weighted objective; no empirical offset is applied. OlmoBaseEval Easy uses its unchanged native evaluator.\n\n| Objective | Mixture | Measured BPB | Old RegMix prediction | Reference RegMix prediction |\n|---|---|---:|---:|---:|\n| Uncheatable | mariner | 0.981424 | 1.008356 | 1.037254 |\n| Uncheatable | endpoint | 1.000331 | 1.013784 | 1.034792 |\n| Uncheatable | midpoint | 0.987572 | 1.005856 | 1.035887 |\n| OlmoBaseEval Easy | mariner | 1.068202 | 1.101763 | 1.180860 |\n| OlmoBaseEval Easy | endpoint | 1.086836 | 1.122041 | 1.175938 |\n| OlmoBaseEval Easy | midpoint | 1.075381 | 1.104587 | 1.176416 |\n\nThe suite reference fit predicts 1.180860 BPB at MARINER's mixture and 1.188817 at its own returned proposal. Thus following the reference code does not eliminate the original apparent inconsistency. The sampler searches a finite candidate pool and returns an average, which need not minimize the fitted predictor. Even the old trained RegMix proposal receives a lower prediction than the new returned proposal on both objectives. There is no basis to infer the new proposals' measured performance from these predictions alone.\n\nFor the four newly proposed validation points:\n\n| Objective | Point | Reference RegMix prediction | Frozen MARINER prediction | Measured |\n|---|---|---:|---:|---|\n| Uncheatable | endpoint | 1.035484 | 1.025648 | Unmeasured |\n| Uncheatable | midpoint | 1.034594 | 0.988722 | Unmeasured |\n| OlmoBaseEval Easy | endpoint | 1.188817 | 1.132000 | Unmeasured |\n| OlmoBaseEval Easy | midpoint | 1.181691 | 1.072671 | Unmeasured |\n\nAt the same proxy training budget and available bucket subsets used in the existing swarm, the two new endpoint mixtures repeat their most-exposed bucket about 10 times. The changes are much larger than runtime rounding (roughly 0.2% total variation), so the old midpoint measurements do not approximate the new mixtures merely because both are 50% blends.\n\n## Reproduction and handoff\n\nRun from the Marin checkout:\n```bash\nuv run --offline --no-sync --with lightgbm==4.7.0 python experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/regmix_official_rerun_20260913/rerun_official.py\n```\n\nThe script freezes its input manifest and reuses completed fits when that manifest is unchanged. Raw source cells, model artifacts, input hashes, the split, candidate-pool hash, continuous/rounded weights, cross-predictions and path predictions are saved beside this report. `PROTOCOL.md` was written before fitting. `policy_weights.csv` contains the primary and diagnostic proposals; `proposal_comparison.csv` identifies the `official_objective` primary result.\n\nHistorical measurement provenance and the Uncheatable metric bridge are documented in `HISTORICAL_MEASUREMENTS.md`. The figure script is `plot_official_replay.py`. The manuscript and its plotted measurements remain unchanged until a baseline-protocol decision and new validation.\n\n## Freshness\n\n- Handoff status: `current`\n- Drifted artifacts: 2\n- Stale validations: 2\n\n### Drifted Artifacts\n- `art_01m2795736y5t7axgq9td204n5` experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_comparator_proposals_3e18_20260909/paired_results.csv (mtime_size)\n- `art_01m27957casj5czvr0n01ajfsm` experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_comparator_proposals_3e18_20260909/diagnostics/calibration.pdf (missing_file)\n\n### Stale Validations\n- `val_01m2795jtz4m7mgtqg74c0zq9p` comparator_proposals_measured_vs_mariner\n- `val_01m274aevrhnf95vtk1wdzxdb9` durable_output_refresh_20260911_0200\n",
+      "body_format": "markdown",
+      "created_at": "2026-09-13T15:14:01Z",
+      "deleted_at": null,
+      "entity_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+      "entity_type": "experiment",
+      "id": "note_01m2dna7gfx4hmg5vzxmwwg9wk",
+      "note_type": "checkpoint",
+      "resolved_at": null,
+      "status": "open",
+      "title": "Experiment handoff",
+      "updated_at": "2026-09-13T15:14:01Z"
+    }
+  }
+}

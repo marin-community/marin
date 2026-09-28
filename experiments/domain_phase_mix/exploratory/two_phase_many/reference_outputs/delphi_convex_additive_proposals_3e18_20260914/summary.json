@@ -1,0 +1,276 @@
+{
+  "cmp_u_cvx_cap06": {
+    "target": "uncheatable",
+    "comparator": "MARINER, fully convex objective (convex harm)",
+    "model_id": "weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_raw_epoch_hinge",
+    "optimizer": "slsqp",
+    "nominal_cap_inactive": true,
+    "max_epochs": 5.578099941015283,
+    "q95_epochs": 4.435950939559275,
+    "active_buckets": 26,
+    "effective_buckets": 15.61305482074634,
+    "tv_to_proportional": 0.4494161807446179,
+    "tv_runtime_to_continuous": 0.0015866433466693454,
+    "tv_to_mariner": 0.17041015625,
+    "self_prediction_runtime": 0.988468371977447,
+    "self_prediction_at_mariner": 0.9915632827527353,
+    "mariner_prediction_runtime": 0.9845796195354494,
+    "mariner_prediction_at_mariner": 0.981031489746078,
+    "optimizer_record": {
+      "starts": [
+        {
+          "start": 0,
+          "objective": 0.988467490717419,
+          "raw_feasibility_violation": 2.220446049250313e-16,
+          "success": true,
+          "iterations": 29,
+          "selected": false
+        },
+        {
+          "start": 1,
+          "objective": 0.9884674907213036,
+          "raw_feasibility_violation": 2.220446049250313e-16,
+          "success": true,
+          "iterations": 1,
+          "polished": true,
+          "selected": false
+        },
+        {
+          "start": 2,
+          "objective": 0.9884674907133262,
+          "raw_feasibility_violation": 0.0,
+          "success": true,
+          "iterations": 33,
+          "selected": true
+        },
+        {
+          "start": 3,
+          "objective": 0.9884674907139245,
+          "raw_feasibility_violation": 0.0,
+          "success": true,
+          "iterations": 1,
+          "polished": true,
+          "selected": false
+        },
+        {
+          "start": 4,
+          "objective": 0.9884674907139842,
+          "raw_feasibility_violation": 0.0,
+          "success": true,
+          "iterations": 27,
+          "selected": false
+        }
+      ],
+      "continuous_prediction": 0.9884674907133262,
+      "runtime_prediction": 0.988468371977447,
+      "exchange_steps": 2.0,
+      "max_materialized_epoch": 5.578099941015283
+    },
+    "seconds": 20.810178166997503
+  },
+  "cmp_u_add_cap08": {
+    "target": "uncheatable",
+    "comparator": "MARINER, additive response",
+    "model_id": "weibull_softplus_unscaled",
+    "optimizer": "slsqp",
+    "nominal_cap_inactive": true,
+    "max_epochs": 6.516068141531636,
+    "q95_epochs": 5.140904007647002,
+    "active_buckets": 35,
+    "effective_buckets": 16.57369695367717,
+    "tv_to_proportional": 0.5551479904915193,
+    "tv_runtime_to_continuous": 0.0024526349120677594,
+    "tv_to_mariner": 0.19482421875,
+    "self_prediction_runtime": 0.9444983448229751,
+    "self_prediction_at_mariner": 0.9536802814112955,
+    "mariner_prediction_runtime": 0.9842314088684369,
+    "mariner_prediction_at_mariner": 0.981031489746078,
+    "optimizer_record": {
+      "starts": [
+        {
+          "start": 0,
+          "objective": 0.944491238228647,
+          "raw_feasibility_violation": 2.220446049250313e-16,
+          "success": true,
+          "iterations": 43,
+          "selected": true
+        },
+        {
+          "start": 1,
+          "objective": 0.9444912382309891,
+          "raw_feasibility_violation": 0.0,
+          "success": true,
+          "iterations": 43,
+          "selected": false
+        },
+        {
+          "start": 2,
+          "objective": 0.9444912382321518,
+          "raw_feasibility_violation": 2.220446049250313e-16,
+          "success": true,
+          "iterations": 1,
+          "polished": true,
+          "selected": false
+        },
+        {
+          "start": 3,
+          "objective": 0.9444912382319481,
+          "raw_feasibility_violation": 1.1102230246251565e-16,
+          "success": true,
+          "iterations": 44,
+          "selected": false
+        },
+        {
+          "start": 4,
+          "objective": 0.944491238231292,
+          "raw_feasibility_violation": 1.1102230246251565e-16,
+          "success": true,
+          "iterations": 45,
+          "selected": false
+        }
+      ],
+      "continuous_prediction": 0.944491238228647,
+      "runtime_prediction": 0.9444983448229751,
+      "exchange_steps": 1.0,
+      "max_materialized_epoch": 6.516068141531636
+    },
+    "seconds": 22.28350650000357
+  },
+  "cmp_t9_cvx_cap08": {
+    "target": "table9",
+    "comparator": "MARINER, fully convex objective (convex harm)",
+    "model_id": "weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_raw_epoch_hinge",
+    "optimizer": "slsqp",
+    "nominal_cap_inactive": true,
+    "max_epochs": 7.926087901708487,
+    "q95_epochs": 6.43285256589231,
+    "active_buckets": 38,
+    "effective_buckets": 19.64124198668535,
+    "tv_to_proportional": 0.4918373533385386,
+    "tv_runtime_to_continuous": 0.002634102994536784,
+    "tv_to_mariner": 0.0556640625,
+    "self_prediction_runtime": 1.0639593575050266,
+    "self_prediction_at_mariner": 1.0651906544660508,
+    "mariner_prediction_runtime": 1.0641025922258494,
+    "mariner_prediction_at_mariner": 1.063076746186674,
+    "optimizer_record": {
+      "starts": [
+        {
+          "start": 0,
+          "objective": 1.0639424573670047,
+          "raw_feasibility_violation": 0.0,
+          "success": true,
+          "iterations": 42,
+          "selected": false
+        },
+        {
+          "start": 1,
+          "objective": 1.0639424573712897,
+          "raw_feasibility_violation": 1.1102230246251565e-16,
+          "success": true,
+          "iterations": 1,
+          "polished": true,
+          "selected": false
+        },
+        {
+          "start": 2,
+          "objective": 1.0639424573660368,
+          "raw_feasibility_violation": 0.0,
+          "success": true,
+          "iterations": 1,
+          "polished": true,
+          "selected": false
+        },
+        {
+          "start": 3,
+          "objective": 1.0639424573654193,
+          "raw_feasibility_violation": 0.0,
+          "success": true,
+          "iterations": 1,
+          "polished": true,
+          "selected": true
+        },
+        {
+          "start": 4,
+          "objective": 1.0639424573663536,
+          "raw_feasibility_violation": 1.1102230246251565e-16,
+          "success": true,
+          "iterations": 42,
+          "selected": false
+        }
+      ],
+      "continuous_prediction": 1.0639424573654193,
+      "runtime_prediction": 1.0639593575050266,
+      "exchange_steps": 0.0,
+      "max_materialized_epoch": 7.926087901708487
+    },
+    "seconds": 164.70705870800157
+  },
+  "cmp_t9_add_cap08": {
+    "target": "table9",
+    "comparator": "MARINER, additive response",
+    "model_id": "weibull_softplus_unscaled",
+    "optimizer": "slsqp",
+    "nominal_cap_inactive": true,
+    "max_epochs": 7.643013333790328,
+    "q95_epochs": 7.339334526359807,
+    "active_buckets": 39,
+    "effective_buckets": 19.776969452618562,
+    "tv_to_proportional": 0.5164561690152605,
+    "tv_runtime_to_continuous": 0.002836302639463254,
+    "tv_to_mariner": 0.09716796875,
+    "self_prediction_runtime": 1.0050628310341407,
+    "self_prediction_at_mariner": 1.0096443858799682,
+    "mariner_prediction_runtime": 1.0655503881002009,
+    "mariner_prediction_at_mariner": 1.063076746186674,
+    "optimizer_record": {
+      "starts": [
+        {
+          "start": 0,
+          "objective": 1.0050482319725624,
+          "raw_feasibility_violation": 1.1102230246251565e-16,
+          "success": true,
+          "iterations": 42,
+          "selected": true
+        },
+        {
+          "start": 1,
+          "objective": 1.0050482319858483,
+          "raw_feasibility_violation": 0.0,
+          "success": true,
+          "iterations": 44,
+          "selected": false
+        },
+        {
+          "start": 2,
+          "objective": 1.00504823198225,
+          "raw_feasibility_violation": 0.0,
+          "success": true,
+          "iterations": 46,
+          "selected": false
+        },
+        {
+          "start": 3,
+          "objective": 1.0050482319729632,
+          "raw_feasibility_violation": 0.0,
+          "success": true,
+          "iterations": 41,
+          "selected": false
+        },
+        {
+          "start": 4,
+          "objective": 1.0050482319730356,
+          "raw_feasibility_violation": 0.0,
+          "success": true,
+          "iterations": 44,
+          "selected": false
+        }
+      ],
+      "continuous_prediction": 1.0050482319725624,
+      "runtime_prediction": 1.0050628310341407,
+      "exchange_steps": 1.0,
+      "max_materialized_epoch": 7.643013333790328
+    },
+    "seconds": 160.7289463749985
+  }
+}

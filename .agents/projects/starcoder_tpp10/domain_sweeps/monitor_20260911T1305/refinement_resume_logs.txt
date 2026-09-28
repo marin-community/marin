@@ -1,0 +1,28 @@
+I20260911 06:07:43 8553706816 iris.cluster.config Loading config from lib/iris/config/marin.yaml
+I20260911 06:07:43 8553706816 finelog.client.log_client LogClient resolved /system/log-server -> https://iris.oa.dev/proxy/system.log-server (log)
+Not all requested scopes were granted by the authorization server, missing scopes email.
+[13:06:59] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=0 | W20260911 13:06:52 140660145230656 levanter.tensorstore_serialization Unknown leaf type <class 'NoneType'>
+[13:06:59] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=0 | W20260911 13:06:52 140660145230656 levanter.tensorstore_serialization Unknown leaf type <class 'NoneType'>
+[13:06:59] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=0 | W20260911 13:06:52 140660145230656 levanter.tensorstore_serialization Unknown leaf type <class 'NoneType'>
+[13:06:59] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=0 | W20260911 13:06:52 140660145230656 levanter.tensorstore_serialization Unknown leaf type <class 'NoneType'>
+[13:06:59] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=0 | W20260911 13:06:52 140660145230656 levanter.tensorstore_serialization Unknown leaf type <class 'NoneType'>
+[13:06:59] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=0 | W20260911 13:06:52 140660145230656 levanter.tensorstore_serialization Unknown leaf type <class 'NoneType'>
+[13:06:59] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=0 | W20260911 13:06:52 140660145230656 levanter.tensorstore_serialization Unknown leaf type <class 'NoneType'>
+[13:06:59] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=0 | W20260911 13:06:52 140660145230656 levanter.tensorstore_serialization Unknown leaf type <class 'NoneType'>
+[13:06:59] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=0 | W20260911 13:06:52 140660145230656 levanter.tensorstore_serialization Unknown leaf type <class 'NoneType'>
+[13:06:59] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=0 | I20260911 13:06:54 140660145230656 levanter.tensorstore_serialization Restore read 2.37GiB from TensorStore and materialized 2.37GiB across 41 arrays in 1.7s (1.40 GiB/s), peak 2.37GiB of a 16.00GiB budget
+[13:06:59] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=0 | I20260911 13:06:56 140660145230656 levanter.main.train_lm Resuming training from step 3011
+[13:06:59] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=0 | W20260911 13:06:56 140660145230656 levanter.data.loader Data loader stalled 0.733s. queue_size=0 fetch_batch_size=32 max_buffered=128
+[13:06:59] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=0 | I20260911 13:06:56 140660145230656 levanter.trainer First batch loaded in 0.7s, starting first train step (includes JIT compilation)...
+[13:06:59] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=0 | I20260911 13:06:57 140660145230656 levanter.trainer Tracing train_step_hooks for jaxpr...
+[13:06:59] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=0 | I20260911 13:06:58 140660145230656 levanter.kernels.pallas.fused_cross_entropy_loss.api Fused cross-entropy selected implementation: xla
+[13:07:05] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=0 | I20260911 13:06:59 140660145230656 levanter.trainer Traced train_step_hooks in 2.1s
+[13:07:05] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=0 | wandb: WARNING Artifact "config.yaml" already exists with the same content. No new version will be created.
+[13:07:05] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=0 | I20260911 13:06:59 140660145230656 levanter.trainer Lowering train_step_hooks to HLO...
+[13:07:05] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=0 | I20260911 13:07:00 140660145230656 levanter.trainer Lowered train_step_hooks in 0.6s
+[13:07:25] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=0 | W20260911 13:07:24 140342661719744 levanter.tracker.wandb Step 3011 is less than the current step 3402. Cowardly refusing to log metrics.
+[13:07:25] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=0 | I20260911 13:07:24 140660145230656 levanter.trainer First train step completed in 27.4s (step 3011)
+[13:07:31] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=0 | I20260911 13:07:30 140660145230656 levanter.trainer Tracing train_step for jaxpr...
+[13:07:31] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=0 | I20260911 13:07:31 140660145230656 levanter.trainer Traced train_step in 1.6s
+[13:07:38] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=0 | I20260911 13:07:33 140660145230656 levanter.trainer Lowering train_step to HLO...
+[13:07:38] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=0 | I20260911 13:07:34 140660145230656 levanter.trainer Lowered train_step in 0.8s

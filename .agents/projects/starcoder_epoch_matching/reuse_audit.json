@@ -1,0 +1,28 @@
+{
+  "design_sha256": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b",
+  "status": "passed",
+  "historical_config_uri": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_wsd80_dense_support_surfaces_20260808/dss_r3d28260_m100_c109_s0711/2026.07.11/.artifact.json#1786382221812759",
+  "historical_config_sha256": "b9e047c49742fa6d73672d62f9890d70fc95eb5f855a47c6f23f94654ced013e",
+  "packed_starcoder_sequence_count": 105745752,
+  "parent_indices_sha256": "24c5bdd4bd466de18bc56ba06ea92053e329ad749aadea354a983fb38c61c4c1",
+  "matched_indices_sha256": "6c8ac23d240d4c99f88b2fa854cb7f7415b19e5387a68cf634f03dd73d2706c3",
+  "legacy_parent_match": true,
+  "nested_subset_match": true,
+  "review_evidence": "verified_historical_config.md",
+  "audit_runtime": {
+    "jax_version": "0.10.1",
+    "numpy_version": "2.3.5",
+    "jax_default_prng_impl": "threefry2x32",
+    "jax_enable_x64": false
+  },
+  "source_parity_reference": "eafa4d49f7c55fbf2abb26b5d92c1ac7d093f9fb",
+  "provenance_limit": "Exact original launch Git SHA is unavailable; configuration and full parent-index parity are verified.",
+  "prior_design_sha256": "5b7ef54df7ba03726c0204efa53e6865050ee02d8c94767075758868ffc244a4",
+  "runtime_revision": "New training uses repository-lock JAX0.11.1; historical and current runtime index hashes agree. This does not assert numerical training equivalence.",
+  "intended_training_environment": {
+    "jax_version": "0.11.1",
+    "numpy_version": "2.3.5",
+    "jax_default_prng_impl": "threefry2x32",
+    "jax_enable_x64": false
+  }
+}

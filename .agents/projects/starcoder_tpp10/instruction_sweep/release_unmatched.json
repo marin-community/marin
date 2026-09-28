@@ -1,0 +1,15 @@
+{
+ "approved": true,
+ "reviewer": "User authorized in chat on 2026-09-20 ('let's also do a proxy scale, no simulated epoching sweep for both'), for the Figure 4 two-domain candidate (FLAN on SciQ, FineMath-3+ on GSM8K).",
+ "approved_at": "2026-09-20T06:01:59Z",
+ "parent_priority": "interactive",
+ "parent_preemptible": false,
+ "parent_timeout": 172800,
+ "parent_failure_retries": 0,
+ "parent_preemption_retries": 0,
+ "child_policy": "Regional v5p-8 workers in us-central1-a, inherited interactive band; existing Fray zero task-failure retries and preemption recovery; remaining points released at the canary's first committed checkpoint (tpp10_execution_check).",
+ "manual_resume": "Only after the old parent and descendants are terminal and leases are absent or expired; exact successful artifacts are skipped and unfinished recipes resumed by resubmitting the same plan and release.",
+ "plan_sha256": "9aca28e0e78b1260f2c1081227ccb236b821accdfb2678b03364e006acd34336",
+ "scope": "Eight single-seed Dolmino FLAN unmatched-proxy points (p = 0, 5, 10, 20, 30, 50, 70, 100 percent) on the frozen TPP-10 grid: the 16.6M proxy trained on the full 190,316,544-token parent pool with no downsampling, so domain exposure stays below one epoch (the no-simulated-epoching comparison). Same evaluations as the matched proxy sweep. No target arm, no replicates.",
+ "pool": "Existing FLAN parent pool (2026.09.19), no new preparation."
+}

@@ -1,0 +1,103 @@
+{
+  "schema_version": 1,
+  "region": "us-east5",
+  "zone": "us-east5-a",
+  "cache_uri": "gs://marin-us-east5/raw/eval-datasets/olmo-base-easy-overlap-v1",
+  "cache_manifest_sha256": "d9fd4365f4367f163714febc124221f5382ffd2c6c2b28bb6d42775f292846ad",
+  "output_root": "gs://marin-us-east5/experiments/mariner_ladder_accuracy_20260914",
+  "tpu_type": "v5p-8",
+  "max_length": 4096,
+  "batch_size": 8,
+  "seed": 0,
+  "runtime_versions": {
+    "lm-eval": "0.4.10",
+    "datasets": "4.8.5",
+    "transformers": "5.12.1",
+    "jax": "0.11.1",
+    "jaxlib": "0.11.1"
+  },
+  "lm_eval_revision": "f7d0b116146bd616b59d0b991549120f197369a4",
+  "source_hashes": {
+    "experiments/domain_phase_mix/evaluate_mariner_ladder_accuracy.py": "ab3e74fa50c178fef4a3e329a1ed7c6dfc8e79814caca42de26de83390b409d5",
+    "experiments/evals/olmo_base_easy_overlap.py": "39a848b00eec01dfb7863280ecbd1ffa308530d66c406c459677b561849a7347",
+    "lib/levanter/src/levanter/eval_harness.py": "d454065391d35370cc926ff5cff46b21d89eb7ea8c88cc7c1a716bde31a33696",
+    "lib/levanter/src/levanter/eval_harness_config.py": "03daa3b2d4a2600fba71f463569912c578b02d297a356fda1465754254ae4a28",
+    "lib/levanter/src/levanter/eval_harness_metrics.py": "4ab5fa4d5efa8fe04f0e58849e3a8f83c4ca749af99c1fbcbbc6f01b0a0b2931",
+    "lib/levanter/src/levanter/data/packing.py": "61b3e1af1b60f6205038ede06fe367e326add2bc663c5d598839fb8b06590046",
+    "lib/levanter/src/levanter/data/loader.py": "1d723d290add5812bbb44fe2e3d0a0532c4d13538b5d5ad37a540fbc888ebea9",
+    "lib/levanter/src/levanter/utils/jax_utils.py": "fadbfc228b71898d477268cde932cc0e6ef6b10e03b30d9fd01d46e20a62021a",
+    "lib/levanter/src/levanter/utils/background_iterable.py": "974a2bfdfedf80b995c8af5d5b2c4d268951ef8d5c8e7573d43360ed315665fd",
+    "lib/levanter/src/levanter/models/qwen.py": "241b086569a8aa23b3a006a4be3ebc9142c45cdda8eaef81a19dabc77526b66b",
+    "lib/levanter/src/levanter/models/llama.py": "f4ebbfbff8708d76e300d70e70c1393ff9553e46c251c38de3d71cd5b948de57",
+    "lib/levanter/src/levanter/compat/hf_checkpoints.py": "0bedd25779e7adb1070e8afd116131cb3cb4346c3e9179d1847ed9ec91fba9a5",
+    "lib/levanter/src/levanter/tokenizers.py": "c49f9f74dc25e683ee9dba413c4008ecbc78a4bac864cba4647a129d6eb0dcb3",
+    "lib/levanter/src/levanter/trainer.py": "83f6046e2179a1c4e4c48883f1f4747c44b457ef977ecb27c12f7a954b261adb",
+    "lib/levanter/src/levanter/distributed.py": "e96cccd01287e9a6e6c4fdf94811250d0ed498148be1d7495d159b9871b80123",
+    "lib/marin/src/marin/evaluation/eval_dataset_cache.py": "3763f6b931744114f468e3e24d2bde7c8c57119febf5427cc7cb206fb65314be",
+    "lib/marin/src/marin/evaluation/evaluation_config.py": "44b74bac25cd17b17e6016a6e315b367b3cf557c8e2d1bb307869aac0d8b3e5a",
+    "lib/marin/src/marin/execution/remote.py": "23e8517a4d315180adfe085fc2539a76662a79babab33e12ee6a187224064f60",
+    "lib/marin/src/marin/training/run_environment.py": "3e1b0cca3563df838b178254f76ace751521e3fb829de22cd40220ffaea41151",
+    "uv.lock": "ebcf703a0c2883942457cc30c6df502c982237a535a4bcd8a6e30ea0a3ffcc7c"
+  },
+  "uv_lock_sha256": "ebcf703a0c2883942457cc30c6df502c982237a535a4bcd8a6e30ea0a3ffcc7c",
+  "rows": [
+    {
+      "name": "lwspu_t9_snc_cap08_1e21-e8e9d7",
+      "method": "MARINER",
+      "checkpoint_uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_frozen_procedure_scaling_v6e_20260908/lwspu_t9_snc_cap08_1e21_seed662005-e8e9d7/hf/step-22056",
+      "checkpoint_step": 22056,
+      "checkpoint_files": {
+        "chat_template.jinja": {
+          "size": 5112,
+          "generation": "1790007480232413",
+          "crc32c": "jSXcIQ=="
+        },
+        "config.json": {
+          "size": 1821,
+          "generation": "1790007480241146",
+          "crc32c": "Ed+/cg=="
+        },
+        "model-00001-of-00003.safetensors": {
+          "size": 4933674712,
+          "generation": "1790007383078511",
+          "crc32c": "qupuCQ=="
+        },
+        "model-00002-of-00003.safetensors": {
+          "size": 4928580272,
+          "generation": "1790007437288569",
+          "crc32c": "83zEQw=="
+        },
+        "model-00003-of-00003.safetensors": {
+          "size": 3670220688,
+          "generation": "1790007478732358",
+          "crc32c": "S8O2hg=="
+        },
+        "model.safetensors.index.json": {
+          "size": 22613,
+          "generation": "1790007480237781",
+          "crc32c": "kQyzZw=="
+        },
+        "tokenizer.json": {
+          "size": 17209892,
+          "generation": "1790007480435310",
+          "crc32c": "cv2h3Q=="
+        },
+        "tokenizer_config.json": {
+          "size": 5614,
+          "generation": "1790007480237451",
+          "crc32c": "IMLwKQ=="
+        }
+      },
+      "source_training_experiment": "exp_01m1zy8yths4dqp5bgc0ffzztp",
+      "training_metadata": {
+        "uri": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_frozen_procedure_scaling_v6e_20260908/lwspu_t9_snc_cap08_1e21_seed662005-e8e9d7/checkpoints/step-22056/metadata.json",
+        "sha256": "1fb48e68f861760317a0d4a4f3879b1567545efa7add8f28ddac36c1770893e8",
+        "data": {
+          "step": 22056,
+          "timestamp": "2026-09-21T16:15:05.060643",
+          "is_temporary": false
+        }
+      }
+    }
+  ]
+}

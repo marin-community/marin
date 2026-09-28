@@ -1,0 +1,21 @@
+{
+  "input_sha256": {
+    "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/starcoder_epoch_matching_design_20260908.json": "17703162656b08a0f5a693d71fef2b23d2484af9986167b0facda5420b1fda3c",
+    "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/analyze_starcoder_epoch_matching.py": "f9b38499c006c70fb726dca5fec2d19791318fd7421ac9cf25c4176244305eba",
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/submission_plan.json": "0b605cb0e0ff772d18798a7980d977dcd116d2385168b339bc79e39d407f2008",
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/collection_plan.json": "9d6da00693878bf1b0b565054221a71f67258a0db16d8e837295566808541850",
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/measurements.csv": "65f23da7430340f61146b22759790b694a5b5c36934e22489813582e7a8315ae"
+  },
+  "output_sha256": {
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/results/RESULTS.md": "67ba5309e63480c3bbd163a642db064b56877a6f0ddd5b0929954f94db480406",
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/results/analysis.json": "0c10c4f5e3a1078721c6c738684cc170ce4a2ae210afa83d3a9f721f1284ed02",
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/results/curves.csv": "6d42ff590ee688c8f6fdd5f8438a844d75eb0a487452910d1d468c4ebab63f44",
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/results/descriptive_diagnostics.json": "c500de2a72efe53e534c8c4c90c5342828db0ae8f1c9ad08e6f43f4b1540fdd6",
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/results/independent_verification.json": "a6d24df2861ca8dd817487cf7dcd8f22ce122dd8d837e37fbbeff67a538b9592",
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/results/curves.png": "1dbcc148e799e2b0176257d711a7bb0d00f18f59fef976a307e1294dc9ffeafc",
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/results/curves.pdf": "54c41f66663f7579323d4854e96510f1e04c485e7c1a854d98219840c80286a6",
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/results/excess_curves.png": "da1f935e0c9ca1c6b743bcda3490604fd6214d6d5d0a8c3aebe7b7c9c9eb1158",
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/results/excess_curves.pdf": "066dcdb984183a80dcf336a8be7c8ff557fabdd7104f556d0c75f218c6391fa7",
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/results/outline_analysis.patch": "d223691454cce27e102c9fa507e21736235797cf892b703bd09bf2971ccdc969"
+  }
+}

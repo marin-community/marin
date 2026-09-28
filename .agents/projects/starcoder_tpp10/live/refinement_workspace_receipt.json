@@ -1,0 +1,41 @@
+{
+  "uri": "gs://marin-us-central2/iris/marin/state/bundles/8100461f4555644152f7a576754a5d25095ebe40b827dd6ffea4354024881fff",
+  "bundle_sha256": "8100461f4555644152f7a576754a5d25095ebe40b827dd6ffea4354024881fff",
+  "size": 26176907,
+  "generation": "1789110522897618",
+  "crc32c": "qJQmGA==",
+  "verified_pins": 27,
+  "release_included": true,
+  "selection_launcher_verified": true,
+  "identical_to_local_preflight_zip": true,
+  "parent_constraints": [
+    {
+      "key": "region",
+      "op": 0,
+      "value": {
+        "string_value": "us-central1"
+      },
+      "mode": 0
+    },
+    {
+      "key": "zone",
+      "op": 0,
+      "value": {
+        "string_value": "us-central1-a"
+      },
+      "mode": 0
+    },
+    {
+      "key": "preemptible",
+      "op": 0,
+      "value": {
+        "string_value": "false"
+      },
+      "mode": 0
+    }
+  ],
+  "parent_state": 3,
+  "preemption_policy": "0",
+  "max_retries_failure": "0",
+  "max_retries_preemption": "0"
+}

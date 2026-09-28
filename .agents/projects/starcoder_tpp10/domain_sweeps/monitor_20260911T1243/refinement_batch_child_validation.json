@@ -1,0 +1,894 @@
+{
+  "status": "passed",
+  "checked_at": "2026-09-11T12:45:46.556148+00:00",
+  "count": 34,
+  "states": {
+    "JOB_STATE_PENDING": 34
+  },
+  "rows": [
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-cffa480f",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "bundle_id": "3655dd72d95b64c91b0b39341b27308cead8f5a24402128694032f1390067246",
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v5p-8",
+        "region": "us-central1",
+        "zone": "us-central1-a"
+      },
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": "240518168576",
+        "device": {
+          "tpu": {
+            "variant": "v5p-8",
+            "count": 4
+          }
+        },
+        "disk_bytes": "53687091200"
+      },
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      }
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-5300643e",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "bundle_id": "3655dd72d95b64c91b0b39341b27308cead8f5a24402128694032f1390067246",
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v5p-8",
+        "region": "us-central1",
+        "zone": "us-central1-a"
+      },
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": "240518168576",
+        "device": {
+          "tpu": {
+            "variant": "v5p-8",
+            "count": 4
+          }
+        },
+        "disk_bytes": "53687091200"
+      },
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      }
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-538206b0",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "bundle_id": "3655dd72d95b64c91b0b39341b27308cead8f5a24402128694032f1390067246",
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v5p-8",
+        "region": "us-central1",
+        "zone": "us-central1-a"
+      },
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": "240518168576",
+        "device": {
+          "tpu": {
+            "variant": "v5p-8",
+            "count": 4
+          }
+        },
+        "disk_bytes": "53687091200"
+      },
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      }
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-9740ffae",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "bundle_id": "3655dd72d95b64c91b0b39341b27308cead8f5a24402128694032f1390067246",
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v5p-8",
+        "region": "us-central1",
+        "zone": "us-central1-a"
+      },
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": "240518168576",
+        "device": {
+          "tpu": {
+            "variant": "v5p-8",
+            "count": 4
+          }
+        },
+        "disk_bytes": "53687091200"
+      },
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      }
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-23772e08",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "bundle_id": "3655dd72d95b64c91b0b39341b27308cead8f5a24402128694032f1390067246",
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v5p-8",
+        "region": "us-central1",
+        "zone": "us-central1-a"
+      },
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": "240518168576",
+        "device": {
+          "tpu": {
+            "variant": "v5p-8",
+            "count": 4
+          }
+        },
+        "disk_bytes": "53687091200"
+      },
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      }
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-d1a98d0f",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "bundle_id": "3655dd72d95b64c91b0b39341b27308cead8f5a24402128694032f1390067246",
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v5p-8",
+        "region": "us-central1",
+        "zone": "us-central1-a"
+      },
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": "240518168576",
+        "device": {
+          "tpu": {
+            "variant": "v5p-8",
+            "count": 4
+          }
+        },
+        "disk_bytes": "53687091200"
+      },
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      }
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-20560554",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "bundle_id": "3655dd72d95b64c91b0b39341b27308cead8f5a24402128694032f1390067246",
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v5p-8",
+        "region": "us-central1",
+        "zone": "us-central1-a"
+      },
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": "240518168576",
+        "device": {
+          "tpu": {
+            "variant": "v5p-8",
+            "count": 4
+          }
+        },
+        "disk_bytes": "53687091200"
+      },
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      }
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-e24265b9",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "bundle_id": "3655dd72d95b64c91b0b39341b27308cead8f5a24402128694032f1390067246",
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v5p-8",
+        "region": "us-central1",
+        "zone": "us-central1-a"
+      },
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": "240518168576",
+        "device": {
+          "tpu": {
+            "variant": "v5p-8",
+            "count": 4
+          }
+        },
+        "disk_bytes": "53687091200"
+      },
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      }
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-f24df5e7",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "bundle_id": "3655dd72d95b64c91b0b39341b27308cead8f5a24402128694032f1390067246",
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v5p-8",
+        "region": "us-central1",
+        "zone": "us-central1-a"
+      },
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": "240518168576",
+        "device": {
+          "tpu": {
+            "variant": "v5p-8",
+            "count": 4
+          }
+        },
+        "disk_bytes": "53687091200"
+      },
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      }
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-41a71805",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "bundle_id": "3655dd72d95b64c91b0b39341b27308cead8f5a24402128694032f1390067246",
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v5p-8",
+        "region": "us-central1",
+        "zone": "us-central1-a"
+      },
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": "240518168576",
+        "device": {
+          "tpu": {
+            "variant": "v5p-8",
+            "count": 4
+          }
+        },
+        "disk_bytes": "53687091200"
+      },
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      }
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-aef5dc6f",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "bundle_id": "3655dd72d95b64c91b0b39341b27308cead8f5a24402128694032f1390067246",
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v5p-8",
+        "region": "us-central1",
+        "zone": "us-central1-a"
+      },
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": "240518168576",
+        "device": {
+          "tpu": {
+            "variant": "v5p-8",
+            "count": 4
+          }
+        },
+        "disk_bytes": "53687091200"
+      },
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      }
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-ceb33beb",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "bundle_id": "3655dd72d95b64c91b0b39341b27308cead8f5a24402128694032f1390067246",
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v5p-8",
+        "region": "us-central1",
+        "zone": "us-central1-a"
+      },
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": "240518168576",
+        "device": {
+          "tpu": {
+            "variant": "v5p-8",
+            "count": 4
+          }
+        },
+        "disk_bytes": "53687091200"
+      },
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      }
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-ebabfa94",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "bundle_id": "3655dd72d95b64c91b0b39341b27308cead8f5a24402128694032f1390067246",
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v5p-8",
+        "region": "us-central1",
+        "zone": "us-central1-a"
+      },
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": "240518168576",
+        "device": {
+          "tpu": {
+            "variant": "v5p-8",
+            "count": 4
+          }
+        },
+        "disk_bytes": "53687091200"
+      },
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      }
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-41348564",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "bundle_id": "3655dd72d95b64c91b0b39341b27308cead8f5a24402128694032f1390067246",
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v5p-8",
+        "region": "us-central1",
+        "zone": "us-central1-a"
+      },
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": "240518168576",
+        "device": {
+          "tpu": {
+            "variant": "v5p-8",
+            "count": 4
+          }
+        },
+        "disk_bytes": "53687091200"
+      },
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      }
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-88eabaca",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "bundle_id": "3655dd72d95b64c91b0b39341b27308cead8f5a24402128694032f1390067246",
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v5p-8",
+        "region": "us-central1",
+        "zone": "us-central1-a"
+      },
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": "240518168576",
+        "device": {
+          "tpu": {
+            "variant": "v5p-8",
+            "count": 4
+          }
+        },
+        "disk_bytes": "53687091200"
+      },
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      }
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-d9142c95",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "bundle_id": "3655dd72d95b64c91b0b39341b27308cead8f5a24402128694032f1390067246",
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v5p-8",
+        "region": "us-central1",
+        "zone": "us-central1-a"
+      },
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": "240518168576",
+        "device": {
+          "tpu": {
+            "variant": "v5p-8",
+            "count": 4
+          }
+        },
+        "disk_bytes": "53687091200"
+      },
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      }
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-868b9225",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "bundle_id": "3655dd72d95b64c91b0b39341b27308cead8f5a24402128694032f1390067246",
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v5p-8",
+        "region": "us-central1",
+        "zone": "us-central1-a"
+      },
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": "240518168576",
+        "device": {
+          "tpu": {
+            "variant": "v5p-8",
+            "count": 4
+          }
+        },
+        "disk_bytes": "53687091200"
+      },
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      }
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-aa2a4590",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "bundle_id": "3655dd72d95b64c91b0b39341b27308cead8f5a24402128694032f1390067246",
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v5p-8",
+        "region": "us-central1",
+        "zone": "us-central1-a"
+      },
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": "240518168576",
+        "device": {
+          "tpu": {
+            "variant": "v5p-8",
+            "count": 4
+          }
+        },
+        "disk_bytes": "53687091200"
+      },
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      }
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-cbf1a3d2",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "bundle_id": "3655dd72d95b64c91b0b39341b27308cead8f5a24402128694032f1390067246",
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v5p-8",
+        "region": "us-central1",
+        "zone": "us-central1-a"
+      },
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": "240518168576",
+        "device": {
+          "tpu": {
+            "variant": "v5p-8",
+            "count": 4
+          }
+        },
+        "disk_bytes": "53687091200"
+      },
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      }
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-0e6106c5",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "bundle_id": "3655dd72d95b64c91b0b39341b27308cead8f5a24402128694032f1390067246",
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v5p-8",
+        "region": "us-central1",
+        "zone": "us-central1-a"
+      },
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": "240518168576",
+        "device": {
+          "tpu": {
+            "variant": "v5p-8",
+            "count": 4
+          }
+        },
+        "disk_bytes": "53687091200"
+      },
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      }
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-0bdba9e0",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "bundle_id": "3655dd72d95b64c91b0b39341b27308cead8f5a24402128694032f1390067246",
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v5p-8",
+        "region": "us-central1",
+        "zone": "us-central1-a"
+      },
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": "240518168576",
+        "device": {
+          "tpu": {
+            "variant": "v5p-8",
+            "count": 4
+          }
+        },
+        "disk_bytes": "53687091200"
+      },
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      }
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-330cbf0c",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "bundle_id": "3655dd72d95b64c91b0b39341b27308cead8f5a24402128694032f1390067246",
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v5p-8",
+        "region": "us-central1",
+        "zone": "us-central1-a"
+      },
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": "240518168576",
+        "device": {
+          "tpu": {
+            "variant": "v5p-8",
+            "count": 4
+          }
+        },
+        "disk_bytes": "53687091200"
+      },
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      }
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-5af121b9",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "bundle_id": "3655dd72d95b64c91b0b39341b27308cead8f5a24402128694032f1390067246",
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v5p-8",
+        "region": "us-central1",
+        "zone": "us-central1-a"
+      },
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": "240518168576",
+        "device": {
+          "tpu": {
+            "variant": "v5p-8",
+            "count": 4
+          }
+        },
+        "disk_bytes": "53687091200"
+      },
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      }
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-3a3d98fc",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "bundle_id": "3655dd72d95b64c91b0b39341b27308cead8f5a24402128694032f1390067246",
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v5p-8",
+        "region": "us-central1",
+        "zone": "us-central1-a"
+      },
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": "240518168576",
+        "device": {
+          "tpu": {
+            "variant": "v5p-8",
+            "count": 4
+          }
+        },
+        "disk_bytes": "53687091200"
+      },
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      }
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-84488469",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "bundle_id": "3655dd72d95b64c91b0b39341b27308cead8f5a24402128694032f1390067246",
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v5p-8",
+        "region": "us-central1",
+        "zone": "us-central1-a"
+      },
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": "240518168576",
+        "device": {
+          "tpu": {
+            "variant": "v5p-8",
+            "count": 4
+          }
+        },
+        "disk_bytes": "53687091200"
+      },
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      }
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-2fc546b7",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "bundle_id": "3655dd72d95b64c91b0b39341b27308cead8f5a24402128694032f1390067246",
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v5p-8",
+        "region": "us-central1",
+        "zone": "us-central1-a"
+      },
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": "240518168576",
+        "device": {
+          "tpu": {
+            "variant": "v5p-8",
+            "count": 4
+          }
+        },
+        "disk_bytes": "53687091200"
+      },
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      }
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-e7af7ef9",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "bundle_id": "3655dd72d95b64c91b0b39341b27308cead8f5a24402128694032f1390067246",
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v5p-8",
+        "region": "us-central1",
+        "zone": "us-central1-a"
+      },
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": "240518168576",
+        "device": {
+          "tpu": {
+            "variant": "v5p-8",
+            "count": 4
+          }
+        },
+        "disk_bytes": "53687091200"
+      },
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      }
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-1e3db94a",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "bundle_id": "3655dd72d95b64c91b0b39341b27308cead8f5a24402128694032f1390067246",
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v5p-8",
+        "region": "us-central1",
+        "zone": "us-central1-a"
+      },
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": "240518168576",
+        "device": {
+          "tpu": {
+            "variant": "v5p-8",
+            "count": 4
+          }
+        },
+        "disk_bytes": "53687091200"
+      },
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      }
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-16aa333a",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "bundle_id": "3655dd72d95b64c91b0b39341b27308cead8f5a24402128694032f1390067246",
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v5p-8",
+        "region": "us-central1",
+        "zone": "us-central1-a"
+      },
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": "240518168576",
+        "device": {
+          "tpu": {
+            "variant": "v5p-8",
+            "count": 4
+          }
+        },
+        "disk_bytes": "53687091200"
+      },
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      }
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-36f0bb02",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "bundle_id": "3655dd72d95b64c91b0b39341b27308cead8f5a24402128694032f1390067246",
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v5p-8",
+        "region": "us-central1",
+        "zone": "us-central1-a"
+      },
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": "240518168576",
+        "device": {
+          "tpu": {
+            "variant": "v5p-8",
+            "count": 4
+          }
+        },
+        "disk_bytes": "53687091200"
+      },
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      }
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-4bdb909e",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "bundle_id": "3655dd72d95b64c91b0b39341b27308cead8f5a24402128694032f1390067246",
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v5p-8",
+        "region": "us-central1",
+        "zone": "us-central1-a"
+      },
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": "240518168576",
+        "device": {
+          "tpu": {
+            "variant": "v5p-8",
+            "count": 4
+          }
+        },
+        "disk_bytes": "53687091200"
+      },
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      }
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-63a9e4db",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "bundle_id": "3655dd72d95b64c91b0b39341b27308cead8f5a24402128694032f1390067246",
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v5p-8",
+        "region": "us-central1",
+        "zone": "us-central1-a"
+      },
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": "240518168576",
+        "device": {
+          "tpu": {
+            "variant": "v5p-8",
+            "count": 4
+          }
+        },
+        "disk_bytes": "53687091200"
+      },
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      }
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-3c9d2262",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "bundle_id": "3655dd72d95b64c91b0b39341b27308cead8f5a24402128694032f1390067246",
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v5p-8",
+        "region": "us-central1",
+        "zone": "us-central1-a"
+      },
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": "240518168576",
+        "device": {
+          "tpu": {
+            "variant": "v5p-8",
+            "count": 4
+          }
+        },
+        "disk_bytes": "53687091200"
+      },
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      }
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "bundle_id": "3655dd72d95b64c91b0b39341b27308cead8f5a24402128694032f1390067246",
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v5p-8",
+        "region": "us-central1",
+        "zone": "us-central1-a"
+      },
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": "240518168576",
+        "device": {
+          "tpu": {
+            "variant": "v5p-8",
+            "count": 4
+          }
+        },
+        "disk_bytes": "53687091200"
+      },
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      }
+    }
+  ]
+}

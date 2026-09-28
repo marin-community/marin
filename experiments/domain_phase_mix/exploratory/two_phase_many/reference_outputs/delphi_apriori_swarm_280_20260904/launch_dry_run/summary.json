@@ -1,0 +1,30 @@
+{
+  "actual_approximate_flops": [
+    3e+18
+  ],
+  "analysis_output_path": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/analysis-af9355",
+  "architecture_target_flops": 3e+18,
+  "experiment_name": "pinlin_calvin_xu/data_mixture/delphi_apriori_swarm_3e18_20260904",
+  "heldout_policy": "These 280 rows are fit data; prior and future validation mixtures remain heldout.",
+  "n_runs": 37,
+  "native_table9_scheduled": true,
+  "panel_counts": {
+    "anchor": 2,
+    "reserved": 3,
+    "subsampled_pool": 32
+  },
+  "phase_boundary": 0.8,
+  "phase_fractions": {
+    "phase_0": 0.8,
+    "phase_1": 0.19999999999999996
+  },
+  "simulated_epoch_target_budget": 6325183647689,
+  "source_experiment_counts": {
+    "pinlin_calvin_xu/data_mixture/delphi_apriori_swarm_3e18_20260904": 37
+  },
+  "source_panel": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_apriori_swarm_280_20260904/swarm_mixtures.csv",
+  "source_panel_sha256": "c5ec2b0ae1b5c68dc44f6ede1a5caa1bd2918f5bfd9f6d0f23be508637856bd6",
+  "total_tokens_per_parameter": [
+    4.399988425475243
+  ]
+}

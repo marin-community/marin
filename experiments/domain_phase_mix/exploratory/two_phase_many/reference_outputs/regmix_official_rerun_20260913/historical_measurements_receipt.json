@@ -1,0 +1,33 @@
+{
+  "source_sha256": {
+    "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260912_full_outline_revision/baseline_calibration/data/comparator_measured_results.csv": "88c1fcb90efaef023f293dd69aaa3438f2b221ad46b48f4ff4ba357e38640aa2",
+    "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260912_full_outline_revision/baseline_calibration/data/fairness_repeats_measured_results.csv": "625718baa8152d34c3a0cc42a9ff7f2e0d54adb8b017a7200c8182f090d7f1b9",
+    "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260912_full_outline_revision/baseline_calibration/data/frozen_procedure_measured_results.csv": "72a7f95ef55513c4ccaf2eeb2b46e5ae27d1f8c2049e1a50b681378aedad3809",
+    "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260912_full_outline_revision/baseline_calibration/data/path_predictions.csv": "d4f29bb9047cba85dd06878f537b83035e769c7f27e5798f9e3d1ee16055d5d8",
+    "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260912_full_outline_revision/baseline_calibration/selected_measured_runs.csv": "1996d89f2af1a62493c1acb308b82c49b368b179ccd39ff277802a53841e6ddf",
+    "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_comparator_proposals_3e18_20260909/solutions.csv": "beb853259620ace70f22e498d55659f6e481e0c05660353368d61934de49bf42",
+    "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/exact_midpoints.csv": "320ae3909be5d6a0041be1be8f68e0e9c523a01bb21705d9ad6a10bcde497fb4",
+    "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/prediction_freeze/78b225d045b6d42ed175dd91d5b06cebecca7e7b04ad07102597fd447809337c/table9/table9_mariner.json": "c0530e148aea54fc43a1bd17079102408b25ef4a70fc2a13bf266e784001146c",
+    "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/prediction_freeze/78b225d045b6d42ed175dd91d5b06cebecca7e7b04ad07102597fd447809337c/uncheatable/uncheatable_mariner.json": "aab5131cf5985f01d3d4513ca462fdfb9fafdd5f2b6abb9101864e4ebdbd8287",
+    "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/prediction_freeze/midpoint_predictions.csv": "e0cbf8d7876691575002bbd920741cbc1aaa2ba1bcefe189b1283d0131fa181d",
+    "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/prediction_freeze/summary.json": "814587934596099dfe5cb06f7bfb50866ccdfcebd1ca4a6bcb649810cb0c52c5",
+    "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/midpoint_scored_results.csv": "90c93c23372c40686a85abc1b9a0c1d33bc333f96467a236d109c48b094a6b40",
+    "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/midpoint_scoring_receipt.json": "750b48eddd8f5841aae0ede619b2e2d0b63904ecd03f7f0a23faa621e72cef41",
+    "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/uncheatable_metric_bridge_audit.json": "1258ee13df7ef126ee92fe8619a12385320180d812896cb29855d1c15b645e3b",
+    "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/regmix_official_rerun_20260913/collect_historical_measurements.py": "0bcb4e851593748ebea5e2fdfed472468fabf78cb0435ed018ef06d771cca91a"
+  },
+  "output_sha256": {
+    "historical_measurements.csv": "601596533d1ad37de2588016a007e07d40d623d8159e13500f23e5133bfeee1d",
+    "historical_weights.csv": "31bbfb3072dafe977fc79ef80938d76372ea65e635f029a13f4f1bc2ef258cc3"
+  },
+  "rows": 10,
+  "distinct_policies": 6,
+  "unchanged_fits_and_measurements": true,
+  "endpoint_csv_roundtrip_tolerance_bpb": 1e-14,
+  "midpoint_weights": "Actual runtime-rounded weights on 1/2048 grid; not the unrounded midpoint.",
+  "uncheatable_metric": "Historical endpoints retain legacy frozen objective BPB; midpoint uses frozen seven-task weights applied to schema-2 pooled component BPB, without empirical offset.",
+  "uncheatable_max_observed_estimator_discrepancy_bpb": 5.3784082599150906e-05,
+  "uncheatable_exact_legacy_metric": false,
+  "midpoint_prediction_fingerprint": "78b225d045b6d42ed175dd91d5b06cebecca7e7b04ad07102597fd447809337c",
+  "mariner_loader": "Add sibling mixture-selection repository to sys.path; import mixture_selection as ms; ms.ObjectiveFit.from_json(json.loads(frozen_json.read_text())).predict(rows reordered to frozen_json['buckets']). No fitting required."
+}

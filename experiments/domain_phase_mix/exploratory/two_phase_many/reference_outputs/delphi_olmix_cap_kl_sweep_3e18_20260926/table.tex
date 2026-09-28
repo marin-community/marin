@@ -1,0 +1,24 @@
+\begin{table}[H]
+\caption{Measured BPB of matched Olmix proposals at Qwen3 360M/1.6B across the epoch cap and the KL weight $\lambda$ of Olmix's optimizer, each trained once at the data and trainer seeds of MARINER's seed-0 runs (0.9814 on Uncheatable, 1.0682 on OlmoBaseEval Easy). Italic entries repeat the run of an earlier cell whose optimized mixture lies within total variation 0.01; cap-1 entries above $\lambda=0$ repeat the $\lambda=0$ run, since a one-epoch cap keeps every mixture within total variation 0.1 of proportional. Bold marks the lowest loss per objective; $\dagger$ marks the deployed Olmix setting.}
+\label{tab:a-olmix-cap-kl}
+\centering
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{lrrrrrrrrrr}
+\toprule
+& \multicolumn{5}{c}{Uncheatable, by epoch cap} & \multicolumn{5}{c}{OlmoBaseEval Easy, by epoch cap} \\
+\cmidrule(lr){2-6}\cmidrule(lr){7-11}
+$\lambda$ & 1 & 4 & 8 & 12 & none & 1 & 4 & 8 & 12 & none \\
+\midrule
+0 & 1.0401 & 1.0024 & 1.0520 & 1.0814 & 1.1929 & 1.2008 & 1.0977 & 1.1052 & 1.1655 & 1.2163 \\
+0.005 & \textit{1.0401} & 1.0014 & 1.0228 & 1.0444 & \textit{1.0444} & \textit{1.2008} & 1.0963\rlap{$^\dagger$} & 1.0946 & 1.1088 & 1.1110 \\
+0.01 & \textit{1.0401} & 0.9970 & 1.0088 & 1.0109 & \textit{1.0109} & \textit{1.2008} & 1.0935 & 1.0942 & 1.0960 & \textit{1.0960} \\
+0.025 & \textit{1.0401} & 0.9959 & \textbf{0.9958} & \textbf{\textit{0.9958}} & \textbf{\textit{0.9958}} & \textit{1.2008} & 1.0981 & \textbf{1.0872} & \textbf{\textit{1.0872}} & \textbf{\textit{1.0872}} \\
+0.05 & \textit{1.0401} & 1.0030\rlap{$^\dagger$} & \textit{1.0030} & \textit{1.0030} & \textit{1.0030} & \textit{1.2008} & 1.1076 & 1.1062 & \textit{1.1062} & \textit{1.1062} \\
+0.075 & \textit{1.0401} & 1.0057 & \textit{1.0057} & \textit{1.0057} & \textit{1.0057} & \textit{1.2008} & 1.1117 & 1.1021 & \textit{1.1021} & \textit{1.1021} \\
+0.1 & \textit{1.0401} & 1.0097 & \textit{1.0097} & \textit{1.0097} & \textit{1.0097} & \textit{1.2008} & 1.1129 & \textit{1.1129} & \textit{1.1129} & \textit{1.1129} \\
+0.2 & \textit{1.0401} & 1.0158 & \textit{1.0158} & \textit{1.0158} & \textit{1.0158} & \textit{1.2008} & 1.1321 & \textit{1.1321} & \textit{1.1321} & \textit{1.1321} \\
+0.5 & \textit{1.0401} & 1.0225 & \textit{1.0225} & \textit{1.0225} & \textit{1.0225} & \textit{1.2008} & 1.1415 & \textit{1.1415} & \textit{1.1415} & \textit{1.1415} \\
+\bottomrule
+\end{tabular}
+\end{table}

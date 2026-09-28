@@ -1,0 +1,131 @@
+{
+  "anchor": "Original canonical280 training-mean mixture, separately for each saved atomic head",
+  "cap_definition": "0 <= weight_b <= min(1, cap / frozen_inventory_b); sum(weights) = 1",
+  "cases": [
+    {
+      "cap": 6,
+      "kappa": 0.25,
+      "target": "uncheatable"
+    },
+    {
+      "cap": 6,
+      "kappa": 0.5,
+      "target": "uncheatable"
+    },
+    {
+      "cap": 6,
+      "kappa": 1.0,
+      "target": "uncheatable"
+    },
+    {
+      "cap": 6,
+      "kappa": 0.25,
+      "target": "table9"
+    },
+    {
+      "cap": 6,
+      "kappa": 0.5,
+      "target": "table9"
+    },
+    {
+      "cap": 6,
+      "kappa": 1.0,
+      "target": "table9"
+    },
+    {
+      "cap": 8,
+      "kappa": 0.25,
+      "target": "table9"
+    },
+    {
+      "cap": 8,
+      "kappa": 0.5,
+      "target": "table9"
+    },
+    {
+      "cap": 8,
+      "kappa": 1.0,
+      "target": "table9"
+    }
+  ],
+  "environment": {
+    "numpy": "2.3.5",
+    "python": "3.12.8",
+    "scipy": "1.17.0"
+  },
+  "evidence_status": "Chosen after retrospective development, frozen before these nine prospective outcomes",
+  "forbidden": [
+    "bank labels",
+    "running ladder",
+    "prospective outcomes",
+    "surrogate refits",
+    "job launches"
+  ],
+  "inputs": {
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_coupling_followup_20260906/continuous_policies/starts.npz": "b8c488951e1bc132348a81a676e71fb213f37c24e054e1864c794e29adad27ea",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_coupling_followup_20260906/incumbent_coupling/reconstructed_heads/table9/fold_-1.npz": "e45626b5411200ac19d887cbc89b6eccd7642c3651b9696627970b38ea66f7c1",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_coupling_followup_20260906/incumbent_coupling/reconstructed_heads/uncheatable/fold_-1.npz": "646d4928b45dcdc90ea710e8b605b8e02295bf48ffe84975be971c211fae7194",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_incumbent_coupled_optima_20260906/protocol.json": "a0480a18cee2332e09254cdbf8b5caf81773f2d19fd90ae1929ff90368c8c6d7",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_incumbent_coupled_optima_20260906/restart_shards/table9/kappa_1/cap6_kl0_start0.npz": "8a0d7a964c2963cd945b3f0e802676f4799365625c99ed69dea1dc69ad29ca21",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_incumbent_coupled_optima_20260906/restart_shards/table9/kappa_1/cap6_kl0_start1.npz": "41d3a39e4ea7e6d10c8c5d6d15c43ed34f7050261a065c4b20b3c7404a56648b",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_incumbent_coupled_optima_20260906/restart_shards/table9/kappa_1/cap6_kl0_start2.npz": "a17f71fd1fdfcc88d123c7758aec7effbbb9b9c95014e18891851aabdb2286dd",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_incumbent_coupled_optima_20260906/restart_shards/table9/kappa_1/cap6_kl0_start3.npz": "7dd37660d2866a5c282df4438e2986eebab3d5e9afd6f5df693d9685a37b4cfa",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_incumbent_coupled_optima_20260906/restart_shards/table9/kappa_1/cap6_kl0_start4.npz": "9025ab66271e35209547426881ed5f97da9a6ce9e31ebab574bf9a424c7f5ca7",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_incumbent_coupled_optima_20260906/restart_shards/table9/kappa_1/cap8_kl0_start0.npz": "8bfaca85b884931687410b94057b3b9fa7de3035e87c3142935b4e2af03bb7db",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_incumbent_coupled_optima_20260906/restart_shards/table9/kappa_1/cap8_kl0_start1.npz": "1928cd783a6fe975ea70125d6a903f903afed42797b5c546e476adeae7e81703",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_incumbent_coupled_optima_20260906/restart_shards/table9/kappa_1/cap8_kl0_start2.npz": "635ea46b81ab4c491092dcc2312ef7aef806a9c8abbdd74e6ea0371cd3ed0ad0",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_incumbent_coupled_optima_20260906/restart_shards/table9/kappa_1/cap8_kl0_start3.npz": "216998213b0c6b18c04782fb1884fe93b126409288b01f24b5d03f3254a9223c",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_incumbent_coupled_optima_20260906/restart_shards/table9/kappa_1/cap8_kl0_start4.npz": "dc3b21fc214fed17ce4049ecdc50a5fabd553c7303356b4b534c3f4ad8bdd85c",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_incumbent_coupled_optima_20260906/restart_shards/uncheatable/kappa_1/cap6_kl0_start0.npz": "e924baab5a12220f85975ca97edef1e8668cd30df8390042d2f49dd35f315ac3",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_incumbent_coupled_optima_20260906/restart_shards/uncheatable/kappa_1/cap6_kl0_start1.npz": "f8e70961c0a9d45d031161d027bdb2e8eef8814d05b27aac2c5c5ee92a6b6a14",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_incumbent_coupled_optima_20260906/restart_shards/uncheatable/kappa_1/cap6_kl0_start2.npz": "611abe452251efed9f8c71ad1fe44a8b6a9844e43018ec8e1e9076f558862bb4",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_incumbent_coupled_optima_20260906/restart_shards/uncheatable/kappa_1/cap6_kl0_start3.npz": "b2f60b96f07e3be4f84069661482a1cb6f334af71c7f084b75e7e6ea1cf14a72",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_incumbent_coupled_optima_20260906/restart_shards/uncheatable/kappa_1/cap6_kl0_start4.npz": "11d5817561c992d412d7f80cee4d5c7ec749811157dca783eeb3b4fad51399b6",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_offline_selection_20260906/inputs/panel.npz": "d78a2484f6f89ab5439999a34770bbc84eabf7c31a49ddb87886004d7c4b3061"
+  },
+  "invalid_values": "Nonpositive factors and predictions are counted and retained; nonfinite predictions raise",
+  "kl_coefficient": 0.0,
+  "law": "A * (1 + (product_b(1 + kappa * delta_b / A) - 1) / kappa)",
+  "near_optimal_objective_tolerance": 1e-06,
+  "objective": "Taskwise fixed coupled-WSPU predictions aggregated in the original target's BPB units",
+  "optimizer": {
+    "eps": 1e-08,
+    "ftol": 1e-11,
+    "maxiter": 500,
+    "method": "SLSQP",
+    "numerical_derivatives_for_both_models": true
+  },
+  "parity_tolerance": 1e-10,
+  "previous_protocol_hash": "055a158c4b427f71b214c1010f8e4371c7c539a6f277d67786758e2b991413ef",
+  "read_boundary": "Only panel coordinates/inventory/aggregation arrays, saved heads/starts, and prior optimizer outputs",
+  "reuse": "All 15 kappa1 restart endpoints reused only after protocol, prediction, KL, and start-objective parity",
+  "scope": "Frozen nine-policy prospective 3e18 validation materialization; no jobs launched by this producer",
+  "selection": "Minimum objective among converged feasible restarts; fail if a policy has none",
+  "sources": {
+    "experiments/__init__.py": "6026bc6a357ca0c546cdd33ed000e6fd8ee02fb6cff84e030e30f3e15ee9040d",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/audit_delphi_wspu_coupling_20260906.py": "2e8c5f3e943a070cd6f738447f1507b98b1520b1743a7b60c6acaf159ab9fcd3",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/benchmark_delphi_selection_20260906.py": "9058f56729e4f04d47f892e73c23e706c0c3d3464500bba0e49292f28e897e95",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/benchmark_dsp_single_phase_ladder_20260824.py": "6f66fa475810e28ef2fc09ba21706ff04ecf22e4061d45ea6e46eeaf35ff3d32",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/benchmark_olmix_swarm_single_phase_dsp_20260901.py": "a2c5ff98a78eebbd5e677051ce15bbdd59ace875ca8f96dd6d988aa4a5ab7e74",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/benchmark_single_phase_componentwise_canonical_dsp_20260902.py": "b33e882b782fac37a49ab1ff65da8528c434b1ac68944372b4fc89ce557d8968",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/benchmark_single_phase_observatory_20260902.py": "ab6580ae6df87e04fa8a3c7678c4c79d635ac95182757cef2612e4541a1ac80d",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/benchmark_single_phase_surrogates_20260824.py": "5c7d50c03d23d7b61a468b81bf9d827474218c4a770eb7e19b0d2cc4d588ec22",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/fit_swarm39_split_damage_20260817.py": "9e9ad8bed9197bec1d565626dba300bcb0fb5f0dc45c5d869c8665068579b5f7",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/general_mixture_surrogate_20260809.py": "46036e00beaa2316097ddfb0e2a3d599dd0de6d37f577b69834f05f0b214eccf",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/materialize_delphi_coupling_validation_20260906.py": "23b1e5e97ca600173b79afbe8461192cd109720b8d6229fc113eda867bae34dd",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/optimize_delphi_incumbent_coupling_20260906.py": "b214fda07cf41231b2143480d804fc8881f45b7199740a6f1bff1b3cc0e5965e",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/optimize_delphi_matched_policies_20260906.py": "22a5849e533d9d60a1902205e416618b5081306ca70ad82344c4267d2efae7e3",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/single_phase_observatory_models_20260902.py": "fc5e8d8158005278db87c9f977360f8b89b12d37f6d1a61425da0c501df9a9de",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/single_phase_observatory_registry_20260902.py": "f22095fffacac032b7e0cedcaac2682b2518f7459da8439434120f10291d5f95",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/single_phase_observatory_starcoder_inputs_20260902.py": "20830b5c88f6c53326fb54e49ba4c1cd14fb0475cdde21b1ae0090e65c58b853",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/single_phase_round4_pooled_law_20260903.py": "13168b6800fd408fc46f5a77831744fbf0164ac4ade87effbe083aaf8f1ec702",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/starcoder_wsd80_epoch_accounting.py": "4a12e75d55f344264af1b11c90cec402bd9639a66d4d8067358bbc5c9aa8a17d",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/swarm39_harness_20260725.py": "0fc2f61e07cae8f44d70e6aeee537847a5d9536fcda8765553b1843c018324a5",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/swarm39_models_20260725.py": "a6c6a9e6116d417d90dbdb76fb7545cbef1f7cfefd4eb12aea3f00b936e73119",
+    "experiments/domain_phase_mix/olmix_loglinear_fit.py": "1a857bebd609822a28bed6fe5da396f032f988b7edf2182ba68dfa1bf686f243"
+  },
+  "starts": "Exactly the original five saved starts per cap; no additional or outcome-derived initialization",
+  "target_budget": 3e+18,
+  "tracking": "New solves track every objective callback; reused kappa1 retains the original full-trajectory diagnostics",
+  "version": 1
+}

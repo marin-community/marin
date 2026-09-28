@@ -1,0 +1,12 @@
+[15:04:38] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-ceb33beb/0 attempt=1 | I20260911 15:04:31 139897030722368 levanter.trainer First train step completed in 13.7s (step 0)
+[15:04:38] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-ceb33beb/0 attempt=1 | I20260911 15:04:31 139897030722368 levanter.trainer Tracing train_step_hooks for jaxpr...
+[15:04:38] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-ceb33beb/0 attempt=1 | I20260911 15:04:32 139897030722368 levanter.trainer Traced train_step_hooks in 0.7s
+[15:04:38] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-ceb33beb/0 attempt=1 | I20260911 15:04:32 139897030722368 levanter.trainer Lowering train_step_hooks to HLO...
+[15:04:38] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-ceb33beb/0 attempt=1 | I20260911 15:04:32 139897030722368 levanter.trainer Lowered train_step_hooks in 0.6s
+[15:04:44] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-ceb33beb/0 attempt=1 | I20260911 15:04:42 139531335730880 finelog.client.log_client LogClient resolved /system/log-server -> http://10.128.0.128:10001 (stats)
+[15:05:17] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-ceb33beb/0 attempt=1 | I20260911 15:05:11 139897030722368 tqdm_loggable.tqdm_logging Progress on:train 381it/2.53kit rate:14.6it/s remaining:02:26 elapsed:01:00 postfix:loss=3.11
+[15:05:24] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-ceb33beb/0 attempt=1 | I20260911 15:05:22 139897030722368 tqdm_loggable.tqdm_logging Progress on:eval -/178 rate:- remaining:? elapsed:00:00 postfix:-
+[15:05:30] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-ceb33beb/0 attempt=1 | I20260911 15:05:29 139897030722368 tqdm_loggable.tqdm_logging Progress on:eval 178it/178it rate:56.8it/s remaining:00:00 elapsed:00:07 postfix:-
+[15:05:30] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-ceb33beb/0 attempt=1 | I20260911 15:05:29 139897030722368 levanter.eval eval loss: 2.327
+[15:05:30] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-ceb33beb/0 attempt=1 | I20260911 15:05:29 139897030722368 levanter.eval paloma micro loss: 2.327
+[15:05:30] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-ceb33beb/0 attempt=1 | I20260911 15:05:29 139897030722368 levanter.eval paloma/dolma_100_programing_languages-tpp10 loss: 2.327

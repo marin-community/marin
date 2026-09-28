@@ -1,0 +1,274 @@
+{
+  "checked_at": "2026-09-12T22:20:13.841464+00:00",
+  "status": "pass",
+  "scope": "Initial dispatch only; training and metrics are not yet verified.",
+  "parent_job_id": "/calvinxu/dm-delphi-3e18-path-midpoints-20260912",
+  "expected_training_children": 10,
+  "actual_training_children": 10,
+  "child_job_states": {
+    "1": 10
+  },
+  "all_interactive": true,
+  "all_expected_recipe_names_matched": true,
+  "all_actual_bundles_match_reviewed_bundle": true,
+  "parent": {
+    "job_id": "/calvinxu/dm-delphi-3e18-path-midpoints-20260912",
+    "state": "3",
+    "parent_job_id": "",
+    "priority_band": "2",
+    "bundle_id": "fb16e62d3bfe4986871cd387cf14a1c01bcf82d1b77be44abdb5f501166b5ec9",
+    "task_state": "3",
+    "current_worker_id": "marin-cpu-vm-e2-highmem-2-ondemand-us-ea-20260816-1907-561c8448-worker-0",
+    "constraints": {
+      "region": "us-east5",
+      "zone": "us-east5-a",
+      "preemptible": "false"
+    },
+    "priority_name": "PRIORITY_BAND_INTERACTIVE",
+    "device": {}
+  },
+  "children": [
+    {
+      "job_id": "/calvinxu/dm-delphi-3e18-path-midpoints-20260912/pinlin_calvin_xu-data_mixture-delphi_path_midpoints_3e18_20260912-uncheatable_seed666200_t0-mp50_uncheatable_seed666200_t0_mp50_u_olmix_cap64_6e259151-70295986",
+      "state": "1",
+      "parent_job_id": "/calvinxu/dm-delphi-3e18-path-midpoints-20260912",
+      "priority_band": "2",
+      "bundle_id": "fb16e62d3bfe4986871cd387cf14a1c01bcf82d1b77be44abdb5f501166b5ec9",
+      "task_state": "1",
+      "current_worker_id": "",
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v6e-8",
+        "region": "us-east5",
+        "zone": "us-east5-b"
+      },
+      "priority_name": "PRIORITY_BAND_INTERACTIVE",
+      "device": {
+        "tpu": {
+          "variant": "v6e-8",
+          "count": 8
+        }
+      },
+      "expected_train_name": "pinlin_calvin_xu/data_mixture/delphi_path_midpoints_3e18_20260912/uncheatable_seed666200_t0/mp50_uncheatable_seed666200_t0_mp50_u_olmix_cap64",
+      "expected_output_path": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_path_midpoints_3e18_20260912/uncheatable_seed666200_t0/mp50_uncheatable_seed666200_t0_mp50_u_olmix_cap64-60fafc"
+    },
+    {
+      "job_id": "/calvinxu/dm-delphi-3e18-path-midpoints-20260912/pinlin_calvin_xu-data_mixture-delphi_path_midpoints_3e18_20260912-uncheatable_seed666200_t0-mp50_uncheatable_seed666200_t0_mp50_u_quad_cap64_e88436d7-b518d369",
+      "state": "1",
+      "parent_job_id": "/calvinxu/dm-delphi-3e18-path-midpoints-20260912",
+      "priority_band": "2",
+      "bundle_id": "fb16e62d3bfe4986871cd387cf14a1c01bcf82d1b77be44abdb5f501166b5ec9",
+      "task_state": "1",
+      "current_worker_id": "",
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v6e-8",
+        "region": "us-east5",
+        "zone": "us-east5-b"
+      },
+      "priority_name": "PRIORITY_BAND_INTERACTIVE",
+      "device": {
+        "tpu": {
+          "variant": "v6e-8",
+          "count": 8
+        }
+      },
+      "expected_train_name": "pinlin_calvin_xu/data_mixture/delphi_path_midpoints_3e18_20260912/uncheatable_seed666200_t0/mp50_uncheatable_seed666200_t0_mp50_u_quad_cap64",
+      "expected_output_path": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_path_midpoints_3e18_20260912/uncheatable_seed666200_t0/mp50_uncheatable_seed666200_t0_mp50_u_quad_cap64-744be4"
+    },
+    {
+      "job_id": "/calvinxu/dm-delphi-3e18-path-midpoints-20260912/pinlin_calvin_xu-data_mixture-delphi_path_midpoints_3e18_20260912-uncheatable_seed666200_t0-mp50_uncheatable_seed666200_t0_mp50_u_spline_cap64_75ab08c6-9766dfe2",
+      "state": "1",
+      "parent_job_id": "/calvinxu/dm-delphi-3e18-path-midpoints-20260912",
+      "priority_band": "2",
+      "bundle_id": "fb16e62d3bfe4986871cd387cf14a1c01bcf82d1b77be44abdb5f501166b5ec9",
+      "task_state": "1",
+      "current_worker_id": "",
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v6e-8",
+        "region": "us-east5",
+        "zone": "us-east5-b"
+      },
+      "priority_name": "PRIORITY_BAND_INTERACTIVE",
+      "device": {
+        "tpu": {
+          "variant": "v6e-8",
+          "count": 8
+        }
+      },
+      "expected_train_name": "pinlin_calvin_xu/data_mixture/delphi_path_midpoints_3e18_20260912/uncheatable_seed666200_t0/mp50_uncheatable_seed666200_t0_mp50_u_spline_cap64",
+      "expected_output_path": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_path_midpoints_3e18_20260912/uncheatable_seed666200_t0/mp50_uncheatable_seed666200_t0_mp50_u_spline_cap64-d8bcb7"
+    },
+    {
+      "job_id": "/calvinxu/dm-delphi-3e18-path-midpoints-20260912/pinlin_calvin_xu-data_mixture-delphi_path_midpoints_3e18_20260912-uncheatable_seed666200_t0-mp50_uncheatable_seed666200_t0_mp50_u_lgbm_cap64_418d518c-706b0ec1",
+      "state": "1",
+      "parent_job_id": "/calvinxu/dm-delphi-3e18-path-midpoints-20260912",
+      "priority_band": "2",
+      "bundle_id": "fb16e62d3bfe4986871cd387cf14a1c01bcf82d1b77be44abdb5f501166b5ec9",
+      "task_state": "1",
+      "current_worker_id": "",
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v6e-8",
+        "region": "us-east5",
+        "zone": "us-east5-b"
+      },
+      "priority_name": "PRIORITY_BAND_INTERACTIVE",
+      "device": {
+        "tpu": {
+          "variant": "v6e-8",
+          "count": 8
+        }
+      },
+      "expected_train_name": "pinlin_calvin_xu/data_mixture/delphi_path_midpoints_3e18_20260912/uncheatable_seed666200_t0/mp50_uncheatable_seed666200_t0_mp50_u_lgbm_cap64",
+      "expected_output_path": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_path_midpoints_3e18_20260912/uncheatable_seed666200_t0/mp50_uncheatable_seed666200_t0_mp50_u_lgbm_cap64-ea4c6f"
+    },
+    {
+      "job_id": "/calvinxu/dm-delphi-3e18-path-midpoints-20260912/pinlin_calvin_xu-data_mixture-delphi_path_midpoints_3e18_20260912-uncheatable_seed666200_t0-mp50_uncheatable_seed666200_t0_mp50_u_krr_cap64_c6352e5e-61075395",
+      "state": "1",
+      "parent_job_id": "/calvinxu/dm-delphi-3e18-path-midpoints-20260912",
+      "priority_band": "2",
+      "bundle_id": "fb16e62d3bfe4986871cd387cf14a1c01bcf82d1b77be44abdb5f501166b5ec9",
+      "task_state": "1",
+      "current_worker_id": "",
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v6e-8",
+        "region": "us-east5",
+        "zone": "us-east5-b"
+      },
+      "priority_name": "PRIORITY_BAND_INTERACTIVE",
+      "device": {
+        "tpu": {
+          "variant": "v6e-8",
+          "count": 8
+        }
+      },
+      "expected_train_name": "pinlin_calvin_xu/data_mixture/delphi_path_midpoints_3e18_20260912/uncheatable_seed666200_t0/mp50_uncheatable_seed666200_t0_mp50_u_krr_cap64",
+      "expected_output_path": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_path_midpoints_3e18_20260912/uncheatable_seed666200_t0/mp50_uncheatable_seed666200_t0_mp50_u_krr_cap64-e1a345"
+    },
+    {
+      "job_id": "/calvinxu/dm-delphi-3e18-path-midpoints-20260912/pinlin_calvin_xu-data_mixture-delphi_path_midpoints_3e18_20260912-table9_seed662009_t0-mp50_table9_seed662009_t0_mp50_t9_olmix_cap64_c06895e2-edd6b0ec",
+      "state": "1",
+      "parent_job_id": "/calvinxu/dm-delphi-3e18-path-midpoints-20260912",
+      "priority_band": "2",
+      "bundle_id": "fb16e62d3bfe4986871cd387cf14a1c01bcf82d1b77be44abdb5f501166b5ec9",
+      "task_state": "1",
+      "current_worker_id": "",
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v6e-8",
+        "region": "us-east5",
+        "zone": "us-east5-b"
+      },
+      "priority_name": "PRIORITY_BAND_INTERACTIVE",
+      "device": {
+        "tpu": {
+          "variant": "v6e-8",
+          "count": 8
+        }
+      },
+      "expected_train_name": "pinlin_calvin_xu/data_mixture/delphi_path_midpoints_3e18_20260912/table9_seed662009_t0/mp50_table9_seed662009_t0_mp50_t9_olmix_cap64",
+      "expected_output_path": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_path_midpoints_3e18_20260912/table9_seed662009_t0/mp50_table9_seed662009_t0_mp50_t9_olmix_cap64-ffe96f"
+    },
+    {
+      "job_id": "/calvinxu/dm-delphi-3e18-path-midpoints-20260912/pinlin_calvin_xu-data_mixture-delphi_path_midpoints_3e18_20260912-table9_seed662009_t0-mp50_table9_seed662009_t0_mp50_t9_quad_cap64_323b4415-68baa3cf",
+      "state": "1",
+      "parent_job_id": "/calvinxu/dm-delphi-3e18-path-midpoints-20260912",
+      "priority_band": "2",
+      "bundle_id": "fb16e62d3bfe4986871cd387cf14a1c01bcf82d1b77be44abdb5f501166b5ec9",
+      "task_state": "1",
+      "current_worker_id": "",
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v6e-8",
+        "region": "us-east5",
+        "zone": "us-east5-b"
+      },
+      "priority_name": "PRIORITY_BAND_INTERACTIVE",
+      "device": {
+        "tpu": {
+          "variant": "v6e-8",
+          "count": 8
+        }
+      },
+      "expected_train_name": "pinlin_calvin_xu/data_mixture/delphi_path_midpoints_3e18_20260912/table9_seed662009_t0/mp50_table9_seed662009_t0_mp50_t9_quad_cap64",
+      "expected_output_path": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_path_midpoints_3e18_20260912/table9_seed662009_t0/mp50_table9_seed662009_t0_mp50_t9_quad_cap64-952b9c"
+    },
+    {
+      "job_id": "/calvinxu/dm-delphi-3e18-path-midpoints-20260912/pinlin_calvin_xu-data_mixture-delphi_path_midpoints_3e18_20260912-table9_seed662009_t0-mp50_table9_seed662009_t0_mp50_t9_spline_cap64_99612977-b0d2f225",
+      "state": "1",
+      "parent_job_id": "/calvinxu/dm-delphi-3e18-path-midpoints-20260912",
+      "priority_band": "2",
+      "bundle_id": "fb16e62d3bfe4986871cd387cf14a1c01bcf82d1b77be44abdb5f501166b5ec9",
+      "task_state": "1",
+      "current_worker_id": "",
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v6e-8",
+        "region": "us-east5",
+        "zone": "us-east5-b"
+      },
+      "priority_name": "PRIORITY_BAND_INTERACTIVE",
+      "device": {
+        "tpu": {
+          "variant": "v6e-8",
+          "count": 8
+        }
+      },
+      "expected_train_name": "pinlin_calvin_xu/data_mixture/delphi_path_midpoints_3e18_20260912/table9_seed662009_t0/mp50_table9_seed662009_t0_mp50_t9_spline_cap64",
+      "expected_output_path": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_path_midpoints_3e18_20260912/table9_seed662009_t0/mp50_table9_seed662009_t0_mp50_t9_spline_cap64-fc675e"
+    },
+    {
+      "job_id": "/calvinxu/dm-delphi-3e18-path-midpoints-20260912/pinlin_calvin_xu-data_mixture-delphi_path_midpoints_3e18_20260912-table9_seed662009_t0-mp50_table9_seed662009_t0_mp50_t9_lgbm_cap64_559abee7-3f58bf9a",
+      "state": "1",
+      "parent_job_id": "/calvinxu/dm-delphi-3e18-path-midpoints-20260912",
+      "priority_band": "2",
+      "bundle_id": "fb16e62d3bfe4986871cd387cf14a1c01bcf82d1b77be44abdb5f501166b5ec9",
+      "task_state": "1",
+      "current_worker_id": "",
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v6e-8",
+        "region": "us-east5",
+        "zone": "us-east5-b"
+      },
+      "priority_name": "PRIORITY_BAND_INTERACTIVE",
+      "device": {
+        "tpu": {
+          "variant": "v6e-8",
+          "count": 8
+        }
+      },
+      "expected_train_name": "pinlin_calvin_xu/data_mixture/delphi_path_midpoints_3e18_20260912/table9_seed662009_t0/mp50_table9_seed662009_t0_mp50_t9_lgbm_cap64",
+      "expected_output_path": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_path_midpoints_3e18_20260912/table9_seed662009_t0/mp50_table9_seed662009_t0_mp50_t9_lgbm_cap64-ff80e3"
+    },
+    {
+      "job_id": "/calvinxu/dm-delphi-3e18-path-midpoints-20260912/pinlin_calvin_xu-data_mixture-delphi_path_midpoints_3e18_20260912-table9_seed662009_t0-mp50_table9_seed662009_t0_mp50_t9_krr_cap64_1213bc18-9d105a52",
+      "state": "1",
+      "parent_job_id": "/calvinxu/dm-delphi-3e18-path-midpoints-20260912",
+      "priority_band": "2",
+      "bundle_id": "fb16e62d3bfe4986871cd387cf14a1c01bcf82d1b77be44abdb5f501166b5ec9",
+      "task_state": "1",
+      "current_worker_id": "",
+      "constraints": {
+        "device-type": "tpu",
+        "device-variant": "v6e-8",
+        "region": "us-east5",
+        "zone": "us-east5-b"
+      },
+      "priority_name": "PRIORITY_BAND_INTERACTIVE",
+      "device": {
+        "tpu": {
+          "variant": "v6e-8",
+          "count": 8
+        }
+      },
+      "expected_train_name": "pinlin_calvin_xu/data_mixture/delphi_path_midpoints_3e18_20260912/table9_seed662009_t0/mp50_table9_seed662009_t0_mp50_t9_krr_cap64",
+      "expected_output_path": "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_path_midpoints_3e18_20260912/table9_seed662009_t0/mp50_table9_seed662009_t0_mp50_t9_krr_cap64-72ad8a"
+    }
+  ],
+  "submission_performed_by_this_audit": false,
+  "mutation_performed": false
+}

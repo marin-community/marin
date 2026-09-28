@@ -1,0 +1,98 @@
+{
+  "spec_sha256": "c788d33ddd3b357a7f80de6ed1d5ecb632104e4beabd5cc0934d580ecac77d39",
+  "target_receipts_verified": 15,
+  "proxy_receipts_verified": 15,
+  "target_reused_payloads_verified": 11,
+  "new_target_evaluations": 4,
+  "unique_checkpoints": 30,
+  "plotted_domain_scale_points": 32,
+  "frozen_population_sha256": "0b8b22970794a9bedb4f0cb55bb5643c38f9d9bf43e7c19c0bb6aec1f59376eb",
+  "all_live_final_checkpoint_metadata_match": true,
+  "paloma_control_tolerance": 5e-05,
+  "paloma_max_abs_discrepancy": 3.814697265625e-06,
+  "paloma_abs_discrepancies": {
+    "tpp10_unmatched_p000_s20260910": 2.384185791015625e-07,
+    "tpp10_wikipedia_matched_p005_s20260910": 9.5367431640625e-07,
+    "tpp10_wikipedia_matched_p010_s20260910": 4.76837158203125e-07,
+    "tpp10_wikipedia_matched_p020_s20260910": 1.1920928955078125e-06,
+    "tpp10_wikipedia_matched_p030_s20260910": 4.76837158203125e-07,
+    "tpp10_wikipedia_matched_p050_s20260910": 2.384185791015625e-07,
+    "tpp10_wikipedia_matched_p070_s20260910": 4.76837158203125e-07,
+    "tpp10_wikipedia_matched_p100_s20260910": 3.814697265625e-06,
+    "tpp10_target_p000_s20260910": 7.152557373046875e-07,
+    "tpp10_wikipedia_target_p005_s20260910": 0.0,
+    "tpp10_wikipedia_target_p010_s20260910": 0.0,
+    "tpp10_wikipedia_target_p020_s20260910": 4.76837158203125e-07,
+    "tpp10_wikipedia_target_p030_s20260910": 1.1920928955078125e-07,
+    "tpp10_wikipedia_target_p050_s20260910": 3.5762786865234375e-07,
+    "tpp10_wikipedia_target_p070_s20260910": 1.1920928955078125e-07,
+    "tpp10_wikipedia_target_p100_s20260910": 9.5367431640625e-07,
+    "tpp10_finemath_3plus_matched_p005_s20260910": 2.384185791015625e-07,
+    "tpp10_finemath_3plus_matched_p010_s20260910": 4.76837158203125e-07,
+    "tpp10_finemath_3plus_matched_p020_s20260910": 1.1920928955078125e-06,
+    "tpp10_finemath_3plus_matched_p030_s20260910": 0.0,
+    "tpp10_finemath_3plus_matched_p050_s20260910": 0.0,
+    "tpp10_finemath_3plus_matched_p070_s20260910": 0.0,
+    "tpp10_finemath_3plus_matched_p100_s20260910": 0.0,
+    "tpp10_finemath_3plus_target_p005_s20260910": 4.76837158203125e-07,
+    "tpp10_finemath_3plus_target_p010_s20260910": 3.5762786865234375e-07,
+    "tpp10_finemath_3plus_target_p020_s20260910": 1.1920928955078125e-07,
+    "tpp10_finemath_3plus_target_p030_s20260910": 3.5762786865234375e-07,
+    "tpp10_finemath_3plus_target_p050_s20260910": 0.0,
+    "tpp10_finemath_3plus_target_p070_s20260910": 2.384185791015625e-07,
+    "tpp10_finemath_3plus_target_p100_s20260910": 1.1920928955078125e-07
+  },
+  "new_target_metrics": {
+    "tpp10_finemath_3plus_target_p030_s20260910": {
+      "percent": 30,
+      "epochs": 4.7684551480716255,
+      "perplexity": {
+        "math500": 4.148761925208614,
+        "gsm8k": 4.800698118653246
+      },
+      "loss": {
+        "math500": 1.4228099584579468,
+        "gsm8k": 1.5687613487243652
+      }
+    },
+    "tpp10_finemath_3plus_target_p050_s20260910": {
+      "percent": 50,
+      "epochs": 7.937187930440771,
+      "perplexity": {
+        "math500": 3.7883461979275896,
+        "gsm8k": 4.359892994587627
+      },
+      "loss": {
+        "math500": 1.3319295644760132,
+        "gsm8k": 1.4724475145339966
+      }
+    },
+    "tpp10_finemath_3plus_target_p070_s20260910": {
+      "percent": 70,
+      "epochs": 11.097925275482094,
+      "perplexity": {
+        "math500": 3.5930685991039373,
+        "gsm8k": 4.036408630681798
+      },
+      "loss": {
+        "math500": 1.2790066003799438,
+        "gsm8k": 1.3953553438186646
+      }
+    },
+    "tpp10_finemath_3plus_target_p100_s20260910": {
+      "percent": 100,
+      "epochs": 15.827823691460056,
+      "perplexity": {
+        "math500": 3.554845985494926,
+        "gsm8k": 4.229166963247635
+      },
+      "loss": {
+        "math500": 1.2683117389678955,
+        "gsm8k": 1.4420050382614136
+      }
+    }
+  },
+  "complete_target_grids": true,
+  "math_evaluator_unchanged": true,
+  "plot_visually_checked": true
+}

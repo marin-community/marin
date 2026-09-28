@@ -1,0 +1,162 @@
+{
+  "observed_at": "2026-09-15T00:51:00Z",
+  "parent_jobs": [
+    {
+      "id": "job_01m2h8f0cpfxr7mrpr9vx8232f",
+      "iris": "/calvinxu/table9-accuracy-choices-v6e4-canary-20260915",
+      "retry_of": "job_01m2g9b075xz7mbp186kc5gmfx",
+      "command": "uv run --no-sync iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources --cpu 1 --memory 4GB --disk 32GB --timeout 172800 --max-retries 0 --max-preemption-retries 0 --priority interactive --extra cpu --extra lm_eval --no-preemptible --region us-east5 --zone us-east5-a --job-name table9-accuracy-choices-v6e4-canary-20260915 --bundle-include .agents/projects/mariner_table9_accuracy_20260914/plan_v6e4.json --exclude '^(checkpoints|cache|logs|wandb|tmp)/' --exclude '^experiments/domain_phase_mix/exploratory/.*(?<!\\.py)$' --exclude '^\\.agents/(?!projects/mariner_table9_accuracy_20260914/plan_v6e4\\.json$).*' --exclude '^(docs|tests)/' --exclude '^lib/[^/]+/tests/' -e MARIN_PREFIX gs://marin-us-east5 -- python -m experiments.domain_phase_mix.evaluate_table9_accuracy --plan .agents/projects/mariner_table9_accuracy_20260914/plan_v6e4.json --submit --mode choices --canary-documents 2"
+    },
+    {
+      "id": "job_01m2h8f0m0gpp5bxsc0d89zvdz",
+      "iris": "/calvinxu/table9-accuracy-generation-v6e4-canary-20260915",
+      "retry_of": "job_01m2g9b1rprvqf4h2qfqk49ypp",
+      "command": "uv run --no-sync iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources --cpu 1 --memory 4GB --disk 32GB --timeout 172800 --max-retries 0 --max-preemption-retries 0 --priority interactive --extra cpu --extra lm_eval --no-preemptible --region us-east5 --zone us-east5-a --job-name table9-accuracy-generation-v6e4-canary-20260915 --bundle-include .agents/projects/mariner_table9_accuracy_20260914/plan_v6e4.json --exclude '^(checkpoints|cache|logs|wandb|tmp)/' --exclude '^experiments/domain_phase_mix/exploratory/.*(?<!\\.py)$' --exclude '^\\.agents/(?!projects/mariner_table9_accuracy_20260914/plan_v6e4\\.json$).*' --exclude '^(docs|tests)/' --exclude '^lib/[^/]+/tests/' -e MARIN_PREFIX gs://marin-us-east5 -- python -m experiments.domain_phase_mix.evaluate_table9_accuracy --plan .agents/projects/mariner_table9_accuracy_20260914/plan_v6e4.json --submit --mode generation --canary-documents 2"
+    }
+  ],
+  "children": [
+    {
+      "id": "job_01m2h8m2g6dar9rqjckvwry9np",
+      "external": "/calvinxu/table9-accuracy-choices-v6e4-canary-20260915/table9-accuracy-choices-proportional_1e21-2f1a48-57cfccb7c8-n2",
+      "name": "table9-accuracy-choices-proportional_1e21-2f1a48-57cfccb7c8-n2",
+      "mode": "choices",
+      "row": "proportional_1e21-2f1a48",
+      "run": "run_01m2g8d93rsaq6p46egp60khvf"
+    },
+    {
+      "id": "job_01m2h8m2xek47qhvkfqzge9p1c",
+      "external": "/calvinxu/table9-accuracy-choices-v6e4-canary-20260915/table9-accuracy-choices-unimax8_1e21-d685cd-57cfccb7c8-n2",
+      "name": "table9-accuracy-choices-unimax8_1e21-d685cd-57cfccb7c8-n2",
+      "mode": "choices",
+      "row": "unimax8_1e21-d685cd",
+      "run": "run_01m2g8d99y7rgmb8954nbrzw32"
+    },
+    {
+      "id": "job_01m2h8m3gf55ys6a35xqn6831h",
+      "external": "/calvinxu/table9-accuracy-generation-v6e4-canary-20260915/table9-accuracy-generation-proportional_1e21-2f1a48-57cfccb7c8-n2",
+      "name": "table9-accuracy-generation-proportional_1e21-2f1a48-57cfccb7c8-n2",
+      "mode": "generation",
+      "row": "proportional_1e21-2f1a48",
+      "run": "run_01m2g8d93rsaq6p46egp60khvf"
+    },
+    {
+      "id": "job_01m2h8m3xqffx8619wnh2fj4rm",
+      "external": "/calvinxu/table9-accuracy-generation-v6e4-canary-20260915/table9-accuracy-generation-unimax8_1e21-d685cd-57cfccb7c8-n2",
+      "name": "table9-accuracy-generation-unimax8_1e21-d685cd-57cfccb7c8-n2",
+      "mode": "generation",
+      "row": "unimax8_1e21-d685cd",
+      "run": "run_01m2g8d99y7rgmb8954nbrzw32"
+    }
+  ],
+  "sampled_wire_requests": [
+    {
+      "job_id": "/calvinxu/table9-accuracy-choices-v6e4-canary-20260915/table9-accuracy-choices-proportional_1e21-2f1a48-57cfccb7c8-n2",
+      "state": "JOB_STATE_PENDING",
+      "pending_reason": "Scheduler: Insufficient TPUs (need 4, available 0) - 21 worker(s)\nInsufficient CPU (need 8 cores, available 0 cores) - 1 worker(s)\n(with constraints=['device-type', 'device-variant', 'zone', 'region'])\n\nAutoscaler: Unsatisfied autoscaler demand: tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity",
+      "bundle_sha256": "9253df3cde2e862d38355311ffe5b18b8531c3f1ae15b2ceda95e73253ae9f48",
+      "resources": {
+        "cpu_millicores": 8000,
+        "memory_bytes": "68719476736",
+        "device": {
+          "tpu": {
+            "variant": "v6e-4",
+            "count": 4
+          }
+        },
+        "disk_bytes": "34359738368"
+      },
+      "constraints": [
+        {
+          "key": "device-type",
+          "op": "CONSTRAINT_OP_EQ",
+          "value": {
+            "string_value": "tpu"
+          },
+          "mode": "CONSTRAINT_MODE_REQUIRED"
+        },
+        {
+          "key": "device-variant",
+          "op": "CONSTRAINT_OP_EQ",
+          "value": {
+            "string_value": "v6e-4"
+          },
+          "mode": "CONSTRAINT_MODE_REQUIRED"
+        },
+        {
+          "key": "zone",
+          "op": "CONSTRAINT_OP_EQ",
+          "value": {
+            "string_value": "us-east5-b"
+          },
+          "mode": "CONSTRAINT_MODE_REQUIRED"
+        },
+        {
+          "key": "region",
+          "op": "CONSTRAINT_OP_EQ",
+          "value": {
+            "string_value": "us-east5"
+          },
+          "mode": "CONSTRAINT_MODE_REQUIRED"
+        }
+      ],
+      "priority_band": "PRIORITY_BAND_INTERACTIVE"
+    },
+    {
+      "job_id": "/calvinxu/table9-accuracy-generation-v6e4-canary-20260915/table9-accuracy-generation-proportional_1e21-2f1a48-57cfccb7c8-n2",
+      "state": "JOB_STATE_PENDING",
+      "pending_reason": "Scheduler: Insufficient TPUs (need 4, available 0) - 21 worker(s)\nInsufficient CPU (need 8 cores, available 0 cores) - 1 worker(s)\n(with constraints=['device-type', 'device-variant', 'zone', 'region'])\n\nAutoscaler: Unsatisfied autoscaler demand: tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity",
+      "bundle_sha256": "9253df3cde2e862d38355311ffe5b18b8531c3f1ae15b2ceda95e73253ae9f48",
+      "resources": {
+        "cpu_millicores": 8000,
+        "memory_bytes": "68719476736",
+        "device": {
+          "tpu": {
+            "variant": "v6e-4",
+            "count": 4
+          }
+        },
+        "disk_bytes": "34359738368"
+      },
+      "constraints": [
+        {
+          "key": "device-type",
+          "op": "CONSTRAINT_OP_EQ",
+          "value": {
+            "string_value": "tpu"
+          },
+          "mode": "CONSTRAINT_MODE_REQUIRED"
+        },
+        {
+          "key": "device-variant",
+          "op": "CONSTRAINT_OP_EQ",
+          "value": {
+            "string_value": "v6e-4"
+          },
+          "mode": "CONSTRAINT_MODE_REQUIRED"
+        },
+        {
+          "key": "zone",
+          "op": "CONSTRAINT_OP_EQ",
+          "value": {
+            "string_value": "us-east5-b"
+          },
+          "mode": "CONSTRAINT_MODE_REQUIRED"
+        },
+        {
+          "key": "region",
+          "op": "CONSTRAINT_OP_EQ",
+          "value": {
+            "string_value": "us-east5"
+          },
+          "mode": "CONSTRAINT_MODE_REQUIRED"
+        }
+      ],
+      "priority_band": "PRIORITY_BAND_INTERACTIVE"
+    }
+  ],
+  "plan_sha256": "6688bf605dd797f39cad6e932903cbfea781487a36c615a22aabeb3afb8e1f63",
+  "canonical_plan_sha256": "df4b68205435b4793d677498248d37cd43d18cbbd5bc518ba6eb5c513ba227b8",
+  "protocol_sha256": "57cfccb7c8aa3eeeafcc944209db02c4343a984bc4515c6f9ce5d437b0ea149f",
+  "old_v5p_children": "All four had zero attempts and no worker before both old roots were cancelled",
+  "full_evaluation_released": false
+}

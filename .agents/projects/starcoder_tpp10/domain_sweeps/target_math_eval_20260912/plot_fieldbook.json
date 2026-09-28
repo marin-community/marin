@@ -1,0 +1,70 @@
+[
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789201055.8149064,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/target_math_eval_20260912/results/66f74c1e8f6f2f360270726605acdead4e1afbd211590e2fa24dbf094b8adc6e/receipt.json",
+      "fieldbook.local_size_at_capture": 369184
+    },
+    "content_hash": "sha256:883ea500b22b53a7cd157174f7034a53498c2206c34f1d5f904ba773f678ca05",
+    "created_at": "2026-09-12T08:24:14Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m2abf51jsssd7dsdz1ynhyx3",
+    "job_id": "job_01m2aaz92txf4m0wzm56zhsyje",
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-12T08:24:14Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/target_math_eval_20260912/results/66f74c1e8f6f2f360270726605acdead4e1afbd211590e2fa24dbf094b8adc6e/receipt.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789200900.2533429,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/target_math_eval_20260912/results/66f74c1e8f6f2f360270726605acdead4e1afbd211590e2fa24dbf094b8adc6e/points.csv",
+      "fieldbook.local_size_at_capture": 110219
+    },
+    "content_hash": "sha256:94ce81a0fcf89632752693044f62a09009110a1b8a8b4a5bfb9bf92c7005d94a",
+    "created_at": "2026-09-12T08:24:14Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m2abf5ecnbsf1mpj36x1ffrs",
+    "job_id": "job_01m2aaz92txf4m0wzm56zhsyje",
+    "run_id": null,
+    "type": "metric-table",
+    "updated_at": "2026-09-12T08:24:14Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/target_math_eval_20260912/results/66f74c1e8f6f2f360270726605acdead4e1afbd211590e2fa24dbf094b8adc6e/points.csv"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789201055.5162637,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/target_math_eval_20260912/results/66f74c1e8f6f2f360270726605acdead4e1afbd211590e2fa24dbf094b8adc6e/math_likelihood_proxy_target.png",
+      "fieldbook.local_size_at_capture": 192288
+    },
+    "content_hash": "sha256:1e2cdf4b971526ca220fd13dee21ca5a25e6067065eb69acfb088bcc3221ade1",
+    "created_at": "2026-09-12T08:24:14Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m2abf5v8tbeh84pxy8dab9wf",
+    "job_id": "job_01m2aaz92txf4m0wzm56zhsyje",
+    "run_id": null,
+    "type": "plot",
+    "updated_at": "2026-09-12T08:24:14Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/target_math_eval_20260912/results/66f74c1e8f6f2f360270726605acdead4e1afbd211590e2fa24dbf094b8adc6e/math_likelihood_proxy_target.png"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789201055.8058627,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/target_math_eval_20260912/results/66f74c1e8f6f2f360270726605acdead4e1afbd211590e2fa24dbf094b8adc6e/math_likelihood_proxy_target.pdf",
+      "fieldbook.local_size_at_capture": 330691
+    },
+    "content_hash": "sha256:0a2ee786725a5770ea11c8c3d81ee42396508f4fee783364e9ed3d880f7bad30",
+    "created_at": "2026-09-12T08:24:15Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "id": "art_01m2abf658cdt0r3sy3tqd8v0c",
+    "job_id": "job_01m2aaz92txf4m0wzm56zhsyje",
+    "run_id": null,
+    "type": "plot",
+    "updated_at": "2026-09-12T08:24:15Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/target_math_eval_20260912/results/66f74c1e8f6f2f360270726605acdead4e1afbd211590e2fa24dbf094b8adc6e/math_likelihood_proxy_target.pdf"
+  }
+]

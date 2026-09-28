@@ -1,0 +1,51 @@
+{
+  "experiment": {
+    "attrs": {
+      "expected.runs": 9,
+      "source.experiment": "exp_01m1ge7ye6hz2epd0mjkbkrvt8"
+    },
+    "created_at": "2026-09-06T12:33:07Z",
+    "deleted_at": null,
+    "description": "Prospectively validate nine frozen canonical-280 WSPU coupling policies: Uncheatable cap6 and Table9 caps6/8 at kappa0.25/0.5/1, KL0, matched target-specific data seeds.",
+    "id": "exp_01m1vbajfrdebbsatntj4sm00z",
+    "idempotency_key": "domain-phase-mix.delphi-wspu-coupling-validation-3e18-20260906",
+    "name": "Delphi WSPU coupling validation 3e18",
+    "status": "active",
+    "tags": [
+      "coupling-validation",
+      "delphi-3e18",
+      "single-phase"
+    ],
+    "updated_at": "2026-09-06T12:33:07Z"
+  },
+  "freshness": {
+    "checkpoint_status": "missing",
+    "drifted_artifact_count": 0,
+    "drifted_artifacts": [],
+    "handoff_status": "missing",
+    "last_checkpoint_at": null,
+    "last_handoff_at": null,
+    "since_last_checkpoint_hours": null,
+    "since_last_handoff_hours": null,
+    "stale_validation_count": 0,
+    "stale_validations": []
+  },
+  "note": {
+    "attrs": {
+      "session_id": "ses_01m1vbbx1f5farfv5yc8x7kw03"
+    },
+    "author": null,
+    "body": "Nine user-requested coupled WSPU trainings were acknowledged under /calvinxu/dm-delphi-3e18-cwspu-kappa-v6e8-20260906. Parent running; all nine children pending at 2026-09-06T12:40:21Z with zero failures. Scheduler needs 90 CPU cores versus80 available on matching workers; autoscaler reports quota-pool tier block. Keep all nine released and do not alter placement, priority or existing jobs to clear capacity without authorization.\n\nGrid: Uncheatable cap6 and Table9 caps6/8, each kappa0.25/0.5/1; KL0. Data seeds666200/662009, trainer seed0. Both suites evaluated for every candidate. Final fit remains canonical280. Candidate CSV hash e72d1f2c9b3acc6ffde470dbd05db7ed2cf50d5a8c28fddfcad0d5d547c0f241. Historical kappa0 sampler counts match exactly for the three control cells. No ladder results used.\n\nFull submission and comparison protocol: experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_coupling_validation_3e18_20260906/SUBMISSION.md. Exact child mapping in submission/fieldbook_children.json; parent job_01m1vbkbfhwbm8709xyt4cfzhk. Run/jobrecords and passing preflight/emission validations are recorded. Next work is collecting both evaluation suites after completion and reporting all nine paired comparisons. Check existing jobs before any retry; keep stable command and output identities. No automatic monitor was created.\n\n## Freshness\n\n- Handoff status: `missing`\n- Drifted artifacts: 0\n- Stale validations: 0\n",
+    "body_format": "markdown",
+    "created_at": "2026-09-06T12:42:19Z",
+    "deleted_at": null,
+    "entity_id": "exp_01m1vbajfrdebbsatntj4sm00z",
+    "entity_type": "experiment",
+    "id": "note_01m1vbvd2d8n0kfarsrqes976j",
+    "note_type": "checkpoint",
+    "resolved_at": null,
+    "status": "open",
+    "title": "Experiment handoff",
+    "updated_at": "2026-09-06T12:42:19Z"
+  }
+}

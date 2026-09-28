@@ -1,0 +1,87 @@
+[
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789314762.9315903,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/regmix_official_rerun_20260913/submission/CC_REVIEW.md",
+      "fieldbook.local_size_at_capture": 6616
+    },
+    "content_hash": "sha256:9f19101c5b2def0af9091ed9b2fb1edf3f12c7a1728a04521970ab705d0bb4ac",
+    "created_at": "2026-09-13T15:53:36Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+    "id": "art_01m2dqjpyes1bmh5s7rhengk42",
+    "job_id": null,
+    "run_id": null,
+    "type": "report",
+    "updated_at": "2026-09-13T15:54:04Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/regmix_official_rerun_20260913/submission/CC_REVIEW.md"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789314163.6127357,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/regmix_official_rerun_20260913/submission/region_validation.json",
+      "fieldbook.local_size_at_capture": 282
+    },
+    "content_hash": "sha256:bdf5a336826c76a4f6f546928c7f6b0f050b45e9c269d56ef285ab02384d4c28",
+    "created_at": "2026-09-13T15:53:37Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+    "id": "art_01m2dqjqb0ea5ng9s3rqwt84mj",
+    "job_id": null,
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-13T15:54:04Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/regmix_official_rerun_20260913/submission/region_validation.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789314747.4595525,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/regmix_official_rerun_20260913/submission/bundle_preflight.json",
+      "fieldbook.local_size_at_capture": 55315
+    },
+    "content_hash": "sha256:59f8e73fad534877cc670b26e444f5639cecca959aaa97e50770593978121e41",
+    "created_at": "2026-09-13T15:53:37Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+    "id": "art_01m2dqjqmjc4nc6ptjpvyetk87",
+    "job_id": null,
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-13T15:54:04Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/regmix_official_rerun_20260913/submission/bundle_preflight.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789314310.504901,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/regmix_official_rerun_20260913/submission/prediction_freeze.json",
+      "fieldbook.local_size_at_capture": 662
+    },
+    "content_hash": "sha256:7c266ca5da047671314921e8676881c1764a1837ce26a54fbb1174d01ff6ea16",
+    "created_at": "2026-09-13T15:53:38Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+    "id": "art_01m2dqjqz1jvtbd2p0z57zn6qv",
+    "job_id": null,
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-13T15:54:05Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/regmix_official_rerun_20260913/submission/prediction_freeze.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789314310.5043554,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/regmix_official_rerun_20260913/submission/validation_predictions.csv",
+      "fieldbook.local_size_at_capture": 1559
+    },
+    "content_hash": "sha256:1c27ce510cd4ac2acae8a03ca215600d50c07181939555255ffab8d2b2ce653c",
+    "created_at": "2026-09-13T15:54:05Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+    "id": "art_01m2dqkjp1s8rfs2r2nrgs7rec",
+    "job_id": null,
+    "run_id": null,
+    "type": "metric-table",
+    "updated_at": "2026-09-13T15:54:05Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/regmix_official_rerun_20260913/submission/validation_predictions.csv"
+  }
+]

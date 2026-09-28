@@ -1,0 +1,25 @@
+{
+  "checked_at": "2026-09-12T21:18:47.150343+00:00",
+  "owner": "root-task-heartbeat",
+  "fieldbook_session": "ses_01m2bq3z6j01kbfatfj8p0f4pb",
+  "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery",
+  "fieldbook_job_id": "job_01m28317ycr6k3vmhzm5xksec6",
+  "config": "lib/iris/config/marin.yaml",
+  "resubmit_command": "uv run iris --config lib/iris/config/marin.yaml job run --no-wait \\\n  --enable-extra-resources --cpu 2 --memory 8GB --disk 32GB --timeout 172800 \\\n  --max-retries 0 --max-preemption-retries 0 \\\n  --extra cpu --no-preemptible --region us-central1 --zone us-central1-a \\\n  --priority interactive --job-name starcoder-tpp10-refinement-batch-recovery \\\n  --bundle-include .agents/projects/starcoder_tpp10/releases/refinement.json \\\n  --exclude '^(checkpoints|logs|wandb)/' \\\n  --exclude '^experiments/domain_phase_mix/exploratory/.*(?<!\\.py)$' \\\n  --exclude '^\\.agents/(?!projects/starcoder_tpp10/releases/).*' \\\n  --exclude '^(docs|tests)/' \\\n  --exclude '^lib/[^/]+/tests/' \\\n  --exclude '^experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/' \\\n  -e MARIN_PREFIX gs://marin-us-central1 \\\n  -e WANDB_API_KEY \"$WANDB_API_KEY\" \\\n  -- python -m experiments.domain_phase_mix.resume_starcoder_tpp10_refinement_batch --release .agents/projects/starcoder_tpp10/releases/refinement.json \\\n  --plan-path .agents/projects/starcoder_tpp10/live/refinement_plan.json --max-concurrent 45 --submit\n",
+  "resubmit_boundary": "Only after the prior tree is terminal and leases are inactive. Preserve exact recipes and successful artifacts.",
+  "latest_signal": "40/45 artifacts verified; four target and one matched p80 remain pending BATCH; central1 v5p preemptible quota exceeded.",
+  "complete": 40,
+  "planned": 45,
+  "missing": [
+    "tpp10_target_p055_s20260910",
+    "tpp10_target_p060_s20260910",
+    "tpp10_target_p065_s20260910",
+    "tpp10_target_p080_s20260910",
+    "tpp10_matched_p080_s20260911_d20260914"
+  ],
+  "restart_count": 0,
+  "parent_timeout_at": "2026-09-13T12:38:22.040+00:00",
+  "evidence_directory": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/completion_20260912",
+  "handoff_fieldbook_note": "note_01m2bqrr4x21sak71nzqkz1y6q",
+  "monitoring_session_ended": true
+}

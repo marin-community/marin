@@ -1,0 +1,6 @@
+Job: /calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_target_p050_s20260910 (/calvinxu/tpp10-domain-sweeps-cpu4g/tpp10_finemath_3plus_target_p050_s20260910)
+State: running  exit=0  failures=0  preemptions=1
+Tasks: 0/1 completed  pending=1
+
+  TASK  STATE    EXIT    DURATION                              PEAK MEM    CUR MEM    DIAGNOSTIC
+     0  pending  -       1 hour, 28 minutes and 13.71 seconds  -           -          Worker marin-tpu-v5p-preemptible-8-us-central1-20260912-0124-fa85216e-worker-0 failed: worker reconcile failure thres...

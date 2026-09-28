@@ -1,0 +1,8 @@
+I20260912 16:16:47 8553706816 iris.cli.main Resolved cluster 'marin' to config: /Users/calvinxu/Projects/Work/Marin/marin/lib/iris/config/marin.yaml
+I20260912 16:16:47 8553706816 iris.cluster.config Loading config from /Users/calvinxu/Projects/Work/Marin/marin/lib/iris/config/marin.yaml
+I20260912 16:16:47 8553706816 finelog.client.log_client LogClient resolved /system/log-server -> https://iris.oa.dev/proxy/system.log-server (log)
+Not all requested scopes were granted by the authorization server, missing scopes email.
+[23:14:40] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | I20260912 23:14:37 139911902876480 tqdm_loggable.tqdm_logging Progress on:train 10.0kit/11.5kit rate:1.3it/s remaining:18:17 elapsed:1:35:40 postfix:loss=2.13
+[23:15:39] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | I20260912 23:15:37 139911902876480 tqdm_loggable.tqdm_logging Progress on:train 10.1kit/11.5kit rate:1.4it/s remaining:16:32 elapsed:1:36:40 postfix:loss=2.04
+[23:16:38] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | I20260912 23:16:37 139911902876480 tqdm_loggable.tqdm_logging Progress on:train 10.2kit/11.5kit rate:1.4it/s remaining:15:35 elapsed:1:37:40 postfix:loss=1.91
+

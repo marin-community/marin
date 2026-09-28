@@ -1,0 +1,37 @@
+{
+  "marin-us-central1/raw/gsm8k-ef3e8c/.executor_info": {
+    "name": "raw/gsm8k",
+    "fn_name": "download_gsm8k",
+    "config": {
+      "output_path": "gs://marin-us-central1/raw/gsm8k-ef3e8c",
+      "num_fewshot": 5,
+      "fewshot_seed": 1234
+    },
+    "override_output_path": null,
+    "version": {
+      "name": "raw/gsm8k",
+      "config": {
+        "num_fewshot": 5,
+        "fewshot_seed": 1234
+      },
+      "dependencies": []
+    },
+    "dependencies": [],
+    "output_path": "gs://marin-us-central1/raw/gsm8k-ef3e8c"
+  },
+  "marin-us-central1/raw/math500-ec7cea/.executor_info": {
+    "name": "raw/math500",
+    "fn_name": "<function download_math500 at 0x7c7afa44e840>",
+    "config": {
+      "output_path": "gs://marin-us-central1/raw/math500-ec7cea"
+    },
+    "override_output_path": null,
+    "version": {
+      "name": "raw/math500",
+      "config": {},
+      "dependencies": []
+    },
+    "dependencies": [],
+    "output_path": "gs://marin-us-central1/raw/math500-ec7cea"
+  }
+}

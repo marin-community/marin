@@ -1,0 +1,24 @@
+{
+  "metric": "PALOMA programming-language BPB, not Uncheatable",
+  "pooled_matched_sd_all_cells": 0.009538648970538893,
+  "pooled_matched_sd_excluding_p100": 0.006400369301010993,
+  "paired_p70_minus_p50": {
+    "mean": 0.008367558320363363,
+    "sd": 0.003655440882145719,
+    "values": [
+      0.00959157943725586,
+      0.005460858345031738,
+      0.0031180381774902344,
+      0.013383984565734863,
+      0.008251428604125977,
+      0.010399460792541504
+    ]
+  },
+  "cc_review_corrections": [
+    "Different legacy top-level labels do not establish different underlying corpus versions: Dolma3 wrappers reuse Dolma1.7 wiki and the same FineMath3plus cache.",
+    "A single observed proxy-to-target shift is not a mathematical lower bound.",
+    "No measured TinyLlama/Llama3 corpus token-count conversion factor is established in this package.",
+    "A matched-minus-unmatched contrast changes available unique data and subset composition as well as repetition.",
+    "A common primary objective should be preserved; a secondary shared exclusion set avoids changing objectives separately for each domain."
+  ]
+}

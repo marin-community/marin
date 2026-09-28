@@ -1,0 +1,637 @@
+{
+  "curves": [
+    {
+      "domain": "wikipedia",
+      "arm": "matched",
+      "points": [
+        {
+          "percent": 0,
+          "epochs": 0.0,
+          "metrics": {
+            "eval/loss": 3.4458281993865967,
+            "eval/loading_time": 2.375337691984896,
+            "eval/total_time": 11.15526088399929,
+            "eval/macro_loss": 3.892329216003418,
+            "eval/uncheatable_eval/macro_loss": 4.014262676239014,
+            "eval/paloma/macro_loss": 3.038792610168457,
+            "eval/uncheatable_eval/micro_loss": 4.051896095275879,
+            "eval/paloma/micro_loss": 3.038792610168457,
+            "eval/uncheatable_eval/wikipedia_english/loss": 3.6658878326416016,
+            "eval/uncheatable_eval/github_python/loss": 4.181911945343018,
+            "eval/uncheatable_eval/github_cpp/loss": 3.8177380561828613,
+            "eval/uncheatable_eval/bbc_news/loss": 3.730692148208618,
+            "eval/uncheatable_eval/arxiv_physics/loss": 4.027435779571533,
+            "eval/uncheatable_eval/arxiv_computer_science/loss": 3.9718620777130127,
+            "eval/uncheatable_eval/ao3_english/loss": 4.704311847686768,
+            "eval/paloma/dolma_100_programing_languages-tpp10/loss": 3.038792610168457,
+            "eval/bpb_schema_version": 2.0,
+            "eval/bpb": 1.6929601430892944,
+            "eval/macro_bpb": 1.6393344402313232,
+            "eval/uncheatable_eval/bpb": 1.6132493985846148,
+            "eval/paloma/bpb": 1.7713395850476321,
+            "eval/uncheatable_eval/wikipedia_english/bpb": 1.4550154209136963,
+            "eval/uncheatable_eval/github_python/bpb": 2.0012755393981934,
+            "eval/uncheatable_eval/github_cpp/bpb": 2.0349340438842773,
+            "eval/uncheatable_eval/bbc_news/bpb": 1.3515231609344482,
+            "eval/uncheatable_eval/arxiv_physics/bpb": 1.4291741847991943,
+            "eval/uncheatable_eval/arxiv_computer_science/bpb": 1.2974233627319336,
+            "eval/uncheatable_eval/ao3_english/bpb": 1.7739896774291992,
+            "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 1.7713395357131958,
+            "eval/uncheatable_eval/macro_bpb": 1.6204766035079956,
+            "eval/paloma/macro_bpb": 1.7713395357131958
+          },
+          "run_name": "shared p0"
+        },
+        {
+          "percent": 5,
+          "epochs": 0.787890625,
+          "metrics": {
+            "eval/uncheatable_eval/wikipedia_english/bpb": 1.4183162548261654,
+            "eval/uncheatable_eval/github_python/bpb": 1.945993431402984,
+            "eval/uncheatable_eval/github_cpp/bpb": 1.951089597079615,
+            "eval/uncheatable_eval/bbc_news/bpb": 1.3457153971847544,
+            "eval/uncheatable_eval/arxiv_physics/bpb": 1.4200592801906786,
+            "eval/uncheatable_eval/arxiv_computer_science/bpb": 1.2886562456593662,
+            "eval/uncheatable_eval/ao3_english/bpb": 1.586064299096879,
+            "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 1.734659483652341,
+            "eval/uncheatable_eval/macro_bpb": 1.5651277864914916
+          },
+          "run_name": "tpp10_wikipedia_matched_p005_s20260910"
+        },
+        {
+          "percent": 10,
+          "epochs": 1.5763671875,
+          "metrics": {
+            "eval/uncheatable_eval/wikipedia_english/bpb": 1.4042746870446676,
+            "eval/uncheatable_eval/github_python/bpb": 1.904122773034788,
+            "eval/uncheatable_eval/github_cpp/bpb": 1.8907235773806241,
+            "eval/uncheatable_eval/bbc_news/bpb": 1.3480360464723957,
+            "eval/uncheatable_eval/arxiv_physics/bpb": 1.41814238211418,
+            "eval/uncheatable_eval/arxiv_computer_science/bpb": 1.293710210344359,
+            "eval/uncheatable_eval/ao3_english/bpb": 1.5837125032773334,
+            "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 1.682825894172635,
+            "eval/uncheatable_eval/macro_bpb": 1.5489603113811925
+          },
+          "run_name": "tpp10_wikipedia_matched_p010_s20260910"
+        },
+        {
+          "percent": 20,
+          "epochs": 3.1619140625,
+          "metrics": {
+            "eval/uncheatable_eval/wikipedia_english/bpb": 1.3818943296840667,
+            "eval/uncheatable_eval/github_python/bpb": 1.8772613884002363,
+            "eval/uncheatable_eval/github_cpp/bpb": 1.8551501270879183,
+            "eval/uncheatable_eval/bbc_news/bpb": 1.3480451155573745,
+            "eval/uncheatable_eval/arxiv_physics/bpb": 1.40884673359218,
+            "eval/uncheatable_eval/arxiv_computer_science/bpb": 1.2912678060159763,
+            "eval/uncheatable_eval/ao3_english/bpb": 1.5738185617390772,
+            "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 1.6775703648100788,
+            "eval/uncheatable_eval/macro_bpb": 1.5337548660109754
+          },
+          "run_name": "tpp10_wikipedia_matched_p020_s20260910"
+        },
+        {
+          "percent": 30,
+          "epochs": 4.768359375,
+          "metrics": {
+            "eval/uncheatable_eval/wikipedia_english/bpb": 1.3659691531126,
+            "eval/uncheatable_eval/github_python/bpb": 1.877611436304932,
+            "eval/uncheatable_eval/github_cpp/bpb": 1.8457871009301412,
+            "eval/uncheatable_eval/bbc_news/bpb": 1.3514439494906028,
+            "eval/uncheatable_eval/arxiv_physics/bpb": 1.40588682366561,
+            "eval/uncheatable_eval/arxiv_computer_science/bpb": 1.2945393240996588,
+            "eval/uncheatable_eval/ao3_english/bpb": 1.575229747119595,
+            "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 1.6610369052652858,
+            "eval/uncheatable_eval/macro_bpb": 1.5309239335318772
+          },
+          "run_name": "tpp10_wikipedia_matched_p030_s20260910"
+        },
+        {
+          "percent": 50,
+          "epochs": 7.937890625,
+          "metrics": {
+            "eval/uncheatable_eval/wikipedia_english/bpb": 1.3571733955934437,
+            "eval/uncheatable_eval/github_python/bpb": 1.8650497595893885,
+            "eval/uncheatable_eval/github_cpp/bpb": 1.8695467472178082,
+            "eval/uncheatable_eval/bbc_news/bpb": 1.3642566663759914,
+            "eval/uncheatable_eval/arxiv_physics/bpb": 1.4150947366839985,
+            "eval/uncheatable_eval/arxiv_computer_science/bpb": 1.308635270383757,
+            "eval/uncheatable_eval/ao3_english/bpb": 1.5971209221680644,
+            "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 1.6862114968487836,
+            "eval/uncheatable_eval/macro_bpb": 1.539553928287493
+          },
+          "run_name": "tpp10_wikipedia_matched_p050_s20260910"
+        },
+        {
+          "percent": 70,
+          "epochs": 11.098046875,
+          "metrics": {
+            "eval/uncheatable_eval/wikipedia_english/bpb": 1.3700287771814095,
+            "eval/uncheatable_eval/github_python/bpb": 1.9733195308732028,
+            "eval/uncheatable_eval/github_cpp/bpb": 2.0680295073118047,
+            "eval/uncheatable_eval/bbc_news/bpb": 1.3931300417804025,
+            "eval/uncheatable_eval/arxiv_physics/bpb": 1.4477265062746356,
+            "eval/uncheatable_eval/arxiv_computer_science/bpb": 1.3444293713034325,
+            "eval/uncheatable_eval/ao3_english/bpb": 1.6349787391460806,
+            "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 1.8806481553152055,
+            "eval/uncheatable_eval/macro_bpb": 1.6045203534101382
+          },
+          "run_name": "tpp10_wikipedia_matched_p070_s20260910"
+        },
+        {
+          "percent": 100,
+          "epochs": 15.825,
+          "metrics": {
+            "eval/uncheatable_eval/wikipedia_english/bpb": 1.4960933527083866,
+            "eval/uncheatable_eval/github_python/bpb": 4.053960463348397,
+            "eval/uncheatable_eval/github_cpp/bpb": 4.883089652137311,
+            "eval/uncheatable_eval/bbc_news/bpb": 1.5413694180882775,
+            "eval/uncheatable_eval/arxiv_physics/bpb": 1.6658618421567941,
+            "eval/uncheatable_eval/arxiv_computer_science/bpb": 1.5653809442222506,
+            "eval/uncheatable_eval/ao3_english/bpb": 1.8657192368130635,
+            "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 4.331247185120651,
+            "eval/uncheatable_eval/macro_bpb": 2.438782129924926
+          },
+          "run_name": "tpp10_wikipedia_matched_p100_s20260910"
+        }
+      ],
+      "best": {
+        "percent": 30,
+        "epochs": 4.768359375,
+        "metrics": {
+          "eval/uncheatable_eval/wikipedia_english/bpb": 1.3659691531126,
+          "eval/uncheatable_eval/github_python/bpb": 1.877611436304932,
+          "eval/uncheatable_eval/github_cpp/bpb": 1.8457871009301412,
+          "eval/uncheatable_eval/bbc_news/bpb": 1.3514439494906028,
+          "eval/uncheatable_eval/arxiv_physics/bpb": 1.40588682366561,
+          "eval/uncheatable_eval/arxiv_computer_science/bpb": 1.2945393240996588,
+          "eval/uncheatable_eval/ao3_english/bpb": 1.575229747119595,
+          "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 1.6610369052652858,
+          "eval/uncheatable_eval/macro_bpb": 1.5309239335318772
+        },
+        "run_name": "tpp10_wikipedia_matched_p030_s20260910"
+      },
+      "missing_percent": []
+    },
+    {
+      "domain": "finemath_3plus",
+      "arm": "matched",
+      "points": [
+        {
+          "percent": 0,
+          "epochs": 0.0,
+          "metrics": {
+            "eval/loss": 3.4458281993865967,
+            "eval/loading_time": 2.375337691984896,
+            "eval/total_time": 11.15526088399929,
+            "eval/macro_loss": 3.892329216003418,
+            "eval/uncheatable_eval/macro_loss": 4.014262676239014,
+            "eval/paloma/macro_loss": 3.038792610168457,
+            "eval/uncheatable_eval/micro_loss": 4.051896095275879,
+            "eval/paloma/micro_loss": 3.038792610168457,
+            "eval/uncheatable_eval/wikipedia_english/loss": 3.6658878326416016,
+            "eval/uncheatable_eval/github_python/loss": 4.181911945343018,
+            "eval/uncheatable_eval/github_cpp/loss": 3.8177380561828613,
+            "eval/uncheatable_eval/bbc_news/loss": 3.730692148208618,
+            "eval/uncheatable_eval/arxiv_physics/loss": 4.027435779571533,
+            "eval/uncheatable_eval/arxiv_computer_science/loss": 3.9718620777130127,
+            "eval/uncheatable_eval/ao3_english/loss": 4.704311847686768,
+            "eval/paloma/dolma_100_programing_languages-tpp10/loss": 3.038792610168457,
+            "eval/bpb_schema_version": 2.0,
+            "eval/bpb": 1.6929601430892944,
+            "eval/macro_bpb": 1.6393344402313232,
+            "eval/uncheatable_eval/bpb": 1.6132493985846148,
+            "eval/paloma/bpb": 1.7713395850476321,
+            "eval/uncheatable_eval/wikipedia_english/bpb": 1.4550154209136963,
+            "eval/uncheatable_eval/github_python/bpb": 2.0012755393981934,
+            "eval/uncheatable_eval/github_cpp/bpb": 2.0349340438842773,
+            "eval/uncheatable_eval/bbc_news/bpb": 1.3515231609344482,
+            "eval/uncheatable_eval/arxiv_physics/bpb": 1.4291741847991943,
+            "eval/uncheatable_eval/arxiv_computer_science/bpb": 1.2974233627319336,
+            "eval/uncheatable_eval/ao3_english/bpb": 1.7739896774291992,
+            "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 1.7713395357131958,
+            "eval/uncheatable_eval/macro_bpb": 1.6204766035079956,
+            "eval/paloma/macro_bpb": 1.7713395357131958
+          },
+          "run_name": "shared p0"
+        },
+        {
+          "percent": 5,
+          "epochs": 0.787890625,
+          "metrics": {
+            "eval/uncheatable_eval/wikipedia_english/bpb": 1.457741071590072,
+            "eval/uncheatable_eval/github_python/bpb": 1.8615333070396092,
+            "eval/uncheatable_eval/github_cpp/bpb": 1.831017621987502,
+            "eval/uncheatable_eval/bbc_news/bpb": 1.3608866807702185,
+            "eval/uncheatable_eval/arxiv_physics/bpb": 1.4121989574341283,
+            "eval/uncheatable_eval/arxiv_computer_science/bpb": 1.2904399383455991,
+            "eval/uncheatable_eval/ao3_english/bpb": 1.5894980396710852,
+            "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 1.6415187897920434,
+            "eval/uncheatable_eval/macro_bpb": 1.543330802405459
+          },
+          "run_name": "tpp10_finemath_3plus_matched_p005_s20260910"
+        },
+        {
+          "percent": 10,
+          "epochs": 1.5763671875,
+          "metrics": {
+            "eval/uncheatable_eval/wikipedia_english/bpb": 1.4613507303337725,
+            "eval/uncheatable_eval/github_python/bpb": 1.7950126814060963,
+            "eval/uncheatable_eval/github_cpp/bpb": 1.758282830854953,
+            "eval/uncheatable_eval/bbc_news/bpb": 1.367930941375853,
+            "eval/uncheatable_eval/arxiv_physics/bpb": 1.4006569585202353,
+            "eval/uncheatable_eval/arxiv_computer_science/bpb": 1.2865040233573077,
+            "eval/uncheatable_eval/ao3_english/bpb": 1.592969361507336,
+            "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 1.5944946156159292,
+            "eval/uncheatable_eval/macro_bpb": 1.523243932479365
+          },
+          "run_name": "tpp10_finemath_3plus_matched_p010_s20260910"
+        },
+        {
+          "percent": 20,
+          "epochs": 3.1619140625,
+          "metrics": {
+            "eval/uncheatable_eval/wikipedia_english/bpb": 1.4725134663338875,
+            "eval/uncheatable_eval/github_python/bpb": 1.7048195527835144,
+            "eval/uncheatable_eval/github_cpp/bpb": 1.6682878791604496,
+            "eval/uncheatable_eval/bbc_news/bpb": 1.381948464607576,
+            "eval/uncheatable_eval/arxiv_physics/bpb": 1.3865121678675687,
+            "eval/uncheatable_eval/arxiv_computer_science/bpb": 1.285722961751831,
+            "eval/uncheatable_eval/ao3_english/bpb": 1.5918435419778478,
+            "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 1.5223108593012915,
+            "eval/uncheatable_eval/macro_bpb": 1.4988068620689536
+          },
+          "run_name": "tpp10_finemath_3plus_matched_p020_s20260910"
+        },
+        {
+          "percent": 30,
+          "epochs": 4.768359375,
+          "metrics": {
+            "eval/uncheatable_eval/wikipedia_english/bpb": 1.4850773877322976,
+            "eval/uncheatable_eval/github_python/bpb": 1.678191039000815,
+            "eval/uncheatable_eval/github_cpp/bpb": 1.63725316523357,
+            "eval/uncheatable_eval/bbc_news/bpb": 1.3958634639929226,
+            "eval/uncheatable_eval/arxiv_physics/bpb": 1.3799301437841798,
+            "eval/uncheatable_eval/arxiv_computer_science/bpb": 1.2870445905727443,
+            "eval/uncheatable_eval/ao3_english/bpb": 1.5937209867482336,
+            "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 1.5091484099166999,
+            "eval/uncheatable_eval/macro_bpb": 1.4938686824378231
+          },
+          "run_name": "tpp10_finemath_3plus_matched_p030_s20260910"
+        },
+        {
+          "percent": 50,
+          "epochs": 7.937890625,
+          "metrics": {
+            "eval/uncheatable_eval/wikipedia_english/bpb": 1.5250740531733094,
+            "eval/uncheatable_eval/github_python/bpb": 1.6711573352261155,
+            "eval/uncheatable_eval/github_cpp/bpb": 1.6359040619083673,
+            "eval/uncheatable_eval/bbc_news/bpb": 1.4363487230593308,
+            "eval/uncheatable_eval/arxiv_physics/bpb": 1.3843485612775395,
+            "eval/uncheatable_eval/arxiv_computer_science/bpb": 1.302560372745709,
+            "eval/uncheatable_eval/ao3_english/bpb": 1.6274612280345477,
+            "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 1.5015244457277028,
+            "eval/uncheatable_eval/macro_bpb": 1.5118363336321312
+          },
+          "run_name": "tpp10_finemath_3plus_matched_p050_s20260910"
+        },
+        {
+          "percent": 70,
+          "epochs": 11.098046875,
+          "metrics": {
+            "eval/uncheatable_eval/wikipedia_english/bpb": 1.5820983338897887,
+            "eval/uncheatable_eval/github_python/bpb": 1.7156687559001078,
+            "eval/uncheatable_eval/github_cpp/bpb": 1.6867817525220523,
+            "eval/uncheatable_eval/bbc_news/bpb": 1.493204112373123,
+            "eval/uncheatable_eval/arxiv_physics/bpb": 1.4106560139631874,
+            "eval/uncheatable_eval/arxiv_computer_science/bpb": 1.3378327534844008,
+            "eval/uncheatable_eval/ao3_english/bpb": 1.6761327384903397,
+            "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 1.5465633428532535,
+            "eval/uncheatable_eval/macro_bpb": 1.5574820658032855
+          },
+          "run_name": "tpp10_finemath_3plus_matched_p070_s20260910"
+        },
+        {
+          "percent": 100,
+          "epochs": 15.825,
+          "metrics": {
+            "eval/uncheatable_eval/wikipedia_english/bpb": 2.241272647502929,
+            "eval/uncheatable_eval/github_python/bpb": 2.192013442585703,
+            "eval/uncheatable_eval/github_cpp/bpb": 2.2020037532558274,
+            "eval/uncheatable_eval/bbc_news/bpb": 2.041885653761677,
+            "eval/uncheatable_eval/arxiv_physics/bpb": 1.6252760919479885,
+            "eval/uncheatable_eval/arxiv_computer_science/bpb": 1.6114655259530561,
+            "eval/uncheatable_eval/ao3_english/bpb": 2.118366553403147,
+            "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 1.9824761213598707,
+            "eval/uncheatable_eval/macro_bpb": 2.004611952630047
+          },
+          "run_name": "tpp10_finemath_3plus_matched_p100_s20260910"
+        }
+      ],
+      "best": {
+        "percent": 30,
+        "epochs": 4.768359375,
+        "metrics": {
+          "eval/uncheatable_eval/wikipedia_english/bpb": 1.4850773877322976,
+          "eval/uncheatable_eval/github_python/bpb": 1.678191039000815,
+          "eval/uncheatable_eval/github_cpp/bpb": 1.63725316523357,
+          "eval/uncheatable_eval/bbc_news/bpb": 1.3958634639929226,
+          "eval/uncheatable_eval/arxiv_physics/bpb": 1.3799301437841798,
+          "eval/uncheatable_eval/arxiv_computer_science/bpb": 1.2870445905727443,
+          "eval/uncheatable_eval/ao3_english/bpb": 1.5937209867482336,
+          "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 1.5091484099166999,
+          "eval/uncheatable_eval/macro_bpb": 1.4938686824378231
+        },
+        "run_name": "tpp10_finemath_3plus_matched_p030_s20260910"
+      },
+      "missing_percent": []
+    },
+    {
+      "domain": "wikipedia",
+      "arm": "target",
+      "points": [
+        {
+          "percent": 0,
+          "epochs": 0.0,
+          "metrics": {
+            "eval/loss": 2.4288501739501953,
+            "eval/loading_time": 0.05320553298952291,
+            "eval/total_time": 19.746265319001395,
+            "eval/macro_loss": 2.843722343444824,
+            "eval/uncheatable_eval/macro_loss": 2.9552390575408936,
+            "eval/paloma/macro_loss": 2.063107490539551,
+            "eval/uncheatable_eval/micro_loss": 2.9734342098236084,
+            "eval/paloma/micro_loss": 2.063107490539551,
+            "eval/uncheatable_eval/wikipedia_english/loss": 2.728376626968384,
+            "eval/uncheatable_eval/github_python/loss": 2.817369222640991,
+            "eval/uncheatable_eval/github_cpp/loss": 2.5827765464782715,
+            "eval/uncheatable_eval/bbc_news/loss": 2.7912111282348633,
+            "eval/uncheatable_eval/arxiv_physics/loss": 3.0497756004333496,
+            "eval/uncheatable_eval/arxiv_computer_science/loss": 3.013780117034912,
+            "eval/uncheatable_eval/ao3_english/loss": 3.703383684158325,
+            "eval/paloma/dolma_100_programing_languages-tpp10/loss": 2.063107490539551,
+            "eval/bpb_schema_version": 2.0,
+            "eval/bpb": 1.193312168121338,
+            "eval/macro_bpb": 1.1856095790863037,
+            "eval/uncheatable_eval/bpb": 1.1838632638103916,
+            "eval/paloma/bpb": 1.2026039832654012,
+            "eval/uncheatable_eval/wikipedia_english/bpb": 1.0829108953475952,
+            "eval/uncheatable_eval/github_python/bpb": 1.3482664823532104,
+            "eval/uncheatable_eval/github_cpp/bpb": 1.3766738176345825,
+            "eval/uncheatable_eval/bbc_news/bpb": 1.0111761093139648,
+            "eval/uncheatable_eval/arxiv_physics/bpb": 1.0822421312332153,
+            "eval/uncheatable_eval/arxiv_computer_science/bpb": 0.984462320804596,
+            "eval/uncheatable_eval/ao3_english/bpb": 1.3965409994125366,
+            "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 1.2026039361953735,
+            "eval/uncheatable_eval/macro_bpb": 1.1831817626953125,
+            "eval/paloma/macro_bpb": 1.2026039361953735
+          },
+          "run_name": "shared p0"
+        },
+        {
+          "percent": 5,
+          "epochs": 0.7882877066115702,
+          "metrics": {
+            "eval/uncheatable_eval/wikipedia_english/bpb": 1.04715722273594,
+            "eval/uncheatable_eval/github_python/bpb": 1.2997288970033385,
+            "eval/uncheatable_eval/github_cpp/bpb": 1.3064665260104025,
+            "eval/uncheatable_eval/bbc_news/bpb": 1.0100382454749266,
+            "eval/uncheatable_eval/arxiv_physics/bpb": 1.0737969438306922,
+            "eval/uncheatable_eval/arxiv_computer_science/bpb": 0.9788345969915296,
+            "eval/uncheatable_eval/ao3_english/bpb": 1.2363275901603519,
+            "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 1.1672699431517333,
+            "eval/uncheatable_eval/macro_bpb": 1.1360500031724545
+          },
+          "run_name": "tpp10_wikipedia_target_p005_s20260910"
+        },
+        {
+          "percent": 10,
+          "epochs": 1.5767045454545454,
+          "metrics": {
+            "eval/uncheatable_eval/wikipedia_english/bpb": 1.033644920162294,
+            "eval/uncheatable_eval/github_python/bpb": 1.2752385506697912,
+            "eval/uncheatable_eval/github_cpp/bpb": 1.2749813061219704,
+            "eval/uncheatable_eval/bbc_news/bpb": 1.0091898109821282,
+            "eval/uncheatable_eval/arxiv_physics/bpb": 1.075418147032434,
+            "eval/uncheatable_eval/arxiv_computer_science/bpb": 0.9803615183034224,
+            "eval/uncheatable_eval/ao3_english/bpb": 1.2335448685298467,
+            "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 1.1551323748038502,
+            "eval/uncheatable_eval/macro_bpb": 1.1260541602574123
+          },
+          "run_name": "tpp10_wikipedia_target_p010_s20260910"
+        },
+        {
+          "percent": 20,
+          "epochs": 3.1609740874655645,
+          "metrics": {
+            "eval/uncheatable_eval/wikipedia_english/bpb": 1.019143640172724,
+            "eval/uncheatable_eval/github_python/bpb": 1.24012137519822,
+            "eval/uncheatable_eval/github_cpp/bpb": 1.2286922951302166,
+            "eval/uncheatable_eval/bbc_news/bpb": 1.0111882918224384,
+            "eval/uncheatable_eval/arxiv_physics/bpb": 1.077486742079015,
+            "eval/uncheatable_eval/arxiv_computer_science/bpb": 0.9829090610471398,
+            "eval/uncheatable_eval/ao3_english/bpb": 1.236276163170185,
+            "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 1.126458428407985,
+            "eval/uncheatable_eval/macro_bpb": 1.1136882240885628
+          },
+          "run_name": "tpp10_wikipedia_target_p020_s20260910"
+        },
+        {
+          "percent": 30,
+          "epochs": 4.7684551480716255,
+          "metrics": {
+            "eval/uncheatable_eval/wikipedia_english/bpb": 1.0072310565940252,
+            "eval/uncheatable_eval/github_python/bpb": 1.2410192001532563,
+            "eval/uncheatable_eval/github_cpp/bpb": 1.2259285141282847,
+            "eval/uncheatable_eval/bbc_news/bpb": 1.0150582863133597,
+            "eval/uncheatable_eval/arxiv_physics/bpb": 1.0761753628061312,
+            "eval/uncheatable_eval/arxiv_computer_science/bpb": 0.984525622593144,
+            "eval/uncheatable_eval/ao3_english/bpb": 1.2423460764343863,
+            "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 1.1258026685365754,
+            "eval/uncheatable_eval/macro_bpb": 1.1131834455746554
+          },
+          "run_name": "tpp10_wikipedia_target_p030_s20260910"
+        },
+        {
+          "percent": 50,
+          "epochs": 7.937187930440771,
+          "metrics": {
+            "eval/uncheatable_eval/wikipedia_english/bpb": 0.9942056250188415,
+            "eval/uncheatable_eval/github_python/bpb": 1.2364921953570982,
+            "eval/uncheatable_eval/github_cpp/bpb": 1.2242303163386574,
+            "eval/uncheatable_eval/bbc_news/bpb": 1.023774713444554,
+            "eval/uncheatable_eval/arxiv_physics/bpb": 1.0811276385712265,
+            "eval/uncheatable_eval/arxiv_computer_science/bpb": 0.9970591341450586,
+            "eval/uncheatable_eval/ao3_english/bpb": 1.2604012655345138,
+            "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 1.13130342165522,
+            "eval/uncheatable_eval/macro_bpb": 1.1167558412014214
+          },
+          "run_name": "tpp10_wikipedia_target_p050_s20260910"
+        },
+        {
+          "percent": 70,
+          "epochs": 11.097925275482094,
+          "metrics": {
+            "eval/uncheatable_eval/wikipedia_english/bpb": 0.9908457892947602,
+            "eval/uncheatable_eval/github_python/bpb": 1.2443138492067094,
+            "eval/uncheatable_eval/github_cpp/bpb": 1.2226825837277264,
+            "eval/uncheatable_eval/bbc_news/bpb": 1.038482350857022,
+            "eval/uncheatable_eval/arxiv_physics/bpb": 1.0913953152523337,
+            "eval/uncheatable_eval/arxiv_computer_science/bpb": 1.0138511409195732,
+            "eval/uncheatable_eval/ao3_english/bpb": 1.285972617136292,
+            "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 1.146192999534448,
+            "eval/uncheatable_eval/macro_bpb": 1.1267919494849168
+          },
+          "run_name": "tpp10_wikipedia_target_p070_s20260910"
+        },
+        {
+          "percent": 100,
+          "epochs": 15.827823691460056,
+          "metrics": {
+            "eval/uncheatable_eval/wikipedia_english/bpb": 1.036790135201339,
+            "eval/uncheatable_eval/github_python/bpb": 2.602811545020571,
+            "eval/uncheatable_eval/github_cpp/bpb": 3.311846094542532,
+            "eval/uncheatable_eval/bbc_news/bpb": 1.1398615923365056,
+            "eval/uncheatable_eval/arxiv_physics/bpb": 1.1929001320190213,
+            "eval/uncheatable_eval/arxiv_computer_science/bpb": 1.1389875058935823,
+            "eval/uncheatable_eval/ao3_english/bpb": 1.4357655937637117,
+            "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 2.9558291775655956,
+            "eval/uncheatable_eval/macro_bpb": 1.6941375141110375
+          },
+          "run_name": "tpp10_wikipedia_target_p100_s20260910"
+        }
+      ],
+      "best": {
+        "percent": 30,
+        "epochs": 4.7684551480716255,
+        "metrics": {
+          "eval/uncheatable_eval/wikipedia_english/bpb": 1.0072310565940252,
+          "eval/uncheatable_eval/github_python/bpb": 1.2410192001532563,
+          "eval/uncheatable_eval/github_cpp/bpb": 1.2259285141282847,
+          "eval/uncheatable_eval/bbc_news/bpb": 1.0150582863133597,
+          "eval/uncheatable_eval/arxiv_physics/bpb": 1.0761753628061312,
+          "eval/uncheatable_eval/arxiv_computer_science/bpb": 0.984525622593144,
+          "eval/uncheatable_eval/ao3_english/bpb": 1.2423460764343863,
+          "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 1.1258026685365754,
+          "eval/uncheatable_eval/macro_bpb": 1.1131834455746554
+        },
+        "run_name": "tpp10_wikipedia_target_p030_s20260910"
+      },
+      "missing_percent": []
+    },
+    {
+      "domain": "finemath_3plus",
+      "arm": "target",
+      "points": [
+        {
+          "percent": 0,
+          "epochs": 0.0,
+          "metrics": {
+            "eval/loss": 2.4288501739501953,
+            "eval/loading_time": 0.05320553298952291,
+            "eval/total_time": 19.746265319001395,
+            "eval/macro_loss": 2.843722343444824,
+            "eval/uncheatable_eval/macro_loss": 2.9552390575408936,
+            "eval/paloma/macro_loss": 2.063107490539551,
+            "eval/uncheatable_eval/micro_loss": 2.9734342098236084,
+            "eval/paloma/micro_loss": 2.063107490539551,
+            "eval/uncheatable_eval/wikipedia_english/loss": 2.728376626968384,
+            "eval/uncheatable_eval/github_python/loss": 2.817369222640991,
+            "eval/uncheatable_eval/github_cpp/loss": 2.5827765464782715,
+            "eval/uncheatable_eval/bbc_news/loss": 2.7912111282348633,
+            "eval/uncheatable_eval/arxiv_physics/loss": 3.0497756004333496,
+            "eval/uncheatable_eval/arxiv_computer_science/loss": 3.013780117034912,
+            "eval/uncheatable_eval/ao3_english/loss": 3.703383684158325,
+            "eval/paloma/dolma_100_programing_languages-tpp10/loss": 2.063107490539551,
+            "eval/bpb_schema_version": 2.0,
+            "eval/bpb": 1.193312168121338,
+            "eval/macro_bpb": 1.1856095790863037,
+            "eval/uncheatable_eval/bpb": 1.1838632638103916,
+            "eval/paloma/bpb": 1.2026039832654012,
+            "eval/uncheatable_eval/wikipedia_english/bpb": 1.0829108953475952,
+            "eval/uncheatable_eval/github_python/bpb": 1.3482664823532104,
+            "eval/uncheatable_eval/github_cpp/bpb": 1.3766738176345825,
+            "eval/uncheatable_eval/bbc_news/bpb": 1.0111761093139648,
+            "eval/uncheatable_eval/arxiv_physics/bpb": 1.0822421312332153,
+            "eval/uncheatable_eval/arxiv_computer_science/bpb": 0.984462320804596,
+            "eval/uncheatable_eval/ao3_english/bpb": 1.3965409994125366,
+            "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 1.2026039361953735,
+            "eval/uncheatable_eval/macro_bpb": 1.1831817626953125,
+            "eval/paloma/macro_bpb": 1.2026039361953735
+          },
+          "run_name": "shared p0"
+        },
+        {
+          "percent": 5,
+          "epochs": 0.7882877066115702,
+          "metrics": {
+            "eval/uncheatable_eval/wikipedia_english/bpb": 1.0791079782363793,
+            "eval/uncheatable_eval/github_python/bpb": 1.2251313837644109,
+            "eval/uncheatable_eval/github_cpp/bpb": 1.217763871952861,
+            "eval/uncheatable_eval/bbc_news/bpb": 1.01712759238874,
+            "eval/uncheatable_eval/arxiv_physics/bpb": 1.0647873452004093,
+            "eval/uncheatable_eval/arxiv_computer_science/bpb": 0.9735578167463345,
+            "eval/uncheatable_eval/ao3_english/bpb": 1.2364694639199374,
+            "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 1.118100252202318,
+            "eval/uncheatable_eval/macro_bpb": 1.1162779217441532
+          },
+          "run_name": "tpp10_finemath_3plus_target_p005_s20260910"
+        },
+        {
+          "percent": 10,
+          "epochs": 1.5767045454545454,
+          "metrics": {
+            "eval/uncheatable_eval/wikipedia_english/bpb": 1.0827874738696552,
+            "eval/uncheatable_eval/github_python/bpb": 1.174688887396221,
+            "eval/uncheatable_eval/github_cpp/bpb": 1.1682319805303873,
+            "eval/uncheatable_eval/bbc_news/bpb": 1.0213673464300703,
+            "eval/uncheatable_eval/arxiv_physics/bpb": 1.0575908341712812,
+            "eval/uncheatable_eval/arxiv_computer_science/bpb": 0.9703986020662912,
+            "eval/uncheatable_eval/ao3_english/bpb": 1.2376283693451973,
+            "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 1.084652329470162,
+            "eval/uncheatable_eval/macro_bpb": 1.1018133562584433
+          },
+          "run_name": "tpp10_finemath_3plus_target_p010_s20260910"
+        },
+        {
+          "percent": 20,
+          "epochs": 3.1609740874655645,
+          "metrics": {
+            "eval/uncheatable_eval/wikipedia_english/bpb": 1.0946305044485738,
+            "eval/uncheatable_eval/github_python/bpb": 1.1229128317353045,
+            "eval/uncheatable_eval/github_cpp/bpb": 1.1148355231584586,
+            "eval/uncheatable_eval/bbc_news/bpb": 1.033164066681153,
+            "eval/uncheatable_eval/arxiv_physics/bpb": 1.055379341086513,
+            "eval/uncheatable_eval/arxiv_computer_science/bpb": 0.9715228821876053,
+            "eval/uncheatable_eval/ao3_english/bpb": 1.2441149131556088,
+            "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 1.0565487419833282,
+            "eval/uncheatable_eval/macro_bpb": 1.090937151779031
+          },
+          "run_name": "tpp10_finemath_3plus_target_p020_s20260910"
+        }
+      ],
+      "best": {
+        "percent": 20,
+        "epochs": 3.1609740874655645,
+        "metrics": {
+          "eval/uncheatable_eval/wikipedia_english/bpb": 1.0946305044485738,
+          "eval/uncheatable_eval/github_python/bpb": 1.1229128317353045,
+          "eval/uncheatable_eval/github_cpp/bpb": 1.1148355231584586,
+          "eval/uncheatable_eval/bbc_news/bpb": 1.033164066681153,
+          "eval/uncheatable_eval/arxiv_physics/bpb": 1.055379341086513,
+          "eval/uncheatable_eval/arxiv_computer_science/bpb": 0.9715228821876053,
+          "eval/uncheatable_eval/ao3_english/bpb": 1.2441149131556088,
+          "eval/paloma/dolma_100_programing_languages-tpp10/bpb": 1.0565487419833282,
+          "eval/uncheatable_eval/macro_bpb": 1.090937151779031
+        },
+        "run_name": "tpp10_finemath_3plus_target_p020_s20260910"
+      },
+      "missing_percent": [
+        30,
+        50,
+        70,
+        100
+      ]
+    }
+  ]
+}

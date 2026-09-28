@@ -1,0 +1,611 @@
+{
+  "adaptive_release": {
+    "additional_starcoder_weights": [
+      0.2,
+      0.4,
+      0.5,
+      0.6,
+      0.9
+    ],
+    "based_on_stage": "pilot",
+    "trainer_seed": 20260711
+  },
+  "design_sha256": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b",
+  "historical_training_environment": {
+    "jax_default_prng_impl": "threefry2x32",
+    "jax_enable_x64": false,
+    "jax_version": "0.10.1",
+    "numpy_version": "2.3.5"
+  },
+  "intended_child_runtime": {
+    "environment": {
+      "jax_default_prng_impl": "threefry2x32",
+      "jax_enable_x64": false,
+      "jax_version": "0.11.1",
+      "numpy_version": "2.3.5"
+    },
+    "locked_packages": {
+      "jax": "0.11.1",
+      "jaxlib": "0.11.1",
+      "numpy": "2.3.5"
+    },
+    "observed_on_child": false,
+    "source": "repository uv.lock bundled with the child job",
+    "uv_lock_sha256": "347c4bb876ef55f60ecd5cf137d22016aaa742387717d20e296ca0ff2cc05dd5"
+  },
+  "marin_prefix": "gs://marin-us-central1",
+  "metric": "eval/paloma/dolma_100_programing_languages-llama3/bpb",
+  "new_training_runs": 20,
+  "observed_parent_runtime": {
+    "jax_default_prng_impl": "threefry2x32",
+    "jax_enable_x64": false,
+    "jax_version": "0.11.1",
+    "numpy_version": "2.3.5"
+  },
+  "reuse_audit": {
+    "audit_runtime": {
+      "jax_default_prng_impl": "threefry2x32",
+      "jax_enable_x64": false,
+      "jax_version": "0.10.1",
+      "numpy_version": "2.3.5"
+    },
+    "design_sha256": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b",
+    "historical_config_sha256": "b9e047c49742fa6d73672d62f9890d70fc95eb5f855a47c6f23f94654ced013e",
+    "historical_config_uri": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_wsd80_dense_support_surfaces_20260808/dss_r3d28260_m100_c109_s0711/2026.07.11/.artifact.json#1786382221812759",
+    "intended_training_environment": {
+      "jax_default_prng_impl": "threefry2x32",
+      "jax_enable_x64": false,
+      "jax_version": "0.11.1",
+      "numpy_version": "2.3.5"
+    },
+    "legacy_parent_match": true,
+    "matched_indices_sha256": "6c8ac23d240d4c99f88b2fa854cb7f7415b19e5387a68cf634f03dd73d2706c3",
+    "nested_subset_match": true,
+    "packed_starcoder_sequence_count": 105745752,
+    "parent_indices_sha256": "24c5bdd4bd466de18bc56ba06ea92053e329ad749aadea354a983fb38c61c4c1",
+    "prior_design_sha256": "5b7ef54df7ba03726c0204efa53e6865050ee02d8c94767075758868ffc244a4",
+    "provenance_limit": "Exact original launch Git SHA is unavailable; configuration and full parent-index parity are verified.",
+    "review_evidence": "verified_historical_config.md",
+    "runtime_revision": "New training uses repository-lock JAX0.11.1; historical and current runtime index hashes agree. This does not assert numerical training equivalence.",
+    "source_parity_reference": "eafa4d49f7c55fbf2abb26b5d92c1ac7d093f9fb",
+    "status": "passed"
+  },
+  "runs": [
+    {
+      "arm": "unmatched",
+      "boundary_step": 848,
+      "coordinate_id": "c000",
+      "data_seed": 20260711,
+      "fingerprint": "7ddb4981",
+      "first_stage": "pilot",
+      "materialized_tokens": 277872640,
+      "output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_unmatched_c000_s20260711/2026.09.08",
+      "run_name": "epmatch_unmatched_c000_s20260711",
+      "starcoder_support_batches": 1068,
+      "starcoder_weight": 0.0,
+      "total_steps": 1060,
+      "trainer_seed": 20260711
+    },
+    {
+      "arm": "unmatched",
+      "boundary_step": 848,
+      "coordinate_id": "c032",
+      "data_seed": 20260711,
+      "fingerprint": "beb8af66",
+      "first_stage": "pilot",
+      "materialized_tokens": 277872640,
+      "output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_unmatched_c032_s20260711/2026.09.08",
+      "run_name": "epmatch_unmatched_c032_s20260711",
+      "starcoder_support_batches": 1068,
+      "starcoder_weight": 0.1,
+      "total_steps": 1060,
+      "trainer_seed": 20260711
+    },
+    {
+      "arm": "matched",
+      "boundary_step": 848,
+      "coordinate_id": "c032",
+      "data_seed": 20260711,
+      "fingerprint": "282d6270",
+      "first_stage": "pilot",
+      "materialized_tokens": 277872640,
+      "output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_matched_c032_s20260711/2026.09.08",
+      "run_name": "epmatch_matched_c032_s20260711",
+      "starcoder_support_batches": 40,
+      "starcoder_weight": 0.1,
+      "total_steps": 1060,
+      "trainer_seed": 20260711
+    },
+    {
+      "arm": "unmatched",
+      "boundary_step": 848,
+      "coordinate_id": "c043",
+      "data_seed": 20260711,
+      "fingerprint": "f5a68b1f",
+      "first_stage": "primary",
+      "materialized_tokens": 277872640,
+      "output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_unmatched_c043_s20260711/2026.09.08",
+      "run_name": "epmatch_unmatched_c043_s20260711",
+      "starcoder_support_batches": 1068,
+      "starcoder_weight": 0.2,
+      "total_steps": 1060,
+      "trainer_seed": 20260711
+    },
+    {
+      "arm": "matched",
+      "boundary_step": 848,
+      "coordinate_id": "c043",
+      "data_seed": 20260711,
+      "fingerprint": "56278bb1",
+      "first_stage": "primary",
+      "materialized_tokens": 277872640,
+      "output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_matched_c043_s20260711/2026.09.08",
+      "run_name": "epmatch_matched_c043_s20260711",
+      "starcoder_support_batches": 40,
+      "starcoder_weight": 0.2,
+      "total_steps": 1060,
+      "trainer_seed": 20260711
+    },
+    {
+      "arm": "unmatched",
+      "boundary_step": 848,
+      "coordinate_id": "c057",
+      "data_seed": 20260711,
+      "fingerprint": "a3748a61",
+      "first_stage": "pilot",
+      "materialized_tokens": 277872640,
+      "output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_unmatched_c057_s20260711/2026.09.08",
+      "run_name": "epmatch_unmatched_c057_s20260711",
+      "starcoder_support_batches": 1068,
+      "starcoder_weight": 0.3,
+      "total_steps": 1060,
+      "trainer_seed": 20260711
+    },
+    {
+      "arm": "matched",
+      "boundary_step": 848,
+      "coordinate_id": "c057",
+      "data_seed": 20260711,
+      "fingerprint": "d9b0c70f",
+      "first_stage": "pilot",
+      "materialized_tokens": 277872640,
+      "output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_matched_c057_s20260711/2026.09.08",
+      "run_name": "epmatch_matched_c057_s20260711",
+      "starcoder_support_batches": 40,
+      "starcoder_weight": 0.3,
+      "total_steps": 1060,
+      "trainer_seed": 20260711
+    },
+    {
+      "arm": "unmatched",
+      "boundary_step": 848,
+      "coordinate_id": "c079",
+      "data_seed": 20260711,
+      "fingerprint": "8274649e",
+      "first_stage": "primary",
+      "materialized_tokens": 277872640,
+      "output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_unmatched_c079_s20260711/2026.09.08",
+      "run_name": "epmatch_unmatched_c079_s20260711",
+      "starcoder_support_batches": 1068,
+      "starcoder_weight": 0.4,
+      "total_steps": 1060,
+      "trainer_seed": 20260711
+    },
+    {
+      "arm": "matched",
+      "boundary_step": 848,
+      "coordinate_id": "c079",
+      "data_seed": 20260711,
+      "fingerprint": "a3549d99",
+      "first_stage": "primary",
+      "materialized_tokens": 277872640,
+      "output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_matched_c079_s20260711/2026.09.08",
+      "run_name": "epmatch_matched_c079_s20260711",
+      "starcoder_support_batches": 40,
+      "starcoder_weight": 0.4,
+      "total_steps": 1060,
+      "trainer_seed": 20260711
+    },
+    {
+      "arm": "unmatched",
+      "boundary_step": 848,
+      "coordinate_id": "c088",
+      "data_seed": 20260711,
+      "fingerprint": "2dbda662",
+      "first_stage": "primary",
+      "materialized_tokens": 277872640,
+      "output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_unmatched_c088_s20260711/2026.09.08",
+      "run_name": "epmatch_unmatched_c088_s20260711",
+      "starcoder_support_batches": 1068,
+      "starcoder_weight": 0.5,
+      "total_steps": 1060,
+      "trainer_seed": 20260711
+    },
+    {
+      "arm": "matched",
+      "boundary_step": 848,
+      "coordinate_id": "c088",
+      "data_seed": 20260711,
+      "fingerprint": "0d11d8b2",
+      "first_stage": "primary",
+      "materialized_tokens": 277872640,
+      "output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_matched_c088_s20260711/2026.09.08",
+      "run_name": "epmatch_matched_c088_s20260711",
+      "starcoder_support_batches": 40,
+      "starcoder_weight": 0.5,
+      "total_steps": 1060,
+      "trainer_seed": 20260711
+    },
+    {
+      "arm": "unmatched",
+      "boundary_step": 848,
+      "coordinate_id": "c100",
+      "data_seed": 20260711,
+      "fingerprint": "2338ca81",
+      "first_stage": "primary",
+      "materialized_tokens": 277872640,
+      "output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_unmatched_c100_s20260711/2026.09.08",
+      "run_name": "epmatch_unmatched_c100_s20260711",
+      "starcoder_support_batches": 1068,
+      "starcoder_weight": 0.6,
+      "total_steps": 1060,
+      "trainer_seed": 20260711
+    },
+    {
+      "arm": "matched",
+      "boundary_step": 848,
+      "coordinate_id": "c100",
+      "data_seed": 20260711,
+      "fingerprint": "d8382fba",
+      "first_stage": "primary",
+      "materialized_tokens": 277872640,
+      "output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_matched_c100_s20260711/2026.09.08",
+      "run_name": "epmatch_matched_c100_s20260711",
+      "starcoder_support_batches": 40,
+      "starcoder_weight": 0.6,
+      "total_steps": 1060,
+      "trainer_seed": 20260711
+    },
+    {
+      "arm": "unmatched",
+      "boundary_step": 848,
+      "coordinate_id": "c109",
+      "data_seed": 20260711,
+      "fingerprint": "4b536552",
+      "first_stage": "pilot",
+      "materialized_tokens": 277872640,
+      "output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_unmatched_c109_s20260711/2026.09.08",
+      "run_name": "epmatch_unmatched_c109_s20260711",
+      "starcoder_support_batches": 1068,
+      "starcoder_weight": 0.7,
+      "total_steps": 1060,
+      "trainer_seed": 20260711
+    },
+    {
+      "arm": "matched",
+      "boundary_step": 848,
+      "coordinate_id": "c109",
+      "data_seed": 20260711,
+      "fingerprint": "46fe3934",
+      "first_stage": "pilot",
+      "materialized_tokens": 277872640,
+      "output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_matched_c109_s20260711/2026.09.08",
+      "run_name": "epmatch_matched_c109_s20260711",
+      "starcoder_support_batches": 40,
+      "starcoder_weight": 0.7,
+      "total_steps": 1060,
+      "trainer_seed": 20260711
+    },
+    {
+      "arm": "unmatched",
+      "boundary_step": 848,
+      "coordinate_id": "c119",
+      "data_seed": 20260711,
+      "fingerprint": "c683238a",
+      "first_stage": "primary",
+      "materialized_tokens": 277872640,
+      "output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_unmatched_c119_s20260711/2026.09.08",
+      "run_name": "epmatch_unmatched_c119_s20260711",
+      "starcoder_support_batches": 1068,
+      "starcoder_weight": 0.9,
+      "total_steps": 1060,
+      "trainer_seed": 20260711
+    },
+    {
+      "arm": "matched",
+      "boundary_step": 848,
+      "coordinate_id": "c119",
+      "data_seed": 20260711,
+      "fingerprint": "40443787",
+      "first_stage": "primary",
+      "materialized_tokens": 277872640,
+      "output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_matched_c119_s20260711/2026.09.08",
+      "run_name": "epmatch_matched_c119_s20260711",
+      "starcoder_support_batches": 40,
+      "starcoder_weight": 0.9,
+      "total_steps": 1060,
+      "trainer_seed": 20260711
+    },
+    {
+      "arm": "unmatched",
+      "boundary_step": 848,
+      "coordinate_id": "c124",
+      "data_seed": 20260711,
+      "fingerprint": "ac32abe4",
+      "first_stage": "pilot",
+      "materialized_tokens": 277872640,
+      "output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_unmatched_c124_s20260711/2026.09.08",
+      "run_name": "epmatch_unmatched_c124_s20260711",
+      "starcoder_support_batches": 1068,
+      "starcoder_weight": 1.0,
+      "total_steps": 1060,
+      "trainer_seed": 20260711
+    },
+    {
+      "arm": "matched",
+      "boundary_step": 848,
+      "coordinate_id": "c124",
+      "data_seed": 20260711,
+      "fingerprint": "0949c68a",
+      "first_stage": "pilot",
+      "materialized_tokens": 277872640,
+      "output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_matched_c124_s20260711/2026.09.08",
+      "run_name": "epmatch_matched_c124_s20260711",
+      "starcoder_support_batches": 40,
+      "starcoder_weight": 1.0,
+      "total_steps": 1060,
+      "trainer_seed": 20260711
+    },
+    {
+      "arm": "target",
+      "boundary_step": 22608,
+      "coordinate_id": "c124",
+      "data_seed": 20260711,
+      "fingerprint": "ee2d7c61",
+      "first_stage": "pilot",
+      "materialized_tokens": 7408189440,
+      "output_path": "gs://marin-us-central1/checkpoints/pinlin_calvin_xu/data_mixture/starcoder_epoch_matching_20260908/epmatch_target_c124_s20260711/2026.09.08",
+      "run_name": "epmatch_target_c124_s20260711",
+      "starcoder_support_batches": 1068,
+      "starcoder_weight": 1.0,
+      "total_steps": 28260,
+      "trainer_seed": 20260711
+    }
+  ],
+  "runtime_index_audit": {
+    "child_process_verified": false,
+    "design_sha256": "3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b",
+    "historical_endpoint_different_positions": 136704,
+    "legacy_parent_match": true,
+    "matched_indices_sha256": "6c8ac23d240d4c99f88b2fa854cb7f7415b19e5387a68cf634f03dd73d2706c3",
+    "matched_sequence_count": 5120,
+    "matches_training_environment": true,
+    "nested_subset_match": true,
+    "observed_environment": {
+      "jax_default_prng_impl": "threefry2x32",
+      "jax_enable_x64": false,
+      "jax_version": "0.11.1",
+      "numpy_version": "2.3.5"
+    },
+    "packed_starcoder_sequence_count": 105745752,
+    "parent_indices_sha256": "24c5bdd4bd466de18bc56ba06ea92053e329ad749aadea354a983fb38c61c4c1",
+    "parent_sequence_count": 136704,
+    "scope": "Index mapping under the recorded audit runtime; no token reads or historical binary replay.",
+    "status": "passed",
+    "verified_process": "parent"
+  },
+  "stage": "refinement",
+  "submission_plan_uri": "gs://marin-us-central1/experiments/starcoder_epoch_matching_20260908/3191f3d005ebc3e1c653f1de664bfb0c3a81c291665a7a06b872903a0b4f9e0b/refinement/launch_plan.json",
+  "target_observations": [
+    {
+      "observed_bpb": 1.573216438293457,
+      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias",
+      "reusable": true,
+      "source_observation_id": "run:dss_r3d28260_full_c000_s0711@endpoint",
+      "source_run_name": "dss_r3d28260_full_c000_s0711",
+      "starcoder_weight": 0.0
+    },
+    {
+      "observed_bpb": 1.0213229656219482,
+      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias",
+      "reusable": true,
+      "source_observation_id": "run:dss_r3d28260_full_c028_s0711@endpoint",
+      "source_run_name": "dss_r3d28260_full_c028_s0711",
+      "starcoder_weight": 0.0364194347695976
+    },
+    {
+      "observed_bpb": 0.9918119311332704,
+      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias",
+      "reusable": true,
+      "source_observation_id": "run:dss_r3d28260_m100_c030_s0711@endpoint",
+      "source_run_name": "dss_r3d28260_m100_c030_s0711",
+      "starcoder_weight": 0.05
+    },
+    {
+      "observed_bpb": 0.9132958650588988,
+      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias",
+      "reusable": true,
+      "source_observation_id": "run:dss_r3d28260_m100_c032_s0711@endpoint",
+      "source_run_name": "dss_r3d28260_m100_c032_s0711",
+      "starcoder_weight": 0.1
+    },
+    {
+      "observed_bpb": 0.8835771679878235,
+      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias",
+      "reusable": true,
+      "source_observation_id": "run:dss_r3d28260_m100_c036_s0711@endpoint",
+      "source_run_name": "dss_r3d28260_m100_c036_s0711",
+      "starcoder_weight": 0.1407040424010894
+    },
+    {
+      "observed_bpb": 0.8769946098327637,
+      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias",
+      "reusable": true,
+      "source_observation_id": "run:dss_r3d28260_m100_c038_s0711@endpoint",
+      "source_run_name": "dss_r3d28260_m100_c038_s0711",
+      "starcoder_weight": 0.15
+    },
+    {
+      "observed_bpb": 0.8698081970214844,
+      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias",
+      "reusable": true,
+      "source_observation_id": "run:dss_r3d28260_m100_c039_s0711@endpoint",
+      "source_run_name": "dss_r3d28260_m100_c039_s0711",
+      "starcoder_weight": 0.17005
+    },
+    {
+      "observed_bpb": 0.8654301762580872,
+      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias",
+      "reusable": true,
+      "source_observation_id": "run:dss_r3d28260_m100_c041_s0711@endpoint",
+      "source_run_name": "dss_r3d28260_m100_c041_s0711",
+      "starcoder_weight": 0.18
+    },
+    {
+      "observed_bpb": 0.8518126606941223,
+      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias",
+      "reusable": true,
+      "source_observation_id": "run:dss_r3d28260_m100_c043_s0711@endpoint",
+      "source_run_name": "dss_r3d28260_m100_c043_s0711",
+      "starcoder_weight": 0.2
+    },
+    {
+      "observed_bpb": 0.8371742367744446,
+      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias",
+      "reusable": true,
+      "source_observation_id": "run:dss_r3d28260_m100_c048_s0711@endpoint",
+      "source_run_name": "dss_r3d28260_m100_c048_s0711",
+      "starcoder_weight": 0.2405
+    },
+    {
+      "observed_bpb": 0.8376805186271667,
+      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias",
+      "reusable": true,
+      "source_observation_id": "run:dss_r3d28260_m100_c049_s0711@endpoint",
+      "source_run_name": "dss_r3d28260_m100_c049_s0711",
+      "starcoder_weight": 0.25
+    },
+    {
+      "observed_bpb": 0.8344674110412598,
+      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias",
+      "reusable": true,
+      "source_observation_id": "run:dss_r3d28260_m100_c050_s0711@endpoint",
+      "source_run_name": "dss_r3d28260_m100_c050_s0711",
+      "starcoder_weight": 0.26
+    },
+    {
+      "observed_bpb": 0.8213925957679749,
+      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias",
+      "reusable": true,
+      "source_observation_id": "run:dss_r3d28260_m100_c057_s0711@endpoint",
+      "source_run_name": "dss_r3d28260_m100_c057_s0711",
+      "starcoder_weight": 0.3
+    },
+    {
+      "observed_bpb": 0.8136085867881775,
+      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias",
+      "reusable": true,
+      "source_observation_id": "run:dss_r3d28260_m100_c073_s0711@endpoint",
+      "source_run_name": "dss_r3d28260_m100_c073_s0711",
+      "starcoder_weight": 0.35
+    },
+    {
+      "observed_bpb": 0.8039188385009766,
+      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias",
+      "reusable": true,
+      "source_observation_id": "run:dss_r3d28260_m100_c079_s0711@endpoint",
+      "source_run_name": "dss_r3d28260_m100_c079_s0711",
+      "starcoder_weight": 0.4
+    },
+    {
+      "observed_bpb": 0.7982728481292725,
+      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias",
+      "reusable": true,
+      "source_observation_id": "run:dss_r3d28260_m100_c085_s0711@endpoint",
+      "source_run_name": "dss_r3d28260_m100_c085_s0711",
+      "starcoder_weight": 0.46
+    },
+    {
+      "observed_bpb": 0.7982456684112549,
+      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias",
+      "reusable": true,
+      "source_observation_id": "run:dss_r3d28260_m100_c088_s0711@endpoint",
+      "source_run_name": "dss_r3d28260_m100_c088_s0711",
+      "starcoder_weight": 0.5
+    },
+    {
+      "observed_bpb": 0.794552743434906,
+      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias",
+      "reusable": true,
+      "source_observation_id": "run:dss_r3d28260_m100_c094_s0711@endpoint",
+      "source_run_name": "dss_r3d28260_m100_c094_s0711",
+      "starcoder_weight": 0.54
+    },
+    {
+      "observed_bpb": 0.7927592992782593,
+      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias",
+      "reusable": true,
+      "source_observation_id": "run:dss_r3d28260_m100_c096_s0711@endpoint",
+      "source_run_name": "dss_r3d28260_m100_c096_s0711",
+      "starcoder_weight": 0.55
+    },
+    {
+      "observed_bpb": 0.792351245880127,
+      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias",
+      "reusable": true,
+      "source_observation_id": "run:dss_r3d28260_m100_c100_s0711@endpoint",
+      "source_run_name": "dss_r3d28260_m100_c100_s0711",
+      "starcoder_weight": 0.6
+    },
+    {
+      "observed_bpb": 0.7898608446121216,
+      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias",
+      "reusable": true,
+      "source_observation_id": "run:dss_r3d28260_m100_c103_s0711@endpoint",
+      "source_run_name": "dss_r3d28260_m100_c103_s0711",
+      "starcoder_weight": 0.65
+    },
+    {
+      "observed_bpb": 0.7880429029464722,
+      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias",
+      "reusable": true,
+      "source_observation_id": "run:dss_r3d28260_m100_c109_s0711@endpoint",
+      "source_run_name": "dss_r3d28260_m100_c109_s0711",
+      "starcoder_weight": 0.7
+    },
+    {
+      "observed_bpb": 0.7921496033668518,
+      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias",
+      "reusable": true,
+      "source_observation_id": "run:dss_r3d28260_m100_c112_s0711@endpoint",
+      "source_run_name": "dss_r3d28260_m100_c112_s0711",
+      "starcoder_weight": 0.75
+    },
+    {
+      "observed_bpb": 0.7932103276252747,
+      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias",
+      "reusable": true,
+      "source_observation_id": "run:dss_r3d28260_m100_c116_s0711@endpoint",
+      "source_run_name": "dss_r3d28260_m100_c116_s0711",
+      "starcoder_weight": 0.8
+    },
+    {
+      "observed_bpb": 0.8038912415504456,
+      "reason": "same ordered parent, or a prefix-equivalent no-wrap alias",
+      "reusable": true,
+      "source_observation_id": "run:dss_r3d28260_m100_c119_s0711@endpoint",
+      "source_run_name": "dss_r3d28260_m100_c119_s0711",
+      "starcoder_weight": 0.9
+    },
+    {
+      "observed_bpb": 0.8343366384506226,
+      "reason": "excluded: dropping zero-weight web components changed the StarCoder shuffle key",
+      "reusable": false,
+      "source_observation_id": "run:dss_r3d28260_m100_c124_s0711@endpoint",
+      "source_run_name": "dss_r3d28260_m100_c124_s0711",
+      "starcoder_weight": 1.0
+    }
+  ],
+  "tpu_region": "us-central1",
+  "tpu_zone": "us-central1-a"
+}

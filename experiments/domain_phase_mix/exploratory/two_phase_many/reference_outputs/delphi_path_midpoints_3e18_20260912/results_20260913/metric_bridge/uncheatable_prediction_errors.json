@@ -1,0 +1,72 @@
+[
+  {
+    "candidate_id": "mp50_u_olmix_cap64",
+    "observed_weighted_schema2": 0.9852296419360127,
+    "predictions": {
+      "mariner": 0.9862935604889548,
+      "olmix": 0.9912171958450664
+    },
+    "errors": {
+      "mariner": 0.001063918552942078,
+      "olmix": 0.0059875539090537
+    },
+    "mariner_absolute_error_advantage": 0.004923635356111622,
+    "advantage_after_twice_empirical_max_drift": 0.00481606719091332
+  },
+  {
+    "candidate_id": "mp50_u_quad_cap64",
+    "observed_weighted_schema2": 0.9822318245979607,
+    "predictions": {
+      "mariner": 0.9817611902722194,
+      "quad": 0.9809573182536604
+    },
+    "errors": {
+      "mariner": -0.0004706343257412371,
+      "quad": -0.0012745063443002635
+    },
+    "mariner_absolute_error_advantage": 0.0008038720185590265,
+    "advantage_after_twice_empirical_max_drift": 0.0006963038533607246
+  },
+  {
+    "candidate_id": "mp50_u_spline_cap64",
+    "observed_weighted_schema2": 0.9826756090287303,
+    "predictions": {
+      "mariner": 0.9820941065450572,
+      "spline": 0.9838888145896966
+    },
+    "errors": {
+      "mariner": -0.0005815024836730576,
+      "spline": 0.0012132055609662684
+    },
+    "mariner_absolute_error_advantage": 0.0006317030772932108,
+    "advantage_after_twice_empirical_max_drift": 0.000524134912094909
+  },
+  {
+    "candidate_id": "mp50_u_lgbm_cap64",
+    "observed_weighted_schema2": 0.9875715438149195,
+    "predictions": {
+      "mariner": 0.9856934564252432,
+      "lgbm": 1.0058557465092215
+    },
+    "errors": {
+      "mariner": -0.0018780873896763195,
+      "lgbm": 0.018284202694301976
+    },
+    "mariner_absolute_error_advantage": 0.016406115304625657,
+    "advantage_after_twice_empirical_max_drift": 0.016298547139427355
+  },
+  {
+    "candidate_id": "mp50_u_krr_cap64",
+    "observed_weighted_schema2": 0.9886331483122787,
+    "predictions": {
+      "mariner": 0.9854408958880124,
+      "krr": 0.9674610627484412
+    },
+    "errors": {
+      "mariner": -0.00319225242426624,
+      "krr": -0.02117208556383743
+    },
+    "mariner_absolute_error_advantage": 0.01797983313957119,
+    "advantage_after_twice_empirical_max_drift": 0.017872264974372887
+  }
+]

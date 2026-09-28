@@ -1,0 +1,17 @@
+{
+  "attrs": {},
+  "check_name": "figure10_midpoints_frozen_prediction_and_recipe_parity",
+  "created_at": "2026-09-12T22:05:23Z",
+  "deleted_at": null,
+  "details": {},
+  "entity_id": "exp_01m21f631n71w9xe9n6krpr2kw",
+  "entity_type": "experiment",
+  "expected_value": "Ten seed-0 midpoints, original sampler and endpoint recipe; frozen predictions reproduce Figure 10 before training",
+  "id": "val_01m2bteqkm2escpk2tgyns3n4r",
+  "measured_value": "10 candidates; 40 exact/runtime predictions; all 1220 path predictions match <=2.23e-16 BPB; 30 sampler blocks exact; 10 train + 10 eval; all 58 GCS paths east5",
+  "session_id": "ses_01m2bsq9b2sp76rjtp26waqp9m",
+  "source_artifact_id": null,
+  "source_job_id": null,
+  "status": "pass",
+  "updated_at": "2026-09-12T22:05:23Z"
+}

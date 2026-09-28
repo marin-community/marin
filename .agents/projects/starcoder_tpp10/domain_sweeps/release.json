@@ -1,0 +1,16 @@
+{
+  "approved": true,
+  "reviewer": "User authorized submission and next-highest research priority; CC scientific and implementation reviews cleared.",
+  "plan_sha256": "30fc30f1a7e618900a2f1dc40fe5650237b06ea979f2cedfcf8ca664c496114b",
+  "approved_at": "2026-09-11T11:06:25.465652+00:00",
+  "cc_review_sha256": "791f80ad3ebb7c1be7904fd28a4328cdbc54d7963ab10ba61566f31773785f9d",
+  "scope": "28 new single-seed Wikipedia/FineMath target and matched-proxy points; 2 included matched p100 checks then 26 points. No unmatched arms, repeat subsets, new StarCoder training, or refinement.",
+  "parent_priority": "interactive",
+  "parent_preemptible": false,
+  "parent_timeout": 172800,
+  "parent_failure_retries": 0,
+  "parent_preemption_retries": 0,
+  "child_policy": "Regional preemptible v5p workers, inherited interactive band; existing Fray zero task-failure retries and preemption recovery.",
+  "manual_resume": "Only after old parent and descendants are terminal and leases are absent or expired. Exact successful artifacts skipped and unfinished recipes resumed.",
+  "evaluation": "Complete PALOMA and seven Uncheatable components during native evaluations and final step; equal component-mean BPB for selection. Shared p0 checkpoints evaluated only if verified results absent; no p0 retraining."
+}

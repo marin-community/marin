@@ -1,0 +1,38 @@
+{
+  "checked_at": "2026-09-11T15:30:07.426645+00:00",
+  "rows": [
+    {
+      "job_id": "/calvinxu/tpp10-domain-sweeps",
+      "state": "JOB_STATE_RUNNING",
+      "task_state_counts": {
+        "running": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 0,
+      "pending_reason": "",
+      "priority_band": "PRIORITY_BAND_INTERACTIVE"
+    },
+    {
+      "job_id": "/calvinxu/tpp10-domain-sweeps/prepare_subset-1430c306",
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 0,
+      "pending_reason": "Scheduler: Insufficient CPU (need 2 cores, available 0 cores) - 3 worker(s)\nInsufficient memory (need 8.0GB, available 4.1GB) - 3 worker(s)\n(with constraints=['region', 'zone', 'preemptible'])\n\nAutoscaler: Unsatisfied autoscaler demand: no_capacity: cpu_vm_e2_highmem_2_ondemand-us-central1-a=at_max_slices",
+      "priority_band": "PRIORITY_BAND_INTERACTIVE"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery",
+      "state": "JOB_STATE_RUNNING",
+      "task_state_counts": {
+        "running": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 0,
+      "pending_reason": "",
+      "priority_band": "PRIORITY_BAND_INTERACTIVE"
+    }
+  ]
+}

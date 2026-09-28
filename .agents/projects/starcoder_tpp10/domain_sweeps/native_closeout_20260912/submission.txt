@@ -1,0 +1,14 @@
+I20260912 14:14:05 8553706816 iris.cluster.config Loading config from lib/iris/config/marin.yaml
+I20260912 14:14:05 8553706816 iris.cli.job Submitting job: tpp10-native-record-closeout
+I20260912 14:14:05 8553706816 iris.cli.job Command: python -m experiments.domain_phase_mix.closeout_tpp10_native_results
+I20260912 14:14:05 8553706816 iris.cli.job Resources: cpu=1, memory=4GB, disk=32GB
+I20260912 14:14:05 8553706816 iris.cli.job Region constraint: us-central1
+I20260912 14:14:05 8553706816 iris.cli.job Zone constraint: us-central1-a
+I20260912 14:14:05 8553706816 iris.cli.job Preemptible constraint: False
+I20260912 14:14:05 8553706816 iris.cli.job Using controller: https://iris.oa.dev
+I20260912 14:14:05 8553706816 iris.cli.job Priority band: interactive
+I20260912 14:14:07 8553706816 iris.cluster.client.remote_client Workspace bundle size: 23.3 MB
+Not all requested scopes were granted by the authorization server, missing scopes email.
+I20260912 14:14:09 8553706816 iris.cli.job Job submitted: /calvinxu/tpp10-native-record-closeout
+I20260912 14:14:09 8553706816 iris.cli.job Dashboard: https://iris.oa.dev/#/job/%2Fcalvinxu%2Ftpp10-native-record-closeout
+/calvinxu/tpp10-native-record-closeout

@@ -1,0 +1,220 @@
+{
+  "plan_sha256": "4362a8b1b2e37d7ae73096f7658c5b3a79774288bf268f240fa4e49edd826b60",
+  "collected_at": "2026-09-10T20:42:00.168098+00:00",
+  "source": "W&B scan_history, with separate train and norm groups",
+  "runs": [
+    {
+      "run_name": "tpp10_target_p100_s20260910",
+      "path": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/optimizer_traces/tpp10_target_p100_s20260910.history.json",
+      "sha256": "3aba296e7086d5016afbd04bbd8322708a1f870e0b344fa8241c9f2242fe87c3",
+      "identical_duplicate_rows": {
+        "train": 11,
+        "norm": 11
+      },
+      "metrics": {
+        "train/loss": {
+          "count": 11479,
+          "nonfinite": 0,
+          "first_step": 2,
+          "last_step": 11490,
+          "first": 10.350756645202637,
+          "last": 0.905732274055481,
+          "min": 0.8147827982902527,
+          "max": 10.350756645202637,
+          "last_10pct_mean": 1.0938389191228755,
+          "post_warmup_max": 2.1062819957733154
+        },
+        "optim/learning_rate": {
+          "count": 11479,
+          "nonfinite": 0,
+          "first_step": 2,
+          "last_step": 11490,
+          "first": 0.00035087764263153076,
+          "last": 9.53674295089968e-09,
+          "min": 9.53674295089968e-09,
+          "max": 0.019999999552965164,
+          "last_10pct_mean": 0.00363359741294421,
+          "post_warmup_max": 0.019999999552965164
+        },
+        "optim/adam_lr": {
+          "count": 11479,
+          "nonfinite": 0,
+          "first_step": 2,
+          "last_step": 11490,
+          "first": 0.00014035124331712723,
+          "last": 3.814697446813398e-09,
+          "min": 3.814697446813398e-09,
+          "max": 0.00800000037997961,
+          "last_10pct_mean": 0.0014534390693866771,
+          "post_warmup_max": 0.00800000037997961
+        },
+        "grad/norm/total": {
+          "count": 1149,
+          "nonfinite": 0,
+          "first_step": 10,
+          "last_step": 11490,
+          "first": 3.229889392852783,
+          "last": 0.1151374951004982,
+          "min": 0.10142382979393005,
+          "max": 3.373378276824951,
+          "last_10pct_mean": 0.11389451363812322,
+          "post_warmup_max": 0.5225229859352112
+        },
+        "params/norm/total": {
+          "count": 1149,
+          "nonfinite": 0,
+          "first_step": 10,
+          "last_step": 11490,
+          "first": 495.332275390625,
+          "last": 4281.75830078125,
+          "min": 495.332275390625,
+          "max": 4282.08154296875,
+          "last_10pct_mean": 4280.063277004076,
+          "post_warmup_max": 4282.08154296875
+        }
+      }
+    },
+    {
+      "run_name": "tpp10_unmatched_p100_s20260910",
+      "path": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/optimizer_traces/tpp10_unmatched_p100_s20260910.history.json",
+      "sha256": "d367a490be49b5bea34838228701c82126e00e64d32998d4fb9022faef893983",
+      "identical_duplicate_rows": {
+        "train": 2,
+        "norm": 2
+      },
+      "metrics": {
+        "train/loss": {
+          "count": 2529,
+          "nonfinite": 0,
+          "first_step": 2,
+          "last_step": 2531,
+          "first": 10.352328300476074,
+          "last": 1.6524467468261719,
+          "min": 1.4759105443954468,
+          "max": 10.352328300476074,
+          "last_10pct_mean": 1.821850905305312,
+          "post_warmup_max": 5.65418815612793
+        },
+        "optim/learning_rate": {
+          "count": 2529,
+          "nonfinite": 0,
+          "first_step": 2,
+          "last_step": 2531,
+          "first": 0.0015999991446733475,
+          "last": 1.9192695788206038e-07,
+          "min": 1.9192695788206038e-07,
+          "max": 0.019999999552965164,
+          "last_10pct_mean": 0.003640972653947556,
+          "post_warmup_max": 0.019999999552965164
+        },
+        "optim/adam_lr": {
+          "count": 2529,
+          "nonfinite": 0,
+          "first_step": 2,
+          "last_step": 2531,
+          "first": 0.0006399997510015965,
+          "last": 7.677078883716604e-08,
+          "min": 7.677078883716604e-08,
+          "max": 0.00800000037997961,
+          "last_10pct_mean": 0.0014563891663361185,
+          "post_warmup_max": 0.00800000037997961
+        },
+        "grad/norm/total": {
+          "count": 253,
+          "nonfinite": 0,
+          "first_step": 10,
+          "last_step": 2530,
+          "first": 1.5948046445846558,
+          "last": 0.15871542692184448,
+          "min": 0.15871542692184448,
+          "max": 2.2110979557037354,
+          "last_10pct_mean": 0.18784313247754023,
+          "post_warmup_max": 0.6850907206535339
+        },
+        "params/norm/total": {
+          "count": 253,
+          "nonfinite": 0,
+          "first_step": 10,
+          "last_step": 2530,
+          "first": 182.35330200195312,
+          "last": 996.8782348632812,
+          "min": 182.35330200195312,
+          "max": 996.8994140625,
+          "last_10pct_mean": 996.7272362342247,
+          "post_warmup_max": 996.8994140625
+        }
+      }
+    },
+    {
+      "run_name": "tpp10_matched_p100_s20260910_d20260912",
+      "path": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/live/optimizer_traces/tpp10_matched_p100_s20260910_d20260912.history.json",
+      "sha256": "192bef0be9475f2bb042a87ed6e135a2db70414365260d76f3563967fef128ee",
+      "identical_duplicate_rows": {
+        "train": 2,
+        "norm": 2
+      },
+      "metrics": {
+        "train/loss": {
+          "count": 2529,
+          "nonfinite": 0,
+          "first_step": 2,
+          "last_step": 2531,
+          "first": 10.349802017211914,
+          "last": 1.4402990341186523,
+          "min": 1.094279408454895,
+          "max": 10.349802017211914,
+          "last_10pct_mean": 1.4019694954981445,
+          "post_warmup_max": 5.824695587158203
+        },
+        "optim/learning_rate": {
+          "count": 2529,
+          "nonfinite": 0,
+          "first_step": 2,
+          "last_step": 2531,
+          "first": 0.0015999991446733475,
+          "last": 1.9192695788206038e-07,
+          "min": 1.9192695788206038e-07,
+          "max": 0.019999999552965164,
+          "last_10pct_mean": 0.003640972653947556,
+          "post_warmup_max": 0.019999999552965164
+        },
+        "optim/adam_lr": {
+          "count": 2529,
+          "nonfinite": 0,
+          "first_step": 2,
+          "last_step": 2531,
+          "first": 0.0006399997510015965,
+          "last": 7.677078883716604e-08,
+          "min": 7.677078883716604e-08,
+          "max": 0.00800000037997961,
+          "last_10pct_mean": 0.0014563891663361185,
+          "post_warmup_max": 0.00800000037997961
+        },
+        "grad/norm/total": {
+          "count": 253,
+          "nonfinite": 0,
+          "first_step": 10,
+          "last_step": 2530,
+          "first": 1.7092440128326416,
+          "last": 0.161734938621521,
+          "min": 0.15613707900047302,
+          "max": 2.6402409076690674,
+          "last_10pct_mean": 0.18620894906612542,
+          "post_warmup_max": 0.8372569680213928
+        },
+        "params/norm/total": {
+          "count": 253,
+          "nonfinite": 0,
+          "first_step": 10,
+          "last_step": 2530,
+          "first": 182.3291015625,
+          "last": 1298.0728759765625,
+          "min": 182.3291015625,
+          "max": 1298.0728759765625,
+          "last_10pct_mean": 1296.602548452524,
+          "post_warmup_max": 1298.0728759765625
+        }
+      }
+    }
+  ]
+}

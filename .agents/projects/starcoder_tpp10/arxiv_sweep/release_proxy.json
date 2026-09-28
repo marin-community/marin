@@ -1,0 +1,16 @@
+{
+  "approved": true,
+  "reviewer": "User authorized in chat on 2026-09-18: sweep the arXiv-papers domain (common-pile arxiv_papers_filtered) at proxy scale first, evaluating on every on-target candidate; target scale only if the proxy curve looks promising.",
+  "plan_sha256": "d7f7900419eea6034f621f2f1d56966a76b274265496c4c9e360249704f29409",
+  "approved_at": "2026-09-18T19:10:00+00:00",
+  "scope": "Eight single-seed arXiv matched-proxy points on the frozen TPP-10 grid (p = 0, 5, 10, 20, 30, 50, 70, 100 percent), one matched subset (seed 20260912), the p=100 point first as the execution check, then the remaining seven. No target arm, no unmatched arm, no replicates, no refinement. The p=0 point is retrained rather than reused so that S2ORC is scored on every point.",
+  "pool": "190,316,544-token parent from two pinned arxiv_papers_filtered shards (0006, 0004 by the seeded selection rule of the earlier domains) and one nested 10,485,760-token matched subset; identical geometry, tokenizer, optimizer, allocator and Nemotron-CC blend to the Wikipedia and FineMath sweeps.",
+  "evaluation": "Seven Uncheatable components (existing TPP-10 caches), Paloma programming languages (frozen), and the complete Paloma m2d2_s2orc_unsplit validation split tokenized with the frozen preparer; all scored at the final step with max_eval_batches=None. On-target candidates: Uncheatable arXiv CS, Uncheatable arXiv physics, Paloma S2ORC.",
+  "parent_priority": "interactive",
+  "parent_preemptible": false,
+  "parent_timeout": 172800,
+  "parent_failure_retries": 0,
+  "parent_preemption_retries": 0,
+  "child_policy": "Regional v5p-8 workers in us-central1-a, inherited interactive band; existing Fray zero task-failure retries and preemption recovery.",
+  "manual_resume": "Only after the old parent and descendants are terminal and leases are absent or expired; exact successful artifacts are skipped and unfinished recipes resumed by resubmitting the same plan and release."
+}

@@ -1,0 +1,7 @@
+target,method,bias,rmse,rows
+table9,weibull_softplus_unscaled,0.023735008911100548,0.07968626671016649,1083
+table9,weibull_softplus_unscaled@kappa_floor_link,-0.019415793223916365,0.03911985142133547,1083
+table9,weibull_softplus_unscaled@response_floor_link,-0.02442610520076954,0.044614363575116424,1083
+uncheatable,weibull_softplus_unscaled,0.024281685084133888,0.038943688254311444,287
+uncheatable,weibull_softplus_unscaled@kappa_floor_link,0.0005514927508442537,0.012850285070915209,287
+uncheatable,weibull_softplus_unscaled@response_floor_link,-0.006423376039796743,0.018160425616865043,287

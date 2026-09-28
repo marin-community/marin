@@ -1,0 +1,57 @@
+{
+  "best_nonprop_by_improved_count": {
+    "improved_count": 13,
+    "issue5416_aggregate": 0.8044164202424633,
+    "issue5416_delta_vs_prop": 0.21932863159155558,
+    "min_noise_z_delta": -35.7919394191945,
+    "min_raw_delta": -1.0378212851431172,
+    "min_signal_z_delta": -2.534700981315861,
+    "row_kind": "signal",
+    "run_name": "baseline_stratified",
+    "strictly_improves_all": false,
+    "tied_count": 0,
+    "weakly_improves_all": false,
+    "worse_count": 13,
+    "worst_noise_z_delta": -35.7919394191945,
+    "worst_noise_z_metric": "eval/uncheatable_eval/ao3_english/bpb",
+    "worst_signal_z_delta": -2.534700981315861,
+    "worst_signal_z_metric": "lm_eval/hellaswag_5shot/choice_logprob"
+  },
+  "best_nonprop_by_min_signal_z": {
+    "improved_count": 9,
+    "issue5416_aggregate": 0.5053445175229783,
+    "issue5416_delta_vs_prop": -0.07974327112792945,
+    "min_noise_z_delta": -28.894827424736576,
+    "min_raw_delta": -0.8575903637296207,
+    "min_signal_z_delta": -2.2076400269043712,
+    "row_kind": "signal",
+    "run_name": "run_00075",
+    "strictly_improves_all": false,
+    "tied_count": 0,
+    "weakly_improves_all": false,
+    "worse_count": 17,
+    "worst_noise_z_delta": -28.894827424736576,
+    "worst_noise_z_metric": "eval/uncheatable_eval/ao3_english/bpb",
+    "worst_signal_z_delta": -2.2076400269043712,
+    "worst_signal_z_metric": "mcq_smooth/swag_0shot/choice_logprob"
+  },
+  "complete_rows_used": 242,
+  "convex_hull_noise_z_exclude_prop": {
+    "margin": -8.50313644680322,
+    "message": "Optimization terminated successfully. (HiGHS Status 7: Optimal)",
+    "success": true,
+    "support_size": 1
+  },
+  "convex_hull_signal_z_exclude_prop": {
+    "margin": -1.7070528223157009,
+    "message": "Optimization terminated successfully. (HiGHS Status 7: Optimal)",
+    "success": true,
+    "support_size": 3
+  },
+  "factor_count": 5,
+  "observed_nonprop_strictly_improves_all_items": 0,
+  "observed_nonprop_weakly_improves_all_items": 0,
+  "proportional_issue5416_aggregate": 0.5850877886509077,
+  "selected_items": 26,
+  "signal_rows": 242
+}

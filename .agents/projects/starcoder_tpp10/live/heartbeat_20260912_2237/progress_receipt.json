@@ -1,0 +1,37 @@
+{
+  "checked_at": "2026-09-12T22:39:35.621794+00:00",
+  "parent_start": "2026-09-12T21:34:54.158000+00:00",
+  "parent_timeout": "2026-09-14T21:34:54.158000+00:00",
+  "parent_state": "running",
+  "new_completed": 3,
+  "completed": 43,
+  "planned": 45,
+  "restoration": {
+    "tpp10_target_p055_s20260910": {
+      "restored_step": 10759,
+      "log": "[21:38:56] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-98a32513/0 attempt=0 | I20260912 21:38:53 140674439217984 levanter.checkpoint Loading checkpoint from gs://marin-us-central1/tmp/ttl=14d/checkpoints-temp/marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p055_s20260910/2026.09.09/checkpoints/step-10759",
+      "full_state_loader": "load_checkpoint_or_initialize with saveable_training_mask over TrainerState model, opt_state, step and training_key; partial checkpoint loading disabled by the original recipe"
+    },
+    "tpp10_target_p060_s20260910": {
+      "restored_step": 6958,
+      "log": "[21:38:56] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-449bcb9c/0 attempt=0 | I20260912 21:38:55 139717592445760 levanter.checkpoint Loading checkpoint from gs://marin-us-central1/tmp/ttl=14d/checkpoints-temp/marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p060_s20260910/2026.09.09/checkpoints/step-6958",
+      "full_state_loader": "load_checkpoint_or_initialize with saveable_training_mask over TrainerState model, opt_state, step and training_key; partial checkpoint loading disabled by the original recipe"
+    },
+    "tpp10_target_p065_s20260910": {
+      "restored_step": 2283,
+      "log": "[21:39:00] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-bafee373/0 attempt=0 | I20260912 21:38:59 139911902876480 levanter.checkpoint Loading checkpoint from gs://marin-us-central1/tmp/ttl=14d/checkpoints-temp/marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p065_s20260910/2026.09.09/checkpoints/step-2283",
+      "full_state_loader": "load_checkpoint_or_initialize with saveable_training_mask over TrainerState model, opt_state, step and training_key; partial checkpoint loading disabled by the original recipe"
+    },
+    "tpp10_target_p080_s20260910": {
+      "restored_step": 728,
+      "log": "[21:39:00] task=/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-869fe9a0/0 attempt=0 | I20260912 21:38:57 139905147319104 levanter.checkpoint Loading checkpoint from gs://marin-us-central1/tmp/ttl=14d/checkpoints-temp/marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p080_s20260910/2026.09.09/checkpoints/step-728",
+      "full_state_loader": "load_checkpoint_or_initialize with saveable_training_mask over TrainerState model, opt_state, step and training_key; partial checkpoint loading disabled by the original recipe"
+    }
+  },
+  "remaining": {
+    "tpp10_target_p065_s20260910": 7112,
+    "tpp10_target_p080_s20260910": 5572
+  },
+  "source_artifact": "remaining_artifact_audit.json",
+  "no_resubmission": true
+}

@@ -1,0 +1,87 @@
+[
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1788928865.0261688,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/review_packet.md",
+      "fieldbook.local_size_at_capture": 14551
+    },
+    "content_hash": "sha256:cfe48be9201cefc359a3000574a6b47fce7b8b927401f3a1869fa43b778dafd6",
+    "created_at": "2026-09-08T23:48:05Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+    "id": "art_01m21pqxdshrh7ep7aw0hqkdfe",
+    "job_id": null,
+    "run_id": null,
+    "type": "report",
+    "updated_at": "2026-09-09T04:41:14Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/review_packet.md"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1788928865.0267978,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/verification.json",
+      "fieldbook.local_size_at_capture": 3308
+    },
+    "content_hash": "sha256:0a595d977af1202fce071bb294f684b59fba7236874590d816461d0a1fd9dec8",
+    "created_at": "2026-09-08T23:57:47Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+    "id": "art_01m21q9nn57gz08csfe1b2afv2",
+    "job_id": null,
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-09T04:41:14Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/verification.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1788928865.0257916,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/README.md",
+      "fieldbook.local_size_at_capture": 4840
+    },
+    "content_hash": "sha256:e18e776bff9211a929e69e47e42143926ee2f832cc0bd4ee534850012049f122",
+    "created_at": "2026-09-09T04:39:32Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+    "id": "art_01m227djc7qmezhvc29z9b18sj",
+    "job_id": null,
+    "run_id": null,
+    "type": "report",
+    "updated_at": "2026-09-09T04:41:14Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/README.md"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1788928764.2345047,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/submission_plan.json",
+      "fieldbook.local_size_at_capture": 24135
+    },
+    "content_hash": "sha256:0b605cb0e0ff772d18798a7980d977dcd116d2385168b339bc79e39d407f2008",
+    "created_at": "2026-09-09T04:41:14Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+    "id": "art_01m227gpdd3emkjb2yvtxx3dkb",
+    "job_id": null,
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-09T04:41:14Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/submission_plan.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1788928870.879798,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/initial_snapshot.json",
+      "fieldbook.local_size_at_capture": 13742
+    },
+    "content_hash": "sha256:96f53b5913a827072c0dbd78c84dee9ae421daf1a5d4f613926c6fa7408ffec7",
+    "created_at": "2026-09-09T04:41:15Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01m21p4aw15bpvhnswz8gtwn0d",
+    "id": "art_01m227gpp6hpmje2kr14ajpmth",
+    "job_id": null,
+    "run_id": null,
+    "type": "report",
+    "updated_at": "2026-09-09T04:41:15Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_epoch_matching/refinement/initial_snapshot.json"
+  }
+]

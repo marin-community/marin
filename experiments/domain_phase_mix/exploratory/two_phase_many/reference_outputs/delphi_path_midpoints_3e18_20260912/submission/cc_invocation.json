@@ -1,0 +1,9 @@
+{
+  "session_id": "353c9d60-7776-472b-98c6-3b91df9f70da",
+  "model": "claude-opus-5[1m]",
+  "permissionMode": "dontAsk",
+  "oauth_account_preflight": "expected subscription account verified",
+  "anthropic_api_key_removed": true,
+  "invocation": "env -u ANTHROPIC_API_KEY claude -p",
+  "cwd": "/tmp/codex-cc-neutral"
+}

@@ -1,0 +1,13 @@
+{
+  "checked_at": "2026-09-11T13:07:27.498891+00:00",
+  "checkpoint_metadata": [
+    {
+      "uri": "gs://marin-us-central1/tmp/ttl=14d/checkpoints-temp/marin-us-central1/checkpoints/starcoder_tpp10/tpp10_target_p055_s20260910/2026.09.09/checkpoints/step-3010/metadata.json",
+      "generation": "1789124409702554",
+      "updated": "2026-09-11T11:00:09.730000+00:00",
+      "bytes": 79,
+      "saved_step": 3010,
+      "metadata_timestamp": "2026-09-11T11:00:09.560579"
+    }
+  ]
+}

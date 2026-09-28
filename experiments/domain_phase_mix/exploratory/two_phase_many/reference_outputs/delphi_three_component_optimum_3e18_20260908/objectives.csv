@@ -1,0 +1,4 @@
+objective,component,weight
+uncheatable_worsened,eval/uncheatable_eval/ao3_english/bpb,0.44856670231838985
+uncheatable_worsened,eval/uncheatable_eval/bbc_news/bpb,0.3136590102415357
+uncheatable_worsened,eval/uncheatable_eval/wikipedia_english/bpb,0.23777428744007448

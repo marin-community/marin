@@ -1,0 +1,20 @@
+{
+  "available_top_level_tokens": 6986431605135,
+  "mixtures": [
+    "unimax1",
+    "unimax12",
+    "unimax4"
+  ],
+  "n_runs": 3,
+  "run_id_base": 660730,
+  "source_experiment": "pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623",
+  "target_budget_tokens": 6325183647689,
+  "target_flops": [
+    3e+18
+  ],
+  "unimax_epoch_caps": {
+    "unimax1": 1.0,
+    "unimax12": 12.0,
+    "unimax4": 4.0
+  }
+}

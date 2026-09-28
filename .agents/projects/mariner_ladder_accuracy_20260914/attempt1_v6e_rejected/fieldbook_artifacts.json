@@ -1,0 +1,87 @@
+[
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789365103.6447165,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/mariner_ladder_accuracy_20260914/plan.json",
+      "fieldbook.local_size_at_capture": 6604
+    },
+    "content_hash": "sha256:00694b60eb18a8e3bc69d0327d9df39dcfb7ae630f5349e08fdc73e19345b576",
+    "created_at": "2026-09-14T05:54:15Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01kvvvv6zxrf0j7tkp4f7k6y66",
+    "id": "art_01m2f7nyxqsvt7z8e3xgd37xxc",
+    "job_id": "job_01m2f7j2ccs856r8tk4scnvkwz",
+    "run_id": null,
+    "type": "manifest",
+    "updated_at": "2026-09-14T05:54:15Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/mariner_ladder_accuracy_20260914/plan.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789365110.80919,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/mariner_ladder_accuracy_20260914/bundle_receipt.json",
+      "fieldbook.local_size_at_capture": 2274
+    },
+    "content_hash": "sha256:584a671c7fc18d409f385867a7fe51095f9ce407b6248e55f7be059dda93ac7b",
+    "created_at": "2026-09-14T05:54:15Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01kvvvv6zxrf0j7tkp4f7k6y66",
+    "id": "art_01m2f7nz6srw1g1rrrrykhw9tt",
+    "job_id": "job_01m2f7j2ccs856r8tk4scnvkwz",
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-14T05:54:15Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/mariner_ladder_accuracy_20260914/bundle_receipt.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789365112.2124913,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/mariner_ladder_accuracy_20260914/accuracy_review.md",
+      "fieldbook.local_size_at_capture": 6747
+    },
+    "content_hash": "sha256:98266b14cb464b2e49c1c45ef098be90b338d2fcd00287c3345a3ce17bd05071",
+    "created_at": "2026-09-14T05:54:15Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01kvvvv6zxrf0j7tkp4f7k6y66",
+    "id": "art_01m2f7nzf590zmdr08rexyc54q",
+    "job_id": "job_01m2f7j2ccs856r8tk4scnvkwz",
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-14T05:54:15Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/mariner_ladder_accuracy_20260914/accuracy_review.md"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789364408.2980962,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/mariner_ladder_accuracy_20260914/final_export_inventory.json",
+      "fieldbook.local_size_at_capture": 209613
+    },
+    "content_hash": "sha256:9b33e05e6f5a6ad3eb3862707909130b8f41fb523588c11fa4126e010c4dbecb",
+    "created_at": "2026-09-14T05:54:15Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01kvvvv6zxrf0j7tkp4f7k6y66",
+    "id": "art_01m2f7nzq9sx1kz6c6x4t98tnn",
+    "job_id": "job_01m2f7j2ccs856r8tk4scnvkwz",
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-14T05:54:15Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/mariner_ladder_accuracy_20260914/final_export_inventory.json"
+  },
+  {
+    "attrs": {
+      "fieldbook.local_mtime_at_capture": 1789365108.6465244,
+      "fieldbook.local_path_at_capture": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/mariner_ladder_accuracy_20260914/region_validation.txt",
+      "fieldbook.local_size_at_capture": 40
+    },
+    "content_hash": "sha256:52f666ce91f3ff042889d7ad8b01fad5e0cd34b15a95b2abe0f5ba0987516170",
+    "created_at": "2026-09-14T05:54:16Z",
+    "deleted_at": null,
+    "experiment_id": "exp_01kvvvv6zxrf0j7tkp4f7k6y66",
+    "id": "art_01m2f7nzzswdx5wfbhd543jk8t",
+    "job_id": "job_01m2f7j2ccs856r8tk4scnvkwz",
+    "run_id": null,
+    "type": "validation-report",
+    "updated_at": "2026-09-14T05:54:16Z",
+    "uri": "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/mariner_ladder_accuracy_20260914/region_validation.txt"
+  }
+]

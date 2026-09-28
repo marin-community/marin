@@ -1,0 +1,10 @@
+{
+  "spec_sha256": "8d4f18d0a9dfbf4a065a09e621bf35f67e9547874f8b3392af0d3aaf57f938e8",
+  "bundle_sha256": "4b94e24eb770d9c32f18a5d7445e2e3af76f3612b70176428f236fcd14afad9f",
+  "bundle_bytes": 24149757,
+  "files": 4513,
+  "pinned_code_files": 18,
+  "endpoints_unchanged": true,
+  "populations_unchanged": true,
+  "region_validation": "region-local launch safety check passed\n"
+}

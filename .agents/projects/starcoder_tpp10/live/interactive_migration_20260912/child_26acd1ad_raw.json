@@ -1,0 +1,105 @@
+{
+  "job": {
+    "job_id": "/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad",
+    "state": "JOB_STATE_RUNNING",
+    "exit_code": 0,
+    "error": "",
+    "started_at": {
+      "epoch_ms": "1789249056125"
+    },
+    "failure_count": 0,
+    "preemption_count": 0,
+    "name": "/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad",
+    "submitted_at": {
+      "epoch_ms": "1789249040977"
+    },
+    "resources": {
+      "cpu_millicores": 104000,
+      "memory_bytes": "240518168576",
+      "device": {
+        "tpu": {
+          "variant": "v5p-8",
+          "count": 4
+        }
+      },
+      "disk_bytes": "53687091200"
+    },
+    "task_state_counts": {
+      "building": 1
+    },
+    "task_count": 1,
+    "completed_count": 0,
+    "pending_reason": "",
+    "has_children": false,
+    "parent_job_id": "/calvinxu/starcoder-tpp10-refinement-interactive",
+    "backend_id": "default",
+    "cluster": "local",
+    "peer_status": "PEER_STATUS_NONE"
+  },
+  "request": {
+    "name": "/calvinxu/starcoder-tpp10-refinement-interactive/verified_training-26acd1ad",
+    "resources": {
+      "cpu_millicores": 104000,
+      "memory_bytes": "240518168576",
+      "device": {
+        "tpu": {
+          "variant": "v5p-8",
+          "count": 4
+        }
+      },
+      "disk_bytes": "53687091200"
+    },
+    "constraints": [
+      {
+        "key": "device-type",
+        "op": "CONSTRAINT_OP_EQ",
+        "value": {
+          "string_value": "tpu"
+        },
+        "mode": "CONSTRAINT_MODE_REQUIRED"
+      },
+      {
+        "key": "device-variant",
+        "op": "CONSTRAINT_OP_EQ",
+        "value": {
+          "string_value": "v5p-8"
+        },
+        "mode": "CONSTRAINT_MODE_REQUIRED"
+      },
+      {
+        "key": "region",
+        "op": "CONSTRAINT_OP_EQ",
+        "value": {
+          "string_value": "us-central1"
+        },
+        "mode": "CONSTRAINT_MODE_REQUIRED"
+      },
+      {
+        "key": "zone",
+        "op": "CONSTRAINT_OP_EQ",
+        "value": {
+          "string_value": "us-central1-a"
+        },
+        "mode": "CONSTRAINT_MODE_REQUIRED"
+      }
+    ],
+    "priority_band": "PRIORITY_BAND_INTERACTIVE",
+    "bundle_id": "b66dcc0d2406e598a2ad0335bda2934ccf80da4c86e7f158e1bfdbee3990bcbe",
+    "entrypoint": {
+      "setup_commands": [
+        "set -e\ncd \"$IRIS_WORKDIR\"\necho 'syncing deps'\nuv sync $([ -f uv.lock ] && echo '--frozen' || echo '') --link-mode symlink --python 3.12 --all-packages --no-dev --extra tpu\nif grep -q 'editable = true' pyproject.toml 2>/dev/null; then echo 'rust-dev mode: building native extensions'; for crate in lib/*/pyproject.toml; do grep -q 'build-backend = \"maturin\"' \"$crate\" 2>/dev/null && uv pip install -e \"$(dirname \"$crate\")\"; done; fi\n",
+        "cd \"$IRIS_WORKDIR\" 2>/dev/null || true\nif [ -d \"$IRIS_VENV\" ]; then\n  echo 'installing iris runtime deps'\n  uv pip install --link-mode symlink cloudpickle py-spy memray || echo '[iris setup] runtime deps install failed; continuing'\nfi\n"
+      ],
+      "run_command": {
+        "argv": [
+          "bash",
+          "-c",
+          "exec $IRIS_PYTHON -u $IRIS_WORKDIR/_callable_runner.py"
+        ]
+      },
+      "workdir_file_refs": {
+        "_callable.pkl": "d798624c64d9ae436c443e7ecc0f16994d8426ef1e04bd73632dc13cfe8d9a6b"
+      }
+    }
+  }
+}

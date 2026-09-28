@@ -1,0 +1,5 @@
+target,candidate,reference,mean_abs_residual_delta,ci_low,ci_high,source_blocks
+uncheatable,weibull_softplus_unscaled@log_deficit_bounded_link,weibull_softplus_unscaled,-0.015293103826064885,-0.028364626085335267,-0.006271284546322445,18
+uncheatable,weibull_softplus_unscaled@fitted_floor_link,weibull_softplus_unscaled,-0.01286673799593882,-0.0253595774723442,-0.005038097160100378,18
+table9,weibull_softplus_unscaled@log_deficit_bounded_link,weibull_softplus_unscaled,-0.017261703584321143,-0.030519623407219545,-0.005568912187374226,20
+table9,weibull_softplus_unscaled@fitted_floor_link,weibull_softplus_unscaled,-0.025298057033728887,-0.04185876913740954,-0.010490436441063896,20

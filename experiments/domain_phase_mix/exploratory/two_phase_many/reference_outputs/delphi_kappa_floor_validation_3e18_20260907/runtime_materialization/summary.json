@@ -1,0 +1,23 @@
+{
+  "candidate_ids": [
+    "lwspu_u_kf_cap06",
+    "lwspu_t9_kf_cap06",
+    "lwspu_t9_kf_cap08"
+  ],
+  "candidate_weights_sha256": "87072f50ac02d1ec27f7c08104b2c94bc9a726428f3da0d15babd854aba10b7f",
+  "surrogate": "weibull_softplus_unscaled@kappa_floor_link",
+  "selection_benchmark_dir": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_single_head_selection_20260907",
+  "frozen_inputs": {
+    "panel.npz": "d78a2484f6f89ab5439999a34770bbc84eabf7c31a49ddb87886004d7c4b3061",
+    "uncheatable_bank_features.npz": "77db18630dffe184eb6e93e4234291199d98ee766b8c9ba1b9eb748740945305",
+    "table9_bank_features.npz": "edca0e09faec8217c0e4887431e4371f5733b46af8fcf84a353ce00dfca1b50e"
+  },
+  "sources": {
+    "experiments/domain_phase_mix/exploratory/two_phase_many/materialize_delphi_link_validation_20260906.py": "9a4e648c7d90179652c92690eee2f4baeb75489d481e7a88b59c3ddefa61c3a8",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/optimize_delphi_matched_policies_20260906.py": "22a5849e533d9d60a1902205e416618b5081306ca70ad82344c4267d2efae7e3",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/materialize_delphi_one_phase_surrogate_challengers_20260831.py": "f581d563addde55de1b4c104083d4c7cfd0f5d4eaed1f411d0291a2576e05e07",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/single_phase_observatory_models_20260902.py": "87ca41e8ead573799fd1e939952b9c51c0d5e0f6dea94af1006fe95f4cb29e60",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/single_phase_observatory_registry_20260902.py": "113927508551dffd63dede1a3417e5584e5e5ae177c528e4aae5f26b8cb488f9"
+  },
+  "no_jobs_launched": true
+}

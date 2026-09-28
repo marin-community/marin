@@ -1,0 +1,3 @@
+JOB ID                                                                                  STATE    SUBMITTED                         REASON
+/calvinxu/starcoder-tpp10-canary-recovery-ondemand-20260910/verified_training-ba05b369  pending  2026-09-10T09:09:04.312000+00:00  Scheduler: Insufficient memory (need 224.0GB, available 208....
+/calvinxu/starcoder-tpp10-canary-recovery-ondemand-20260910                             running  2026-09-10T09:07:16.774000+00:00

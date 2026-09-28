@@ -1,0 +1,165 @@
+{
+ "languages": 17,
+ "mean_pass@1": {
+  "Proportional": {
+   "mean": 0.04410983920567978,
+   "ci95": [
+    0.039739277181132016,
+    0.04858491350927259
+   ]
+  },
+  "UniMax-8": {
+   "mean": 0.08943929558265354,
+   "ci95": [
+    0.08333756294893835,
+    0.09563545259016185
+   ]
+  },
+  "Olmix": {
+   "mean": 0.12486440717591428,
+   "ci95": [
+    0.1177914816694566,
+    0.13189581342707316
+   ]
+  },
+  "MARINER": {
+   "mean": 0.15714250690598655,
+   "ci95": [
+    0.1496188344965103,
+    0.1648644030157367
+   ]
+  }
+ },
+ "differences": {
+  "UniMax-8 - Proportional": {
+   "mean": 0.04532945637697376,
+   "ci95": [
+    0.039462638779768945,
+    0.05132416759763405
+   ],
+   "p_leq_0": 0.0
+  },
+  "Olmix - Proportional": {
+   "mean": 0.0807545679702345,
+   "ci95": [
+    0.0738720695416254,
+    0.08768344750082299
+   ],
+   "p_leq_0": 0.0
+  },
+  "MARINER - Proportional": {
+   "mean": 0.11303266770030677,
+   "ci95": [
+    0.10549053976303842,
+    0.12074949302471592
+   ],
+   "p_leq_0": 0.0
+  },
+  "Olmix - UniMax-8": {
+   "mean": 0.03542511159326074,
+   "ci95": [
+    0.029058515968302036,
+    0.041932068860414465
+   ],
+   "p_leq_0": 0.0
+  },
+  "MARINER - UniMax-8": {
+   "mean": 0.06770321132333301,
+   "ci95": [
+    0.060434698224378636,
+    0.07494851934271105
+   ],
+   "p_leq_0": 0.0
+  },
+  "MARINER - Olmix": {
+   "mean": 0.03227809973007227,
+   "ci95": [
+    0.02518616355764492,
+    0.03943792610931156
+   ],
+   "p_leq_0": 0.0
+  }
+ },
+ "cross_run_agreement": [
+  {
+   "checkpoint": "proportional_1e21-2f1a48",
+   "language": "bash",
+   "plans": [
+    "plan_euw4",
+    "plan_east5b"
+   ],
+   "problems": 465,
+   "differ": 0
+  },
+  {
+   "checkpoint": "proportional_1e21-2f1a48",
+   "language": "c",
+   "plans": [
+    "plan_euw4",
+    "plan_east5b"
+   ],
+   "problems": 481,
+   "differ": 0
+  },
+  {
+   "checkpoint": "proportional_1e21-2f1a48",
+   "language": "java",
+   "plans": [
+    "plan_euw4",
+    "plan_east5b"
+   ],
+   "problems": 483,
+   "differ": 0
+  },
+  {
+   "checkpoint": "proportional_1e21-2f1a48",
+   "language": "javascript",
+   "plans": [
+    "plan_euw4",
+    "plan_east5b"
+   ],
+   "problems": 485,
+   "differ": 0
+  },
+  {
+   "checkpoint": "proportional_1e21-2f1a48",
+   "language": "matlab",
+   "plans": [
+    "plan_euw4",
+    "plan_east5b"
+   ],
+   "problems": 460,
+   "differ": 0
+  },
+  {
+   "checkpoint": "proportional_1e21-2f1a48",
+   "language": "matlab",
+   "plans": [
+    "plan_euw4",
+    "plan_east5"
+   ],
+   "problems": 460,
+   "differ": 0
+  },
+  {
+   "checkpoint": "proportional_1e21-2f1a48",
+   "language": "php",
+   "plans": [
+    "plan_euw4",
+    "plan_east5b"
+   ],
+   "problems": 485,
+   "differ": 0
+  },
+  {
+   "checkpoint": "proportional_1e21-2f1a48",
+   "language": "php",
+   "plans": [
+    "plan_euw4",
+    "plan_east5"
+   ],
+   "problems": 485,
+   "differ": 0
+  }
+ ]
+}

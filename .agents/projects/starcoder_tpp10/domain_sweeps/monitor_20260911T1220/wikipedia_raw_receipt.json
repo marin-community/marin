@@ -1,0 +1,37 @@
+{
+  "design_sha256": "72d14a845033b901d73397c74c724a668cbdec5fd72cec41178626b993f889a2",
+  "part_receipts": [
+    {
+      "identity": {
+        "design_sha256": "72d14a845033b901d73397c74c724a668cbdec5fd72cec41178626b993f889a2",
+        "implementation_sha256": "3dcd74598da46f09dc978ee0a6b0ddee62a820b6906c4c184bf9148883079105",
+        "quota": 95158272,
+        "source": {
+          "crc32c": "djFLEg==",
+          "generation": "1755319695895937",
+          "size_bytes": 4258475299,
+          "uri": "gs://marin-us-central1/raw/dolma/v1.7/wiki-0000.json.gz"
+        }
+      },
+      "token_stream_sha256": "f7eedbc46fa3fecdbfaf9e2f69cb0a7c8d3b9fce0dcf80ee1120b8feb2e5e056",
+      "tokens": 95158272
+    },
+    {
+      "identity": {
+        "design_sha256": "72d14a845033b901d73397c74c724a668cbdec5fd72cec41178626b993f889a2",
+        "implementation_sha256": "3dcd74598da46f09dc978ee0a6b0ddee62a820b6906c4c184bf9148883079105",
+        "quota": 95158272,
+        "source": {
+          "crc32c": "Tu/XDg==",
+          "generation": "1755319695929144",
+          "size_bytes": 2222652693,
+          "uri": "gs://marin-us-central1/raw/dolma/v1.7/wiki-0001.json.gz"
+        }
+      },
+      "token_stream_sha256": "f8d8902260e10183ba63ae9e92ea4cbdbceb53da378b3ef086576af00c0456dc",
+      "tokens": 95158272
+    }
+  ],
+  "recipe_sha256": "81af73b910676fac8eeccffd1b2d652f6ca53562693fb146475b2ec79a90c27e",
+  "tokens": 190316544
+}

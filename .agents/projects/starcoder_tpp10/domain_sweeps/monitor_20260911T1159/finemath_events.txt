@@ -1,0 +1,7 @@
+I20260911 05:02:40 8553706816 iris.cluster.config Loading config from lib/iris/config/marin.yaml
+Not all requested scopes were granted by the authorization server, missing scopes email.
+I20260911 05:02:40 8553706816 finelog.client.log_client LogClient resolved https://iris.oa.dev/proxy/system.log-server -> https://iris.oa.dev/proxy/system.log-server (stats)
+Task: /calvinxu/tpp10-domain-sweeps/prepare_parquet-ebd457af/0
+
+TIME (UTC)                          ATTEMPT  TYPE    SOURCE           ACTION                COUNT  MESSAGE
+2026-09-11T11:42:49.014000+00:00          0  Normal  iris/controller  TaskRetryScheduled        1  Preempted by /calvinxu/tpp10-domain-sweeps/prepare_parent-219e0a84/0; controller returned the task …

@@ -80,6 +80,20 @@ def test_collect_respects_extra_exclude(workspace):
     assert "pyproject.toml" in rel
 
 
+def test_collect_exclude_takes_precedence_over_extra_include(workspace):
+    (workspace / "data").mkdir()
+    (workspace / "data" / "required.csv").write_text("1,2,3")
+
+    with _mock_git_files(workspace, "pyproject.toml"):
+        files = collect_workspace_files(
+            workspace,
+            exclude=re.compile(r"^data(/|$)"),
+            extra_includes=["data/required.csv"],
+        )
+    rel = {str(f.relative_to(workspace)) for f in files}
+    assert "data/required.csv" not in rel
+
+
 def test_extra_exclude_is_matched_literally_not_verbose(workspace):
     # DEFAULT_EXCLUDE is verbose; the merge must not extend re.VERBOSE onto the
     # caller's pattern, or literal whitespace in it would be dropped and match

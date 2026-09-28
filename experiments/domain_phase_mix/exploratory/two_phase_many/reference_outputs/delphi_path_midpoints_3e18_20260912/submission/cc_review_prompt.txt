@@ -1,0 +1,23 @@
+Review this experiment before submission. Read-only review; do not submit, edit files, launch programs, or contact anyone.
+
+User request: train a measured midpoint in each column of current Figure 10, for both Uncheatable and Table-9/OlmoBaseEval Easy: the 50% MARINER-baseline mixture. Get CC review before submission. This means ten seed-0 runs, five baselines per objective (Olmix, quadratic, natural cubic spline, RegMix, Hellinger kernel ridge). It does not include MARINER's exponential-benefit ablation.
+
+Repository: /Users/calvinxu/Projects/Work/Marin/marin
+Artifact directory: experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912
+
+Read README.md, midpoint_plan.json, submission/submit.sh and launch_dry_run/runtime_recipe_validation.json there, then review:
+- experiments/domain_phase_mix/launch_delphi_path_midpoints_3e18.py
+- experiments/domain_phase_mix/exploratory/two_phase_many/materialize_delphi_path_midpoints_20260912.py
+- experiments/domain_phase_mix/exploratory/two_phase_many/predict_delphi_path_midpoints_20260912.py
+
+Compare to the original endpoint launchers and plotting logic:
+- experiments/domain_phase_mix/launch_delphi_comparator_proposals_3e18.py
+- experiments/domain_phase_mix/launch_delphi_matched_olmix_3e18.py
+- experiments/domain_phase_mix/launch_delphi_one_phase_dsp_epoch_cap_sweep_3e18.py
+- experiments/domain_phase_mix/exploratory/two_phase_many/plot_comparator_proposal_diagnostics_20260909.py
+
+Scientific checks already found: use trained runtime endpoints, not continuous solutions; exact midpoints need a 4096 grid, but preserve the original2048 sampler with neutral largest-remainder rounding, alphabetical bucket ties, no prediction-based optimization. TV deviation <=0.003174. Preserve seed0 and objective data seeds666200/662009. Current data builder's zero-weight removal changes shuffle-key allocation as active sets change: preserve historical behavior but do not claim identical subsets. All10 get inlineUncheatable and nativeTable9 eval. Candidate cap64 is inactive loader metadata only. The real sampler passed30 full-block count checks and all scientific run-spec fields match archived endpoint manifests.
+
+Local baseline reconstruction/prediction freezing is running in parallel with your review. MARINER loads the original saved full fits, Olmix loads saved laws, other regressors reconstruct from the old280-run swarm. Before actual submission, all1220 archived Figure10 path predictions must match, and exact/runtime midpoint predictions will be frozen. Do not treat an incomplete prediction receipt during this review as a passed gate; distinguish what needs final verification.
+
+Please give concrete blockers first with file/line evidence, then nonblocking advice. In particular: does this train the intended10midpoints; any hidden recipe/evaluation/seed/rounding mismatch; prospective prediction/parity check sound; resume/idempotency and east5 placement correct; is the launch command safe? State whether you recommend proceeding once the listed gates pass. Keep scope on this batch; do not propose extra seeds or new experiments as requirements absent a correctness reason.

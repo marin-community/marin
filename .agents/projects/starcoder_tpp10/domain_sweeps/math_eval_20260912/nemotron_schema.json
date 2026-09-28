@@ -1,0 +1,8 @@
+{
+  "name": "raw/nemotron_pretraining_specialized_v1-a31fae/Nemotron-Pretraining-Math-Textbooks/part_000000.parquet",
+  "generation": "1774591407244032",
+  "payload_bytes": 2391061448,
+  "footer_bytes_read": 57336,
+  "schema": "<pyarrow._parquet.ParquetSchema object at 0x10e818380>\nrequired group field_id=-1 root {\n  optional binary field_id=-1 text (String);\n  optional binary field_id=-1 license (String);\n  optional group field_id=-1 metadata {\n    optional binary field_id=-1 category (String);\n    optional binary field_id=-1 models_used (String);\n  }\n  optional binary field_id=-1 uuid (String);\n}\n",
+  "rows": 1000000
+}

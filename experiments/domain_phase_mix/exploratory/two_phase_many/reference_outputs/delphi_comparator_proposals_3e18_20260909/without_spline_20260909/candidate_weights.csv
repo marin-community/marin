@@ -1,0 +1,313 @@
+candidate_id,target,target_label,epoch_cap,surrogate,domain,runtime_count,weight,materialized_epochs
+cmp_u_quad_cap08,uncheatable,Uncheatable,8,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/art_and_design_high,0,0.0,0.0
+cmp_u_quad_cap08,uncheatable,Uncheatable,8,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/art_and_design_low,8,0.00390625,0.5331800115492766
+cmp_u_quad_cap08,uncheatable,Uncheatable,8,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/crime_and_law_high,26,0.0126953125,0.5225338258131579
+cmp_u_quad_cap08,uncheatable,Uncheatable,8,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/crime_and_law_low,0,0.0,0.0
+cmp_u_quad_cap08,uncheatable,Uncheatable,8,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/education_and_jobs_high,0,0.0,0.0
+cmp_u_quad_cap08,uncheatable,Uncheatable,8,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/education_and_jobs_low,0,0.0,0.0
+cmp_u_quad_cap08,uncheatable,Uncheatable,8,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/electronics_and_hardware_high,0,0.0,0.0
+cmp_u_quad_cap08,uncheatable,Uncheatable,8,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/electronics_and_hardware_low,0,0.0,0.0
+cmp_u_quad_cap08,uncheatable,Uncheatable,8,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/entertainment_high,0,0.0,0.0
+cmp_u_quad_cap08,uncheatable,Uncheatable,8,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/entertainment_low,0,0.0,0.0
+cmp_u_quad_cap08,uncheatable,Uncheatable,8,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/finance_and_business_high,6,0.0029296875,0.03406627018942325
+cmp_u_quad_cap08,uncheatable,Uncheatable,8,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/finance_and_business_low,0,0.0,0.0
+cmp_u_quad_cap08,uncheatable,Uncheatable,8,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/food_and_dining_high,0,0.0,0.0
+cmp_u_quad_cap08,uncheatable,Uncheatable,8,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/food_and_dining_low,0,0.0,0.0
+cmp_u_quad_cap08,uncheatable,Uncheatable,8,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/games_high,0,0.0,0.0
+cmp_u_quad_cap08,uncheatable,Uncheatable,8,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/games_low,0,0.0,0.0
+cmp_u_quad_cap08,uncheatable,Uncheatable,8,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/health_high,0,0.0,0.0
+cmp_u_quad_cap08,uncheatable,Uncheatable,8,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/health_low,0,0.0,0.0
+cmp_u_quad_cap08,uncheatable,Uncheatable,8,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/history_and_geography_high,30,0.0146484375,0.6857591942809769
+cmp_u_quad_cap08,uncheatable,Uncheatable,8,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/history_and_geography_low,13,0.00634765625,1.0798216688464892
+cmp_u_quad_cap08,uncheatable,Uncheatable,8,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/industrial_high,0,0.0,0.0
+cmp_u_quad_cap08,uncheatable,Uncheatable,8,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/industrial_low,21,0.01025390625,1.4998413551998928
+cmp_u_quad_cap08,uncheatable,Uncheatable,8,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/literature_high,155,0.07568359375,1.8530293090624177
+cmp_u_quad_cap08,uncheatable,Uncheatable,8,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/literature_low,28,0.013671875,1.2554479956820448
+cmp_u_quad_cap08,uncheatable,Uncheatable,8,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/science_math_and_technology_high,286,0.1396484375,3.634431045600107
+cmp_u_quad_cap08,uncheatable,Uncheatable,8,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/science_math_and_technology_low,64,0.03125,1.7816535759372214
+cmp_u_quad_cap08,uncheatable,Uncheatable,8,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_stack_edu,268,0.130859375,6.173666624870629
+cmp_u_quad_cap08,uncheatable,Uncheatable,8,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_arxiv,25,0.01220703125,2.7343627161839623
+cmp_u_quad_cap08,uncheatable,Uncheatable,8,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_finemath_3plus,21,0.01025390625,1.9074804038741309
+cmp_u_quad_cap08,uncheatable,Uncheatable,8,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_wikipedia,0,0.0,0.0
+cmp_u_quad_cap08,uncheatable,Uncheatable,8,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolmino_common_crawl_hq,425,0.20751953125,0.9962154590353764
+cmp_u_quad_cap08,uncheatable,Uncheatable,8,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolmino_olmocr_pdfs_hq,218,0.1064453125,3.269930489670357
+cmp_u_quad_cap08,uncheatable,Uncheatable,8,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolmino_stack_edu_fim,319,0.15576171875,7.35882430641438
+cmp_u_quad_cap08,uncheatable,Uncheatable,8,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolmino_stem_heavy_crawl,1,0.00048828125,0.5923698310483305
+cmp_u_quad_cap08,uncheatable,Uncheatable,8,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolmino_synth_code,30,0.0146484375,4.912520166851077
+cmp_u_quad_cap08,uncheatable,Uncheatable,8,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolmino_synth_instruction,12,0.005859375,2.0612203404116967
+cmp_u_quad_cap08,uncheatable,Uncheatable,8,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolmino_synth_math,19,0.00927734375,2.6892083952225225
+cmp_u_quad_cap08,uncheatable,Uncheatable,8,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolmino_synth_qa,73,0.03564453125,0.42769019983764234
+cmp_u_quad_cap08,uncheatable,Uncheatable,8,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolmino_synth_thinking,0,0.0,0.0
+cmp_u_lgbm_cap08,uncheatable,Uncheatable,8,lightgbm_regmix,dolma3_cc/art_and_design_high,43,0.02099609375,1.1632129115378818
+cmp_u_lgbm_cap08,uncheatable,Uncheatable,8,lightgbm_regmix,dolma3_cc/art_and_design_low,46,0.0224609375,3.0657850664083406
+cmp_u_lgbm_cap08,uncheatable,Uncheatable,8,lightgbm_regmix,dolma3_cc/crime_and_law_high,56,0.02734375,1.1254574709821863
+cmp_u_lgbm_cap08,uncheatable,Uncheatable,8,lightgbm_regmix,dolma3_cc/crime_and_law_low,49,0.02392578125,2.1922577478853564
+cmp_u_lgbm_cap08,uncheatable,Uncheatable,8,lightgbm_regmix,dolma3_cc/education_and_jobs_high,46,0.0224609375,0.565426770821867
+cmp_u_lgbm_cap08,uncheatable,Uncheatable,8,lightgbm_regmix,dolma3_cc/education_and_jobs_low,45,0.02197265625,1.1292539092868814
+cmp_u_lgbm_cap08,uncheatable,Uncheatable,8,lightgbm_regmix,dolma3_cc/electronics_and_hardware_high,40,0.01953125,0.9318594673235256
+cmp_u_lgbm_cap08,uncheatable,Uncheatable,8,lightgbm_regmix,dolma3_cc/electronics_and_hardware_low,42,0.0205078125,2.08165425560283
+cmp_u_lgbm_cap08,uncheatable,Uncheatable,8,lightgbm_regmix,dolma3_cc/entertainment_high,56,0.02734375,0.40847701726360697
+cmp_u_lgbm_cap08,uncheatable,Uncheatable,8,lightgbm_regmix,dolma3_cc/entertainment_low,50,0.0244140625,1.0021960182826215
+cmp_u_lgbm_cap08,uncheatable,Uncheatable,8,lightgbm_regmix,dolma3_cc/finance_and_business_high,43,0.02099609375,0.2441416030242
+cmp_u_lgbm_cap08,uncheatable,Uncheatable,8,lightgbm_regmix,dolma3_cc/finance_and_business_low,47,0.02294921875,0.5600359442858289
+cmp_u_lgbm_cap08,uncheatable,Uncheatable,8,lightgbm_regmix,dolma3_cc/food_and_dining_high,48,0.0234375,0.8677539513562027
+cmp_u_lgbm_cap08,uncheatable,Uncheatable,8,lightgbm_regmix,dolma3_cc/food_and_dining_low,45,0.02197265625,1.6527635436649906
+cmp_u_lgbm_cap08,uncheatable,Uncheatable,8,lightgbm_regmix,dolma3_cc/games_high,47,0.02294921875,0.6424558912432864
+cmp_u_lgbm_cap08,uncheatable,Uncheatable,8,lightgbm_regmix,dolma3_cc/games_low,44,0.021484375,1.604205409701257
+cmp_u_lgbm_cap08,uncheatable,Uncheatable,8,lightgbm_regmix,dolma3_cc/health_high,41,0.02001953125,0.2907840656345292
+cmp_u_lgbm_cap08,uncheatable,Uncheatable,8,lightgbm_regmix,dolma3_cc/health_low,44,0.021484375,0.7321920436700384
+cmp_u_lgbm_cap08,uncheatable,Uncheatable,8,lightgbm_regmix,dolma3_cc/history_and_geography_high,58,0.0283203125,1.3258011089432218
+cmp_u_lgbm_cap08,uncheatable,Uncheatable,8,lightgbm_regmix,dolma3_cc/history_and_geography_low,38,0.0185546875,3.156401801243584
+cmp_u_lgbm_cap08,uncheatable,Uncheatable,8,lightgbm_regmix,dolma3_cc/industrial_high,39,0.01904296875,1.4747966024843258
+cmp_u_lgbm_cap08,uncheatable,Uncheatable,8,lightgbm_regmix,dolma3_cc/industrial_low,44,0.021484375,3.142524744228347
+cmp_u_lgbm_cap08,uncheatable,Uncheatable,8,lightgbm_regmix,dolma3_cc/literature_high,71,0.03466796875,0.8488069738285914
+cmp_u_lgbm_cap08,uncheatable,Uncheatable,8,lightgbm_regmix,dolma3_cc/literature_low,59,0.02880859375,2.645408276615737
+cmp_u_lgbm_cap08,uncheatable,Uncheatable,8,lightgbm_regmix,dolma3_cc/science_math_and_technology_high,71,0.03466796875,0.902253860970656
+cmp_u_lgbm_cap08,uncheatable,Uncheatable,8,lightgbm_regmix,dolma3_cc/science_math_and_technology_low,82,0.0400390625,2.2827436441695648
+cmp_u_lgbm_cap08,uncheatable,Uncheatable,8,lightgbm_regmix,dolma3_stack_edu,135,0.06591796875,3.1098693819311003
+cmp_u_lgbm_cap08,uncheatable,Uncheatable,8,lightgbm_regmix,dolma3_arxiv,62,0.0302734375,6.781219536136227
+cmp_u_lgbm_cap08,uncheatable,Uncheatable,8,lightgbm_regmix,dolma3_finemath_3plus,47,0.02294921875,4.269122808670674
+cmp_u_lgbm_cap08,uncheatable,Uncheatable,8,lightgbm_regmix,dolma3_wikipedia,7,0.00341796875,5.892198479471702
+cmp_u_lgbm_cap08,uncheatable,Uncheatable,8,lightgbm_regmix,dolmino_common_crawl_hq,57,0.02783203125,0.1336100733294505
+cmp_u_lgbm_cap08,uncheatable,Uncheatable,8,lightgbm_regmix,dolmino_olmocr_pdfs_hq,88,0.04296875,1.3199719407843644
+cmp_u_lgbm_cap08,uncheatable,Uncheatable,8,lightgbm_regmix,dolmino_stack_edu_fim,150,0.0732421875,3.4602622130475145
+cmp_u_lgbm_cap08,uncheatable,Uncheatable,8,lightgbm_regmix,dolmino_stem_heavy_crawl,3,0.00146484375,1.7771094931449916
+cmp_u_lgbm_cap08,uncheatable,Uncheatable,8,lightgbm_regmix,dolmino_synth_code,39,0.01904296875,6.3862762169064
+cmp_u_lgbm_cap08,uncheatable,Uncheatable,8,lightgbm_regmix,dolmino_synth_instruction,28,0.013671875,4.809514127627293
+cmp_u_lgbm_cap08,uncheatable,Uncheatable,8,lightgbm_regmix,dolmino_synth_math,41,0.02001953125,5.803028642322285
+cmp_u_lgbm_cap08,uncheatable,Uncheatable,8,lightgbm_regmix,dolmino_synth_qa,56,0.02734375,0.32809111220421877
+cmp_u_lgbm_cap08,uncheatable,Uncheatable,8,lightgbm_regmix,dolmino_synth_thinking,41,0.02001953125,3.1737820255655884
+cmp_u_krr_cap12,uncheatable,Uncheatable,12,hellinger_krr,dolma3_cc/art_and_design_high,63,0.03076171875,1.704242172718292
+cmp_u_krr_cap12,uncheatable,Uncheatable,12,hellinger_krr,dolma3_cc/art_and_design_low,20,0.009765625,1.3329500288731917
+cmp_u_krr_cap12,uncheatable,Uncheatable,12,hellinger_krr,dolma3_cc/crime_and_law_high,56,0.02734375,1.1254574709821863
+cmp_u_krr_cap12,uncheatable,Uncheatable,12,hellinger_krr,dolma3_cc/crime_and_law_low,69,0.03369140625,3.08705682865489
+cmp_u_krr_cap12,uncheatable,Uncheatable,12,hellinger_krr,dolma3_cc/education_and_jobs_high,29,0.01416015625,0.3564647033442205
+cmp_u_krr_cap12,uncheatable,Uncheatable,12,hellinger_krr,dolma3_cc/education_and_jobs_low,1,0.00048828125,0.025094531317486252
+cmp_u_krr_cap12,uncheatable,Uncheatable,12,hellinger_krr,dolma3_cc/electronics_and_hardware_high,7,0.00341796875,0.16307540678161697
+cmp_u_krr_cap12,uncheatable,Uncheatable,12,hellinger_krr,dolma3_cc/electronics_and_hardware_low,15,0.00732421875,0.7434479484295821
+cmp_u_krr_cap12,uncheatable,Uncheatable,12,hellinger_krr,dolma3_cc/entertainment_high,4,0.001953125,0.029176929804543353
+cmp_u_krr_cap12,uncheatable,Uncheatable,12,hellinger_krr,dolma3_cc/entertainment_low,66,0.0322265625,1.3228987441330604
+cmp_u_krr_cap12,uncheatable,Uncheatable,12,hellinger_krr,dolma3_cc/finance_and_business_high,29,0.01416015625,0.16465363924887905
+cmp_u_krr_cap12,uncheatable,Uncheatable,12,hellinger_krr,dolma3_cc/finance_and_business_low,1,0.00048828125,0.01191565838906019
+cmp_u_krr_cap12,uncheatable,Uncheatable,12,hellinger_krr,dolma3_cc/food_and_dining_high,1,0.00048828125,0.01807820731992089
+cmp_u_krr_cap12,uncheatable,Uncheatable,12,hellinger_krr,dolma3_cc/food_and_dining_low,88,0.04296875,3.2320709298337595
+cmp_u_krr_cap12,uncheatable,Uncheatable,12,hellinger_krr,dolma3_cc/games_high,26,0.0126953125,0.3554011313260733
+cmp_u_krr_cap12,uncheatable,Uncheatable,12,hellinger_krr,dolma3_cc/games_low,23,0.01123046875,0.8385619187074753
+cmp_u_krr_cap12,uncheatable,Uncheatable,12,hellinger_krr,dolma3_cc/health_high,2,0.0009765625,0.01418458856753801
+cmp_u_krr_cap12,uncheatable,Uncheatable,12,hellinger_krr,dolma3_cc/health_low,15,0.00732421875,0.2496109239784222
+cmp_u_krr_cap12,uncheatable,Uncheatable,12,hellinger_krr,dolma3_cc/history_and_geography_high,64,0.03125,1.4629529477994172
+cmp_u_krr_cap12,uncheatable,Uncheatable,12,hellinger_krr,dolma3_cc/history_and_geography_low,28,0.013671875,2.3257697482847464
+cmp_u_krr_cap12,uncheatable,Uncheatable,12,hellinger_krr,dolma3_cc/industrial_high,11,0.00537109375,0.41596827249557905
+cmp_u_krr_cap12,uncheatable,Uncheatable,12,hellinger_krr,dolma3_cc/industrial_low,33,0.01611328125,2.3568935581712602
+cmp_u_krr_cap12,uncheatable,Uncheatable,12,hellinger_krr,dolma3_cc/literature_high,98,0.0478515625,1.1715927244394642
+cmp_u_krr_cap12,uncheatable,Uncheatable,12,hellinger_krr,dolma3_cc/literature_low,59,0.02880859375,2.645408276615737
+cmp_u_krr_cap12,uncheatable,Uncheatable,12,hellinger_krr,dolma3_cc/science_math_and_technology_high,155,0.07568359375,1.9697091331049532
+cmp_u_krr_cap12,uncheatable,Uncheatable,12,hellinger_krr,dolma3_cc/science_math_and_technology_low,76,0.037109375,2.1157136214254506
+cmp_u_krr_cap12,uncheatable,Uncheatable,12,hellinger_krr,dolma3_stack_edu,269,0.13134765625,6.196702694366415
+cmp_u_krr_cap12,uncheatable,Uncheatable,12,hellinger_krr,dolma3_arxiv,38,0.0185546875,4.156231328599623
+cmp_u_krr_cap12,uncheatable,Uncheatable,12,hellinger_krr,dolma3_finemath_3plus,26,0.0126953125,2.361642404796543
+cmp_u_krr_cap12,uncheatable,Uncheatable,12,hellinger_krr,dolma3_wikipedia,0,0.0,0.0
+cmp_u_krr_cap12,uncheatable,Uncheatable,12,hellinger_krr,dolmino_common_crawl_hq,23,0.01123046875,0.05391283660662038
+cmp_u_krr_cap12,uncheatable,Uncheatable,12,hellinger_krr,dolmino_olmocr_pdfs_hq,15,0.00732421875,0.22499521717915302
+cmp_u_krr_cap12,uncheatable,Uncheatable,12,hellinger_krr,dolmino_stack_edu_fim,351,0.17138671875,8.097013578531184
+cmp_u_krr_cap12,uncheatable,Uncheatable,12,hellinger_krr,dolmino_stem_heavy_crawl,0,0.0,0.0
+cmp_u_krr_cap12,uncheatable,Uncheatable,12,hellinger_krr,dolmino_synth_code,34,0.0166015625,5.567522855764554
+cmp_u_krr_cap12,uncheatable,Uncheatable,12,hellinger_krr,dolmino_synth_instruction,7,0.00341796875,1.2023785319068232
+cmp_u_krr_cap12,uncheatable,Uncheatable,12,hellinger_krr,dolmino_synth_math,68,0.033203125,9.62453530921745
+cmp_u_krr_cap12,uncheatable,Uncheatable,12,hellinger_krr,dolmino_synth_qa,168,0.08203125,0.9842733366126563
+cmp_u_krr_cap12,uncheatable,Uncheatable,12,hellinger_krr,dolmino_synth_thinking,10,0.0048828125,0.7740931769672167
+cmp_u_mk1_cap06,uncheatable,Uncheatable,6,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/art_and_design_high,0,0.0,0.0
+cmp_u_mk1_cap06,uncheatable,Uncheatable,6,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/art_and_design_low,3,0.00146484375,0.19994250433097874
+cmp_u_mk1_cap06,uncheatable,Uncheatable,6,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/crime_and_law_high,12,0.005859375,0.24116945806761134
+cmp_u_mk1_cap06,uncheatable,Uncheatable,6,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/crime_and_law_low,13,0.00634765625,0.5816194025001966
+cmp_u_mk1_cap06,uncheatable,Uncheatable,6,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/education_and_jobs_high,0,0.0,0.0
+cmp_u_mk1_cap06,uncheatable,Uncheatable,6,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/education_and_jobs_low,0,0.0,0.0
+cmp_u_mk1_cap06,uncheatable,Uncheatable,6,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/electronics_and_hardware_high,0,0.0,0.0
+cmp_u_mk1_cap06,uncheatable,Uncheatable,6,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/electronics_and_hardware_low,0,0.0,0.0
+cmp_u_mk1_cap06,uncheatable,Uncheatable,6,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/entertainment_high,36,0.017578125,0.26259236824089016
+cmp_u_mk1_cap06,uncheatable,Uncheatable,6,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/entertainment_low,0,0.0,0.0
+cmp_u_mk1_cap06,uncheatable,Uncheatable,6,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/finance_and_business_high,0,0.0,0.0
+cmp_u_mk1_cap06,uncheatable,Uncheatable,6,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/finance_and_business_low,0,0.0,0.0
+cmp_u_mk1_cap06,uncheatable,Uncheatable,6,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/food_and_dining_high,0,0.0,0.0
+cmp_u_mk1_cap06,uncheatable,Uncheatable,6,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/food_and_dining_low,0,0.0,0.0
+cmp_u_mk1_cap06,uncheatable,Uncheatable,6,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/games_high,0,0.0,0.0
+cmp_u_mk1_cap06,uncheatable,Uncheatable,6,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/games_low,0,0.0,0.0
+cmp_u_mk1_cap06,uncheatable,Uncheatable,6,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/health_high,0,0.0,0.0
+cmp_u_mk1_cap06,uncheatable,Uncheatable,6,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/health_low,0,0.0,0.0
+cmp_u_mk1_cap06,uncheatable,Uncheatable,6,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/history_and_geography_high,31,0.01513671875,0.7086178340903427
+cmp_u_mk1_cap06,uncheatable,Uncheatable,6,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/history_and_geography_low,8,0.00390625,0.6645056423670703
+cmp_u_mk1_cap06,uncheatable,Uncheatable,6,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/industrial_high,0,0.0,0.0
+cmp_u_mk1_cap06,uncheatable,Uncheatable,6,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/industrial_low,22,0.0107421875,1.5712623721141734
+cmp_u_mk1_cap06,uncheatable,Uncheatable,6,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/literature_high,251,0.12255859375,3.0007119779010765
+cmp_u_mk1_cap06,uncheatable,Uncheatable,6,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/literature_low,28,0.013671875,1.2554479956820448
+cmp_u_mk1_cap06,uncheatable,Uncheatable,6,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/science_math_and_technology_high,238,0.1162109375,3.0244566043805086
+cmp_u_mk1_cap06,uncheatable,Uncheatable,6,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/science_math_and_technology_low,51,0.02490234375,1.4197551933249732
+cmp_u_mk1_cap06,uncheatable,Uncheatable,6,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_stack_edu,228,0.111328125,5.252223845039191
+cmp_u_mk1_cap06,uncheatable,Uncheatable,6,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_arxiv,36,0.017578125,3.937482311304906
+cmp_u_mk1_cap06,uncheatable,Uncheatable,6,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_finemath_3plus,31,0.01513671875,2.8158044057189553
+cmp_u_mk1_cap06,uncheatable,Uncheatable,6,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_wikipedia,4,0.001953125,3.366970559698115
+cmp_u_mk1_cap06,uncheatable,Uncheatable,6,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolmino_common_crawl_hq,378,0.1845703125,0.8860457494479349
+cmp_u_mk1_cap06,uncheatable,Uncheatable,6,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolmino_olmocr_pdfs_hq,260,0.126953125,3.8999170977719855
+cmp_u_mk1_cap06,uncheatable,Uncheatable,6,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolmino_stack_edu_fim,214,0.1044921875,4.93664075728112
+cmp_u_mk1_cap06,uncheatable,Uncheatable,6,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolmino_stem_heavy_crawl,6,0.0029296875,3.554218986289983
+cmp_u_mk1_cap06,uncheatable,Uncheatable,6,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolmino_synth_code,32,0.015625,5.240021511307815
+cmp_u_mk1_cap06,uncheatable,Uncheatable,6,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolmino_synth_instruction,16,0.0078125,2.7482937872155957
+cmp_u_mk1_cap06,uncheatable,Uncheatable,6,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolmino_synth_math,22,0.0107421875,3.113820247099763
+cmp_u_mk1_cap06,uncheatable,Uncheatable,6,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolmino_synth_qa,111,0.05419921875,0.650323454547648
+cmp_u_mk1_cap06,uncheatable,Uncheatable,6,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolmino_synth_thinking,17,0.00830078125,1.3159584008442684
+cmp_t9_quad_cap12,table9,Table 9,12,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/art_and_design_high,0,0.0,0.0
+cmp_t9_quad_cap12,table9,Table 9,12,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/art_and_design_low,0,0.0,0.0
+cmp_t9_quad_cap12,table9,Table 9,12,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/crime_and_law_high,27,0.01318359375,0.5426312806521255
+cmp_t9_quad_cap12,table9,Table 9,12,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/crime_and_law_low,25,0.01220703125,1.1184988509619167
+cmp_t9_quad_cap12,table9,Table 9,12,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/education_and_jobs_high,0,0.0,0.0
+cmp_t9_quad_cap12,table9,Table 9,12,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/education_and_jobs_low,0,0.0,0.0
+cmp_t9_quad_cap12,table9,Table 9,12,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/electronics_and_hardware_high,0,0.0,0.0
+cmp_t9_quad_cap12,table9,Table 9,12,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/electronics_and_hardware_low,0,0.0,0.0
+cmp_t9_quad_cap12,table9,Table 9,12,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/entertainment_high,0,0.0,0.0
+cmp_t9_quad_cap12,table9,Table 9,12,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/entertainment_low,0,0.0,0.0
+cmp_t9_quad_cap12,table9,Table 9,12,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/finance_and_business_high,0,0.0,0.0
+cmp_t9_quad_cap12,table9,Table 9,12,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/finance_and_business_low,0,0.0,0.0
+cmp_t9_quad_cap12,table9,Table 9,12,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/food_and_dining_high,0,0.0,0.0
+cmp_t9_quad_cap12,table9,Table 9,12,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/food_and_dining_low,0,0.0,0.0
+cmp_t9_quad_cap12,table9,Table 9,12,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/games_high,31,0.01513671875,0.42374750273493356
+cmp_t9_quad_cap12,table9,Table 9,12,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/games_low,28,0.013671875,1.020857987991709
+cmp_t9_quad_cap12,table9,Table 9,12,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/health_high,0,0.0,0.0
+cmp_t9_quad_cap12,table9,Table 9,12,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/health_low,28,0.013671875,0.4659403914263881
+cmp_t9_quad_cap12,table9,Table 9,12,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/history_and_geography_high,63,0.03076171875,1.4400943079900512
+cmp_t9_quad_cap12,table9,Table 9,12,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/history_and_geography_low,0,0.0,0.0
+cmp_t9_quad_cap12,table9,Table 9,12,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/industrial_high,0,0.0,0.0
+cmp_t9_quad_cap12,table9,Table 9,12,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/industrial_low,30,0.0146484375,2.1426305074284184
+cmp_t9_quad_cap12,table9,Table 9,12,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/literature_high,285,0.13916015625,3.4071829231147683
+cmp_t9_quad_cap12,table9,Table 9,12,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/literature_low,33,0.01611328125,1.4796351377681243
+cmp_t9_quad_cap12,table9,Table 9,12,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/science_math_and_technology_high,68,0.033203125,0.864130458394431
+cmp_t9_quad_cap12,table9,Table 9,12,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_cc/science_math_and_technology_low,53,0.02587890625,1.4754318675730114
+cmp_t9_quad_cap12,table9,Table 9,12,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_stack_edu,371,0.18115234375,8.54638178293658
+cmp_t9_quad_cap12,table9,Table 9,12,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_arxiv,18,0.0087890625,1.968741155652453
+cmp_t9_quad_cap12,table9,Table 9,12,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_finemath_3plus,43,0.02099609375,3.905793207932744
+cmp_t9_quad_cap12,table9,Table 9,12,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolma3_wikipedia,0,0.0,0.0
+cmp_t9_quad_cap12,table9,Table 9,12,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolmino_common_crawl_hq,0,0.0,0.0
+cmp_t9_quad_cap12,table9,Table 9,12,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolmino_olmocr_pdfs_hq,0,0.0,0.0
+cmp_t9_quad_cap12,table9,Table 9,12,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolmino_stack_edu_fim,485,0.23681640625,11.188181155520297
+cmp_t9_quad_cap12,table9,Table 9,12,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolmino_stem_heavy_crawl,0,0.0,0.0
+cmp_t9_quad_cap12,table9,Table 9,12,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolmino_synth_code,28,0.013671875,4.585018822394338
+cmp_t9_quad_cap12,table9,Table 9,12,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolmino_synth_instruction,12,0.005859375,2.0612203404116967
+cmp_t9_quad_cap12,table9,Table 9,12,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolmino_synth_math,41,0.02001953125,5.803028642322285
+cmp_t9_quad_cap12,table9,Table 9,12,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolmino_synth_qa,309,0.15087890625,1.8103598869839927
+cmp_t9_quad_cap12,table9,Table 9,12,quadratic_log_epoch@kappa_floor_link_flat15_nocap,dolmino_synth_thinking,70,0.0341796875,5.418652238770517
+cmp_t9_lgbm_cap12,table9,Table 9,12,lightgbm_regmix,dolma3_cc/art_and_design_high,43,0.02099609375,1.1632129115378818
+cmp_t9_lgbm_cap12,table9,Table 9,12,lightgbm_regmix,dolma3_cc/art_and_design_low,41,0.02001953125,2.7325475591900426
+cmp_t9_lgbm_cap12,table9,Table 9,12,lightgbm_regmix,dolma3_cc/crime_and_law_high,51,0.02490234375,1.0249701967873481
+cmp_t9_lgbm_cap12,table9,Table 9,12,lightgbm_regmix,dolma3_cc/crime_and_law_low,45,0.02197265625,2.01329793173145
+cmp_t9_lgbm_cap12,table9,Table 9,12,lightgbm_regmix,dolma3_cc/education_and_jobs_high,41,0.02001953125,0.5039673392107945
+cmp_t9_lgbm_cap12,table9,Table 9,12,lightgbm_regmix,dolma3_cc/education_and_jobs_low,40,0.01953125,1.00378125269945
+cmp_t9_lgbm_cap12,table9,Table 9,12,lightgbm_regmix,dolma3_cc/electronics_and_hardware_high,37,0.01806640625,0.8619700072742612
+cmp_t9_lgbm_cap12,table9,Table 9,12,lightgbm_regmix,dolma3_cc/electronics_and_hardware_low,45,0.02197265625,2.230343845288746
+cmp_t9_lgbm_cap12,table9,Table 9,12,lightgbm_regmix,dolma3_cc/entertainment_high,41,0.02001953125,0.29906353049656936
+cmp_t9_lgbm_cap12,table9,Table 9,12,lightgbm_regmix,dolma3_cc/entertainment_low,39,0.01904296875,0.7817128942604449
+cmp_t9_lgbm_cap12,table9,Table 9,12,lightgbm_regmix,dolma3_cc/finance_and_business_high,48,0.0234375,0.272530161515386
+cmp_t9_lgbm_cap12,table9,Table 9,12,lightgbm_regmix,dolma3_cc/finance_and_business_low,43,0.02099609375,0.5123733107295881
+cmp_t9_lgbm_cap12,table9,Table 9,12,lightgbm_regmix,dolma3_cc/food_and_dining_high,54,0.0263671875,0.9762231952757281
+cmp_t9_lgbm_cap12,table9,Table 9,12,lightgbm_regmix,dolma3_cc/food_and_dining_low,47,0.02294921875,1.7262197011612126
+cmp_t9_lgbm_cap12,table9,Table 9,12,lightgbm_regmix,dolma3_cc/games_high,40,0.01953125,0.546770971270882
+cmp_t9_lgbm_cap12,table9,Table 9,12,lightgbm_regmix,dolma3_cc/games_low,37,0.01806640625,1.3489909127033297
+cmp_t9_lgbm_cap12,table9,Table 9,12,lightgbm_regmix,dolma3_cc/health_high,39,0.01904296875,0.2765994770669912
+cmp_t9_lgbm_cap12,table9,Table 9,12,lightgbm_regmix,dolma3_cc/health_low,57,0.02783203125,0.9485215111180043
+cmp_t9_lgbm_cap12,table9,Table 9,12,lightgbm_regmix,dolma3_cc/history_and_geography_high,64,0.03125,1.4629529477994172
+cmp_t9_lgbm_cap12,table9,Table 9,12,lightgbm_regmix,dolma3_cc/history_and_geography_low,34,0.0166015625,2.8241489800600488
+cmp_t9_lgbm_cap12,table9,Table 9,12,lightgbm_regmix,dolma3_cc/industrial_high,34,0.0166015625,1.2857201149863353
+cmp_t9_lgbm_cap12,table9,Table 9,12,lightgbm_regmix,dolma3_cc/industrial_low,41,0.02001953125,2.928261693485505
+cmp_t9_lgbm_cap12,table9,Table 9,12,lightgbm_regmix,dolma3_cc/literature_high,57,0.02783203125,0.6814365846229536
+cmp_t9_lgbm_cap12,table9,Table 9,12,lightgbm_regmix,dolma3_cc/literature_low,50,0.0244140625,2.2418714208607944
+cmp_t9_lgbm_cap12,table9,Table 9,12,lightgbm_regmix,dolma3_cc/science_math_and_technology_high,51,0.02490234375,0.6480978437958232
+cmp_t9_lgbm_cap12,table9,Table 9,12,lightgbm_regmix,dolma3_cc/science_math_and_technology_low,62,0.0302734375,1.7259769016891833
+cmp_t9_lgbm_cap12,table9,Table 9,12,lightgbm_regmix,dolma3_stack_edu,152,0.07421875,3.501482563359461
+cmp_t9_lgbm_cap12,table9,Table 9,12,lightgbm_regmix,dolma3_arxiv,45,0.02197265625,4.921852889131133
+cmp_t9_lgbm_cap12,table9,Table 9,12,lightgbm_regmix,dolma3_finemath_3plus,64,0.03125,5.813273611806875
+cmp_t9_lgbm_cap12,table9,Table 9,12,lightgbm_regmix,dolma3_wikipedia,11,0.00537109375,9.259169039169818
+cmp_t9_lgbm_cap12,table9,Table 9,12,lightgbm_regmix,dolmino_common_crawl_hq,50,0.0244140625,0.11720181871004429
+cmp_t9_lgbm_cap12,table9,Table 9,12,lightgbm_regmix,dolmino_olmocr_pdfs_hq,58,0.0283203125,0.8699815064260583
+cmp_t9_lgbm_cap12,table9,Table 9,12,lightgbm_regmix,dolmino_stack_edu_fim,148,0.072265625,3.414125383540214
+cmp_t9_lgbm_cap12,table9,Table 9,12,lightgbm_regmix,dolmino_stem_heavy_crawl,8,0.00390625,4.738958648386644
+cmp_t9_lgbm_cap12,table9,Table 9,12,lightgbm_regmix,dolmino_synth_code,48,0.0234375,7.860032266961722
+cmp_t9_lgbm_cap12,table9,Table 9,12,lightgbm_regmix,dolmino_synth_instruction,22,0.0107421875,3.778903957421444
+cmp_t9_lgbm_cap12,table9,Table 9,12,lightgbm_regmix,dolmino_synth_math,62,0.0302734375,8.775311605462969
+cmp_t9_lgbm_cap12,table9,Table 9,12,lightgbm_regmix,dolmino_synth_qa,130,0.0634765625,0.7616400819026508
+cmp_t9_lgbm_cap12,table9,Table 9,12,lightgbm_regmix,dolmino_synth_thinking,69,0.03369140625,5.341242921073795
+cmp_t9_krr_cap16,table9,Table 9,16,hellinger_krr,dolma3_cc/art_and_design_high,62,0.0302734375,1.6771907096592715
+cmp_t9_krr_cap16,table9,Table 9,16,hellinger_krr,dolma3_cc/art_and_design_low,28,0.013671875,1.866130040422468
+cmp_t9_krr_cap16,table9,Table 9,16,hellinger_krr,dolma3_cc/crime_and_law_high,25,0.01220703125,0.5024363709741902
+cmp_t9_krr_cap16,table9,Table 9,16,hellinger_krr,dolma3_cc/crime_and_law_low,44,0.021484375,1.9685579776929734
+cmp_t9_krr_cap16,table9,Table 9,16,hellinger_krr,dolma3_cc/education_and_jobs_high,24,0.01171875,0.295005271733148
+cmp_t9_krr_cap16,table9,Table 9,16,hellinger_krr,dolma3_cc/education_and_jobs_low,25,0.01220703125,0.6273632829371563
+cmp_t9_krr_cap16,table9,Table 9,16,hellinger_krr,dolma3_cc/electronics_and_hardware_high,31,0.01513671875,0.7221910871757323
+cmp_t9_krr_cap16,table9,Table 9,16,hellinger_krr,dolma3_cc/electronics_and_hardware_low,25,0.01220703125,1.2390799140493034
+cmp_t9_krr_cap16,table9,Table 9,16,hellinger_krr,dolma3_cc/entertainment_high,22,0.0107421875,0.16047311392498845
+cmp_t9_krr_cap16,table9,Table 9,16,hellinger_krr,dolma3_cc/entertainment_low,42,0.0205078125,0.8418446553574022
+cmp_t9_krr_cap16,table9,Table 9,16,hellinger_krr,dolma3_cc/finance_and_business_high,27,0.01318359375,0.15329821585240463
+cmp_t9_krr_cap16,table9,Table 9,16,hellinger_krr,dolma3_cc/finance_and_business_low,15,0.00732421875,0.17873487583590283
+cmp_t9_krr_cap16,table9,Table 9,16,hellinger_krr,dolma3_cc/food_and_dining_high,32,0.015625,0.5785026342374685
+cmp_t9_krr_cap16,table9,Table 9,16,hellinger_krr,dolma3_cc/food_and_dining_low,59,0.02880859375,2.1669566461385434
+cmp_t9_krr_cap16,table9,Table 9,16,hellinger_krr,dolma3_cc/games_high,30,0.0146484375,0.4100782284531615
+cmp_t9_krr_cap16,table9,Table 9,16,hellinger_krr,dolma3_cc/games_low,25,0.01220703125,0.9114803464211687
+cmp_t9_krr_cap16,table9,Table 9,16,hellinger_krr,dolma3_cc/health_high,22,0.0107421875,0.1560304742429181
+cmp_t9_krr_cap16,table9,Table 9,16,hellinger_krr,dolma3_cc/health_low,47,0.02294921875,0.7821142284657229
+cmp_t9_krr_cap16,table9,Table 9,16,hellinger_krr,dolma3_cc/history_and_geography_high,56,0.02734375,1.28008382932449
+cmp_t9_krr_cap16,table9,Table 9,16,hellinger_krr,dolma3_cc/history_and_geography_low,32,0.015625,2.6580225694682813
+cmp_t9_krr_cap16,table9,Table 9,16,hellinger_krr,dolma3_cc/industrial_high,23,0.01123046875,0.8697518424907562
+cmp_t9_krr_cap16,table9,Table 9,16,hellinger_krr,dolma3_cc/industrial_low,41,0.02001953125,2.928261693485505
+cmp_t9_krr_cap16,table9,Table 9,16,hellinger_krr,dolma3_cc/literature_high,80,0.0390625,0.9564022240322156
+cmp_t9_krr_cap16,table9,Table 9,16,hellinger_krr,dolma3_cc/literature_low,43,0.02099609375,1.928009421940283
+cmp_t9_krr_cap16,table9,Table 9,16,hellinger_krr,dolma3_cc/science_math_and_technology_high,50,0.0244140625,0.6353900429370817
+cmp_t9_krr_cap16,table9,Table 9,16,hellinger_krr,dolma3_cc/science_math_and_technology_low,47,0.02294921875,1.308401844828897
+cmp_t9_krr_cap16,table9,Table 9,16,hellinger_krr,dolma3_stack_edu,290,0.1416015625,6.680460153777919
+cmp_t9_krr_cap16,table9,Table 9,16,hellinger_krr,dolma3_arxiv,27,0.01318359375,2.9531117334786794
+cmp_t9_krr_cap16,table9,Table 9,16,hellinger_krr,dolma3_finemath_3plus,44,0.021484375,3.9966256081172267
+cmp_t9_krr_cap16,table9,Table 9,16,hellinger_krr,dolma3_wikipedia,18,0.0087890625,15.151367518641518
+cmp_t9_krr_cap16,table9,Table 9,16,hellinger_krr,dolmino_common_crawl_hq,40,0.01953125,0.09376145496803544
+cmp_t9_krr_cap16,table9,Table 9,16,hellinger_krr,dolmino_olmocr_pdfs_hq,16,0.0078125,0.23999489832442988
+cmp_t9_krr_cap16,table9,Table 9,16,hellinger_krr,dolmino_stack_edu_fim,330,0.1611328125,7.612576868704532
+cmp_t9_krr_cap16,table9,Table 9,16,hellinger_krr,dolmino_stem_heavy_crawl,6,0.0029296875,3.554218986289983
+cmp_t9_krr_cap16,table9,Table 9,16,hellinger_krr,dolmino_synth_code,42,0.0205078125,6.877528233591508
+cmp_t9_krr_cap16,table9,Table 9,16,hellinger_krr,dolmino_synth_instruction,0,0.0,0.0
+cmp_t9_krr_cap16,table9,Table 9,16,hellinger_krr,dolmino_synth_math,81,0.03955078125,11.464520000685491
+cmp_t9_krr_cap16,table9,Table 9,16,hellinger_krr,dolmino_synth_qa,135,0.06591796875,0.7909339312065988
+cmp_t9_krr_cap16,table9,Table 9,16,hellinger_krr,dolmino_synth_thinking,62,0.0302734375,4.799377697196744
+cmp_t9_mk1_cap08,table9,Table 9,8,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/art_and_design_high,11,0.00537109375,0.2975660936492256
+cmp_t9_mk1_cap08,table9,Table 9,8,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/art_and_design_low,0,0.0,0.0
+cmp_t9_mk1_cap08,table9,Table 9,8,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/crime_and_law_high,11,0.00537109375,0.22107200322864373
+cmp_t9_mk1_cap08,table9,Table 9,8,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/crime_and_law_low,19,0.00927734375,0.8500591267310567
+cmp_t9_mk1_cap08,table9,Table 9,8,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/education_and_jobs_high,26,0.0126953125,0.319589044377577
+cmp_t9_mk1_cap08,table9,Table 9,8,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/education_and_jobs_low,8,0.00390625,0.20075625053989002
+cmp_t9_mk1_cap08,table9,Table 9,8,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/electronics_and_hardware_high,18,0.0087890625,0.41933676029558653
+cmp_t9_mk1_cap08,table9,Table 9,8,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/electronics_and_hardware_low,18,0.0087890625,0.8921375381154986
+cmp_t9_mk1_cap08,table9,Table 9,8,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/entertainment_high,0,0.0,0.0
+cmp_t9_mk1_cap08,table9,Table 9,8,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/entertainment_low,0,0.0,0.0
+cmp_t9_mk1_cap08,table9,Table 9,8,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/finance_and_business_high,0,0.0,0.0
+cmp_t9_mk1_cap08,table9,Table 9,8,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/finance_and_business_low,5,0.00244140625,0.05957829194530095
+cmp_t9_mk1_cap08,table9,Table 9,8,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/food_and_dining_high,44,0.021484375,0.7954411220765192
+cmp_t9_mk1_cap08,table9,Table 9,8,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/food_and_dining_low,33,0.01611328125,1.2120265986876597
+cmp_t9_mk1_cap08,table9,Table 9,8,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/games_high,37,0.01806640625,0.5057631484255659
+cmp_t9_mk1_cap08,table9,Table 9,8,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/games_low,21,0.01025390625,0.7656434909937817
+cmp_t9_mk1_cap08,table9,Table 9,8,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/health_high,23,0.01123046875,0.1631227685266871
+cmp_t9_mk1_cap08,table9,Table 9,8,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/health_low,33,0.01611328125,0.5491440327525288
+cmp_t9_mk1_cap08,table9,Table 9,8,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/history_and_geography_high,71,0.03466796875,1.6229634264649784
+cmp_t9_mk1_cap08,table9,Table 9,8,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/history_and_geography_low,4,0.001953125,0.33225282118353516
+cmp_t9_mk1_cap08,table9,Table 9,8,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/industrial_high,16,0.0078125,0.6050447599935695
+cmp_t9_mk1_cap08,table9,Table 9,8,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/industrial_low,34,0.0166015625,2.428314575085541
+cmp_t9_mk1_cap08,table9,Table 9,8,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/literature_high,164,0.080078125,1.960624559266042
+cmp_t9_mk1_cap08,table9,Table 9,8,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/literature_low,38,0.0185546875,1.7038222798542035
+cmp_t9_mk1_cap08,table9,Table 9,8,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/science_math_and_technology_high,89,0.04345703125,1.1309942764280054
+cmp_t9_mk1_cap08,table9,Table 9,8,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_cc/science_math_and_technology_low,42,0.0205078125,1.1692101592088016
+cmp_t9_mk1_cap08,table9,Table 9,8,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_stack_edu,267,0.13037109375,6.150630555374843
+cmp_t9_mk1_cap08,table9,Table 9,8,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_arxiv,26,0.0126953125,2.843737224831321
+cmp_t9_mk1_cap08,table9,Table 9,8,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_finemath_3plus,56,0.02734375,5.086614410331015
+cmp_t9_mk1_cap08,table9,Table 9,8,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolma3_wikipedia,1,0.00048828125,0.8417426399245288
+cmp_t9_mk1_cap08,table9,Table 9,8,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolmino_common_crawl_hq,55,0.02685546875,0.12892200058104872
+cmp_t9_mk1_cap08,table9,Table 9,8,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolmino_olmocr_pdfs_hq,67,0.03271484375,1.00497863673355
+cmp_t9_mk1_cap08,table9,Table 9,8,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolmino_stack_edu_fim,269,0.13134765625,6.205403568731876
+cmp_t9_mk1_cap08,table9,Table 9,8,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolmino_stem_heavy_crawl,2,0.0009765625,1.184739662096661
+cmp_t9_mk1_cap08,table9,Table 9,8,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolmino_synth_code,34,0.0166015625,5.567522855764554
+cmp_t9_mk1_cap08,table9,Table 9,8,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolmino_synth_instruction,9,0.00439453125,1.5459152553087725
+cmp_t9_mk1_cap08,table9,Table 9,8,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolmino_synth_math,54,0.0263671875,7.643013333790328
+cmp_t9_mk1_cap08,table9,Table 9,8,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolmino_synth_qa,371,0.18115234375,2.1736036183529492
+cmp_t9_mk1_cap08,table9,Table 9,8,weibull_softplus_unscaled@kappa_floor_link_flat15_nocap_kappa1,dolmino_synth_thinking,72,0.03515625,5.57347087416396

@@ -1,0 +1,18 @@
+{
+  "attrs": {
+    "session_id": "ses_01m2a6997as3er0jq2c6btf4pd"
+  },
+  "author": null,
+  "body": "Submitted evaluation-only parent /calvinxu/tpp10-finemath-math-eval at 06:58:35 UTC on 12 September. It scores the seven existing FineMath matched proxies plus shared web-only proxy, using MATH-500 primary and GSM8K secondary reference-solution likelihood. One CPU coordinator and one sequential TPU worker; no training, target evaluation, repeats, or additional domain sweeps. Source generations, full populations, tokenization, code, tokenizer and checkpoint identities are pinned in spec 82831ee6aebe21cc45b73da023497dac3ca61e5787659072bcd52fe7f09c57a6. All 1819 problems fit in 2048 tokens. Every result must reproduce original PALOMA token loss within 5e-5. Masking/window tests 7 passed, focused Pyrefly and lint passed, region safety and 23MB bundle pin checks passed. Broader shared-checkout tests report 23 failures and 13 collection errors outside the new test module. CC review is in progress; candidate training remains gated on discussion and explicit user approval. Canceled targets remain stopped.",
+  "body_format": "markdown",
+  "created_at": "2026-09-12T06:59:54Z",
+  "deleted_at": null,
+  "entity_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+  "entity_type": "experiment",
+  "id": "note_01m2a6mr79sm1yea45n3h269zg",
+  "note_type": "decision",
+  "resolved_at": null,
+  "status": "open",
+  "title": "Math likelihood evaluation only; candidate training remains unreleased",
+  "updated_at": "2026-09-12T06:59:54Z"
+}

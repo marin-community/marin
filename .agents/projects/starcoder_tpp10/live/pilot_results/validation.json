@@ -1,0 +1,27 @@
+{
+  "observed_at": "2026-09-11T05:33:02.936155Z",
+  "finished_at": "2026-09-11T04:34:02.581000Z",
+  "plan_sha256": "afa613b25468dd3dadff230544361d815f8524370bd33c14e6c58d3717496ba0",
+  "expected_endpoints": 57,
+  "verified_endpoints": 57,
+  "iris_parent": "succeeded",
+  "iris_new_children": {
+    "succeeded": 50
+  },
+  "collector": "experiments.domain_phase_mix.launch_starcoder_tpp10.collect_results",
+  "collector_checks": [
+    "saved plan digest",
+    "executor SUCCESS",
+    "exact artifact fingerprint",
+    "exact verified code and runtime receipt",
+    "finite primary metric at planned final step"
+  ],
+  "analysis_checks": [
+    "57 unique submitted run identities",
+    "matching plan and fingerprint in each CSV row",
+    "prespecified seven-coordinate common grid"
+  ],
+  "target_final_checkpoint_metadata": 7,
+  "plot_visually_checked": true,
+  "dense_released": false
+}

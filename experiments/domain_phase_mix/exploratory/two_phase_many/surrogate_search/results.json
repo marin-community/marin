@@ -1,0 +1,156 @@
+[
+  {
+    "model": "Ridge-LogEpoch",
+    "dataset": "two_phase_many",
+    "r2": -0.017874426715503766,
+    "rmse": 0.09222047628199648,
+    "spearman": 0.07664946332430302,
+    "regret_at_1": 0.09573058866450275,
+    "n_params": 157,
+    "duration_s": 0.0,
+    "error": null
+  },
+  {
+    "model": "ElasticNet-LogEpoch",
+    "dataset": "two_phase_many",
+    "r2": 0.078172324160796,
+    "rmse": 0.08776172089437602,
+    "spearman": 0.288357738074826,
+    "regret_at_1": 0.11674218010016366,
+    "n_params": 8,
+    "duration_s": 209.0,
+    "error": null
+  },
+  {
+    "model": "S-CES",
+    "dataset": "two_phase_many",
+    "r2": -0.06529935779874418,
+    "rmse": 0.09434439239741498,
+    "spearman": 0.17698724323582868,
+    "regret_at_1": 0.10164933013256876,
+    "n_params": 44,
+    "duration_s": 183.3,
+    "error": null
+  },
+  {
+    "model": "QF-CES",
+    "dataset": "two_phase_many",
+    "r2": -0.9881035119425341,
+    "rmse": 0.1288842223533367,
+    "spearman": 0.28378056308082716,
+    "regret_at_1": 0.10023577168018134,
+    "n_params": 32,
+    "duration_s": 294.6,
+    "error": null
+  },
+  {
+    "model": "G-CES",
+    "dataset": "two_phase_many",
+    "r2": -0.03859643658275003,
+    "rmse": 0.09315446443922351,
+    "spearman": 0.1942551695758033,
+    "regret_at_1": 0.10792699816378253,
+    "n_params": 45,
+    "duration_s": 283.4,
+    "error": null
+  },
+  {
+    "model": "ADD-GR",
+    "dataset": "two_phase_many",
+    "r2": -84.86859466047574,
+    "rmse": 0.8470273562330303,
+    "spearman": 0.023509996227838555,
+    "regret_at_1": 0.17161816899405072,
+    "n_params": 43,
+    "duration_s": 180.2,
+    "error": null
+  },
+  {
+    "model": "PD-CES",
+    "dataset": "two_phase_many",
+    "r2": -2.181685386472891,
+    "rmse": 0.16304552212705065,
+    "spearman": 0.3293311271904257,
+    "regret_at_1": 0.08413392565437014,
+    "n_params": 49,
+    "duration_s": 487.8,
+    "error": null
+  },
+  {
+    "model": "Ridge-LogEpoch",
+    "dataset": "starcoder_2phase",
+    "r2": -7.7823679266875985,
+    "rmse": 0.9695410598309302,
+    "spearman": 0.7055164725329643,
+    "regret_at_1": 0.019715428352355936,
+    "n_params": 9,
+    "duration_s": 0.0,
+    "error": null
+  },
+  {
+    "model": "ElasticNet-LogEpoch",
+    "dataset": "starcoder_2phase",
+    "r2": -7.520213347612074,
+    "rmse": 0.9549609815197913,
+    "spearman": 0.7134279014338986,
+    "regret_at_1": 0.027465248107910133,
+    "n_params": 7,
+    "duration_s": 0.2,
+    "error": null
+  },
+  {
+    "model": "S-CES",
+    "dataset": "starcoder_2phase",
+    "r2": 0.983469172119643,
+    "rmse": 0.04206372160029459,
+    "spearman": 0.9498865951639565,
+    "regret_at_1": 0.0016450166702270286,
+    "n_params": 7,
+    "duration_s": 5.8,
+    "error": null
+  },
+  {
+    "model": "QF-CES",
+    "dataset": "starcoder_2phase",
+    "r2": 0.9834551651489829,
+    "rmse": 0.042081538631712434,
+    "spearman": 0.9503786568254335,
+    "regret_at_1": 0.0016450166702270286,
+    "n_params": 21,
+    "duration_s": 28.5,
+    "error": null
+  },
+  {
+    "model": "G-CES",
+    "dataset": "starcoder_2phase",
+    "r2": 0.9751890034663518,
+    "rmse": 0.05153265241313078,
+    "spearman": 0.960957982547188,
+    "regret_at_1": 0.0013722062110900434,
+    "n_params": 12,
+    "duration_s": 29.0,
+    "error": null
+  },
+  {
+    "model": "ADD-GR",
+    "dataset": "starcoder_2phase",
+    "r2": -1.702840998778846,
+    "rmse": 0.5378617262520651,
+    "spearman": 0.5176719332641371,
+    "regret_at_1": 0.23405442237854004,
+    "n_params": 6,
+    "duration_s": 2.6,
+    "error": null
+  },
+  {
+    "model": "PD-CES",
+    "dataset": "starcoder_2phase",
+    "r2": 0.9892291772136281,
+    "rmse": 0.03395352217714475,
+    "spearman": 0.9582439549456043,
+    "regret_at_1": 0.001661098003387429,
+    "n_params": 12,
+    "duration_s": 41.0,
+    "error": null
+  }
+]

@@ -1,0 +1,32 @@
+{
+  "comparable_at_plot_precision": true,
+  "exact_legacy_uncheatable_metric": false,
+  "candidate_count": 10,
+  "trained_checkpoint_step": 3006,
+  "training_or_predictor_refit": false,
+  "all_ten_runtime_predictions_unchanged": true,
+  "mariner_closer_count": 10,
+  "uncheatable_primary_metric": "Frozen task weights applied to measured schema2 per-component BPB; no empirical offset",
+  "uncheatable_estimator_caveat": "Historical components used token-weighted batch BPB, new components pool scored bytes. The empirical 98-checkpoint difference is small but not a universal bound or exact legacy reconstruction.",
+  "max_observed_legacy_estimator_delta_bpb": 5.3784082599150906e-05,
+  "smallest_uncheatable_absolute_error_advantage_bpb": 0.0006317030772932108,
+  "midpoint_outcomes_single_trainer_seed": true,
+  "scored_csv_sha256": "90c93c23372c40686a85abc1b9a0c1d33bc333f96467a236d109c48b094a6b40",
+  "input_sha256": {
+    "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_frozen_procedure_validation_3e18_20260908/fits/fit_uncheatable.json": "14093a111eb5c34cd89eee827d844c139b36fa8e74dd9eb2a521d77d52f148d5",
+    "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/prediction_freeze/midpoint_predictions.csv": "e0cbf8d7876691575002bbd920741cbc1aaa2ba1bcefe189b1283d0131fa181d",
+    "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/collected_midpoints.json": "85ad7fadb0ff53b8d291e18ac8daed28d63082ddfbf44b0618546c25099f8cfa",
+    "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/runtime_identity_audit.json": "d6bf670d46aa1059df0fd6be75c0ed3463220279130446c71cb107301cd85f04",
+    "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/native_obe_comparability.json": "0eba0b9ab3163a2e36e6a6bd1e889d10655ab05043864ee3707b18b5783c7dd5",
+    "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_path_midpoints_3e18_20260912/results_20260913/uncheatable_metric_bridge_audit.json": "1258ee13df7ef126ee92fe8619a12385320180d812896cb29855d1c15b645e3b"
+  },
+  "pass": true,
+  "uncheatable_mae": {
+    "mariner": 0.0014372790352597641,
+    "baseline": 0.009586310814491905
+  },
+  "table9_mae": {
+    "mariner": 0.0050969767972359305,
+    "baseline": 0.034706925747877995
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "spec_sha256": "12ea6861093bc224babb05709a17b4ce78082ffaf8e8035e9f7d154cdfc4ea51",
+  "bundle_sha256": "d3b694986b4ff3e4d698bc94f5c6c063aeb0106d923e8c90c577dece5323d27a",
+  "bytes": 24178010,
+  "files": 4517,
+  "base_evaluator_unchanged": true,
+  "reference_spec_sha256": "8d4f18d0a9dfbf4a065a09e621bf35f67e9547874f8b3392af0d3aaf57f938e8",
+  "new_checkpoints": 7,
+  "reused_baselines": 1,
+  "region_check": "region-local launch safety check passed\n"
+}

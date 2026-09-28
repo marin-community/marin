@@ -1,0 +1,4 @@
+run_order,run_id,run_name,mixture,target_flops,tpu_type,tpu_region,tpu_zone,batch_size,train_tokens,train_steps,realized_train_tokens,expected_checkpoint_step,model_hidden_dim,model_layers,non_embedding_params,total_trainable_params,tensor_parallel_size,data_seed,trainer_seed
+0,660730,unimax1_3e18,unimax1,3e+18,v5p-8,us-east5,us-east5-a,128,1576304640,3007,1576534016,3006,896,10,128469376,358304128,1,660730,0
+1,660731,unimax4_3e18,unimax4,3e+18,v5p-8,us-east5,us-east5-a,128,1576304640,3007,1576534016,3006,896,10,128469376,358304128,1,660731,0
+2,660732,unimax12_3e18,unimax12,3e+18,v5p-8,us-east5,us-east5-a,128,1576304640,3007,1576534016,3006,896,10,128469376,358304128,1,660732,0

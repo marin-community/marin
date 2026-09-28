@@ -1,0 +1,23 @@
+I20260911 06:06:45 8553706816 iris.cluster.config Loading config from lib/iris/config/marin.yaml
+I20260911 06:06:45 8553706816 finelog.client.log_client LogClient resolved /system/log-server -> https://iris.oa.dev/proxy/system.log-server (log)
+Not all requested scopes were granted by the authorization server, missing scopes email.
+[13:06:32] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=0 | I20260911 13:06:27 levanter.distributed Detected Iris job context; initializing jax.distributed via iris.runtime.jax_init.
+[13:06:32] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=0 | I20260911 13:06:27 iris.runtime.jax_init JAX compilation cache: gs://marin-us-central1/tmp/ttl=30d/compilation-cache
+[13:06:32] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=0 | I20260911 13:06:27 iris.env_resources TaskResources: TaskResources(memory_bytes=240518168576, cpu_cores=104.0, gpu_count=0, tpu_count=4)
+[13:06:32] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=0 | I20260911 13:06:27 iris.runtime.jax_init initialize_jax bootstrap inputs: task_index=0 num_tasks=1 advertise_host=10.128.0.107 ports={} endpoint_name=jax_coordinator-calvinxu-c54b2987ced1def0e8fb3a03be144ab4327f542a2db9f8bd4792a51cadb06a31 requested_port=None env={'IRIS_TASK_ID': '/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0:0', 'IRIS_NUM_TASKS': '1'}
+[13:06:32] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=0 | I20260911 13:06:27 iris.runtime.jax_init JAX coordinator port 59097 (selected by the kernel)
+[13:06:32] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=0 | I20260911 13:06:27 jax._src.distributed Starting JAX distributed service on [::]:59097
+[13:06:32] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=0 | I20260911 13:06:27 jax._src.distributed Connecting to JAX distributed service on 10.128.0.107:59097
+[13:06:39] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=0 | I20260911 13:06:33 levanter.cutlass_kernel_cache CuTeDSL kernel cache skipped, cutlass.jax unavailable: No module named 'cutlass'
+[13:06:39] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=0 | I20260911 13:06:33 levanter.trainer Setting per_device_eval_parallelism to 32
+[13:06:39] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=0 | I20260911 13:06:34 140660145230656 levanter.tracker.wandb Setting wandb code_dir to .
+[13:06:39] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=0 | W20260911 13:06:34 140660145230656 levanter.tracker.wandb Could not find git repo at .
+[13:06:39] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=0 | wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from WANDB_API_KEY.
+[13:06:39] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=0 | wandb: Currently logged in as: pinlinxu (marin-community) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+[13:06:39] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=0 | wandb: setting up run tpp10_target_p055_s20260910
+[13:06:39] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=0 | wandb: Tracking run with wandb version 0.26.0
+[13:06:39] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=0 | wandb: Run data is saved locally in /app/wandb/run-20260911_130634-tpp10_target_p055_s20260910
+[13:06:39] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=0 | wandb: Run `wandb offline` to turn off syncing.
+[13:06:39] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=0 | wandb: Resuming run tpp10_target_p055_s20260910
+[13:06:39] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=0 | wandb: ⭐️ View project at https://wandb.ai/marin-community/marin
+[13:06:39] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=0 | wandb: 🚀 View run at https://wandb.ai/marin-community/marin/runs/tpp10_target_p055_s20260910

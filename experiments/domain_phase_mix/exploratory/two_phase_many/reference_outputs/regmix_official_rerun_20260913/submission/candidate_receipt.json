@@ -1,0 +1,15 @@
+{
+  "original_frozen_weights": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/regmix_official_rerun_20260913/primary_validation_weights.csv",
+  "original_sha256": "7ada44316bd54244ccf49a051868aea67cea6322028dbe26a39f3095027dfad3",
+  "launcher_csv": "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/regmix_official_rerun_20260913/candidate_weights.csv",
+  "launcher_sha256": "7c4b8b005b5a8d7eaaa19278d236591a00873f7e3ff3da5ff5031270f91c3899",
+  "mixtures": [
+    "rgref_u_endpoint_cap64",
+    "rgref_u_midpoint_cap64",
+    "rgref_t9_endpoint_cap64",
+    "rgref_t9_midpoint_cap64"
+  ],
+  "runtime_counts_unchanged": true,
+  "total_runs": 4,
+  "no_rerounding": true
+}

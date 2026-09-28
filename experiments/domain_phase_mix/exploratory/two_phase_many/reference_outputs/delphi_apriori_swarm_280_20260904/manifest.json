@@ -1,0 +1,278 @@
+{
+  "base_data_seed": 662009,
+  "blocks": {
+    "new": {
+      "anchor": 4,
+      "corner": 9,
+      "ladder": 48,
+      "lhs": 76,
+      "reserved": 3,
+      "reused_dose_ladder": 0,
+      "reused_random_panel": 0,
+      "subsampled_pool": 40
+    },
+    "reused_dose": {
+      "anchor": 0,
+      "corner": 0,
+      "ladder": 0,
+      "lhs": 0,
+      "reserved": 0,
+      "reused_dose_ladder": 40,
+      "reused_random_panel": 0,
+      "subsampled_pool": 0
+    },
+    "reused_panel": {
+      "anchor": 0,
+      "corner": 0,
+      "ladder": 0,
+      "lhs": 0,
+      "reserved": 42,
+      "reused_dose_ladder": 0,
+      "reused_random_panel": 18,
+      "subsampled_pool": 0
+    }
+  },
+  "coverage_diagnostic": {
+    "current_panel": {
+      "max_tv_to_top10": 0.4732674296925976,
+      "median_tv_to_top10": 0.3444446126979064,
+      "min_tv_to_top10": 0.27834544834393776
+    },
+    "design_all_rows": {
+      "max_tv_to_top10": 0.39600494480564985,
+      "median_tv_to_top10": 0.2778862129945836,
+      "min_tv_to_top10": 0.2010369225959141
+    },
+    "design_new_rows": {
+      "max_tv_to_top10": 0.39600494480564985,
+      "median_tv_to_top10": 0.2778862129945836,
+      "min_tv_to_top10": 0.2010369225959141
+    },
+    "note": "diagnostic against measured Table-9 coordinates; the design was placed without them"
+  },
+  "design_seed": 20260904,
+  "mixtures_sha256": "c5ec2b0ae1b5c68dc44f6ede1a5caa1bd2918f5bfd9f6d0f23be508637856bd6",
+  "new_runs": 180,
+  "panel_inputs": {
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/delphi_3e18_observed_components_20260724/observed_component_panel.csv": "209802db7bcad05d09da01d846d1be75140b181993a08761cee430c7ca19fbed",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/olmo_base_easy_one_phase_parity_panel_300m_20260628/component_metadata.json": "97d94efe47c87ece8b855d3a833961059927873b2acb5a790490f5278ea14c67",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/two_phase_surrogate_collaborator_packet_20260721/data/canonical/delphi_3e18_one_phase_fit.csv": "8fc4732bcf7f4e44476c8b14ade8888ef9d059157f3445740a43aadebad35e10",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/two_phase_surrogate_collaborator_packet_20260721/data/catalog.json": "d3f0201c39d1698fc52a883b3a19086112c95a709f94fb2ed5967706799270d7"
+  },
+  "pilot_runs": 37,
+  "registry_dir": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/single_phase_heldout_benchmark_20260902",
+  "registry_hashes": {
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/single_phase_heldout_benchmark_20260902/heldout_coordinate_components.csv": "bef9abafec0586d766657b7f2608b0e005659e2a81ca5cbf5b5ea11cd248e65f",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/single_phase_heldout_benchmark_20260902/heldout_coordinates.csv": "91cfeb9d0458c1719519f2fdb64d0fb91d465187390799f44cb963ad4d3a98fb",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/single_phase_heldout_benchmark_20260902/manifest.json": "6cce727e50ccafe0d7d1eab9e6c13c9ad52c2cc35ff432b8a8e904e410eb8724"
+  },
+  "reused_dose_rows_require": "table9_macro_n > 0 and uncheatable_n > 0 in the registry",
+  "rows": 280,
+  "script_sha256": "46d6888852133a3605fc0fc247b70b673e0ce1c27163c065a97e00f835c33e7d",
+  "support_separation": {
+    "buckets": 39,
+    "design_rank_shares_and_exposures": 47,
+    "note": "a rank above 39 counts exposure directions not implied by shares; the per-bucket ratio is the smaller over the larger singular value of the centred (share, exposure) pair, 0 when collinear",
+    "panel_rank_shares_and_exposures": 39,
+    "per_bucket": {
+      "dolma3_arxiv": {
+        "rows_with_reduced_pool": 0,
+        "share_exposure_condition_ratio": 9.659102100496864e-17
+      },
+      "dolma3_cc/art_and_design_high": {
+        "rows_with_reduced_pool": 8,
+        "share_exposure_condition_ratio": 0.1264581446820679
+      },
+      "dolma3_cc/art_and_design_low": {
+        "rows_with_reduced_pool": 0,
+        "share_exposure_condition_ratio": 1.8915659346276105e-16
+      },
+      "dolma3_cc/crime_and_law_high": {
+        "rows_with_reduced_pool": 8,
+        "share_exposure_condition_ratio": 0.1308750144490587
+      },
+      "dolma3_cc/crime_and_law_low": {
+        "rows_with_reduced_pool": 0,
+        "share_exposure_condition_ratio": 2.970206310114209e-17
+      },
+      "dolma3_cc/education_and_jobs_high": {
+        "rows_with_reduced_pool": 8,
+        "share_exposure_condition_ratio": 0.21476912058711123
+      },
+      "dolma3_cc/education_and_jobs_low": {
+        "rows_with_reduced_pool": 0,
+        "share_exposure_condition_ratio": 7.427445969538303e-17
+      },
+      "dolma3_cc/electronics_and_hardware_high": {
+        "rows_with_reduced_pool": 8,
+        "share_exposure_condition_ratio": 0.12708848253398672
+      },
+      "dolma3_cc/electronics_and_hardware_low": {
+        "rows_with_reduced_pool": 0,
+        "share_exposure_condition_ratio": 1.406890718730058e-16
+      },
+      "dolma3_cc/entertainment_high": {
+        "rows_with_reduced_pool": 8,
+        "share_exposure_condition_ratio": 0.22561038193865177
+      },
+      "dolma3_cc/entertainment_low": {
+        "rows_with_reduced_pool": 0,
+        "share_exposure_condition_ratio": 1.2766416821921223e-16
+      },
+      "dolma3_cc/finance_and_business_high": {
+        "rows_with_reduced_pool": 8,
+        "share_exposure_condition_ratio": 0.308356800282096
+      },
+      "dolma3_cc/finance_and_business_low": {
+        "rows_with_reduced_pool": 0,
+        "share_exposure_condition_ratio": 1.4233430376954196e-16
+      },
+      "dolma3_cc/food_and_dining_high": {
+        "rows_with_reduced_pool": 8,
+        "share_exposure_condition_ratio": 0.1332433602519518
+      },
+      "dolma3_cc/food_and_dining_low": {
+        "rows_with_reduced_pool": 0,
+        "share_exposure_condition_ratio": 3.3169535282172385e-16
+      },
+      "dolma3_cc/games_high": {
+        "rows_with_reduced_pool": 8,
+        "share_exposure_condition_ratio": 0.2151479589229611
+      },
+      "dolma3_cc/games_low": {
+        "rows_with_reduced_pool": 0,
+        "share_exposure_condition_ratio": 4.226734304071812e-17
+      },
+      "dolma3_cc/health_high": {
+        "rows_with_reduced_pool": 8,
+        "share_exposure_condition_ratio": 0.32348969054059723
+      },
+      "dolma3_cc/health_low": {
+        "rows_with_reduced_pool": 0,
+        "share_exposure_condition_ratio": 9.690640342722874e-17
+      },
+      "dolma3_cc/history_and_geography_high": {
+        "rows_with_reduced_pool": 8,
+        "share_exposure_condition_ratio": 0.2621739782286089
+      },
+      "dolma3_cc/history_and_geography_low": {
+        "rows_with_reduced_pool": 0,
+        "share_exposure_condition_ratio": 1.230315433671903e-16
+      },
+      "dolma3_cc/industrial_high": {
+        "rows_with_reduced_pool": 8,
+        "share_exposure_condition_ratio": 0.20282062772567017
+      },
+      "dolma3_cc/industrial_low": {
+        "rows_with_reduced_pool": 0,
+        "share_exposure_condition_ratio": 5.478221041140521e-17
+      },
+      "dolma3_cc/literature_high": {
+        "rows_with_reduced_pool": 8,
+        "share_exposure_condition_ratio": 0.3186159433112833
+      },
+      "dolma3_cc/literature_low": {
+        "rows_with_reduced_pool": 0,
+        "share_exposure_condition_ratio": 2.6621180059957537e-16
+      },
+      "dolma3_cc/science_math_and_technology_high": {
+        "rows_with_reduced_pool": 8,
+        "share_exposure_condition_ratio": 0.3046659042510964
+      },
+      "dolma3_cc/science_math_and_technology_low": {
+        "rows_with_reduced_pool": 0,
+        "share_exposure_condition_ratio": 3.0655570554895004e-16
+      },
+      "dolma3_finemath_3plus": {
+        "rows_with_reduced_pool": 0,
+        "share_exposure_condition_ratio": 1.0495865235669521e-16
+      },
+      "dolma3_stack_edu": {
+        "rows_with_reduced_pool": 8,
+        "share_exposure_condition_ratio": 0.08500190728296793
+      },
+      "dolma3_wikipedia": {
+        "rows_with_reduced_pool": 2,
+        "share_exposure_condition_ratio": 0.012274388436443047
+      },
+      "dolmino_common_crawl_hq": {
+        "rows_with_reduced_pool": 0,
+        "share_exposure_condition_ratio": 1.695554877097886e-16
+      },
+      "dolmino_olmocr_pdfs_hq": {
+        "rows_with_reduced_pool": 8,
+        "share_exposure_condition_ratio": 0.22952916133680756
+      },
+      "dolmino_stack_edu_fim": {
+        "rows_with_reduced_pool": 2,
+        "share_exposure_condition_ratio": 0.09407878688755461
+      },
+      "dolmino_stem_heavy_crawl": {
+        "rows_with_reduced_pool": 2,
+        "share_exposure_condition_ratio": 0.01830312034330008
+      },
+      "dolmino_synth_code": {
+        "rows_with_reduced_pool": 0,
+        "share_exposure_condition_ratio": 1.3194822806875114e-16
+      },
+      "dolmino_synth_instruction": {
+        "rows_with_reduced_pool": 0,
+        "share_exposure_condition_ratio": 1.0582930638484157e-16
+      },
+      "dolmino_synth_math": {
+        "rows_with_reduced_pool": 2,
+        "share_exposure_condition_ratio": 0.07304464371819532
+      },
+      "dolmino_synth_qa": {
+        "rows_with_reduced_pool": 8,
+        "share_exposure_condition_ratio": 0.21669609743287666
+      },
+      "dolmino_synth_thinking": {
+        "rows_with_reduced_pool": 0,
+        "share_exposure_condition_ratio": 1.2837084118228393e-16
+      }
+    }
+  },
+  "target_budget_tokens": 6325183647689.0,
+  "unique_tokens": {
+    "dolma3_arxiv": 28237567983,
+    "dolma3_cc/art_and_design_high": 114170169532,
+    "dolma3_cc/art_and_design_low": 46340373707,
+    "dolma3_cc/crime_and_law_high": 153674689073,
+    "dolma3_cc/crime_and_law_low": 69031589100,
+    "dolma3_cc/education_and_jobs_high": 251260875880,
+    "dolma3_cc/education_and_jobs_low": 123073433190,
+    "dolma3_cc/electronics_and_hardware_high": 132572355890,
+    "dolma3_cc/electronics_and_hardware_low": 62313779937,
+    "dolma3_cc/entertainment_high": 423412626925,
+    "dolma3_cc/entertainment_low": 154085132409,
+    "dolma3_cc/finance_and_business_high": 543963886806,
+    "dolma3_cc/finance_and_business_low": 259194248668,
+    "dolma3_cc/food_and_dining_high": 170839401766,
+    "dolma3_cc/food_and_dining_low": 84090162862,
+    "dolma3_cc/games_high": 225942508715,
+    "dolma3_cc/games_low": 84710277508,
+    "dolma3_cc/health_high": 435468411203,
+    "dolma3_cc/health_low": 185597052864,
+    "dolma3_cc/history_and_geography_high": 135111719214,
+    "dolma3_cc/history_and_geography_low": 37182168838,
+    "dolma3_cc/industrial_high": 81672506307,
+    "dolma3_cc/industrial_low": 43243155264,
+    "dolma3_cc/literature_high": 258340689382,
+    "dolma3_cc/literature_low": 68881517798,
+    "dolma3_cc/science_math_and_technology_high": 243037340439,
+    "dolma3_cc/science_math_and_technology_low": 110943053451,
+    "dolma3_finemath_3plus": 34001855255,
+    "dolma3_stack_edu": 134071054270,
+    "dolma3_wikipedia": 3669138258,
+    "dolmino_common_crawl_hq": 1317586261685,
+    "dolmino_olmocr_pdfs_hq": 205902385099,
+    "dolmino_stack_edu_fim": 133883067238,
+    "dolmino_stem_heavy_crawl": 5213753236,
+    "dolmino_synth_code": 18860808823,
+    "dolmino_synth_instruction": 17980436519,
+    "dolmino_synth_math": 21820894376,
+    "dolmino_synth_qa": 527153343948,
+    "dolmino_synth_thinking": 39897911717
+  }
+}

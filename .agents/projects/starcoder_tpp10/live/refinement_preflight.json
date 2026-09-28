@@ -1,0 +1,20 @@
+{
+  "sha256": "8100461f4555644152f7a576754a5d25095ebe40b827dd6ffea4354024881fff",
+  "size": 26176907,
+  "files": 5274,
+  "verified_pins": 27,
+  "release_included": true,
+  "selection_launcher_verified": true,
+  "bundle_includes": [
+    ".agents/projects/starcoder_tpp10/releases/refinement.json"
+  ],
+  "excludes": [
+    "^(checkpoints|logs|wandb)/",
+    "^experiments/domain_phase_mix/exploratory/.*(?<!\\.py)$",
+    "^\\.agents/(?!projects/starcoder_tpp10/releases/).*",
+    "^(docs|tests)/.*(?<!\\.py)$",
+    "^lib/[^/]+/tests/.*(?<!\\.py)$",
+    "^experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/"
+  ],
+  "plan_sha256": "99ca724bc3bde33e80afb07373e47ddc0d7e44f22e15cd41da3daa3de2f4ef40"
+}

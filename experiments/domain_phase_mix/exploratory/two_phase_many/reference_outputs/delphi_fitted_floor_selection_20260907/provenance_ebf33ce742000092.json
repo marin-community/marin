@@ -1,0 +1,37 @@
+{
+  "inputs": {
+    "historical_predictions.csv": "35106a0d6cb4fb00a814e136b2e4904d53e2b3f979a75917b5ad8a6f1176165c",
+    "panel.npz": "d78a2484f6f89ab5439999a34770bbc84eabf7c31a49ddb87886004d7c4b3061",
+    "provenance.json": "25f8377163090aa0179ec6f8973321ca2f1b0fe51ad21a3c2958cc96837e1cf0",
+    "splits.csv": "7b2c9470247890b00b804cd08aefc8a22c435bfa388548e9c88ddbfa608b0029",
+    "table9_bank_features.npz": "edca0e09faec8217c0e4887431e4371f5733b46af8fcf84a353ce00dfca1b50e",
+    "table9_bank_labels.csv": "884901eb3df31830ead177bf3c4addb4065e709195482508721ef314eb6ed616",
+    "uncheatable_bank_features.npz": "77db18630dffe184eb6e93e4234291199d98ee766b8c9ba1b9eb748740945305",
+    "uncheatable_bank_labels.csv": "701a1ea5986b03682bf1a1105fee0a95934d9daa754523a1f265155275e6c648"
+  },
+  "numpy": "2.3.5",
+  "python": "3.12.8",
+  "sources": {
+    "experiments/__init__.py": "6026bc6a357ca0c546cdd33ed000e6fd8ee02fb6cff84e030e30f3e15ee9040d",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/audit_delphi_wspu_coupling_20260906.py": "2e8c5f3e943a070cd6f738447f1507b98b1520b1743a7b60c6acaf159ab9fcd3",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/benchmark_delphi_selection_20260906.py": "9058f56729e4f04d47f892e73c23e706c0c3d3464500bba0e49292f28e897e95",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/benchmark_dsp_single_phase_ladder_20260824.py": "6f66fa475810e28ef2fc09ba21706ff04ecf22e4061d45ea6e46eeaf35ff3d32",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/benchmark_olmix_swarm_single_phase_dsp_20260901.py": "a2c5ff98a78eebbd5e677051ce15bbdd59ace875ca8f96dd6d988aa4a5ab7e74",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/benchmark_single_phase_componentwise_canonical_dsp_20260902.py": "b33e882b782fac37a49ab1ff65da8528c434b1ac68944372b4fc89ce557d8968",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/benchmark_single_phase_observatory_20260902.py": "ab6580ae6df87e04fa8a3c7678c4c79d635ac95182757cef2612e4541a1ac80d",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/benchmark_single_phase_surrogates_20260824.py": "5c7d50c03d23d7b61a468b81bf9d827474218c4a770eb7e19b0d2cc4d588ec22",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/delphi_selection_models_20260906.py": "8705b32bbc92a9aa09657264b611ab2a033b2806f1b3b5324f7c421249741547",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/evaluate_delphi_link_selection_20260906.py": "b2f7ff7427939e4f192128ce0688c253b4f5905218f579c3f64d276611485f3c",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/fit_swarm39_split_damage_20260817.py": "9e9ad8bed9197bec1d565626dba300bcb0fb5f0dc45c5d869c8665068579b5f7",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/general_mixture_surrogate_20260809.py": "46036e00beaa2316097ddfb0e2a3d599dd0de6d37f577b69834f05f0b214eccf",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/score_delphi_selection_20260906.py": "6353f19ee13164f91efeee6c837f25716ace3a2450ea61c543f83504c1b28443",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/single_phase_observatory_models_20260902.py": "1d4d76e1f135a05c1fb9749829bce8fc189ba4c5d0c66914b31c17c38b88fbf8",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/single_phase_observatory_registry_20260902.py": "bd82ff5380b8b251841cbc380a735577140ba86966b488d9442facf2d1ba918b",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/single_phase_observatory_starcoder_inputs_20260902.py": "20830b5c88f6c53326fb54e49ba4c1cd14fb0475cdde21b1ae0090e65c58b853",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/single_phase_round4_pooled_law_20260903.py": "13168b6800fd408fc46f5a77831744fbf0164ac4ade87effbe083aaf8f1ec702",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/starcoder_wsd80_epoch_accounting.py": "4a12e75d55f344264af1b11c90cec402bd9639a66d4d8067358bbc5c9aa8a17d",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/swarm39_harness_20260725.py": "0fc2f61e07cae8f44d70e6aeee537847a5d9536fcda8765553b1843c018324a5",
+    "experiments/domain_phase_mix/exploratory/two_phase_many/swarm39_models_20260725.py": "a6c6a9e6116d417d90dbdb76fb7545cbef1f7cfefd4eb12aea3f00b936e73119",
+    "experiments/domain_phase_mix/olmix_loglinear_fit.py": "1a857bebd609822a28bed6fe5da396f032f988b7edf2182ba68dfa1bf686f243"
+  }
+}

@@ -1,0 +1,240 @@
+{
+  "preregistration_version": "2026-08-12-c12-randomized-onset-gate-v3",
+  "generation": 14,
+  "analysis_scope": "operational_only_no_endpoint_metrics",
+  "endpoint_metrics_read": false,
+  "scientific_inference_allowed": false,
+  "implementation_sha256": {
+    "stress_launcher": "8f229fa527595a521b674908df291c03571deb5dbf78299c7fdfd263afda5f46",
+    "runtime_gate": "a381a06db637a6b1411d15763e05b0f3d6c6f5e222950ef2f3db0378a373fec7",
+    "tests": "d12cbfc2b6cfbdb735cc5131e65097a6d096a54848189bca97693c25f3bd0de2",
+    "gradient_conflict_full": "0db639259b210db1431220a242954c3eb633f0e9c77f778c5e922bda44a350ce",
+    "wsd80_surface": "4334978b7c6fbe8c33c6af34806d33621655ca2082a4f1c08533ab8a7bc1d468"
+  },
+  "design": {
+    "stage": 12,
+    "total_steps": 3328,
+    "terminal_step": 3327,
+    "data_switch_step": 1536,
+    "optimizer_decay_steps": [
+      2304,
+      1920,
+      1920,
+      3072,
+      3072,
+      2304,
+      2688,
+      2688,
+      2304,
+      2432,
+      2304,
+      2432
+    ],
+    "support_ids": [
+      "m100a",
+      "m100a",
+      "m100a",
+      "m100a",
+      "m100a",
+      "m100a",
+      "m100a",
+      "m100a",
+      "full",
+      "full",
+      "full",
+      "m100b"
+    ],
+    "training_seeds": [
+      2026090200,
+      2026090201,
+      2026090202,
+      2026090203,
+      2026090204,
+      2026090205,
+      2026090206,
+      2026090207,
+      2026090208,
+      2026090209,
+      2026090210,
+      2026090211
+    ],
+    "primary_randomized_onset_cohort": {
+      "support_id": "m100a",
+      "row_count": 8,
+      "assignment_seed": 2026081202,
+      "assignment_algorithm": "Python random.Random(seed).shuffle over two copies of each onset",
+      "assignment_initial_multiset_order": [
+        1920,
+        1920,
+        2304,
+        2304,
+        2688,
+        2688,
+        3072,
+        3072
+      ],
+      "candidate_onset_steps": [
+        1920,
+        2304,
+        2688,
+        3072
+      ],
+      "assigned_onset_steps_in_trajectory_order": [
+        2304,
+        1920,
+        1920,
+        3072,
+        3072,
+        2304,
+        2688,
+        2688
+      ],
+      "replicas_per_onset": 2
+    },
+    "control_rows": {
+      "support_ids": [
+        "full",
+        "full",
+        "full",
+        "m100b"
+      ],
+      "optimizer_decay_steps": [
+        2304,
+        2432,
+        2304,
+        2432
+      ],
+      "role": "loader and support controls; excluded from onset-assignment inference"
+    },
+    "cohort": {
+      "replicas": 12,
+      "coscheduling_group_by": "tpu-topology",
+      "parent_managed_whole_cohort_retries": 20,
+      "per_attempt_wait_timeout_seconds": 14400,
+      "max_retries_failure": 0,
+      "max_retries_preemption": 0,
+      "max_task_failures": 0,
+      "initialize_jax_distributed": false,
+      "start_and_completion_barriers_required": true,
+      "assignment_time_iris_redispatch_allowed": true,
+      "barriers_scoped_by_parent_and_iris_attempt": true,
+      "finished_child_history_preserved_on_parent_restart": true
+    }
+  },
+  "release_gate": {
+    "unchanged_row_checks": {
+      "loading_p99_seconds_max": 0.01,
+      "loading_over_one_second_fraction_max": 0.0002837281883955171,
+      "loading_seconds_max": 60.0,
+      "duty_fraction_min": 0.99,
+      "tokens_per_second_p50_min": 690000.0,
+      "mfu_percent_p50_min": 33.0,
+      "rolling_window_steps": 1000,
+      "rolling_tokens_per_second_p50_min": 660000.0,
+      "history_coverage_fraction_min": 0.95,
+      "event_tokens_per_second_p50_min": 660000.0,
+      "event_loading_p99_seconds_max": 0.025,
+      "event_history_coverage_fraction_min": 0.95,
+      "runtime_accounting_ratio_min": 0.95,
+      "runtime_accounting_ratio_max": 1.25
+    },
+    "short_window": {
+      "window_steps": 32,
+      "tokens_per_second_min": 660000.0,
+      "max_consecutive_positions": 96,
+      "max_exceeding_rows": 1
+    },
+    "synchronized_depression": {
+      "quorum_fraction": 0.8333333333333334,
+      "depression_fraction": 0.95,
+      "bin_seconds": 12.0,
+      "grid_anchor": "all-row host-time overlap start",
+      "checkpoint_exclusion_rule": "Exclude any fixed grid bin intersecting the union of declared checkpoint-pause intervals; retain all rows on the shared host clock.",
+      "max_seconds": 36.0
+    },
+    "pause_accounting": {
+      "pause_detection_rule": "A consecutive host-time gap is a pause when delta exceeds the right step's recorded duration plus loading time plus the fixed slack.",
+      "accounting_slack_seconds": 1.0,
+      "declared_checkpoint_steps": [
+        1536,
+        3327
+      ],
+      "unexplained_pause_longest_seconds_max": 5.0,
+      "unexplained_pause_total_seconds_max": 15.0,
+      "checkpoint_pause_seconds_max": 60.0,
+      "checkpoint_pause_cross_row_spread_seconds_max": 30.0
+    },
+    "concurrency_and_integrity": {
+      "concurrent_overlap_seconds_min": 120.0,
+      "concurrent_overlap_fraction_min": 0.95,
+      "runtime_start_skew_seconds_max": 180.0,
+      "rendezvous_ready_spread_seconds_max": 450.0,
+      "completion_rendezvous_ready_spread_seconds_max": 450.0,
+      "finite_to_full_loading_p99_ratio_max": 1.5,
+      "permanent_checkpoint_bytes_max": 2350000000,
+      "clean_iris_completion_required": true,
+      "historical_infrastructure_preemptions_allowed": true,
+      "application_failures_allowed": false,
+      "cohort_coscheduling_required": true,
+      "latest_released_attempt_required": true,
+      "one_complete_attempt_membership_required": true,
+      "one_shared_iris_attempt_per_barrier_required": true,
+      "parent_managed_whole_cohort_replacement_required": true,
+      "preempted_child_attempts_must_have_zero_application_failures": true,
+      "completion_barrier_required": true,
+      "fresh_checkpoint_namespace_per_attempt_required": true,
+      "fresh_wandb_namespace_per_attempt_required": true,
+      "cross_replica_jax_forbidden": true,
+      "checkpoint_inventory_required": true,
+      "all_pre_and_post_event_windows_inside_all_row_overlap_required": true,
+      "unique_rendezvous_worker_claims_required": true,
+      "remote_preregistration_hash_required": true,
+      "report_upload_create_only_and_remote_hash_verified": true,
+      "new_cohort_attempt_rejects_preexisting_start_or_completion_rendezvous_state": true,
+      "existing_child_reattachment_may_reuse_its_immutable_rendezvous_state": true
+    }
+  },
+  "diagnostic_only": {
+    "decay_alignment": {
+      "primary_support_id": "m100a",
+      "primary_row_count": 8,
+      "estimand": "mean log post/pre median-throughput ratio at assigned optimizer-decay onset",
+      "window_steps": 64,
+      "assignment_test": "exact enumeration of all 2,520 balanced onset assignments",
+      "primary_alternative": "lower",
+      "alpha": 0.01,
+      "minimum_attainable_p_value": 0.0003968253968253968,
+      "non_rejection_interpretation": "Failure to reject is not evidence of no timing effect; the eight-row design has coarse power.",
+      "pretrend_falsification": "two-sided exact assignment test one window before onset",
+      "lead_placebo_falsification": {
+        "offset_steps": 256,
+        "direction": "lead; evaluate at assigned onset minus offset_steps",
+        "test": "two-sided exact assignment test"
+      },
+      "classification_rule": "decay_aligned only when primary p<=0.01 and both falsification p-values exceed 0.01; falsification_failed takes precedence; otherwise no_detectable_decay_alignment",
+      "host_time_control": "Every permutation preserves two rows at each candidate step, so a shared step-indexed disturbance is present in every balanced assignment. Random assignment, not host-clock alignment, justifies inference for host-time disturbances.",
+      "window_separation": "Candidate onsets are 384 steps apart, so another assigned onset's 64-step response window cannot overlap the primary, pretrend, or 256-step lead-placebo windows."
+    },
+    "decision_rule": "The randomized-onset classification is an infrastructure diagnostic. It never overrides the operational release gate and is not evidence about endpoint loss or gradient conflict.",
+    "failure_policy": "Any diagnostic exception is recorded as classification=unavailable; the operational report is still written and its verdict is unchanged.",
+    "generation_policy": "Do not repeat C12 after inspecting its classification. Only independently diagnosed infrastructure failure before a complete report may motivate a new frozen generation; generation 14 supersedes the unlaunched blocked generations 12 and 13."
+  },
+  "predecessor": {
+    "generation": 11,
+    "stage": 6,
+    "runtime_report_sha256": "44e930e801681d1b809c3b6dd91124f317ba612d9d949fed44ef618aa635e6f1",
+    "runtime_report_remote_generation": "1786596853124878",
+    "runtime_report_status": "pass",
+    "integrity_rule": "Only this exact passing C6 runtime-report object authorizes C12 generation 14."
+  },
+  "predecessor_evidence_archive": {
+    "preregistration_sha256": "1960c88aceaf218ffbc5b73f2a6cfa8134a413d441954aecb46bb811f0cfad7d",
+    "reproducibility_bundle_sha256": "9d9d2c5a81f26a3f88ec9c7e3be02df0d6563ba513c5fa70e9b260bbd30a711f",
+    "reproducibility_manifest_sha256": "e030dcf967274dd1d88ed1e284e7adf18c19ce1285896db41fc3f3a48d04c76a",
+    "role": "audit provenance; these hashes are not additional launch authorization checks"
+  },
+  "next_stage": {
+    "on_pass": "C24 only after this exact report passes and its SHA-256 and remote object generation are pinned; C24 requires a separately reviewed fresh-generation preregistration.",
+    "on_fail": "Do not launch C24; diagnose without changing this generation's thresholds."
+  }
+}

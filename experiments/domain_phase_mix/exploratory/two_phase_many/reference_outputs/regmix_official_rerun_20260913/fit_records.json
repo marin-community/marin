@@ -1,0 +1,2522 @@
+[
+  {
+    "response": "objective:uncheatable",
+    "best_iteration": 460,
+    "tree_count": 460,
+    "early_stop_rmse": 0.013993911230774527,
+    "early_stop_spearman": 0.8566440870162035,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.009097351897696438,
+        "l2": 0.00019582949218643236
+      }
+    }
+  },
+  {
+    "response": "objective:table9",
+    "best_iteration": 170,
+    "tree_count": 170,
+    "early_stop_rmse": 0.02841123160866521,
+    "early_stop_spearman": 0.8163798184391965,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.019064077129171148,
+        "l2": 0.0008071979139776819
+      }
+    }
+  },
+  {
+    "response": "uncheatable:eval/uncheatable_eval/ao3_english/bpb",
+    "best_iteration": 470,
+    "tree_count": 470,
+    "early_stop_rmse": 0.008463678565116798,
+    "early_stop_spearman": 0.9392547941591787,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.006441391299901688,
+        "l2": 7.163385485361756e-05
+      }
+    }
+  },
+  {
+    "response": "uncheatable:eval/uncheatable_eval/arxiv_computer_science/bpb",
+    "best_iteration": 338,
+    "tree_count": 338,
+    "early_stop_rmse": 0.010347922213325308,
+    "early_stop_spearman": 0.8573783883649675,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.007655103748995531,
+        "l2": 0.00010707949413303127
+      }
+    }
+  },
+  {
+    "response": "uncheatable:eval/uncheatable_eval/arxiv_physics/bpb",
+    "best_iteration": 388,
+    "tree_count": 388,
+    "early_stop_rmse": 0.013289394155286927,
+    "early_stop_spearman": 0.8797111396257943,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.009282067250642961,
+        "l2": 0.00017660799701457445
+      }
+    }
+  },
+  {
+    "response": "uncheatable:eval/uncheatable_eval/bbc_news/bpb",
+    "best_iteration": 433,
+    "tree_count": 433,
+    "early_stop_rmse": 0.012301884403021473,
+    "early_stop_spearman": 0.871354714556152,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.007680124258010827,
+        "l2": 0.00015133635986530283
+      }
+    }
+  },
+  {
+    "response": "uncheatable:eval/uncheatable_eval/github_cpp/bpb",
+    "best_iteration": 427,
+    "tree_count": 427,
+    "early_stop_rmse": 0.02166112739655983,
+    "early_stop_spearman": 0.953421836947626,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.013814738301903592,
+        "l2": 0.0004692044400899945
+      }
+    }
+  },
+  {
+    "response": "uncheatable:eval/uncheatable_eval/github_python/bpb",
+    "best_iteration": 312,
+    "tree_count": 312,
+    "early_stop_rmse": 0.03080945725164407,
+    "early_stop_spearman": 0.9132076034734862,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.01652604991810641,
+        "l2": 0.0009492226561408829
+      }
+    }
+  },
+  {
+    "response": "uncheatable:eval/uncheatable_eval/wikipedia_english/bpb",
+    "best_iteration": 245,
+    "tree_count": 245,
+    "early_stop_rmse": 0.013253837018575203,
+    "early_stop_spearman": 0.8006520470494084,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.010124620683742836,
+        "l2": 0.00017566419571495395
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/minerva_math_algebra/bpb",
+    "best_iteration": 229,
+    "tree_count": 229,
+    "early_stop_rmse": 0.03839501002030795,
+    "early_stop_spearman": 0.9025678519677932,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.021342268225450867,
+        "l2": 0.0014741768724361541
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/minerva_math_counting_and_probability/bpb",
+    "best_iteration": 254,
+    "tree_count": 254,
+    "early_stop_rmse": 0.037971896116112146,
+    "early_stop_spearman": 0.8690984643105444,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.018691591277523196,
+        "l2": 0.001441864786282412
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/minerva_math_geometry/bpb",
+    "best_iteration": 199,
+    "tree_count": 199,
+    "early_stop_rmse": 0.04144459925061195,
+    "early_stop_spearman": 0.8390865483558737,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.024231737990933026,
+        "l2": 0.0017176548899553313
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/minerva_math_intermediate_algebra/bpb",
+    "best_iteration": 287,
+    "tree_count": 287,
+    "early_stop_rmse": 0.034950608416414446,
+    "early_stop_spearman": 0.8529352521443236,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.020747534260116475,
+        "l2": 0.0012215445577433376
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/minerva_math_number_theory/bpb",
+    "best_iteration": 234,
+    "tree_count": 234,
+    "early_stop_rmse": 0.03971800514036928,
+    "early_stop_spearman": 0.8793264873031517,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.020693332971106728,
+        "l2": 0.0015775198815382349
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/minerva_math_prealgebra/bpb",
+    "best_iteration": 236,
+    "tree_count": 236,
+    "early_stop_rmse": 0.03996515449107885,
+    "early_stop_spearman": 0.8628233583172616,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.02103913223864743,
+        "l2": 0.0015972139375373105
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/minerva_math_precalculus/bpb",
+    "best_iteration": 364,
+    "tree_count": 364,
+    "early_stop_rmse": 0.02983922037972776,
+    "early_stop_spearman": 0.8662486431703723,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.018615711808791003,
+        "l2": 0.0008903794720225926
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/codex_humaneval/bpb",
+    "best_iteration": 212,
+    "tree_count": 212,
+    "early_stop_rmse": 0.0335101667962012,
+    "early_stop_spearman": 0.807435205750837,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.025696386007599235,
+        "l2": 0.001122931277463361
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/mbpp/bpb",
+    "best_iteration": 339,
+    "tree_count": 339,
+    "early_stop_rmse": 0.03912344243122069,
+    "early_stop_spearman": 0.8389484050013427,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.027824133223887642,
+        "l2": 0.001530643818889475
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/mt_mbpp_bash/bpb",
+    "best_iteration": 284,
+    "tree_count": 284,
+    "early_stop_rmse": 0.060652886945904504,
+    "early_stop_spearman": 0.9077351755276942,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.0436509685942302,
+        "l2": 0.0036787729857146114
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/mt_mbpp_c/bpb",
+    "best_iteration": 395,
+    "tree_count": 395,
+    "early_stop_rmse": 0.022351440126551204,
+    "early_stop_spearman": 0.9284448705149134,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.014670349848899969,
+        "l2": 0.0004995867693760209
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/mt_mbpp_cpp/bpb",
+    "best_iteration": 316,
+    "tree_count": 316,
+    "early_stop_rmse": 0.023977335994945354,
+    "early_stop_spearman": 0.929153595667574,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.015355755149832824,
+        "l2": 0.0005749127340479097
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/mt_mbpp_csharp/bpb",
+    "best_iteration": 310,
+    "tree_count": 310,
+    "early_stop_rmse": 0.021197124701118716,
+    "early_stop_spearman": 0.9226666070100018,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.01419781076795337,
+        "l2": 0.00044931813233964926
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/mt_mbpp_go/bpb",
+    "best_iteration": 303,
+    "tree_count": 303,
+    "early_stop_rmse": 0.035753439128043456,
+    "early_stop_spearman": 0.8979987691033573,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.025053699925863784,
+        "l2": 0.0012783082248395846
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/mt_mbpp_haskell/bpb",
+    "best_iteration": 212,
+    "tree_count": 212,
+    "early_stop_rmse": 0.04153252734789962,
+    "early_stop_spearman": 0.7824043358961057,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.030863750445193402,
+        "l2": 0.0017249510114184512
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/mt_mbpp_java/bpb",
+    "best_iteration": 259,
+    "tree_count": 259,
+    "early_stop_rmse": 0.02086869642163528,
+    "early_stop_spearman": 0.9206120661575764,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.013348605338492388,
+        "l2": 0.00043550251713853555
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/mt_mbpp_javascript/bpb",
+    "best_iteration": 355,
+    "tree_count": 355,
+    "early_stop_rmse": 0.026844634726365477,
+    "early_stop_spearman": 0.9189479534692615,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.018237891159237362,
+        "l2": 0.0007206342222622651
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/mt_mbpp_matlab/bpb",
+    "best_iteration": 250,
+    "tree_count": 250,
+    "early_stop_rmse": 0.03560676439687153,
+    "early_stop_spearman": 0.7322622879936951,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.02693315740580375,
+        "l2": 0.001267841971488189
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/mt_mbpp_php/bpb",
+    "best_iteration": 407,
+    "tree_count": 407,
+    "early_stop_rmse": 0.022779813968490364,
+    "early_stop_spearman": 0.8988093461848347,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.015847105991681303,
+        "l2": 0.0005189199594162952
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/mt_mbpp_python/bpb",
+    "best_iteration": 261,
+    "tree_count": 261,
+    "early_stop_rmse": 0.04058516181163088,
+    "early_stop_spearman": 0.855719017636,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.02835136443447186,
+        "l2": 0.0016471556339193076
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/mt_mbpp_r/bpb",
+    "best_iteration": 215,
+    "tree_count": 215,
+    "early_stop_rmse": 0.03892829976503844,
+    "early_stop_spearman": 0.8060220382350148,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.029387145769165245,
+        "l2": 0.0015154128626904595
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/mt_mbpp_ruby/bpb",
+    "best_iteration": 223,
+    "tree_count": 223,
+    "early_stop_rmse": 0.053360038973058424,
+    "early_stop_spearman": 0.902645822532902,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.03815787958986861,
+        "l2": 0.00284729398464197
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/mt_mbpp_rust/bpb",
+    "best_iteration": 270,
+    "tree_count": 270,
+    "early_stop_rmse": 0.05675706815251906,
+    "early_stop_spearman": 0.9167431346912526,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.039630601811072905,
+        "l2": 0.0032213646417558516
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/mt_mbpp_scala/bpb",
+    "best_iteration": 251,
+    "tree_count": 251,
+    "early_stop_rmse": 0.039620564583336376,
+    "early_stop_spearman": 0.8828178912131005,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.028540383165128563,
+        "l2": 0.0015697889849342226
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/mt_mbpp_swift/bpb",
+    "best_iteration": 260,
+    "tree_count": 260,
+    "early_stop_rmse": 0.0389102528430285,
+    "early_stop_spearman": 0.9005699621019964,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.0291677052203703,
+        "l2": 0.001514007772442977
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/mt_mbpp_typescript/bpb",
+    "best_iteration": 387,
+    "tree_count": 387,
+    "early_stop_rmse": 0.027936731604487865,
+    "early_stop_spearman": 0.9311081850359643,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.019121051464131063,
+        "l2": 0.0007804610311530132
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/arc_easy/bpb",
+    "best_iteration": 146,
+    "tree_count": 146,
+    "early_stop_rmse": 0.09219877888814389,
+    "early_stop_spearman": 0.780727080137808,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.05063217735240996,
+        "l2": 0.008500613549919746
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/arc_challenge/bpb",
+    "best_iteration": 242,
+    "tree_count": 242,
+    "early_stop_rmse": 0.0537711062974621,
+    "early_stop_spearman": 0.8464864018082889,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.03125734330524585,
+        "l2": 0.0028913315750591895
+      }
+    }
+  },
+  {
+    "response": "table9:mmlu_stem",
+    "best_iteration": 162,
+    "tree_count": 162,
+    "early_stop_rmse": 0.059212403730332645,
+    "early_stop_spearman": 0.7078053602845403,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.03348034813515132,
+        "l2": 0.003506109017633109
+      }
+    }
+  },
+  {
+    "response": "table9:mmlu_humanities",
+    "best_iteration": 226,
+    "tree_count": 226,
+    "early_stop_rmse": 0.022098052944487447,
+    "early_stop_spearman": 0.801915824716193,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.017275292540913048,
+        "l2": 0.0004883238544461929
+      }
+    }
+  },
+  {
+    "response": "table9:mmlu_social_sciences",
+    "best_iteration": 245,
+    "tree_count": 245,
+    "early_stop_rmse": 0.03333279706535793,
+    "early_stop_spearman": 0.8215769803834784,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.019044390466339486,
+        "l2": 0.0011110753339464373
+      }
+    }
+  },
+  {
+    "response": "table9:mmlu_other",
+    "best_iteration": 344,
+    "tree_count": 344,
+    "early_stop_rmse": 0.04085363096396889,
+    "early_stop_spearman": 0.8515327171368616,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.02412676927847142,
+        "l2": 0.0016690195116456348
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/csqa/bpb",
+    "best_iteration": 220,
+    "tree_count": 220,
+    "early_stop_rmse": 0.09566025414473861,
+    "early_stop_spearman": 0.7446957715377039,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.0514151515927111,
+        "l2": 0.009150883758248551
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/hellaswag/bpb",
+    "best_iteration": 378,
+    "tree_count": 378,
+    "early_stop_rmse": 0.008754521958209468,
+    "early_stop_spearman": 0.7892702875551484,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.00657295522220378,
+        "l2": 7.664163354828567e-05
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/winogrande/bpb",
+    "best_iteration": 171,
+    "tree_count": 171,
+    "early_stop_rmse": 0.013920326574210677,
+    "early_stop_spearman": 0.6642837895647762,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.011110401429954848,
+        "l2": 0.0001937756684644937
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/socialiqa/bpb",
+    "best_iteration": 175,
+    "tree_count": 175,
+    "early_stop_rmse": 0.09947343541386254,
+    "early_stop_spearman": 0.779637118613361,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.04984747233398943,
+        "l2": 0.009894966081241399
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/piqa/bpb",
+    "best_iteration": 136,
+    "tree_count": 136,
+    "early_stop_rmse": 0.055280866275379516,
+    "early_stop_spearman": 0.7585821026548845,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.0267564377253703,
+        "l2": 0.0030559740387810074
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/coqa/bpb",
+    "best_iteration": 195,
+    "tree_count": 195,
+    "early_stop_rmse": 0.06644755697023888,
+    "early_stop_spearman": 0.8502066586652627,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.040363953426552086,
+        "l2": 0.004415278440836234
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/drop/bpb",
+    "best_iteration": 113,
+    "tree_count": 113,
+    "early_stop_rmse": 0.10069149879229779,
+    "early_stop_spearman": 0.6271574911626895,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.05652758583702462,
+        "l2": 0.010138779802217888
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/jeopardy/bpb",
+    "best_iteration": 160,
+    "tree_count": 160,
+    "early_stop_rmse": 0.055041795523036174,
+    "early_stop_spearman": 0.7219969636772635,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.03847453907305874,
+        "l2": 0.0030295997870669724
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/naturalqs/bpb",
+    "best_iteration": 236,
+    "tree_count": 236,
+    "early_stop_rmse": 0.08986166434344849,
+    "early_stop_spearman": 0.7841857307570399,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.05309003099338969,
+        "l2": 0.00807512050037208
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/squad/bpb",
+    "best_iteration": 261,
+    "tree_count": 261,
+    "early_stop_rmse": 0.03875180915502132,
+    "early_stop_spearman": 0.8537835440549015,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.028738739426595276,
+        "l2": 0.0015017026794428298
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/sciq/bpb",
+    "best_iteration": 196,
+    "tree_count": 196,
+    "early_stop_rmse": 0.08839254312495656,
+    "early_stop_spearman": 0.7666081020490725,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.06443442444452072,
+        "l2": 0.007813242355506326
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/basic_skills_arithmetic/bpb",
+    "best_iteration": 190,
+    "tree_count": 190,
+    "early_stop_rmse": 0.13465266263038791,
+    "early_stop_spearman": 0.6895705344196752,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.07855871390380638,
+        "l2": 0.018131338622263033
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/basic_skills_coding/bpb",
+    "best_iteration": 239,
+    "tree_count": 239,
+    "early_stop_rmse": 0.06196214013874812,
+    "early_stop_spearman": 0.7842078172076251,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.045874337494647976,
+        "l2": 0.0038393067623991787
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/basic_skills_common_knowledge/bpb",
+    "best_iteration": 182,
+    "tree_count": 182,
+    "early_stop_rmse": 0.05317281737124725,
+    "early_stop_spearman": 0.5501272147204007,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.04291767272526698,
+        "l2": 0.0028273489169267597
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/basic_skills_logical_reasoning/bpb",
+    "best_iteration": 70,
+    "tree_count": 70,
+    "early_stop_rmse": 0.03293309741785387,
+    "early_stop_spearman": 0.5262289903588273,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.02455759557151737,
+        "l2": 0.0010845891538181962
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/basic_skills_pattern/bpb",
+    "best_iteration": 55,
+    "tree_count": 55,
+    "early_stop_rmse": 0.06326198872317104,
+    "early_stop_spearman": 0.20215833527539992,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.04971961908397903,
+        "l2": 0.0040020791268805
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/basic_skills_string_operations/bpb",
+    "best_iteration": 148,
+    "tree_count": 148,
+    "early_stop_rmse": 0.08413577735307207,
+    "early_stop_spearman": 0.35845959879543954,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.06646148005152482,
+        "l2": 0.007078828117599736
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/lambada/bpb",
+    "best_iteration": 460,
+    "tree_count": 460,
+    "early_stop_rmse": 0.023587239275501968,
+    "early_stop_spearman": 0.8810969697046191,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.017849603249575633,
+        "l2": 0.0005563580493629833
+      }
+    }
+  },
+  {
+    "response": "table9:olmo_base_eval/easy_bpb/medmcqa/bpb",
+    "best_iteration": 316,
+    "tree_count": 316,
+    "early_stop_rmse": 0.08183611940232327,
+    "early_stop_spearman": 0.8745551800784988,
+    "parameters": {
+      "boosting_type": "gbdt",
+      "class_weight": null,
+      "colsample_bytree": 1.0,
+      "importance_type": "split",
+      "learning_rate": 0.01,
+      "max_depth": -1,
+      "min_child_samples": 20,
+      "min_child_weight": 0.001,
+      "min_split_gain": 0.0,
+      "n_estimators": 100,
+      "n_jobs": null,
+      "num_leaves": 31,
+      "objective": "regression",
+      "random_state": null,
+      "reg_alpha": 0.0,
+      "reg_lambda": 0.0,
+      "subsample": 1.0,
+      "subsample_for_bin": 200000,
+      "subsample_freq": 0,
+      "task": "train",
+      "metric": [
+        "l1",
+        "l2"
+      ],
+      "num_iterations": 1000,
+      "seed": 42,
+      "verbosity": -1
+    },
+    "best_score": {
+      "valid_0": {
+        "l1": 0.05339259317988963,
+        "l2": 0.0066971494399554144
+      }
+    }
+  }
+]

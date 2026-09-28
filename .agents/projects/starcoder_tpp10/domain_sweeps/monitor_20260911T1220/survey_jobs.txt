@@ -1,0 +1,13 @@
+I20260911 05:20:58 8553706816 iris.cluster.config Loading config from lib/iris/config/marin.yaml
+Not all requested scopes were granted by the authorization server, missing scopes email.
+JOB ID                                                                                                                                                                              STATE      SUBMITTED                         REASON
+/calvinxu/tpp10-domain-sweeps/prepare_parent-49ac5674                                                                                                                               running    2026-09-11T12:16:45.055000+00:00
+/calvinxu/tpp10-domain-sweeps/prepare_parquet-ebd457af/zephyr-levanter-cache-probe-474afa1f-coordinator-732d731c/zephyr-levanter-cache-probe-474afa1f-coordinator-732d731c-workers  killed     2026-09-11T12:15:15.881000+00:00  Terminated by user
+/calvinxu/tpp10-domain-sweeps/prepare_parquet-ebd457af/zephyr-levanter-cache-probe-474afa1f-coordinator-732d731c                                                                    killed     2026-09-11T12:14:42.547000+00:00  Terminated by user
+/calvinxu/tpp10-domain-sweeps/prepare_subset-73a9f18a                                                                                                                               succeeded  2026-09-11T12:04:35.241000+00:00
+/calvinxu/tpp10-domain-sweeps/prepare_parent-219e0a84                                                                                                                               succeeded  2026-09-11T11:39:33.440000+00:00
+/calvinxu/tpp10-domain-sweeps/prepare_raw-47ef88d5/zephyr-levanter-cache-probe-00e8c1b0-coordinator-7dc5461f/zephyr-levanter-cache-probe-00e8c1b0-coordinator-7dc5461f-workers      killed     2026-09-11T11:37:25.481000+00:00  Terminated by user
+/calvinxu/tpp10-domain-sweeps/prepare_raw-47ef88d5/zephyr-levanter-cache-probe-00e8c1b0-coordinator-7dc5461f                                                                        killed     2026-09-11T11:36:49.766000+00:00  Terminated by user
+/calvinxu/tpp10-domain-sweeps/prepare_parquet-ebd457af                                                                                                                              succeeded  2026-09-11T11:10:07.168000+00:00
+/calvinxu/tpp10-domain-sweeps/prepare_raw-47ef88d5                                                                                                                                  succeeded  2026-09-11T11:10:05.950000+00:00
+/calvinxu/tpp10-domain-sweeps                                                                                                                                                       running    2026-09-11T11:08:39.194000+00:00

@@ -1,0 +1,105 @@
+{
+  "checked_at": "2026-09-11T15:50:30.034906+00:00",
+  "new_refinement_completed": [],
+  "rows": [
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-cffa480f",
+      "state": "JOB_STATE_RUNNING",
+      "task_state_counts": {
+        "pending": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 1,
+      "pending_reason": "",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "run_name": "tpp10_matched_p080_s20260911_d20260914"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-e24265b9",
+      "state": "JOB_STATE_RUNNING",
+      "task_state_counts": {
+        "pending": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 1,
+      "pending_reason": "",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "run_name": "tpp10_target_p080_s20260910"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-aa2a4590",
+      "state": "JOB_STATE_RUNNING",
+      "task_state_counts": {
+        "running": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 2,
+      "pending_reason": "",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "run_name": "tpp10_target_p065_s20260910",
+      "last_training_progress": "[15:50:07] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-aa2a4590/0 attempt=2 | I20260911 15:50:02 139987065164608 tqdm_loggable.tqdm_logging Progress on:train 893it/11.5kit rate:1.2it/s remaining:2:24:15 elapsed:03:05 postfix:loss=2.25",
+      "last_log": "[15:50:07] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-aa2a4590/0 attempt=2 | I20260911 15:50:02 139987065164608 tqdm_loggable.tqdm_logging Progress on:train 893it/11.5kit rate:1.2it/s remaining:2:24:15 elapsed:03:05 postfix:loss=2.25"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-e7af7ef9",
+      "state": "JOB_STATE_RUNNING",
+      "task_state_counts": {
+        "running": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 3,
+      "pending_reason": "",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "run_name": "tpp10_target_p060_s20260910",
+      "last_training_progress": "[15:49:34] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-e7af7ef9/0 attempt=3 | I20260911 15:49:32 139945362375488 tqdm_loggable.tqdm_logging Progress on:train 5.58kit/11.5kit rate:1.3it/s remaining:1:14:02 elapsed:03:08 postfix:loss=2.27",
+      "last_log": "[15:49:34] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-e7af7ef9/0 attempt=3 | I20260911 15:49:32 139945362375488 tqdm_loggable.tqdm_logging Progress on:train 5.58kit/11.5kit rate:1.3it/s remaining:1:14:02 elapsed:03:08 postfix:loss=2.27"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d",
+      "state": "JOB_STATE_RUNNING",
+      "task_state_counts": {
+        "running": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 6,
+      "pending_reason": "",
+      "priority_band": "PRIORITY_BAND_BATCH",
+      "run_name": "tpp10_target_p055_s20260910",
+      "last_training_progress": "[15:50:01] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=6 | I20260911 15:50:00 140457533817664 tqdm_loggable.tqdm_logging Progress on:train 10.2kit/11.5kit rate:1.4it/s remaining:15:19 elapsed:13:11 postfix:loss=2.23",
+      "last_log": "[15:50:01] task=/calvinxu/starcoder-tpp10-refinement-batch-recovery/verified_training-15f44e0d/0 attempt=6 | I20260911 15:50:00 140457533817664 tqdm_loggable.tqdm_logging Progress on:train 10.2kit/11.5kit rate:1.4it/s remaining:15:19 elapsed:13:11 postfix:loss=2.23"
+    },
+    {
+      "job_id": "/calvinxu/tpp10-domain-sweeps",
+      "state": "JOB_STATE_RUNNING",
+      "task_state_counts": {
+        "running": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 0,
+      "pending_reason": "",
+      "priority_band": "PRIORITY_BAND_INTERACTIVE"
+    },
+    {
+      "job_id": "/calvinxu/tpp10-domain-sweeps/prepare_subset-1430c306",
+      "state": "JOB_STATE_PENDING",
+      "task_state_counts": {
+        "pending": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 0,
+      "pending_reason": "Scheduler: Insufficient CPU (need 2 cores, available 0 cores) - 3 worker(s)\nInsufficient memory (need 8.0GB, available 4.1GB) - 3 worker(s)\n(with constraints=['region', 'zone', 'preemptible'])\n\nAutoscaler: Unsatisfied autoscaler demand: no_capacity: cpu_vm_e2_highmem_2_ondemand-us-central1-a=at_max_slices",
+      "priority_band": "PRIORITY_BAND_INTERACTIVE"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-tpp10-refinement-batch-recovery",
+      "state": "JOB_STATE_RUNNING",
+      "task_state_counts": {
+        "running": 1
+      },
+      "failure_count": 0,
+      "preemption_count": 0,
+      "pending_reason": "",
+      "priority_band": "PRIORITY_BAND_INTERACTIVE"
+    }
+  ]
+}

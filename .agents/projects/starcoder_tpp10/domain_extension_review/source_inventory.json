@@ -1,0 +1,888 @@
+{
+  "checked_at": "2026-09-11",
+  "mode": "GCS metadata only; no training payload downloaded",
+  "finemath_3plus_inventory": [
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00000-of-00128.parquet",
+      "generation": "1769303617477518",
+      "bytes": 507607173,
+      "crc32c": "RJw6RA=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00001-of-00128.parquet",
+      "generation": "1769303617860456",
+      "bytes": 508028702,
+      "crc32c": "K3gerg=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00002-of-00128.parquet",
+      "generation": "1769303615183921",
+      "bytes": 510782025,
+      "crc32c": "SKaaWA=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00003-of-00128.parquet",
+      "generation": "1769303615852889",
+      "bytes": 510710993,
+      "crc32c": "jhaFuQ=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00004-of-00128.parquet",
+      "generation": "1769303613650194",
+      "bytes": 506975908,
+      "crc32c": "8IuaWw=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00005-of-00128.parquet",
+      "generation": "1769303614813041",
+      "bytes": 506751723,
+      "crc32c": "21IdnA=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00006-of-00128.parquet",
+      "generation": "1769303618165981",
+      "bytes": 511957204,
+      "crc32c": "NhwaQg=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00007-of-00128.parquet",
+      "generation": "1769303618504343",
+      "bytes": 506421083,
+      "crc32c": "pmIAvA=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00008-of-00128.parquet",
+      "generation": "1769303616220166",
+      "bytes": 506115361,
+      "crc32c": "LesfzQ=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00009-of-00128.parquet",
+      "generation": "1769303614435245",
+      "bytes": 509655554,
+      "crc32c": "Htl00w=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00010-of-00128.parquet",
+      "generation": "1769303615477786",
+      "bytes": 506226925,
+      "crc32c": "r8z6wQ=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00011-of-00128.parquet",
+      "generation": "1769303616550237",
+      "bytes": 510112231,
+      "crc32c": "lciqqA=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00012-of-00128.parquet",
+      "generation": "1769303619368615",
+      "bytes": 509502362,
+      "crc32c": "WNDnvQ=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00013-of-00128.parquet",
+      "generation": "1769303618919338",
+      "bytes": 514287322,
+      "crc32c": "EFC10Q=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00014-of-00128.parquet",
+      "generation": "1769303614108628",
+      "bytes": 507521347,
+      "crc32c": "PGSfaA=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00015-of-00128.parquet",
+      "generation": "1769303616951509",
+      "bytes": 506164566,
+      "crc32c": "zTtlIw=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00016-of-00128.parquet",
+      "generation": "1769303620074299",
+      "bytes": 511761680,
+      "crc32c": "tE1FDA=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00017-of-00128.parquet",
+      "generation": "1769303619702023",
+      "bytes": 510687478,
+      "crc32c": "HaIrhA=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00018-of-00128.parquet",
+      "generation": "1769303626001014",
+      "bytes": 506371948,
+      "crc32c": "VmDI0A=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00019-of-00128.parquet",
+      "generation": "1769303621439959",
+      "bytes": 504981890,
+      "crc32c": "RqHSzg=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00020-of-00128.parquet",
+      "generation": "1769303626364332",
+      "bytes": 507447794,
+      "crc32c": "p0HIPQ=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00021-of-00128.parquet",
+      "generation": "1769303621789314",
+      "bytes": 505634882,
+      "crc32c": "mK5Amw=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00022-of-00128.parquet",
+      "generation": "1769303620735074",
+      "bytes": 508625085,
+      "crc32c": "DttReQ=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00023-of-00128.parquet",
+      "generation": "1769303621090744",
+      "bytes": 510162971,
+      "crc32c": "OacXQA=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00024-of-00128.parquet",
+      "generation": "1769303622824439",
+      "bytes": 507761712,
+      "crc32c": "B8OYPQ=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00025-of-00128.parquet",
+      "generation": "1769303622136697",
+      "bytes": 508388654,
+      "crc32c": "2fJJ7A=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00026-of-00128.parquet",
+      "generation": "1769303626692441",
+      "bytes": 508135460,
+      "crc32c": "U8hkCw=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00027-of-00128.parquet",
+      "generation": "1769303620427960",
+      "bytes": 505409240,
+      "crc32c": "hRplgA=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00028-of-00128.parquet",
+      "generation": "1769303627045677",
+      "bytes": 503053872,
+      "crc32c": "3G3X9w=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00029-of-00128.parquet",
+      "generation": "1769303622527476",
+      "bytes": 505575767,
+      "crc32c": "//XJ/w=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00030-of-00128.parquet",
+      "generation": "1769303623185785",
+      "bytes": 506996627,
+      "crc32c": "+WJNBQ=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00031-of-00128.parquet",
+      "generation": "1769303632011781",
+      "bytes": 512322023,
+      "crc32c": "WNnctg=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00032-of-00128.parquet",
+      "generation": "1769303629837543",
+      "bytes": 503115333,
+      "crc32c": "hw9LWg=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00033-of-00128.parquet",
+      "generation": "1769303623551593",
+      "bytes": 505174522,
+      "crc32c": "HT0hWA=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00034-of-00128.parquet",
+      "generation": "1769303625294097",
+      "bytes": 508205092,
+      "crc32c": "2UqySg=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00035-of-00128.parquet",
+      "generation": "1769303624249759",
+      "bytes": 505640974,
+      "crc32c": "5BNPBQ=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00036-of-00128.parquet",
+      "generation": "1769303624610185",
+      "bytes": 509331460,
+      "crc32c": "YqmQ6w=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00037-of-00128.parquet",
+      "generation": "1769303624943525",
+      "bytes": 513958236,
+      "crc32c": "4twpbA=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00038-of-00128.parquet",
+      "generation": "1769303623874128",
+      "bytes": 501844842,
+      "crc32c": "piTzHA=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00039-of-00128.parquet",
+      "generation": "1769303631208922",
+      "bytes": 508982152,
+      "crc32c": "ticG7g=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00040-of-00128.parquet",
+      "generation": "1769303631593137",
+      "bytes": 513922008,
+      "crc32c": "JPKHSg=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00041-of-00128.parquet",
+      "generation": "1769303625699719",
+      "bytes": 511723118,
+      "crc32c": "1asVVw=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00042-of-00128.parquet",
+      "generation": "1769303630885071",
+      "bytes": 508901026,
+      "crc32c": "XTt+xg=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00043-of-00128.parquet",
+      "generation": "1769303628452935",
+      "bytes": 506058299,
+      "crc32c": "fFJzlA=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00044-of-00128.parquet",
+      "generation": "1769303627760080",
+      "bytes": 504587829,
+      "crc32c": "TkJfIg=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00045-of-00128.parquet",
+      "generation": "1769303628062804",
+      "bytes": 502367259,
+      "crc32c": "e/5Y2A=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00046-of-00128.parquet",
+      "generation": "1769303627399211",
+      "bytes": 502737277,
+      "crc32c": "BcM3zw=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00047-of-00128.parquet",
+      "generation": "1769303629144770",
+      "bytes": 510788265,
+      "crc32c": "AbCYeg=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00048-of-00128.parquet",
+      "generation": "1769303628787938",
+      "bytes": 501754465,
+      "crc32c": "+qABmg=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00049-of-00128.parquet",
+      "generation": "1769303629513351",
+      "bytes": 512828261,
+      "crc32c": "AfWt3Q=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00050-of-00128.parquet",
+      "generation": "1769303630530489",
+      "bytes": 506698065,
+      "crc32c": "q3MMYg=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00051-of-00128.parquet",
+      "generation": "1769303630135180",
+      "bytes": 504921224,
+      "crc32c": "L+0LMg=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00052-of-00128.parquet",
+      "generation": "1769303632648911",
+      "bytes": 504832807,
+      "crc32c": "bNflgg=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00053-of-00128.parquet",
+      "generation": "1769303632311572",
+      "bytes": 509227959,
+      "crc32c": "rFXmAQ=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00054-of-00128.parquet",
+      "generation": "1769303515324177",
+      "bytes": 511579268,
+      "crc32c": "z67TrA=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00055-of-00128.parquet",
+      "generation": "1769303514864822",
+      "bytes": 513804618,
+      "crc32c": "Pe9GLA=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00056-of-00128.parquet",
+      "generation": "1769303516760961",
+      "bytes": 501920872,
+      "crc32c": "rLPdgw=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00057-of-00128.parquet",
+      "generation": "1769303516450121",
+      "bytes": 508597553,
+      "crc32c": "BmRqGw=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00058-of-00128.parquet",
+      "generation": "1769303515723493",
+      "bytes": 502823598,
+      "crc32c": "eiGKaA=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00059-of-00128.parquet",
+      "generation": "1769303516141581",
+      "bytes": 508517860,
+      "crc32c": "Q8tYoQ=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00060-of-00128.parquet",
+      "generation": "1769303517182380",
+      "bytes": 509875747,
+      "crc32c": "mC2BBg=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00061-of-00128.parquet",
+      "generation": "1769303517501241",
+      "bytes": 503219567,
+      "crc32c": "iTCdUA=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00062-of-00128.parquet",
+      "generation": "1769303518246098",
+      "bytes": 506852545,
+      "crc32c": "qAZJnw=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00063-of-00128.parquet",
+      "generation": "1769303517815788",
+      "bytes": 512129742,
+      "crc32c": "c5VuYQ=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00064-of-00128.parquet",
+      "generation": "1769303518867186",
+      "bytes": 515986744,
+      "crc32c": "tndV9g=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00065-of-00128.parquet",
+      "generation": "1769303519234100",
+      "bytes": 515380586,
+      "crc32c": "MD2G7A=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00066-of-00128.parquet",
+      "generation": "1769303519636278",
+      "bytes": 504012139,
+      "crc32c": "R2nfcw=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00067-of-00128.parquet",
+      "generation": "1769303520798021",
+      "bytes": 508158044,
+      "crc32c": "NGSErA=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00068-of-00128.parquet",
+      "generation": "1769303522256383",
+      "bytes": 501780032,
+      "crc32c": "/f8h3w=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00069-of-00128.parquet",
+      "generation": "1769303521112337",
+      "bytes": 510801064,
+      "crc32c": "U2UA2Q=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00070-of-00128.parquet",
+      "generation": "1769303518565589",
+      "bytes": 507144150,
+      "crc32c": "CbqnhA=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00071-of-00128.parquet",
+      "generation": "1769303521919478",
+      "bytes": 508001215,
+      "crc32c": "0S5CpA=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00072-of-00128.parquet",
+      "generation": "1769303522620146",
+      "bytes": 510737678,
+      "crc32c": "hidRPQ=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00073-of-00128.parquet",
+      "generation": "1769303521508933",
+      "bytes": 504529200,
+      "crc32c": "1goIcw=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00074-of-00128.parquet",
+      "generation": "1769303522958867",
+      "bytes": 511759554,
+      "crc32c": "+HwmrA=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00075-of-00128.parquet",
+      "generation": "1769303523599248",
+      "bytes": 508783841,
+      "crc32c": "UCBdog=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00076-of-00128.parquet",
+      "generation": "1769303523275529",
+      "bytes": 503424134,
+      "crc32c": "F4dSgQ=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00077-of-00128.parquet",
+      "generation": "1769303524674936",
+      "bytes": 510663476,
+      "crc32c": "6nOI8w=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00078-of-00128.parquet",
+      "generation": "1769303524252285",
+      "bytes": 506203867,
+      "crc32c": "SlUdOA=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00079-of-00128.parquet",
+      "generation": "1769303523954492",
+      "bytes": 503565837,
+      "crc32c": "nJpv7g=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00080-of-00128.parquet",
+      "generation": "1769303525052616",
+      "bytes": 508428148,
+      "crc32c": "PycTag=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00081-of-00128.parquet",
+      "generation": "1769303525374520",
+      "bytes": 511094374,
+      "crc32c": "56Z8cA=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00082-of-00128.parquet",
+      "generation": "1769303520387992",
+      "bytes": 509319346,
+      "crc32c": "IkmJAw=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00083-of-00128.parquet",
+      "generation": "1769303519978061",
+      "bytes": 500161843,
+      "crc32c": "4QJeAA=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00084-of-00128.parquet",
+      "generation": "1769303525697824",
+      "bytes": 509391921,
+      "crc32c": "fvAWxw=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00085-of-00128.parquet",
+      "generation": "1769303526115745",
+      "bytes": 509058220,
+      "crc32c": "SnEmUw=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00086-of-00128.parquet",
+      "generation": "1769303527451952",
+      "bytes": 506580183,
+      "crc32c": "8+EKug=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00087-of-00128.parquet",
+      "generation": "1769303527149564",
+      "bytes": 510713692,
+      "crc32c": "a5Ke9g=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00088-of-00128.parquet",
+      "generation": "1769303526774890",
+      "bytes": 509308150,
+      "crc32c": "5i91HQ=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00089-of-00128.parquet",
+      "generation": "1769303527778318",
+      "bytes": 511595850,
+      "crc32c": "c9+XhA=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00090-of-00128.parquet",
+      "generation": "1769303528425284",
+      "bytes": 508250699,
+      "crc32c": "AjOmRg=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00091-of-00128.parquet",
+      "generation": "1769303528120512",
+      "bytes": 510783581,
+      "crc32c": "llaZbQ=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00092-of-00128.parquet",
+      "generation": "1769303528729616",
+      "bytes": 512255244,
+      "crc32c": "XkBETQ=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00093-of-00128.parquet",
+      "generation": "1769303529165011",
+      "bytes": 504347740,
+      "crc32c": "IIoPyQ=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00094-of-00128.parquet",
+      "generation": "1769303526454283",
+      "bytes": 507545798,
+      "crc32c": "8hWlOw=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00095-of-00128.parquet",
+      "generation": "1769303530112732",
+      "bytes": 508994780,
+      "crc32c": "QVKAtQ=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00096-of-00128.parquet",
+      "generation": "1769303529475572",
+      "bytes": 509062125,
+      "crc32c": "03oJbg=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00097-of-00128.parquet",
+      "generation": "1769303529800700",
+      "bytes": 509798272,
+      "crc32c": "qjNz5w=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00098-of-00128.parquet",
+      "generation": "1769303531148311",
+      "bytes": 509974819,
+      "crc32c": "W8ul8A=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00099-of-00128.parquet",
+      "generation": "1769303531888511",
+      "bytes": 511955659,
+      "crc32c": "U4QPMw=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00100-of-00128.parquet",
+      "generation": "1769303532939755",
+      "bytes": 506978894,
+      "crc32c": "GSLB9Q=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00101-of-00128.parquet",
+      "generation": "1769303532532549",
+      "bytes": 499795078,
+      "crc32c": "a2dCVg=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00102-of-00128.parquet",
+      "generation": "1769303530454806",
+      "bytes": 506113144,
+      "crc32c": "dDs19A=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00103-of-00128.parquet",
+      "generation": "1769303530856776",
+      "bytes": 515186720,
+      "crc32c": "eKs3hg=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00104-of-00128.parquet",
+      "generation": "1769303533965714",
+      "bytes": 508878479,
+      "crc32c": "ey1xYQ=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00105-of-00128.parquet",
+      "generation": "1769303534284720",
+      "bytes": 508605161,
+      "crc32c": "eJjbTw=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00106-of-00128.parquet",
+      "generation": "1769303533590841",
+      "bytes": 505567778,
+      "crc32c": "Wp0qSQ=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00107-of-00128.parquet",
+      "generation": "1769303531480690",
+      "bytes": 503679176,
+      "crc32c": "D3lMpA=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00108-of-00128.parquet",
+      "generation": "1769303533279963",
+      "bytes": 507940948,
+      "crc32c": "lWbudw=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00109-of-00128.parquet",
+      "generation": "1769303534605954",
+      "bytes": 514443995,
+      "crc32c": "jtZD9A=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00110-of-00128.parquet",
+      "generation": "1769303534939211",
+      "bytes": 509537692,
+      "crc32c": "riB5pA=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00111-of-00128.parquet",
+      "generation": "1769303611701535",
+      "bytes": 510344870,
+      "crc32c": "DECCEQ=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00112-of-00128.parquet",
+      "generation": "1769303611306434",
+      "bytes": 508740642,
+      "crc32c": "lZkH6A=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00113-of-00128.parquet",
+      "generation": "1769303612170443",
+      "bytes": 509608209,
+      "crc32c": "OMcmxw=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00114-of-00128.parquet",
+      "generation": "1769303532214495",
+      "bytes": 508335929,
+      "crc32c": "X3VPlA=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00115-of-00128.parquet",
+      "generation": "1769303612883794",
+      "bytes": 511250364,
+      "crc32c": "+AZ29A=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00116-of-00128.parquet",
+      "generation": "1769303613244809",
+      "bytes": 505136089,
+      "crc32c": "vuFeQw=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00117-of-00128.parquet",
+      "generation": "1769303612581637",
+      "bytes": 507893216,
+      "crc32c": "8V7WuQ=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00118-of-00128.parquet",
+      "generation": "1769303632987946",
+      "bytes": 504148254,
+      "crc32c": "kpIu1w=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00119-of-00128.parquet",
+      "generation": "1769303633320572",
+      "bytes": 507688128,
+      "crc32c": "wSU5Dw=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00120-of-00128.parquet",
+      "generation": "1769303633697918",
+      "bytes": 507811337,
+      "crc32c": "M+f6LQ=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00121-of-00128.parquet",
+      "generation": "1769303634048053",
+      "bytes": 508581927,
+      "crc32c": "BR+MRA=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00122-of-00128.parquet",
+      "generation": "1769303635538570",
+      "bytes": 506184632,
+      "crc32c": "+Zw7ZQ=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00123-of-00128.parquet",
+      "generation": "1769303635173627",
+      "bytes": 512022565,
+      "crc32c": "uCG15w=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00124-of-00128.parquet",
+      "generation": "1769303635831500",
+      "bytes": 510783212,
+      "crc32c": "aN9+iA=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00125-of-00128.parquet",
+      "generation": "1769303634424000",
+      "bytes": 507403399,
+      "crc32c": "e4RkiA=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00126-of-00128.parquet",
+      "generation": "1769303634788944",
+      "bytes": 508991175,
+      "crc32c": "gCZLSw=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00127-of-00128.parquet",
+      "generation": "1769303636208965",
+      "bytes": 508934522,
+      "crc32c": "B0k3EA=="
+    }
+  ],
+  "finemath_selected": [
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00090-of-00128.parquet",
+      "generation": "1769303528425284",
+      "bytes": 508250699,
+      "crc32c": "AjOmRg=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00016-of-00128.parquet",
+      "generation": "1769303620074299",
+      "bytes": 511761680,
+      "crc32c": "tE1FDA=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00096-of-00128.parquet",
+      "generation": "1769303529475572",
+      "bytes": 509062125,
+      "crc32c": "03oJbg=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00021-of-00128.parquet",
+      "generation": "1769303621789314",
+      "bytes": 505634882,
+      "crc32c": "mK5Amw=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00097-of-00128.parquet",
+      "generation": "1769303529800700",
+      "bytes": 509798272,
+      "crc32c": "qjNz5w=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00024-of-00128.parquet",
+      "generation": "1769303622824439",
+      "bytes": 507761712,
+      "crc32c": "B8OYPQ=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00035-of-00128.parquet",
+      "generation": "1769303624249759",
+      "bytes": 505640974,
+      "crc32c": "5BNPBQ=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00023-of-00128.parquet",
+      "generation": "1769303621090744",
+      "bytes": 510162971,
+      "crc32c": "OacXQA=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00117-of-00128.parquet",
+      "generation": "1769303612581637",
+      "bytes": 507893216,
+      "crc32c": "8V7WuQ=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00002-of-00128.parquet",
+      "generation": "1769303615183921",
+      "bytes": 510782025,
+      "crc32c": "SKaaWA=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00126-of-00128.parquet",
+      "generation": "1769303634788944",
+      "bytes": 508991175,
+      "crc32c": "gCZLSw=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00005-of-00128.parquet",
+      "generation": "1769303614813041",
+      "bytes": 506751723,
+      "crc32c": "21IdnA=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00068-of-00128.parquet",
+      "generation": "1769303522256383",
+      "bytes": 501780032,
+      "crc32c": "/f8h3w=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00033-of-00128.parquet",
+      "generation": "1769303623551593",
+      "bytes": 505174522,
+      "crc32c": "HT0hWA=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00075-of-00128.parquet",
+      "generation": "1769303523599248",
+      "bytes": 508783841,
+      "crc32c": "UCBdog=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/finemath-7090a5/finemath-3plus/train-00105-of-00128.parquet",
+      "generation": "1769303534284720",
+      "bytes": 508605161,
+      "crc32c": "eJjbTw=="
+    }
+  ],
+  "selection_seed": 20260916,
+  "selection_key": "sha256(UTF8(str(seed) + colon + full gs URI)) ascending",
+  "wikipedia_selected": [
+    {
+      "uri": "gs://marin-us-central1/raw/dolma/v1.7/wiki-0000.json.gz",
+      "generation": "1755319695895937",
+      "bytes": 4258475299,
+      "crc32c": "djFLEg=="
+    },
+    {
+      "uri": "gs://marin-us-central1/raw/dolma/v1.7/wiki-0001.json.gz",
+      "generation": "1755319695929144",
+      "bytes": 2222652693,
+      "crc32c": "Tu/XDg=="
+    }
+  ]
+}

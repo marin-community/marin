@@ -106,8 +106,8 @@ def test_job_run_accepts_unconstrained_placement_with_cluster_metadata(recorded_
 
 
 @pytest.fixture
-def recorded_bundle_exclude(monkeypatch):
-    """Capture the ``bundle_exclude`` passed to ``IrisClient.remote`` by ``iris job run``."""
+def recorded_bundle_options(monkeypatch):
+    """Capture bundle selection passed to ``IrisClient.remote`` by ``iris job run``."""
     captured: dict[str, object] = {}
 
     class FakeJob:
@@ -118,6 +118,7 @@ def recorded_bundle_exclude(monkeypatch):
             return FakeJob()
 
     def fake_remote(*args, **kwargs):
+        captured["extra_bundle_includes"] = kwargs.get("extra_bundle_includes")
         captured["bundle_exclude"] = kwargs.get("bundle_exclude")
         return FakeClient()
 
@@ -125,21 +126,49 @@ def recorded_bundle_exclude(monkeypatch):
     return captured
 
 
-def test_exclude_options_become_one_or_ed_bundle_regex(recorded_bundle_exclude):
+def test_exclude_options_become_one_or_ed_bundle_regex(recorded_bundle_options):
     # Each --exclude flag contributes an independent alternative; a path matching any
     # one is dropped, and an unrelated path is kept.
     result = _run_cli(["--exclude", r"^docs/", "--exclude", r"^data/"])
     assert result.exit_code == 0, result.output
-    pattern = recorded_bundle_exclude["bundle_exclude"]
+    pattern = recorded_bundle_options["bundle_exclude"]
     assert pattern.search("docs/guide.md")
     assert pattern.search("data/big.csv")
     assert not pattern.search("src/main.py")
 
 
-def test_no_exclude_leaves_bundle_exclude_unset(recorded_bundle_exclude):
+def test_no_exclude_leaves_bundle_exclude_unset(recorded_bundle_options):
     result = _run_cli([])
     assert result.exit_code == 0, result.output
-    assert recorded_bundle_exclude["bundle_exclude"] is None
+    assert recorded_bundle_options["bundle_exclude"] is None
+
+
+def test_bundle_include_options_reach_workspace_bundle(recorded_bundle_options, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "reference_outputs").mkdir()
+    (tmp_path / "reference_outputs" / "candidate_weights.csv").write_text("weight\n1\n")
+    (tmp_path / "reference_outputs" / "manifest.json").write_text("{}\n")
+    result = _run_cli(
+        [
+            "--bundle-include",
+            "reference_outputs/candidate_weights.csv",
+            "--bundle-include",
+            "reference_outputs/manifest.json",
+        ]
+    )
+    assert result.exit_code == 0, result.output
+    assert recorded_bundle_options["extra_bundle_includes"] == (
+        "reference_outputs/candidate_weights.csv",
+        "reference_outputs/manifest.json",
+    )
+
+
+def test_bundle_include_with_no_matches_fails_before_submission(recorded_bundle_options, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    result = _run_cli(["--bundle-include", "missing/*.csv"])
+    assert result.exit_code != 0
+    assert "matched no files" in result.output
+    assert recorded_bundle_options == {}
 
 
 # ---------------------------------------------------------------------------
@@ -272,7 +301,14 @@ def test_job_run_cli_accepts_task_image_override(monkeypatch):
             captured.update(kwargs)
             return FakeJob()
 
-    def fake_remote(controller_url, *, workspace, credentials=None, bundle_exclude=None):
+    def fake_remote(
+        controller_url,
+        *,
+        workspace,
+        credentials=None,
+        extra_bundle_includes=(),
+        bundle_exclude=None,
+    ):
         captured["controller_url"] = controller_url
         captured["workspace"] = workspace
         captured["credentials"] = credentials

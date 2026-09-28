@@ -1,0 +1,58 @@
+{
+  "sources": {
+    "wikipedia_english": {
+      "uri": "gs://marin-us-central1/raw/uncheatable_eval/2026.06.28/wikipedia_english_20250901to20250914.jsonl.gz",
+      "generation": "1783764317093004",
+      "size_bytes": 987916,
+      "crc32c": "MdwhcQ=="
+    },
+    "github_python": {
+      "uri": "gs://marin-us-central1/raw/uncheatable_eval/2026.06.28/github_python_20250901to20250914.jsonl.gz",
+      "generation": "1783764316218628",
+      "size_bytes": 1191875,
+      "crc32c": "xBQztw=="
+    },
+    "github_cpp": {
+      "uri": "gs://marin-us-central1/raw/uncheatable_eval/2026.06.28/github_cpp_20250901to20250914.jsonl.gz",
+      "generation": "1783764326326792",
+      "size_bytes": 1039264,
+      "crc32c": "kCXKcA=="
+    },
+    "bbc_news": {
+      "uri": "gs://marin-us-central1/raw/uncheatable_eval/2026.06.28/bbc_news_20250901to20250914.jsonl.gz",
+      "generation": "1783764316895020",
+      "size_bytes": 1415005,
+      "crc32c": "KTLXWA=="
+    },
+    "arxiv_physics": {
+      "uri": "gs://marin-us-central1/raw/uncheatable_eval/2026.06.28/arxiv_physics_20250901to20250914.jsonl.gz",
+      "generation": "1783764312844471",
+      "size_bytes": 1747524,
+      "crc32c": "PQJ70Q=="
+    },
+    "arxiv_computer_science": {
+      "uri": "gs://marin-us-central1/raw/uncheatable_eval/2026.06.28/arxiv_computer_science_20250901to20250914.jsonl.gz",
+      "generation": "1783764309251512",
+      "size_bytes": 1662821,
+      "crc32c": "5w+xCQ=="
+    },
+    "ao3_english": {
+      "uri": "gs://marin-us-central1/raw/uncheatable_eval/2026.06.28/ao3_english_20250901to20250914.jsonl.gz",
+      "generation": "1783764309037104",
+      "size_bytes": 1896123,
+      "crc32c": "hKS2dQ=="
+    }
+  },
+  "tokenizer_pins": {
+    "tokenizer_repo": "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T",
+    "tokenizer_revision": "59f6f375b26bde864a6ca194a9a3044570490064",
+    "vocabulary_size": 32000,
+    "files_sha256": {
+      "sources.json": "9f9b80e55ca9d2d9decc3125336000713c81e941b8f4c08b61f898566259e44a",
+      "tokenizer_config.json": "f514e7c3008881b6ba7e6a0cdb44c71ce47dc335920dac143ae7bc788197e53a",
+      "special_tokens_map.json": "6fa06efa2785e450051989a6f8fb4416b10149ded485ddd3f127a40734f5cfd0",
+      "tokenizer.json": "bcd04f0eadf90287bd26e1a183ac487d8a141b09b06aecb7725bbdd343640f2e",
+      "tokenizer.model": "9e556afd44213b6bd1be2b850ebbbd98f5481437a8021afaf58ee7fb1818d347"
+    }
+  }
+}

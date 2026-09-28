@@ -1,0 +1,20 @@
+{
+  "marker_path": "/Users/calvinxu/Projects/Work/Marin/.fieldbook.session",
+  "marker_status": "ok",
+  "session": {
+    "agent": "codex",
+    "attrs": {},
+    "cwd": "/Users/calvinxu/Projects/Work/Marin/marin",
+    "ended_at": null,
+    "experiment_id": "exp_01m23ddmn78breygyvkkpzyrq8",
+    "git_branch": "calvin/swarm-olmo3-regmix-test",
+    "git_commit": "5548443ef6c67c0c9c23c6c7f088e205ee03bfde",
+    "git_root": "/Users/calvinxu/Projects/Work/Marin/marin",
+    "git_worktree_dir": "/Users/calvinxu/Projects/Work/Marin/marin",
+    "id": "ses_01m2bym1mrceh7w0v6s6h2z9hn",
+    "intent": "Heartbeat: final two StarCoder targets progressing normally",
+    "last_touch_at": "2026-09-12T23:18:11Z",
+    "ledger_id": "0db0b028-e7c7-4672-ba25-8fdf237da666",
+    "started_at": "2026-09-12T23:18:11Z"
+  }
+}

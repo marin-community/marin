@@ -1,0 +1,328 @@
+{
+  "observed_at": "2026-09-09T04:40:01.966245+00:00",
+  "parent_job_id": "/calvinxu/starcoder-epoch-matching-refinement",
+  "source": "IrisClient.list_jobs and full job_status",
+  "jobs": [
+    {
+      "job_id": "/calvinxu/starcoder-epoch-matching-refinement/run_levanter_train_lm-d9647317",
+      "state": "pending",
+      "submitted_at": "2026-09-09T04:39:20.381000+00:00",
+      "started_at": null,
+      "finished_at": null,
+      "pending_reason": "Scheduler: Insufficient memory (need 224.0GB, available 168.8GB) - 19 worker(s)\nInsufficient TPUs (need 4, available 0) - 1 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: (scaling up) Waiting for worker scale-up in scale group 'tpu_v5p-preemptible_8-us-central1-a' (9 slice(s) requested)",
+      "failure_count": 0,
+      "preemption_count": 0,
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": 240518168576,
+        "disk_bytes": 53687091200,
+        "device": {
+          "kind": "tpu",
+          "variant": "v5p-8",
+          "count": 4,
+          "topology": ""
+        }
+      },
+      "tasks": [],
+      "logical_run_name": null
+    },
+    {
+      "job_id": "/calvinxu/starcoder-epoch-matching-refinement/run_levanter_train_lm-594cda60",
+      "state": "pending",
+      "submitted_at": "2026-09-09T04:39:20.228000+00:00",
+      "started_at": null,
+      "finished_at": null,
+      "pending_reason": "Scheduler: Insufficient memory (need 224.0GB, available 168.8GB) - 19 worker(s)\nInsufficient TPUs (need 4, available 0) - 1 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: (scaling up) Waiting for worker scale-up in scale group 'tpu_v5p-preemptible_8-us-central1-a' (9 slice(s) requested)",
+      "failure_count": 0,
+      "preemption_count": 0,
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": 240518168576,
+        "disk_bytes": 53687091200,
+        "device": {
+          "kind": "tpu",
+          "variant": "v5p-8",
+          "count": 4,
+          "topology": ""
+        }
+      },
+      "tasks": [],
+      "logical_run_name": null
+    },
+    {
+      "job_id": "/calvinxu/starcoder-epoch-matching-refinement/run_levanter_train_lm-c2622da9",
+      "state": "pending",
+      "submitted_at": "2026-09-09T04:39:20.085000+00:00",
+      "started_at": null,
+      "finished_at": null,
+      "pending_reason": "Scheduler: Insufficient memory (need 224.0GB, available 168.8GB) - 19 worker(s)\nInsufficient TPUs (need 4, available 0) - 1 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: (scaling up) Waiting for worker scale-up in scale group 'tpu_v5p-preemptible_8-us-central1-a' (9 slice(s) requested)",
+      "failure_count": 0,
+      "preemption_count": 0,
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": 240518168576,
+        "disk_bytes": 53687091200,
+        "device": {
+          "kind": "tpu",
+          "variant": "v5p-8",
+          "count": 4,
+          "topology": ""
+        }
+      },
+      "tasks": [],
+      "logical_run_name": null
+    },
+    {
+      "job_id": "/calvinxu/starcoder-epoch-matching-refinement/run_levanter_train_lm-f5a554ab",
+      "state": "pending",
+      "submitted_at": "2026-09-09T04:39:20.061000+00:00",
+      "started_at": null,
+      "finished_at": null,
+      "pending_reason": "Scheduler: Insufficient memory (need 224.0GB, available 168.8GB) - 19 worker(s)\nInsufficient TPUs (need 4, available 0) - 1 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: (scaling up) Waiting for worker scale-up in scale group 'tpu_v5p-preemptible_8-us-central1-a' (9 slice(s) requested)",
+      "failure_count": 0,
+      "preemption_count": 0,
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": 240518168576,
+        "disk_bytes": 53687091200,
+        "device": {
+          "kind": "tpu",
+          "variant": "v5p-8",
+          "count": 4,
+          "topology": ""
+        }
+      },
+      "tasks": [],
+      "logical_run_name": null
+    },
+    {
+      "job_id": "/calvinxu/starcoder-epoch-matching-refinement/run_levanter_train_lm-74552e0d",
+      "state": "pending",
+      "submitted_at": "2026-09-09T04:39:19.264000+00:00",
+      "started_at": null,
+      "finished_at": null,
+      "pending_reason": "Scheduler: Insufficient memory (need 224.0GB, available 168.8GB) - 19 worker(s)\nInsufficient TPUs (need 4, available 0) - 1 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: (scaling up) Waiting for worker scale-up in scale group 'tpu_v5p-preemptible_8-us-central1-a' (9 slice(s) requested)",
+      "failure_count": 0,
+      "preemption_count": 0,
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": 240518168576,
+        "disk_bytes": 53687091200,
+        "device": {
+          "kind": "tpu",
+          "variant": "v5p-8",
+          "count": 4,
+          "topology": ""
+        }
+      },
+      "tasks": [],
+      "logical_run_name": null
+    },
+    {
+      "job_id": "/calvinxu/starcoder-epoch-matching-refinement/run_levanter_train_lm-2813fa9d",
+      "state": "pending",
+      "submitted_at": "2026-09-09T04:39:18.945000+00:00",
+      "started_at": null,
+      "finished_at": null,
+      "pending_reason": "Scheduler: Insufficient memory (need 224.0GB, available 168.8GB) - 19 worker(s)\nInsufficient TPUs (need 4, available 0) - 1 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: (scaling up) Waiting for worker scale-up in scale group 'tpu_v5p-preemptible_8-us-central1-a' (9 slice(s) requested)",
+      "failure_count": 0,
+      "preemption_count": 0,
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": 240518168576,
+        "disk_bytes": 53687091200,
+        "device": {
+          "kind": "tpu",
+          "variant": "v5p-8",
+          "count": 4,
+          "topology": ""
+        }
+      },
+      "tasks": [],
+      "logical_run_name": null
+    },
+    {
+      "job_id": "/calvinxu/starcoder-epoch-matching-refinement/run_levanter_train_lm-5284a2e5",
+      "state": "pending",
+      "submitted_at": "2026-09-09T04:39:18.653000+00:00",
+      "started_at": null,
+      "finished_at": null,
+      "pending_reason": "Scheduler: Insufficient memory (need 224.0GB, available 168.8GB) - 19 worker(s)\nInsufficient TPUs (need 4, available 0) - 1 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: (scaling up) Waiting for worker scale-up in scale group 'tpu_v5p-preemptible_8-us-central1-a' (9 slice(s) requested)",
+      "failure_count": 0,
+      "preemption_count": 0,
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": 240518168576,
+        "disk_bytes": 53687091200,
+        "device": {
+          "kind": "tpu",
+          "variant": "v5p-8",
+          "count": 4,
+          "topology": ""
+        }
+      },
+      "tasks": [],
+      "logical_run_name": null
+    },
+    {
+      "job_id": "/calvinxu/starcoder-epoch-matching-refinement/run_levanter_train_lm-58d3eafa",
+      "state": "pending",
+      "submitted_at": "2026-09-09T04:39:18.160000+00:00",
+      "started_at": null,
+      "finished_at": null,
+      "pending_reason": "Scheduler: Insufficient memory (need 224.0GB, available 168.8GB) - 19 worker(s)\nInsufficient TPUs (need 4, available 0) - 1 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: (scaling up) Waiting for worker scale-up in scale group 'tpu_v5p-preemptible_8-us-central1-a' (9 slice(s) requested)",
+      "failure_count": 0,
+      "preemption_count": 0,
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": 240518168576,
+        "disk_bytes": 53687091200,
+        "device": {
+          "kind": "tpu",
+          "variant": "v5p-8",
+          "count": 4,
+          "topology": ""
+        }
+      },
+      "tasks": [],
+      "logical_run_name": null
+    },
+    {
+      "job_id": "/calvinxu/starcoder-epoch-matching-refinement/run_levanter_train_lm-eff88bb4",
+      "state": "pending",
+      "submitted_at": "2026-09-09T04:39:17.990000+00:00",
+      "started_at": null,
+      "finished_at": null,
+      "pending_reason": "Scheduler: Insufficient memory (need 224.0GB, available 168.8GB) - 19 worker(s)\nInsufficient TPUs (need 4, available 0) - 1 worker(s)\n(with constraints=['device-type', 'device-variant', 'region', 'zone'])\n\nAutoscaler: (scaling up) Waiting for worker scale-up in scale group 'tpu_v5p-preemptible_8-us-central1-a' (9 slice(s) requested)",
+      "failure_count": 0,
+      "preemption_count": 0,
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": 240518168576,
+        "disk_bytes": 53687091200,
+        "device": {
+          "kind": "tpu",
+          "variant": "v5p-8",
+          "count": 4,
+          "topology": ""
+        }
+      },
+      "tasks": [],
+      "logical_run_name": null
+    },
+    {
+      "job_id": "/calvinxu/starcoder-epoch-matching-refinement/run_levanter_train_lm-5bbad32d",
+      "state": "running",
+      "submitted_at": "2026-09-09T04:39:17.672000+00:00",
+      "started_at": "2026-09-09T04:39:41.157000+00:00",
+      "finished_at": null,
+      "pending_reason": "",
+      "failure_count": 0,
+      "preemption_count": 0,
+      "resources": {
+        "cpu_millicores": 104000,
+        "memory_bytes": 240518168576,
+        "disk_bytes": 53687091200,
+        "device": {
+          "kind": "tpu",
+          "variant": "v5p-8",
+          "count": 4,
+          "topology": ""
+        }
+      },
+      "tasks": [
+        {
+          "task_id": "/calvinxu/starcoder-epoch-matching-refinement/run_levanter_train_lm-5bbad32d/0",
+          "state": "running",
+          "started_at": "2026-09-09T04:39:44.431000+00:00",
+          "finished_at": null,
+          "worker_id": "marin-tpu-v5p-preemptible-8-us-central1-20260908-2228-c7a8e9c2-worker-0",
+          "current_attempt_number": 0
+        }
+      ],
+      "logical_run_name": "epmatch_unmatched_c043_s20260711",
+      "logical_mapping_evidence": "[04:40:10] task=/calvinxu/starcoder-epoch-matching-refinement/run_levanter_train_lm-5bbad32d/0 attempt=0 | I20260909 04:40:08 marin.training.training Using run ID: epmatch_unmatched_c043_s20260711"
+    },
+    {
+      "job_id": "/calvinxu/starcoder-epoch-matching-refinement",
+      "state": "running",
+      "submitted_at": "2026-09-09T04:38:15.891000+00:00",
+      "started_at": "2026-09-09T04:38:23.941000+00:00",
+      "finished_at": null,
+      "pending_reason": "",
+      "failure_count": 0,
+      "preemption_count": 0,
+      "resources": {
+        "cpu_millicores": 2000,
+        "memory_bytes": 8589934592,
+        "disk_bytes": 34359738368,
+        "device": null
+      },
+      "tasks": [
+        {
+          "task_id": "/calvinxu/starcoder-epoch-matching-refinement/0",
+          "state": "running",
+          "started_at": "2026-09-09T04:38:27.202000+00:00",
+          "finished_at": null,
+          "worker_id": "marin-tpu-v5p-preemptible-8-us-central1-20260909-0128-6252b134-worker-0",
+          "current_attempt_number": 0
+        }
+      ],
+      "logical_run_name": null
+    }
+  ],
+  "child_count": 10,
+  "resource_source_note": "Full job_status supplied resources; list_jobs resource summaries are empty. Running task worker identities were obtained with list_tasks.",
+  "pilot_reuse_evidence": {
+    "selected_count_log": "[04:39:11] task=/calvinxu/starcoder-epoch-matching-refinement/0 attempt=0 | INFO:__main__:Selected 20 training runs; submitting 10 incomplete artifacts",
+    "durable_success_preflight": "pilot_durable_success_preflight.json",
+    "reused_pilot_run_names": [
+      "epmatch_matched_c032_s20260711",
+      "epmatch_matched_c057_s20260711",
+      "epmatch_matched_c109_s20260711",
+      "epmatch_matched_c124_s20260711",
+      "epmatch_target_c124_s20260711",
+      "epmatch_unmatched_c000_s20260711",
+      "epmatch_unmatched_c032_s20260711",
+      "epmatch_unmatched_c057_s20260711",
+      "epmatch_unmatched_c109_s20260711",
+      "epmatch_unmatched_c124_s20260711"
+    ],
+    "expected_new_run_names": [
+      "epmatch_unmatched_c043_s20260711",
+      "epmatch_matched_c043_s20260711",
+      "epmatch_unmatched_c079_s20260711",
+      "epmatch_matched_c079_s20260711",
+      "epmatch_unmatched_c088_s20260711",
+      "epmatch_matched_c088_s20260711",
+      "epmatch_unmatched_c100_s20260711",
+      "epmatch_matched_c100_s20260711",
+      "epmatch_unmatched_c119_s20260711",
+      "epmatch_matched_c119_s20260711"
+    ],
+    "actual_new_child_count": 10,
+    "method": "All pilot outputs were verified SUCCESS; launcher reuses matching recorded fingerprints, and parent reports 20 selected / 10 incomplete. Individual queued-child mappings are not guessed."
+  },
+  "placement": {
+    "declared_region": "us-central1",
+    "declared_zone": "us-central1-a",
+    "declared_marin_prefix": "gs://marin-us-central1",
+    "declaration_source": "persisted GCS launch plan, identical to reviewed runtime plan",
+    "observed_running_worker_region": "us-central1",
+    "observed_worker_source": "running parent and first child task worker IDs",
+    "other_children": "queued; no worker assigned yet"
+  },
+  "persisted_plan_comparison": {
+    "equal_json": true,
+    "differing_top_level_keys": [],
+    "runtime_plan_sha256": "0b605cb0e0ff772d18798a7980d977dcd116d2385168b339bc79e39d407f2008",
+    "submission_plan_sha256": "0b605cb0e0ff772d18798a7980d977dcd116d2385168b339bc79e39d407f2008"
+  },
+  "startup_summary": {
+    "children": 10,
+    "running": 1,
+    "pending": 9,
+    "failures": 0,
+    "preemptions": 0
+  }
+}

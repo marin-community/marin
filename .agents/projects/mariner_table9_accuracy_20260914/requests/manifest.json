@@ -1,0 +1,1337 @@
+{
+  "schema_version": 1,
+  "olmo_eval_git_sha": "b9444c95a36bbdd6edec9d5fd8bb60afe60fc6db",
+  "native_request_set": "gs://marin-us-east5/raw/eval-datasets/olmo_base_eval_table9/v2",
+  "deferred": [
+    "mt_mbpp_bash",
+    "mt_mbpp_c",
+    "mt_mbpp_cpp",
+    "mt_mbpp_csharp",
+    "mt_mbpp_go",
+    "mt_mbpp_haskell",
+    "mt_mbpp_java",
+    "mt_mbpp_javascript",
+    "mt_mbpp_matlab",
+    "mt_mbpp_php",
+    "mt_mbpp_python",
+    "mt_mbpp_r",
+    "mt_mbpp_ruby",
+    "mt_mbpp_rust",
+    "mt_mbpp_scala",
+    "mt_mbpp_swift",
+    "mt_mbpp_typescript"
+  ],
+  "tasks": {
+    "basic_skills_arithmetic": {
+      "count": 1047,
+      "metric": "acc_per_token",
+      "task_spec": "basic_skills_arithmetic:bpb:olmo3base",
+      "config": {
+        "name": "basic_skills_arithmetic",
+        "data_source": {
+          "path": "json",
+          "subset": null,
+          "split": "train",
+          "source_type": "SourceType.HF",
+          "data_files": "hf://datasets/allenai/basic-skills/arithmetic/validation.json",
+          "revision": null
+        },
+        "fewshot_source": null,
+        "formatter": {
+          "fewshot_separator": "\n\n",
+          "leading_space": true,
+          "always_prepend_separator": false,
+          "answer_prefix": ""
+        },
+        "metrics": [
+          {
+            "name": "bits_per_byte",
+            "scorer": "<class 'olmo_eval.common.scorers.base.BitsPerByteScorer'>"
+          }
+        ],
+        "num_fewshot": 5,
+        "fewshot_seed": 1234,
+        "limit": null,
+        "seed": 42,
+        "split": "validation",
+        "primary_metric": null,
+        "sampling_params": {
+          "max_tokens": 512,
+          "temperature": 0.0,
+          "top_p": null,
+          "top_k": null,
+          "stop_sequences": null,
+          "num_samples": 1,
+          "logprobs": null,
+          "do_sample": true
+        },
+        "output_score_aggregation": "max",
+        "max_length": null,
+        "answer_extractor": null,
+        "dependencies": null,
+        "sandbox_env": null,
+        "sandbox_allocation_weight": 1.0
+      },
+      "generation": {
+        "max_gen_toks": 1024,
+        "temperature": 0.0,
+        "seed": 0,
+        "n": 1,
+        "until": []
+      },
+      "file": "basic_skills_arithmetic.json.gz",
+      "sha256": "6cccd4f3a565c36d384381f7d626e6bda8c1f4ca78687959820ae96aa3fed182",
+      "size": 34876
+    },
+    "basic_skills_coding": {
+      "count": 1012,
+      "metric": "acc_per_token",
+      "task_spec": "basic_skills_coding:bpb:olmo3base",
+      "config": {
+        "name": "basic_skills_coding",
+        "data_source": {
+          "path": "json",
+          "subset": null,
+          "split": "train",
+          "source_type": "SourceType.HF",
+          "data_files": "hf://datasets/allenai/basic-skills/coding/validation.json",
+          "revision": null
+        },
+        "fewshot_source": null,
+        "formatter": {
+          "fewshot_separator": "\n\n",
+          "leading_space": true,
+          "always_prepend_separator": false,
+          "answer_prefix": ""
+        },
+        "metrics": [
+          {
+            "name": "bits_per_byte",
+            "scorer": "<class 'olmo_eval.common.scorers.base.BitsPerByteScorer'>"
+          }
+        ],
+        "num_fewshot": 5,
+        "fewshot_seed": 1234,
+        "limit": null,
+        "seed": 42,
+        "split": "validation",
+        "primary_metric": null,
+        "sampling_params": {
+          "max_tokens": 512,
+          "temperature": 0.0,
+          "top_p": null,
+          "top_k": null,
+          "stop_sequences": null,
+          "num_samples": 1,
+          "logprobs": null,
+          "do_sample": true
+        },
+        "output_score_aggregation": "max",
+        "max_length": null,
+        "answer_extractor": null,
+        "dependencies": null,
+        "sandbox_env": null,
+        "sandbox_allocation_weight": 1.0
+      },
+      "generation": {
+        "max_gen_toks": 1024,
+        "temperature": 0.0,
+        "seed": 0,
+        "n": 1,
+        "until": []
+      },
+      "file": "basic_skills_coding.json.gz",
+      "sha256": "3708cbf6f34bc07b110510f9b36047ac135a51195f016b2f4ccca7c1ee43d879",
+      "size": 81071
+    },
+    "basic_skills_common_knowledge": {
+      "count": 1037,
+      "metric": "acc_per_token",
+      "task_spec": "basic_skills_common_knowledge:bpb:olmo3base",
+      "config": {
+        "name": "basic_skills_common_knowledge",
+        "data_source": {
+          "path": "json",
+          "subset": null,
+          "split": "train",
+          "source_type": "SourceType.HF",
+          "data_files": "hf://datasets/allenai/basic-skills/common_knowledge/validation.json",
+          "revision": null
+        },
+        "fewshot_source": null,
+        "formatter": {
+          "fewshot_separator": "\n\n",
+          "leading_space": true,
+          "always_prepend_separator": false,
+          "answer_prefix": ""
+        },
+        "metrics": [
+          {
+            "name": "bits_per_byte",
+            "scorer": "<class 'olmo_eval.common.scorers.base.BitsPerByteScorer'>"
+          }
+        ],
+        "num_fewshot": 5,
+        "fewshot_seed": 1234,
+        "limit": null,
+        "seed": 42,
+        "split": "validation",
+        "primary_metric": null,
+        "sampling_params": {
+          "max_tokens": 512,
+          "temperature": 0.0,
+          "top_p": null,
+          "top_k": null,
+          "stop_sequences": null,
+          "num_samples": 1,
+          "logprobs": null,
+          "do_sample": true
+        },
+        "output_score_aggregation": "max",
+        "max_length": null,
+        "answer_extractor": null,
+        "dependencies": null,
+        "sandbox_env": null,
+        "sandbox_allocation_weight": 1.0
+      },
+      "generation": {
+        "max_gen_toks": 1024,
+        "temperature": 0.0,
+        "seed": 0,
+        "n": 1,
+        "until": []
+      },
+      "file": "basic_skills_common_knowledge.json.gz",
+      "sha256": "92755f442b2a361cb0642184f72f9c9f413348b984019d909499ed4d278dfcae",
+      "size": 68845
+    },
+    "basic_skills_logical_reasoning": {
+      "count": 1118,
+      "metric": "acc_per_token",
+      "task_spec": "basic_skills_logical_reasoning:bpb:olmo3base",
+      "config": {
+        "name": "basic_skills_logical_reasoning",
+        "data_source": {
+          "path": "json",
+          "subset": null,
+          "split": "train",
+          "source_type": "SourceType.HF",
+          "data_files": "hf://datasets/allenai/basic-skills/logical_reasoning/validation.json",
+          "revision": null
+        },
+        "fewshot_source": null,
+        "formatter": {
+          "fewshot_separator": "\n\n",
+          "leading_space": true,
+          "always_prepend_separator": false,
+          "answer_prefix": ""
+        },
+        "metrics": [
+          {
+            "name": "bits_per_byte",
+            "scorer": "<class 'olmo_eval.common.scorers.base.BitsPerByteScorer'>"
+          }
+        ],
+        "num_fewshot": 5,
+        "fewshot_seed": 1234,
+        "limit": null,
+        "seed": 42,
+        "split": "validation",
+        "primary_metric": null,
+        "sampling_params": {
+          "max_tokens": 512,
+          "temperature": 0.0,
+          "top_p": null,
+          "top_k": null,
+          "stop_sequences": null,
+          "num_samples": 1,
+          "logprobs": null,
+          "do_sample": true
+        },
+        "output_score_aggregation": "max",
+        "max_length": null,
+        "answer_extractor": null,
+        "dependencies": null,
+        "sandbox_env": null,
+        "sandbox_allocation_weight": 1.0
+      },
+      "generation": {
+        "max_gen_toks": 1024,
+        "temperature": 0.0,
+        "seed": 0,
+        "n": 1,
+        "until": []
+      },
+      "file": "basic_skills_logical_reasoning.json.gz",
+      "sha256": "3300fbd1b6c7a72f8612287778a6989e02dd82eb9fab70df1eb35c13ae532b94",
+      "size": 95513
+    },
+    "basic_skills_pattern": {
+      "count": 534,
+      "metric": "acc_per_token",
+      "task_spec": "basic_skills_pattern:bpb:olmo3base",
+      "config": {
+        "name": "basic_skills_pattern",
+        "data_source": {
+          "path": "json",
+          "subset": null,
+          "split": "train",
+          "source_type": "SourceType.HF",
+          "data_files": "hf://datasets/allenai/basic-skills/pattern/validation.json",
+          "revision": null
+        },
+        "fewshot_source": null,
+        "formatter": {
+          "fewshot_separator": "\n\n",
+          "leading_space": true,
+          "always_prepend_separator": false,
+          "answer_prefix": ""
+        },
+        "metrics": [
+          {
+            "name": "bits_per_byte",
+            "scorer": "<class 'olmo_eval.common.scorers.base.BitsPerByteScorer'>"
+          }
+        ],
+        "num_fewshot": 5,
+        "fewshot_seed": 1234,
+        "limit": null,
+        "seed": 42,
+        "split": "validation",
+        "primary_metric": null,
+        "sampling_params": {
+          "max_tokens": 512,
+          "temperature": 0.0,
+          "top_p": null,
+          "top_k": null,
+          "stop_sequences": null,
+          "num_samples": 1,
+          "logprobs": null,
+          "do_sample": true
+        },
+        "output_score_aggregation": "max",
+        "max_length": null,
+        "answer_extractor": null,
+        "dependencies": null,
+        "sandbox_env": null,
+        "sandbox_allocation_weight": 1.0
+      },
+      "generation": {
+        "max_gen_toks": 1024,
+        "temperature": 0.0,
+        "seed": 0,
+        "n": 1,
+        "until": []
+      },
+      "file": "basic_skills_pattern.json.gz",
+      "sha256": "8920818dd7187ec7b871c3844fa04eca53f32f2fce33115967a4079c57da56c3",
+      "size": 20904
+    },
+    "basic_skills_string_operations": {
+      "count": 1219,
+      "metric": "acc_per_token",
+      "task_spec": "basic_skills_string_operations:bpb:olmo3base",
+      "config": {
+        "name": "basic_skills_string_operations",
+        "data_source": {
+          "path": "json",
+          "subset": null,
+          "split": "train",
+          "source_type": "SourceType.HF",
+          "data_files": "hf://datasets/allenai/basic-skills/string_operations/validation.json",
+          "revision": null
+        },
+        "fewshot_source": null,
+        "formatter": {
+          "fewshot_separator": "\n\n",
+          "leading_space": true,
+          "always_prepend_separator": false,
+          "answer_prefix": ""
+        },
+        "metrics": [
+          {
+            "name": "bits_per_byte",
+            "scorer": "<class 'olmo_eval.common.scorers.base.BitsPerByteScorer'>"
+          }
+        ],
+        "num_fewshot": 5,
+        "fewshot_seed": 1234,
+        "limit": null,
+        "seed": 42,
+        "split": "validation",
+        "primary_metric": null,
+        "sampling_params": {
+          "max_tokens": 512,
+          "temperature": 0.0,
+          "top_p": null,
+          "top_k": null,
+          "stop_sequences": null,
+          "num_samples": 1,
+          "logprobs": null,
+          "do_sample": true
+        },
+        "output_score_aggregation": "max",
+        "max_length": null,
+        "answer_extractor": null,
+        "dependencies": null,
+        "sandbox_env": null,
+        "sandbox_allocation_weight": 1.0
+      },
+      "generation": {
+        "max_gen_toks": 1024,
+        "temperature": 0.0,
+        "seed": 0,
+        "n": 1,
+        "until": []
+      },
+      "file": "basic_skills_string_operations.json.gz",
+      "sha256": "73cc6d551c1976383189265105e6db32f7a62ac434e476e0955dc64d9a4e6689",
+      "size": 63639
+    },
+    "coqa": {
+      "count": 7728,
+      "metric": "acc_per_char",
+      "task_spec": "coqa:bpb:olmo3base",
+      "config": {
+        "name": "coqa:bpb",
+        "data_source": {
+          "path": "allenai/coqa-gen2mc",
+          "subset": null,
+          "split": "validation",
+          "source_type": "SourceType.HF",
+          "data_files": null,
+          "revision": null
+        },
+        "fewshot_source": null,
+        "formatter": null,
+        "metrics": [
+          {
+            "name": "bits_per_byte",
+            "scorer": "<class 'olmo_eval.common.scorers.base.BitsPerByteScorer'>"
+          }
+        ],
+        "num_fewshot": 0,
+        "fewshot_seed": 42,
+        "limit": null,
+        "seed": 42,
+        "split": "validation",
+        "primary_metric": null,
+        "sampling_params": {
+          "max_tokens": 512,
+          "temperature": 0.0,
+          "top_p": null,
+          "top_k": null,
+          "stop_sequences": null,
+          "num_samples": 1,
+          "logprobs": null,
+          "do_sample": true
+        },
+        "output_score_aggregation": "max",
+        "max_length": null,
+        "answer_extractor": null,
+        "dependencies": null,
+        "sandbox_env": null,
+        "sandbox_allocation_weight": 1.0
+      },
+      "generation": {
+        "max_gen_toks": 1024,
+        "temperature": 0.0,
+        "seed": 0,
+        "n": 1,
+        "until": []
+      },
+      "file": "coqa.json.gz",
+      "sha256": "13b441a9c5c9b5848d443e7c5ea47bee570eec473f410073920522b880934f18",
+      "size": 1005631
+    },
+    "drop": {
+      "count": 1588,
+      "metric": "acc_per_char",
+      "task_spec": "drop:bpb:olmo3base",
+      "config": {
+        "name": "drop:bpb",
+        "data_source": {
+          "path": "allenai/drop_mc",
+          "subset": null,
+          "split": "validation",
+          "source_type": "SourceType.HF",
+          "data_files": null,
+          "revision": null
+        },
+        "fewshot_source": "olmes_drop_mc_fixed",
+        "formatter": {
+          "fewshot_separator": "\n\n",
+          "leading_space": true,
+          "always_prepend_separator": false,
+          "answer_prefix": ""
+        },
+        "metrics": [
+          {
+            "name": "bits_per_byte",
+            "scorer": "<class 'olmo_eval.common.scorers.base.BitsPerByteScorer'>"
+          }
+        ],
+        "num_fewshot": 5,
+        "fewshot_seed": 42,
+        "limit": null,
+        "seed": 42,
+        "split": "validation",
+        "primary_metric": {
+          "name": "bits_per_byte",
+          "scorer": "<class 'olmo_eval.common.scorers.base.BitsPerByteScorer'>"
+        },
+        "sampling_params": {
+          "max_tokens": 100,
+          "temperature": 0,
+          "top_p": null,
+          "top_k": null,
+          "stop_sequences": [
+            "Passage:",
+            "Question:",
+            "\n\n"
+          ],
+          "num_samples": 1,
+          "logprobs": null,
+          "do_sample": true
+        },
+        "output_score_aggregation": "max",
+        "max_length": null,
+        "answer_extractor": null,
+        "dependencies": null,
+        "sandbox_env": null,
+        "sandbox_allocation_weight": 1.0
+      },
+      "generation": {
+        "max_gen_toks": 1024,
+        "temperature": 0.0,
+        "seed": 0,
+        "n": 1,
+        "until": [
+          "Passage:",
+          "Question:",
+          "\n\n"
+        ]
+      },
+      "file": "drop.json.gz",
+      "sha256": "5e98ae28bfbfa700eb46cc07db5b25fd65e35bd410f543077c44f0b204d36e2c",
+      "size": 821237
+    },
+    "jeopardy": {
+      "count": 2097,
+      "metric": "acc_per_char",
+      "task_spec": "jeopardy:bpb:olmo3base",
+      "config": {
+        "name": "jeopardy:bpb",
+        "data_source": {
+          "path": "allenai/jeopardy_mc",
+          "subset": null,
+          "split": "test",
+          "source_type": "SourceType.HF",
+          "data_files": null,
+          "revision": null
+        },
+        "fewshot_source": "jeopardy_mc_fixed",
+        "formatter": null,
+        "metrics": [
+          {
+            "name": "bits_per_byte",
+            "scorer": "<class 'olmo_eval.common.scorers.base.BitsPerByteScorer'>"
+          }
+        ],
+        "num_fewshot": 5,
+        "fewshot_seed": 42,
+        "limit": null,
+        "seed": 42,
+        "split": "test",
+        "primary_metric": null,
+        "sampling_params": {
+          "max_tokens": 512,
+          "temperature": 0.0,
+          "top_p": null,
+          "top_k": null,
+          "stop_sequences": null,
+          "num_samples": 1,
+          "logprobs": null,
+          "do_sample": true
+        },
+        "output_score_aggregation": "max",
+        "max_length": null,
+        "answer_extractor": null,
+        "dependencies": null,
+        "sandbox_env": null,
+        "sandbox_allocation_weight": 1.0
+      },
+      "generation": {
+        "max_gen_toks": 1024,
+        "temperature": 0.0,
+        "seed": 0,
+        "n": 1,
+        "until": []
+      },
+      "file": "jeopardy.json.gz",
+      "sha256": "25dee8d930678c87430fc4282ea1b821f6430bd02a83a939f0e1f27f7f5a03ff",
+      "size": 216228
+    },
+    "naturalqs": {
+      "count": 1999,
+      "metric": "acc_per_char",
+      "task_spec": "naturalqs:bpb:olmo3base",
+      "config": {
+        "name": "naturalqs:bpb",
+        "data_source": {
+          "path": "allenai/nq_open_mc",
+          "subset": null,
+          "split": "validation",
+          "source_type": "SourceType.HF",
+          "data_files": null,
+          "revision": null
+        },
+        "fewshot_source": "nq_mc_fixed",
+        "formatter": {
+          "fewshot_separator": "\n\n",
+          "leading_space": true,
+          "always_prepend_separator": false,
+          "answer_prefix": ""
+        },
+        "metrics": [
+          {
+            "name": "bits_per_byte",
+            "scorer": "<class 'olmo_eval.common.scorers.base.BitsPerByteScorer'>"
+          }
+        ],
+        "num_fewshot": 5,
+        "fewshot_seed": 42,
+        "limit": 10000,
+        "seed": 1234,
+        "split": "validation",
+        "primary_metric": {
+          "name": "bits_per_byte",
+          "scorer": "<class 'olmo_eval.common.scorers.base.BitsPerByteScorer'>"
+        },
+        "sampling_params": {
+          "max_tokens": 512,
+          "temperature": 0.0,
+          "top_p": null,
+          "top_k": null,
+          "stop_sequences": null,
+          "num_samples": 1,
+          "logprobs": null,
+          "do_sample": true
+        },
+        "output_score_aggregation": "max",
+        "max_length": null,
+        "answer_extractor": null,
+        "dependencies": null,
+        "sandbox_env": null,
+        "sandbox_allocation_weight": 1.0
+      },
+      "generation": {
+        "max_gen_toks": 1024,
+        "temperature": 0.0,
+        "seed": 0,
+        "n": 1,
+        "until": []
+      },
+      "file": "naturalqs.json.gz",
+      "sha256": "cf40a0c84178d301212e169d976c160583c4ea2bb1302fd89dae5b9921ef25d5",
+      "size": 166448
+    },
+    "squad": {
+      "count": 2110,
+      "metric": "acc_per_char",
+      "task_spec": "squad:bpb:olmo3base",
+      "config": {
+        "name": "squad:bpb",
+        "data_source": {
+          "path": "allenai/squad_mc",
+          "subset": null,
+          "split": "validation",
+          "source_type": "SourceType.HF",
+          "data_files": null,
+          "revision": null
+        },
+        "fewshot_source": "squad_mc_fixed",
+        "formatter": null,
+        "metrics": [
+          {
+            "name": "bits_per_byte",
+            "scorer": "<class 'olmo_eval.common.scorers.base.BitsPerByteScorer'>"
+          }
+        ],
+        "num_fewshot": 5,
+        "fewshot_seed": 42,
+        "limit": 10000,
+        "seed": 1234,
+        "split": "validation",
+        "primary_metric": null,
+        "sampling_params": {
+          "max_tokens": 512,
+          "temperature": 0.0,
+          "top_p": null,
+          "top_k": null,
+          "stop_sequences": null,
+          "num_samples": 1,
+          "logprobs": null,
+          "do_sample": true
+        },
+        "output_score_aggregation": "max",
+        "max_length": 2048,
+        "answer_extractor": null,
+        "dependencies": null,
+        "sandbox_env": null,
+        "sandbox_allocation_weight": 1.0
+      },
+      "generation": {
+        "max_gen_toks": 1024,
+        "temperature": 0.0,
+        "seed": 0,
+        "n": 1,
+        "until": []
+      },
+      "file": "squad.json.gz",
+      "sha256": "b47961c33a604c1dbd8599f16c17eb67b27e9236064a3659da97c3c6ec9de4f6",
+      "size": 933962
+    },
+    "minerva_math_algebra": {
+      "count": 1187,
+      "metric": "exact_match",
+      "task_spec": "minerva_math_algebra:bpb:olmo3base",
+      "config": {
+        "name": "minerva_math_algebra:bpb",
+        "data_source": {
+          "path": "EleutherAI/hendrycks_math",
+          "subset": "algebra",
+          "split": "test",
+          "source_type": "SourceType.HF",
+          "data_files": null,
+          "revision": null
+        },
+        "fewshot_source": "minerva_math_fixed",
+        "formatter": {
+          "fewshot_separator": "\n\n",
+          "leading_space": true,
+          "always_prepend_separator": false,
+          "answer_prefix": ""
+        },
+        "metrics": [
+          {
+            "name": "bits_per_byte",
+            "scorer": "<class 'olmo_eval.common.scorers.base.BitsPerByteScorer'>"
+          }
+        ],
+        "num_fewshot": 4,
+        "fewshot_seed": 42,
+        "limit": null,
+        "seed": 42,
+        "split": "test",
+        "primary_metric": {
+          "name": "bits_per_byte",
+          "scorer": "<class 'olmo_eval.common.scorers.base.BitsPerByteScorer'>"
+        },
+        "sampling_params": {
+          "max_tokens": 1024,
+          "temperature": 0,
+          "top_p": null,
+          "top_k": null,
+          "stop_sequences": [
+            "Problem:",
+            "\n\n"
+          ],
+          "num_samples": 1,
+          "logprobs": null,
+          "do_sample": true
+        },
+        "output_score_aggregation": "max",
+        "max_length": null,
+        "answer_extractor": null,
+        "dependencies": [
+          "antlr4-python3-runtime>=4.11,<4.12"
+        ],
+        "sandbox_env": null,
+        "sandbox_allocation_weight": 1.0
+      },
+      "generation": {
+        "max_gen_toks": 1024,
+        "temperature": 0.0,
+        "seed": 0,
+        "n": 1,
+        "until": [
+          "Problem:",
+          "\n\n"
+        ]
+      },
+      "file": "minerva_math_algebra.json.gz",
+      "sha256": "157a568bf08a208ccc11291a87aab0756d198b8c07d5b4f082e8d1ef351b20e0",
+      "size": 285568
+    },
+    "minerva_math_counting_and_probability": {
+      "count": 474,
+      "metric": "exact_match",
+      "task_spec": "minerva_math_counting_and_probability:bpb:olmo3base",
+      "config": {
+        "name": "minerva_math_counting_and_probability:bpb",
+        "data_source": {
+          "path": "EleutherAI/hendrycks_math",
+          "subset": "counting_and_probability",
+          "split": "test",
+          "source_type": "SourceType.HF",
+          "data_files": null,
+          "revision": null
+        },
+        "fewshot_source": "minerva_math_fixed",
+        "formatter": {
+          "fewshot_separator": "\n\n",
+          "leading_space": true,
+          "always_prepend_separator": false,
+          "answer_prefix": ""
+        },
+        "metrics": [
+          {
+            "name": "bits_per_byte",
+            "scorer": "<class 'olmo_eval.common.scorers.base.BitsPerByteScorer'>"
+          }
+        ],
+        "num_fewshot": 4,
+        "fewshot_seed": 42,
+        "limit": null,
+        "seed": 42,
+        "split": "test",
+        "primary_metric": {
+          "name": "bits_per_byte",
+          "scorer": "<class 'olmo_eval.common.scorers.base.BitsPerByteScorer'>"
+        },
+        "sampling_params": {
+          "max_tokens": 1024,
+          "temperature": 0,
+          "top_p": null,
+          "top_k": null,
+          "stop_sequences": [
+            "Problem:",
+            "\n\n"
+          ],
+          "num_samples": 1,
+          "logprobs": null,
+          "do_sample": true
+        },
+        "output_score_aggregation": "max",
+        "max_length": null,
+        "answer_extractor": null,
+        "dependencies": [
+          "antlr4-python3-runtime>=4.11,<4.12"
+        ],
+        "sandbox_env": null,
+        "sandbox_allocation_weight": 1.0
+      },
+      "generation": {
+        "max_gen_toks": 1024,
+        "temperature": 0.0,
+        "seed": 0,
+        "n": 1,
+        "until": [
+          "Problem:",
+          "\n\n"
+        ]
+      },
+      "file": "minerva_math_counting_and_probability.json.gz",
+      "sha256": "2a5f2ce7223d329ca8d41256636c94c9f53a598f5501e0faccb40236b065d05c",
+      "size": 139539
+    },
+    "minerva_math_geometry": {
+      "count": 479,
+      "metric": "exact_match",
+      "task_spec": "minerva_math_geometry:bpb:olmo3base",
+      "config": {
+        "name": "minerva_math_geometry:bpb",
+        "data_source": {
+          "path": "EleutherAI/hendrycks_math",
+          "subset": "geometry",
+          "split": "test",
+          "source_type": "SourceType.HF",
+          "data_files": null,
+          "revision": null
+        },
+        "fewshot_source": "minerva_math_fixed",
+        "formatter": {
+          "fewshot_separator": "\n\n",
+          "leading_space": true,
+          "always_prepend_separator": false,
+          "answer_prefix": ""
+        },
+        "metrics": [
+          {
+            "name": "bits_per_byte",
+            "scorer": "<class 'olmo_eval.common.scorers.base.BitsPerByteScorer'>"
+          }
+        ],
+        "num_fewshot": 4,
+        "fewshot_seed": 42,
+        "limit": null,
+        "seed": 42,
+        "split": "test",
+        "primary_metric": {
+          "name": "bits_per_byte",
+          "scorer": "<class 'olmo_eval.common.scorers.base.BitsPerByteScorer'>"
+        },
+        "sampling_params": {
+          "max_tokens": 1024,
+          "temperature": 0,
+          "top_p": null,
+          "top_k": null,
+          "stop_sequences": [
+            "Problem:",
+            "\n\n"
+          ],
+          "num_samples": 1,
+          "logprobs": null,
+          "do_sample": true
+        },
+        "output_score_aggregation": "max",
+        "max_length": null,
+        "answer_extractor": null,
+        "dependencies": [
+          "antlr4-python3-runtime>=4.11,<4.12"
+        ],
+        "sandbox_env": null,
+        "sandbox_allocation_weight": 1.0
+      },
+      "generation": {
+        "max_gen_toks": 1024,
+        "temperature": 0.0,
+        "seed": 0,
+        "n": 1,
+        "until": [
+          "Problem:",
+          "\n\n"
+        ]
+      },
+      "file": "minerva_math_geometry.json.gz",
+      "sha256": "751b9bb40c167949d9c523d33d25e7a2c5482dbca0c6b1e720216c993ff419f7",
+      "size": 194215
+    },
+    "minerva_math_intermediate_algebra": {
+      "count": 903,
+      "metric": "exact_match",
+      "task_spec": "minerva_math_intermediate_algebra:bpb:olmo3base",
+      "config": {
+        "name": "minerva_math_intermediate_algebra:bpb",
+        "data_source": {
+          "path": "EleutherAI/hendrycks_math",
+          "subset": "intermediate_algebra",
+          "split": "test",
+          "source_type": "SourceType.HF",
+          "data_files": null,
+          "revision": null
+        },
+        "fewshot_source": "minerva_math_fixed",
+        "formatter": {
+          "fewshot_separator": "\n\n",
+          "leading_space": true,
+          "always_prepend_separator": false,
+          "answer_prefix": ""
+        },
+        "metrics": [
+          {
+            "name": "bits_per_byte",
+            "scorer": "<class 'olmo_eval.common.scorers.base.BitsPerByteScorer'>"
+          }
+        ],
+        "num_fewshot": 4,
+        "fewshot_seed": 42,
+        "limit": null,
+        "seed": 42,
+        "split": "test",
+        "primary_metric": {
+          "name": "bits_per_byte",
+          "scorer": "<class 'olmo_eval.common.scorers.base.BitsPerByteScorer'>"
+        },
+        "sampling_params": {
+          "max_tokens": 1024,
+          "temperature": 0,
+          "top_p": null,
+          "top_k": null,
+          "stop_sequences": [
+            "Problem:",
+            "\n\n"
+          ],
+          "num_samples": 1,
+          "logprobs": null,
+          "do_sample": true
+        },
+        "output_score_aggregation": "max",
+        "max_length": null,
+        "answer_extractor": null,
+        "dependencies": [
+          "antlr4-python3-runtime>=4.11,<4.12"
+        ],
+        "sandbox_env": null,
+        "sandbox_allocation_weight": 1.0
+      },
+      "generation": {
+        "max_gen_toks": 1024,
+        "temperature": 0.0,
+        "seed": 0,
+        "n": 1,
+        "until": [
+          "Problem:",
+          "\n\n"
+        ]
+      },
+      "file": "minerva_math_intermediate_algebra.json.gz",
+      "sha256": "7c55fc63a1fe4ce7c65bf8373f4d9e6c5e63a9cfae52aff945f25e424a9c8161",
+      "size": 305067
+    },
+    "minerva_math_number_theory": {
+      "count": 540,
+      "metric": "exact_match",
+      "task_spec": "minerva_math_number_theory:bpb:olmo3base",
+      "config": {
+        "name": "minerva_math_number_theory:bpb",
+        "data_source": {
+          "path": "EleutherAI/hendrycks_math",
+          "subset": "number_theory",
+          "split": "test",
+          "source_type": "SourceType.HF",
+          "data_files": null,
+          "revision": null
+        },
+        "fewshot_source": "minerva_math_fixed",
+        "formatter": {
+          "fewshot_separator": "\n\n",
+          "leading_space": true,
+          "always_prepend_separator": false,
+          "answer_prefix": ""
+        },
+        "metrics": [
+          {
+            "name": "bits_per_byte",
+            "scorer": "<class 'olmo_eval.common.scorers.base.BitsPerByteScorer'>"
+          }
+        ],
+        "num_fewshot": 4,
+        "fewshot_seed": 42,
+        "limit": null,
+        "seed": 42,
+        "split": "test",
+        "primary_metric": {
+          "name": "bits_per_byte",
+          "scorer": "<class 'olmo_eval.common.scorers.base.BitsPerByteScorer'>"
+        },
+        "sampling_params": {
+          "max_tokens": 1024,
+          "temperature": 0,
+          "top_p": null,
+          "top_k": null,
+          "stop_sequences": [
+            "Problem:",
+            "\n\n"
+          ],
+          "num_samples": 1,
+          "logprobs": null,
+          "do_sample": true
+        },
+        "output_score_aggregation": "max",
+        "max_length": null,
+        "answer_extractor": null,
+        "dependencies": [
+          "antlr4-python3-runtime>=4.11,<4.12"
+        ],
+        "sandbox_env": null,
+        "sandbox_allocation_weight": 1.0
+      },
+      "generation": {
+        "max_gen_toks": 1024,
+        "temperature": 0.0,
+        "seed": 0,
+        "n": 1,
+        "until": [
+          "Problem:",
+          "\n\n"
+        ]
+      },
+      "file": "minerva_math_number_theory.json.gz",
+      "sha256": "f4a157ec183e8cf282cb1271ab02d37e964e7fb0e0f440a31cbaf7e6fdb4d376",
+      "size": 143658
+    },
+    "minerva_math_prealgebra": {
+      "count": 871,
+      "metric": "exact_match",
+      "task_spec": "minerva_math_prealgebra:bpb:olmo3base",
+      "config": {
+        "name": "minerva_math_prealgebra:bpb",
+        "data_source": {
+          "path": "EleutherAI/hendrycks_math",
+          "subset": "prealgebra",
+          "split": "test",
+          "source_type": "SourceType.HF",
+          "data_files": null,
+          "revision": null
+        },
+        "fewshot_source": "minerva_math_fixed",
+        "formatter": {
+          "fewshot_separator": "\n\n",
+          "leading_space": true,
+          "always_prepend_separator": false,
+          "answer_prefix": ""
+        },
+        "metrics": [
+          {
+            "name": "bits_per_byte",
+            "scorer": "<class 'olmo_eval.common.scorers.base.BitsPerByteScorer'>"
+          }
+        ],
+        "num_fewshot": 4,
+        "fewshot_seed": 42,
+        "limit": null,
+        "seed": 42,
+        "split": "test",
+        "primary_metric": {
+          "name": "bits_per_byte",
+          "scorer": "<class 'olmo_eval.common.scorers.base.BitsPerByteScorer'>"
+        },
+        "sampling_params": {
+          "max_tokens": 1024,
+          "temperature": 0,
+          "top_p": null,
+          "top_k": null,
+          "stop_sequences": [
+            "Problem:",
+            "\n\n"
+          ],
+          "num_samples": 1,
+          "logprobs": null,
+          "do_sample": true
+        },
+        "output_score_aggregation": "max",
+        "max_length": null,
+        "answer_extractor": null,
+        "dependencies": [
+          "antlr4-python3-runtime>=4.11,<4.12"
+        ],
+        "sandbox_env": null,
+        "sandbox_allocation_weight": 1.0
+      },
+      "generation": {
+        "max_gen_toks": 1024,
+        "temperature": 0.0,
+        "seed": 0,
+        "n": 1,
+        "until": [
+          "Problem:",
+          "\n\n"
+        ]
+      },
+      "file": "minerva_math_prealgebra.json.gz",
+      "sha256": "b423b88ff8f4e52faa314e353567da1ef3a60364c5dc4531af51d59b5b0c1c98",
+      "size": 214994
+    },
+    "minerva_math_precalculus": {
+      "count": 546,
+      "metric": "exact_match",
+      "task_spec": "minerva_math_precalculus:bpb:olmo3base",
+      "config": {
+        "name": "minerva_math_precalculus:bpb",
+        "data_source": {
+          "path": "EleutherAI/hendrycks_math",
+          "subset": "precalculus",
+          "split": "test",
+          "source_type": "SourceType.HF",
+          "data_files": null,
+          "revision": null
+        },
+        "fewshot_source": "minerva_math_fixed",
+        "formatter": {
+          "fewshot_separator": "\n\n",
+          "leading_space": true,
+          "always_prepend_separator": false,
+          "answer_prefix": ""
+        },
+        "metrics": [
+          {
+            "name": "bits_per_byte",
+            "scorer": "<class 'olmo_eval.common.scorers.base.BitsPerByteScorer'>"
+          }
+        ],
+        "num_fewshot": 4,
+        "fewshot_seed": 42,
+        "limit": null,
+        "seed": 42,
+        "split": "test",
+        "primary_metric": {
+          "name": "bits_per_byte",
+          "scorer": "<class 'olmo_eval.common.scorers.base.BitsPerByteScorer'>"
+        },
+        "sampling_params": {
+          "max_tokens": 1024,
+          "temperature": 0,
+          "top_p": null,
+          "top_k": null,
+          "stop_sequences": [
+            "Problem:",
+            "\n\n"
+          ],
+          "num_samples": 1,
+          "logprobs": null,
+          "do_sample": true
+        },
+        "output_score_aggregation": "max",
+        "max_length": null,
+        "answer_extractor": null,
+        "dependencies": [
+          "antlr4-python3-runtime>=4.11,<4.12"
+        ],
+        "sandbox_env": null,
+        "sandbox_allocation_weight": 1.0
+      },
+      "generation": {
+        "max_gen_toks": 1024,
+        "temperature": 0.0,
+        "seed": 0,
+        "n": 1,
+        "until": [
+          "Problem:",
+          "\n\n"
+        ]
+      },
+      "file": "minerva_math_precalculus.json.gz",
+      "sha256": "818b842ab15f9e409ad09c0c979faf1bc9de882e818a555e0d727f997c624ae4",
+      "size": 184291
+    },
+    "codex_humaneval": {
+      "count": 164,
+      "metric": "pass@1",
+      "task_spec": "codex_humaneval:bpb:olmo3base",
+      "config": {
+        "name": "codex_humaneval",
+        "data_source": {
+          "path": "openai_humaneval",
+          "subset": null,
+          "split": "test",
+          "source_type": "SourceType.HF",
+          "data_files": null,
+          "revision": null
+        },
+        "fewshot_source": null,
+        "formatter": {
+          "fewshot_separator": "\n\n",
+          "leading_space": true,
+          "always_prepend_separator": false,
+          "answer_prefix": " "
+        },
+        "metrics": [
+          {
+            "name": "bits_per_byte",
+            "scorer": "<class 'olmo_eval.common.scorers.base.BitsPerByteScorer'>"
+          }
+        ],
+        "num_fewshot": 3,
+        "fewshot_seed": 1234,
+        "limit": null,
+        "seed": 42,
+        "split": "test",
+        "primary_metric": null,
+        "sampling_params": {
+          "max_tokens": 1024,
+          "temperature": 0.0,
+          "top_p": null,
+          "top_k": null,
+          "stop_sequences": [
+            "\nclass",
+            "\ndef",
+            "\nif",
+            "\nprint",
+            "\n#",
+            "\n```",
+            "\n```\n\n",
+            "<|eot_id|>",
+            "<|endoftext|>",
+            "<|im_end|>"
+          ],
+          "num_samples": 1,
+          "logprobs": null,
+          "do_sample": true
+        },
+        "output_score_aggregation": "max",
+        "max_length": null,
+        "answer_extractor": null,
+        "dependencies": null,
+        "sandbox_env": null,
+        "sandbox_allocation_weight": 1.0
+      },
+      "generation": {
+        "max_gen_toks": 1024,
+        "temperature": 0.0,
+        "seed": 0,
+        "n": 1,
+        "until": [
+          "\nclass",
+          "\ndef",
+          "\nif",
+          "\nprint",
+          "\n#",
+          "\n```",
+          "\n```\n\n",
+          "<|eot_id|>",
+          "<|endoftext|>",
+          "<|im_end|>"
+        ]
+      },
+      "file": "codex_humaneval.json.gz",
+      "sha256": "ac3d58142d272907bd0e5b564d6ac2b7381cdf55f1f38e4a9a2ba2cd543f2207",
+      "size": 54338
+    },
+    "mbpp": {
+      "count": 500,
+      "metric": "pass@1",
+      "task_spec": "mbpp:bpb:olmo3base",
+      "config": {
+        "name": "mbpp:bpb",
+        "data_source": {
+          "path": "google-research-datasets/mbpp",
+          "subset": null,
+          "split": "test",
+          "source_type": "SourceType.HF",
+          "data_files": null,
+          "revision": null
+        },
+        "fewshot_source": null,
+        "formatter": {
+          "fewshot_separator": "\n\n",
+          "leading_space": false,
+          "always_prepend_separator": false,
+          "answer_prefix": ""
+        },
+        "metrics": [
+          {
+            "name": "bits_per_byte",
+            "scorer": "<class 'olmo_eval.common.scorers.base.BitsPerByteScorer'>"
+          }
+        ],
+        "num_fewshot": 3,
+        "fewshot_seed": 1234,
+        "limit": 500,
+        "seed": 42,
+        "split": "test",
+        "primary_metric": null,
+        "sampling_params": null,
+        "output_score_aggregation": "max",
+        "max_length": null,
+        "answer_extractor": null,
+        "dependencies": null,
+        "sandbox_env": null,
+        "sandbox_allocation_weight": 1.0
+      },
+      "generation": {
+        "max_gen_toks": 1024,
+        "temperature": 0.0,
+        "seed": 0,
+        "n": 1,
+        "until": [
+          "```"
+        ]
+      },
+      "file": "mbpp.json.gz",
+      "sha256": "6d7f48735581208e18eb6aba07a75e58eb32c28c5a45fc47cf4e077650b43040",
+      "size": 77173
+    }
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "input_hashes_verified": true,
+  "candidate_pool_hash": "d12cf2e4cbb63b4c6ff9c83ffcbacc183a35d6fa68f3376d45aa8a905c6b5a67",
+  "primary_refits": [
+    {
+      "objective": "objective:uncheatable",
+      "refit_best_iteration": 460,
+      "saved_best_iteration": 460,
+      "candidate_prediction_max_abs_diff": 0.0,
+      "candidate_predictions_identical": true,
+      "model_text_identical": true,
+      "top128_indices_identical": true
+    },
+    {
+      "objective": "objective:table9",
+      "refit_best_iteration": 170,
+      "saved_best_iteration": 170,
+      "candidate_prediction_max_abs_diff": 0.0,
+      "candidate_predictions_identical": true,
+      "model_text_identical": true,
+      "top128_indices_identical": true
+    }
+  ],
+  "official_source_sha256": "47a4c645e7f3974c3adc04e7d42c4fa3f83af1876f941ff7c3c40cf162f07560"
+}
