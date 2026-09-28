@@ -55,7 +55,10 @@ and omit the supplied reference answer. A validation check rejects altered tagge
 DNA, RNA, protein, peptide, and SMILES strings in the learner question. The teacher uses that reference to check
 the reasoning and answer. When a label requires unavailable assay measurements
 or structural coordinates, the reasoning states that limitation and identifies
-the result as a reference annotation; it must not invent a derivation.
+the result as a reference annotation; it must not invent a derivation. The teacher
+receives privately computed string lengths, residue positions, and RNA/DNA
+interval boundary checks to distinguish annotation claims from verified string
+properties. These checks do not establish the biological annotation.
 Swallow textbook user turns pose problems exercising the supplied theories and
 starting formulas. They reuse source examples when possible, or provide clearly
 hypothetical givens. Reasoning shows intermediate steps and checks the solution.

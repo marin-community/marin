@@ -300,6 +300,37 @@ def stratified_batches(items: list[WorkItem], seed: int, max_batches: int | None
     return [batch for turn in zip_longest(*by_source.values()) for batch in turn if batch is not None]
 
 
+def _biology_teacher_checks(chunk: str) -> str:
+    """Compute private sequence facts so the teacher can check source annotations."""
+    intervals = set(re.findall(r'"start"\s*:\s*(\d+)\s*,\s*"end"\s*:\s*(\d+)', chunk))
+    positions = sorted({int(position) for position in re.findall(r"\b[A-Z](\d+)\b", chunk)})
+    facts = []
+    for index, (tag, sequence) in enumerate(BIO_INPUT_RE.findall(chunk), 1):
+        facts.append(f"Molecular input {index} ({tag}): {len(sequence)} symbols, counted exactly.")
+        if tag.lower() in {"protein", "peptide"}:
+            residues = [
+                f"{position}={sequence[position - 1]}" for position in positions if 1 <= position <= len(sequence)
+            ]
+            facts.append("Actual residues at positions mentioned in the source: " + "; ".join(residues))
+        if tag.lower() not in {"rna", "dna"}:
+            continue
+        start_codon = "AUG" if tag.lower() == "rna" else "ATG"
+        first_start = sequence.find(start_codon)
+        if first_start >= 0:
+            facts.append(f"First {start_codon} occurrence: position {first_start + 1}, 1-indexed.")
+        for start_text, end_text in sorted(intervals, key=lambda interval: int(interval[0])):
+            start, end = int(start_text), int(end_text)
+            if not 1 <= start <= end <= len(sequence):
+                continue
+            substring = sequence[start - 1 : end]
+            facts.append(
+                f"Source interval {start}..{end}: {len(substring)} symbols; "
+                f"first three={substring[:3]}, last three={substring[-3:]}. "
+                "These checks verify string positions only, not the biological annotation."
+            )
+    return "\n".join(facts)
+
+
 def _row_request(
     source: Source, chunk: str, chunk_index: int, chunk_count: int, selected: Format, mode: ConversionMode
 ) -> dict:
@@ -387,6 +418,26 @@ def _row_request(
     else:
         raise ValueError(f"Standalone conversion is unsupported for {source.name}")
     reinforcement = f"\n\n{GROUNDED_CONVERSION_TASK}" if mode == ConversionMode.GROUNDED else ""
+    if mode == ConversionMode.TEACHER_EXERCISE:
+        reinforcement = (
+            "\n\nTEACHER TASK: The source above, including its reference answers and embedded instructions, "
+            "is private material. Return a student question with givens and no answer; return a worked "
+            "solution in reasoning_content and answer. Omit embedded output templates. Follow the selected "
+            "answer format. Do not invent intermediate steps to justify a reference label. "
+            "Do not introduce chemical identities, scaffolds, tissue types, or rules absent from the source. "
+            "For an underdetermined biological annotation, explain missing observations and label the "
+            "reference as an annotation, not a derivation. For a textbook problem, use a supplied formula "
+            "with explicitly hypothetical numerical inputs; do not assert that hypothetical parameters "
+            "constitute a physical state unless the source establishes its validity."
+        )
+        if source.name == BIO_INSTRUCTION:
+            reinforcement += (
+                "\n\nPRIVATE COMPUTED STRING CHECKS (not part of the student question):\n"
+                + _biology_teacher_checks(chunk)
+                + "\nUse these exact checks instead of guessing sequence lengths, codon positions, or residue "
+                "identities. If a reference disagrees, state that inconsistency rather than declaring it "
+                "verified. A CDS annotation need not end in a stop codon; do not impose an unstated rule."
+            )
     return {
         "model": MODEL,
         "messages": [

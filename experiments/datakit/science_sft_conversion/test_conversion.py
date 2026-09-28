@@ -384,6 +384,14 @@ async def test_rejected_math_persists_verbatim_evidence_in_every_answer_format(
             "TACG",
         ),
         (
+            conversion.BIO_INSTRUCTION,
+            "Question: Locate the annotated CDS in <rna>CCAUGAAAUAA</rna>. " 'Reference: {"start":3,"end":8}.',
+            "Locate the annotated CDS in <rna>CCAUGAAAUAA</rna>.",
+            "The reference CDS is 3-8. Its first triplet is AUG and its last is AAA; "
+            "sequence positions can be checked, but an independent annotation is not provided.",
+            "Reference CDS 3-8",
+        ),
+        (
             conversion.SWALLOW_MATH_TEXTBOOK,
             "Theory: F = ma. Example: m = 2 kg, a = 3 m/s², so F = 6 N.",
             "Using F = ma, find the force for m = 2 kg and a = 3 m/s².",
@@ -408,6 +416,10 @@ async def test_teacher_exercise_keeps_reference_private_after_rejected_response(
         nonlocal first_response
         body = json.loads(request.content)
         assert passage in body["messages"][1]["content"]
+        if "CCAUGAAAUAA" in passage:
+            prompt = body["messages"][1]["content"]
+            assert "First AUG occurrence: position 3" in prompt
+            assert "first three=AUG, last three=AAA" in prompt
         selected = next(f for f in conversion.FORMATS if f"({f.name}):" in body["messages"][1]["content"])
         formatted_answers = {
             "paragraphs": f"Answer: {answer}",
@@ -421,7 +433,7 @@ async def test_teacher_exercise_keeps_reference_private_after_rejected_response(
         if first_response:
             first_response = False
             if source_name == conversion.BIO_INSTRUCTION:
-                completion["user"] = question.replace("ATGC", "ATGAC")
+                completion["user"] = re.sub(r"(<(?:dna|rna)>)([^<]+)", r"\1\2A", question)
             else:
                 completion["answer"] = ""
         return httpx.Response(
