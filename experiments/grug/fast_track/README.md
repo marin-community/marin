@@ -154,7 +154,7 @@ uv run fast-track --submit --run-id probe-d1280 --size d1280 --num-steps 20 --no
 | `--no-eval` | skip eval (clean MFU probes) |
 | `--save-checkpoints` | save a permanent final checkpoint to S3 (off by default) |
 | `--seed` | trainer seed (model init and data key) for run-to-run noise estimates |
-| `--profile` | capture a JAX profile of steps 50-54 (uploaded to W&B) |
+| `--profile-start-step N` | capture a JAX profile of steps N to N+4 (uploaded to the run's xprof directory) |
 | `--max-retries` | training-job retries after a failure (default 3; 0 for debugging) |
 | `--priority` | Iris priority for `--submit` (`interactive` default, `production`, `batch`) |
 | `--submit` | Submit as an Iris H100 job. Omit to print the plan locally. |

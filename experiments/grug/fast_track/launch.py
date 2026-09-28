@@ -142,7 +142,6 @@ STARTUP_TIMEOUT = timedelta(seconds=2 * RESTORE_BARRIER_TIMEOUT)
 MAX_RETRIES_FAILURE = 3
 Z_LOSS_WEIGHT = 1e-4
 MAX_TASK_FAILURES = 3
-PROFILE_START_STEP = 50
 PROFILE_NUM_STEPS = 5
 
 
@@ -324,7 +323,7 @@ def build_h100_ladder_run(
     recipe: Recipe = Recipe.BASELINE,
     attn_res_remat_attention: bool = False,
     seed: int = 0,
-    profile: bool = False,
+    profile_start_step: int | None = None,
     dump_hlo: bool = False,
     pgle_runs: int = 0,
     ema_beta: float | None = None,
@@ -460,7 +459,11 @@ def build_h100_ladder_run(
                 if pgle_runs
                 else dict(DEFAULT_JAX_CONFIG)
             ),
-            profiler=ProfilerConfig(enabled=profile, start_step=PROFILE_START_STEP, num_steps=PROFILE_NUM_STEPS),
+            profiler=ProfilerConfig(
+                enabled=profile_start_step is not None,
+                start_step=profile_start_step if profile_start_step is not None else 0,
+                num_steps=PROFILE_NUM_STEPS,
+            ),
             mp=jmp.get_policy(mp_policy),
             tracker=WandbConfig(
                 entity="marin-community",
@@ -631,7 +634,12 @@ def _submit_to_cluster(run_id: str, target_cluster: str | None, priority: str) -
     show_default=True,
     help="Trainer seed (model init and data key); vary it to measure run-to-run noise.",
 )
-@click.option("--profile", is_flag=True, help="Capture a JAX profile of a few steps (uploaded as a W&B artifact).")
+@click.option(
+    "--profile-start-step",
+    type=int,
+    default=None,
+    help="Capture a JAX profile of a few steps from this step (uploaded to the run's xprof directory).",
+)
 @click.option("--dump-hlo", is_flag=True, help="Write the compiled train-step HLO to <output>/train_step.hlo.txt.")
 @click.option(
     "--pgle-runs",
@@ -731,7 +739,7 @@ def main(
     recipe: str,
     attn_res_remat_attention: bool,
     seed: int,
-    profile: bool,
+    profile_start_step: int | None,
     dump_hlo: bool,
     pgle_runs: int,
     ema_beta: float | None,
@@ -764,7 +772,7 @@ def main(
         recipe=Recipe(recipe),
         attn_res_remat_attention=attn_res_remat_attention,
         seed=seed,
-        profile=profile,
+        profile_start_step=profile_start_step,
         dump_hlo=dump_hlo,
         pgle_runs=pgle_runs,
         ema_beta=ema_beta,
