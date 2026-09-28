@@ -38,6 +38,7 @@ from levanter.callbacks import StepInfo
 from levanter.checkpoint import (
     CheckpointCandidate,
     CheckpointDebugConfig,
+    CheckpointRetention,
     Checkpointer,
     CheckpointerConfig,
     CheckpointInterval,
@@ -924,8 +925,8 @@ def test_checkpointer_coalesces_requests_into_one_temporary_checkpoint(tmp_path)
         temporary_base_path=temporary_path,
     )
 
-    checkpointer.request_checkpoint()
-    checkpointer.request_checkpoint()
+    checkpointer.request_checkpoint(CheckpointRetention.TEMPORARY)
+    checkpointer.request_checkpoint(CheckpointRetention.TEMPORARY)
     _on_step(checkpointer, 1)
     _on_step(checkpointer, 2)
     checkpointer.wait_until_finished()
@@ -944,12 +945,39 @@ def test_requested_checkpoint_does_not_downgrade_scheduled_permanent_checkpoint(
         temporary_base_path=temporary_path,
     )
 
-    checkpointer.request_checkpoint()
+    checkpointer.request_checkpoint(CheckpointRetention.TEMPORARY)
     _on_step(checkpointer, 1)
     checkpointer.wait_until_finished()
 
     assert _get_checkpoint_steps(permanent_path) == [1]
     assert not temporary_path.exists()
+
+
+def test_permanent_request_saves_permanent_checkpoint_and_prunes_temporaries(tmp_path):
+    permanent_path = tmp_path / "checkpoints"
+    temporary_path = tmp_path / "temporary"
+    checkpointer = Checkpointer(
+        permanent_path,
+        None,
+        [],
+        temporary_base_path=temporary_path,
+    )
+
+    checkpointer.request_checkpoint(CheckpointRetention.TEMPORARY)
+    _on_step(checkpointer, 1)
+    checkpointer.wait_until_finished()
+    assert _get_checkpoint_steps(temporary_path) == [1]
+
+    # A temporary request made in the same step does not downgrade the permanent one.
+    checkpointer.request_checkpoint(CheckpointRetention.PERMANENT)
+    checkpointer.request_checkpoint(CheckpointRetention.TEMPORARY)
+    _on_step(checkpointer, 2)
+    checkpointer.wait_until_finished()
+
+    assert _get_checkpoint_steps(permanent_path) == [2]
+    metadata = json.loads((permanent_path / "step-2" / "metadata.json").read_text())
+    assert metadata["is_temporary"] is False
+    assert _get_checkpoint_steps(temporary_path) == []
 
 
 def test_load_from_checkpoint_or_initialize():

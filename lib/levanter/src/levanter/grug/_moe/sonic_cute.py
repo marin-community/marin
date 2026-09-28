@@ -11,10 +11,11 @@ elementwise in JAX; the two weight-gradient GEMMs (``dw13``/``dw2``) stay on XLA
 ``ragged_dot``, reached through its transpose, which is where the contraction runs over the
 ragged dimension. QuACK covers ~2/3 of the MoE FLOPs.
 
-``_expert_mlp_quack_wgrad`` is the same forward with those two weight gradients also on QuACK,
-through its varlen-k grouping, which is faster than ``ragged_dot`` at the hero shapes. That is
-the path the ragged all-to-all EP backend takes, so on the hero every grouped GEMM in the expert
-MLP is one kernel family.
+``_expert_mlp_quack_wgrad`` computes the same active rows with those two weight gradients also on
+QuACK, through its varlen-k grouping, which is faster than ``ragged_dot`` at the hero shapes. It
+leaves rows past the last expert segment unspecified instead of zeroing them. That is the path the
+ragged all-to-all EP backend takes, so on the hero every grouped GEMM in the expert MLP is one
+kernel family.
 """
 
 import jax
@@ -114,34 +115,25 @@ def _expert_mlp_quack_wgrad(x_dispatch, w13_il, moe_w2, cu):
     Every grouped GEMM here is driven by ``cu`` alone, so unlike ``_expert_mlp`` -- whose weight
     gradients go through ``ragged_dot`` -- this one never needs the per-expert sizes.
 
-    The forward output is masked past the last expert group: the grouped GEMMs write only
-    the rows inside ``cu``, and those trailing rows flow on through the unpermute and
-    combine, so they have to be zero rather than whatever the buffer held.
+    Rows past ``cu[-1]`` are unspecified in both the output and input gradient, so a caller
+    must read only the active rows. Every grouped GEMM here bounds its reads by ``cu``.
     """
     _gu, h = quack_gated_grouped_gemm(x_dispatch, w13_il, cu, return_preact=True, **_QUACK_GATED_KW)
-    y = quack_grouped_gemm(h, moe_w2, cu, b_major="n", **_QUACK_GROUPED_KW)
-    return _zero_inactive_grouped_rows(y, cu)
+    return quack_grouped_gemm(h, moe_w2, cu, b_major="n", **_QUACK_GROUPED_KW)
 
 
 def _expert_mlp_quack_wgrad_fwd(x_dispatch, w13_il, moe_w2, cu):
     gu, h = quack_gated_grouped_gemm(x_dispatch, w13_il, cu, return_preact=True, **_QUACK_GATED_KW)
     y = quack_grouped_gemm(h, moe_w2, cu, b_major="n", **_QUACK_GROUPED_KW)
-    return _zero_inactive_grouped_rows(y, cu), (x_dispatch, w13_il, moe_w2, gu, h, cu)
+    return y, (x_dispatch, w13_il, moe_w2, gu, h, cu)
 
 
 def _expert_mlp_quack_wgrad_bwd(res, dy):
     x_dispatch, w13_il, moe_w2, gu, h, cu = res
-    # Both consumers of `dy` below are bounded by `cu` -- the varlen-m GEMM writes only rows
-    # inside it, the varlen-k one contracts only rows inside it -- so this mask is defensive
-    # rather than load-bearing, and it costs a full pass over the receiver buffer. It is kept
-    # because the measured numbers on this path were taken with it; dropping it is a throughput
-    # follow-up that needs its own draw, not a free tidy.
-    dy = _zero_inactive_grouped_rows(dy, cu)
     dh = quack_grouped_gemm(dy, moe_w2, cu, b_major="k", **_QUACK_GROUPED_KW)
     dw2 = quack_grouped_wgrad(h, dy, cu, **_QUACK_WGRAD_KW)
     d_gu = _swiglu_gate_up_backward(gu, dh)
     dx = quack_grouped_gemm(d_gu, w13_il, cu, b_major="k", **_QUACK_GROUPED_KW)
-    dx = _zero_inactive_grouped_rows(dx, cu)
     dw13_il = quack_grouped_wgrad(x_dispatch, d_gu, cu, **_QUACK_WGRAD_KW)
     # the int-typed routing arg gets a float0 zero cotangent
     cu_ct = np.zeros(cu.shape, dtype=jax.dtypes.float0)

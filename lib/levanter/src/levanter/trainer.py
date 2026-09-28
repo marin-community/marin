@@ -65,7 +65,13 @@ from levanter.callbacks import (
 from levanter.callbacks.profiler import ProfilerConfig, XlaDumpUploadConfig
 from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.callbacks.watch import WatchConfig
-from levanter.checkpoint import Checkpointer, CheckpointerConfig, is_checkpoint_path, load_checkpoint_or_initialize
+from levanter.checkpoint import (
+    Checkpointer,
+    CheckpointerConfig,
+    CheckpointRetention,
+    is_checkpoint_path,
+    load_checkpoint_or_initialize,
+)
 from levanter.config import JsonAtom
 from levanter.cutlass_kernel_cache import cutlass_kernel_cache
 from levanter.cutlass_kernel_cache import install as install_cutlass_kernel_cache
@@ -362,11 +368,11 @@ class Trainer:
         if self._xla_dump_upload is not None:
             self._xla_dump_upload(info)
 
-    def request_checkpoint(self) -> None:
-        """Request a checkpoint after the current step, subject to the save policy."""
+    def request_checkpoint(self, retention: CheckpointRetention) -> None:
+        """Request a checkpoint after the current step with the given retention."""
         if self._checkpointer is None:
             raise RuntimeError("Checkpointing is not configured")
-        self._checkpointer.request_checkpoint()
+        self._checkpointer.request_checkpoint(retention)
 
     @property
     def parameter_axis_mapping(self) -> ResourceMapping:

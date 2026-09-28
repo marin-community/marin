@@ -78,6 +78,7 @@ def score_expected(
     prompt_ids: Sequence[Sequence[int]],
     expected_ids: Sequence[Sequence[int]],
     *,
+    batch_size: int,
     eos_token_id: int,
     logprobs: Callable[[np.ndarray, np.ndarray, np.ndarray], BatchLogprobs[np.ndarray]],
     decode: Callable[[list[int]], str],
@@ -95,14 +96,14 @@ def score_expected(
             raise ValueError("Each prompt and expected completion must be nonempty and fit in the context with EOS")
     expected_ids = [(*ids, eos_token_id) for ids in expected_ids]
     results = []
-    for start in range(0, len(prompt_ids), spec.batch_size):
-        prompts = prompt_ids[start : start + spec.batch_size]
-        expected = expected_ids[start : start + spec.batch_size]
+    for start in range(0, len(prompt_ids), batch_size):
+        prompts = prompt_ids[start : start + batch_size]
+        expected = expected_ids[start : start + batch_size]
         width = max(map(len, expected))
-        tokens = np.full((spec.batch_size, spec.context_length), eos_token_id, dtype=np.int32)
-        positions = np.zeros((spec.batch_size, width), dtype=np.int32)
-        targets = np.full((spec.batch_size, width), eos_token_id, dtype=np.int32)
-        for row in range(spec.batch_size):
+        tokens = np.full((batch_size, spec.context_length), eos_token_id, dtype=np.int32)
+        positions = np.zeros((batch_size, width), dtype=np.int32)
+        targets = np.full((batch_size, width), eos_token_id, dtype=np.int32)
+        for row in range(batch_size):
             prompt, continuation = prompts[row % len(prompts)], expected[row % len(expected)]
             full = [*prompt, *continuation]
             tokens[row, : len(full)] = full
@@ -150,6 +151,7 @@ def generate(
     spec: SamplingSpec,
     prompt_ids: Sequence[Sequence[int]],
     *,
+    batch_size: int,
     eos_token_id: int,
     logits: Callable[[np.ndarray, np.ndarray], np.ndarray],
     decode: Callable[[list[int]], str],
@@ -157,7 +159,8 @@ def generate(
     """Generate a fixed prompt bank, preserving text and token boundaries.
 
     ``logits`` receives padded token rows and the index of each row's last input token.
-    The model backend must be dropless so filler rows cannot change prompt routing.
+    The model backend must be dropless so filler rows cannot change prompt routing. Each row
+    keeps its own random stream, so ``batch_size`` changes the pass count but not the output.
     """
     if len(prompt_ids) != len(spec.prompts):
         raise ValueError("Tokenized prompt count differs from the prompt bank")
@@ -165,20 +168,21 @@ def generate(
         raise ValueError("Each prompt must contain 1..context_length tokens")
     samples: list[list[Completion]] = [[] for _ in prompt_ids]
     for sample_index in range(spec.completions_per_prompt):
-        for start in range(0, len(prompt_ids), spec.batch_size):
-            batch = slice(start, start + spec.batch_size)
+        for start in range(0, len(prompt_ids), batch_size):
+            batch = slice(start, start + batch_size)
             logger.info(
                 "Generation: sample %d/%d, prompts %d-%d/%d, limit=%d new tokens per prompt",
                 sample_index + 1,
                 spec.completions_per_prompt,
                 start + 1,
-                min(start + spec.batch_size, len(prompt_ids)),
+                min(start + batch_size, len(prompt_ids)),
                 len(prompt_ids),
                 spec.max_new_tokens,
             )
             completed = _generate_batch(
                 spec.model_copy(update={"prompts": spec.prompts[batch]}),
                 prompt_ids[batch],
+                batch_size=batch_size,
                 sample_index=sample_index,
                 eos_token_id=eos_token_id,
                 logits=logits,
@@ -196,12 +200,12 @@ def _generate_batch(
     spec: SamplingSpec,
     prompt_ids: Sequence[Sequence[int]],
     *,
+    batch_size: int,
     sample_index: int,
     eos_token_id: int,
     logits: Callable[[np.ndarray, np.ndarray], np.ndarray],
     decode: Callable[[list[int]], str],
 ) -> tuple[Completion, ...]:
-    batch_size = spec.batch_size
     tokens = np.full((batch_size, spec.context_length), eos_token_id, dtype=np.int32)
     positions = np.zeros(batch_size, dtype=np.int32)
     for row in range(batch_size):

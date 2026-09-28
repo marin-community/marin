@@ -43,9 +43,9 @@ from finestore.migrations.m0001_manifest import LEGACY_SEAL_FILE
 from finestore.reader import ReadView
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
-from marin.evaluation.eval_stats import SAMPLE_COUNT_METRIC
+from marin.evaluation.eval_stats import SAMPLE_COUNT_METRIC, UNGRADED_ERROR
 from marin.evaluation.evaluation_config import eval_task_directory
-from marin.evaluation.metric_selection import base_metric, declared_metric, primary_filter
+from marin.evaluation.metric_selection import REPEAT_MEAN_SUFFIX, base_metric, declared_metric, primary_filter
 from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, BenchmarkMetadataRef, EvalTaskRef, TaskCoverage
 
 
@@ -87,6 +87,9 @@ _CONTENT_TYPES = {
 # :func:`is_scratch_artifact`.
 _SCRATCH_SEGMENT = re.compile(r"(?:^|/)tmp[a-z0-9_]{6,}/")
 _INFRASTRUCTURE_ERROR_PREFIX = f"[{EVALCHEMY_INFRASTRUCTURE_ERROR}]"
+# The pinned Evalchemy normalizer marks these failures in its native sample table. Preserve that
+# decision when Marin rebuilds the same rows from Evalchemy's raw source artifacts.
+_INFRASTRUCTURE_FAILURE_CATEGORIES = frozenset({"agent_timeout", "model_transport", "grader_infrastructure"})
 EVALCHEMY_SOURCE_ROOT = PurePosixPath(prefix_join(SOURCES_PREFIX, "evalchemy"))
 EVALCHEMY_NATIVE_SOURCE_DIR = "native"
 
@@ -105,6 +108,8 @@ def is_scratch_artifact(relative_path: str) -> bool:
 # Live runs are normalized by Evalchemy. These conversion helpers remain for historical exports and
 # for rebuilding an archive's table from preserved sources after damage or an interrupted migration.
 # FineStore itself owns only the normalized schema and storage API.
+_FAILURE_CATEGORY_KEY = "failure_category"
+
 _LM_EVAL_STRUCTURAL_KEYS = frozenset(
     {
         "doc",
@@ -117,7 +122,14 @@ _LM_EVAL_STRUCTURAL_KEYS = frozenset(
         "filter_variants",
         "metrics",
         "schema_version",
+        "sample_id",
+        "sample_namespace",
+        "sample_ordinal",
+        "sample_repeat",
+        "sample_shard",
+        "source_id",
         "task_name",
+        _FAILURE_CATEGORY_KEY,
         "doc_hash",
         "prompt_hash",
         "target_hash",
@@ -208,6 +220,8 @@ def _lm_eval_grading(
     ``,<filter>`` suffix. This accepts both encodings.
     """
     picked = declared_metric(metrics, primary_metric_name)
+    if picked is None and primary_metric_name is not None and primary_metric_name.endswith(REPEAT_MEAN_SUFFIX):
+        picked = declared_metric(metrics, primary_metric_name.removesuffix(REPEAT_MEAN_SUFFIX))
     if picked is None:
         return None
     name, value = picked
@@ -233,6 +247,12 @@ def sample_from_lm_eval(task: str, raw: dict, primary_metric_name: str | None = 
         metrics,
         extraction_filter if isinstance(extraction_filter, str) else None,
         primary_metric_name,
+    )
+    failure_category = raw.get(_FAILURE_CATEGORY_KEY)
+    failure_marker = (
+        f"{_INFRASTRUCTURE_ERROR_PREFIX} {failure_category}"
+        if isinstance(failure_category, str) and failure_category in _INFRASTRUCTURE_FAILURE_CATEGORIES
+        else None
     )
     common = {
         "task": task,
@@ -260,8 +280,10 @@ def sample_from_lm_eval(task: str, raw: dict, primary_metric_name: str | None = 
             kind=SampleKind.MULTIPLE_CHOICE,
             prompt_text=context,
             choices=choices,
-            model_choice=max(scored)[1] if scored else None,
+            model_choice=max(scored)[1] if scored and failure_marker is None else None,
             target_choice=_resolve_target_choice(target, choices),
+            output=failure_marker,
+            extracted=failure_marker,
             **common,
         )
 
@@ -269,6 +291,10 @@ def sample_from_lm_eval(task: str, raw: dict, primary_metric_name: str | None = 
     if isinstance(arguments, list) and arguments:
         first = arguments[0]
         candidate = first[0] if isinstance(first, list) and first else first
+        # Native Evalchemy nests positional generation arguments before request kwargs:
+        # ``[[[prompt], kwargs]]``.
+        if isinstance(candidate, list) and candidate:
+            candidate = candidate[0]
         if isinstance(candidate, str):
             prompt = candidate
     output = ""
@@ -281,6 +307,9 @@ def sample_from_lm_eval(task: str, raw: dict, primary_metric_name: str | None = 
     filtered = raw.get("filtered_resps")
     if isinstance(filtered, list) and filtered:
         filtered = filtered[0]
+    if failure_marker is not None:
+        output = failure_marker
+        filtered = output
     messages = _parse_chat_messages(prompt)
     return EvalSample(
         kind=SampleKind.GENERATION,
@@ -346,6 +375,101 @@ def _is_infrastructure_error(sample: EvalSample) -> bool:
     )
 
 
+@dataclass(frozen=True)
+class _GradedSampleSummary:
+    filter: str | None
+    score: float | None
+    correct: bool | None
+    generation: bool
+    unanswered: bool
+    infrastructure_error: bool
+
+
+@dataclass
+class _TaskCoverageAccumulator:
+    """Fold samples into coverage one at a time, never retaining the samples themselves.
+
+    An export streams a results tree whose sample payloads dwarf everything else in memory, so the
+    only per-sample state kept here is one small summary row.
+    """
+
+    n_benchmark: int | None = None
+    n_attempted: int | None = None
+    score_from_aggregate: bool = False
+    graded: dict[str, list[_GradedSampleSummary]] = field(default_factory=dict)
+    first: dict[str, _GradedSampleSummary] = field(default_factory=dict)
+    recovered_values: dict[str, tuple[float, int]] = field(default_factory=dict)
+    recovered_doc_ids: set[str] = field(default_factory=set)
+    seen: set[str] = field(default_factory=set)
+    any_metrics: bool = False
+
+    def _summary(self, sample: EvalSample) -> _GradedSampleSummary:
+        return _GradedSampleSummary(
+            filter=sample.grading.filter if sample.grading is not None else None,
+            score=sample.grading.score if sample.grading is not None else None,
+            correct=sample.correct,
+            generation=sample.kind is SampleKind.GENERATION,
+            unanswered=sample.kind is SampleKind.GENERATION and not sample.extracted,
+            infrastructure_error=_is_infrastructure_error(sample),
+        )
+
+    def add(self, sample: EvalSample) -> None:
+        summary = self._summary(sample)
+        self.seen.add(sample.doc_id)
+        self.any_metrics = self.any_metrics or bool(sample.metrics)
+        self.first.setdefault(sample.doc_id, summary)
+        if sample.grading is None:
+            return
+        self.graded.setdefault(sample.doc_id, []).append(summary)
+        if summary.infrastructure_error:
+            return
+        self.recovered_doc_ids.add(sample.doc_id)
+        for name, value in sample.metrics.items():
+            metric = name if "," in name or sample.grading.filter is None else f"{name},{sample.grading.filter}"
+            total, count = self.recovered_values.get(metric, (0.0, 0))
+            self.recovered_values[metric] = (total + value, count + 1)
+
+    def result(self) -> tuple[TaskCoverage, dict[str, float]]:
+        headline = primary_filter(
+            {summary.filter for rows in self.graded.values() for summary in rows if summary.filter}
+        )
+        aggregate_scored = self.score_from_aggregate and bool(self.seen) and not self.any_metrics
+        if aggregate_scored:
+            graded_samples = list(self.first.values())
+        else:
+            graded_samples = [
+                next((summary for summary in rows if summary.filter == headline), rows[0])
+                for rows in self.graded.values()
+            ]
+        infrastructure_errors = [summary for summary in graded_samples if summary.infrastructure_error]
+        scored = [summary for summary in graded_samples if not summary.infrastructure_error]
+        ungraded = 0 if aggregate_scored else len(self.seen) - len(graded_samples)
+        # A pass/fail grade is the only one with a Bernoulli count behind it; a partial-credit score
+        # (a rubric, an edit distance) has no numerator to record, and neither does an aggregate-scored
+        # task.
+        binary = not aggregate_scored and all(summary.score in (0.0, 1.0) for summary in scored)
+        errors = {UNGRADED_ERROR: ungraded} if ungraded else {}
+        if infrastructure_errors:
+            errors[EVALCHEMY_INFRASTRUCTURE_ERROR] = len(infrastructure_errors)
+        extent = _document_extent(self.seen)
+        if self.n_attempted is not None and extent is not None and extent > self.n_attempted:
+            raise ValueError(f"sample document extent {extent} exceeds intended count {self.n_attempted}")
+        coverage = TaskCoverage(
+            n_benchmark=self.n_benchmark,
+            n_attempted=self.n_attempted if self.n_attempted is not None else extent,
+            n_scored=len(scored),
+            n_correct=sum(1 for summary in scored if summary.correct) if binary and scored else None,
+            n_unanswered=sum(1 for summary in scored if summary.generation and summary.unanswered),
+            errors=errors,
+        )
+        recovered_metrics: dict[str, float] = {}
+        if infrastructure_errors:
+            recovered_metrics = {name: total / count for name, (total, count) in self.recovered_values.items()}
+            if recovered_metrics:
+                recovered_metrics[SAMPLE_COUNT_METRIC] = float(len(self.recovered_doc_ids))
+        return coverage, recovered_metrics
+
+
 def task_coverage_and_metrics(
     samples: Sequence[EvalSample],
     *,
@@ -362,59 +486,12 @@ def task_coverage_and_metrics(
     When the evaluator declares an aggregate-only primary metric, every enumerated document counts
     as scored even though the sample rows carry no per-item score. No per-item pass tally exists.
     """
-    graded: dict[str, list[EvalSample]] = {}
-    recovered_values: dict[str, list[float]] = {}
-    recovered_doc_ids: set[str] = set()
-    by_doc: dict[str, list[EvalSample]] = {}
-    aggregate_scored = score_from_aggregate and bool(samples) and not any(sample.metrics for sample in samples)
+    accumulator = _TaskCoverageAccumulator(
+        n_benchmark=n_benchmark, n_attempted=n_attempted, score_from_aggregate=score_from_aggregate
+    )
     for sample in samples:
-        by_doc.setdefault(sample.doc_id, []).append(sample)
-        if aggregate_scored:
-            continue
-        if sample.grading is not None:
-            graded.setdefault(sample.doc_id, []).append(sample)
-            if not _is_infrastructure_error(sample):
-                recovered_doc_ids.add(sample.doc_id)
-                for name, value in sample.metrics.items():
-                    metric = name if "," in name or sample.grading.filter is None else f"{name},{sample.grading.filter}"
-                    recovered_values.setdefault(metric, []).append(value)
-
-    headline = primary_filter(
-        {sample.grading.filter for rows in graded.values() for sample in rows if sample.grading.filter}
-    )
-    if aggregate_scored:
-        graded_samples = [rows[0] for rows in by_doc.values()]
-    else:
-        graded_samples = [
-            next((sample for sample in rows if sample.grading.filter == headline), rows[0]) for rows in graded.values()
-        ]
-    infrastructure_errors = [sample for sample in graded_samples if _is_infrastructure_error(sample)]
-    scored = [sample for sample in graded_samples if not _is_infrastructure_error(sample)]
-    ungraded = len(by_doc) - len(graded_samples)
-    # A pass/fail grade is the only one with a Bernoulli count behind it; a partial-credit score
-    # (a rubric, an edit distance) has no numerator to record, and neither does an aggregate-scored
-    # task.
-    binary = not aggregate_scored and all(sample.grading.score in (0.0, 1.0) for sample in scored)
-    errors = {"ungraded": ungraded} if ungraded else {}
-    if infrastructure_errors:
-        errors[EVALCHEMY_INFRASTRUCTURE_ERROR] = len(infrastructure_errors)
-    extent = _document_extent(by_doc)
-    if n_attempted is not None and extent is not None and extent > n_attempted:
-        raise ValueError(f"sample document extent {extent} exceeds intended count {n_attempted}")
-    coverage = TaskCoverage(
-        n_benchmark=n_benchmark,
-        n_attempted=n_attempted if n_attempted is not None else extent,
-        n_scored=len(scored),
-        n_correct=sum(1 for sample in scored if sample.correct) if binary and scored else None,
-        n_unanswered=sum(1 for sample in scored if sample.kind is SampleKind.GENERATION and not sample.extracted),
-        errors=errors,
-    )
-    recovered_metrics: dict[str, float] = {}
-    if infrastructure_errors:
-        recovered_metrics = {name: sum(entries) / len(entries) for name, entries in recovered_values.items()}
-        if recovered_metrics:
-            recovered_metrics[SAMPLE_COUNT_METRIC] = float(len(recovered_doc_ids))
-    return coverage, recovered_metrics
+        accumulator.add(sample)
+    return accumulator.result()
 
 
 def _task_keys(
@@ -628,21 +705,22 @@ def _write_sample_archive(
                     metric.source_name for metric in benchmark.metrics if metric.name == benchmark.primary_metric
                 )
                 score_from_aggregate = primary_source.endswith("_avg")
-            samples = _add_lm_eval_rows(
-                store,
-                relative.rsplit("/", 1)[-1],
-                payload,
-                primary_metric_name=primary_source,
-            )
-            count += len(samples)
-            if not samples:
-                continue
-            task_coverage_result, task_metrics = task_coverage_and_metrics(
-                samples,
+            accumulator = _TaskCoverageAccumulator(
                 n_benchmark=benchmark.n_benchmark if benchmark is not None else None,
                 n_attempted=benchmark.n_attempted if benchmark is not None else None,
                 score_from_aggregate=score_from_aggregate,
             )
+            written = _add_lm_eval_rows(
+                store,
+                relative.rsplit("/", 1)[-1],
+                payload,
+                primary_metric_name=primary_source,
+                coverage=accumulator,
+            )
+            count += written
+            if not written:
+                continue
+            task_coverage_result, task_metrics = accumulator.result()
             coverage[task_key] = task_coverage_result
             if task_coverage_result.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR):
                 recovered_metrics[task_key] = task_metrics
@@ -814,21 +892,43 @@ def _task_from_filename(name: str, suffix: str) -> str:
 
 
 def _add_lm_eval_rows(
-    store: EvaluationStore, filename: str, payload: bytes, *, primary_metric_name: str | None = None
-) -> list[EvalSample]:
-    """Normalize one ``samples_*.jsonl`` payload into ``store``; return the samples added.
+    store: EvaluationStore,
+    filename: str,
+    payload: bytes,
+    *,
+    primary_metric_name: str | None = None,
+    task_name: str | None = None,
+    coverage: _TaskCoverageAccumulator | None = None,
+) -> int:
+    """Normalize one ``samples_*.jsonl`` payload into ``store``; return the sample count added.
 
-    Physical LF bytes delimit records. Literal U+2028/U+2029 characters remain inside JSON strings.
+    Physical LF bytes delimit records, so the payload is parsed one line at a time and never fully
+    decoded into a row list. Literal U+2028/U+2029 characters remain inside JSON strings.
     """
-    rows = [json.loads(line) for line in payload.decode().split("\n") if line.strip()]
-    if not rows:
+    task = task_name or _task_from_filename(filename, ".jsonl")
+    count = 0
+    start = 0
+    while start < len(payload):
+        end = payload.find(b"\n", start)
+        if end < 0:
+            end = len(payload)
+        line = payload[start:end]
+        start = end + 1
+        if not line or line.isspace():
+            continue
+        raw = json.loads(line)
+        extraction_filter = raw.get("filter")
+        extraction_filter = extraction_filter if isinstance(extraction_filter, str) else None
+        for sample in samples_from_lm_eval(task, raw, primary_metric_name):
+            # An explicit filter only carries information a grading does not already name; a
+            # filtered response without a per-sample grade would otherwise lose its filter.
+            store.add_sample(sample, extraction_filter=extraction_filter if sample.grading is None else None)
+            if coverage is not None:
+                coverage.add(sample)
+            count += 1
+    if not count:
         logger.warning("samples file %s is empty; skipping archive export", filename)
-        return []
-    task = _task_from_filename(filename, ".jsonl")
-    samples = [sample for raw in rows for sample in samples_from_lm_eval(task, raw, primary_metric_name)]
-    for sample in samples:
-        store.add_sample(sample)
-    return samples
+    return count
 
 
 def preserved_sample_sources(out_path: str) -> tuple[str, ...]:
@@ -865,6 +965,8 @@ def rebuild_lm_eval_samples(out_path: str, *, tasks: Sequence[EvalTaskRef] = (),
     require_current_samples(out_path)
     store = EvaluationStore.open(out_path, writer_id=writer_id)
     task_configs = {eval_task_directory(task.name, task.num_fewshot, task.task_alias): task for task in tasks}
+    native_names = tuple(name for name in names if _is_native_evalchemy_source(name))
+    native_task_keys = _task_keys(native_names)
     count = 0
     try:
         for name in names:
@@ -891,13 +993,12 @@ def rebuild_lm_eval_samples(out_path: str, *, tasks: Sequence[EvalTaskRef] = (),
                 primary_source = next(
                     metric.source_name for metric in benchmark.metrics if metric.name == benchmark.primary_metric
                 )
-            count += len(
-                _add_lm_eval_rows(
-                    store,
-                    name.rsplit("/", 1)[-1],
-                    payload,
-                    primary_metric_name=primary_source,
-                )
+            count += _add_lm_eval_rows(
+                store,
+                name.rsplit("/", 1)[-1],
+                payload,
+                primary_metric_name=primary_source,
+                task_name=native_task_keys.get(name),
             )
         store.seal()
     finally:

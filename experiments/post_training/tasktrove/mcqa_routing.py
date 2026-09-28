@@ -18,8 +18,6 @@ import os
 import re
 import time
 import tomllib
-import urllib.parse
-import urllib.request
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from enum import StrEnum
@@ -27,18 +25,18 @@ from pathlib import Path
 from typing import Any
 
 import pyarrow.parquet as pq
-from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
-from iris.cluster.types import JobName
+from marin.inference.openai_batch import CHAT_COMPLETIONS_ENDPOINT, OpenAIBatchClient, jsonl_text
+from marin.inference.structured_output import sole_tool_arguments
 from rigging.filesystem.storage_path import StoragePath
 
+from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, GLM_MODEL, resolve_glm_base_url
 from experiments.post_training.tasktrove.taskbinary import INSTRUCTION, read_task_binary
 
 logger = logging.getLogger(__name__)
 
 MCQA_SOURCE = "laion__nemotron-gym-knowledge-mcqa-v2"
 POLICY_VERSION = "tasktrove-mcqa-glm53-v1"
-GLM_BULK_TOKEN_ENV = "GLM_BULK_TOKEN"
 DECISIONS_FILENAME = "decisions.jsonl"
 ROUTE_MAPPINGS_FILENAME = "route-mappings.jsonl"
 ROUTE_MAPPING_FIELDS = ("task_id", "route", "route_source", "policy_version", "reason_codes")
@@ -357,32 +355,6 @@ def select_tasks(
     return tasks, summary
 
 
-def resolve_base_url(relay_job: str) -> str:
-    client = iris_ctx().client
-    if client is None:
-        raise RuntimeError("Iris client is unavailable inside the task")
-    endpoints = client.resolver_for_job(JobName.from_string(relay_job)).resolve("glm-5.3").endpoints
-    if not endpoints:
-        raise RuntimeError("The GLM relay has no registered endpoint")
-    base_url = endpoints[0].url.rstrip("/")
-    return base_url if base_url.endswith("/v1") else f"{base_url}/v1"
-
-
-def _request(url: str, token: str, *, data: bytes | None = None, content_type: str | None = None) -> bytes:
-    headers = {"Authorization": f"Bearer {token}", "x-priority": "bulk"}
-    if content_type is not None:
-        headers["Content-Type"] = content_type
-    request = urllib.request.Request(url, data=data, headers=headers, method="POST" if data is not None else "GET")
-    with urllib.request.urlopen(request, timeout=600) as response:
-        return response.read()
-
-
-def _request_json(url: str, token: str, *, body: dict[str, Any] | None = None) -> dict[str, Any]:
-    data = None if body is None else json.dumps(body, separators=(",", ":")).encode()
-    raw = _request(url, token, data=data, content_type="application/json" if data is not None else None)
-    return json.loads(raw)
-
-
 def completion_body(tasks: list[RoutingTask], batch_id: int) -> dict[str, Any]:
     visible = [
         {"row_id": row_id, "question": task.question, "options": task.options, "expected": task.expected}
@@ -394,7 +366,7 @@ def completion_body(tasks: list[RoutingTask], batch_id: int) -> dict[str, Any]:
         + "\n".join(json.dumps(row, ensure_ascii=False, separators=(",", ":")) for row in visible)
     )
     return {
-        "model": "glm-5.3",
+        "model": GLM_MODEL,
         "messages": [
             {"role": "system", "content": "Apply the routing rubric conservatively and call submit_routes once."},
             {"role": "user", "content": prompt},
@@ -430,52 +402,12 @@ def batch_lines(
             {
                 "custom_id": custom_id,
                 "method": "POST",
-                "url": "/v1/chat/completions",
+                "url": CHAT_COMPLETIONS_ENDPOINT,
                 "body": completion_body(batch, start // batch_size),
             }
         )
         by_custom_id[custom_id] = batch
     return lines, by_custom_id
-
-
-def _jsonl(rows: list[dict[str, Any]]) -> str:
-    return "".join(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n" for row in rows)
-
-
-def submit_batch(base_url: str, token: str, lines: list[dict[str, Any]], filename: str) -> tuple[str, str]:
-    query = urllib.parse.urlencode({"purpose": "batch", "filename": filename})
-    file_response = json.loads(
-        _request(f"{base_url}/files?{query}", token, data=_jsonl(lines).encode(), content_type="application/jsonl")
-    )
-    file_id = file_response["id"]
-    batch = _request_json(
-        f"{base_url}/batches",
-        token,
-        body={"input_file_id": file_id, "endpoint": "/v1/chat/completions", "priority": "bulk"},
-    )
-    return file_id, batch["id"]
-
-
-def wait_for_batch(base_url: str, token: str, batch_id: str, poll_seconds: float) -> dict[str, Any]:
-    terminal = {"completed", "failed", "expired", "cancelled"}
-    last_counts = None
-    while True:
-        batch = _request_json(f"{base_url}/batches/{batch_id}", token)
-        counts = batch.get("request_counts")
-        if counts != last_counts:
-            logger.info("GLM batch %s status=%s counts=%s", batch_id, batch.get("status"), counts)
-            last_counts = counts
-        if batch.get("status") in terminal:
-            return batch
-        time.sleep(poll_seconds)
-
-
-def _tool_arguments(response_body: dict[str, Any]) -> dict[str, Any]:
-    message = response_body["choices"][0]["message"]
-    calls = message.get("tool_calls") or []
-    if len(calls) != 1 or calls[0]["function"]["name"] != "submit_routes":
-        raise ValueError("expected exactly one submit_routes tool call")
-    return json.loads(calls[0]["function"]["arguments"])
 
 
 def parse_decision(row: dict[str, Any]) -> GlmDecision:
@@ -527,7 +459,7 @@ def decision_row(task: RoutingTask, decision: GlmDecision) -> dict[str, Any]:
         "task_id": task.task_id,
         "route": route.value,
         "model_route": decision.route.value,
-        "route_source": "glm-5.3",
+        "route_source": GLM_MODEL,
         "policy_version": POLICY_VERSION,
         "reason_codes": [
             f"model_route:{decision.route.value}",
@@ -573,14 +505,6 @@ def fallback_row(task: RoutingTask, reason: str) -> dict[str, Any]:
     }
 
 
-def read_batch_output(base_url: str, token: str, batch: dict[str, Any]) -> tuple[str, str | None]:
-    output_id = batch.get("output_file_id")
-    output = "" if not output_id else _request(f"{base_url}/files/{output_id}/content", token).decode()
-    error_id = batch.get("error_file_id")
-    errors = None if not error_id else _request(f"{base_url}/files/{error_id}/content", token).decode()
-    return output, errors
-
-
 def parse_batch_output(
     output: str, by_custom_id: dict[str, list[RoutingTask]]
 ) -> tuple[list[dict[str, Any]], list[str]]:
@@ -605,7 +529,7 @@ def parse_batch_output(
             routed.extend(fallback_row(task, "request_error") for task in tasks)
             continue
         try:
-            raw_results = _tool_arguments(response["body"])["results"]
+            raw_results = json.loads(sole_tool_arguments(response["body"], "submit_routes"))["results"]
             if not isinstance(raw_results, list):
                 raise TypeError("results must be an array")
         except (KeyError, TypeError, ValueError, json.JSONDecodeError):
@@ -679,12 +603,13 @@ def run_worker(config: RoutingConfig) -> None:
     )
     logger.info("worker %d selected %d rows from %d source rows", worker_index, len(tasks), scan_summary["source_rows"])
 
-    base_url = resolve_base_url(config.relay_job)
+    base_url = resolve_glm_base_url(config.relay_job)
     token = os.environ[GLM_BULK_TOKEN_ENV]
+    batch_client = OpenAIBatchClient(base_url, token)
     lines, by_custom_id = batch_lines(tasks, config.request_batch_size, worker_index)
     request_path = output_root / "requests.jsonl"
     if not request_path.exists():
-        request_path.write_text(_jsonl(lines))
+        request_path.write_text(jsonl_text(lines))
 
     state_path = output_root / "batch-state.json"
     if state_path.exists():
@@ -692,12 +617,11 @@ def run_worker(config: RoutingConfig) -> None:
         file_id, batch_id = state["file_id"], state["batch_id"]
         logger.info("worker %d resuming GLM batch %s", worker_index, batch_id)
     else:
-        file_id, batch_id = submit_batch(
-            base_url,
-            token,
+        submission = batch_client.submit(
             lines,
             f"tasktrove-mcqa-worker-{worker_index:03d}.jsonl",
         )
+        file_id, batch_id = submission.file_id, submission.batch_id
         state_path.write_text(json.dumps({"file_id": file_id, "batch_id": batch_id}, indent=2) + "\n")
         logger.info(
             "worker %d submitted GLM batch %s with %d requests of at most %d tasks",
@@ -707,8 +631,9 @@ def run_worker(config: RoutingConfig) -> None:
             config.request_batch_size,
         )
 
-    batch = wait_for_batch(base_url, token, batch_id, config.poll_seconds)
-    raw_output, raw_errors = read_batch_output(base_url, token, batch)
+    batch = batch_client.wait(batch_id, config.poll_seconds)
+    batch_output = batch_client.output(batch)
+    raw_output, raw_errors = batch_output.output, batch_output.errors
     (output_root / "raw-output.jsonl").write_text(raw_output)
     if raw_errors is not None:
         (output_root / "raw-errors.jsonl").write_text(raw_errors)
@@ -718,9 +643,9 @@ def run_worker(config: RoutingConfig) -> None:
         raise RuntimeError(f"worker {worker_index} routed {len(routed)} of {len(tasks)} tasks")
 
     routed.sort(key=lambda row: row["task_id"])
-    (output_root / DECISIONS_FILENAME).write_text(_jsonl(routed))
+    (output_root / DECISIONS_FILENAME).write_text(jsonl_text(routed))
     mappings = [{key: row[key] for key in ROUTE_MAPPING_FIELDS} for row in routed]
-    (output_root / ROUTE_MAPPINGS_FILENAME).write_text(_jsonl(mappings))
+    (output_root / ROUTE_MAPPINGS_FILENAME).write_text(jsonl_text(mappings))
 
     route_subject = defaultdict(Counter)
     for row in routed:

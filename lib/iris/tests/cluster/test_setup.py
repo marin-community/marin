@@ -4,7 +4,9 @@
 """Tests for how EnvironmentSpec resolves the user setup scripts onto the wire."""
 
 import os
+import shutil
 import subprocess
+from zipfile import ZipFile
 
 import pytest
 from iris.cluster.runtime.env import UV_CACHE_RECOVERY_SIGNAL_PREFIX, build_common_iris_env, render_setup_steps
@@ -71,6 +73,62 @@ package = false
     assert (venv / "bin" / "python").is_file()
 
 
+@pytest.mark.parametrize("link_mode", ["copy", "symlink"])
+def test_default_setup_sync_uses_host_link_mode_for_cached_wheel(tmp_path, link_mode):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    wheel = tmp_path / "setup_payload-0.1.0-py3-none-any.whl"
+    with ZipFile(wheel, "w") as archive:
+        archive.writestr("setup_payload/__init__.py", "value = 1\n")
+        archive.writestr(
+            "setup_payload-0.1.0.dist-info/WHEEL",
+            "Wheel-Version: 1.0\nGenerator: iris-test\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+        )
+        archive.writestr(
+            "setup_payload-0.1.0.dist-info/METADATA",
+            "Metadata-Version: 2.1\nName: setup-payload\nVersion: 0.1.0\n",
+        )
+        archive.writestr(
+            "setup_payload-0.1.0.dist-info/RECORD",
+            "setup_payload/__init__.py,,\nsetup_payload-0.1.0.dist-info/WHEEL,,\n"
+            "setup_payload-0.1.0.dist-info/METADATA,,\nsetup_payload-0.1.0.dist-info/RECORD,,\n",
+        )
+    (workdir / "pyproject.toml").write_text(
+        '[project]\nname = "setup-test"\nversion = "0.1.0"\nrequires-python = ">=3.12"\n'
+        f'dependencies = ["setup-payload @ {wheel.as_uri()}"]\n'
+        "[tool.uv]\npackage = false\n"
+    )
+
+    venv = tmp_path / "venv"
+    cache = tmp_path / "uv-cache"
+    env = {
+        **os.environ,
+        "IRIS_VENV": str(venv),
+        "IRIS_WORKDIR": str(workdir),
+        "UV_CACHE_DIR": str(cache),
+        "UV_LINK_MODE": link_mode,
+        "UV_PROJECT_ENVIRONMENT": str(venv),
+    }
+    subprocess.run(
+        ["bash", "-c", default_setup_script()],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    installed = next((venv / "lib").glob("python*/site-packages/setup_payload/__init__.py"))
+    if link_mode == "symlink":
+        assert installed.is_symlink()
+        assert installed.resolve().is_relative_to(cache)
+    else:
+        assert not installed.is_symlink()
+        shutil.rmtree(cache)
+        subprocess.run(
+            [venv / "bin" / "python", "-c", "import setup_payload; assert setup_payload.value == 1"], check=True
+        )
+
+
 @pytest.mark.parametrize(
     "shared_cache_fails, local_cache_fails, expected_status",
     [(False, False, 0), (True, False, 0), (True, True, 2)],
@@ -96,7 +154,7 @@ if [ "$UV_CACHE_DIR" != "$SHARED_UV_CACHE" ] && [ "$LOCAL_CACHE_FAILS" = "1" ]; 
 fi
 if [ "$1" = "sync" ]; then
   case " $* " in
-    *" --link-mode clone "*) ;;
+    *" --link-mode copy "*) ;;
     *) exit 3 ;;
   esac
 fi

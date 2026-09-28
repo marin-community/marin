@@ -61,6 +61,8 @@ from iris.rpc.proto_display import resolve_container_profile
 
 logger = logging.getLogger(__name__)
 
+_SETUP_CPU_MIN_MILLICORES = 1000
+
 # Substrings that indicate a docker/registry infrastructure problem rather than
 # a user-code error.  Checked case-insensitively against stderr from docker
 # create/start/pull.
@@ -479,10 +481,12 @@ class DockerContainerHandle:
         )
         build_memory_mb = build_memory_bytes // (1024 * 1024)
 
+        # Small coordinator requests should not throttle transient uv builds.
         build_container_id = self._docker_create(
             command=["bash", "/app/_setup_env.sh"],
             label_suffix="_build",
             memory_limit_mb=build_memory_mb,
+            cpu_millicores=max(_SETUP_CPU_MIN_MILLICORES, self.config.get_cpu_millicores() or 0),
         )
 
         build_logs: list[LogLine] = []
@@ -653,6 +657,7 @@ exec {quoted_cmd}
         label_suffix: str = "",
         include_devices: bool = False,
         memory_limit_mb: int | None = None,
+        cpu_millicores: int | None = None,
     ) -> str:
         """Create a Docker container. Returns container_id.
 
@@ -665,6 +670,7 @@ exec {quoted_cmd}
             include_devices: If True, also pass through accelerator devices.
             memory_limit_mb: Override memory limit in MB. When None, uses
                 the task's requested memory from config.resources.
+            cpu_millicores: Override the task's requested CPU for this container.
         """
         config = self.config
         self.runtime.ensure_image(config.image)
@@ -732,15 +738,15 @@ exec {quoted_cmd}
             cmd.extend(["--label", f"iris.ports={json.dumps(config.ports)}"])
 
         # Resource limits (cgroups v2) — always applied
-        cpu_millicores = config.get_cpu_millicores()
-        if cpu_millicores:
+        effective_cpu_millicores = cpu_millicores or config.get_cpu_millicores()
+        if effective_cpu_millicores:
             if self.runtime.capacity_type == CapacityType.ON_DEMAND:
                 # Soft weight: on-demand workers let containers burst onto idle
                 # host CPU; the scheduler still places by cpu_millicores.
-                shares = max(2, int(cpu_millicores * 1024 / 1000))
+                shares = max(2, int(effective_cpu_millicores * 1024 / 1000))
                 cmd.extend(["--cpu-shares", str(shares)])
             else:
-                cmd.extend(["--cpus", str(cpu_millicores / 1000)])
+                cmd.extend(["--cpus", str(effective_cpu_millicores / 1000)])
         effective_memory_mb = memory_limit_mb or config.get_memory_mb()
         if effective_memory_mb:
             cmd.extend(["--memory", f"{effective_memory_mb}m"])

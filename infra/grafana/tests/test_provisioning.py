@@ -787,6 +787,20 @@ def test_every_sql_selector_has_a_matching_variable():
                 assert variable in variables, f"{name}: ${variable} used but not declared"
 
 
+def test_every_queried_panel_says_what_it_measures():
+    # A panel's description is the only place the dashboard says what its series mean.
+    for name, dashboard in _stitched_dashboards().items():
+        for panel in _all_panels(dashboard):
+            queries_sql = any(
+                param["key"] == "sql"
+                for target in panel.get("targets", [])
+                for param in target.get("url_options", {}).get("params", [])
+            )
+            if not panel.get("title") or not queries_sql:
+                continue
+            assert panel.get("description", "").strip(), f"{name}: {panel['title']} has no description"
+
+
 def test_dashboard_links_point_at_provisioned_dashboards():
     # Deleting a dashboard silently strands every nav link that named it.
     uids = {dashboard["uid"] for dashboard in _stitched_dashboards().values()}

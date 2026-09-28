@@ -28,6 +28,11 @@ logger = logging.getLogger(__name__)
 
 JOB_USER = "hero-completions"
 MAX_ATTEMPTS = 3
+# One pass per sample over the prompt bank runs the full decode limit and takes about 40 minutes.
+# A rack-wide batch covers the bank in one pass, so three samples need about two hours plus the
+# checkpoint restore. Keep enough margin that a slow node does not discard a finished attempt:
+# the job holds no partial result, and a timeout consumes one of MAX_ATTEMPTS.
+SAMPLING_TIMEOUT = Duration.from_hours(6)
 
 
 class SubmissionMode(StrEnum):
@@ -139,8 +144,6 @@ class IrisSamplingJobs:
         resources = replace(self.resources, target_cluster=request.target_cluster)
         if not isinstance(resources.device, GpuConfig):
             raise ValueError("Native sampling requires GPU resources")
-        if resources.device.count * resources.replicas != request.spec.batch_size:
-            raise ValueError("Sampling batch size must match the GPU count")
         native_resources = convert_resources(resources)
         command = Entrypoint(
             command=[
@@ -190,7 +193,7 @@ class IrisSamplingJobs:
                             coscheduling=resolve_coscheduling(resources, resources.replicas),
                             ports=["jax"],
                             scheduling_timeout=Duration.from_hours(24),
-                            timeout=Duration.from_hours(4),
+                            timeout=SAMPLING_TIMEOUT,
                             max_retries_failure=0,
                             max_retries_preemption=1000,
                             max_task_failures=0,

@@ -2,7 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import re
+import threading
 import warnings
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from typing import cast
 
 import jax
@@ -1322,7 +1325,7 @@ def test_benchmark_candidate_handles_real_shard_map_tracers():
     assert float(score) >= 0.0
 
 
-def test_pallas_tpu_autotune_sweeps_for_real_shard_map_tracers(monkeypatch: pytest.MonkeyPatch):
+def test_pallas_tpu_autotune_selects_first_viable_for_real_shard_map_tracers(monkeypatch: pytest.MonkeyPatch):
     partition_spec = jax.sharding.PartitionSpec
     mesh = jax.sharding.Mesh(
         np.array(jax.devices()[:1]),
@@ -1343,7 +1346,7 @@ def test_pallas_tpu_autotune_sweeps_for_real_shard_map_tracers(monkeypatch: pyte
     )
     inferred = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=128)
     seen_block_sizes: list[fused_api.BlockSizes | None] = []
-    benchmarked_candidates: list[fused_api.BlockSizes] = []
+    compiled_candidates: list[fused_api.BlockSizes] = []
     faster = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=256)
     slower = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=512)
 
@@ -1365,12 +1368,14 @@ def test_pallas_tpu_autotune_sweeps_for_real_shard_map_tracers(monkeypatch: pyte
         lambda impl_name, inferred_block_sizes, **kwargs: [inferred_block_sizes, slower, faster],
     )
 
-    def fake_benchmark(**kwargs):
+    def fake_compile(**kwargs):
         candidate = kwargs["candidate"]
-        benchmarked_candidates.append(candidate)
-        return 1.0 if candidate == faster else 2.0
+        compiled_candidates.append(candidate)
+        if candidate == inferred:
+            raise RuntimeError("candidate cannot compile")
+        return lambda *args: args[0]
 
-    monkeypatch.setattr(fused_api, "_benchmark_block_sizes_candidate", fake_benchmark)
+    monkeypatch.setattr(fused_api, "_compile_block_sizes_candidate", fake_compile)
     monkeypatch.setitem(fused_api.IMPLEMENTATIONS, "pallas_tpu", fake_impl)
     monkeypatch.setattr(
         fused_api, "_AUTOTUNE_CACHE", fused_api.AutotuneBlockSizeCache(fused_api.PersistentKvCache.in_memory())
@@ -1397,9 +1402,8 @@ def test_pallas_tpu_autotune_sweeps_for_real_shard_map_tracers(monkeypatch: pyte
     out = mapped(x, y, w)
     out.block_until_ready()
 
-    assert benchmarked_candidates == [inferred, slower, faster]
-    assert seen_block_sizes[-1] == faster
-    assert faster in seen_block_sizes
+    assert compiled_candidates == [inferred, slower]
+    assert seen_block_sizes[-1] == slower
 
 
 def test_pallas_tpu_vmem_compile_error_falls_back_to_xla_when_requested(monkeypatch: pytest.MonkeyPatch):
@@ -1593,6 +1597,144 @@ def test_pallas_autotune_cache_reuses_winner(monkeypatch: pytest.MonkeyPatch):
     assert winner_1 == faster
     assert winner_2 == faster
     assert calls["bench"] == 3
+
+
+def test_distributed_fused_ce_autotune_skips_failed_compile_and_chooses_lowest_mean(monkeypatch: pytest.MonkeyPatch):
+    x = jnp.ones((4, 8), dtype=jnp.float32)
+    w = jnp.ones((8, 16), dtype=jnp.float32)
+    labels = jnp.zeros((4,), dtype=jnp.int32)
+    candidates = [BlockSizes(128, 128, v) for v in (128, 256, 512)]
+    rank_timings = ((1.0, 2.0, 0.1), (10.0, 2.0, None))
+    context = threading.local()
+    condition = threading.Condition()
+    exchanged: dict[int, dict[int, object]] = {}
+    executed: dict[int, list[BlockSizes]] = {0: [], 1: []}
+
+    @dataclass(frozen=True)
+    class Device:
+        process_index: int
+
+    mesh = jax.sharding.Mesh(np.array([Device(1), Device(2)], dtype=object), ("data",))
+    sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec("data"))
+
+    def allgather(value, *, process_ids):
+        assert process_ids == (1, 2)
+        sequence = context.sequence
+        context.sequence += 1
+        with condition:
+            round_values = exchanged.setdefault(sequence, {})
+            round_values[context.rank] = value
+            condition.notify_all()
+            assert condition.wait_for(lambda: len(round_values) == 2, timeout=5)
+            return [round_values[index] for index in range(2)]
+
+    def compile_candidate(*, candidate, **kwargs):
+        del kwargs
+        if rank_timings[context.rank][candidates.index(candidate)] is None:
+            raise RuntimeError("candidate failed on this rank")
+        return candidate
+
+    def run_candidate(candidate, *args):
+        del args
+        executed[context.rank].append(candidate)
+        return rank_timings[context.rank][candidates.index(candidate)]
+
+    def fake_impl(x_value, labels_value, w_value, **kwargs):
+        del labels_value, w_value, kwargs
+        return x_value, x_value
+
+    monkeypatch.setattr(jax, "process_count", lambda: 3)
+    monkeypatch.setattr(jax, "process_index", lambda: context.rank + 1)
+    monkeypatch.setattr(fused_api.autotune_utils, "named_sharding_of", lambda _value: sharding)
+    monkeypatch.setattr(fused_api, "_autotune_enabled", lambda: True)
+    monkeypatch.setattr(fused_api, "_autotune_cache_key", lambda **kwargs: None)
+    monkeypatch.setattr(fused_api, "_candidate_block_sizes", lambda *args, **kwargs: candidates)
+    monkeypatch.setattr(fused_api, "_compile_block_sizes_candidate", compile_candidate)
+    monkeypatch.setattr(fused_api, "_run_block_sizes_candidate", run_candidate)
+    monkeypatch.setattr(fused_api, "multihost_allgather_sync", allgather)
+
+    def run_rank(rank):
+        context.rank = rank
+        context.sequence = 0
+        return fused_api._autotune_block_sizes_on_miss(
+            impl_name="batched_xla",
+            fn=fake_impl,
+            x=x,
+            labels=labels,
+            w=w,
+            inferred=candidates[0],
+            dtype=jnp.float32,
+            logit_soft_cap=None,
+            precision=None,
+            return_argmax=False,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        winners = list(executor.map(run_rank, range(2)))
+
+    assert winners == [candidates[1], candidates[1]]
+    assert executed == {0: candidates[:2], 1: candidates[:2]}
+
+
+@pytest.mark.parametrize("different_setting", ["tuned_match", "autotune_enabled"])
+def test_distributed_fused_ce_rejects_rank_local_selection_before_sweep(
+    monkeypatch: pytest.MonkeyPatch, different_setting: str
+):
+    x = jnp.ones((4, 8), dtype=jnp.float32)
+    w = jnp.ones((8, 16), dtype=jnp.float32)
+    labels = jnp.zeros((4,), dtype=jnp.int32)
+    inferred = BlockSizes(128, 128, 128)
+    faster = BlockSizes(128, 128, 256)
+    context = threading.local()
+    condition = threading.Condition()
+    exchanged: dict[int, object] = {}
+
+    def allgather(value):
+        with condition:
+            exchanged[context.rank] = value
+            condition.notify_all()
+            assert condition.wait_for(lambda: len(exchanged) == 2, timeout=5)
+            return [exchanged[index] for index in range(2)]
+
+    def fake_impl(x_value, labels_value, w_value, *, block_sizes, **kwargs):
+        del labels_value, w_value, kwargs
+        output = jnp.full((x_value.shape[0],), block_sizes.v_block_size, dtype=jnp.float32)
+        return output, jnp.zeros_like(output)
+
+    def infer_for_rank(*args, **kwargs):
+        del args, kwargs
+        return inferred, different_setting == "tuned_match" and context.rank == 0
+
+    monkeypatch.setattr(jax, "process_count", lambda: 2)
+    monkeypatch.setattr(fused_api, "multihost_allgather_sync", allgather)
+    monkeypatch.setattr(fused_api, "infer_block_sizes_with_tuned_match", infer_for_rank)
+    monkeypatch.setattr(
+        fused_api, "_autotune_enabled", lambda: different_setting != "autotune_enabled" or context.rank == 0
+    )
+    sweep_called = []
+
+    def fake_autotune(**kwargs):
+        sweep_called.append(kwargs)
+        return faster
+
+    monkeypatch.setattr(fused_api, "_autotune_block_sizes_on_miss", fake_autotune)
+    monkeypatch.setitem(fused_api.IMPLEMENTATIONS, "batched_xla", fake_impl)
+
+    def run_rank(rank):
+        context.rank = rank
+        try:
+            fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+                x, labels, w, reduction=None, implementation="batched_xla"
+            )
+        except RuntimeError as exc:
+            return exc
+        return None
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(run_rank, range(2)))
+
+    assert all(isinstance(result, RuntimeError) for result in results)
+    assert not sweep_called
 
 
 def _run_autotune_miss(impl_name: str = "pallas_tpu", *, vocab: int = 16):

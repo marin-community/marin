@@ -33,6 +33,7 @@ from scripts.ci.package_release import (
     validate_targeted_lock_change,
 )
 from scripts.python_libs_package import PACKAGES as BUNDLED_LIBRARIES
+from scripts.python_libs_package import _rewrite_sibling_pins
 
 RELEASE_WORKFLOW = Path(".github/workflows/marin-release-libs-wheels.yaml")
 EXTERNAL_UPDATE_WORKFLOW = Path(".github/workflows/ops-external-dependencies.yaml")
@@ -133,6 +134,7 @@ def test_change_detection_maps_shared_and_owned_sources() -> None:
     assert packages_for_changes(["scripts/python_libs_package.py"]) == ["python-libs"]
     assert packages_for_changes(["lib/iris/hatch_build.py"]) == ["python-libs"]
     assert packages_for_changes(["lib/finestore/src/finestore/eval.py"]) == ["python-libs"]
+    assert packages_for_changes(["lib/shellbox/src/shellbox/machine.py"]) == ["python-libs"]
     assert packages_for_changes(["scripts/ci/package_release.py"]) == [
         "dupekit",
         "finelog",
@@ -291,6 +293,13 @@ def test_python_libs_release_expectations_track_the_bundle_builder() -> None:
     }
 
 
+def test_shellbox_iris_extra_pins_to_bundle_release() -> None:
+    pyproject = Path("lib/shellbox/pyproject.toml").read_text()
+    released = tomllib.loads(_rewrite_sibling_pins(pyproject, "0.3.0.dev30194118926"))
+
+    assert released["project"]["optional-dependencies"]["iris"] == ["marin-iris==0.3.0.dev30194118926"]
+
+
 @pytest.mark.parametrize("package", ["iris", "dupekit", "finelog"])
 def test_native_release_expectations_track_the_build_legs(package: str) -> None:
     """Native families must expect exactly the distributions and wheels their legs build.
@@ -421,6 +430,8 @@ def test_release_workflow_publishes_only_trusted_package_releases() -> None:
     assert "schedule" in triggers
     assert "uv.lock" not in push["paths"]
     assert not any(item.endswith("pyproject.toml") for item in push["paths"])
+    assert "shellbox-v*" not in push["tags"]
+    assert "lib/shellbox/src/**" in push["paths"]
 
     publish = workflow["jobs"]["publish"]
     assert publish["permissions"] == {"contents": "read", "id-token": "write"}

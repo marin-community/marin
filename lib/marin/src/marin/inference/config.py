@@ -7,6 +7,7 @@ These dataclasses are safe to construct in CPU coordinators and CLI processes.
 Accelerator-heavy serving implementations translate them inside worker jobs.
 """
 
+import json
 import tomllib
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -166,6 +167,50 @@ class VllmCompilationCacheMode(StrEnum):
 
 
 @dataclass(frozen=True)
+class ResolvedModelLocator:
+    """An immutable model source resolved before inference is launched."""
+
+    uri: str
+    identity: str
+
+    def __post_init__(self) -> None:
+        if not self.uri:
+            raise ValueError("resolved model URI must not be empty")
+        if not self.identity:
+            raise ValueError("resolved model identity must not be empty")
+
+
+class SpeculativeMethod(StrEnum):
+    """Speculative decoding methods supported by Marin's vLLM launcher."""
+
+    EAGLE3 = "eagle3"
+
+
+@dataclass(frozen=True)
+class SpeculativeServingConfig:
+    """A resolved draft model and its vLLM speculative-decoding policy."""
+
+    method: SpeculativeMethod
+    model: ResolvedModelLocator
+    num_speculative_tokens: int
+
+    def __post_init__(self) -> None:
+        if self.num_speculative_tokens <= 0:
+            raise ValueError("num_speculative_tokens must be positive")
+
+    def vllm_argument(self) -> str:
+        """Return the JSON value accepted by vLLM's ``--speculative-config``."""
+        return json.dumps(
+            {
+                "method": self.method.value,
+                "model": self.model.uri,
+                "num_speculative_tokens": self.num_speculative_tokens,
+            },
+            separators=(",", ":"),
+        )
+
+
+@dataclass(frozen=True)
 class ServedModelConfig:
     """Model and tokenizer inputs for local or Iris-backed serving.
 
@@ -225,6 +270,7 @@ class VllmEngineConfig:
     max_num_seqs: int | None = None
     extra_args: tuple[str, ...] = ()
     extra_metric_families: frozenset[str] = frozenset()
+    speculative: SpeculativeServingConfig | None = None
 
     def __post_init__(self) -> None:
         if self.startup_timeout_seconds <= 0:
