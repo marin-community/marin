@@ -57,7 +57,6 @@ from iris.cluster.controller.backend import (
 )
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
-from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.health import validate_task_health_check
 from iris.cluster.platforms.k8s.constants import (
     COREWEAVE_INTERRUPTABLE_TOLERATION,

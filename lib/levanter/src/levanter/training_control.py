@@ -32,7 +32,7 @@ from iris.client.client import get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.health import HEALTH_PATH, publish_task_health, task_health_enabled, task_health_port
 from iris.cluster.types import EndpointAccess
-from iris.hooks.multigpu import IRIS_MULTIGPU_LOCAL_PROCESS_INDEX_ENV
+from iris.jax.multigpu import IRIS_MULTIGPU_LOCAL_PROCESS_INDEX_ENV
 from levanter.callbacks.progress_watchdog import ProgressState, ProgressWatchdog
 
 
