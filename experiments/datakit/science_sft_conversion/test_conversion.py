@@ -187,6 +187,43 @@ def test_worked_solution_stays_out_of_the_user_turn() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "question, reasoning, answer",
+    [
+        (
+            'Cell F12 contains the text string "February09", a named range. '
+            'Explain why DSUM(INDIRECT(F12), "Profit", H1:H2) resolves that named range.',
+            'INDIRECT converts the text "February09" into a range reference.',
+            'Answer: INDIRECT resolves the text "February09" into the named range used by DSUM.',
+        ),
+        (
+            'A1 contains "20240315". Use the text-parsing formula '
+            "DATE(LEFT(A1,4), MID(A1,5,2), RIGHT(A1,2)) to convert the text in A1 into a date.",
+            "LEFT extracts 2024, MID extracts 03, and RIGHT extracts 15.",
+            "Answer: DATE constructs March 15, 2024.",
+        ),
+        (
+            "A state enacted strict gun-control laws. Its violent-crime rate has decreased since "
+            "the passage of those laws. Does this weaken the claim that repealing the laws would reduce crime?",
+            "The passage of those laws preceded a decrease in violent crime. That weakens the repeal claim.",
+            "Answer: Yes; the decrease is evidence against the stated claim.",
+        ),
+    ],
+)
+def test_teacher_exercises_accept_text_data_and_legislative_passage(question, reasoning, answer) -> None:
+    # Production exhausted all formats on these ordinary uses of "text" and "passage".
+    source = Source(conversion.SWALLOW_MATH_TEXTBOOK, "", 0, 0)
+    private_reference = "Private teacher reference with a worked solution."
+    completion = {"user": question, "reasoning_content": reasoning, "answer": answer}
+    selected = next(f for f in conversion.FORMATS if f.name == "paragraphs")
+
+    record = _document(source, "regression", private_reference, 0, completion, selected, ConversionMode.TEACHER_EXERCISE)
+
+    assert record["messages"][0]["content"][0]["text"] == f"{question}\n\n{selected.instruction}"
+    assert record["messages"][1]["content"][0]["text"] == reasoning
+    assert record["messages"][2]["content"][0]["text"] == answer
+
+
 def test_numbered_worked_solution_accepts_step_headings() -> None:
     source = Source("nemotron_specialized/math_textbooks", "", 0, 0)
     completion = {

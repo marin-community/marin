@@ -60,7 +60,12 @@ QUESTION_SOLUTION_SOURCES = frozenset({NEMOTRON_MATH_TEXTBOOKS, SWALLOW_MATH_QA}
 BIO_INPUT_RE = re.compile(r"<(dna|rna|protein|peptide|smiles)>(.*?)</\1>", re.S | re.I)
 NUMBERED_STEP_RE = re.compile(r"^(?:\d+[.)]|step\s+\d+\b)", re.I)
 MISSING_CONTEXT_RE = re.compile(
-    r"\b(?:the|source|provided|above) (?:passage|text)\b|\bprovided in (?:the|this) text\b", re.I
+    r"\b(?:the|source|provided|above) passage\b"
+    r"(?!\s+of\s+(?:(?:the|those|these|a|an)\s+)?(?:laws?|acts?|bills?|legislation|time)\b)|"
+    r"\b(?:the|source|provided|above) text\b"
+    r"(?![-\s]+(?:strings?|parsing)\b|\s+[\"'`]|\s+in\s+(?:cell\s+)?[a-z]{1,3}[1-9]\d*\b)|"
+    r"\bprovided in (?:the|this) text\b",
+    re.I,
 )
 WITHHELD_SOLUTION_RE = re.compile(
     r"\b(?:do not|don't|without)\s+(?:\w+\s+){0,5}"
