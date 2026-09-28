@@ -34,26 +34,30 @@ def _archive(release_revision: str = RELEASE_REVISION):
     return read_archive(FIXTURE.read_bytes(), TASKTROVE_SOURCE, TASKTROVE_PATH, RELEASE_URI, release_revision)
 
 
-def test_import_preserves_release_provenance_source_grading_and_prompt_hygiene(tmp_path):
-    archive = _archive()
-    specification = import_task(archive)
-
+def test_import_preserves_release_identity():
+    specification = import_task(_archive())
     assert specification.source.dataset == RELEASE_URI
     assert specification.source.revision == RELEASE_REVISION
     assert specification.source.row == f"{TASKTROVE_SOURCE}:{TASKTROVE_PATH}"
     assert "/" not in specification.id
-    assert specification.requirements.capabilities == ()
-    assert specification.answer_type is AnswerType.TEXT
+    later_release = import_task(_archive("2026.09.10.10"))
+    assert later_release.id != specification.id
+
+
+def test_import_removes_source_submission_instructions():
+    specification = import_task(_archive())
     assert "verifier" not in specification.instructions.lower()
     assert "/app/answer.txt" not in specification.instructions
     assert "theranostics clinical trials" in specification.instructions
     assert "Choose one option letter from A through J." in specification.instructions
     public = render_instruction(specification, SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN))
     assert "verifier" not in public.lower()
+    assert specification.requirements.capabilities == ()
+    assert specification.answer_type is AnswerType.TEXT
 
-    later_release = import_task(_archive("2026.09.10.10"))
-    assert later_release.id != specification.id
 
+def test_imported_mcqa_matches_source_grading(tmp_path):
+    specification = import_task(_archive())
     source_contract = McqSpec(expected="C", options=10, output=str(tmp_path / "source-answer.txt"))
     convention = SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN)
     for source_response, response, reward in (
@@ -65,6 +69,11 @@ def test_import_preserves_release_provenance_source_grading_and_prompt_hygiene(t
         assert source_grade(source_contract, tmp_path, tmp_path).reward == reward
         result = grade_answer(specification, convention, response, object())
         assert (result.status, result.reward) == (Outcome.GRADED, reward)
+
+
+def test_imported_mcqa_extracts_json_and_rejects_malformed_answers():
+    specification = import_task(_archive())
+    convention = SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN)
     json_result = grade_answer(
         specification, SubmissionConvention(id="json", answer_format=AnswerFormat.JSON), '{"answer":"C"}', object()
     )
