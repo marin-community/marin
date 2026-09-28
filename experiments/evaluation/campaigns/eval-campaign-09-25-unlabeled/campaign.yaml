@@ -18,6 +18,9 @@ harbor_harness_profiles:
         compaction_reserve_tokens: 16384
       open-athena-Snowball-67B-A2B-5.7T-Mixed-RLVR-Step38:
         compaction_reserve_tokens: 16384
+        # Pi's local token count is one token below this model's served
+        # chat-template count at the window boundary.
+        context_window_safety_tokens: 1
 
 harbor_eval_harness_profiles:
   bixbench-pi: pi-65k-16k
