@@ -83,6 +83,29 @@ def test_conversion_process_leaks_are_rejected_without_blocking_unit_conversion(
     assert record["messages"][2]["content"][0]["text"] == completion["answer"]
 
 
+def test_grounded_math_rejects_missing_radicals_but_standalone_exercises_can_derive_them() -> None:
+    source = Source("probe/physics", "", 0, 0)
+    completion = {
+        "user": "Report the stated amplitude of the oscillation.",
+        "reasoning_content": "The reported amplitude is √(2E/k).",
+        "answer": "- Amplitude: √(2E/k).\nConclusion: √(2E/k).",
+    }
+    with pytest.raises(ValueError, match="square-root notation absent"):
+        validated_document(source, "test-2", "Amplitude (2E/k).", 0, completion, ConversionMode.GROUNDED)
+
+    record = validated_document(source, "test-2", "Amplitude sqrt(2E/k).", 0, completion, ConversionMode.GROUNDED)
+    assert record["messages"][2]["content"][0]["text"] == completion["answer"]
+    exercise = validated_document(
+        source,
+        "test-2",
+        "Energy E = k A² / 2; solve for positive A.",
+        0,
+        {**completion, "user": "Energy E = k A² / 2. Solve for positive A."},
+        ConversionMode.STANDALONE,
+    )
+    assert exercise["messages"][2]["content"][0]["text"] == completion["answer"]
+
+
 def test_worked_solution_stays_out_of_the_user_turn() -> None:
     source = Source("swallow-math-v2/qa", "", 0, 0)
     passage = "Question: What is 2 + 2?\nAnswer: 4."

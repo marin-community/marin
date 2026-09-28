@@ -21,6 +21,9 @@ or `the answer field` is rejected and sent back for repair. These phrases descri
 the text-to-chat preparation instead of the user's task. Scientific unit conversions remain allowed.
 For damaged mathematical extraction, the request requires quoting the supplied
 text and marking ambiguity instead of restoring missing notation or equations.
+For source-grounded tasks that summarize the supplied passage, the validator rejects added square-root
+notation when the source contains no radical notation or explicit square-root wording.
+Standalone worked exercises can derive new radicals.
 For prose, code, and textbook passages, the worker appends the source chunk to
 the user turn so the assistant's answer has its evidence. For the Nemotron math
 textbooks and Swallow math QA sources, MiniMax extracts a standalone question
