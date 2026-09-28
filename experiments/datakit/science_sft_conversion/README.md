@@ -100,18 +100,24 @@ uv run iris --cluster=cw-rno2a job run --priority interactive --enable-extra-res
 ```
 
 The conversion is complete only when every expected source batch has a
-validated output file. Audit batch coverage, Parquet schema, and the minimum
-record count before registering the converted chat source in Datakit or using
-it for SFT. Run the audit from the science SFT worktree with CoreWeave S3 access:
+validated output file. Audit batch coverage, Parquet schema, and exact
+source-row/chunk identities before using the converted chat source for SFT.
+The audit reads source text and output chunk IDs. Run it on RNO2A to keep
+these reads in the storage region:
 
 ```bash
-uv run python -m experiments.datakit.science_sft_conversion.audit
+uv run iris --cluster=cw-rno2a job run \
+    --priority interactive --enable-extra-resources \
+    --job-name science-sft-conversion-audit --cpu 8 --memory 32GB --disk 20GB \
+    --extra cpu --no-wait -- \
+    python -m experiments.datakit.science_sft_conversion.audit --workers 32
 ```
 
 The audit prints aggregate counts and exits nonzero if a batch is missing,
-short, has the wrong schema, or if an unrecognized Parquet file appears in the
-output directory. Inspect generated conversations from each source as well;
-the audit checks structural completeness, not answer quality.
+has fewer records than input rows, has the wrong schema, contains missing, duplicated, or unexpected chunk
+IDs, or if an unrecognized Parquet file appears in the output directory.
+Generated answers still require quality review; the audit does not assess
+their factual correctness.
 
 To compare server batching configurations, use the identical probe JSON file
 and an endpoint with no other traffic. The benchmark issues one completion per sampled chunk,
@@ -192,7 +198,7 @@ uv run iris --cluster=cw-rno2a job run --priority interactive --enable-extra-res
 ## Full-conversion handoff
 
 The handoff waits for the named conversion job to succeed, then audits every
-expected output batch for coverage, schema, and minimum record count. It writes
+expected output batch for coverage, schema, and exact source-row/chunk identities. It writes
 `audit/final-coverage.json`, stops the dedicated conversion serving pool, builds
 the packed token store with loss on assistant reasoning and final answers
 only, checks that its conversation count matches the

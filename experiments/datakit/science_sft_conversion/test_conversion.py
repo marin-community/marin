@@ -144,20 +144,52 @@ def test_numbered_worked_solution_accepts_step_headings() -> None:
 
 def test_audit_detects_short_batch(tmp_path) -> None:
     source = Source("probe/physics", "", 0, 0)
-    work = WorkItem(source, "unused.parquet", 0, 2)
-    output = Path(_output_path(source, work.url, work.row_group, 0, str(tmp_path)))
+    input_path = tmp_path / "input.parquet"
+    pq.write_table(
+        pa.Table.from_pylist([{"id": "one", "text": "First row."}, {"id": "two", "text": "Second row."}]), input_path
+    )
+    work = WorkItem(source, str(input_path), 0, 2)
+    output = Path(_output_path(source, work.url, work.row_group, 0, str(tmp_path / "output")))
     output.parent.mkdir(parents=True)
-    record = {"id": "one", "messages": []}
+    record = {"id": "one", "source_id": "probe/physics:one:0", "messages": []}
 
     pq.write_table(pa.Table.from_pylist([record], schema=CHAT_SCHEMA), output)
-    result = audit([work], str(tmp_path), workers=1)
+    result = audit([work], str(tmp_path / "output"), workers=1)
     assert result.short_batches == 1
     assert result.missing_batches == 0
 
-    pq.write_table(pa.Table.from_pylist([record, {**record, "id": "two"}], schema=CHAT_SCHEMA), output)
-    result = audit([work], str(tmp_path), workers=1)
+    pq.write_table(
+        pa.Table.from_pylist([record, {**record, "id": "two", "source_id": "probe/physics:two:0"}], schema=CHAT_SCHEMA),
+        output,
+    )
+    result = audit([work], str(tmp_path / "output"), workers=1)
     assert result.complete
     assert result.source_rows == result.output_rows == 2
+
+
+def test_audit_rejects_duplicate_replacing_missing_chunk(tmp_path) -> None:
+    source = Source("probe/physics", "", 1, 2)
+    input_path = tmp_path / "input.parquet"
+    pq.write_table(pa.Table.from_pylist([{"id": "long", "text": "a" * 8001}, {"id": "short", "text": "b"}]), input_path)
+    work = WorkItem(source, str(input_path), 0, 2)
+    output_root = str(tmp_path / "output")
+    output = Path(_output_path(source, work.url, 0, 0, output_root))
+    output.parent.mkdir(parents=True)
+    records = [
+        {"id": "long-0", "source_id": "probe/physics:long:0", "messages": []},
+        {"id": "long-1", "source_id": "probe/physics:long:1", "messages": []},
+        {"id": "short-0", "source_id": "probe/physics:short:0", "messages": []},
+    ]
+    pq.write_table(pa.Table.from_pylist(records, schema=CHAT_SCHEMA), output)
+    assert audit([work], output_root, workers=1).complete
+
+    records[1] = records[0]
+    pq.write_table(pa.Table.from_pylist(records, schema=CHAT_SCHEMA), output)
+    result = audit([work], output_root, workers=1)
+    assert result.output_rows == 3
+    assert result.short_batches == result.missing_batches == result.wrong_schemas == 0
+    assert result.wrong_lineage_batches == 1
+    assert not result.complete
 
 
 def test_early_conversion_covers_every_source_without_losing_batches() -> None:
