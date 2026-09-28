@@ -114,26 +114,32 @@ def calibration_sha256(model_dir: str) -> str:
     return _named_digest({CALIBRATION_FILE: StoragePath(model_dir) / CALIBRATION_FILE})
 
 
+def _require_digest(what: str, digest: str, pinned: str, pin_name: str, consequence: str) -> str:
+    if digest != pinned:
+        raise ValueError(f"{what} digests to {digest}, but {pin_name} pins {pinned}; {consequence}")
+    return digest
+
+
 def require_pinned_model(pin: QualityPin, model_dir: str) -> str:
     """Return ``model_dir``'s model digest, refusing bytes that are not ``pin``'s."""
-    digest = model_sha256(model_dir)
-    if digest != pin.model_sha256:
-        raise ValueError(
-            f"{model_dir} digests to {digest}, but {pin.name} pins {pin.model_sha256}; "
-            f"its scores would be written to a path that claims {pin.name}"
-        )
-    return digest
+    return _require_digest(
+        model_dir,
+        model_sha256(model_dir),
+        pin.model_sha256,
+        pin.name,
+        f"its scores would be written to a path that claims {pin.name}",
+    )
 
 
 def require_pinned_calibration(pin: QualityPin, model_dir: str) -> str:
     """Return ``model_dir``'s calibration digest, refusing a file that is not ``pin``'s."""
-    digest = calibration_sha256(model_dir)
-    if digest != pin.calibration_sha256:
-        raise ValueError(
-            f"{model_dir}/{CALIBRATION_FILE} digests to {digest}, but {pin.name} pins "
-            f"{pin.calibration_sha256}; the bucketed path claims a different calibration"
-        )
-    return digest
+    return _require_digest(
+        f"{model_dir}/{CALIBRATION_FILE}",
+        calibration_sha256(model_dir),
+        pin.calibration_sha256,
+        pin.name,
+        "the bucketed path claims a different calibration",
+    )
 
 
 def classifier_path(pin: ContentTypePin) -> str:
@@ -143,10 +149,10 @@ def classifier_path(pin: ContentTypePin) -> str:
 
 def require_pinned_classifier(pin: ContentTypePin, path: str) -> str:
     """Return the weight file's digest, refusing bytes that are not ``pin``'s."""
-    digest = _file_digest(StoragePath(path)).hex()
-    if digest != pin.model_sha256:
-        raise ValueError(
-            f"{path} digests to {digest}, but {pin.name} pins {pin.model_sha256}; "
-            f"its types would be written to a path that claims {pin.name}"
-        )
-    return digest
+    return _require_digest(
+        path,
+        _file_digest(StoragePath(path)).hex(),
+        pin.model_sha256,
+        pin.name,
+        f"its types would be written to a path that claims {pin.name}",
+    )
