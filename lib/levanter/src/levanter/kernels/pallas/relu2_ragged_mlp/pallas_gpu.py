@@ -138,8 +138,9 @@ def _gmm_kernel(
                 b = plgpu.load(b_ref.at[weight_group, span_k, cols])
             return acc + plgpu.dot(a, b, trans_b=trans_b)
 
-        steps = jnp.where(is_padding, 0, contraction // bk)
-        acc = jax.lax.fori_loop(0, steps, body, jnp.zeros((bm, bn), jnp.float32))
+        # Triton's scf.for needs bounds of one type; a weakly typed where() would not lower to int32.
+        steps = jnp.where(is_padding, jnp.int32(0), jnp.int32(contraction // bk))
+        acc = jax.lax.fori_loop(jnp.int32(0), steps, body, jnp.zeros((bm, bn), jnp.float32))
         if epilogue == Epilogue.RELU2:
             relu = jnp.maximum(acc, 0.0)
             acc = relu * relu
@@ -216,8 +217,8 @@ def _tgmm_kernel(lo_ref, hi_ref, a_ref, b_ref, o_ref, *, bm: int, bn: int, bk: i
         b = plgpu.load(b_ref.at[rows, b_cols], mask=mask, other=0.0)
         return acc + plgpu.dot(a, b, trans_a=True)
 
-    steps = pl.cdiv(jnp.maximum(row_hi - row_lo, 0), bk)
-    acc = jax.lax.fori_loop(0, steps, body, jnp.zeros((bm, bn), jnp.float32))
+    steps = pl.cdiv(jnp.maximum(row_hi - row_lo, 0), bk).astype(jnp.int32)
+    acc = jax.lax.fori_loop(jnp.int32(0), steps, body, jnp.zeros((bm, bn), jnp.float32))
     o_ref[...] = acc
 
 
