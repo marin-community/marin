@@ -108,6 +108,8 @@ def is_scratch_artifact(relative_path: str) -> bool:
 # Live runs are normalized by Evalchemy. These conversion helpers remain for historical exports and
 # for rebuilding an archive's table from preserved sources after damage or an interrupted migration.
 # FineStore itself owns only the normalized schema and storage API.
+_FAILURE_CATEGORY_KEY = "failure_category"
+
 _LM_EVAL_STRUCTURAL_KEYS = frozenset(
     {
         "doc",
@@ -127,7 +129,7 @@ _LM_EVAL_STRUCTURAL_KEYS = frozenset(
         "sample_shard",
         "source_id",
         "task_name",
-        "failure_category",
+        _FAILURE_CATEGORY_KEY,
         "doc_hash",
         "prompt_hash",
         "target_hash",
@@ -246,7 +248,7 @@ def sample_from_lm_eval(task: str, raw: dict, primary_metric_name: str | None = 
         extraction_filter if isinstance(extraction_filter, str) else None,
         primary_metric_name,
     )
-    failure_category = raw.get("failure_category")
+    failure_category = raw.get(_FAILURE_CATEGORY_KEY)
     failure_marker = (
         f"{_INFRASTRUCTURE_ERROR_PREFIX} {failure_category}"
         if isinstance(failure_category, str) and failure_category in _INFRASTRUCTURE_FAILURE_CATEGORIES

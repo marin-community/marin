@@ -804,15 +804,24 @@ def test_evalchemy_executor_excludes_infrastructure_failures(tmp_path, monkeypat
     }
 
 
-def test_evalchemy_executor_preserves_native_transport_failure_when_rebuilding(tmp_path, monkeypatch):
-    output_dir = f"file://{tmp_path / 'native-transport-failure'}"
+@pytest.mark.parametrize(
+    ("task_name", "benchmark_name", "source_metric"),
+    [
+        ("math500", "MATH500", "accuracy"),
+        ("mmlu-pro", "MMLUPro", "accuracy_avg"),
+    ],
+)
+def test_evalchemy_executor_preserves_native_transport_failure_when_rebuilding(
+    tmp_path, monkeypatch, task_name, benchmark_name, source_metric
+):
+    output_dir = f"file://{tmp_path / task_name}"
     failed = _lm_eval_generation(1, "accuracy", 0.0, "")
     failed["failure_category"] = "model_transport"
     _write_evalchemy_output(
         output_dir,
-        "math500",
-        {"MATH500": {"accuracy": 0.5}},
-        {"MATH500": [_lm_eval_generation(0, "accuracy", 1.0, "4"), failed]},
+        task_name,
+        {benchmark_name: {source_metric: 0.5}},
+        {benchmark_name: [_lm_eval_generation(0, "accuracy", 1.0, "4"), failed]},
     )
     monkeypatch.setattr(
         "marin.evaluation.evalchemy.runner._run_evalchemy_child",
@@ -820,15 +829,15 @@ def test_evalchemy_executor_preserves_native_transport_failure_when_rebuilding(t
     )
     executor = EvalchemyExecutor(
         EvalchemyRunConfig(
-            name="math500",
-            tasks=(EvalTaskConfig(name="MATH500", num_fewshot=0, task_alias="math500", generation=True),),
+            name=task_name,
+            tasks=(EvalTaskConfig(name=benchmark_name, num_fewshot=0, task_alias=task_name, generation=True),),
         )
     )
 
     outcome = executor(_remote_session(), output_dir, {})
 
     assert outcome.coverage == {
-        "math500": TaskCoverage(
+        task_name: TaskCoverage(
             n_benchmark=2,
             n_attempted=2,
             n_scored=1,
@@ -836,8 +845,8 @@ def test_evalchemy_executor_preserves_native_transport_failure_when_rebuilding(t
             errors={EVALCHEMY_INFRASTRUCTURE_ERROR: 1},
         )
     }
-    assert outcome.metrics["math500"]["accuracy,none"] == 1.0
-    assert outcome.canonical_metrics["math500"]["accuracy"] == 1.0
+    assert outcome.metrics[task_name]["accuracy,none"] == 1.0
+    assert outcome.canonical_metrics[task_name]["accuracy"] == 1.0
     samples = [sample_from_archive_row(row) for row in ReadView(output_dir).scan("samples").to_pylist()]
     assert sum("[EVALCHEMY_INFRASTRUCTURE_ERROR]" in (sample.output or "") for sample in samples) == 1
 
@@ -884,40 +893,6 @@ def test_evalchemy_executor_excludes_failed_multiple_choice_request(tmp_path, mo
         sample.kind is SampleKind.MULTIPLE_CHOICE and EVALCHEMY_INFRASTRUCTURE_ERROR in (sample.output or "")
         for sample in samples
     )
-
-
-def test_evalchemy_executor_recovers_aggregate_metric_from_scored_items(tmp_path, monkeypatch):
-    output_dir = f"file://{tmp_path / 'aggregate-transport-failure'}"
-    failed = _lm_eval_generation(1, "accuracy", 0.0, "")
-    failed["failure_category"] = "model_transport"
-    _write_evalchemy_output(
-        output_dir,
-        "mmlu-pro",
-        {"MMLUPro": {"accuracy_avg": 0.5, "total_examples": 2}},
-        {"MMLUPro": [_lm_eval_generation(0, "accuracy", 1.0, "4"), failed]},
-    )
-    monkeypatch.setattr(
-        "marin.evaluation.evalchemy.runner._run_evalchemy_child",
-        lambda _model, _config, _output_dir, _env_vars: "/eval/completed",
-    )
-    executor = EvalchemyExecutor(
-        EvalchemyRunConfig(
-            name="mmlu-pro",
-            tasks=(EvalTaskConfig(name="MMLUPro", num_fewshot=0, task_alias="mmlu-pro", generation=True),),
-        )
-    )
-
-    outcome = executor(_remote_session(), output_dir, {})
-
-    assert outcome.coverage["mmlu-pro"] == TaskCoverage(
-        n_benchmark=2,
-        n_attempted=2,
-        n_scored=1,
-        n_correct=1,
-        errors={EVALCHEMY_INFRASTRUCTURE_ERROR: 1},
-    )
-    assert outcome.metrics["mmlu-pro"]["accuracy,none"] == 1.0
-    assert outcome.canonical_metrics["mmlu-pro"]["accuracy"] == 1.0
 
 
 def test_evalchemy_executor_uses_aggregate_count_when_custom_task_omits_sample_scores(tmp_path, monkeypatch):
