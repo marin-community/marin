@@ -29,7 +29,13 @@ from rigging.provenance import Provenance
 
 from experiments.post_training.async_rl import CHAT_TEMPLATE, GPUS_PER_NODE, SNOWBALL_RECIPE
 from experiments.post_training.curriculum_rl.launch import SNOWBALL_MODEL, SNOWBALL_POLICY
-from experiments.post_training.mismatch_probe.launch import ProbeSettings, mismatch_probe_config
+from experiments.post_training.mismatch_probe.launch import (
+    PROBE_ENGINE_OPTIONS,
+    PROBE_SAMPLING_PARAMS,
+    REPLAY_MODES,
+    ProbeSettings,
+    mismatch_probe_config,
+)
 
 TOKENIZER_REVISION = "a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2"
 HELDOUT_DATA_URI = (
@@ -65,7 +71,7 @@ def snowball_recipe(
         settings,
         marin_commit=marin_commit,
         skyrl_commit=skyrl_commit,
-        replay_modes=campaign is Campaign.MISMATCH,
+        extra_trainer_modes=REPLAY_MODES if campaign is Campaign.MISMATCH else (),
     )
     config = {
         "entrypoint": "standard",
@@ -120,7 +126,6 @@ def snowball_recipe(
             "vllm_attention_backend": "FLASH_ATTN",
             "run_engines_locally": True,
             "weight_sync_backend": "nccl",
-            "async_engine": True,
             "batched": False,
             "gpu_memory_utilization": 0.75,
             "enable_prefix_caching": settings.cache_mode != "off",
@@ -129,18 +134,9 @@ def snowball_recipe(
             "engine_init_kwargs": {
                 **dict(SNOWBALL_RECIPE.engine_init_kwargs),
                 "enable_return_routed_experts": replay,
-                "logprobs_mode": "processed_logprobs",
-                "generation_config": "vllm",
+                **PROBE_ENGINE_OPTIONS,
             },
-            "sampling_params": {
-                "temperature": 1.0,
-                "top_p": 1.0,
-                "top_k": -1,
-                "min_p": 0.0,
-                "repetition_penalty": 1.0,
-                "logprobs": 0,
-                "seed": settings.seed,
-            },
+            "sampling_params": {**PROBE_SAMPLING_PARAMS, "seed": settings.seed},
             "trajectory_retention": {
                 "enabled": campaign is Campaign.STEP_TIME,
                 "sample_fraction": 1.0,

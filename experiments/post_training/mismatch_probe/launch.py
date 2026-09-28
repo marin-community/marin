@@ -35,6 +35,17 @@ CLUSTER = "cw-rno2a"
 TOKENIZER = "Qwen/Qwen2.5-0.5B-Instruct"
 TOKENIZER_REVISION = "7ae557604adf67be50417f59c2c2f167def9a775"
 
+REPLAY_MODES = ("router_replay", "router_replay_filtered")
+PROBE_ENGINE_OPTIONS = {"logprobs_mode": "processed_logprobs", "generation_config": "vllm"}
+PROBE_SAMPLING_PARAMS = {
+    "temperature": 1.0,
+    "top_p": 1.0,
+    "top_k": -1,
+    "min_p": 0.0,
+    "repetition_penalty": 1.0,
+    "logprobs": 0,
+}
+
 
 @dataclass(frozen=True)
 class ArmSpec:
@@ -63,8 +74,10 @@ ARMS = {
 }
 
 
-def mismatch_probe_config(settings: ProbeSettings, *, marin_commit: str, skyrl_commit: str, replay_modes: bool) -> dict:
-    """Configure frozen-token scoring shared by the fixture and model launchers."""
+def mismatch_probe_config(
+    settings: ProbeSettings, *, marin_commit: str, skyrl_commit: str, extra_trainer_modes: tuple[str, ...]
+) -> dict:
+    """Configure frozen-token inputs, scoring modes and source provenance."""
     return {
         "enabled": True,
         "prompts": {"count": settings.prompt_count, "samples_per_prompt": settings.samples_per_prompt},
@@ -72,7 +85,7 @@ def mismatch_probe_config(settings: ProbeSettings, *, marin_commit: str, skyrl_c
         "archive_uri": None,
         "reuse_probe": settings.reuse_probe,
         "score_after_updates": list(settings.updates),
-        "extra_trainer_modes": ["router_replay", "router_replay_filtered"] if replay_modes else [],
+        "extra_trainer_modes": list(extra_trainer_modes),
         "filtered_replay": {"keep_fraction": settings.keep_fraction},
         "rescore_prefix_cache": settings.cache_mode,
         "layer_tokens": 0,
@@ -123,7 +136,7 @@ def probe_recipe(
             },
             "mismatch_probe": {
                 **mismatch_probe_config(
-                    settings, marin_commit=marin_commit, skyrl_commit=skyrl_commit, replay_modes=True
+                    settings, marin_commit=marin_commit, skyrl_commit=skyrl_commit, extra_trainer_modes=REPLAY_MODES
                 ),
                 "enabled": not warmup,
             },
@@ -133,7 +146,6 @@ def probe_recipe(
             "model_dtype": "bfloat16",
             "run_engines_locally": True,
             "weight_sync_backend": "nccl",
-            "async_engine": True,
             "batched": False,
             "gpu_memory_utilization": 0.35,
             "enable_prefix_caching": settings.cache_mode != "off",
@@ -141,17 +153,9 @@ def probe_recipe(
             "chat_template": {"source": "name", "name_or_path": "qwen2_5_with_generation_tag_simplified"},
             "engine_init_kwargs": {
                 "enable_return_routed_experts": True,
-                "logprobs_mode": "processed_logprobs",
-                "generation_config": "vllm",
+                **PROBE_ENGINE_OPTIONS,
             },
-            "sampling_params": {
-                "temperature": 1.0,
-                "top_p": 1.0,
-                "top_k": -1,
-                "min_p": 0.0,
-                "repetition_penalty": 1.0,
-                "logprobs": 0,
-            },
+            "sampling_params": dict(PROBE_SAMPLING_PARAMS),
         },
         "data": {"kind": "parquet", "train_data": [], "val_data": []},
     }
