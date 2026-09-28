@@ -8,11 +8,11 @@ from types import MappingProxyType
 
 from pydantic import ValidationError
 
-from taskcompendium.grading import ExactAnswerVerifier, GradeResult, GradingAttempt, Verifier
+from taskcompendium.grading import EXACT_ANSWER_KIND, ExactAnswerVerifier, GradeResult, GradingAttempt, Verifier
 from taskcompendium.models import TaskSpec, VerifierSpec
 from taskcompendium.submission import SubmissionConvention
 
-VERIFIERS: Mapping[str, type[Verifier]] = MappingProxyType({"exact_answer": ExactAnswerVerifier})
+VERIFIERS: Mapping[str, type[Verifier]] = MappingProxyType({EXACT_ANSWER_KIND: ExactAnswerVerifier})
 
 
 def resolve_verifier(specification: VerifierSpec) -> Verifier:

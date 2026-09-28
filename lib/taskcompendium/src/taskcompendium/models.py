@@ -40,9 +40,8 @@ class Source(BaseModel):
 class VerifierSpec(BaseModel):
     """A private verifier selection and its pinned configuration.
 
-    ``kind`` selects a verifier class. ``parameters_json`` is that class's
-    serialized configuration, kept as a string so a frozen TaskSpec cannot
-    change its grading semantics through a mutable nested mapping.
+    ``kind`` selects a verifier class. ``parameters_json`` is its private
+    JSON-encoded configuration.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
