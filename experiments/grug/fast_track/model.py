@@ -412,7 +412,8 @@ class GrugModelConfig:
     together cover the whole input, but each one reads a slice. ``expert_read_subset_pattern`` picks the slices."""
     expert_read_subset_pattern: str = "blocks"
     """``blocks``: expert ``e`` reads contiguous block ``e mod (in_dim / expert_read_subset)``; ``random``: a fixed
-    random subset per expert."""
+    random subset per expert; ``shared``: every expert reads channels ``[0, expert_read_subset)`` (the control that
+    isolates the per-expert split from the masking itself)."""
     latent_write_select: bool = False
     """With a MoE latent, drop ``w_latent_up``: the combined routed output is written into the first ``latent_dim``
     hidden channels (the rest get zero), scaled by ``initializer_std * sqrt(latent_dim)``, the gain of the
@@ -995,9 +996,9 @@ class GrugModelConfig:
             raise ValueError(
                 f"latent_select_pattern must be first, random or rotating, got {self.latent_select_pattern!r}"
             )
-        if self.expert_read_subset_pattern not in ("blocks", "random"):
+        if self.expert_read_subset_pattern not in ("blocks", "random", "shared"):
             raise ValueError(
-                f"expert_read_subset_pattern must be blocks or random, got {self.expert_read_subset_pattern!r}"
+                f"expert_read_subset_pattern must be blocks, random or shared, got {self.expert_read_subset_pattern!r}"
             )
         if self.expert_read_subset and (
             self.expert_in_dim % self.expert_read_subset or self.moe_bank2_experts or self.moe_const_experts
@@ -3493,8 +3494,9 @@ _EXPERT_READ_SUBSET_SALT = 0x5B5E7
 def _expert_read_mask(cfg: "GrugModelConfig", num_experts: int, in_dim: int) -> jax.Array:
     """``[E, in_dim, 1]`` 0/1 mask of the input channels each routed expert reads (``expert_read_subset``)."""
     width = cfg.expert_read_subset
-    if cfg.expert_read_subset_pattern == "blocks":
-        start = (jnp.arange(num_experts) % (in_dim // width)) * width
+    if cfg.expert_read_subset_pattern in ("blocks", "shared"):
+        groups = 1 if cfg.expert_read_subset_pattern == "shared" else in_dim // width
+        start = (jnp.arange(num_experts) % groups) * width
         channel = jnp.arange(in_dim)
         mask = (channel[None, :] >= start[:, None]) & (channel[None, :] < start[:, None] + width)
     else:
