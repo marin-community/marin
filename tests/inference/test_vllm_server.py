@@ -8,6 +8,8 @@ routing by severity and flushing/draining on teardown. A second group covers sta
 process without HTTP readiness and waiting once for an ordinary server.
 """
 
+import json
+import logging
 import os
 import socket
 import subprocess
@@ -28,12 +30,17 @@ from marin.inference.vllm_server import (
     _engine_kwargs_to_cli_args,
     _linux_process_group_status,
     _LogPump,
+    _native_error_summary,
     _native_logs,
     _native_logs_tail,
     _prepare_vllm_compilation_cache,
     _ProcessGroupStatus,
     _starts_nccl_ras_probe,
 )
+from prometheus_client.parser import text_string_to_metric_families
+from rigging import telemetry
+from rigging.telemetry.prometheus import PrometheusCollector, PrometheusScraper
+from rigging.testing import RecordingTelemetryTransport
 
 
 def test_engine_kwargs_forward_dtype_to_vllm_command() -> None:
@@ -48,6 +55,91 @@ def test_nccl_ras_probe_supports_direct_and_wrapped_cuda_launchers() -> None:
     assert _starts_nccl_ras_probe(VllmLauncherWithEnvironment(cuda, {"VLLM_HOST_IP": "10.0.0.2"}))
     assert not _starts_nccl_ras_probe(preinstalled)
     assert not _starts_nccl_ras_probe(VllmLauncherWithEnvironment(preinstalled, {"VLLM_HOST_IP": "10.0.0.2"}))
+
+
+def test_vllm_family_selection_keeps_late_counter_and_histogram_complete() -> None:
+    noise = "\n".join(f'vllm:noise{{index="{index}"}} {index}' for index in range(1050))
+    scrape = f"""
+# TYPE vllm:noise gauge
+{noise}
+# TYPE vllm:late_requests_total counter
+vllm:late_requests_total{{engine="0"}} 7
+# TYPE vllm:late_requests_created gauge
+vllm:late_requests_created{{engine="0"}} 1
+# TYPE vllm:late_histogram histogram
+vllm:late_histogram_bucket{{engine="0",le="0.1"}} 2
+vllm:late_histogram_bucket{{engine="0",le="+Inf"}} 3
+vllm:late_histogram_count{{engine="0"}} 3
+vllm:late_histogram_sum{{engine="0"}} 0.4
+# TYPE vllm:late_histogram_created gauge
+vllm:late_histogram_created{{engine="0"}} 1
+"""
+
+    snapshots = vllm_server._vllm_metric_snapshots(
+        tuple(text_string_to_metric_families(scrape)),
+        family_names=frozenset({"vllm:late_requests", "vllm:late_histogram"}),
+    )
+
+    assert {snapshot.name for snapshot in snapshots} == {
+        "late_requests_total",
+        "late_histogram_bucket",
+        "late_histogram_count",
+        "late_histogram_sum",
+    }
+    assert len(snapshots) == 5
+
+
+def test_vllm_metric_overflow_rejects_whole_batch_and_recovers(monkeypatch: pytest.MonkeyPatch) -> None:
+    telemetry.shutdown(0.01)
+    transport = RecordingTelemetryTransport()
+    monkeypatch.setattr(telemetry, "_RequestsTransport", lambda: transport)
+    telemetry.configure(endpoint="http://finelog/v1/telemetry", service="vllm", attributes={"job_id": "/serve"})
+    scrapes = iter(
+        (
+            tuple(
+                text_string_to_metric_families(
+                    '# TYPE vllm:selected gauge\nvllm:selected{index="0"} 0\n'
+                    'vllm:selected{index="1"} 1\nvllm:selected{index="2"} 2\n'
+                )
+            ),
+            tuple(text_string_to_metric_families('# TYPE vllm:selected gauge\nvllm:selected{index="recovered"} 4\n')),
+        )
+    )
+    scraper = PrometheusScraper("http://vllm/metrics")
+    monkeypatch.setattr(scraper, "scrape", lambda: next(scrapes))
+    collector = PrometheusCollector(
+        metric_source="vllm",
+        scraper=scraper,
+        processor=lambda families: vllm_server._vllm_metric_snapshots(
+            families,
+            family_names=frozenset({"vllm:selected"}),
+        ),
+        publisher=vllm_server._VllmMetricSnapshotPublisher(
+            max_records=2,
+            attributes={"metric_source": "vllm"},
+        ),
+    )
+
+    try:
+        collector.poll_once()
+        transport.wait_for_value("prometheus_enqueued_samples", {"metric_source": "vllm"}, 0)
+        transport.wait_for_value(
+            "prometheus_dropped_samples",
+            {"metric_source": "vllm", "drop_reason": "sample_limit"},
+            3,
+        )
+        assert not [record for record in transport.records if record["name"] == "selected"]
+
+        collector.poll_once()
+        transport.wait_for_value("prometheus_enqueued_samples", {"metric_source": "vllm"}, 1)
+        transport.wait_for_value(
+            "prometheus_dropped_samples",
+            {"metric_source": "vllm", "drop_reason": "sample_limit"},
+            0,
+        )
+        assert transport.record("selected", {"index": "recovered"})["value"] == 4
+    finally:
+        telemetry.shutdown(0.1)
 
 
 def _spawn(script: str, *, start_new_session: bool = False) -> subprocess.Popen[str]:
@@ -124,6 +216,17 @@ def test_native_logs_tail_includes_unterminated_final_fragment(tmp_path):
 
     assert "FATAL partial line no newline" in _native_logs_tail(str(tmp_path))
     pump.close()
+
+
+def test_native_error_summary_preserves_originating_exception(tmp_path):
+    (tmp_path / "stdout.log").write_text("ordinary output\nRuntimeError: engine initialization failed\n")
+    (tmp_path / "stderr.log").write_text("Ninja build stopped\nCalledProcessError: nvcc exited 1\n")
+
+    summary = _native_error_summary(str(tmp_path))
+
+    assert "RuntimeError: engine initialization failed" in summary
+    assert "CalledProcessError: nvcc exited 1" in summary
+    assert "ordinary output" not in summary
 
 
 def test_native_logs_keeps_placement_older_than_diagnostic_tail(tmp_path):
@@ -310,11 +413,14 @@ def test_subprocess_environment_overrides_reach_vllm():
         cache.close()
 
 
-def _environment(launcher: _FakeLauncher, *, timeout_seconds: float = 30) -> VllmEnvironment:
+def _environment(
+    launcher: _FakeLauncher, *, timeout_seconds: float = 30, extra_args: list[str] | None = None
+) -> VllmEnvironment:
     return VllmEnvironment(
         vllm_server.InferenceModelConfig(name="fake-model", path=None, engine_kwargs={}),
         port=_free_port(),
         timeout_seconds=timeout_seconds,
+        extra_args=extra_args,
         launcher=launcher,
         compilation_cache_mode=VllmCompilationCacheMode.CALLER_MANAGED,
         wait_for_ready=False,
@@ -323,6 +429,62 @@ def _environment(launcher: _FakeLauncher, *, timeout_seconds: float = 30) -> Vll
 
 def _wait_until_ready(environment: VllmEnvironment) -> None:
     environment.wait_until_ready(poll_interval_seconds=0.05)
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--enforce-eager"],
+        ["--no-enforce-eager", "--enforce-eager"],
+    ],
+)
+def test_eager_without_acknowledgement_fails_before_spawn(monkeypatch, args):
+    monkeypatch.setattr(vllm_server.subprocess, "Popen", lambda *_args, **_kwargs: pytest.fail("vLLM spawned"))
+
+    with pytest.raises(ValueError, match="--i-know-i-am-making-vllm-slow"):
+        with _environment(_FakeLauncher("exit"), extra_args=args):
+            pass
+
+
+@pytest.mark.parametrize(
+    ("args", "expected_eager"),
+    [
+        ([], False),
+        (["--no-enforce-eager"], False),
+        (["--enforce-eager", "--no-enforce-eager"], False),
+        (["--enforce-eager", "--i-know-i-am-making-vllm-slow"], True),
+        (["--no-enforce-eager", "--enforce-eager", "--i-know-i-am-making-vllm-slow"], True),
+    ],
+)
+def test_eager_guard_preserves_vllm_args_and_warns_on_acknowledged_eager(tmp_path, caplog, args, expected_eager):
+    argv_path = tmp_path / "argv.json"
+    with _environment(_FakeLauncher("record-args", str(argv_path)), extra_args=args) as environment:
+        _wait_until_ready(environment)
+        argv = json.loads(argv_path.read_text())
+
+    assert argv[argv.index("--port") + 2 :] == [arg for arg in args if arg != "--i-know-i-am-making-vllm-slow"]
+    assert "--i-know-i-am-making-vllm-slow" not in argv
+    assert (
+        any(record.name == vllm_server.__name__ and record.levelno == logging.WARNING for record in caplog.records)
+        is expected_eager
+    )
+
+
+@pytest.mark.parametrize("arg", ["--enforce_eager", "--enf", "--no-enf", "--enforce-eager=true"])
+def test_eager_aliases_rejected_before_spawn(monkeypatch, arg):
+    monkeypatch.setattr(vllm_server.subprocess, "Popen", lambda *_args, **_kwargs: pytest.fail("vLLM spawned"))
+
+    with pytest.raises(ValueError, match="Use the exact"):
+        with _environment(_FakeLauncher("exit"), extra_args=[arg]):
+            pass
+
+
+@pytest.mark.parametrize("args", [["--config", "vllm.yaml"], ["--config=vllm.yaml"]])
+def test_vllm_config_file_rejected_before_spawn(monkeypatch, args):
+    monkeypatch.setattr(vllm_server.subprocess, "Popen", lambda *_args, **_kwargs: pytest.fail("vLLM spawned"))
+    with pytest.raises(ValueError, match="does not support --config"):
+        with _environment(_FakeLauncher("exit"), extra_args=args):
+            pass
 
 
 def test_environment_starts_without_waiting_for_http_readiness(tmp_path):

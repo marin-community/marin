@@ -20,10 +20,10 @@ from iris.cluster.bundle import BundleStore
 from iris.cluster.client.endpoint_client import EndpointClient, EndpointLeaseRenewer, renew_interval
 from iris.cluster.config import AuthConfig
 from iris.cluster.controller.auth import MAX_ENDPOINT_TOKEN_TTL_SECONDS, create_controller_auth
-from iris.cluster.controller.endpoint_service import (
+from iris.cluster.controller.endpoint_service import EndpointServiceImpl
+from iris.cluster.controller.endpoints import (
     ENDPOINT_LEASE,
     MIN_ENDPOINT_LEASE,
-    EndpointServiceImpl,
     ProxyRegistryReset,
 )
 from iris.cluster.controller.projections.endpoints import EndpointRow
@@ -143,7 +143,7 @@ def test_sweep_expired_deletes_only_expired(state):
 
     result = prune_old_data(
         state._db,
-        [],
+        state._health,
         job_retention=Duration.from_hours(1),
         worker_retention=Duration.from_hours(1),
         slice_retention=Duration.from_hours(1),

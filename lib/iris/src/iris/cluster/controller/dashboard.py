@@ -57,7 +57,7 @@ from starlette.routing import Mount, Route
 from starlette.types import ASGIApp
 
 from iris.cluster.controller.auth import VERIFIED_IDENTITY_HEADER, JwtTokenManager
-from iris.cluster.controller.backend import backend_descriptor
+from iris.cluster.controller.backend import dashboard_backend_descriptor
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.federation_proxy import FederatedEndpointHandoff
 from iris.cluster.controller.native_proxy import (
@@ -245,8 +245,7 @@ class ControllerDashboard:
             authorize=authorize_method,
         )
         controller_interceptors = [_ControllerDrainingInterceptor(self._draining), auth_interceptor, controller_timing]
-        # @on_loop handlers run inline on the event loop; everything else
-        # is dispatched to a thread by AsyncServiceAdapter.
+        # AsyncServiceAdapter dispatches each sync handler to a thread.
         rpc_asgi_app = ControllerServiceASGIApplication(
             service=AsyncServiceAdapter(self._service),
             interceptors=controller_interceptors,
@@ -387,23 +386,24 @@ class ControllerDashboard:
             if self._reports_native_identity
             else _request_is_authenticated(self._auth_policy, request)
         )
-        descriptors = {bid: backend_descriptor(b) for bid, b in self._service.backends.items()}
-        union_capabilities = sorted({cap for d in descriptors.values() for cap in d.capabilities})
-        representative = backend_descriptor(self._service.provider)
+        backend = self._service.backend
+        descriptor = dashboard_backend_descriptor(backend)
         return JSONResponse(
             {
                 "auth_enabled": self._auth_provider is not None,
                 "provider": self._auth_provider,
                 "authenticated": authenticated,
-                # Union of every backend's capabilities gates which tabs the dashboard shows.
-                "capabilities": union_capabilities,
+                "capabilities": descriptor.capabilities,
                 "backends": [
-                    {"id": bid, "name": d.name, "capabilities": d.capabilities} for bid, d in descriptors.items()
+                    {
+                        "id": backend.descriptor.backend_id,
+                        "name": descriptor.name,
+                        "capabilities": descriptor.capabilities,
+                    }
                 ],
-                # Representative backend for the single-backend frontend path.
                 "backend": {
-                    "name": representative.name,
-                    "capabilities": representative.capabilities,
+                    "name": descriptor.name,
+                    "capabilities": descriptor.capabilities,
                 },
                 "optional": self._auth_optional,
             }

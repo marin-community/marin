@@ -117,6 +117,7 @@ PACKAGES: Mapping[str, PackageFamily] = MappingProxyType(
                 Path("lib/levanter/pyproject.toml"),
                 Path("lib/haliax/src/haliax/__about__.py"),
                 Path("lib/finestore/pyproject.toml"),
+                Path("lib/shellbox/pyproject.toml"),
             ),
             artifacts=MappingProxyType(
                 {
@@ -130,11 +131,19 @@ PACKAGES: Mapping[str, PackageFamily] = MappingProxyType(
                         "marin-levanter",
                         "marin-haliax",
                         "marin-finestore",
+                        "marin-shellbox",
                     )
                 }
             ),
             tag_prefix="marin-libs-v",
-            source_patterns=("scripts/python_libs_package.py", "lib/iris/hatch_build.py"),
+            source_patterns=(
+                "scripts/python_libs_package.py",
+                "lib/iris/hatch_build.py",
+                "lib/finestore/src/**",
+                "lib/shellbox/src/**",
+                "lib/shellbox/pyproject.toml",
+                "lib/shellbox/README.md",
+            ),
             build_legs=(("ubuntu-latest", BuildOperation.PYTHON),),
             build=PythonBundle(script_path=Path("scripts/python_libs_package.py")),
         ),

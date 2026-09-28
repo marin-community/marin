@@ -33,6 +33,7 @@ from iris.cluster.config import (
     ScaleGroupResources,
     SliceConfig,
 )
+from iris.cluster.controller.backend import BackendDescriptor, BackendKind
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.local_cluster import LocalCluster
@@ -162,10 +163,6 @@ class E2ECluster:
         cache_path = self._cache_dir if self._cache_dir else temp_path / "cache"
         cache_path.mkdir(exist_ok=True)
 
-        fake_bundle = temp_path / "fake_bundle"
-        fake_bundle.mkdir()
-        (fake_bundle / "pyproject.toml").write_text("[project]\nname = 'test'\n")
-
         controller_config = ControllerConfig(
             host="127.0.0.1",
             port=self._controller_port,
@@ -178,11 +175,16 @@ class E2ECluster:
             host="127.0.0.1",
             worker_token=None,
         )
-        self._controller = Controller(
-            config=controller_config,
-            backends={DEFAULT_BACKEND_ID: RpcTaskBackend(stub_factory=RpcWorkerStubFactory())},
-            log_stack=log_stack,
+        backend = RpcTaskBackend(
+            descriptor=BackendDescriptor(
+                backend_id=DEFAULT_BACKEND_ID,
+                display_name="worker",
+                kind=BackendKind.WORKER,
+            ),
+            stub_factory=RpcWorkerStubFactory(),
         )
+        self._controller = Controller(config=controller_config, log_stack=log_stack)
+        self._controller.register_backend(backend)
         self._controller.start()
 
         self._controller_client = ControllerServiceClientSync(

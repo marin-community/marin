@@ -14,7 +14,7 @@ from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
 from iris.cluster.client.job_info import JobInfo, set_job_info
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.types import JobName
-from iris.hooks.multigpu import IRIS_MULTIGPU_PROCESS_INDEX_ENV
+from iris.jax.multigpu import IRIS_MULTIGPU_PROCESS_INDEX_ENV
 from iris.runtime import telemetry
 from rigging import telemetry as rigging_telemetry
 
@@ -166,7 +166,10 @@ def test_configure_separates_reused_numeric_attempts(telemetry_receiver: Telemet
 def test_vllm_resource_exposes_serving_job_join(telemetry_receiver: TelemetryReceiver) -> None:
     info = JobInfo(task_id=JobName.from_wire("/alice/serve/0"), worker_id="w-1", attempt_id=0)
     with _iris_metadata(info, telemetry_receiver.endpoint):
-        telemetry.configure("vllm", attributes={"role": rigging_telemetry.TelemetryRole.INFERENCE.value})
+        telemetry.configure(
+            "vllm",
+            attributes={"role": rigging_telemetry.TelemetryRole.INFERENCE.value},
+        )
         rigging_telemetry.gauge("identity_probe").set(1)
 
     attributes = telemetry_receiver.latest_resource()["attributes"]

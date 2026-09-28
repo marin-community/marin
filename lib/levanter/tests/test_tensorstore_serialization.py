@@ -30,7 +30,6 @@ from levanter.tensorstore_serialization import (
     TensorStoreReadConfig,
     TensorStoreWriteConfig,
     _capped_chunk_shape,
-    _HostByteBudget,
     _trim_host_memory_after_commits,
     _transfer_shard_to_pageable_host,
     build_kvstore_spec,
@@ -39,6 +38,7 @@ from levanter.tensorstore_serialization import (
 )
 from levanter.testing import eight_device_checkpoints
 from levanter.testing.eight_device_checkpoints import run_on_eight_devices
+from levanter.utils.byte_budget import HostByteBudget
 
 _ASYNC_TEST_TIMEOUT = 5
 
@@ -308,7 +308,7 @@ def test_staged_bytes_stay_admitted_until_their_write_is_released():
     """TensorStore holds a shard snapshot until the commit, so admission must outlive the copy."""
 
     async def scenario():
-        gate = _HostByteBudget(100)
+        gate = HostByteBudget(100)
         await gate.acquire(60)
 
         queued = asyncio.create_task(gate.acquire(60))
@@ -611,3 +611,15 @@ def test_checkpoints_without_a_manifest_still_load(tmp_path):
         restored = load_checkpoint({"model": {"w": hax.zeros(A)}}, str(tmp_path))
 
         assert jax.numpy.array_equal(restored["model"]["w"].array, state["model"]["w"].array)
+
+
+def test_a_leaf_absent_from_the_exemplar_is_not_read_back():
+    fp32 = jnp.arange(8, dtype=jnp.float32) + 0.123456789
+    written = {"params": fp32.astype(jnp.bfloat16), "master_params": fp32}
+
+    with TemporaryDirectory() as tmpdir:
+        save_checkpoint(written, step=0, checkpoint_path=tmpdir)
+        restored = load_checkpoint({"params": jnp.zeros(8, jnp.float32)}, tmpdir)
+
+    assert restored["params"].dtype == jnp.bfloat16
+    assert_trees_not_close(restored["params"].astype(jnp.float32), fp32)

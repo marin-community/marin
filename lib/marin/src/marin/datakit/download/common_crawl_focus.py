@@ -9,6 +9,10 @@ the text and WARC provenance as Parquet. Those shards are the input here, not th
 finished source: they hold duplicate ids and no row order, so the chain sends them
 through ``normalize_step`` like every other datakit source.
 
+The exact extractor, launch configuration, and completed-run record are preserved at
+Marin commit ``20b7003fea217ec031c0cfe77643854641abbffc``:
+https://github.com/marin-community/marin/blob/20b7003fea217ec031c0cfe77643854641abbffc/experiments/datakit/focus_crawl.py
+
 The extraction is read from ``{MARIN_PREFIX}/<_FOCUS_CRAWL_EXTRACTION>``, so each
 cluster reads it from its own bucket and it must be copied in before a run. The
 canonical copy lives on CoreWeave at

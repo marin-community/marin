@@ -23,6 +23,10 @@ from levanter.utils.profile_dirs import (
 
 from marin.profiling.schema import ProfileSummary, RunMetadata
 from marin.profiling.trace_summary import (
+    DEFAULT_BREAKDOWN_MODE,
+    DEFAULT_HOT_OP_LIMIT,
+    DEFAULT_WARMUP_STEPS,
+    BreakdownMode,
     TraceSummaryContext,
     load_trace_payload,
     parse_complete_events,
@@ -143,9 +147,9 @@ def summarize_profile_artifact(
     profile_dir: Path,
     *,
     run_metadata: RunMetadata | None = None,
-    warmup_steps: int = 5,
-    hot_op_limit: int = 25,
-    breakdown_mode: str = "exclusive_per_track",
+    warmup_steps: int = DEFAULT_WARMUP_STEPS,
+    hot_op_limit: int = DEFAULT_HOT_OP_LIMIT,
+    breakdown_mode: BreakdownMode = DEFAULT_BREAKDOWN_MODE,
 ) -> ProfileSummary:
     """
     Summarize a downloaded profile directory into the normalized schema.
@@ -184,9 +188,9 @@ def summarize_trace(
     trace_path: Path,
     *,
     run_metadata: RunMetadata | None = None,
-    warmup_steps: int = 5,
-    hot_op_limit: int = 25,
-    breakdown_mode: str = "exclusive_per_track",
+    warmup_steps: int = DEFAULT_WARMUP_STEPS,
+    hot_op_limit: int = DEFAULT_HOT_OP_LIMIT,
+    breakdown_mode: BreakdownMode = DEFAULT_BREAKDOWN_MODE,
 ) -> ProfileSummary:
     """
     Summarize a single trace file into the normalized profile schema.

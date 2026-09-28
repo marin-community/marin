@@ -47,7 +47,6 @@ class FakeWorkerHandle:
     _vm_id: str
     _internal_address: str
     _state: CloudWorkerState = CloudWorkerState.RUNNING
-    _bootstrap_log: str = ""
     _port: int = 10001
 
     @property
@@ -67,10 +66,6 @@ class FakeWorkerHandle:
         if not self._internal_address:
             return ""
         return f"http://{self._internal_address}:{self._port}"
-
-    @property
-    def bootstrap_log(self) -> str:
-        return self._bootstrap_log
 
     def status(self) -> CloudWorkerStatus:
         return CloudWorkerStatus(state=self._state)
@@ -134,13 +129,11 @@ def make_fake_worker_handle(
     vm_id: str,
     address: str,
     state: vm_pb2.VmState,
-    bootstrap_log: str = "",
 ) -> FakeWorkerHandle:
     return FakeWorkerHandle(
         _vm_id=vm_id,
         _internal_address=address,
         _state=_cloud_worker_state_from_iris(state),
-        _bootstrap_log=bootstrap_log,
     )
 
 
@@ -150,7 +143,6 @@ def make_fake_slice_handle(
     all_ready: bool = False,
     any_failed: bool = False,
     vm_states: list[vm_pb2.VmState] | None = None,
-    bootstrap_logs: list[str] | None = None,
     created_at_ms: int = 1000000,
 ) -> FakeSliceHandle:
     if vm_states is None:
@@ -174,12 +166,10 @@ def make_fake_slice_handle(
     slice_hash = abs(hash(slice_id)) % 256
     worker_handles: list[FakeWorkerHandle] = []
     for i, state in enumerate(vm_states):
-        bootstrap_log = bootstrap_logs[i] if bootstrap_logs and i < len(bootstrap_logs) else ""
         worker_handle = make_fake_worker_handle(
             vm_id=f"{slice_id}-vm-{i}",
             address=f"10.0.{slice_hash}.{i}",
             state=state,
-            bootstrap_log=bootstrap_log,
         )
         worker_handles.append(worker_handle)
 

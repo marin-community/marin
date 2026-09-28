@@ -16,7 +16,13 @@ import levanter
 import levanter.config
 import levanter.utils.logging as logging_utils
 from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
-from levanter.compat.hf_checkpoints import DEFAULT_MAX_SHARD_SIZE, RepoRef, load_tokenizer
+from levanter.compat.hf_checkpoints import (
+    DEFAULT_EXPORT_HOST_BUDGET_BYTES,
+    DEFAULT_MAX_SHARD_SIZE,
+    MAX_CONCURRENT_HF_SHARDS,
+    RepoRef,
+    load_tokenizer,
+)
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.trainer import TrainerConfig
@@ -38,6 +44,8 @@ class ConvertLmConfig:
     upload_to_hf: Optional[RepoRef] = None  # if specified, attempt to upload this checkpoint to the hf hub
     checkpoint_subpath: str = "model"
     max_shard_size: int = DEFAULT_MAX_SHARD_SIZE
+    export_host_budget_bytes: int = DEFAULT_EXPORT_HOST_BUDGET_BYTES
+    max_concurrent_shards: int = MAX_CONCURRENT_HF_SHARDS
 
     model: LmConfig = LlamaConfig()
     save_tokenizer: bool = True  # if True, save the tokenizer to the output directory
@@ -106,6 +114,8 @@ def main(config: ConvertLmConfig):
             upload_to_hf=config.upload_to_hf or False,
             save_tokenizer=config.save_tokenizer,
             max_shard_size=config.max_shard_size,
+            export_host_budget_bytes=config.export_host_budget_bytes,
+            max_concurrent_shards=config.max_concurrent_shards,
         )
 
 

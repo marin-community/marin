@@ -243,9 +243,8 @@ def insert_job(
 def stamp_backend(tx: Tx, pins: list[tuple[JobName, str]]) -> None:
     """Stamp ``backend_id`` on each job and all of its tasks.
 
-    ``pins`` is a list of ``(job_id, backend_id)`` produced by the task->backend
-    meta-scheduler. Recording the pin lets later ticks skip routing the job; the
-    same id propagates to the job's tasks.
+    ``pins`` is a list of ``(job_id, backend_id)`` produced when local scheduling
+    accepts an unassigned job. The same id propagates to the job's tasks.
     """
     by_backend: dict[str, list[JobName]] = {}
     for job_id, backend_id in pins:

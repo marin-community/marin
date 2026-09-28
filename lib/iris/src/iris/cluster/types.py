@@ -70,9 +70,8 @@ class GcpSliceMode(StrEnum):
 DEFAULT_BACKEND_ID = "default"
 """Backend id of the implicit single backend synthesized from top-level config.
 
-Shared by the runtime config synthesis (``iris.cluster.config.resolve_backends``)
-and the ``0032_backend_id`` migration backfill — the migration has only a raw DB
-connection (no config object), so both must agree on this exact literal.
+Shared by controller composition and the backend-ID migration backfill. The
+migration has only a raw DB connection, so both must agree on this literal.
 """
 
 
@@ -98,6 +97,13 @@ class WellKnownAttribute(StrEnum):
     TPU_VM_COUNT = "tpu-vm-count"
     GPU_VARIANT = "gpu-variant"
     GPU_COUNT = "gpu-count"
+
+
+AVAILABILITY_PREFIX = "availability:"
+
+
+def availability_key(variant: str) -> str:
+    return f"{AVAILABILITY_PREFIX}{variant.strip().lower()}"
 
 
 AUTO_DEVICE_VARIANT = "auto"
@@ -401,14 +407,6 @@ class TaskAttempt:
         """Get the task index from the task_id."""
         return self.task_id.require_task()[1]
 
-    def with_attempt(self, attempt_id: int) -> "TaskAttempt":
-        """Return a new TaskAttempt with the given attempt_id."""
-        return TaskAttempt(task_id=self.task_id, attempt_id=attempt_id)
-
-    def without_attempt(self) -> "TaskAttempt":
-        """Return a new TaskAttempt with attempt_id=None."""
-        return TaskAttempt(task_id=self.task_id)
-
     def __str__(self) -> str:
         return self.to_wire()
 
@@ -441,6 +439,7 @@ class PendingTask:
 
     task_id: JobName
     job_id: JobName
+    submitting_user: str
     backend_id: str
     state: int
     current_attempt_id: int
@@ -842,6 +841,17 @@ class Namespace(str):
 
 TERMINAL_JOB_STATES: frozenset[int] = frozenset(
     job_pb2.JobState.Value(f"JOB_STATE_{state.name}") for state in NATIVE_TERMINAL_JOB_STATES
+)
+
+USER_JOB_STATES = (
+    job_pb2.JOB_STATE_PENDING,
+    job_pb2.JOB_STATE_BUILDING,
+    job_pb2.JOB_STATE_RUNNING,
+    job_pb2.JOB_STATE_SUCCEEDED,
+    job_pb2.JOB_STATE_FAILED,
+    job_pb2.JOB_STATE_KILLED,
+    job_pb2.JOB_STATE_WORKER_FAILED,
+    job_pb2.JOB_STATE_UNSCHEDULABLE,
 )
 
 TERMINAL_TASK_STATES: frozenset[int] = frozenset(

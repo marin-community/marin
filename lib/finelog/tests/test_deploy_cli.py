@@ -20,16 +20,20 @@ import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
 from finelog.client.log_client import NamespaceInfo
+from finelog.deploy import connect as deploy_connect
 from finelog.deploy.cli import (
     _list_namespace_dirs,
     _list_namespace_segments,
     _register_namespace_views,
     cli,
 )
+from finelog.deploy.config import load_finelog_config
 from finelog.errors import SchemaValidationError
 from finelog.policy import StoragePolicy
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.schema import Column, Schema
+from rigging import credentials as rigging_credentials
+from rigging.auth import MARIN_DESKTOP_OAUTH_CLIENT, IapServiceAccountTokenProvider
 
 
 def _write_segment(path: Path, level: int, seq: int, rows: list[dict[str, object]]) -> Path:
@@ -74,6 +78,9 @@ class _FakeLogClient:
         assert namespace == "iris.task"
         return self.list_namespaces()[0].schema
 
+    def close(self) -> None:
+        pass
+
 
 @contextmanager
 def _fake_log_client(client: _FakeLogClient):
@@ -81,7 +88,7 @@ def _fake_log_client(client: _FakeLogClient):
 
 
 def _patch_cli_client(client: _FakeLogClient):
-    return patch("finelog.deploy.cli._log_client", return_value=_fake_log_client(client))
+    return patch("finelog.deploy.cli.open_client", return_value=_fake_log_client(client))
 
 
 def test_query_reads_multiline_sql_from_stdin_without_shell_escaping() -> None:
@@ -236,3 +243,25 @@ def test_register_namespace_views_empty_filter_skips_view(tmp_path: Path) -> Non
         )
     with pytest.raises(duckdb.CatalogException):
         conn.execute("SELECT * FROM log").fetchall()
+
+
+def test_iap_client_mints_a_service_account_token_without_a_cached_login(monkeypatch) -> None:
+    """With no cached desktop login, the IAP client mints its edge token for the
+    Marin desktop client id. open_client used to raise IapLoginRequired here, so
+    an unattended caller could not reach an IAP-fronted deployment at all."""
+    monkeypatch.setattr(rigging_credentials, "load_credentials", lambda cluster: None)
+    minted_for: list[str] = []
+
+    class _RecordingProvider(IapServiceAccountTokenProvider):
+        def __init__(self, audience: str) -> None:
+            minted_for.append(audience)
+            super().__init__(audience)
+
+    monkeypatch.setattr(rigging_credentials, "IapServiceAccountTokenProvider", _RecordingProvider)
+    monkeypatch.setattr(deploy_connect, "connect", lambda url, factory, **kw: _FakeLogClient())
+    monkeypatch.setattr(deploy_connect, "disconnect", lambda client: None)
+
+    with deploy_connect.open_client(load_finelog_config("marin"), "marin"):
+        pass
+
+    assert minted_for == [MARIN_DESKTOP_OAUTH_CLIENT.client_id]

@@ -7,7 +7,7 @@ import logging
 import threading
 
 import pytest
-from rigging import telemetry
+import zephyr.coordinator as coordinator_module
 from zephyr import counters
 from zephyr.coordinator import ZephyrCoordinator, ZephyrExecutionResult, _PipelineExecution
 from zephyr.counters import ScopedCounters
@@ -40,7 +40,7 @@ def _make_coordinator(
         reduce_cost=_COUNTER_TASK_RESOURCES,
     )
     coord._executions = {run.execution_id: run}
-    coord._worker_counters = {str(i): s for i, s in enumerate(inflight or [])}
+    coord._worker_counters = {(str(i), run.execution_id): snapshot for i, snapshot in enumerate(inflight or [])}
     for snapshot in completed:
         run.fold_counters(snapshot)
     return coord
@@ -470,7 +470,7 @@ def test_publish_telemetry_exports_aggregated_counter_snapshots_as_gauges(monkey
         def set(self, value, *, attributes=None):
             emitted.append((value, attributes))
 
-    monkeypatch.setattr(telemetry, "gauge", lambda name, **kwargs: Gauge())
+    monkeypatch.setattr(coordinator_module.telemetry, "gauge", lambda _name, **_kwargs: Gauge())
     coord._publish_telemetry()
 
     assert (15, {"source_kind": "gauge", "source_temporality": "current_snapshot", "run": "run-1"}) in emitted

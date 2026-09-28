@@ -4,10 +4,10 @@
 """The federation manager: peer registry, handoff, delta-sync, and cancel.
 
 The controller composes one manager. It owns the peer registry, the submit-time
-:class:`~iris.cluster.federation.router.PeerRouter`, a capability heartbeat loop,
-and one sync loop per peer. Each sync pass delivers pending handoffs and cancels,
+:class:`~iris.cluster.federation.router.PeerRouter`, and one capability-heartbeat
+and sync loop per peer. Each sync pass delivers pending handoffs and cancels,
 then mirrors the peer's jobs into the local projection. Handoffs to one peer run
-with bounded concurrency. A slow LaunchJob delays only that peer's sync pass.
+with bounded concurrency. A slow peer delays only that peer's loops.
 Every durable mutation goes through an injected
 :class:`~iris.cluster.federation.store.FederationStore`, so the manager stays a
 self-contained module.
@@ -29,7 +29,7 @@ from connectrpc.errors import ConnectError
 from rigging.timing import Duration, Timestamp
 
 from iris.cluster.bundle import BundleStore
-from iris.cluster.constraints import BACKEND_CONSTRAINT_KEY, CLUSTER_CONSTRAINT_KEY
+from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY
 from iris.cluster.federation.availability import (
     AVAILABILITY_METRIC_VERSION,
     BackendAvailability,
@@ -132,20 +132,25 @@ class FederationManager:
         # already promoted against each peer backend since its last heartbeat, so
         # successive ticks between heartbeats do not each re-spend the same number.
         self._ledger = ReservationLedger()
-        self._heartbeat_thread: ManagedThread | None = None
+        self._heartbeat_threads: dict[str, ManagedThread] = {}
         self._sync_threads: dict[str, ManagedThread] = {}
 
     # -- lifecycle -----------------------------------------------------------
 
     def start(self) -> None:
-        """Start heartbeat and, when a store is wired, one sync loop per peer.
+        """Start one heartbeat and, when a store is wired, one sync loop per peer.
 
         A no-op when no peers are configured, so a single-cluster deployment is
         unchanged.
         """
         if not self._peers:
             return
-        self._heartbeat_thread = self._threads.spawn(self._run_heartbeat_loop, name="federation-heartbeat")
+        for peer_id, peer in self._peers.items():
+            self._heartbeat_threads[peer_id] = self._threads.spawn(
+                self._run_peer_heartbeat_loop,
+                name=f"federation-heartbeat-{peer_id}",
+                args=(peer,),
+            )
         if self._store is not None:
             for peer_id, peer in self._peers.items():
                 self._sync_threads[peer_id] = self._threads.spawn(
@@ -156,12 +161,12 @@ class FederationManager:
 
     def stop(self) -> None:
         """Stop all loops and release peer connections. Idempotent."""
-        threads = [thread for thread in [self._heartbeat_thread, *self._sync_threads.values()] if thread is not None]
+        threads = [*self._heartbeat_threads.values(), *self._sync_threads.values()]
         for thread in threads:
             thread.stop()
         for thread in threads:
             thread.join(timeout=_JOIN_TIMEOUT)
-        self._heartbeat_thread = None
+        self._heartbeat_threads.clear()
         self._sync_threads.clear()
         for peer in self._peers.values():
             peer.close()
@@ -350,8 +355,8 @@ class FederationManager:
             step()
             stop_event.wait(timeout=interval)
 
-    def _run_heartbeat_loop(self, stop_event: threading.Event) -> None:
-        self._run_loop(stop_event, self._probe_all_peers, self._heartbeat_interval.to_seconds())
+    def _run_peer_heartbeat_loop(self, stop_event: threading.Event, peer: FederationPeer) -> None:
+        self._run_loop(stop_event, peer.probe, self._heartbeat_interval.to_seconds())
 
     def _run_peer_sync_loop(self, stop_event: threading.Event, peer: FederationPeer) -> None:
         self._run_loop(
@@ -359,10 +364,6 @@ class FederationManager:
             lambda: self._sync_peer_once(peer),
             self._sync_interval.to_seconds(),
         )
-
-    def _probe_all_peers(self) -> None:
-        for peer in self._peers.values():
-            peer.probe()
 
     def sync_once(self) -> None:
         """Deliver pending work and mirror one status batch from each peer."""
@@ -454,12 +455,11 @@ class FederationManager:
 
     def _build_handoff_request(self, spec: HandoffSpec) -> controller_pb2.Controller.LaunchJobRequest:
         """The request delivered to the peer: the same cluster-invariant job name,
-        federation attribution, and the routing directives stripped (the peer
-        matches workers, not the parent's ``backend``/``cluster`` pins)."""
+        federation attribution, and the cluster directive stripped."""
         handoff = controller_pb2.Controller.LaunchJobRequest()
         handoff.CopyFrom(spec.request)
         handoff.name = spec.local_job_id.to_wire()
-        kept = [c for c in spec.request.constraints if c.key not in (BACKEND_CONSTRAINT_KEY, CLUSTER_CONSTRAINT_KEY)]
+        kept = [c for c in spec.request.constraints if c.key != CLUSTER_CONSTRAINT_KEY]
         del handoff.constraints[:]
         handoff.constraints.extend(kept)
         handoff.federation.CopyFrom(

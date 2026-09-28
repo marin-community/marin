@@ -17,7 +17,7 @@ import jax.numpy as jnp
 from haliax.jax_utils import tree_checkpoint_name
 from haliax.nn.ragged_dot import ragged_dot
 from jax.typing import DTypeLike
-from jaxtyping import Array, Float, Int
+from jaxtyping import Array, Bool, Float, Int
 
 from levanter.grug._moe.common import (
     _CHECKPOINT_DISPATCH_INPUT,
@@ -25,6 +25,7 @@ from levanter.grug._moe.common import (
     _CHECKPOINT_MOE_OUTPUT,
     _prepare_moe_dispatch_indices_with_assignment_ids,
     _zero_dropped_assignments,
+    _zero_inactive_grouped_rows,
     split_moe_w13_output,
 )
 
@@ -155,10 +156,15 @@ def _require_sonic_deps() -> None:
 
 
 def sonic_gather_sum_available() -> bool:
+    """Whether the fused gather-and-weighted-sum kernel can run in this process.
+
+    The kernel is Triton, so a non-GPU backend rules it out however the imports went.
+    """
     return (
         jt is not None
         and _sonic_token_gather_sum_kernel is not None
         and _sonic_token_gather_sum_bwd_kernel is not None
+        and jax.default_backend() == "gpu"
     )
 
 
@@ -350,6 +356,7 @@ def _moe_mlp_local_sonic(
     x: Float[Array, "T H"],
     selected_experts: Int[Array, "T K"],
     combine_weights: Float[Array, "T K"],
+    token_valid: Bool[Array, "T"],
     moe_w13: Float[Array, "E H I2"],
     moe_w2: Float[Array, "E I H"],
     *,
@@ -360,19 +367,24 @@ def _moe_mlp_local_sonic(
     token_ids_sort, dispatch_positions, group_sizes, _sorted_assignment_ids = (
         _prepare_moe_dispatch_indices_with_assignment_ids(
             selected_experts,
+            token_valid,
             num_experts=num_experts,
         )
     )
-    x_dispatch = tree_checkpoint_name(x[token_ids_sort], _CHECKPOINT_DISPATCH_INPUT)
+    cumulative_group_sizes = jnp.cumsum(group_sizes).astype(jnp.int32)
+    x_dispatch = _zero_inactive_grouped_rows(x[token_ids_sort], cumulative_group_sizes)
+    x_dispatch = tree_checkpoint_name(x_dispatch, _CHECKPOINT_DISPATCH_INPUT)
 
     with jax.named_scope("moe_up_down"):
+        # Rows past the last group are unspecified kernel output; every consumer before the
+        # gather-sum is row-local or group-bounded, so only `out_dispatch` needs zeroing.
         w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13, group_sizes), _CHECKPOINT_EXPERT_HIDDEN)
         moe_dim = moe_w2.shape[1]
         gate, up = split_moe_w13_output(w13_out, intermediate_dim=moe_dim, interleaved=False)
         hidden = activation_fn(gate) * up
-        out_dispatch = ragged_dot(hidden, moe_w2, group_sizes)
+        out_dispatch = _zero_inactive_grouped_rows(ragged_dot(hidden, moe_w2, group_sizes), cumulative_group_sizes)
         out = tree_checkpoint_name(
-            sonic_gather_sum(out_dispatch, dispatch_positions, combine_weights),
+            sonic_gather_sum(out_dispatch, dispatch_positions, jnp.where(token_valid[:, None], combine_weights, 0)),
             _CHECKPOINT_MOE_OUTPUT,
         )
 

@@ -41,8 +41,8 @@ from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from iris.test_util import FakeStatsTable, wait_for_condition
 from iris.testing.k8s import (
+    k8s_backend_descriptor,
     make_batch,
-    make_kueue_provider,
     make_pod,
     make_run_req,
     pod_config,
@@ -70,6 +70,7 @@ def test_sync_applies_pods_for_tasks_to_run(provider, k8s):
 
 def test_sync_releases_output_uploader_after_task_container_exits(k8s):
     provider = K8sTaskProvider(
+        descriptor=k8s_backend_descriptor(),
         kubectl=k8s,
         pods=pod_config(task_outputs=TaskOutputPolicy()),
         cluster_scan_interval=0.0,
@@ -99,6 +100,7 @@ def test_sync_releases_output_uploader_after_task_container_exits(k8s):
 
 def test_sync_output_timeout_preserves_successful_task_outcome(k8s, monkeypatch):
     provider = K8sTaskProvider(
+        descriptor=k8s_backend_descriptor(),
         kubectl=k8s,
         pods=pod_config(task_outputs=TaskOutputPolicy(finalization_timeout=Duration.from_ms(1))),
         cluster_scan_interval=0.0,
@@ -481,6 +483,7 @@ def test_poll_stops_scanning_terminal_pods_once_attempts_resolve(k8s):
     """
     counting = _CountingK8sService(k8s)
     provider = K8sTaskProvider(
+        descriptor=k8s_backend_descriptor(),
         kubectl=counting,
         pods=pod_config(),
         cluster_scan_interval=0.0,
@@ -688,7 +691,12 @@ def test_get_cluster_status_basic(k8s):
     pod = k8s.get_json(K8sResource.PODS, "iris-task-0")
     pod["status"]["conditions"] = []
 
-    p = K8sTaskProvider(kubectl=k8s, pods=pod_config(default_image="img:latest"), cluster_scan_interval=0.0)
+    p = K8sTaskProvider(
+        descriptor=k8s_backend_descriptor(),
+        kubectl=k8s,
+        pods=pod_config(default_image="img:latest"),
+        cluster_scan_interval=0.0,
+    )
     try:
         p.sync(make_batch())
         resp = p.get_cluster_status()
@@ -709,7 +717,10 @@ def test_get_cluster_status_node_failure(k8s):
     """Node list failure during sync is handled gracefully; status reports 0 nodes."""
     k8s.inject_failure("list_json:node", RuntimeError("kubectl error"))
     p = K8sTaskProvider(
-        kubectl=k8s, pods=pod_config(namespace="test-ns", default_image="img:latest"), cluster_scan_interval=0.0
+        descriptor=k8s_backend_descriptor(),
+        kubectl=k8s,
+        pods=pod_config(namespace="test-ns", default_image="img:latest"),
+        cluster_scan_interval=0.0,
     )
     try:
         p.sync(make_batch())
@@ -728,7 +739,12 @@ def test_get_cluster_status_excludes_terminal_pods(k8s):
     populate_pod(k8s, "iris-succeeded", "Succeeded")
     populate_pod(k8s, "iris-failed", "Failed")
 
-    p = K8sTaskProvider(kubectl=k8s, pods=pod_config(default_image="img:latest"), cluster_scan_interval=0.0)
+    p = K8sTaskProvider(
+        descriptor=k8s_backend_descriptor(),
+        kubectl=k8s,
+        pods=pod_config(default_image="img:latest"),
+        cluster_scan_interval=0.0,
+    )
     try:
         p.sync(make_batch())
         resp = p.get_cluster_status()
@@ -1119,6 +1135,7 @@ def test_reconcile_dumps_only_running_pods_via_periodic_profiler(k8s):
     dumps only the running pod (not the terminal one) into iris.profile."""
     profile_table = FakeStatsTable()
     provider = K8sTaskProvider(
+        descriptor=k8s_backend_descriptor(),
         kubectl=k8s,
         pods=pod_config(),
         profile_table=profile_table,
@@ -1661,166 +1678,3 @@ def test_gc_skips_gang_with_active_sibling(provider, k8s):
 
     assert k8s.get_json(K8sResource.PODS, "early-failed-gang-pod") is None
     assert k8s.get_json(K8sResource.WORKLOADS, group) is None
-
-
-# ---------------------------------------------------------------------------
-# Preemptible blocker eviction (preempt_namespaces)
-# ---------------------------------------------------------------------------
-
-_PREEMPT_NS = "verify-ns"
-
-
-@pytest.fixture
-def preempt_provider(k8s):
-    """Kueue provider with blocker eviction enabled for _PREEMPT_NS."""
-    p = make_kueue_provider(k8s, preempt_namespaces=[_PREEMPT_NS])
-    yield p
-    p.close()
-
-
-def _seed_blocker_pod(
-    k8s,
-    namespace: str,
-    name: str,
-    *,
-    priority: int = -1,
-    gpus: int = 8,
-    phase: str = "Running",
-) -> None:
-    """Insert a health-check-style pod into a foreign namespace of the fake."""
-    resources = {"requests": {"nvidia.com/gpu": str(gpus)}} if gpus else {}
-    pod = {
-        "kind": "Pod",
-        "metadata": {"name": name, "namespace": namespace},
-        "spec": {
-            "priority": priority,
-            "containers": [{"name": "verify", "resources": resources}],
-        },
-        "status": {"phase": phase},
-    }
-    k8s.seed_namespaced_pod(namespace, name, pod)
-
-
-def _gang_reqs(num_tasks: int = 2) -> list[job_pb2.RunTaskRequest]:
-    reqs = []
-    for i in range(num_tasks):
-        req = make_run_req(f"/gang/task/{i}", attempt_id=0, num_tasks=num_tasks, coscheduling_group_by="leafgroup")
-        # Gangs are GPU workloads; the GPU request is what makes blocker eviction fire.
-        req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="H100", count=8))
-        reqs.append(req)
-    return reqs
-
-
-def test_gang_submit_evicts_preemptible_gpu_blocker(preempt_provider, k8s):
-    """Submitting a gang deletes negative-priority GPU pods in configured namespaces,
-    freeing the node capacity Kueue TAS counts against the gang."""
-    _seed_blocker_pod(k8s, _PREEMPT_NS, "nhc-verify-0")
-
-    preempt_provider.sync(make_batch(tasks_to_run=_gang_reqs()))
-
-    assert k8s.list_pods_in_namespace(_PREEMPT_NS) == []
-    # The gang's own pods were still created.
-    assert len(k8s.list_json(K8sResource.PODS, labels=_MANAGED_POD_LABELS)) == 2
-
-
-def test_gang_submit_spares_non_blocker_pods(preempt_provider, k8s):
-    """The hard guards hold regardless of config: normal-priority pods, non-GPU
-    pods, and pods in unconfigured namespaces are never deleted."""
-    _seed_blocker_pod(k8s, _PREEMPT_NS, "normal-priority", priority=0)
-    _seed_blocker_pod(k8s, _PREEMPT_NS, "no-gpu", gpus=0)
-    _seed_blocker_pod(k8s, "other-ns", "unconfigured-ns")
-    _seed_blocker_pod(k8s, _PREEMPT_NS, "real-blocker")
-
-    preempt_provider.sync(make_batch(tasks_to_run=_gang_reqs()))
-
-    survivors = {p["metadata"]["name"] for p in k8s.list_pods_in_namespace(_PREEMPT_NS)}
-    assert survivors == {"normal-priority", "no-gpu"}
-    assert [p["metadata"]["name"] for p in k8s.list_pods_in_namespace("other-ns")] == ["unconfigured-ns"]
-
-
-def test_cpu_submit_does_not_evict(preempt_provider, k8s):
-    """A CPU-only submission needs no GPU capacity, so it triggers no blocker eviction."""
-    _seed_blocker_pod(k8s, _PREEMPT_NS, "blocker")
-
-    preempt_provider.sync(make_batch(tasks_to_run=[make_run_req("/plain-job/0")]))
-
-    assert [p["metadata"]["name"] for p in k8s.list_pods_in_namespace(_PREEMPT_NS)] == ["blocker"]
-
-
-def test_single_pod_gpu_submit_evicts_blocker(preempt_provider, k8s):
-    """A non-coscheduled GPU job now routes through Kueue and is gated too, so it also
-    frees the GPU capacity blockers hold — eviction is not gated on coscheduling."""
-    _seed_blocker_pod(k8s, _PREEMPT_NS, "nhc-verify-0")
-
-    req = make_run_req("/gpu-job/0", num_tasks=1)
-    req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="H100", count=8))
-    preempt_provider.sync(make_batch(tasks_to_run=[req]))
-
-    assert k8s.list_pods_in_namespace(_PREEMPT_NS) == []
-
-
-def test_reconcile_evicts_blockers_while_gang_gated(preempt_provider, k8s):
-    """A blocker that lands AFTER gang submission is evicted by the reconcile
-    loop while the gang's pods remain SchedulingGated, and the sweep is
-    debounced so back-to-back reconciles don't re-list the namespace."""
-    entries = [RunningTaskEntry(task_id=JobName.from_wire(f"/gang/task/{i}"), attempt_id=0) for i in range(2)]
-    preempt_provider.sync(make_batch(tasks_to_run=_gang_reqs(), running_tasks=entries))
-
-    # Kueue's webhook gates gang pods until the pod-group Workload is admitted.
-    for pod in k8s.list_json(K8sResource.PODS, labels=_MANAGED_POD_LABELS):
-        pod["spec"]["schedulingGates"] = [{"name": "kueue.x-k8s.io/admission"}]
-        pod["status"] = {"phase": "Pending"}
-
-    # Health-check pod lands after submission, on capacity the gang needs.
-    _seed_blocker_pod(k8s, _PREEMPT_NS, "late-blocker")
-    preempt_provider._last_preempt_time = 0.0  # clear the submit-time debounce
-    preempt_provider.sync(make_batch(running_tasks=entries))
-    assert k8s.list_pods_in_namespace(_PREEMPT_NS) == []
-
-    # Debounce: a blocker appearing immediately after survives this cycle.
-    _seed_blocker_pod(k8s, _PREEMPT_NS, "back-to-back-blocker")
-    preempt_provider.sync(make_batch(running_tasks=entries))
-    assert [p["metadata"]["name"] for p in k8s.list_pods_in_namespace(_PREEMPT_NS)] == ["back-to-back-blocker"]
-
-
-def test_reconcile_without_gated_gang_pods_does_not_evict(preempt_provider, k8s):
-    """No gang work waiting on admission -> no eviction, even with a blocker present."""
-    _seed_blocker_pod(k8s, _PREEMPT_NS, "blocker")
-    preempt_provider._last_preempt_time = 0.0
-
-    preempt_provider.sync(make_batch())
-
-    assert [p["metadata"]["name"] for p in k8s.list_pods_in_namespace(_PREEMPT_NS)] == ["blocker"]
-
-
-def test_preemption_disabled_makes_no_foreign_namespace_calls(kueue_provider, k8s):
-    """With preempt_namespaces unset (the default), gang submission never lists
-    or deletes pods outside iris's own namespace."""
-    _seed_blocker_pod(k8s, _PREEMPT_NS, "blocker")
-
-    kueue_provider.sync(make_batch(tasks_to_run=_gang_reqs()))
-
-    assert k8s.namespaced_pod_calls == []
-    assert [p["metadata"]["name"] for p in k8s.list_pods_in_namespace(_PREEMPT_NS)] == ["blocker"]
-
-
-def test_preemption_never_touches_own_namespace(k8s):
-    """Even if misconfigured to include iris's own namespace, eviction skips it."""
-    provider = make_kueue_provider(k8s, preempt_namespaces=["iris"])
-    try:
-        victim = {
-            "kind": "Pod",
-            "metadata": {"name": "own-ns-victim"},
-            "spec": {
-                "priority": -1,
-                "containers": [{"name": "x", "resources": {"requests": {"nvidia.com/gpu": "8"}}}],
-            },
-            "status": {"phase": "Running"},
-        }
-        k8s.seed_resource(K8sResource.PODS, "own-ns-victim", victim)
-
-        provider.sync(make_batch(tasks_to_run=_gang_reqs()))
-
-        assert k8s.get_json(K8sResource.PODS, "own-ns-victim") is not None
-    finally:
-        provider.close()

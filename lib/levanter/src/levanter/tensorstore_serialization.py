@@ -42,6 +42,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from levanter._debug_logging import flush_debug_output
 from levanter.checkpoint_manifest import CheckpointArray, build_manifest, read_manifest, write_manifest
 from levanter.utils import jax_utils
+from levanter.utils.byte_budget import HostByteBudget
 
 logger = logging.getLogger(__name__)
 
@@ -322,43 +323,6 @@ class _ShardWrite:
         return self.slice_axis, self.slice_start, self.slice_limit
 
 
-class _HostByteBudget:
-    """Bound one process's staged save bytes while writes remain in flight."""
-
-    def __init__(self, limit_bytes: int):
-        self._limit = limit_bytes
-        self._in_flight = 0
-        self._peak = 0
-        self._released = asyncio.Event()
-        self._loop: asyncio.AbstractEventLoop | None = None
-
-    @property
-    def peak_bytes(self) -> int:
-        return self._peak
-
-    async def acquire(self, num_bytes: int) -> None:
-        # Built before the save's loop exists, so bind on first use.
-        self._loop = asyncio.get_running_loop()
-        # A snapshot larger than the whole budget proceeds alone; it can never be admitted.
-        while self._in_flight and self._in_flight + num_bytes > self._limit:
-            self._released.clear()
-            await self._released.wait()
-        self._in_flight += num_bytes
-        self._peak = max(self._peak, self._in_flight)
-
-    def release(self, num_bytes: int) -> None:
-        """Callable from any thread; TensorStore resolves commits off the loop."""
-        loop = self._loop
-        if loop is None or loop.is_closed():
-            return
-        loop.call_soon_threadsafe(self._release_on_loop, num_bytes)
-
-    def _release_on_loop(self, num_bytes: int) -> None:
-        # Every mutation lands on the loop thread, so acquire never observes a partial update.
-        self._in_flight -= num_bytes
-        self._released.set()
-
-
 def _hashable_index(index) -> tuple:
     return tuple((entry.start, entry.stop) if isinstance(entry, slice) else entry for entry in index)
 
@@ -615,9 +579,13 @@ def tree_serialize_leaves_tensorstore(
     manager: Optional[array_ser.GlobalAsyncCheckpointManager] = None,
     *,
     commit_callback: Optional[Callable] = None,
+    on_local_commit: Optional[Callable[[str], None]] = None,
+    on_staged: Optional[Callable[[int], None]] = None,
     debug_checkpointer: bool = False,
+    debug_log_flush: Callable[[logging.Logger], None] | None = flush_debug_output,
     write_config: Optional[TensorStoreWriteConfig] = None,
-):
+) -> int:
+    """Serialize a PyTree and return the peak host bytes staged by this process."""
     write_config = write_config or TensorStoreWriteConfig()
 
     if manager is None:
@@ -649,7 +617,8 @@ def tree_serialize_leaves_tensorstore(
             largest_path or "<none>",
             _format_gib(largest_array_bytes),
         )
-        flush_debug_output(logger)
+        if debug_log_flush is not None:
+            debug_log_flush(logger)
 
     plans = [plan_array_write(path, array, write_config) for path, array in zip(paths, arrays)]
     _log_write_share(paths, arrays, plans, total_array_bytes)
@@ -681,16 +650,29 @@ def tree_serialize_leaves_tensorstore(
             split,
             len(plans),
         )
-        flush_debug_output(logger)
+        if debug_log_flush is not None:
+            debug_log_flush(logger)
 
-    _serialize_arrays(arrays, tspecs, plans, manager, write_config, commit_callback)
+    staged_host_bytes = _serialize_arrays(
+        arrays,
+        tspecs,
+        plans,
+        manager,
+        write_config,
+        commit_callback,
+        on_local_commit,
+        on_staged,
+    )
 
     if debug_checkpointer:
         logger.info("Checkpoint tensorstore serialize handed off async commit for %s", checkpoint_dir)
-        flush_debug_output(logger)
+        if debug_log_flush is not None:
+            debug_log_flush(logger)
 
     if manager_was_none:
         manager.wait_until_finished()
+
+    return staged_host_bytes
 
 
 def _serialize_arrays(
@@ -700,18 +682,23 @@ def _serialize_arrays(
     manager: array_ser.GlobalAsyncCheckpointManager,
     config: TensorStoreWriteConfig,
     commit_callback: Callable,
-) -> None:
+    on_local_commit: Optional[Callable[[str], None]],
+    on_staged: Optional[Callable[[int], None]],
+) -> int:
     """Write every array according to its plan and start the asynchronous commit.
 
     Returns once this process has copied its data out. ``manager`` joins the commits and
     barriers on the other processes.
+
+    Returns:
+        The peak host bytes staged by this process.
     """
     manager.wait_until_finished()
 
     # JAX's process-lifetime context accumulates caches across saves, since each save writes a
     # new OCDBT database (#6785). Give each save bounded caches and copy concurrency of its own.
     context = _tensorstore_write_context(config)
-    gate = _HostByteBudget(config.max_staged_host_bytes)
+    gate = HostByteBudget(config.max_staged_host_bytes)
     commit_futures: list[ts.Future] = []
 
     async def issue_write(num_bytes: int, stage, store_future, region: _ShardWrite | None):
@@ -799,12 +786,39 @@ def _serialize_arrays(
         len(commit_futures),
         _STAGED_BYTE_OVERHEAD * gate.peak_bytes / 1024**3,
     )
+    staged_host_bytes = gate.peak_bytes
 
     _trim_host_memory_after_commits(commit_futures)
 
     # Private to AsyncManager. Its own `serialize` calls these.
     manager._add_futures(commit_futures)
+    if on_staged is not None:
+        on_staged(staged_host_bytes)
+    if on_local_commit is not None:
+        remaining = len(commit_futures)
+        callback_lock = threading.Lock()
+        local_status = "local_completed"
+
+        def local_write_finished(future: ts.Future) -> None:
+            nonlocal remaining, local_status
+            try:
+                future.result()
+                failed = False
+            except BaseException:
+                failed = True
+            with callback_lock:
+                if failed:
+                    local_status = "local_failed"
+                remaining -= 1
+                if remaining == 0:
+                    on_local_commit(local_status)
+
+        for future in commit_futures:
+            future.add_done_callback(local_write_finished)
+        if not commit_futures:
+            on_local_commit(local_status)
     manager._start_async_commit(commit_callback)
+    return staged_host_bytes
 
 
 def _sharding_from_leaf(leaf, axis_mapping, mesh) -> Optional[jax.sharding.Sharding]:

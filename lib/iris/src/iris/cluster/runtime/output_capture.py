@@ -130,6 +130,15 @@ class _HashingWriter:
         self.raw.flush()
 
 
+def _is_archivable(mode: int) -> bool:
+    """Whether a stat mode is one of the file types the archive carries.
+
+    Everything else (fifos, sockets, devices) is inventoried but reported as a
+    skipped entry rather than written into the tar.
+    """
+    return stat.S_ISDIR(mode) or stat.S_ISREG(mode) or stat.S_ISLNK(mode)
+
+
 def _check_running(deadline: Deadline, stop: threading.Event) -> None:
     if stop.is_set():
         raise _ArchiveStopped(_CAPTURE_CANCELLED)
@@ -151,14 +160,10 @@ def _inventory(source: Path, limits: TaskOutputLimits, deadline: Deadline, stop:
             relative = f"{relative_dir}/{child.name}" if relative_dir else child.name
             info = child.stat(follow_symlinks=False)
             mode = info.st_mode
-            size = info.st_size if stat.S_ISREG(mode) else 0
-            if not (stat.S_ISDIR(mode) or stat.S_ISREG(mode) or stat.S_ISLNK(mode)):
-                entries.append(_Entry(Path(child.path), relative, mode))
-            else:
-                total_bytes += size
-                if total_bytes > limits.max_bytes:
-                    raise _CaptureError(f"too_large: regular-file bytes exceed {limits.max_bytes}")
-                entries.append(_Entry(Path(child.path), relative, mode))
+            total_bytes += info.st_size if stat.S_ISREG(mode) else 0
+            if total_bytes > limits.max_bytes:
+                raise _CaptureError(f"too_large: regular-file bytes exceed {limits.max_bytes}")
+            entries.append(_Entry(Path(child.path), relative, mode))
             if len(entries) > limits.max_entries:
                 raise _CaptureError(f"too_many_entries: entry count exceeds {limits.max_entries}")
             if stat.S_ISDIR(mode):
@@ -196,7 +201,7 @@ def _write_archive(
                 with tarfile.open(fileobj=compressed, mode="w|", format=tarfile.PAX_FORMAT) as archive:
                     for entry in entries:
                         _check_running(deadline, stop)
-                        if not (stat.S_ISDIR(entry.mode) or stat.S_ISREG(entry.mode) or stat.S_ISLNK(entry.mode)):
+                        if not _is_archivable(entry.mode):
                             skipped.append(_skipped_entry(entry))
                             continue
                         info = _normalized_tarinfo(archive.gettarinfo(str(entry.path), arcname=entry.relative))
@@ -227,16 +232,8 @@ def capture_task_outputs(
     """Archive one stable output tree and return its terminal capture result."""
     try:
         entries = _inventory(source, limits, deadline, stop)
-        eligible = [
-            entry
-            for entry in entries
-            if stat.S_ISDIR(entry.mode) or stat.S_ISREG(entry.mode) or stat.S_ISLNK(entry.mode)
-        ]
-        skipped_entries = [
-            entry
-            for entry in entries
-            if not (stat.S_ISDIR(entry.mode) or stat.S_ISREG(entry.mode) or stat.S_ISLNK(entry.mode))
-        ]
+        eligible = [entry for entry in entries if _is_archivable(entry.mode)]
+        skipped_entries = [entry for entry in entries if not _is_archivable(entry.mode)]
         if not eligible:
             return job_pb2.TaskOutputArchive(
                 state=job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_STATE_EMPTY,

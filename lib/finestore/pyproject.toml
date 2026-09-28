@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Transactional Parquet tables and named objects on conditional object storage."
 requires-python = ">=3.12"
 dependencies = [
-    "marin-rigging",
+    "marin-rigging>=0.2.82.dev31904388897",
     "pyarrow>=23.0.0",
     "pydantic>=2.0",
 ]

@@ -3,15 +3,15 @@
 
 """Federation availability inferred from the cached kubectl cluster sync: GPU
 free/total counting on :class:`ClusterState` and its attribution to a backend's
-advertised device variant in ``K8sTaskProvider.resource_capacity``."""
+advertised device variant in the backend observation."""
 
 from iris.cluster.backends.k8s.tasks import ClusterState, K8sTaskProvider, PodConfig
-from iris.cluster.controller.backend import DeviceCapacity
+from iris.cluster.controller.backend import BackendObservationRequest, DeviceCapacity
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.platforms.k8s.types import IRIS_PRIORITY_CLASS_BATCH, IRIS_PRIORITY_CLASS_INTERACTIVE, K8sResource
 from iris.cluster.types import WellKnownAttribute
 from iris.rpc import job_pb2
-from iris.testing.k8s import make_batch
+from iris.testing.k8s import k8s_backend_descriptor, make_batch
 
 _GPU = "nvidia.com/gpu"
 
@@ -122,14 +122,14 @@ def _resource_capacity(advertised: dict[str, set[str]]) -> dict[str, DeviceCapac
     pod["metadata"]["labels"] = {"iris.managed": "true", "iris.runtime": "iris-kubernetes"}
     k8s.seed_resource(K8sResource.PODS, "a", pod)
     provider = K8sTaskProvider(
+        descriptor=k8s_backend_descriptor(advertised_attributes=advertised),
         kubectl=k8s,
         pods=PodConfig(namespace="test-ns", default_image="img"),
-        advertised=advertised,
         cluster_scan_interval=0.0,
     )
     try:
         provider.sync(make_batch())
-        return provider.resource_capacity()
+        return provider.observe(BackendObservationRequest()).resource_capacity
     finally:
         provider.close()
 

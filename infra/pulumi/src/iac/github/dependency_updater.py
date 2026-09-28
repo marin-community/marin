@@ -15,7 +15,7 @@ from scripts.ci.dependency_update_policy import GITHUB_ACTIONS_APP_ID, REQUIRED_
 APP_SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 UPDATER_ENVIRONMENT = "external-runtime-updater"
 UPDATER_BRANCH = "main"
-CLASSIC_REQUIRED_CHECKS = ("marin-lint", "marin-docs", "marin-integration", "unit-tests")
+CLASSIC_REQUIRED_CHECKS = tuple(context for context in REQUIRED_CHECKS if context != "rust-checks")
 
 
 @dataclass(frozen=True)
@@ -116,9 +116,10 @@ def dependency_updater_config(
 def dependency_updater_plan(config: DependencyUpdaterConfig) -> DependencyUpdaterPlan:
     """Compute the app's credentials and non-overlapping merge rules."""
     repository = repository_name(config.organization, config.repository)
+    # Administrators may bypass only when merging a pull request; direct pushes to main stay blocked.
     organization_admin = RulesetBypassActorPlan(
         actor_type="OrganizationAdmin",
-        bypass_mode="always",
+        bypass_mode="pull_request",
     )
     return DependencyUpdaterPlan(
         repository=repository,

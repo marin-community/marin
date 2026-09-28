@@ -11,7 +11,11 @@ from haliax import Axis
 from levanter.layers.gated_deltanet import chunk_gated_delta_rule, recurrent_gated_delta_rule
 from levanter.testing.helpers import skip_if_no_torch
 
-jax.config.update("jax_default_matmul_precision", "float32")
+
+@pytest.fixture(scope="module", autouse=True)
+def _use_float32_matmul_precision():
+    with jax.default_matmul_precision("float32"):
+        yield
 
 
 def _to_np(x):

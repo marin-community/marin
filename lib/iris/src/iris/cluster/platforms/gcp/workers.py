@@ -11,8 +11,6 @@ and TPU slices via GcpService.
 import logging
 import threading
 import time
-import urllib.error
-import urllib.request
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
@@ -59,6 +57,7 @@ from iris.cluster.platforms.types import (
     RemoteWorkerHandle,
     SliceHandle,
     generate_slice_suffix,
+    probe_worker_health,
 )
 from iris.cluster.service_mode import ServiceMode
 from iris.cluster.tpu_topology import get_tpu_topology
@@ -66,6 +65,11 @@ from iris.cluster.types import AcceleratorType, CapacityType, GcpSliceMode
 from iris.cluster.worker.env_probe import construct_worker_id
 
 logger = logging.getLogger(__name__)
+
+# How long a bootstrap poll waits for a worker /health response per probe. The
+# poll is serial over a slice's workers, so it is more patient than the
+# autoscaler's fanned-out liveness probe.
+_BOOTSTRAP_HEALTH_PROBE_TIMEOUT_SECONDS = 5.0
 
 
 def _spawn_bootstrap_thread(
@@ -946,7 +950,9 @@ def _run_tpu_bootstrap(
 
     while not health_deadline.expired():
         for worker_id, worker_url in worker_urls:
-            if worker_id not in healthy_workers and _probe_worker_health(worker_url):
+            if worker_id in healthy_workers:
+                continue
+            if probe_worker_health(worker_url, timeout=_BOOTSTRAP_HEALTH_PROBE_TIMEOUT_SECONDS):
                 healthy_workers.add(worker_id)
                 logger.info("Worker %s is healthy", worker_id)
 
@@ -999,15 +1005,6 @@ def _fetch_bootstrap_logs(gcp_service: GcpService, handle: GcpSliceHandle) -> No
         logger.warning("No Cloud Logging entries found for %s", handle.slice_id)
 
 
-def _probe_worker_health(worker_url: str) -> bool:
-    """Probe the worker's HTTP health endpoint. Returns True if healthy."""
-    try:
-        resp = urllib.request.urlopen(f"{worker_url}/health", timeout=5)
-        return resp.status == 200
-    except (urllib.error.URLError, urllib.error.HTTPError, OSError, TimeoutError):
-        return False
-
-
 def _run_vm_slice_bootstrap(
     gcp_service: GcpService,
     handle: GcpVmSliceHandle,
@@ -1047,7 +1044,7 @@ def _run_vm_slice_bootstrap(
 
     while not bootstrap_deadline.expired():
         # Primary signal: HTTP health probe
-        if _probe_worker_health(worker_url):
+        if probe_worker_health(worker_url, timeout=_BOOTSTRAP_HEALTH_PROBE_TIMEOUT_SECONDS):
             logger.info("Worker health probe succeeded for VM slice %s", handle.slice_id)
             break
 

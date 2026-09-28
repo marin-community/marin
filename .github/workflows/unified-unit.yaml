@@ -156,7 +156,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Notify Slack
-        uses: marin-community/marin-style/actions/notify-slack@main
+        uses: marin-community/marin-style/actions/notify-slack@4b2fc2b0ec0bb9ad1304ef76936eb68e97f893cb  # main 2026-08-24
         with:
           webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
           fallback-text: ":red_circle: *Nightly slow tests failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
@@ -284,13 +284,6 @@ jobs:
             -w /workspace \
             $DOCKER_IMAGE \
             bash -c "\
-              # Install Node.js in userspace if not present (needed for protobuf generation during uv sync)
-              if ! command -v npx >/dev/null 2>&1; then \
-                echo '::group::Installing Node.js in userspace'; \
-                curl -fsSL https://nodejs.org/dist/v22.16.0/node-v22.16.0-linux-x64.tar.xz | tar -xJ -C /tmp && \
-                export PATH=/tmp/node-v22.16.0-linux-x64/bin:\$PATH; \
-                echo '::endgroup::'; \
-              fi && \
               cp -a /workspace-src/. /workspace/ && cd /workspace && \
               ( status=0; \
                 timeout --kill-after=5 --signal=TERM 1490 \
@@ -306,14 +299,8 @@ jobs:
     if: ${{ contains(fromJSON(needs.select.outputs.suites), 'iris-e2e-smoke') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    env:
-      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
     steps:
       - uses: actions/checkout@v5
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "22"
 
       - uses: astral-sh/setup-uv@v7
         with:
@@ -349,15 +336,6 @@ jobs:
           uv run --package marin-iris --frozen --group test pytest \
             lib/iris/tests/e2e/test_smoke.py \
             -m requires_cluster -o "addopts=" --tb=short -v
-
-      - name: Verify screenshots with Claude
-        # Skip on PRs without secrets access (forks, dependabot): no token means
-        # the claude CLI can't authenticate, so the step would only error out.
-        if: always() && env.CLAUDE_CODE_OAUTH_TOKEN != '' && hashFiles('iris-screenshots/*.txt') != ''
-        run: |
-          npm install -g @anthropic-ai/claude-code
-          python -m lib.iris.scripts.verify_screenshots \
-            --screenshot-dir ${{ github.workspace }}/iris-screenshots
 
       - name: Upload screenshots
         if: always()

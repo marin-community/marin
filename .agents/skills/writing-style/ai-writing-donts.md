@@ -4,6 +4,30 @@ Use this as the final prose pass for agent-written Marin text. Delete first.
 Rewrite only when the sentence carries a fact, decision, result, constraint, or
 caveat.
 
+## Use Plain Technical English
+
+Apply Orwell's rules of writing and Simplified Technical English (ASD-STE100).
+Prefer short, active sentences, common concrete words, one action or claim per
+sentence, and one term for each concept. Cut words that add no fact. Avoid stale
+metaphors and idioms. Keep specialized terms when they improve precision, and
+explain unfamiliar terms. If a term's origin or exact meaning is unclear, omit
+it or research it until you can explain it to other readers. Repeating jargon
+solely because another source used it hides uncertainty and spreads undefined
+language. Break a rule when following it would make the prose less clear or
+accurate.
+
+## Test With A Cold Reader
+
+For durable prose or any text that must stand alone, give a context-less
+subagent only the finished draft and its intended audience. Do not provide the
+conversation, source notes, diff, or author intent. Ask what terms, referents,
+claims, or causal links a first-time reader cannot recover from the text.
+Fix concrete gaps with the smallest local edit. Extra context can hide the main
+claim and overload a first-time reader. Narrow or reshape a claim when its full
+explanation would interrupt the text; put optional background behind a link. Do
+not add conversation history that the intended audience does not need, and do
+not turn personal style preferences into findings.
+
 ## Cut Empty Sentences
 
 Delete a sentence when removing it loses no information. Common waste:

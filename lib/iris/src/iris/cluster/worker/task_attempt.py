@@ -33,6 +33,7 @@ from iris.cluster.runtime.env import (
     IRIS_WORKER_REGION_ENV,
     STANDARD_MOUNTS,
     TASK_OUTPUT_FINALIZING_STATUS,
+    UV_LINK_MODE_ENV,
     build_common_iris_env,
 )
 from iris.cluster.runtime.output_capture import capture_task_outputs_for_attempt
@@ -610,11 +611,6 @@ class TaskAttempt:
         self.output_dir = self.workdir / _OUTPUT_HOST_DIRNAME
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Mount tmpfs on workdir for quota enforcement (Docker only; no-op for process/k8s).
-        # Must happen before _download_bundle() so staged files land on the tmpfs.
-        disk_bytes = self.request.resources.disk_bytes if self.request.HasField("resources") else 0
-        self._runtime.prepare_workdir(self.workdir, disk_bytes)
-
     def run(self) -> None:
         """Execute the full task lifecycle. Intended to run in a background thread.
 
@@ -747,6 +743,9 @@ class TaskAttempt:
 
         env.update(self._task_env)
         env.update(dict(self.request.environment.env_vars))
+        # CPU tasks on TPU hosts also need to share the cache's package files.
+        if self._worker_metadata.device.HasField("tpu"):
+            env[UV_LINK_MODE_ENV] = "symlink"
         # The controller owns the process-incarnation identity. User and cluster
         # env cannot replace it with a value shared by two attempts.
         env.pop(IRIS_ATTEMPT_UID_ENV, None)

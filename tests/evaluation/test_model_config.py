@@ -4,6 +4,7 @@
 """Model YAML validation and serving-option rendering."""
 
 import textwrap
+from dataclasses import replace
 
 import pytest
 from draccus.utils import ParsingError
@@ -19,6 +20,7 @@ from marin.evaluation.model_config import (
     serve_config_vllm_args,
 )
 from marin.evaluation.serving_config import _serve_host_memory, inference_config_for_model
+from marin.inference.config import BrokerConfig, LevanterEngineConfig
 
 from experiments.evaluation.fleet import MARIN_EVAL_HARDWARE
 from experiments.evaluation.models import models
@@ -160,6 +162,37 @@ def test_gpu_lowering_emits_no_swap_space_or_trust_remote_code():
     assert "--trust-remote-code" not in engine_args
 
 
+@pytest.mark.parametrize(
+    ("serve", "accelerator"),
+    [
+        (
+            ServeConfig(backend=ServeBackend.LEVANTER, vllm_batch_invariant=True),
+            AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=1),
+        ),
+        (
+            ServeConfig(vllm_use_flashinfer_sampler=False, auto_overrides=False),
+            AcceleratorChoice(platform=Platform.TPU, tpu_type="v6e-4"),
+        ),
+    ],
+    ids=("levanter-gpu", "vllm-tpu"),
+)
+def test_vllm_process_settings_reject_unsupported_lowering(serve, accelerator):
+    model = ModelConfig(
+        name="unsupported-vllm-settings",
+        location="org/model",
+        resource_hint=ResourceHint(memory="32g"),
+        serve=serve,
+    )
+
+    with pytest.raises(ValueError, match="require the vLLM backend on GPU"):
+        inference_config_for_model(
+            model,
+            accelerator,
+            env_vars={},
+            priority=job_pb2.PRIORITY_BAND_INHERIT,
+        )
+
+
 def _gib(memory: str) -> int:
     return int(memory.removesuffix("g"))
 
@@ -258,3 +291,59 @@ def test_explicit_gpu_override_respects_fleet_limits():
 
     with pytest.raises(ValueError, match="positive power of two"):
         MARIN_EVAL_HARDWARE.select(model, Platform.GPU, override="H100x3")
+
+
+@pytest.mark.parametrize("auto_overrides", [False, True])
+def test_pipeline_catalog_lowers_a_gang_and_rejects_incompatible_overrides(tmp_path, auto_overrides):
+    body = _CATALOG_YAML.replace("H100: 2", "H100: 8").replace(
+        "tensor_parallel_size: 2", "tensor_parallel_size: 8\n  pipeline_parallel_size: 2\n  gpu_memory_utilization: 0.92"
+    )
+    model = load_model_config(_write(tmp_path, "pipeline.yaml", body))
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    (checkpoint / "config.json").write_text('{"max_position_embeddings": 4096}')
+    model = replace(
+        model,
+        location=str(checkpoint),
+        resource_hint=replace(model.resource_hint, memory="512g"),
+        serve=replace(model.serve, auto_overrides=auto_overrides),
+    )
+    choice = MARIN_EVAL_HARDWARE.select(model, Platform.GPU, override=None)
+    config = inference_config_for_model(model, choice, env_vars={}, priority=0)
+    assert config.iris.worker_resources.chip_count() == 16
+    assert config.iris.serving_geometry is not None
+    assert config.iris.worker_resources.replicas == config.iris.serving_geometry.task_count == 2
+    assert config.iris.worker_resources.ram == "512g"
+    with pytest.raises(ValueError, match="requiring 8 GPUs"):
+        MARIN_EVAL_HARDWARE.select(model, Platform.GPU, override="H100x4")
+    with pytest.raises(ValueError, match="requires GPU"):
+        MARIN_EVAL_HARDWARE.select(model, Platform.GPU, override="v6e-4")
+    with pytest.raises(ValueError, match="one instance and no broker"):
+        replace(config, broker=BrokerConfig())
+    with pytest.raises(ValueError, match="one instance and no broker"):
+        replace(config, instances=2)
+    with pytest.raises(ValueError, match="vLLM backend"):
+        replace(config, engine=LevanterEngineConfig())
+
+
+@pytest.mark.parametrize("flag", ["--tensor-parallel-size", "--pipeline-parallel-size", "--headless"])
+@pytest.mark.parametrize("equals", [False, True])
+def test_pipeline_rejects_raw_topology_overrides(flag, equals):
+    extra_args = (f"{flag}=2",) if equals else (flag, "2")
+    with pytest.raises(ValueError, match="pipeline parallelism owns"):
+        ServeConfig(tensor_parallel_size=8, pipeline_parallel_size=2, vllm_extra_args=extra_args)
+
+
+@pytest.mark.parametrize(
+    "serve",
+    [
+        {"pipeline_parallel_size": 2},
+        {"pipeline_parallel_size": 0},
+        {"tensor_parallel_size": 8, "pipeline_parallel_size": 2, "backend": ServeBackend.LEVANTER},
+        {"gpu_memory_utilization": 1.1},
+        {"gpu_memory_utilization": 0.9, "vllm_extra_args": ("--gpu-memory-utilization=0.8",)},
+    ],
+)
+def test_invalid_pipeline_or_memory_settings_fail_before_submission(serve):
+    with pytest.raises(ValueError):
+        ServeConfig(**serve)

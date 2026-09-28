@@ -14,6 +14,7 @@ confirmed by the live-policy inventory. The project-level OAuth consent screen r
 """
 
 import re
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
 import pulumi
@@ -65,8 +66,10 @@ class CloudRunServiceArgs:
     memory: str = "2Gi"
     # Keep CPU allocated between requests. Cloud Run's default throttles CPU to near-zero
     # off the request path, which stalls a service whose background work runs while idle
-    # (an apiserver, indexers, reconcilers). True also enables startup CPU boost.
+    # (an apiserver, indexers, reconcilers).
     cpu_always_allocated: bool = False
+    # Temporarily allocate additional CPU during startup and for ten seconds afterward.
+    startup_cpu_boost: bool = False
     request_timeout: int = 60
     max_instance_request_concurrency: int | None = None
     # Service-level min == max == 1 for a service whose local SQLite is per-instance:
@@ -97,6 +100,10 @@ class CloudRunServiceArgs:
     # Cloud SQL connection names (project:region:instance) to attach. The service mounts the
     # connector socket at /cloudsql; its centrally declared IAM includes cloudsql.client.
     cloudsql_instances: tuple[str, ...] = ()
+    # Builds the resources that must run between the image push and the service revision,
+    # given the digest-pinned image ref: typically a migration job and the command that
+    # executes it. The Service waits on everything returned.
+    before_deploy: Callable[[pulumi.Output[str]], Sequence[pulumi.Resource]] | None = None
 
 
 def resource_slug(identifier: str) -> str:
@@ -218,6 +225,8 @@ class CloudRunService(pulumi.ComponentResource):
             gcp_provider=gcp_provider,
         )
 
+        before_deploy = args.before_deploy(image.ref) if args.before_deploy else ()
+
         # Cloud SQL connector: a "cloudsql" volume exposes the auth-proxy sockets under
         # /cloudsql, one per attached connection name. Empty when no instances are attached.
         cloudsql_volumes = (
@@ -246,6 +255,10 @@ class CloudRunService(pulumi.ComponentResource):
             # IAP is the gate; ingress stays open so IAP (not the network) authorizes.
             ingress="INGRESS_TRAFFIC_ALL",
             iap_enabled=True,
+            # The provider defaults this on and then refuses to destroy the service, which
+            # makes retiring a stack a two-step edit. Pulumi's own `protect` marks what
+            # must survive a destroy; this flag only hides the service from it.
+            deletion_protection=False,
             scaling=gcp.cloudrunv2.ServiceScalingArgs(
                 min_instance_count=args.min_instances,
                 max_instance_count=args.max_instances,
@@ -287,7 +300,7 @@ class CloudRunService(pulumi.ComponentResource):
                         resources=gcp.cloudrunv2.ServiceTemplateContainerResourcesArgs(
                             limits={"cpu": args.cpu, "memory": args.memory},
                             cpu_idle=not args.cpu_always_allocated,
-                            startup_cpu_boost=args.cpu_always_allocated,
+                            startup_cpu_boost=args.startup_cpu_boost,
                         ),
                         volume_mounts=cloudsql_volume_mounts,
                     )
@@ -297,7 +310,12 @@ class CloudRunService(pulumi.ComponentResource):
             # comes from the marin stack; wait here for secrets created by this stack.
             opts=pulumi.ResourceOptions.merge(
                 child,
-                pulumi.ResourceOptions(depends_on=[r for secret in args.secrets for r in secret.wait_for]),
+                pulumi.ResourceOptions(
+                    depends_on=[
+                        *before_deploy,
+                        *(r for secret in args.secrets for r in secret.wait_for),
+                    ]
+                ),
             ),
         )
 

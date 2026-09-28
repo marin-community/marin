@@ -45,7 +45,7 @@ from iris.cluster.types import (
     tpu_device,
 )
 from iris.cluster.types import Entrypoint as IrisEntrypoint
-from iris.hooks.multigpu import build_multigpu_hook
+from iris.jax.multigpu import build_multigpu_hook
 from iris.resources.state import JobState as IrisJobState
 from iris.resources.state import is_job_finished
 from iris.rpc import actor_pb2, job_pb2
@@ -410,7 +410,12 @@ class OperationFuture:
     def result(self, timeout: float | None = None) -> Any:
         deadline = None if timeout is None else time.monotonic() + timeout
         while True:
-            op = self._client.poll_operation_status(self._op_id)
+            try:
+                op = self._client.poll_operation_status(self._op_id)
+            except ConnectError as exc:
+                if exc.code is Code.NOT_FOUND:
+                    raise ActorUnavailableError(f"Operation {self._op_id} was lost") from exc
+                raise
 
             if op.state == actor_pb2.Operation.SUCCEEDED:
                 return cloudpickle.loads(op.serialized_result)
@@ -693,6 +698,7 @@ class FrayIrisClient:
                 existing_job_policy=policy,
                 task_image=request.resources.image,
                 priority_band=request.priority,
+                timeout=request.timeout,
             )
         except IrisJobAlreadyExists as e:
             raise FrayJobAlreadyExists(request.name) from e

@@ -6,6 +6,10 @@ are unsure whether a change is wanted, open an issue or ask in the
 unlikely to merge typo fixes, stylistic rewrites, or speculative refactors that
 are not tied to an issue.
 
+If you are new to Marin, ask for code review in the `#code-review` channel of
+the [Marin Discord](https://discord.gg/J9CTk7pqcM). If you are unable to join
+the Discord, tag a Marin maintainer in the issue or pull request.
+
 ## AI-generated contributions
 
 We use coding agents ourselves and accept contributions made with them. We do
@@ -19,22 +23,13 @@ it is correct, and that you can explain why it matters.
 
 ## Setup
 
-1. Clone the repository
-2. Create and activate a virtual environment
-3. Install dependencies
-4. Set up the Git hook that runs `infra/pre-commit.py`
+Complete the [installation guide](../tutorials/installation.md), then install
+the development dependencies and the Git hook that runs `infra/pre-commit.py`:
 
 ```bash
-git clone https://github.com/marin-community/marin.git
-cd marin
-uv venv --python 3.12
-source .venv/bin/activate
 uv sync --package marin-core --group dev
 make setup_pre_commit
 ```
-
-Alternatively, you can install all the core dependencies and build the `marin-core`
-package with `make init`.
 
 ### Linting
 

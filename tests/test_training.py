@@ -25,7 +25,6 @@ from marin.training.training import (
     _maybe_auto_resolve_dpo_schedule,
     _resolve_run_id,
     apply_output_path,
-    data_local_temporary_checkpoint_base_path,
     doublecheck_paths,
     resolve_training_env,
     temporary_checkpoint_base_path,
@@ -89,10 +88,6 @@ def test_temporary_checkpoint_base_path_uses_cluster_local_scratch():
     ):
         assert temporary_checkpoint_base_path("s3://marin-us-east-02a/experiments/grug/base-trial") == (
             "s3://hero-checkpoints/tmp/ttl=14d/checkpoints-temp/"
-            "marin-us-east-02a/experiments/grug/base-trial/checkpoints"
-        )
-        assert data_local_temporary_checkpoint_base_path("s3://marin-us-east-02a/experiments/grug/base-trial") == (
-            "s3://marin-us-east-02a/tmp/ttl=14d/checkpoints-temp/"
             "marin-us-east-02a/experiments/grug/base-trial/checkpoints"
         )
 

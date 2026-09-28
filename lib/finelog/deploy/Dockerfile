@@ -30,8 +30,7 @@ RUN npm run build
 
 
 # ── Stage: rustbuild ─────────────────────────────────────────────────
-# Compile the release `finelog-server` binary from finelog's own Rust
-# workspace at lib/finelog/rust (no top-level rust/ tree). `connectrpc-build`
+# The Rust workspace lives at lib/finelog/rust (there is no top-level rust/ tree). `connectrpc-build`
 # fetches a vendored protoc from the crate registry at build time, so no
 # system protoc is needed.
 FROM rust:1-bookworm AS rustbuild
@@ -67,8 +66,10 @@ ENV FINELOG_SOURCE_COMMIT=${SOURCE_COMMIT} \
     FINELOG_SOURCE_DIRTY=${SOURCE_DIRTY}
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/build/rust/target \
-    mold -run cargo build --profile ${CARGO_PROFILE} -p finelog --bin finelog-server \
-    && cp target/${CARGO_PROFILE}/finelog-server /finelog-server
+    mold -run cargo build --profile ${CARGO_PROFILE} -p finelog \
+      --bin finelog-server --bin finelog-migrate \
+    && cp target/${CARGO_PROFILE}/finelog-server /finelog-server \
+    && cp target/${CARGO_PROFILE}/finelog-migrate /finelog-migrate
 
 
 # ── Stage: runtime ───────────────────────────────────────────────────
@@ -91,6 +92,7 @@ WORKDIR /app
 # The server binary + the pre-built dashboard SPA. The Rust server reads the
 # SPA from /app/dashboard/dist (see spa.rs); the binary is on PATH.
 COPY --from=rustbuild /finelog-server /usr/local/bin/finelog-server
+COPY --from=rustbuild /finelog-migrate /usr/local/bin/finelog-migrate
 COPY --from=dashboard /build/dashboard/dist ./dashboard/dist
 
 # Local segment cache / durable store. Declared as a volume so k8s/Docker mount

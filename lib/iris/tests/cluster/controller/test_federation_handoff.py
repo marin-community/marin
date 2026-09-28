@@ -22,13 +22,10 @@ from iris.cluster.bundle import content_id
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.federation_store import ControllerFederationStore
+from iris.cluster.controller.jobs import WORKDIR_FILE_OFFLOAD_THRESHOLD, peer_status
 from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
-from iris.cluster.controller.service import (
-    WORKDIR_FILE_OFFLOAD_THRESHOLD,
-    ControllerServiceImpl,
-    _peer_status,
-)
+from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.federation.store import HandoffAdmission, HandoffSpec, HandoffState
 from iris.cluster.types import LOCAL_ADMIN_SUBMITTER, LOCAL_CLUSTER, AttemptUid, JobName
 from iris.rpc import controller_pb2, job_pb2
@@ -468,7 +465,7 @@ def test_sync_mirrors_attempt_terminal_reason(tmp_path, log_client):
 
 def _dispatch_building(peer_state, task_id: JobName, attempt_id: int, status_message: str | None) -> None:
     """Land a direct-provider (k8s-style) BUILDING observation on the peer, carrying
-    ``status_message``. Models the K8sTaskProvider path (``record_updates``), which —
+    ``status_message``. Models the K8sTaskProvider observation path, which —
     unlike the worker-observation wire — carries the message."""
     with peer_state._db.transaction() as cur:
         commit_dispatch_updates(
@@ -678,7 +675,7 @@ def test_a_job_the_peer_has_no_room_for_waits_in_the_queue_unassigned(tmp_path, 
         manager = _attach_federation(parent_service, connection)
         # No local backend can host an H100 job, so the unpinned job classifies as QUEUE
         # (a locally feasible job would just run here).
-        parent_service._controller.provider.autoscaler = Mock(job_feasibility=Mock(return_value="no local GPU backend"))
+        parent_service._controller.backend.job_feasibility = Mock(return_value="no local GPU backend")
 
         request = make_direct_job_request("no-room", replicas=1)
         request.resources.device.CopyFrom(job_pb2.DeviceConfig(gpu=job_pb2.GpuDevice(variant="h100", count=8)))
@@ -721,7 +718,7 @@ def test_a_peer_with_no_free_gpus_receives_only_work_that_outranks_the_holder(
         peer_service, _ = _make_service(stack, "peer", tmp_path, log_client)
         connection = _BatchOccupiedGpuPeerConnection(peer_service)
         manager = _attach_federation(parent_service, connection)
-        parent_service._controller.provider.autoscaler = Mock(job_feasibility=Mock(return_value="no local GPU backend"))
+        parent_service._controller.backend.job_feasibility = Mock(return_value="no local GPU backend")
 
         request = make_direct_job_request("held-by-batch", replicas=1)
         request.priority_band = band
@@ -761,7 +758,7 @@ def test_a_peer_with_no_free_gpus_receives_only_work_that_outranks_the_holder(
 def test_peer_status_derivation(cluster, handoff_state, has_reported_tasks, expected):
     """The full truth table of the PeerStatus derivation, including REJECTED and
     the mirrored-tasks-beat-a-stale-PENDING_HANDOFF ordering."""
-    assert _peer_status(cluster, handoff_state, has_reported_tasks) == expected
+    assert peer_status(cluster, handoff_state, has_reported_tasks) == expected
 
 
 def test_cancel_routes_to_peer_and_tombstone_drops_the_handle(tmp_path, log_client):

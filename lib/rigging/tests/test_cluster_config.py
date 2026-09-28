@@ -4,6 +4,8 @@
 """Tests for the cluster DataConfig: the active-config accessor, YAML loading and
 field-default parsing, and prefix resolution."""
 
+import os
+
 import pytest
 import rigging.filesystem.cluster_config as fs
 from rigging.filesystem.cluster_config import (
@@ -115,6 +117,18 @@ def test_resolved_root_strips_trailing_slash(monkeypatch):
     assert config.resolved_root() == "s3://marin-na/marin"
 
 
+def test_resolved_root_anchors_relative_local_prefix(monkeypatch, tmp_path):
+    """A relative local prefix resolves against the working directory, so every path derived
+    from the root is absolute and cannot be re-rooted a second time."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MARIN_PREFIX", "local_store/")
+    assert DataConfig(region_buckets={}).resolved_root() == os.path.join(os.getcwd(), "local_store")
+
+    monkeypatch.delenv("MARIN_PREFIX", raising=False)
+    config = DataConfig(region_buckets={}, root="local_store")
+    assert config.resolved_root() == os.path.join(os.getcwd(), "local_store")
+
+
 def test_resolved_root_uses_explicit_root(monkeypatch):
     """An explicit root is used when MARIN_PREFIX is unset."""
     monkeypatch.delenv("MARIN_PREFIX", raising=False)
@@ -159,6 +173,18 @@ def test_marin_temp_bucket_routes_coreweave_to_bucket_root():
     with use_data_config(cfg):
         path = marin_temp_bucket(3, "store/x", source_prefix="s3://marin-us-east-02a/marin")
     assert path == "s3://marin-us-east-02a/tmp/ttl=3d/store/x"
+
+
+def test_marin_temp_bucket_explicit_source_does_not_probe_ambient_prefix(monkeypatch):
+    monkeypatch.delenv("MARIN_TEMP_PREFIX", raising=False)
+    monkeypatch.setattr(
+        "rigging.filesystem.cluster_config.marin_prefix",
+        lambda: pytest.fail("explicit source must not probe the launcher environment"),
+    )
+    cfg = DataConfig(region_buckets={}, scheme="s3", ttl_days=(1, 14, 30))
+    with use_data_config(cfg):
+        path = marin_temp_bucket(30, "curriculum-math", source_prefix="s3://marin-us-east-02a/marin")
+    assert path == "s3://marin-us-east-02a/tmp/ttl=30d/curriculum-math"
 
 
 def test_marin_temp_bucket_routes_r2_to_bucket_root():

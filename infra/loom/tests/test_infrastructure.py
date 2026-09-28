@@ -16,6 +16,7 @@ from infra.loom.infrastructure import (
     DeploymentConfig,
     GitHubFederationConfig,
     ProfileConfig,
+    RemoteMcpConfig,
     WorkloadIdentityConfig,
     _deployment_manifest,
     _deployment_profiles,
@@ -72,6 +73,16 @@ def deployment_config() -> DeploymentConfig:
         boot_disk_snapshot="loom-pre-c4d-hyperdisk-20260816",
         dotenv_secret_version=3,
         prune_deployment=True,
+        remote_mcps=(
+            RemoteMcpConfig.parse(
+                {
+                    "identity": "/marina/api",
+                    "label": "Marina API",
+                    "url": "https://marina.example.com/api/marina/mcp/",
+                    "auth": {"type": "iap", "audience": "iap-client-id"},
+                }
+            ),
+        ),
         profiles=(
             ProfileConfig.parse(
                 "ops",
@@ -116,7 +127,7 @@ def field(inputs: dict, snake: str, camel: str):
 def test_empty_runtime_policy_cannot_prune_existing_profiles() -> None:
     base = deployment_config()
     with pytest.raises(ValueError, match="non-empty runtime policy"):
-        replace(base, prune_deployment=True, profiles=(), workloads=(), github_federations=())
+        replace(base, prune_deployment=True, remote_mcps=(), profiles=(), workloads=(), github_federations=())
 
 
 def test_domain_is_a_canonical_hostname() -> None:
@@ -153,6 +164,65 @@ def test_fork_ferry_workflow_stays_within_loom_profile_capacity() -> None:
     units = workflow["jobs"]["ferry"]["strategy"]["matrix"]["include"]
 
     assert len(units) <= max_concurrent
+
+
+def test_loom_pr_review_launcher_starts_one_bounded_review_session() -> None:
+    workflow_path = ROOT.parent.parent / ".github/workflows/ops-loom-review.yaml"
+    workflow = yaml.safe_load(workflow_path.read_text())
+    stack = yaml.safe_load((ROOT / "Pulumi.marin-loom.yaml").read_text())
+    trigger = workflow.get("on", workflow.get(True))
+    job = workflow["jobs"]["review"]
+
+    assert set(trigger) == {"pull_request_target"}
+    assert job["permissions"] == {"contents": "read", "id-token": "write"}
+    checkout, author, launch = job["steps"]
+    assert checkout["uses"].startswith("actions/checkout@")
+    assert checkout["with"]["ref"] == "main"
+    assert set(checkout["with"]["sparse-checkout"].split()) == {
+        ".github/actions/launch-loom-run",
+        ".github/actions/check-write-access",
+    }
+    assert author["uses"] == "./.github/actions/check-write-access"
+    assert launch["if"] == "steps.author.outputs.allowed == 'true'"
+    assert launch["uses"] == "./.github/actions/launch-loom-run"
+    assert "head.repo.full_name == github.repository" in job["if"]
+    assert "strategy" not in job
+    assert launch["with"]["idempotency-key"] == (
+        "pr-review:${{ github.event.pull_request.number }}:${{ github.event.pull_request.head.sha }}"
+    )
+
+    review_profile = stack["config"]["marin-loom:profiles"]["pr-review"]
+    assert 0 < review_profile["idleArchiveSeconds"] <= 900
+
+
+def test_loom_launch_action_uses_registered_automation_endpoint() -> None:
+    action_path = ROOT.parent.parent / ".github/actions/launch-loom-run/action.yaml"
+    action = yaml.safe_load(action_path.read_text())
+    launch_script = action["runs"]["steps"][0]["run"]
+
+    assert '"$LOOM_URL/api/runs/create"' in launch_script
+
+
+def test_codehealth_refinement_workflow_launches_one_database_backed_agent() -> None:
+    workflow_path = ROOT.parent.parent / ".github/workflows/ops-codehealth-refinement.yaml"
+    workflow = yaml.safe_load(workflow_path.read_text())
+    steps = {step["name"]: step for step in workflow["jobs"]["refine"]["steps"]}
+    trigger = workflow.get("on", workflow.get(True))
+
+    assert set(trigger) == {"schedule", "workflow_dispatch"}
+    assert workflow["permissions"] == {"contents": "read", "id-token": "write"}
+
+    checkout = steps["Checkout repository"]
+    assert checkout["with"]["persist-credentials"] is False
+    assert set(steps) == {"Checkout repository", "Launch refinement agent"}
+    assert [step["uses"] for step in workflow["jobs"]["refine"]["steps"]] == [
+        "actions/checkout@v6",
+        "./.github/actions/launch-loom-run",
+    ]
+    launch = steps["Launch refinement agent"]
+    assert launch["uses"] == "./.github/actions/launch-loom-run"
+    assert launch["with"]["profile"] == "${{ vars.LOOM_CODEHEALTH_REFINEMENT_PROFILE }}"
+    assert launch["with"]["channel"] == "codehealth-refinement"
 
 
 def test_release_reference_must_be_the_expected_registry_digest() -> None:
@@ -224,6 +294,26 @@ def test_profile_mcp_access_rejects_invalid_selections(mcp_access: dict[str, obj
         ProfileConfig.parse("ops", {"agent": "codex", "mcpAccess": mcp_access})
 
 
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"url": "http://marina.example.com/mcp"},
+        {"auth": {"type": "iap"}},
+    ],
+)
+def test_remote_mcp_rejects_unsafe_or_ambiguous_configuration(override: dict[str, object]) -> None:
+    value: dict[str, object] = {
+        "identity": "/marina/api",
+        "label": "Marina API",
+        "url": "https://marina.example.com/mcp",
+        "auth": {"type": "none"},
+    }
+    value.update(override)
+
+    with pytest.raises(ValueError, match="remote MCP"):
+        RemoteMcpConfig.parse(value)
+
+
 @pulumi.runtime.test
 def test_deployment_models_durable_resources_without_secret_payloads():
     infrastructure, mocks = infrastructure_and_mocks()
@@ -271,6 +361,8 @@ def test_deployment_models_durable_resources_without_secret_payloads():
         assert "startup-script" in metadata
         assert "loom-compose" in metadata
         assert "loom-caddyfile" in metadata
+        assert "header_up X-Loom-Forwarded 1" in metadata["loom-caddyfile"]
+        assert "http://127.0.0.1:${LOOM_PORT}/api/deployment/reconcile" in metadata["startup-script"]
         assert "metadataStartupScript" not in vm.inputs
         assert "metadata_startup_script" not in vm.inputs
         assert field(vm.inputs, "allow_stopping_for_update", "allowStoppingForUpdate") is False

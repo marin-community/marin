@@ -1,4 +1,6 @@
 name: finelog
+backend:
+  url: gs://marin-iac-state/
 runtime:
   name: python
   # Use the shared repo venv, which contains finelog, iac, and the Pulumi providers.

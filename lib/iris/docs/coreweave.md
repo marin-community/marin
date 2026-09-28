@@ -148,14 +148,22 @@ namespace scope in
 [`KueueAddon`](../../../infra/pulumi/src/iac/coreweave/kueue.py); do not replace
 that release with an ad hoc cluster-wide install.
 
+Pulumi pins `cks-kueue` 1.5.0, which contains Kueue 0.18.3. Iris explicitly
+enables `TASRecomputeAssignmentWithinSchedulingCycle`, added in Kueue 0.18.2,
+so a workload's hostname assignment is recomputed when an earlier admission in
+the same scheduling cycle consumes that domain.
+
 #### TAS preemption and CPU spillover
 
 All Iris Pods use the topology-aware `cw-tas` ResourceFlavor. Its
 `iris.kueue=true` selector covers every Iris-managed NodePool. Accelerator-free
 Pods request unconstrained TAS, so Kueue records their per-node CPU reservations
-in the same flavor as GPU gangs. `preemption.withinClusterQueue: LowerPriority`
-can then remove a lower-priority CPU Workload from the topology snapshot before
-retrying a blocked GPU gang's fit.
+in the same flavor as GPU gangs. The ClusterQueue's binding GPU and RDMA quotas
+are derived from the configured maximum GPU node count and per-node device
+count; CPU, memory, disk, and Pods retain non-binding sentinels. Accelerator
+quota pressure activates `preemption.withinClusterQueue: LowerPriority`, and TAS
+then checks whether removing lower-priority candidates creates a compatible
+topology before admitting the waiting Workload.
 
 Each Iris band has three Kueue admission tiers. The controller reconciles the
 twelve `WorkloadPriorityClass` objects at startup.
@@ -182,9 +190,11 @@ Choose the Iris band for operational importance; Iris derives the tier from the
 request shape.
 
 The lowest batch Workload priority is `0`. CoreWeave node-health-check Pods use
-Kubernetes priority `-1`, and Iris batch Pods retain Kubernetes priority `0`.
-Kueue Workload priority and Kubernetes Pod priority are separate scheduling
-domains, but neither representation places Iris work below the health checker.
+Kubernetes priority `-1`, bypass Kueue, and carry Kueue's unconstrained-topology
+annotation so they do not consume TAS capacity. Iris batch Pods use priority `0`
+with `PreemptLowerPriority`. Kueue can therefore admit Iris work against that
+capacity, after which kube-scheduler preempts only the lower-priority health-check
+Pods needed for placement. Iris does not delete verification Pods directly.
 
 ```mermaid
 flowchart TD
@@ -199,10 +209,12 @@ flowchart TD
     native --> queue[Kueue LocalQueue and shared ClusterQueue]
     gpu --> queue
     cpu --> queue
-    queue --> fit{TAS topology fit?}
+    queue --> quota{Accelerator quota available?}
+    quota -- No --> preempt[withinClusterQueue: LowerPriority<br/>select compatible victims]
+    preempt --> fit{Quota and TAS fit after victims?}
+    quota -- Yes --> fit
     fit -- Yes --> admit[Admit workload and release scheduling gate]
-    fit -- No --> preempt[withinClusterQueue: LowerPriority<br/>select compatible victims]
-    preempt --> fit
+    fit -- No --> wait[Remain SchedulingGated]
     admit --> schedule[Kubernetes schedules Pods]
 ```
 
@@ -225,6 +237,12 @@ tracked by
 When migrating from the split flavors, apply the NodePool labels before
 switching the ClusterQueue to `cw-tas`, then verify CPU nodes appear in Kueue's
 topology cache.
+
+TAS admission pins each Pod to a hostname from Kueue's capacity snapshot. The
+same-cycle recomputation gate prevents two newly admitted Workloads from keeping
+the same hostname when only one has capacity. If capacity becomes unavailable
+after admission for another reason, kube-scheduler reports an affinity plus
+resource failure and Iris returns the attempt to `PENDING` for fresh admission.
 
 ## Resource ownership
 
@@ -278,7 +296,6 @@ their Kubernetes service account inside the cluster.
 | `kubernetes_provider.controller_address` | In-cluster controller address injected into task Pods. |
 | `kubernetes_provider.kueue.cluster_queue` | Pulumi-owned ClusterQueue to which Iris binds its LocalQueue. This is required. |
 | `kubernetes_provider.kueue.topologies` | Optional `group_by` to CoreWeave node-label mappings. |
-| `kubernetes_provider.preempt_namespaces` | Namespaces containing provider health-check Pods that Iris may clear when they block an admitted GPU job. |
 
 An empty `kubernetes_provider.kubeconfig` means in-cluster authentication. That
 is the normal CoreWeave controller configuration.
@@ -346,19 +363,38 @@ Task working directories and caches are node-local:
 
 Keep `cache_dir` on `/mnt/local`, the node's NVMe storage. The shared Hugging
 Face path is `HF_HUB_CACHE`; Iris deliberately leaves `HF_HOME` private because
-it may contain the submitter's token. The CoreWeave configs set
-`cache_max_age` to seven days. Every five minutes, the node-agent removes
-top-level entries whose files have not been modified or accessed within that age. The
-sweep ignores directory access times because walking a directory updates them. File
-access times are best-effort: `noatime`, `O_NOATIME`, and some memory-mapped reads do
-not refresh them. The node-agent atomically renames an expired entry before recursive
-deletion so another task can refill the original path. Durable outputs belong in
-object storage.
+it may contain the submitter's token. The CoreWeave configs set `cache_max_age`
+to seven days. Every five minutes, the node-agent removes top-level entries
+outside the uv namespace whose files have not been modified or accessed within
+that age. The sweep ignores directory access times because walking a directory
+updates them. File access times are best-effort: `noatime`, `O_NOATIME`, and
+some memory-mapped reads do not refresh them. The node-agent atomically renames
+an expired entry before recursive deletion so another task can refill the
+original path. Durable outputs belong in object storage.
+
+Iris installs cached packages into Kubernetes task environments with uv's `copy`
+link mode. CoreWeave's task workdirs and shared cache use the same node-local XFS
+filesystem, where the copy shares extents with the cache: a 4.3 GB PyTorch
+install added 44 MB of used space. Unlike symlink mode, a copied environment stays
+usable after its cache entries are removed. Clone mode would behave the same, but
+the task image's uv 0.10.3 drops executable bits when it makes XFS reflinks,
+which leaves wheel binaries such as `ptxas` unrunnable.
+
+If a uv install fails against the shared cache but succeeds with a task-local
+cache, Iris records that recovery on the node. Three distinct recoveries within
+30 minutes make the node-agent run `uv cache clean` against the shared cache.
+uv serializes that operation with installs using its cache lock. The generic
+age-based cache reclaimer leaves the uv namespace alone rather than deleting uv
+internals directly.
+
+The node-agent emits `uv_cache_recovery_observed` and `uv_cache_cleared`
+telemetry events for these transitions. Repair-loop errors increment
+`iris_uv_cache_recovery_failures`.
 
 `/cache` is unclaimed node-local scratch: a task that needs a real directory on
 the node instead of a bucket picks its own subdirectory there. The node-agent
 reclaims those subdirectories under the same policy, so treat anything written
-there as recoverable. `iris.runtime.jax_init` uses `/cache/xla` for XLA's
+there as recoverable. `iris.jax.compile_cache` uses `/cache/xla` for XLA's
 per-fusion autotune results on GPU tasks, because XLA opens that directory from
 C++ and cannot read an object-store URL. Iris warms one local leader per node
 from a FineStore file-set snapshot and has global rank 0 publish newly created

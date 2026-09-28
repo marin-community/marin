@@ -1,0 +1,21 @@
+schema_version: 1
+code: ml-seconds-suffix
+lane: prose
+title: '`_s` suffix for "seconds"'
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** Seconds are the assumed unit in this codebase, so the `_s`
+  suffix is either redundant or confusing (`responses_s`? `rows_s`?).
+
+  **When allowed:** Never. Use `_ms` / `_us` / `_ns` for non-second units;
+  plain names for seconds.
+
+  **Bad example:**
+  ```python
+  def wait(timeout_s: float): ...   # timeout: float — seconds are the default.
+
+  # or better -- use dedicated domain types
+  def wait(timeout: Duration)
+  ```
+
+  ## Comments

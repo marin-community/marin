@@ -6,7 +6,7 @@
 import pytest
 from iris.cluster.backends.k8s.tasks import K8sTaskProvider
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
-from iris.testing.k8s import make_kueue_provider, pod_config
+from iris.testing.k8s import k8s_backend_descriptor, make_kueue_provider, pod_config
 
 
 @pytest.fixture
@@ -17,6 +17,7 @@ def k8s():
 @pytest.fixture
 def provider(k8s):
     result = K8sTaskProvider(
+        descriptor=k8s_backend_descriptor(),
         kubectl=k8s,
         pods=pod_config(),
         cluster_scan_interval=0.0,

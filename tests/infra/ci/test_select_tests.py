@@ -4,6 +4,7 @@
 """Tests for the import-driven test selector (infra/ci/select_tests.py)."""
 
 import textwrap
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ from infra.ci.select_tests import (
     SCOPES,
     UV_PACKAGE,
     MatrixLeg,
+    SelectionResult,
     classify,
     matrix_leg,
     select_changed_tests,
@@ -120,6 +122,63 @@ def test_experiments_changes_select_dependent_marin_tests(tmp_path: Path) -> Non
     assert leg_paths(matrix, "marin") == ["tests/test_tokenizer_sweep.py"]
 
 
+@pytest.mark.parametrize("select_tests", [select_changed_tests, select_local_tests])
+@pytest.mark.parametrize(
+    "changed_file",
+    ["experiments/moe/test_optimizer.py", "experiments/moe/optimizer.py", "lib/levanter/src/levanter/optim.py"],
+)
+def test_experiment_tests_run_for_test_and_dependency_changes(
+    tmp_path: Path, select_tests: Callable[[list[str], Path], SelectionResult], changed_file: str
+) -> None:
+    write(tmp_path, "lib/levanter/src/levanter/optim.py", "RATE = 1\n")
+    write(tmp_path, "experiments/moe/optimizer.py", "from levanter.optim import RATE\n")
+    write(
+        tmp_path,
+        "experiments/moe/test_optimizer.py",
+        "from experiments.moe.optimizer import RATE\n\ndef test_rate():\n    assert RATE == 1\n",
+    )
+    write(tmp_path, "experiments/moe/test_unrelated.py", "def test_other():\n    assert True\n")
+    write(tmp_path, "tests/test_unrelated.py", "def test_other():\n    assert True\n")
+
+    selection = select_tests([changed_file], tmp_path)
+
+    assert leg_paths(selection.matrix, "marin") == ["experiments/moe/test_optimizer.py"]
+
+
+@pytest.mark.parametrize(
+    "changed_files, run_all_tests",
+    [
+        ([], True),
+        (["pyproject.toml"], False),
+        (["experiments/moe/conftest.py"], False),
+        (["experiments/moe/fixtures/weights.json"], False),
+    ],
+)
+def test_full_marin_suite_includes_experiment_tests(
+    tmp_path: Path, changed_files: list[str], run_all_tests: bool
+) -> None:
+    write(tmp_path, "tests/test_root.py", "def test_root():\n    assert True\n")
+    write(tmp_path, "experiments/moe/test_optimizer.py", "def test_optimizer():\n    assert True\n")
+
+    selection = select_changed_tests(changed_files, tmp_path, run_all_tests=run_all_tests)
+
+    assert leg_paths(selection.matrix, "marin") == ["tests", "experiments"]
+
+
+def test_deleted_experiment_source_runs_full_marin_suite(tmp_path: Path) -> None:
+    write(tmp_path, "experiments/moe/test_optimizer.py", "from experiments.moe.optimizer import RATE\n")
+
+    matrix = select_matrix(["experiments/moe/optimizer.py"], tmp_path)
+
+    assert leg_paths(matrix, "marin") == ["tests", "experiments"]
+
+
+def test_deleted_experiment_test_is_not_handed_to_pytest(tmp_path: Path) -> None:
+    write(tmp_path, "experiments/moe/test_other.py", "def test_other():\n    assert True\n")
+
+    assert select_matrix(["experiments/moe/test_removed.py"], tmp_path) == []
+
+
 @pytest.mark.parametrize(
     "changed_file",
     ["lib/iris/src/iris/client.py", "lib/ducky/src/ducky/server.py"],
@@ -209,8 +268,8 @@ def test_source_files_map_to_dotted_modules(tmp_path: Path) -> None:
 
 
 def test_evaldash_source_maps_to_dotted_module(tmp_path: Path) -> None:
-    write(tmp_path, "infra/evaldash/src/metrics.py")
-    assert classify(["infra/evaldash/src/metrics.py"], tmp_path).src_modules == {"infra.evaldash.src.metrics"}
+    write(tmp_path, "infra/marina/apps/evaldash/metrics.py")
+    assert classify(["infra/marina/apps/evaldash/metrics.py"], tmp_path).src_modules == {"evaldash.metrics"}
 
 
 def test_deploy_change_selects_deploy_test(tmp_path: Path) -> None:

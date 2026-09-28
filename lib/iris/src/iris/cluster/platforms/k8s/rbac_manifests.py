@@ -11,14 +11,14 @@ CLUSTER_ROLE_RULES = [
         "verbs": ["get", "list", "watch", "create", "update", "patch", "delete"],
     },
     {
-        # Bound via ClusterRoleBinding, so this grants pod access in ALL namespaces —
-        # required for blocker eviction in kubernetes_provider.preempt_namespaces.
         "apiGroups": [""],
         "resources": ["pods", "pods/exec", "pods/log"],
         "verbs": ["get", "list", "watch", "create", "update", "patch", "delete"],
     },
     {"apiGroups": [""], "resources": ["nodes"], "verbs": ["get", "list", "watch"]},
-    {"apiGroups": [""], "resources": ["nodes/proxy"], "verbs": ["get"]},
+    # The node agent reads its own kubelet's metrics/resource endpoint directly;
+    # the kubelet authorizes that read against the nodes/metrics subresource.
+    {"apiGroups": [""], "resources": ["nodes/metrics"], "verbs": ["get"]},
     {
         "apiGroups": [""],
         "resources": ["configmaps"],

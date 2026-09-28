@@ -18,11 +18,12 @@ from typing import Any
 
 import draccus
 from datasets import get_dataset_config_names, load_dataset
-from marin.core.data import QAExample, QAExampleMetadata
-from marin.utilities.dataclass_utils import asdict_without_nones
 from rigging.filesystem.factory import filesystem as marin_filesystem
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
+
+from marin.core.data import QAExample, QAExampleMetadata
+from marin.utilities.dataclass_utils import asdict_without_nones
 
 logger = logging.getLogger(__name__)
 
@@ -158,6 +159,9 @@ def load_datasets(config: DatasetConversionConfig) -> list[DatasetWithMetaData]:
     Returns:
         List[DatasetWithMetaData]: A list of Hugging Face datasets, with their subset and split info
     """
+    if not config.splits:
+        raise ValueError(f"No splits requested for {config.input_path}; nothing would be converted")
+
     # set up input path which can be GCP path, HF Hub path, or local path
     # handle case of gs:// path which requires downloading resource from GCP to local for processing
     if config.input_path.startswith("gs://"):
@@ -182,6 +186,7 @@ def load_datasets(config: DatasetConversionConfig) -> list[DatasetWithMetaData]:
             subsets.append(subset)
     subsets = [subset for subset in subsets if subset not in config.exclude_subsets]
 
+    failed_pairs: list[str] = []
     for subset in subsets:
         for split in config.splits:
             try:
@@ -201,9 +206,10 @@ def load_datasets(config: DatasetConversionConfig) -> list[DatasetWithMetaData]:
                 datasets.append(dataset_w_metadata)
             except Exception as e:
                 logger.exception(f"Failed to load subset '{subset}' and split '{split}': {e}")
+                failed_pairs.append(f"{subset}/{split}")
 
-    if len(datasets) != len(subsets):
-        raise ValueError(f"Not all subsets succeeded from {subsets} for {input_path} only ")
+    if failed_pairs:
+        raise ValueError(f"Failed to load {len(failed_pairs)} subset/split pair(s) from {input_path}: {failed_pairs}")
 
     return datasets
 

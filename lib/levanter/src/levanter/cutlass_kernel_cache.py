@@ -204,3 +204,18 @@ def _kernel_cache_revision() -> str:
 def _device_architecture() -> str:
     device = jax.local_devices()[0]
     return f"{device.platform}-{getattr(device, 'compute_capability', device.device_kind)}"
+
+
+def gpu_compute_capability() -> int:
+    """Return the CUDA compute capability as an integer such as 90 or 100."""
+    for device in jax.local_devices(backend="gpu"):
+        compute_capability = getattr(device, "compute_capability", None)
+        if callable(compute_capability):
+            compute_capability = compute_capability()
+        if isinstance(compute_capability, tuple) and len(compute_capability) >= 2:
+            return int(compute_capability[0]) * 10 + int(compute_capability[1])
+        if isinstance(compute_capability, str):
+            major, _, minor = compute_capability.partition(".")
+            if major.isdigit() and minor.isdigit():
+                return int(major) * 10 + int(minor)
+    raise RuntimeError("Could not determine CUDA compute capability.")

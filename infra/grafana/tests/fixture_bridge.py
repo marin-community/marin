@@ -9,6 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 from config import K8S_CLUSTERS
+from wandb_source import WANDB_CHARTS
 
 _NOW = datetime(2026, 7, 21, 12, tzinfo=UTC)
 _CW_K8S_CLUSTERS = tuple(target.name for target in K8S_CLUSTERS)
@@ -24,6 +25,7 @@ _LANES = (
     ("harbor", "Harbor", "forks", "evaluation"),
     ("marinskyrl", "SkyRL", "forks", "rl"),
     ("vllm-gpu", "vLLM GPU", "forks", "inference"),
+    ("vllm-gpu-release", "vLLM release", "forks", "inference"),
     ("tpu-inference", "TPU infer", "forks", "inference"),
 )
 
@@ -44,6 +46,7 @@ def _nightlies() -> list[dict]:
                     "group": group,
                     "subgroup": subgroup,
                     "state": "run",
+                    "status": "completed",
                     "duration_state": "slow" if slow else "normal",
                     "duration_seconds": 1800 + lane_order * 137 + offset * 83,
                     "conclusion": "failure" if failed else "success",
@@ -79,7 +82,6 @@ def _builds() -> list[dict]:
 
 
 def _wandb(chart: str) -> list[dict]:
-    titles = {"train-loss": "Train cross-entropy loss", "paloma-macro-loss": "Paloma macro loss", "mfu": "MFU (%)"}
     rows = []
     for run_index, run in enumerate(("hero-12d8b6f0-dee637",)):
         for index in range(40):
@@ -90,7 +92,7 @@ def _wandb(chart: str) -> list[dict]:
                 value = 3.2 - index * 0.035 + run_index * 0.08
             rows.append(
                 {
-                    "chart": titles[chart],
+                    "chart": WANDB_CHARTS[chart][0],
                     "run": run,
                     "tokens": tokens,
                     "value": value,

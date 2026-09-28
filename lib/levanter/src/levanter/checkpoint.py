@@ -19,6 +19,7 @@ import urllib.parse
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import timedelta
+from enum import StrEnum
 from typing import Any, Callable, List, Optional, ParamSpec, Sequence, TypeVar, Union
 
 import equinox
@@ -33,10 +34,13 @@ from haliax.jax_utils import broadcast_one_to_all, is_in_jit, is_jax_array_like
 from jax.experimental.array_serialization.serialization import GlobalAsyncCheckpointManager
 from jaxtyping import PyTree
 
-from rigging.filesystem.storage_path import StoragePath
+from rigging import telemetry
+from rigging.filesystem.atomic import atomic_rename
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from levanter._debug_logging import flush_debug_output
 from levanter.tensorstore_serialization import (
+    TensorStoreReadConfig,
     TensorStoreWriteConfig,
     tree_deserialize_leaves_tensorstore,
     tree_serialize_leaves_tensorstore,
@@ -44,6 +48,9 @@ from levanter.tensorstore_serialization import (
 from levanter.utils.types import FilterSpec
 
 logger = logging.getLogger(__name__)
+
+_CHECKPOINT_CURRENT = telemetry.snapshot_attributes("gauge", telemetry.CURRENT_SNAPSHOT)
+_CHECKPOINT_PHASE_DURATION_METRIC = "checkpoint_phase_duration_seconds"
 
 PathLike = Union[str, pathlib.Path]
 
@@ -218,11 +225,18 @@ class _CheckpointProgressLogger:
         if self._flush_logs:
             flush_debug_output(logger)
 
+    def _publish(self, name: str, value: int | float, **attributes: str) -> None:
+        telemetry.gauge(name).set(
+            float(value),
+            attributes={**_CHECKPOINT_CURRENT, "checkpoint_step": str(self.step), **attributes},
+        )
+
     def _log_memory_state(self, event: str, *, include_top_allocations: bool = False) -> None:
+        rss_bytes = _current_process_rss_bytes()
         state: dict[str, Any] = {
             "event": event,
             "phase": self.phase,
-            "rss": _format_bytes_human_readable(_current_process_rss_bytes()),
+            "rss": _format_bytes_human_readable(rss_bytes),
             "gc_counts": gc.get_count(),
             "gc_garbage_len": len(gc.garbage),
             **_tracemalloc_memory_state(),
@@ -233,6 +247,8 @@ class _CheckpointProgressLogger:
         extra_state = _collect_debug_checkpointer_state()
         if extra_state:
             state["providers"] = extra_state
+        if rss_bytes is not None:
+            self._publish("checkpoint_process_peak_rss_bytes", rss_bytes, event=event, phase=self.phase)
 
         self._log(
             logging.INFO,
@@ -300,14 +316,28 @@ class _CheckpointProgressLogger:
             previous_phase_elapsed,
             total_elapsed,
         )
+        self._publish(_CHECKPOINT_PHASE_DURATION_METRIC, previous_phase_elapsed, phase=previous_phase)
         self._log_memory_state(f"phase_{phase}", include_top_allocations=True)
 
+    def publish_staged_host_bytes(self, staged_host_bytes: int) -> None:
+        self._publish("checkpoint_staged_host_bytes", staged_host_bytes)
+
     def finish(self, status: str) -> None:
+        elapsed = self._finish_local(status)
+        self._publish("checkpoint_total_duration_seconds", elapsed, status=status)
+
+    def finish_local(self, status: str) -> None:
+        self._finish_local(status)
+
+    def _finish_local(self, status: str) -> float:
         self._stop_event.set()
         if self._thread.is_alive():
             self._thread.join(timeout=1.0)
 
-        elapsed = time.time() - self.started_at
+        now = time.time()
+        elapsed = now - self.started_at
+        phase_elapsed = now - self.phase_started_at
+        self._publish(_CHECKPOINT_PHASE_DURATION_METRIC, phase_elapsed, phase=self.phase)
         self._log_memory_state(f"checkpoint_{status}", include_top_allocations=True)
         self._log(
             logging.INFO,
@@ -317,6 +347,7 @@ class _CheckpointProgressLogger:
             self.checkpoint_path,
             elapsed,
         )
+        return elapsed
 
     def _run(self) -> None:
         while not self._stop_event.wait(self.interval):
@@ -418,6 +449,17 @@ def _temporary_checkpoint_record(checkpoint_path: str) -> _TemporaryCheckpointRe
     )
 
 
+class CheckpointRetention(StrEnum):
+    """Retention for a requested checkpoint.
+
+    A temporary checkpoint goes under the temporary base path, when one is configured, and later saves prune it.
+    A permanent checkpoint goes under the permanent base path and is kept.
+    """
+
+    TEMPORARY = "temporary"
+    PERMANENT = "permanent"
+
+
 class Checkpointer:
     """
     A checkpointer class that saves checkpoints with two different, but overlapping policies: time and step.
@@ -488,7 +530,7 @@ class Checkpointer:
         self.write_config = write_config or TensorStoreWriteConfig()
         self._temporary_checkpoints = []
         self._checkpoint_request_lock = threading.Lock()
-        self._checkpoint_requested = False
+        self._requested_retention: CheckpointRetention | None = None
 
         # ensure that the step_policies are sorted. We could sort, but instead we'll just insist that they are sorted
         # since it's probably a typo if they aren't
@@ -567,9 +609,9 @@ class Checkpointer:
         # then we could end up with a situation where one process saves a checkpoint, and then another process
         # saves a checkpoint for the next step, etc. This leads to partial checkpoints, no good.
         # we fix by having process 0 make the decision
-        checkpoint_requested = self._consume_checkpoint_request()
-        my_should_save = force or checkpoint_requested
-        my_save_permanent_ckpt = force
+        requested_retention = self._consume_checkpoint_request()
+        my_should_save = force or requested_retention is not None
+        my_save_permanent_ckpt = force or requested_retention == CheckpointRetention.PERMANENT
 
         if not force:
             current_every = self._get_current_step_save_interval(step)
@@ -577,7 +619,7 @@ class Checkpointer:
             if current_every is not None and step % current_every == 0:
                 my_should_save = True
                 my_save_permanent_ckpt = True
-            elif not checkpoint_requested and self.save_interval and last_save_time >= self.save_interval:
+            elif requested_retention is None and self.save_interval and last_save_time >= self.save_interval:
                 my_should_save = True
                 my_save_permanent_ckpt = False
 
@@ -622,15 +664,20 @@ class Checkpointer:
                 base_path_override=save_base_path,
             )
 
-    def request_checkpoint(self) -> None:
-        """Request a checkpoint on the next step, subject to the save policy."""
-        with self._checkpoint_request_lock:
-            self._checkpoint_requested = True
+    def request_checkpoint(self, retention: CheckpointRetention) -> None:
+        """Request a checkpoint on the next step.
 
-    def _consume_checkpoint_request(self) -> bool:
+        Requests made before that step coalesce into one save, which is permanent if any request was.
+        A step the save policy already makes permanent stays permanent.
+        """
         with self._checkpoint_request_lock:
-            requested = self._checkpoint_requested
-            self._checkpoint_requested = False
+            if self._requested_retention != CheckpointRetention.PERMANENT:
+                self._requested_retention = retention
+
+    def _consume_checkpoint_request(self) -> CheckpointRetention | None:
+        with self._checkpoint_request_lock:
+            requested = self._requested_retention
+            self._requested_retention = None
         return requested
 
     def _discover_temporary_checkpoints(self) -> list["_TemporaryCheckpointRecord"]:
@@ -760,6 +807,7 @@ def save_checkpoint(
     is_temporary: bool = True,
     debug: CheckpointDebugConfig | None = None,
     write_config: TensorStoreWriteConfig | None = None,
+    metadata: Mapping[str, Any] | None = None,
 ):
     """
     Save a checkpoint to a given path using TensorStore with OCDBT.
@@ -776,8 +824,11 @@ def save_checkpoint(
         manager: the GlobalAsyncCheckpointManager to use for saving the checkpoint
         commit_callback: a callback to call after the checkpoint has been saved
         is_temporary: whether the checkpoint is temporary
+        metadata: Additional application metadata committed with the completion marker.
         write_config: how the save divides work across the processes holding the state
     """
+    if metadata is not None and {"step", "timestamp", "is_temporary"}.intersection(metadata):
+        raise ValueError("Checkpoint metadata must not override step, timestamp, or is_temporary")
     step = int(step)
     checkpoint_path = str(checkpoint_path)
     checkpoint_debug = debug or CheckpointDebugConfig()
@@ -808,7 +859,7 @@ def save_checkpoint(
             progress_logger.set_phase("metadata_write")
         status = "completed"
         try:
-            _save_metadata(checkpoint_path, fs, step, is_temporary)
+            _save_metadata(checkpoint_path, step, is_temporary, metadata)
             logger.info(f"Saved checkpoint to {checkpoint_path} for step {step}")
 
             if commit_callback is not None:
@@ -822,6 +873,15 @@ def save_checkpoint(
 
     tree = equinox.filter(tree, lambda x: is_jax_array_like(x) or isinstance(x, (int, float, bool, complex)))
 
+    def on_staged(staged_host_bytes: int) -> None:
+        if progress_logger is not None:
+            progress_logger.publish_staged_host_bytes(staged_host_bytes)
+            progress_logger.set_phase("async_commit_in_flight")
+
+    def on_local_commit(status: str) -> None:
+        if progress_logger is not None and jax.process_index() != 0:
+            progress_logger.finish_local(status)
+
     try:
         if progress_logger is not None:
             if checkpoint_debug.force_gc_before_serialize:
@@ -833,24 +893,40 @@ def save_checkpoint(
             tree,
             manager,
             commit_callback=my_callback,
+            on_local_commit=on_local_commit,
+            on_staged=on_staged,
             debug_checkpointer=checkpoint_debug.enabled,
+            debug_log_flush=flush_debug_output if checkpoint_debug.flush_logs else None,
             write_config=write_config,
         )
-        if progress_logger is not None:
-            progress_logger.set_phase("async_commit_in_flight")
     except Exception:
         if progress_logger is not None:
-            progress_logger.finish("failed")
+            if jax.process_index() == 0:
+                progress_logger.finish("failed")
+            else:
+                progress_logger.finish_local("failed")
         raise
 
     return checkpoint_path
 
 
-def _save_metadata(checkpoint_path, fs, step, is_temporary):
-    metadata = {"step": step, "timestamp": datetime.datetime.now().isoformat(), "is_temporary": is_temporary}
+def _save_metadata(checkpoint_path, step, is_temporary, extra_metadata=None):
+    metadata = {
+        **(extra_metadata or {}),
+        "step": step,
+        "timestamp": datetime.datetime.now().isoformat(),
+        "is_temporary": is_temporary,
+    }
     if jax.process_index() == 0:
-        with fs.open(os.path.join(checkpoint_path, "metadata.json"), "w") as json_out:
-            json.dump(metadata, json_out)
+        metadata_path = StoragePath(prefix_join(checkpoint_path, "metadata.json"))
+        if metadata_path.is_remote:
+            # Object-store writers publish the completed object when they close. A sibling rename
+            # would copy and then delete its temporary source, which protected checkpoint prefixes
+            # intentionally forbid.
+            metadata_path.write_text(json.dumps(metadata))
+        else:
+            with atomic_rename(str(metadata_path)) as temporary_path:
+                StoragePath(temporary_path).write_text(json.dumps(metadata))
 
 
 def load_checkpoint(
@@ -861,6 +937,7 @@ def load_checkpoint(
     axis_mapping: Optional[haliax.partitioning.ResourceMapping] = None,
     mesh: Optional[jax.sharding.Mesh] = None,
     allow_partial: bool = False,
+    read_config: TensorStoreReadConfig | None = None,
 ) -> M:
     """
     Load a checkpoint from a given path using TensorStore.
@@ -878,6 +955,7 @@ def load_checkpoint(
         subpath: the subpath to load from the checkpoint
         axis_mapping: the axis mapping to use for loading the checkpoint
         mesh: the mesh to use for loading the checkpoint
+        read_config: Controls replica-local reads and restore collectives.
         allow_partial: if True, allow partial loading of the checkpoint. If False, all parameters must be present in the checkpoint.
     Returns:
         the loaded checkpoint, with the same structure as the exemplar tree
@@ -898,7 +976,12 @@ def load_checkpoint(
 
     ser, non_ser = equinox.partition(tree, is_jax_array_like)
     tree = tree_deserialize_leaves_tensorstore(
-        checkpoint_path, ser, axis_mapping=axis_mapping, mesh=mesh, allow_missing=allow_partial
+        checkpoint_path,
+        ser,
+        axis_mapping=axis_mapping,
+        mesh=mesh,
+        allow_missing=allow_partial,
+        read_config=read_config,
     )
     tree = equinox.combine(tree, non_ser)
     return tree
@@ -1027,12 +1110,14 @@ def discover_checkpoint_candidates(
     *additional_paths: PathLike,
     exclude_paths: Sequence[PathLike] = (),
     max_step: int | None = None,
+    fs: AbstractFileSystem | None = None,
 ) -> list[CheckpointCandidate]:
     """Return complete checkpoint candidates across one or more roots.
 
     A complete candidate is a checkpoint directory with a readable
     ``metadata.json`` containing a parseable integer ``step`` and ISO-format
     ``timestamp``. Results are sorted by numeric step, then timestamp, then path.
+    If supplied, ``fs`` reads all roots and their metadata.
     This function is intentionally importable for operational one-liners, e.g.:
 
     ```bash
@@ -1043,7 +1128,7 @@ def discover_checkpoint_candidates(
     candidates_by_path: dict[str, CheckpointCandidate] = {}
 
     for cp_path in all_paths:
-        for candidate in _discover_checkpoint_candidates_single(cp_path):
+        for candidate in _discover_checkpoint_candidates_single(cp_path, fs=fs):
             if max_step is not None and candidate.step > max_step:
                 continue
             if _is_path_under_any(candidate.path, exclude_paths):
@@ -1108,13 +1193,15 @@ def latest_checkpoint_path(
     return latest
 
 
-def _discover_checkpoint_candidates_single(checkpoint_path: str) -> list[CheckpointCandidate]:
+def _discover_checkpoint_candidates_single(
+    checkpoint_path: str, fs: AbstractFileSystem | None = None
+) -> list[CheckpointCandidate]:
     """Discover complete checkpoint candidates in a single root path."""
     candidates: list[CheckpointCandidate] = []
 
-    for ckpt_dir in _discover_checkpoint_paths_single(checkpoint_path):
+    for ckpt_dir in _discover_checkpoint_paths_single(checkpoint_path, fs=fs):
         try:
-            metadata = _load_metadata(ckpt_dir)
+            metadata = _load_metadata(ckpt_dir, fs=fs)
             step = int(metadata["step"])
             timestamp = datetime.datetime.fromisoformat(metadata["timestamp"])
         except Exception:
@@ -1126,21 +1213,30 @@ def _discover_checkpoint_candidates_single(checkpoint_path: str) -> list[Checkpo
     return sorted(candidates, key=_checkpoint_candidate_sort_key)
 
 
-def _discover_checkpoint_paths_single(checkpoint_path: str) -> list[str]:
-    """Discover valid checkpoint directories in a single root path."""
-    fs: AbstractFileSystem
-    fs, _ = _get_fs_and_plain_path(checkpoint_path)
+def _discover_checkpoint_paths_single(checkpoint_path: str, fs: AbstractFileSystem | None = None) -> list[str]:
+    """Discover valid checkpoint directories in a single root path.
+
+    Uses a single delimited listing of the root. Globbing ``<root>/*`` instead would make object
+    stores enumerate every object below the root -- every tensorstore chunk of every saved step --
+    only to discard all but the first level.
+    """
+    fs, _ = _get_fs_and_plain_path(checkpoint_path, fs=fs)
+    base_path_protocol = urllib.parse.urlparse(str(checkpoint_path)).scheme
 
     def is_checkpoint_dir(path: str):
         return fs.exists(os.path.join(path, "metadata.json"))
 
     def maybe_unstrip_protocol(path: str):
-        base_path_protocol = urllib.parse.urlparse(str(checkpoint_path)).scheme
         if base_path_protocol != "" and urllib.parse.urlparse(path).scheme == "":
             return f"{base_path_protocol}://{path}"
         return path
 
-    ckpt_dirs = [maybe_unstrip_protocol(d) for d in fs.glob(os.path.join(checkpoint_path, "*")) if fs.isdir(d)]
+    try:
+        entries = fs.ls(checkpoint_path, detail=True)
+    except FileNotFoundError:
+        entries = []
+
+    ckpt_dirs = [maybe_unstrip_protocol(e["name"]) for e in entries if e["type"] == "directory"]
     ckpt_dirs.append(checkpoint_path)
     return sorted(d for d in ckpt_dirs if is_checkpoint_dir(d))
 
@@ -1247,10 +1343,8 @@ def is_checkpoint_path(path: str) -> bool:
         metadata_path = os.path.join(plain_path, "metadata.json")
         if fs.exists(metadata_path):
             return True
-        # glob
-        # if we don't find a metadata file, we can check if the path has any subdirectories
-        metadata_files = fs.glob(os.path.join(plain_path, "*", "metadata.json"))
-        if len(metadata_files) > 0:
+        # if we don't find a metadata file, we can check if the path has any checkpoint subdirectories
+        if _discover_checkpoint_paths_single(path):
             return True
         else:
             logger.warning(

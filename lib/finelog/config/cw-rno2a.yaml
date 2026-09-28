@@ -3,14 +3,15 @@
 name: finelog-cw-rno2a
 port: 10001
 image: ghcr.io/marin-community/finelog:latest
-remote_log_dir: s3://marin-us-east-02a/finelog/cw-rno2a
+remote_log_dir: s3://marin-us-east-02a/finelog/cw-rno2a-vnext
 deployment:
   k8s:
     namespace: iris
     kubeconfig: ~/.kube/coreweave-iris
     kube_context: marin-rn02a_RNO2A
-    # storage_class omitted -> cluster default (shared-vast, VAST CSI); sized
-    # generously to absorb ingest bursts before offload to object storage.
+    # The regional cache is disposable once rows reach the hub. Keep it on the
+    # node's local disk so VAST availability cannot block Finelog persistence.
+    cache_storage: node-local
     storage_gb: 250
     # CoreWeave AI Object Storage via LOTA (in-cluster cache endpoint).
     object_storage_endpoint: http://cwlota.com

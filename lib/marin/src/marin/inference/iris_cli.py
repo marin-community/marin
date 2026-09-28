@@ -65,12 +65,14 @@ from marin.inference.config import (
     WORKER_PYTHON_VERSION,
     BrokerConfig,
     InferenceProxyConfig,
+    InferenceWorkerConfig,
     IrisConfig,
     LevanterEngineConfig,
     ServedModelConfig,
     VllmEngineConfig,
     VllmLauncherType,
     VllmSource,
+    load_vllm_metric_family_additions,
 )
 from marin.inference.iris import IrisServiceConfig, run_iris_service
 
@@ -83,6 +85,8 @@ _GPU_WORKER_EXTRAS: tuple[str, ...] = ()
 _LEVANTER_TPU_EXTRAS = ("tpu",)
 _LEVANTER_GPU_EXTRAS = ("gpu",)
 _ENDPOINT_READY_POLL_SECONDS = 5.0
+_BROKER_WORKER_TIMEOUT_FRACTION = 0.9
+_BROKER_LEASE_TIMEOUT_FRACTION = 0.95
 
 # Options that only mean something to one backend, by Click parameter name. Passing one to the
 # other backend is a mistake worth failing on, but several carry non-None defaults, so only a
@@ -91,6 +95,7 @@ _VLLM_ONLY_OPTIONS = {
     "vllm_version": "--vllm-version",
     "vllm_source": "--vllm-source",
     "vllm_args": "--vllm-arg",
+    "vllm_metrics_config": "--vllm-metrics-config",
     "max_num_batched_tokens": "--max-num-batched-tokens",
 }
 _LEVANTER_ONLY_OPTIONS = {
@@ -344,8 +349,8 @@ def _mint_and_print_capability_url(
     "--proxy-timeout",
     type=float,
     default=600.0,
-    help="Seconds the controller proxy waits for a single completion before returning 504. "
-    "Raise for long reasoning generations; the shorter proxy default cuts those off.",
+    help="Seconds allowed for a completion through the controller proxy. Brokered worker and "
+    "request-lease timeouts scale with this value; raise it for long generations.",
 )
 @click.option(
     "--region",
@@ -365,6 +370,12 @@ def _mint_and_print_capability_url(
     help="Use the request broker for one instance; multiple instances always use it.",
 )
 @click.option("--vllm-arg", "vllm_args", multiple=True, help="Extra raw flag forwarded to `vllm serve` (repeatable).")
+@click.option(
+    "--vllm-metrics-config",
+    type=click.Path(path_type=Path, dir_okay=False),
+    default=None,
+    help="TOML file of additional vLLM metric families to forward.",
+)
 @click.option(
     "--vllm-version",
     default=DEFAULT_CUDA_VLLM_VERSION,
@@ -430,6 +441,7 @@ def main(
     instances: int,
     broker: bool,
     vllm_args: tuple[str, ...],
+    vllm_metrics_config: Path | None,
     vllm_version: str,
     vllm_source: str,
     extras: tuple[str, ...],
@@ -462,6 +474,8 @@ def main(
     if proxy_timeout <= 0:
         raise click.ClickException("--proxy-timeout must be positive.")
 
+    extra_metric_families = load_vllm_metric_family_additions(vllm_metrics_config)
+
     vllm_source_enum = VllmSource.MARIN_FORK if vllm_source == "marin-fork" else VllmSource.UPSTREAM
     plan = _resolve_serving_plan(
         backend=backend,
@@ -477,6 +491,7 @@ def main(
             # --wait-timeout for a slow-booting model actually takes effect.
             startup_timeout_seconds=int(wait_timeout),
             extra_args=tuple(vllm_args),
+            extra_metric_families=extra_metric_families,
         ),
         levanter=LevanterEngineConfig(max_seqs=max_seqs, page_size=page_size, hbm_utilization=hbm_utilization),
         extras=extras,
@@ -485,10 +500,14 @@ def main(
     brokered = broker or instances > 1
     broker_config = (
         BrokerConfig(
+            worker=InferenceWorkerConfig(
+                request_timeout_seconds=proxy_timeout * _BROKER_WORKER_TIMEOUT_FRACTION,
+            ),
             proxy=InferenceProxyConfig(
                 request_timeout_seconds=proxy_timeout,
                 readiness_timeout_seconds=wait_timeout,
             ),
+            request_lease_timeout_seconds=proxy_timeout * _BROKER_LEASE_TIMEOUT_FRACTION,
             max_retries_preemption=max_retries_preemption,
         )
         if brokered

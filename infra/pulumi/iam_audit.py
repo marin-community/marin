@@ -139,6 +139,9 @@ def _iter_grants(config: GcpIamConfig) -> Iterator[tuple[str, str, GcpRoleGrant]
     for account in args.service_accounts:
         for grant in account.grants:
             yield "service_accounts", account.email, grant
+    for service in args.backend_service_iap:
+        for grant in service.iap_grants:
+            yield "backend_service_iap", service.service, grant
     for service in args.cloud_run_iap:
         for grant in service.iap_grants:
             yield "cloud_run_iap", f"{service.location}/{service.service}", grant

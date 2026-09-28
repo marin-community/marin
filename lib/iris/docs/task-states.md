@@ -328,6 +328,16 @@ The job detail page shows per-task attempt history. Each attempt has its own
 state badge, and worker failures are annotated with "(worker failure)" in the
 attempt rows.
 
+Attempt duration uses `started_at` and `finished_at`. Only active attempts use
+the current time when `finished_at` is absent. Terminal attempts without a
+finish time show `-`.
+
+For Kubernetes attempts, controller cancellation, preemption, timeout, and
+coscheduled termination record the controller decision time as `finished_at`.
+This timestamp does not identify the exact process exit. Worker-bound attempts
+wait for worker confirmation before the controller records `finished_at` and
+releases capacity.
+
 Pending tasks display a `pending_reason` diagnostic below the state badge when
 the controller can identify why the task cannot be scheduled (e.g., no workers
 match constraints).

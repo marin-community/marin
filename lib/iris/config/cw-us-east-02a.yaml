@@ -58,6 +58,10 @@ provisioning:
     rbac: { service_account: iris-controller }
     grafana_observer_rbac:
       usernames: [cwtoken-uhBSRqWXRtyV7WWciRtYr-readonly-ops-token]
+    loom_session_rbac:
+      usernames:
+        - cwtoken-uhBSRqWXRtyV7WWciRtYr-loom-token
+        - cwtoken-umHabiNiEWJbDFZqyTwbP-ops-loom-token
 
 platform:
   label_prefix: cw-use02a
@@ -106,6 +110,7 @@ auth:
       -----END PUBLIC KEY-----
   allowed_submitters:
     - "*@openathena.ai"
+    - contractor@hai-gcp-models.iam.gserviceaccount.com
     - ravwojdyla@rav-openathena.iam.gserviceaccount.com
 
 kubernetes_provider:
@@ -119,12 +124,6 @@ kubernetes_provider:
     # Pulumi owns the cluster-scoped ClusterQueue and cw-tas ResourceFlavor;
     # Iris reconciles the namespaced LocalQueue bound to it at controller start.
     cluster_queue: iris-cq
-  # CoreWeave's node health checker runs preemptible (priority -1) GPU
-  # verification pods on idle nodes. Kueue TAS counts them as fixed node usage
-  # and cannot preempt non-Kueue pods, so gangs queue behind every NHC sweep;
-  # Iris evicts them itself when it has gang work.
-  preempt_namespaces: ["cw-hpc-verification"]
-
 controller:
   image: ghcr.io/marin-community/iris-controller:latest
   checkpoint_interval_seconds: 600
@@ -163,7 +162,7 @@ defaults:
     default_task_image: ghcr.io/marin-community/iris-task:latest
 
 user_budget_defaults:
-  budget_limit: 400000
+  budget_limit: 10688
   max_band: interactive
 
 scale_groups:
@@ -212,23 +211,29 @@ scale_groups:
 # 42752 is 4 h100-8x nodes (32 GPUs) at full node resources.
 user_budgets:
   - user_ids:
-      - benjaminfeuer
       - betsy
-      - dlwh
       - eczech
-      - held
       - larry
       - marin
-      - muchanem
-      - mwittmann
-      - power
-      - rav
-      - romain
-      - wmoss
       - zack
     budget_limit: 42752
     max_band: PRIORITY_BAND_INTERACTIVE
-  # 171008 is 16 h100-8x nodes: half of this cluster's 32-node fleet.
-  - user_ids: [benjaminfeuer]
-    budget_limit: 171008
+  - user_ids:
+      - ben.feuer@openathena.ai
+      - benjaminfeuer
+      - david.hall@openathena.ai
+      - dlwh
+      - mark.muchane@openathena.ai
+      - muchanem
+      - matt.wittmann@openathena.ai
+      - mwittmann
+      - rafal.wojdyla@openathena.ai
+      - rav
+      - romain.yon@openathena.ai
+      - romain
+      - russell.power@openathena.ai
+      - power
+      - will.held@openathena.ai
+      - held
+    budget_limit: 0
     max_band: PRIORITY_BAND_INTERACTIVE

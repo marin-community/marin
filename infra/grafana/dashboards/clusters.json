@@ -535,7 +535,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, COALESCE(NULLIF(\"cluster\", ''), 'marin') AS series, AVG(value) AS value FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name = 'node_cpu_utilization_percent' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
+                "value": "WITH telemetry AS (SELECT * FROM \"telemetry_v1.node_agent\") SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, COALESCE(NULLIF(\"cluster\", ''), 'marin') AS series, AVG(value) AS value FROM telemetry WHERE service = 'iris-node-agent' AND name = 'node_cpu_utilization_percent' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
               },
               {
                 "key": "from",
@@ -698,7 +698,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, COALESCE(NULLIF(\"cluster\", ''), 'marin') AS series, SUM(CASE WHEN name = 'node_memory_used_bytes' THEN value END) / NULLIF(SUM(CASE WHEN name = 'node_memory_total_bytes' THEN value END), 0) AS value FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name IN ('node_memory_used_bytes', 'node_memory_total_bytes') AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
+                "value": "WITH telemetry AS (SELECT * FROM \"telemetry_v1.node_agent\") SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, COALESCE(NULLIF(\"cluster\", ''), 'marin') AS series, SUM(CASE WHEN name = 'node_memory_used_bytes' THEN value END) / NULLIF(SUM(CASE WHEN name = 'node_memory_total_bytes' THEN value END), 0) AS value FROM telemetry WHERE service = 'iris-node-agent' AND name IN ('node_memory_used_bytes', 'node_memory_total_bytes') AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
               },
               {
                 "key": "from",
@@ -861,7 +861,7 @@
             "params": [
               {
                 "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, COALESCE(NULLIF(\"cluster\", ''), 'marin') AS series, SUM(CASE WHEN name = 'node_disk_used_bytes' THEN value END) / NULLIF(SUM(CASE WHEN name = 'node_disk_total_bytes' THEN value END), 0) AS value FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name IN ('node_disk_used_bytes', 'node_disk_total_bytes') AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
+                "value": "WITH telemetry AS (SELECT * FROM \"telemetry_v1.node_agent\") SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, COALESCE(NULLIF(\"cluster\", ''), 'marin') AS series, SUM(CASE WHEN name = 'node_disk_used_bytes' THEN value END) / NULLIF(SUM(CASE WHEN name = 'node_disk_total_bytes' THEN value END), 0) AS value FROM telemetry WHERE service = 'iris-node-agent' AND name IN ('node_disk_used_bytes', 'node_disk_total_bytes') AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
               },
               {
                 "key": "from",
@@ -1066,6 +1066,16 @@
           "panelRef": "finelog_fleet_health"
         },
         {
+          "id": 53,
+          "gridPos": {
+            "h": 8,
+            "w": 24,
+            "x": 0,
+            "y": 7
+          },
+          "panelRef": "finelog_forwarding_events"
+        },
+        {
           "id": 51,
           "type": "table",
           "title": "Finelog pods and storage",
@@ -1078,7 +1088,7 @@
             "h": 9,
             "w": 24,
             "x": 0,
-            "y": 7
+            "y": 15
           },
           "fieldConfig": {
             "defaults": {
@@ -1188,7 +1198,7 @@
             "h": 8,
             "w": 24,
             "x": 0,
-            "y": 16
+            "y": 24
           },
           "fieldConfig": {
             "defaults": {

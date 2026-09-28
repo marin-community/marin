@@ -46,10 +46,9 @@ _YAML_HEADER = """\
 # SPDX-License-Identifier: Apache-2.0
 #
 # Shared GCP IAM declaration for hai-gcp-models. Deploy-target grants live in
-# the adjacent echo.py, evaldash.py, grafana.py, and loom.py modules. The
+# the adjacent echo.py, evaldash.py, grafana.py, iap.py, and loom.py modules. The
 # `marin` stack composes every declaration and is their sole owner. Resources
-# use additive IAM members; changing to role-authoritative bindings requires a
-# complete live-policy audit. Human user principals are KMS ciphertexts
+# use role-authoritative IAM bindings. Human user principals are KMS ciphertexts
 # declared once under `principals`; grants reference their opaque IDs so one
 # principal cannot drift across roles.
 #

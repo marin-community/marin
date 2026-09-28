@@ -18,13 +18,10 @@ across the corpus 122 further assistant messages are rejected answers to the int
 keep an assistant message only when it appears there.
 
 Reasoning is inline in assistant content with a closing ``</think>`` and no opener, because
-the opener comes from the GLM chat template and was never echoed back. Like
-``superior_reasoning`` and ``synthetic1``, the other sources whose reasoning arrives inline
-in a text field, we leave the reasoning inline rather than introduce markup the plain-text
-tokenizer would not read; the tag itself becomes a paragraph break (see
-:func:`join_reasoning_and_answer`). A turn missing the tag entirely is one that spent its
-token budget mid-reasoning: 3,711 of 3,724 untruncated turns close exactly once, while
-2,181 of 2,459 truncated turns never close.
+the opener comes from the GLM chat template and was never echoed back. The text path turns
+that boundary into a paragraph break. The chat path separates reasoning and final-answer
+Harmony messages and rejects trajectories with any truncated generation, since a turn
+that spent its token budget commonly ends with unclosed reasoning.
 """
 
 from enum import StrEnum
@@ -36,8 +33,15 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.readers import load_jsonl
 
+from marin.datakit.chat_normalize import CHAT_SCHEMA, normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.download.rollout_transforms import render_role_message, text_document
+from marin.datakit.download.rollout_transforms import (
+    ReasoningFormatError,
+    checked_openai_chat_document,
+    normalize_reasoning_tokens,
+    render_role_message,
+    text_document,
+)
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
@@ -70,8 +74,8 @@ class TruncationFilter(StrEnum):
 def join_reasoning_and_answer(content: str) -> str:
     """Replace GLM's dangling ``</think>`` with a paragraph break.
 
-    The shared ``strip_think_tags`` deletes the tag outright, which works for sources that
-    wrap it in newlines. GLM does not: responses read ``...write the final code.</think>Looking
+    Deleting the tag outright works for sources that wrap it in newlines.
+    GLM does not: responses read ``...write the final code.</think>Looking
     at the profile...``, so deleting the tag alone would run the last reasoning sentence into
     the first word of the answer.
     """
@@ -85,8 +89,8 @@ def render_message(message: dict) -> str:
     return render_role_message({**message, "content": join_reasoning_and_answer(message["content"])})
 
 
-def render_conversation(messages: list[dict], turns: list[dict]) -> str:
-    """Render a trajectory as a tagged transcript of its recorded generation turns.
+def recorded_messages(messages: list[dict], turns: list[dict]) -> list[dict]:
+    """Keep the real generation turns and discard sampler bookkeeping.
 
     An assistant message absent from ``turns`` is sampler bookkeeping rather than a recorded
     generation: either the ``KERNELGYM_FINAL`` stop sentinel or a rejected answer to the
@@ -104,7 +108,55 @@ def render_conversation(messages: list[dict], turns: list[dict]) -> str:
             continue
         kept.append(message)
 
-    return "\n\n".join(render_message(m) for m in kept)
+    return kept
+
+
+def conversation_messages(messages: list[dict], turns: list[dict]) -> list[dict]:
+    """Prepare recorded generation turns for the plain-text transcript."""
+    return [
+        (
+            {**message, "content": join_reasoning_and_answer(message["content"])}
+            if message["role"] == "assistant"
+            else message
+        )
+        for message in recorded_messages(messages, turns)
+    ]
+
+
+def chat_conversation_messages(messages: list[dict], turns: list[dict]) -> list[dict]:
+    """Restore reasoning boundaries and merge adjacent environment context."""
+    repaired: list[dict] = []
+    for message in recorded_messages(messages, turns):
+        if message["role"] == "user" and repaired and repaired[-1]["role"] == "user":
+            repaired[-1] = {**repaired[-1], "content": f"{repaired[-1]['content']}\n\n{message['content']}"}
+            continue
+        if message["role"] != "assistant":
+            repaired.append(message)
+            continue
+
+        content = message["content"]
+        if content.count(REASONING_CLOSE_TAG) > 1:
+            raise ReasoningFormatError("GLM assistant response has multiple reasoning close tags")
+        if REASONING_CLOSE_TAG not in content:
+            repaired.append(message)
+            continue
+        reasoning, answer = content.split(REASONING_CLOSE_TAG, 1)
+        reasoning = reasoning.strip()
+        answer = answer.strip()
+        if not reasoning:
+            repaired.append({**message, "content": answer})
+            continue
+        repaired.append(
+            {
+                **message,
+                "content": normalize_reasoning_tokens(f"<think>{reasoning}</think>{answer}"),
+            }
+        )
+    return repaired
+
+
+def render_conversation(messages: list[dict], turns: list[dict]) -> str:
+    return "\n\n".join(render_message(message) for message in conversation_messages(messages, turns))
 
 
 def row_to_doc(row: dict, truncation_filter: TruncationFilter) -> list[dict]:
@@ -128,6 +180,24 @@ def row_to_doc(row: dict, truncation_filter: TruncationFilter) -> list[dict]:
     return [text_document(text, HF_DATASET_ID)]
 
 
+def row_to_chat_doc(row: dict, truncation_filter: TruncationFilter) -> list[dict]:
+    messages = row["messages"]
+    turns = row["turns"]
+    if not messages or not turns:
+        return []
+    truncated = [turn["usage"]["completion_tokens"] >= row["max_tokens"] for turn in turns]
+    if truncated[-1] or (truncation_filter is TruncationFilter.ANY_TURN and any(truncated)):
+        return []
+    try:
+        kept = chat_conversation_messages(messages, turns)
+    except ReasoningFormatError:
+        counters.pipeline.update_counter("glm_kernelgym_rollouts/dropped_malformed_reasoning", 1)
+        return []
+    return (
+        checked_openai_chat_document(kept, HF_DATASET_ID, counter_prefix="glm_kernelgym_rollouts/chat") if kept else []
+    )
+
+
 def transform(input_path: str, output_path: str, truncation_filter: TruncationFilter) -> None:
     pipeline = (
         Dataset.from_files(prefix_join(input_path, "**/*.jsonl.gz"))
@@ -137,6 +207,20 @@ def transform(input_path: str, output_path: str, truncation_filter: TruncationFi
     )
     ctx = ZephyrContext(name="glm-kernelgym-rollouts-transform", resources=ResourceConfig(cpu=1, ram="8g"))
     ctx.execute(pipeline)
+
+
+def transform_chat(input_path: str, output_path: str, truncation_filter: TruncationFilter) -> None:
+    pipeline = (
+        Dataset.from_files(prefix_join(input_path, "**/*.jsonl.gz"))
+        .flat_map(load_jsonl)
+        .flat_map(lambda row: row_to_chat_doc(row, truncation_filter))
+        .write_parquet(
+            prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"), schema=CHAT_SCHEMA, skip_existing=True
+        )
+    )
+    ZephyrContext(name="glm-kernelgym-rollouts-chat-transform", resources=ResourceConfig(cpu=1, ram="8g")).execute(
+        pipeline
+    )
 
 
 def download_glm_kernelgym_rollouts_step(truncation_filter: TruncationFilter) -> StepSpec:
@@ -171,4 +255,23 @@ def glm_kernelgym_rollouts_normalize_steps() -> tuple[StepSpec, ...]:
     return (
         processed,
         normalize_step(name="normalized/glm-5.2-kernelgym-rollouts", download=processed),
+    )
+
+
+def glm_kernelgym_rollouts_chat_normalize_steps() -> tuple[StepSpec, ...]:
+    download = download_hf_step(
+        "raw/glm-5.2-kernelgym-rollouts",
+        hf_dataset_id=HF_DATASET_ID,
+        revision=HF_REVISION,
+        hf_urls_glob=[DATA_GLOB],
+    )
+    truncation_filter = TruncationFilter.ANY_TURN
+    processed = StepSpec(
+        name="processed-chat/glm-5.2-kernelgym-rollouts",
+        deps=[download],
+        fn=lambda output_path: transform_chat(download.output_path, output_path, truncation_filter),
+        hash_attrs={"version": "2026.09.11.review-fixes", "truncation_filter": truncation_filter.value},
+    )
+    return processed, normalize_chat_step(
+        output_schema=CHAT_SCHEMA, name="normalized-chat/glm-5.2-kernelgym-rollouts", download=processed
     )

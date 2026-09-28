@@ -3,7 +3,7 @@
 
 """Agentic lint-review runner (lanes + composer) invoked by `pre-commit.py --review`.
 
-Fans out one headless agent per "lane" (rules in infra/lint/*.md) over the branch's
+Fans out one headless agent per structured rule lane under ``infra/lint/`` over the branch's
 changes and merges the per-lane findings with a composer agent (or a deterministic
 dedupe-and-concat). Each lane is handed the changed-file inventory (`git diff --stat`)
 and read-only git access, and probes each file itself rather than reading a pasted
@@ -12,7 +12,6 @@ on its own. This subsystem is self-contained and used only by the `--review` pat
 pre-commit.py.
 """
 
-import hashlib
 import json
 import os
 import pathlib
@@ -29,13 +28,13 @@ from dataclasses import dataclass
 
 import click
 
-# codehealth/ holds stdlib-only helpers imported by path (it is not an installed package).
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent / "codehealth"))
-import complexity as complexity_leads
-
 ROOT_DIR = pathlib.Path(__file__).parent.parent
+sys.path.insert(0, str(ROOT_DIR))
+from infra.codehealth import complexity as complexity_leads  # noqa: E402
+from infra.lint.catalog import LintLane, catalog_sha, load_catalog, render_lane  # noqa: E402
+
 LINT_DIR = ROOT_DIR / "infra/lint"
-LINT_SHARED = LINT_DIR / "shared.md"
+LINT_CATALOG = load_catalog(LINT_DIR)
 
 
 LINT_REVIEW_AGENT_DEFAULT = "claude -p"
@@ -129,64 +128,9 @@ READ_ONLY_MANDATE = (
     "helpfulness. If you cannot complete the review read-only, emit nothing and stop."
 )
 
-LINT_LANE_INSTRUCTIONS = (
-    "You are ONE lane of the review. Apply ONLY the rules in the lane catalog above "
-    'to the change described below. Follow the shared "Detector usage" and "Output format" '
-    "exactly: emit one finding per line in the format it specifies, and emit nothing at "
-    "all when there are no findings. Resolve overlap precedence within your lane; leave "
-    "cross-lane duplicates to the composer. You are handed the changed-file inventory, not a "
-    "pasted diff: inspect each file yourself with read-only git and Read (see 'The change' below)."
-)
 
-# The meta lane is holistic: it reasons over the whole change, may read beyond the diff,
-# and owns only its own (meta) codes. It replaces the per-hunk framing above.
-META_LANE_INSTRUCTIONS = (
-    "You are the META lane — the holistic reviewer. Unlike the other lanes, which scan "
-    "added/modified hunks for a known local shape, you reason over the change as a UNIT: "
-    "model what this PR is trying to do, then judge whether the means are the cleanest path "
-    "to that end. Apply ONLY the meta rules in the catalog above.\n\n"
-    "Diff scope is WIDE, rule scope is NARROW. You MAY read beyond the diff — open the whole "
-    "file, follow the call graph, check a sibling module or an existing helper, grep the tree "
-    "for a symbol — to confirm a finding (several rules require it). But you OWN only the meta "
-    "ml- codes: if you notice a local smell (a bad name, one overloaded function, a swallowed "
-    "exception), stay SILENT and let its lane catch it. Fire only where a hunk-scoped pass "
-    "structurally CANNOT see the problem — it spans files, lives in an unchanged file, or is a "
-    "property of the whole change. If a single hunk would let a local lane flag it, defer.\n\n"
-    "Precision is the whole game. Honor each rule's confidence floor and its suppressors; where "
-    "a rule says so, phrase the finding as a question to confirm rather than an assertion. "
-    'Follow the shared "Output format" exactly: one finding per line, nothing at all when there '
-    "are no findings. You are handed only the changed-file inventory, not a pasted diff — pulling "
-    "each file's diff and reading into the surrounding code is exactly this lane's job."
-)
-
-# The holistic meta lane only runs on larger diffs — its rules need the whole change, and on a
-# small PR there is no aggregate shape to see. This is the lane's only volume gate (findings are
-# advisory and read only by agents, so there is no per-PR finding cap).
-META_LANE_MIN_DIFF_LINES = 100
-
-
-@dataclass(frozen=True)
-class LintLane:
-    """One fan-out lane of the lint review: a rule file under infra/lint/."""
-
-    name: str
-    include_complexity_leads: bool
-    # Instruction block appended after the lane catalog; the holistic meta lane overrides the
-    # default per-hunk framing with its own wide-diff-scope framing.
-    instructions: str = LINT_LANE_INSTRUCTIONS
-    # Run this lane only when the diff has more than this many changed lines (0 = always run).
-    min_diff_lines: int = 0
-
-
-# Coarse lanes — one headless agent each. Keep this aligned with infra/lint/*.md.
-LINT_LANES = (
-    LintLane("complexity", True),
-    LintLane("interfaces", False),
-    LintLane("robustness", False),
-    LintLane("cruft", False),
-    LintLane("prose", False),
-    LintLane("meta", False, META_LANE_INSTRUCTIONS, META_LANE_MIN_DIFF_LINES),
-)
+# Coarse lanes — one headless agent each, derived from the structured catalog.
+LINT_LANES = LINT_CATALOG.lanes
 
 # The composer merges the lanes' outputs. Authored to never silently drop a real
 # finding — it may only collapse true duplicates and drop overlap-precedence losers.
@@ -242,7 +186,7 @@ LINT_REVIEW_STRIPPED_ENV = (
 )
 
 
-# Output format the agent emits, per infra/lint/shared.md "Output format":
+# Output format the agent emits, per infra/lint/catalog.yaml "Output format":
 #   <path>:<line>: <code> (<confidence>) <message>
 _FINDING_RE = re.compile(r"^(?P<path>[^:\s]+):(?P<line>\d+): (?P<code>ml-[\w-]+) \((?P<conf>[\d.]+)\) (?P<msg>.*)$")
 
@@ -296,42 +240,65 @@ def _git(args: list[str]) -> str | None:
         return None
 
 
-def _lint_catalog_sha() -> str | None:
-    """Fingerprint the multi-file lint catalog: sha1 over the sorted lane files.
+# A CI runner checks out the synthetic pull-request merge ref, so local git
+# state describes the merge commit rather than the branch under review. The
+# review harness supplies the real identity through the environment. A
+# developer's machine sets none of them and falls back to local git.
+REVIEW_TRIGGER_ENV = "MARIN_REVIEW_TRIGGER"
+REVIEW_PR_NUMBER_ENV = "MARIN_REVIEW_PR_NUMBER"
+REVIEW_HEAD_SHA_ENV = "MARIN_REVIEW_HEAD_SHA"
 
-    Mirrors infra/codehealth/log_stats.py so the `lint_catalog_sha` stat is
-    comparable across the local review and the stats aggregator.
-    """
-    files = sorted(LINT_DIR.glob("*.md"))
-    if not files:
+
+def _review_trigger() -> str:
+    return os.environ.get(REVIEW_TRIGGER_ENV) or "local"
+
+
+def _review_pr_number() -> int | None:
+    raw = (os.environ.get(REVIEW_PR_NUMBER_ENV) or "").strip()
+    if not raw.isdigit():
         return None
-    h = hashlib.sha1()
-    for f in files:
-        h.update(f.read_bytes())
-    return h.hexdigest()
+    return int(raw)
 
 
-def _ship_review_stats(event: dict) -> None:
+def _review_head_sha() -> str | None:
+    """The reviewed commit: the harness-supplied head SHA, else local HEAD."""
+    return (os.environ.get(REVIEW_HEAD_SHA_ENV) or "").strip() or _git(["rev-parse", "HEAD"])
+
+
+def _ship_review_stats(event: dict, log_dir: pathlib.Path | None) -> None:
     """Fire-and-forget: hand the event off to infra/codehealth/log_stats.py via
-    `uv run`. Detached so the W&B init/network cost never blocks the dev.
-    Silent on every failure mode (no uv, no wandb, no auth, no network).
+    `uv run`. Detached so the Finelog connect and write never block the dev.
+
+    The child's stderr goes to `stats.log` in the run's log directory, so a
+    failed ship (no uv, no Finelog credentials, no network) is diagnosable
+    afterwards rather than silently dropped. Without a log directory there is
+    nowhere to put it and the output is discarded.
     """
     if not shutil.which("uv"):
         return
+    stats_log = None
     try:
+        if log_dir is not None:
+            stats_log = (log_dir / "stats.log").open("wb")
         proc = subprocess.Popen(
-            ["uv", "run", "--quiet", str(ROOT_DIR / "infra" / "codehealth" / "log_stats.py")],
+            # --no-sync: a bare `uv run` re-resolves the root workspace and
+            # can start installing into it from this detached process.
+            ["uv", "run", "--quiet", "--no-sync", str(ROOT_DIR / "infra" / "codehealth" / "log_stats.py")],
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=stats_log or subprocess.DEVNULL,
             cwd=ROOT_DIR,
             start_new_session=True,
         )
         assert proc.stdin is not None
         proc.stdin.write(json.dumps(event).encode())
         proc.stdin.close()
-    except Exception:
-        pass
+    except (OSError, ValueError) as e:
+        click.echo(f"  ⚠ Lint review: could not ship review stats: {e}")
+    finally:
+        # The child holds its own dup of the descriptor.
+        if stats_log is not None:
+            stats_log.close()
 
 
 @dataclass(frozen=True)
@@ -492,10 +459,9 @@ def _change_context(merge_base: str, stat: str) -> str:
 
 
 def _lane_prompt(shared_text: str, lane: LintLane, merge_base: str, stat: str, leads: str) -> str:
-    parts = [READ_ONLY_MANDATE, shared_text, (LINT_DIR / f"{lane.name}.md").read_text()]
+    parts = [READ_ONLY_MANDATE, shared_text, render_lane(LINT_CATALOG, lane.name)]
     if lane.include_complexity_leads and leads:
         parts.append(leads)
-    parts.append(lane.instructions)
     parts.append(_change_context(merge_base, stat))
     return "\n\n".join(parts) + "\n"
 
@@ -709,9 +675,11 @@ def _ship_review_event(
     merge_base: str,
     diff_stats: tuple[int, int, int],
     started: float,
+    elapsed: float,
     composer_rc: int,
     timed_out: bool,
     findings: list[list],
+    log_dir: pathlib.Path | None,
 ) -> None:
     """Assemble and ship the review's telemetry event (see infra/codehealth/log_stats.py)."""
     diff_files, diff_added, diff_removed = diff_stats
@@ -722,23 +690,24 @@ def _ship_review_event(
             "tool": "pre-commit-review",
             "invocation": {
                 "variant": mode,
-                "trigger": "local",
+                "trigger": _review_trigger(),
                 "agent_cli": agent_cmd[0],
                 "git_branch": _git(["rev-parse", "--abbrev-ref", "HEAD"]),
                 "merge_base_sha": merge_base,
-                "head_sha": _git(["rev-parse", "HEAD"]),
-                "pr_number": None,
+                "head_sha": _review_head_sha(),
+                "pr_number": _review_pr_number(),
                 "marin_user": _git(["config", "user.email"]),
-                "lint_catalog_sha": _lint_catalog_sha(),
+                "lint_catalog_sha": catalog_sha(LINT_CATALOG),
                 "diff_files": diff_files,
                 "diff_added_lines": diff_added,
                 "diff_removed_lines": diff_removed,
-                "elapsed": time.time() - started,
+                "elapsed": elapsed,
                 "agent_exit_code": composer_rc,
                 "timed_out": timed_out,
             },
             "findings": findings,
-        }
+        },
+        log_dir,
     )
 
 
@@ -799,7 +768,7 @@ def run_lint_review(agent_command: str, lane_names: list[str] | None = None, com
     if not lanes:
         return 0
 
-    shared_text = LINT_SHARED.read_text()
+    shared_text = LINT_CATALOG.shared_prompt
     leads = ""
     if any(lane.include_complexity_leads for lane in lanes):
         leads = complexity_leads.compute_leads(_read_worktree, _changed_py_files(merge_base))
@@ -816,20 +785,35 @@ def run_lint_review(agent_command: str, lane_names: list[str] | None = None, com
 
     outcome = _merge_lane_results(lane_results, lanes, shared_text, merge_base, stat, agent_cmd, env, compose)
     parsed = _parse_findings(outcome.findings_text) if outcome.findings_text else []
-    _ship_review_event(
-        outcome.mode, agent_cmd, merge_base, diff_stats, started, outcome.composer_rc, outcome.timed_out, parsed
-    )
+    elapsed = time.time() - started
 
     # Persist raw per-arm + combined output for debugging a slow/broken cycle. Log I/O is a
     # side channel: a write failure (e.g. /tmp not writable) must not fail the advisory review.
     branch = _git(["rev-parse", "--abbrev-ref", "HEAD"])
-    run = ReviewRun(lane_results, outcome, merge_base, diff_stats, time.time() - started, branch)
+    run = ReviewRun(lane_results, outcome, merge_base, diff_stats, elapsed, branch)
+    log_dir: pathlib.Path | None = None
     try:
         log_dir = _review_log_dir(branch, started)
         _write_review_log(log_dir, run)
         click.echo(f"  Lint review logs: {log_dir}")
     except OSError as e:
+        log_dir = None
         click.echo(f"  ⚠ Lint review: could not write logs under {LINT_REVIEW_LOG_ROOT}: {e}")
+
+    # Ships after the log dir exists so a failed write lands in stats.log beside
+    # the run it belongs to instead of vanishing.
+    _ship_review_event(
+        outcome.mode,
+        agent_cmd,
+        merge_base,
+        diff_stats,
+        started,
+        elapsed,
+        outcome.composer_rc,
+        outcome.timed_out,
+        parsed,
+        log_dir,
+    )
 
     if all(r.returncode != 0 for r in lane_results):
         click.echo("  ⚠ Lint review: every lane failed to run (is the agent CLI working?)")

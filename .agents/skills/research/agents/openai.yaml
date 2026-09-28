@@ -1,0 +1,4 @@
+interface:
+  display_name: "Research"
+  short_description: "Research Marin questions and experiments"
+  default_prompt: "Research this Marin question, assess the evidence, and record the result in the task's existing durable surface."

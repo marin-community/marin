@@ -167,15 +167,14 @@ class DataConfig:
         from ``region_buckets[<gcs metadata region>]`` > ``{scheme}://marin-{region}``
         for a detected-but-unmapped region > :data:`_DEFAULT_LOCAL_PREFIX`.
 
-        The env/explicit value is canonicalized through :class:`StoragePath` (trailing
-        ``/`` stripped, interior ``//`` collapsed) so downstream joins never double the
-        separator.
+        The configured value is canonicalized so downstream joins do not duplicate
+        separators. Relative local paths are anchored at the working directory.
         """
         env_prefix = os.environ.get(_MARIN_PREFIX_ENV)
         if env_prefix:
-            return StoragePath.normalize(env_prefix)
+            return _canonical_root(env_prefix)
         if self.root is not None:
-            return StoragePath.normalize(self.root)
+            return _canonical_root(self.root)
         region = region_from_metadata()
         if region is not None:
             spec = self.region_buckets.get(region)
@@ -183,6 +182,14 @@ class DataConfig:
                 return f"{self.scheme}://{spec.name}"
             return f"{self.scheme}://marin-{region}"
         return _DEFAULT_LOCAL_PREFIX
+
+
+def _canonical_root(prefix: str) -> str:
+    """Canonicalize a root and anchor relative local paths at the working directory."""
+    path = StoragePath(prefix)
+    if path.is_local and not path.rooted:
+        return StoragePath.normalize(os.path.abspath(prefix))
+    return str(path)
 
 
 # The marin cluster's storage layout lives in ``config/marin.yaml`` (loaded as
@@ -547,7 +554,7 @@ def marin_temp_bucket(
     ttl_days = _resolve_ttl_days(ttl_days, cfg.ttl_days)
 
     override_prefix = os.environ.get(_MARIN_TEMP_PREFIX_ENV) if use_env_override else None
-    mp = override_prefix or marin_prefix()
+    mp = override_prefix or source_prefix or marin_prefix()
 
     # A cluster temp override takes precedence over explicit source routing so
     # all disposable writes from the cluster share one lifecycle-managed bucket.

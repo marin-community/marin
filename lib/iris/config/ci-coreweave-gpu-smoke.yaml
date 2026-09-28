@@ -108,4 +108,3 @@ scale_groups:
       coreweave:
         region: US-WEST-04A
         instance_type: gd-8xh100ib-i128
-        infiniband: true

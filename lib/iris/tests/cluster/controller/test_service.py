@@ -10,34 +10,29 @@ State changes are verified via RPC calls rather than internal state inspection.
 import concurrent.futures
 import time
 from datetime import date, timedelta
-from unittest.mock import Mock
 
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import (
-    BACKEND_CONSTRAINT_KEY,
     Constraint,
     ConstraintOp,
     WellKnownAttribute,
     device_variant_constraint,
 )
+from iris.cluster.controller import jobs as jobs_module
 from iris.cluster.controller import ops, writes
-from iris.cluster.controller import service as service_module
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
+from iris.cluster.controller.jobs import FRESHNESS_WINDOW, MAX_LIST_JOBS_OFFSET
 from iris.cluster.controller.ops.task import Assignment, finalize
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table
-from iris.cluster.controller.service import (
-    FRESHNESS_WINDOW,
-    MAX_LIST_JOBS_OFFSET,
-    ControllerServiceImpl,
-)
+from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.redaction import REDACTED_VALUE, redact_request_env_vars
-from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, UserBudgetDefaults, WorkerId, tpu_device
+from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId, tpu_device
 from iris.rpc import controller_pb2, job_pb2
 from iris.testing.controller import (
     make_job_request,
@@ -144,94 +139,6 @@ def test_launch_job_returns_job_id(service):
     )
     assert status_response.job.job_id == JobName.root("test-user", "test-job").to_wire()
     assert status_response.job.state == job_pb2.JOB_STATE_PENDING
-
-
-class _FeasibilityAutoscaler:
-    """Autoscaler stub whose job_feasibility returns a fixed verdict."""
-
-    def __init__(self, error: str | None):
-        self._error = error
-
-    def job_feasibility(self, constraints, replicas=None, resources=None) -> str | None:
-        return self._error
-
-
-def test_launch_job_feasible_on_non_first_backend(service):
-    """A job the first backend's autoscaler rejects still launches when a later
-    backend can host it — feasibility is the OR across every backend."""
-    rejecting = Mock()
-    rejecting.autoscaler = _FeasibilityAutoscaler("no scaling group matches gpu:h100")
-    admitting = Mock()
-    admitting.autoscaler = _FeasibilityAutoscaler(None)
-    service._controller.backends = {"gcp": rejecting, "cw": admitting}
-
-    response = service.launch_job(make_job_request("multi-backend-ok"), None)
-
-    assert response.job_id == JobName.root("test-user", "multi-backend-ok").to_wire()
-
-
-def test_launch_job_rejected_when_all_backends_infeasible(service):
-    """Submit fails fast only when every backend's autoscaler rejects the shape."""
-    gcp = Mock()
-    gcp.autoscaler = _FeasibilityAutoscaler("no scaling group matches gpu:h100")
-    cw = Mock()
-    cw.autoscaler = _FeasibilityAutoscaler("region us-east5 has no h100 pool")
-    service._controller.backends = {"gcp": gcp, "cw": cw}
-
-    with pytest.raises(ConnectError) as exc_info:
-        service.launch_job(make_job_request("multi-backend-bad"), None)
-    assert exc_info.value.code == Code.FAILED_PRECONDITION
-
-
-def test_launch_job_pinned_backend_checks_only_that_backend(service):
-    """A job pinned with --backend is checked only against the pinned backend: it
-    fails fast when that backend rejects, even if another backend is feasible."""
-    rejecting = Mock()
-    rejecting.autoscaler = _FeasibilityAutoscaler("no scaling group matches gpu:h100")
-    admitting = Mock()
-    admitting.autoscaler = _FeasibilityAutoscaler(None)
-    service._controller.backends = {"gcp": rejecting, "cw": admitting}
-
-    request = make_job_request("pinned-bad")
-    request.constraints.append(Constraint.create(key=BACKEND_CONSTRAINT_KEY, op=ConstraintOp.EQ, value="gcp").to_proto())
-
-    with pytest.raises(ConnectError) as exc_info:
-        service.launch_job(request, None)
-    assert exc_info.value.code == Code.FAILED_PRECONDITION
-
-
-def test_profile_worker_routes_to_worker_backend(service, state):
-    """ProfileTask on /system/worker/<id> dispatches to the worker's backend
-    (resolved from its scale group), not the representative backend."""
-    with state._db.transaction() as cur:
-        ops.worker.register(
-            cur,
-            worker_id=WorkerId("w-cw"),
-            address="w-cw:8080",
-            metadata=make_worker_metadata(),
-            ts=Timestamp.now(),
-            health=state._health,
-            scale_group="cw-h100",
-        )
-    cw = Mock()
-    cw.profile_task.return_value = job_pb2.ProfileTaskResponse(profile_data=b"cw-profile")
-    # This mock backend only routes the profile dispatch; the worker's liveness is
-    # registered into the default backend's tracker above, so cw owns no tracker.
-    cw.health = None
-    service._controller.backends = {DEFAULT_BACKEND_ID: service._controller.provider, "cw": cw}
-    service._controller.scale_group_to_backend = {"cw-h100": "cw"}
-
-    resp = service.profile_task(
-        job_pb2.ProfileTaskRequest(
-            target="/system/worker/w-cw",
-            duration_seconds=1,
-            profile_type=job_pb2.ProfileType(cpu=job_pb2.CpuProfile()),
-        ),
-        None,
-    )
-
-    # The profile bytes could only have come from the cw backend's provider.
-    assert resp.profile_data == b"cw-profile"
 
 
 def test_get_job_status_reports_parent_job_id(service):
@@ -444,7 +351,7 @@ def test_launch_job_rejects_exceeding_per_user_task_cap(service, state, monkeypa
     Only non-terminal tasks count: once the first job's tasks finish, the freed
     budget lets the next submission through.
     """
-    monkeypatch.setattr(service_module, "MAX_ACTIVE_TASKS_PER_USER", 5)
+    monkeypatch.setattr(jobs_module, "MAX_ACTIVE_TASKS_PER_USER", 5)
 
     # 3 active tasks for test-user: under the cap.
     service.launch_job(make_job_request("job-a", replicas=3), None)
@@ -470,7 +377,7 @@ def test_launch_job_rejects_exceeding_per_user_task_cap(service, state, monkeypa
 
 def test_launch_job_user_task_cap_is_per_user(service, monkeypatch):
     """The cap is scoped per user: one user's tasks don't count against another's."""
-    monkeypatch.setattr(service_module, "MAX_ACTIVE_TASKS_PER_USER", 5)
+    monkeypatch.setattr(jobs_module, "MAX_ACTIVE_TASKS_PER_USER", 5)
 
     service.launch_job(make_job_request("/alice/job", replicas=5), None)
 
@@ -565,7 +472,7 @@ def test_existing_job_policy_keep_drains_unfinalized_child_attempt(service, stat
     """
     # Tighten the drain wait so the test fails fast on regression instead
     # of waiting the production 30s.
-    monkeypatch.setattr(service_module, "_JOB_REPLACEMENT_DRAIN_WAIT", Duration.from_seconds(5))
+    monkeypatch.setattr(jobs_module, "_JOB_REPLACEMENT_DRAIN_WAIT", Duration.from_seconds(5))
 
     child_name = "/test-user/parent/child"
     service.launch_job(make_job_request("parent"), None)
@@ -632,7 +539,7 @@ def test_existing_job_policy_keep_replaces_after_drain_wait(service, state, monk
     must not block the new submission forever. After the drain wait elapses
     it logs a warning, CASCADE-deletes the predecessor, and proceeds with
     the replacement. (Earlier behavior raised DEADLINE_EXCEEDED.)"""
-    monkeypatch.setattr(service_module, "_JOB_REPLACEMENT_DRAIN_WAIT", Duration.from_seconds(1))
+    monkeypatch.setattr(jobs_module, "_JOB_REPLACEMENT_DRAIN_WAIT", Duration.from_seconds(1))
 
     child_name = "/test-user/parent/child"
     service.launch_job(make_job_request("parent"), None)
@@ -1419,6 +1326,7 @@ def test_register_allows_worker_role(state, mock_controller, tmp_path, log_clien
 
 def test_get_scheduler_state_with_running_task(controller_service, state):
     """get_scheduler_state aggregates a running task into a (band, user, worker, job) bucket."""
+    email = "alice@example.com"
     # Submit a job and move a task to RUNNING
     job_id = JobName.root("alice", "sched-test")
     request = controller_pb2.Controller.LaunchJobRequest(
@@ -1429,7 +1337,13 @@ def test_get_scheduler_state_with_running_task(controller_service, state):
         replicas=1,
     )
     with state._db.transaction() as cur:
-        submit_job_in_tx(cur, job_id=job_id, request=request, ts=Timestamp.now())
+        submit_job_in_tx(
+            cur,
+            job_id=job_id,
+            request=request,
+            ts=Timestamp.now(),
+            submitting_user=email,
+        )
 
     w1 = WorkerId("w1")
     with state._db.transaction() as cur:
@@ -1460,13 +1374,12 @@ def test_get_scheduler_state_with_running_task(controller_service, state):
         assert len(resp.running_buckets) == 1
         bucket = resp.running_buckets[0]
         assert bucket.job_id == job_id.to_wire()
-        assert bucket.user_id == "alice"
+        assert bucket.user_id == email
         assert bucket.worker_id == "w1"
         assert bucket.count == 1
-        # alice has no explicit user_budgets row but has an active task — the
-        # scheduler state must report her spend using UserBudgetDefaults so the
-        # dashboard renders Spent/Limit/Utilization instead of '-'.
-        alice_budget = next((b for b in resp.user_budgets if b.user_id == "alice"), None)
+        # The email has no explicit user_budgets row but has an active task. The
+        # scheduler state must apply UserBudgetDefaults to that principal.
+        alice_budget = next((b for b in resp.user_budgets if b.user_id == email), None)
         assert alice_budget is not None
         assert alice_budget.budget_spent > 0
         assert alice_budget.budget_limit == UserBudgetDefaults().budget_limit
@@ -1486,7 +1399,7 @@ CONTROLLER_BUILD = date(2026, 5, 1)
 
 @pytest.fixture
 def controller_build(monkeypatch):
-    monkeypatch.setattr(service_module, "client_revision_date", lambda: CONTROLLER_BUILD.isoformat())
+    monkeypatch.setattr(jobs_module, "client_revision_date", lambda: CONTROLLER_BUILD.isoformat())
 
 
 @pytest.mark.parametrize(
@@ -1551,7 +1464,7 @@ def test_launch_job_admits_a_client_as_old_as_the_controller_itself(service, mon
     that case admissible, where a floor of ``today - FRESHNESS_WINDOW`` rejected it.
     """
     stale_build = (date.today() - timedelta(days=60)).isoformat()
-    monkeypatch.setattr(service_module, "client_revision_date", lambda: stale_build)
+    monkeypatch.setattr(jobs_module, "client_revision_date", lambda: stale_build)
     request = make_job_request("quiet-tree")
     request.client_revision_date = stale_build
 
@@ -1565,7 +1478,7 @@ def test_launch_job_measures_from_today_when_the_controller_cannot_identify_its_
     Abstaining instead would silently disable the gate on every cluster until its
     controller is rebuilt, which is the window where it is least safe to lose.
     """
-    monkeypatch.setattr(service_module, "client_revision_date", lambda: "")
+    monkeypatch.setattr(jobs_module, "client_revision_date", lambda: "")
     stale = make_job_request("no-controller-build")
     stale.client_revision_date = "2000-01-01"
 

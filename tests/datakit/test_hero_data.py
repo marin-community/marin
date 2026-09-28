@@ -22,7 +22,7 @@ from experiments.datakit.cluster.quality.fast_transformer import run as quality_
 
 PREFIX = hero_data.MANIFEST_PREFIX
 MANIFEST = hero_data.manifest_path()
-PINNED_STAGES = ("harrier", "fusion_scores", "content_type")
+PINNED_STAGES = ("harrier", "fusion_scores", "content_type", "decontam")
 
 
 @pytest.fixture(autouse=True)
@@ -64,6 +64,13 @@ def test_pinned_leaves_resolve_under_the_prefix():
     assert hero_data.content_type(focus).output_path.startswith(f"{PREFIX}/datakit/content-type/{focus}_")
 
 
+def test_decontam_paths_are_pinned_to_the_v4_run():
+    # Where v4-final-20260815 wrote. Current code resolves a different hash once the
+    # marking rule changes, which is why these are pinned and not recomputed.
+    expected = f"{PREFIX}/datakit/decontam/stack-v3_86eaa592"
+    assert hero_data.decontaminated("stack-v3").output_path == expected
+
+
 def test_every_registered_source_has_every_stage():
     keys = set(_relative_paths())
     missing = {
@@ -72,6 +79,7 @@ def test_every_registered_source_has_every_stage():
         for stage in (
             "normalized",
             "minhash",
+            "decontam",
             "tokenize.marin",
             "tokenize.nemotron",
             "harrier",
@@ -91,6 +99,7 @@ def test_steps_refuse_to_run():
         hero_data.normalized("stack-v3"),
         hero_data.tokenized("stack-v3", hero_data.MARIN_TOKENIZER),
         hero_data.minhash("stack-v3"),
+        hero_data.decontaminated("stack-v3"),
         hero_data.exact_dups(),
         hero_data.fuzzy_dups(),
         hero_data.domain_cluster_assignment(),

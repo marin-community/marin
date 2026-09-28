@@ -1,21 +1,21 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Typed eval-output artifact + report aggregation: read metrics back through the artifact.
+"""Read current FineStore and historical Evalchemy metrics into typed reports.
 
-Each toy fixture writes the on-disk shape evalchemy's real producer writes — lm-eval's native
-``<task_dir>/<model>/results_<ts>.json`` tree — so reading through the typed accessor and compiling a
-report exercises the real round-trip without running an eval. The fixtures pin the behaviour that
-matters: metrics are keyed by the upload dir (unique per task-config), not by the bare task name
-lm-eval writes inside the JSON, so shot variants of one task do not overwrite each other.
+Historical fixtures use lm-eval's ``<task_dir>/<model>/results_<ts>.json`` tree. Current fixtures
+store the same results artifacts in FineStore. Both readers key metrics by the task-config
+directory so shot variants of one task do not overwrite each other.
 """
 
 import json
 
 import fsspec
 import pytest
+from finestore.eval import EvaluationStore
 from marin.evaluation.evalchemy.result import (
     EvalchemyResult,
+    FineStoreEvalchemyResult,
     ReportEntry,
     compile_eval_report,
 )
@@ -47,7 +47,7 @@ def _step(name: str, kind: type, files: dict[str, object]) -> ArtifactStep:
     )
 
 
-# evalchemy's aggregated output: one results_<ts>.json per task-config, nested under <task_dir>/<model>/.
+# Evalchemy's results output: one results_<ts>.json per task-config, nested under <task_dir>/<model>/.
 # lm-eval keys its `results` block by the bare task name, so both hellaswag shot variants say "hellaswag".
 _GSM8K = {"results": {"gsm8k": {"exact_match,none": 0.3, "exact_match_stderr,none": 0.02, "alias": "gsm8k"}}}
 _ARC = {"results": {"arc_easy": {"acc,none": 0.5, "acc_norm,none": 0.66, "alias": "arc_easy"}}}
@@ -60,6 +60,37 @@ _MMLU = {
         "mmlu_stem": {"acc,none": 0.38, "alias": " - stem"},
     }
 }
+
+
+def test_finestore_evalchemy_result_reads_evalchemy_results_artifacts(tmp_path):
+    root = str(tmp_path / "archive")
+    store = EvaluationStore.open(root, writer_id="evalchemy")
+    try:
+        store.add_source_artifact(
+            "evalchemy/gsm8k_8shot/native/results_gsm8k.json",
+            json.dumps(_GSM8K).encode(),
+            content_type="application/json",
+        )
+        store.add_source_artifact(
+            "evalchemy/mmlu_5shot/native/results_mmlu.json",
+            json.dumps(_MMLU).encode(),
+            content_type="application/json",
+        )
+        store.seal()
+    finally:
+        store.close()
+
+    expected = {
+        "gsm8k_8shot": {"exact_match,none": 0.3, "exact_match_stderr,none": 0.02},
+        "mmlu_5shot/mmlu": {"acc,none": 0.41},
+        "mmlu_5shot/mmlu_stem": {"acc,none": 0.38},
+    }
+
+    report = compile_eval_report(
+        [ReportEntry(root, result_type_name(FineStoreEvalchemyResult), "evalchemy")],
+        str(tmp_path / "report"),
+    )
+    assert report.task_metrics == expected
 
 
 def test_evalchemy_result_keys_by_task_dir(tmp_path, monkeypatch):

@@ -15,10 +15,10 @@ from unittest.mock import MagicMock
 
 import cloudpickle
 import pytest
+import zephyr.coordinator as coordinator_module
 from fray.actor import ActorContext
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
-from rigging import telemetry
 from zephyr import counters
 from zephyr.context import (
     _NON_RETRYABLE_ERRORS,
@@ -372,8 +372,8 @@ def test_pull_task_rotates_between_executions(coordinator):
 def test_duplicate_execution_id_joins_terminal_execution(coordinator):
     """A repeated execution ID returns the retained terminal result."""
     plan = compute_plan(Dataset.from_list([]))
-    coordinator.run_pipeline(plan, "same-run", TEST_TASK_COST, TEST_TASK_COST)
-    coordinator.run_pipeline(plan, "same-run", TEST_TASK_COST, TEST_TASK_COST)
+    coordinator.run_pipeline(plan, "same-run", "test", TEST_TASK_COST, TEST_TASK_COST)
+    coordinator.run_pipeline(plan, "same-run", "test", TEST_TASK_COST, TEST_TASK_COST)
     assert list(coordinator._executions) == ["same-run"]
 
 
@@ -615,7 +615,7 @@ def test_log_status_omits_throughput_when_counters_missing(coordinator, caplog):
     assert all("items=" not in m and "bytes_processed=" not in m for m in msgs), msgs
 
     # Once a counter snapshot exists, the throughput segment reappears.
-    coordinator._worker_counters["worker-A"] = CounterSnapshot(
+    coordinator._worker_counters[("worker-A", TEST_EXECUTION_ID)] = CounterSnapshot(
         counters={ZEPHYR_STAGE_ITEM_COUNT_KEY: CounterEntry(7, stage="map_only")}, generation=1
     )
     with caplog.at_level(logging.INFO, logger="zephyr.coordinator"):
@@ -625,7 +625,7 @@ def test_log_status_omits_throughput_when_counters_missing(coordinator, caplog):
     assert msgs and "items=7" in msgs[-1] and "bytes_processed=0 bytes" in msgs[-1], msgs
 
     # Same when only the byte counter is present.
-    coordinator._worker_counters["worker-A"] = CounterSnapshot(
+    coordinator._worker_counters[("worker-A", TEST_EXECUTION_ID)] = CounterSnapshot(
         counters={ZEPHYR_STAGE_BYTES_PROCESSED_KEY: CounterEntry(1024, stage="map_only")}, generation=2
     )
     with caplog.at_level(logging.INFO, logger="zephyr.coordinator"):
@@ -714,7 +714,7 @@ def test_progress_metric_resets_at_stage_start_and_advances_after_a_shard(coordi
             if self.name == ZEPHYR_PROGRESS_TIME_METRIC:
                 emitted.append((value, attributes))
 
-    monkeypatch.setattr(telemetry, "gauge", lambda name, **kwargs: Gauge(name))
+    monkeypatch.setattr(coordinator_module.telemetry, "gauge", lambda name, **_kwargs: Gauge(name))
     start_test_stage(coordinator, [task])
     coordinator._publish_telemetry()
     assert emitted[-1][0] == 1_000.0
@@ -759,7 +759,7 @@ def test_progress_metric_isolated_between_executions(coordinator, monkeypatch):
         def set(self, value, *, attributes=None):
             emitted.append((self.name, value, attributes))
 
-    monkeypatch.setattr(telemetry, "gauge", lambda name, **kwargs: Gauge(name))
+    monkeypatch.setattr(coordinator_module.telemetry, "gauge", lambda name, **_kwargs: Gauge(name))
     coordinator._publish_telemetry()
     progress = {attributes["run"]: value for name, value, attributes in emitted if name == ZEPHYR_PROGRESS_TIME_METRIC}
     assert progress == {"run-1": 1_000.0, "run-2": 2_000.0}
@@ -1625,6 +1625,7 @@ def test_registration_retries_a_failed_rpc_and_waits_out_a_slow_one():
     rpc = _RegistrationRpc()
     worker = ZephyrWorker.__new__(ZephyrWorker)
     worker._coordinator = MagicMock(register_worker=rpc)
+    worker._task_id = ""
     worker._worker_id = "test-worker-0"
     worker._actor_handle = MagicMock()
     worker._memory_store = MagicMock()

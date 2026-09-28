@@ -59,6 +59,7 @@ from zephyr.stage_io import (
     ZephyrWorkerError,
     _shared_data_path,
 )
+from zephyr.stats import StatsConfig
 from zephyr.worker import ZephyrWorker
 from zephyr.writers import ensure_parent_dir
 
@@ -256,13 +257,15 @@ class ZephyrContext:
         max_concurrent_pipelines: Maximum pipelines one pool runs at the same
             time. A pipeline past the limit is rejected, not queued. Raise it
             for a driver that fans many pipelines onto one shared pool.
+        stats_config: Explicit Finelog endpoint for local reporting.
+            When absent, discover Finelog through the Iris context.
     """
 
     client: Client | None = None
     max_workers: int | None = None
     resources: ResourceConfig | None = None
     coordinator_resources: ResourceConfig = field(
-        default_factory=lambda: ResourceConfig(cpu=0.1, ram="1g", preemptible=False)
+        default_factory=lambda: ResourceConfig(cpu=0.1, ram="4g", preemptible=False)
     )
     chunk_storage_prefix: str | None = None
     name: str = ""
@@ -273,6 +276,7 @@ class ZephyrContext:
     max_shard_failures: int = MAX_SHARD_FAILURES
     max_shard_infra_failures: int = MAX_SHARD_INFRA_FAILURES
     max_concurrent_pipelines: int = MAX_CONCURRENT_PIPELINES
+    stats_config: StatsConfig | None = None
 
     _shared_data: ContextVar[dict[str, Any] | None] = field(init=False, repr=False)
     _state: _ContextState = field(init=False, default=_ContextState.NEW, repr=False)
@@ -511,14 +515,22 @@ class ZephyrContext:
             max_shard_infra_failures=self.max_shard_infra_failures,
             drain_idle_workers=idle_policy is _IdleWorkerPolicy.DRAIN,
             max_concurrent_pipelines=self.max_concurrent_pipelines,
+            expected_workers=worker_count,
+            stats_config=self.stats_config,
             name=coordinator_name,
             count=1,
             resources=self.coordinator_resources,
             actor_config=ActorConfig(max_concurrency=100),
         )
-        coordinator: ActorHandle | None = None
         try:
             coordinator = coordinator_group.wait_ready(count=1)[0]
+        except Exception:
+            with suppress(Exception):
+                coordinator_group.shutdown()
+            raise
+
+        pool = _OwnedPool(coordinator_group, coordinator, worker_count)
+        try:
             # The coordinator creates the workers so they land in a child job of its
             # own and Iris cascading termination retires them with it.
             coordinator.start_workers.remote(
@@ -531,15 +543,9 @@ class ZephyrContext:
             ).result()
             ready_wait = float(os.environ.get("ZEPHYR_WORKERS_READY_WAIT") or 12 * 60 * 60)
             coordinator.worker_handles.remote(1, ready_wait).result(timeout=ready_wait)
-            return _OwnedPool(coordinator_group, coordinator, worker_count)
+            return pool
         except Exception:
-            if coordinator is not None:
-                with suppress(Exception):
-                    coordinator.stop_workers.remote().result(timeout=30.0)
-                with suppress(Exception):
-                    coordinator.shutdown.remote().result(timeout=10.0)
-            with suppress(Exception):
-                coordinator_group.shutdown()
+            pool.shutdown()
             raise
 
     def start(self) -> "ZephyrContext":
@@ -567,6 +573,7 @@ class ZephyrContext:
             coordinator.run_pipeline.submit(
                 plan,
                 execution_id,
+                self.name,
                 ZephyrTaskResources.from_resource_config(map_task_resources),
                 ZephyrTaskResources.from_resource_config(reduce_task_resources),
             ).result()
@@ -675,7 +682,6 @@ class ZephyrContext:
                 time.sleep(delay)
             finally:
                 if pool is not None:
-                    assert self.client is not None
                     pool.shutdown()
                 _cleanup_execution(self.chunk_storage_prefix, execution_id)
 
@@ -695,7 +701,6 @@ class ZephyrContext:
             self._coordinator = None
             self._state = _ContextState.CLOSED
 
-        assert self.client is not None
         pool.shutdown()
 
     def __enter__(self) -> "ZephyrContext":

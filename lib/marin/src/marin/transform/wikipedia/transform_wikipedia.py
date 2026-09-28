@@ -15,12 +15,13 @@ from dataclasses import dataclass
 
 import draccus
 from bs4 import BeautifulSoup
-from marin.schemas.web.convert import ExtractionConfig
-from marin.web.convert import convert_page
 from rigging.filesystem.storage_path import StoragePath
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.readers import load_jsonl
+
+from marin.schemas.web.convert import ExtractionConfig
+from marin.web.convert import convert_page
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,6 @@ class WikiExtractionConfig:
     input_path: The path to the Wikipedia dump file or directory containing the dump files in JSONL format
     output_path: The path where the processed text/markdown files will be saved
     revision: The revision identifier of the Wikipedia dump (e.g., "20241201") for versioning and tracking
-    extract_method: The method to use for HTML extraction (e.g., "readability", "resiliparse", "trafilatura")
     extract_config: Configuration object for the extraction method (e.g., ResiliparseConfig, HtmlToMarkdownConfig)
     remove_reference_section: If True, removes reference sections from articles to reduce noise in the extracted text
     max_files: Optional limit on the number of files to process, useful for testing or partial processing
@@ -46,7 +46,6 @@ class WikiExtractionConfig:
     input_path: str
     output_path: str
     revision: str
-    extract_method: str
     extract_config: ExtractionConfig
     remove_reference_section: bool
     max_files: int | None = None
@@ -55,12 +54,10 @@ class WikiExtractionConfig:
     special_char_threshold: int = 50
 
 
-def remove_and_append_infobox(html: str) -> str:
+def remove_and_append_infobox(soup: BeautifulSoup) -> None:
     """
     Wraps the infobox in a new section with heading 'InfoBox' and appends it to the end of the article.
     """
-    soup = BeautifulSoup(html, "html.parser")
-
     infobox = soup.find("table", {"class": "infobox"})
     if infobox:
         # Remove the infobox from its current position
@@ -83,15 +80,11 @@ def remove_and_append_infobox(html: str) -> str:
         else:
             soup.append(notes_section)
 
-    return str(soup)
 
-
-def remove_references_from_html(html: str) -> str:
+def remove_references(soup: BeautifulSoup) -> None:
     """
     Removes the references list and heading from the article.
     """
-    soup = BeautifulSoup(html, "html.parser")
-
     reflist = soup.find("div", {"class": "reflist"})
     if reflist:
         reflist.extract()
@@ -100,13 +93,10 @@ def remove_references_from_html(html: str) -> str:
     if ref_heading:
         ref_heading.extract()
 
-    return str(soup)
 
-
-def unwrap_eqn(html: str):
+def unwrap_eqn(soup: BeautifulSoup) -> None:
     """Extract equations from math elements and convert to LaTeX inline/block quotes,
     wrapping display math in <p> tags."""
-    soup = BeautifulSoup(html, "html.parser")
     # Find all annotations containing equations
     annotations = soup.find_all("annotation", {"encoding": "application/x-tex"})
 
@@ -171,8 +161,6 @@ def unwrap_eqn(html: str):
             formatted_latex = f"{left_space}${latex}$"
             span_element.replace_with(formatted_latex)
 
-    return str(soup)
-
 
 def postprocess_content(
     content: str, digit_threshold: int, word_threshold: int, special_char_threshold: float
@@ -202,18 +190,19 @@ def clean_wiki_html(html: str, remove_reference_section: bool = True) -> str:
     """
     Cleans the HTML by removing unwanted elements.
     """
-    html = unwrap_eqn(html)
-    html = remove_and_append_infobox(html)
+    soup = BeautifulSoup(html, "html.parser")
+
+    unwrap_eqn(soup)
+    remove_and_append_infobox(soup)
 
     if remove_reference_section:
-        html = remove_references_from_html(html)
+        remove_references(soup)
 
-    return html
+    return str(soup)
 
 
 def process_record(
     row: dict,
-    extract_method: str,
     extract_config: ExtractionConfig,
     remove_reference_section: bool = True,
     digit_threshold: int = 50,
@@ -224,7 +213,6 @@ def process_record(
 
     Args:
         row: Record from NDJSON file
-        extract_method: Method to use for HTML extraction
         extract_config: Configuration for the extraction method
         remove_reference_section: Whether to remove reference sections
         digit_threshold: Percentage threshold for filtering pages with excessive digits
@@ -242,7 +230,7 @@ def process_record(
             html_string = row["article_body"]["html"]
 
             filtered_html = clean_wiki_html(html_string, remove_reference_section)
-            content = convert_page(filtered_html, extract_method=extract_method, config=extract_config)["content"]
+            content = convert_page(filtered_html, config=extract_config)["content"]
         else:
             logger.error(f"No content found in the row: {row}")
             return None
@@ -287,7 +275,6 @@ def process_wiki_dump(cfg: WikiExtractionConfig) -> None:
         .map(
             lambda row: process_record(
                 row,
-                cfg.extract_method,
                 cfg.extract_config,
                 cfg.remove_reference_section,
                 cfg.digit_threshold,

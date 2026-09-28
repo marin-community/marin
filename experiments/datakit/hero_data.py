@@ -23,12 +23,15 @@ or use it as a dependency of a step you do intend to run::
 as the registry moves. :func:`tokenized` pins the artifact version instead,
 because the tokenize hash includes one and it has changed under the runs that
 produced this data: each tokenizer was applied to the whole registry in a single
-fleet run, and each of those runs wrote a different version. The dedup stages
-and domain cluster assignment are pinned to specific runs outright, as are the
-three leaves whose producers ran from branches: :func:`harrier`,
-:func:`fusion_scores` and :func:`content_type` read fixed source-to-path maps
-from JSON files beside this module. :func:`quality` is the bucket step over the
-pinned scores and types, so its path recomputes from that step's identity.
+fleet run, and each of those runs wrote a different version. The dedup stages,
+domain cluster assignment and decontamination are pinned to specific runs
+outright, as are the three leaves whose producers ran from branches:
+:func:`harrier`, :func:`fusion_scores` and :func:`content_type`. Those and
+:func:`decontaminated` read fixed source-to-path maps from JSON files beside this
+module; decontamination has its own because the marking rule is still under
+review and every mark hangs off two shared upstream steps. :func:`quality` is the
+bucket step over the pinned scores and types, so its path recomputes from that
+step's identity.
 
 All paths resolve against ``MARIN_PREFIX``. CoreWeave Datakit has one storage
 root, ``s3://marin-us-east-02a/marin``; use it regardless of worker placement.
@@ -68,6 +71,7 @@ _PINNED_MAP_FILES = {
     "harrier": "hero_data_emb_paths.json",
     "fusion_scores": "hero_data_fusion_score_paths.json",
     "content_type": "hero_data_content_type_paths.json",
+    "decontam": "hero_data_decontam_paths.json",
 }
 
 
@@ -261,6 +265,18 @@ def quality(source: str, quality_model: QualityPin = NEMOTRON_88K) -> StepSpec:
     return _read_only(quality_step_for(source, quality_model))
 
 
+def decontaminated(source: str) -> StepSpec:
+    """Return the pinned decontamination attributes for ``source``.
+
+    A mark's hash covers its eval Bloom and drop-set dependencies, not just its
+    own config, so a change to the marking rule rekeys those two shared steps
+    and repoints all 292 marks at once. The ``v4-final-20260815`` outputs stay
+    where they are, so resolving from current code would hand out paths with
+    nothing behind them.
+    """
+    return _frozen_step(f"hero/decontam/{source}", pinned_map("decontam")[source])
+
+
 def exact_dups() -> StepSpec:
     """Return the pinned global exact-duplicate attributes covering every source."""
     return _frozen_step("hero/exact_dups", f"datakit/{EXACT_DUPS_ID}")
@@ -326,6 +342,7 @@ def all_paths() -> dict[str, str]:
     for source in sorted(sources):
         paths[f"normalized/{source}"] = _read_only(sources[source]).output_path
         paths[f"minhash/{source}"] = _read_only(minhash_steps[source]).output_path
+        paths[f"decontam/{source}"] = decontaminated(source).output_path
         paths[f"tokenize.marin/{source}"] = tokenized(source, MARIN_TOKENIZER).output_path
         paths[f"tokenize.nemotron/{source}"] = tokenized(source, NEMOTRON_TOKENIZER).output_path
         paths[f"harrier/{source}"] = harrier(source).output_path

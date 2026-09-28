@@ -3,6 +3,8 @@
 
 """Shared expert-parallel routing helpers for Grug MoE."""
 
+from typing import NamedTuple
+
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Bool, Float, Int
@@ -37,13 +39,20 @@ def _sort_activations_custom_bwd(
 _sort_activations_custom.defvjp(_sort_activations_custom_fwd, _sort_activations_custom_bwd)
 
 
-def _ranks_within_groups(group_ids: Int[Array, "N"], *, num_groups: int) -> Int[Array, "N"]:
-    """Return the zero-based rank of each item in its group."""
-    order = jnp.argsort(group_ids, stable=True)
+def _ranks_within_groups(
+    group_ids: Int[Array, "N"],
+    *,
+    num_groups: int,
+    valid: Bool[Array, "N"],
+) -> Int[Array, "N"]:
+    """Return each valid item's zero-based group rank; invalid ranks are unspecified."""
+    sortable_groups = jnp.where(valid, group_ids, num_groups)
+    safe_groups = jnp.where(valid, group_ids, 0)
+    order = jnp.argsort(sortable_groups, stable=True)
     inverse_order = jnp.argsort(order)
-    counts = jnp.bincount(group_ids, length=num_groups).astype(jnp.int32)
+    counts = jnp.bincount(sortable_groups, length=num_groups).astype(jnp.int32)
     starts = jnp.cumsum(counts) - counts
-    sorted_ranks = jnp.arange(group_ids.shape[0], dtype=jnp.int32) - starts[group_ids[order]]
+    sorted_ranks = jnp.arange(group_ids.shape[0], dtype=jnp.int32) - starts[safe_groups[order]]
     return sorted_ranks[inverse_order]
 
 
@@ -76,96 +85,17 @@ def _token_sources(
     )
 
 
-def _prefix_cap_counts(counts: Int[Array, "E"], *, capacity: int) -> Int[Array, "E"]:
-    accepted = []
-    remaining = jnp.array(capacity, dtype=jnp.int32)
-    for expert in range(int(counts.shape[0])):
-        take = jnp.minimum(counts[expert], remaining)
-        accepted.append(take)
-        remaining = jnp.maximum(remaining - take, 0)
-    return jnp.stack(accepted, axis=0)
-
-
-def _permute_by_global_expert(
-    x_local: Float[Array, "Tlocal H"],
-    selected_experts_local: Int[Array, "Tlocal K"],
-    *,
-    num_experts: int,
-) -> tuple[Float[Array, "TK H"], Int[Array, "TK"], Int[Array, "E"]]:
-    topk = selected_experts_local.shape[1]
-    flat_selected = selected_experts_local.reshape(-1)
-    sorted_indices = jnp.argsort(flat_selected)
-    repeated_x = jnp.repeat(x_local, topk, axis=0)
-    sorted_x = _sort_activations(repeated_x, sorted_indices)
-    group_sizes = jnp.bincount(flat_selected, length=num_experts).astype(jnp.int32)
-    return sorted_x, sorted_indices, group_sizes
-
-
-def _unpermute_from_global_expert(
-    intermediate: Float[Array, "TK H"],
-    sorted_indices: Int[Array, "TK"],
-    combine_weights_local: Float[Array, "Tlocal K"],
-    *,
-    tokens_per_shard: int,
-    topk: int,
-) -> Float[Array, "Tlocal H"]:
-    unsorted = _sort_activations(intermediate, jnp.argsort(sorted_indices))
-    reshaped = unsorted.reshape(tokens_per_shard, topk, -1)
-    return jnp.einsum(
-        "tkd,tk->td", reshaped, combine_weights_local.astype(reshaped.dtype), preferred_element_type=jnp.float32
-    )
-
-
-def _shard_a2a_params(
-    shard_counts: Int[Array, "S S"],
-    shard_id: Int[Array, ""],
-) -> tuple[Int[Array, "S"], Int[Array, "S"], Int[Array, "S"], Int[Array, "S"]]:
-    row = shard_counts[shard_id]
-    input_offsets = jnp.cumsum(jnp.concatenate((jnp.array([0], dtype=row.dtype), row[:-1])))
-    send_sizes = row
-
-    recv_sizes = shard_counts[:, shard_id]
-    # `ragged_all_to_all` expects sender-side output offsets: for each
-    # destination shard, where this sender's slice should land in the remote
-    # receiver buffer. JAX computes the local receive offsets by transposing
-    # these offsets with an internal all_to_all.
-    sender_output_offsets = jnp.cumsum(shard_counts, axis=0, dtype=shard_counts.dtype) - shard_counts
-    output_offsets = sender_output_offsets[shard_id]
-    return input_offsets, send_sizes, output_offsets, recv_sizes
-
-
-def _local_permute_from_counts(
-    inputs: Float[Array, "C H"],
-    global_group_sizes: Int[Array, "S E"],
-    *,
-    local_expert_size: int,
-    shard_index: Int[Array, ""],
-) -> tuple[Float[Array, "C H"], Int[Array, "C"], Int[Array, "Elocal"]]:
-    all_shard_local_sizes = jax.lax.dynamic_slice_in_dim(
-        global_group_sizes,
-        start_index=shard_index * local_expert_size,
-        slice_size=local_expert_size,
-        axis=1,
-    )
-    local_group_sizes = jnp.sum(all_shard_local_sizes, axis=0)
-    local_sizes = all_shard_local_sizes.reshape(-1)
-    total_valid = jnp.sum(local_sizes, dtype=jnp.int32)
-    segment_ends = jnp.cumsum(local_sizes, dtype=jnp.int32)
-    positions = jnp.arange(inputs.shape[0], dtype=jnp.int32)
-    segment_index = jnp.searchsorted(segment_ends, positions, side="right")
-    local_expert_ids = jnp.where(positions < total_valid, segment_index % local_expert_size, local_expert_size)
-    sorted_indices = jnp.argsort(local_expert_ids)
-    sorted_inputs = _sort_activations(inputs, sorted_indices)
-    sorted_inputs = jnp.where((positions < total_valid)[:, None], sorted_inputs, 0)
-    group_sizes = local_group_sizes.at[-1].add(inputs.shape[0] - total_valid)
-    return sorted_inputs, sorted_indices, group_sizes
+def _prefix_cap_counts(counts: Int[Array, "*batch E"], *, capacity: int | Int[Array, ""]) -> Int[Array, "*batch E"]:
+    """Allocate capacity in order along the last axis, independently for each batch."""
+    starts = jnp.cumsum(counts, axis=-1, dtype=jnp.int32) - counts
+    return jnp.minimum(counts, jnp.maximum(jnp.asarray(capacity, dtype=jnp.int32) - starts, 0))
 
 
 def _clip_receiver_group_sizes(
     global_group_sizes: Int[Array, "S E"],
     *,
     local_expert_size: int,
-    receiver_capacity: int,
+    receiver_capacity: int | Int[Array, ""],
 ) -> Int[Array, "S E"]:
     """Clip sender->expert group sizes so each receiver shard stays within capacity."""
     num_senders = int(global_group_sizes.shape[0])
@@ -176,55 +106,82 @@ def _clip_receiver_group_sizes(
     if num_receivers != num_senders:
         raise ValueError(f"sender/receiver shard mismatch: num_senders={num_senders}, num_receivers={num_receivers}")
 
-    clipped_by_receiver: list[jax.Array] = []
-    for receiver_index in range(num_receivers):
-        start = receiver_index * local_expert_size
-        stop = start + local_expert_size
-        receiver_counts = global_group_sizes[:, start:stop]
-        receiver_totals = jnp.sum(receiver_counts, axis=0, dtype=jnp.int32)
-        accepted_totals = _prefix_cap_counts(receiver_totals, capacity=receiver_capacity)
-        remaining = accepted_totals
-        accepted_rows: list[jax.Array] = []
-        for sender_index in range(num_senders):
-            # Greedy first-sender-wins: earlier shards get priority when capacity is scarce.
-            accepted = jnp.minimum(receiver_counts[sender_index], remaining)
-            accepted_rows.append(accepted)
-            remaining = remaining - accepted
-        clipped_by_receiver.append(jnp.stack(accepted_rows, axis=0))
-
-    return jnp.concatenate(clipped_by_receiver, axis=1)
+    # Each receiver prioritizes earlier experts, then earlier senders within each expert.
+    # Batch receivers so traced capacities do not produce a separate kernel chain for each one.
+    receiver_counts = global_group_sizes.reshape(num_senders, num_receivers, local_expert_size)
+    receiver_counts = receiver_counts.transpose(1, 2, 0).reshape(num_receivers, -1)
+    accepted = _prefix_cap_counts(receiver_counts, capacity=receiver_capacity)
+    return (
+        accepted.reshape(num_receivers, local_expert_size, num_senders)
+        .transpose(2, 0, 1)
+        .reshape(global_group_sizes.shape)
+    )
 
 
-def _expert_prefix_keep_mask(
-    group_sizes: Int[Array, "E"],
-    accepted_group_sizes: Int[Array, "E"],
+class ExpertA2aParams(NamedTuple):
+    """Offset/size vectors for one direction of an expert-granular ``ragged_all_to_all``."""
+
+    input_offsets: Int[Array, "U"]
+    send_sizes: Int[Array, "U"]
+    output_offsets: Int[Array, "U"]
+    recv_sizes: Int[Array, "U"]
+
+
+def _expert_granular_a2a_params(
+    all_group_sizes: Int[Array, "S E"],
+    clipped_group_sizes: Int[Array, "S E"],
+    shard_id: Int[Array, ""],
     *,
-    total_size: int,
-) -> Bool[Array, "TK"]:
-    segment_ends = jnp.cumsum(group_sizes, dtype=jnp.int32)
-    segment_starts = jnp.concatenate((jnp.array([0], dtype=segment_ends.dtype), segment_ends[:-1]))
-    positions = jnp.arange(total_size, dtype=jnp.int32)
-    expert_index = jnp.searchsorted(segment_ends, positions, side="right")
-    # Explicitly clip overflow positions to the last segment rather than
-    # depending on implicit out-of-bounds `jnp.take` behavior. Those clipped
-    # positions will have local_rank >= accepted, so they are masked out.
-    expert_index = jnp.minimum(expert_index, group_sizes.shape[0] - 1)
-    local_rank = positions - segment_starts[expert_index]
-    accepted = accepted_group_sizes[expert_index]
-    return local_rank < accepted
+    local_expert_size: int,
+) -> tuple[ExpertA2aParams, ExpertA2aParams]:
+    """Build dispatch and return ``ragged_all_to_all`` parameters at (peer, expert) granularity.
 
+    One update per (destination shard, local expert). Sender reads each global-expert
+    group at its *unclipped* offset with its *clipped* size, so accepted rows need no
+    compaction: they are the prefix of each group. Receiver offsets pack arriving rows
+    expert-major (sender-major within each expert), so the received buffer needs no local
+    permute before the grouped MLP. The return direction is the exact mirror: it reads the
+    expert-major receiver buffer and writes valid prefixes back to the sender's unclipped
+    positions, leaving dropped rows at the output operand's values.
+    """
+    num_shards = all_group_sizes.shape[0]
 
-def _compact_by_keep_mask(inputs: Float[Array, "N *tail"], keep_mask: Bool[Array, "N"]) -> Float[Array, "N *tail"]:
-    total_size = inputs.shape[0]
-    positions = jnp.arange(total_size, dtype=jnp.int32)
-    sort_key = jnp.where(keep_mask, positions, positions + total_size)
-    compacted = _sort_activations(inputs, jnp.argsort(sort_key))
-    valid = positions < jnp.sum(keep_mask.astype(jnp.int32), dtype=jnp.int32)
-    return jnp.where(valid[:, None], compacted, 0)
+    # [src, dest, e]: rows sender `src` contributes to `dest`'s local expert `e`.
+    clipped = clipped_group_sizes.reshape(num_shards, num_shards, local_expert_size)
 
+    # Sender side: unclipped group starts in this shard's expert-sorted buffer.
+    unclipped_starts = jnp.cumsum(all_group_sizes, axis=1) - all_group_sizes
+    my_send = clipped[shard_id]  # [dest, e]
+    dispatch_input_offsets = unclipped_starts[shard_id].reshape(num_shards, local_expert_size)
 
-def _expand_from_keep_mask(compacted: Float[Array, "N *tail"], keep_mask: Bool[Array, "N"]) -> Float[Array, "N *tail"]:
-    keep_i32 = keep_mask.astype(jnp.int32)
-    compact_index = jnp.cumsum(keep_i32, dtype=jnp.int32) - 1
-    gathered = jnp.take(compacted, jnp.maximum(compact_index, 0), axis=0)
-    return jnp.where(keep_mask[:, None], gathered, 0)
+    # Receiver side: expert-major segment starts on each destination, sender-major within.
+    dest_totals = jnp.sum(clipped, axis=0)  # [dest, e]
+    expert_starts = jnp.cumsum(dest_totals, axis=1) - dest_totals
+    senders_before_me = (jnp.cumsum(clipped, axis=0) - clipped)[shard_id]  # [dest, e]
+    dispatch_output_offsets = expert_starts + senders_before_me
+
+    # What each source sends this shard, source-major -- also the return direction's sends.
+    inbound = clipped[:, shard_id, :]  # [src, e]
+
+    dispatch = ExpertA2aParams(
+        dispatch_input_offsets.reshape(-1),
+        my_send.reshape(-1),
+        dispatch_output_offsets.reshape(-1),
+        inbound.reshape(-1),
+    )
+
+    # Return: read this shard's expert-major receiver buffer, write back to each original
+    # sender's unclipped sorted positions for the experts this shard owns.
+    my_expert_starts = expert_starts[shard_id]  # [e]
+    senders_before = jnp.cumsum(inbound, axis=0) - inbound  # [src, e]
+    return_input_offsets = my_expert_starts[None, :] + senders_before
+    my_global_experts = jnp.arange(local_expert_size, dtype=jnp.int32) + shard_id * local_expert_size
+    return_output_offsets = unclipped_starts[:, my_global_experts]  # [src, e]
+
+    ret = ExpertA2aParams(
+        return_input_offsets.reshape(-1),
+        inbound.reshape(-1),
+        return_output_offsets.reshape(-1),
+        my_send.reshape(-1),
+    )
+    return dispatch, ret

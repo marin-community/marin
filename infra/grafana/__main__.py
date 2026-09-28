@@ -150,6 +150,7 @@ def main() -> None:
             # Grafana 13's apiserver and search indexers run between requests and need CPU
             # while idle; the dashboards list hangs on them otherwise.
             cpu_always_allocated=True,
+            startup_cpu_boost=True,
             cpu="1",
             env=env,
             secrets=tuple(secrets),

@@ -26,7 +26,7 @@ Storage, and Cloudflare R2 buckets.
 
 Beyond cluster prerequisites, the `iac` package also carries the reusable *service* components
 other `infra/<service>/` Pulumi projects build on: `iac.gcp.cloud_run` (IAP-gated Cloud Run,
-used by `infra/echo`, `infra/evaldash`, and `infra/grafana`), `iac.iris` (always-on Iris
+used by `infra/marina` and `infra/grafana`), `iac.iris` (always-on Iris
 service jobs via a `local.Command` around the `iac.iris.deploy` CLI, used by `infra/ducky` and
 `infra/xprof`), and `iac.kubernetes.finelog` (a custom image plus stateful Kubernetes resources,
 used by [`infra/finelog`](../finelog/README.md)). The service components create runtime
@@ -37,19 +37,19 @@ client remains a component-owned IAP setting.
 ### Cloud Run IAP access
 
 For an access report, compare the live IAP policy and settings with the service declaration in
-`src/iac/gcp/{echo,evaldash,grafana}.py`:
+`src/iac/gcp/{marina,grafana}.py`:
 
 ```bash
 gcloud iap web get-iam-policy \
   --project=hai-gcp-models \
   --resource-type=cloud-run \
   --region=us-central1 \
-  --service=marin-evaldash
+  --service=marina
 gcloud iap settings get \
   --project=hai-gcp-models \
   --resource-type=cloud-run \
   --region=us-central1 \
-  --service=marin-evaldash
+  --service=marina
 ```
 
 `domain:openathena.ai` and
@@ -67,8 +67,9 @@ redirect trace and follow [Google's IAP troubleshooting guide](https://cloud.goo
 ### User grants
 
 A GCP user grant is applied by the `marin` stack. Shared grants and the encrypted principal
-registry live in `src/iac/gcp/iam_data.yaml`; Echo, EvalDash, Grafana, and Loom grants live in
-the adjacent deploy-target modules. Service stack config must not contain IAM members. The IAM
+registry live in `src/iac/gcp/iam_data.yaml`; backend-service IAP, Echo, EvalDash, Grafana, and
+Loom grants live in the adjacent deploy-target modules. Service stack config must not contain
+IAM members. The IAM
 YAML declares each human principal's KMS ciphertext once under an opaque `human-NNN` ID, and
 deploy-target modules reference that ID so one person's ciphertext cannot drift across roles.
 Two agent skills drive the flow so no personal email lands in this public repo unencrypted:
@@ -86,11 +87,15 @@ decrypting, or applying needs `roles/cloudkms.cryptoKeyEncrypterDecrypter` on th
 key ("Backend").
 
 The `marin` stack is the sole repository owner of grants on `hai-gcp-models`; application
-stacks and deploy scripts must not create or mutate IAM policy. The resources remain additive
-`*IAMMember` resources during inventory adoption. Import only grants confirmed by the
-live-policy audit, then convert them to authoritative role bindings in a separately reviewed
-change. Record code-declared grants that are absent live for a separate policy review instead
-of creating them during import.
+stacks and deploy scripts must not create or mutate IAM policy. Each `*IAMBinding` resource is
+authoritative for one role and optional condition on its target: Pulumi removes undeclared
+members from managed bindings while leaving other roles untouched. Audit live policy before
+adding or importing a managed binding so the declaration includes every intended member.
+
+`src/iac/gcp/iris.py` declares the authoritative Iris backend-service bindings. Echo, EvalDash,
+and Grafana declare their Cloud Run bindings in their own target modules. Each service lists its
+members directly so changing one policy cannot broaden another. Do not add
+`roles/iap.httpsResourceAccessor` at project scope; add access to the owning service declaration.
 
 GitHub organization and repository resources live in the independent
 [`github`](github/README.md) Pulumi project. Its stack YAML declares existing Actions secrets
@@ -113,8 +118,15 @@ Cluster infrastructure comes from the per-cluster Iris config
   `provisioning.coreweave.grafana_observer_rbac`. The stack binds those identities to `get`,
   `list`, and `watch` on Nodes and NodePools; the standard CoreWeave `read` group omits these
   cluster-inventory resources. Retain both identities during a token rotation.
-- Kueue's controller-manager memory request and limit default to `2Gi`.
-  `manager_memory_limit` accepts larger per-cluster values and rejects values below `2Gi`.
+- Loom's CoreWeave Managed Auth usernames from
+  `provisioning.coreweave.loom_session_rbac`. CoreWeave's CKS Viewer role supplies namespaced
+  read access, including `get` on `pods/log`. The stack adds only `create` on `pods/exec` and
+  `pods/portforward` in that cluster's Iris namespace. `pods/portforward` is required because
+  the Iris CLI reaches the controller through `kubectl port-forward`.
+- For IaC-managed CoreWeave clusters, Kueue's controller-manager memory request and limit
+  default to `8Gi`; its Kubernetes API client defaults to `1000` QPS and `2000` burst.
+  `manager_memory_limit` accepts per-cluster values at or above `2Gi`, and
+  `client_connection` accepts positive `qps` and `burst` overrides.
 - The GCP GCLB route set from `provisioning.gcp.gclb`. Controller runtime details come from
   each referenced Iris config, finelog VM details come from `lib/finelog/config`, and current
   internal VM addresses are read from GCE during preview. See
@@ -198,7 +210,7 @@ Once the preview is clean, `pulumi up`.
 Marin follows Pulumi's Program-first bulk-import workflow. The normal program never attaches
 `import_` options, so adding one live resource cannot put unrelated resources into import mode.
 Each component instead records the provider ID beside the resource declaration. This includes
-all nine GCP `*IAMMember` types, custom roles, service accounts, and the existing CoreWeave
+all seven GCP `*IAMBinding` types, custom roles, service accounts, and the existing CoreWeave
 resource types.
 
 Declare the resource in code first and review its ordinary `create` preview in the PR. After the
@@ -246,10 +258,58 @@ pulumi stack init <cluster> \
   --secrets-provider="gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key"
 ```
 
-A CoreWeave token rotation creates a new Managed Auth username (`cwtoken-…`). Append it to
-`grafana_observer_rbac.usernames` in all three monitored cluster configs and run a normal preview/up for
-each stack before switching Grafana to the new token. Remove the old username and update the
-stacks again only after the new Grafana revision passes its bridge checks.
+### CoreWeave token rotation
+
+A Grafana token rotation creates a new Managed Auth username (`cwtoken-…`). Append it to
+`grafana_observer_rbac.usernames` in all three monitored cluster configs and run a normal
+preview/up for each stack before switching Grafana to the new token. Remove the old username
+and update the stacks again only after the new Grafana revision passes its bridge checks.
+
+Loom uses a separate user-scoped [CoreWeave API
+token](https://docs.coreweave.com/security/authn-authz/managed-auth/api-access). Its token-owning
+user has the [CKS Viewer role](https://docs.coreweave.com/security/iam/access-policies). During
+rotation, the token owner creates a replacement token and assembles a kubeconfig containing
+these four contexts:
+
+- `marin-gpu_US-EAST-02A` for `cw-us-east-02a`
+- `marin-us-east-08a_US-EAST-08A` for `cw-us-east-08a`
+- `marin-rn02a_RNO2A` for `cw-rno2a`
+- `marin_US-WEST-04A` for `cw-us-west-04a`
+
+These names must match each Iris config's `platform.coreweave.kube_context`; the short cluster
+names are not kubeconfig aliases.
+
+CKS Viewer maps the identity into Kubernetes' `read` group. Kubernetes RoleBindings, not the
+CoreWeave IAM policy, add `pods/exec` and `pods/portforward`. Keep the current and replacement
+Managed Auth usernames in every cluster config during rotation, and preview/apply all four
+Pulumi stacks before exposing the replacement kubeconfig to Loom.
+
+Inspect the replacement file without printing its token, verify the expected username and
+contexts, and add the complete kubeconfig as a new version of the existing
+`loom-coreweave-iris-kubeconfig` Secret Manager secret:
+
+```bash
+export KUBECONFIG=/path/to/reviewed/coreweave-iris
+chmod 600 "$KUBECONFIG"
+kubectl auth whoami --kubeconfig "$KUBECONFIG" --context marin-us-east-08a_US-EAST-08A
+kubectl config get-contexts --kubeconfig "$KUBECONFIG" -o name
+
+gcloud secrets versions add loom-coreweave-iris-kubeconfig \
+  --project=hai-gcp-models \
+  --data-file="$KUBECONFIG"
+```
+
+Do not put the kubeconfig in Git, Pulumi configuration, shell output, or a PR. Pin the new
+numeric secret version through the Loom stack's `homeFiles` entry at `.kube/coreweave-iris`
+with mode `0600`. That deployment grants the Loom VM access only to the referenced secret and
+installs the file atomically.
+
+Exercise the replacement from a new Loom session before removing the old username from the
+four cluster configs, applying that removal, and revoking the old CoreWeave token. `pods/exec`
+permits arbitrary commands in any pod in the namespace, and `pods/portforward` permits direct
+connections to any pod port there; Kubernetes RBAC cannot constrain either subresource by
+command, container, label, or port. Any narrower policy requires separate namespaces or an
+authorization layer outside these Role rules.
 
 ### Backend
 
@@ -263,6 +323,18 @@ already provisioned:
   `roles/cloudkms.cryptoKeyDecrypter`; operators who run `pulumi up` need
   `roles/cloudkms.cryptoKeyEncrypterDecrypter` on the key. Request this through the central
   `iam_data.yaml` grant workflow; do not mutate the key policy with `gcloud`.
+
+The `marin` GCP stack operator needs both project custom roles:
+
+- `projects/hai-gcp-models/roles/marindev` supplies resource reads, state-bucket object access,
+  KMS encrypt/decrypt, Secret Manager access, and project IAM policy updates.
+- `projects/hai-gcp-models/roles/marinPulumiAdmin` supplies the remaining resource writes and
+  resource-scoped IAM updates for the graph declared by `iac.program._build_gcp`.
+
+`marinPulumiAdmin` is supplemental to `marindev`; it does not duplicate permissions already in
+`marindev`. Several permissions can change IAM policy and therefore grant administrative access
+within the target resource. Grant both roles only to trusted operators of the `marin` stack.
+CoreWeave stacks still require the Kubernetes credentials described in "First-time setup."
 
 ## CI preview
 

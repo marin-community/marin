@@ -17,6 +17,7 @@ from types import MappingProxyType
 from typing import Any, Literal
 
 import humanfriendly
+from rigging.timing import Duration
 
 from fray.device_flops import device_flops as _device_flops
 
@@ -702,7 +703,7 @@ class JobRequest:
         environment: Environment configuration (dependencies, env vars)
         replicas: Gang-scheduled replicas (e.g. TPU slices for multislice training)
         processes_per_task: GPU processes to run inside each task (default 1). When
-            > 1, fray composes the ``iris.hooks.multigpu_main`` supervisor into the command
+            > 1, fray composes the ``iris.jax.multigpu_main`` supervisor into the command
             (one process per GPU group); iris runs it verbatim. ``1`` is a no-op.
         max_retries_failure: Max retries on failure
         max_retries_preemption: Max retries on preemption
@@ -710,6 +711,7 @@ class JobRequest:
             fails (0 = fail on the first failure). Counts across retries.
         priority: Forwarded to the underlying backend if supported. 0 leaves
             the backend to use its default priority.
+        timeout: Backend-enforced execution deadline, if supported.
     """
 
     name: str
@@ -722,6 +724,7 @@ class JobRequest:
     max_retries_preemption: int = 100
     max_task_failures: int = 0
     priority: int = 0
+    timeout: Duration | None = None
 
     def __post_init__(self):
         if " " in self.name:

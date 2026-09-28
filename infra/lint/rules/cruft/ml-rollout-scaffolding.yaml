@@ -1,0 +1,19 @@
+schema_version: 1
+code: ml-rollout-scaffolding
+lane: cruft
+title: Knob added "just for the rollout"
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** Configuration flags added "to stage safely, removed after
+  testing" rarely get removed. They accumulate as long-term technical debt and
+  expand the surface area reviewers must understand.
+
+  **When allowed:** Only with an explicit removal trigger in a comment
+  (`# CRON(2026-06-01)` or "delete after all workers updated to vX.Y") and an
+  owner. Without those, do not add it.
+
+  **Bad example:**
+  ```python
+  # nervous about this; testing on dev-cluster first, will remove next week.
+  USE_NEW_RECONCILE = os.environ.get("USE_NEW_RECONCILE") == "1"
+  ```

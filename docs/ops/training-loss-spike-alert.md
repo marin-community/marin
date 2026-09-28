@@ -8,7 +8,7 @@ Enrollment uses the [`TrainingProgressStalled`](training-stall-alert-contract.md
 
 ## What fires it
 
-The bridge reads `train_loss` from `service=levanter` telemetry for the enrolled run IDs over one bounded hour and reduces it, in SQL, to two windows per run: a baseline covering `[now-60m, now-5m)` and a recent window covering the last five minutes.
+The bridge reads `train_loss` from `levanter.metrics` for the enrolled run IDs over one bounded hour and reduces it, in SQL, to two windows per run: a baseline covering `[now-60m, now-5m)` and a recent window covering the last five minutes.
 
 The run alerts when either condition holds:
 
@@ -32,20 +32,37 @@ A run reports `warming_up` with fewer than 20 baseline or 5 recent samples, and 
 3. Check whether the optimizer absorbed it. Steps skipped during the window mean the update was rejected and the weights did not take the spike; a spike with no skipped steps entered the weights.
 4. Decide. Resuming from the last checkpoint before the rise costs the steps since it; letting a diverged run continue costs everything after it. `manage-hero-run` covers the rollback.
 
-Verify what the rule saw with a bounded Finelog query:
+Check the rule's baseline and recent windows for the alert's cluster and run ID:
 
 ```sql
+WITH samples AS (
+  SELECT
+    value,
+    timestamp_ms,
+    CAST(EXTRACT(EPOCH FROM now() - INTERVAL '5 minutes') * 1000 AS BIGINT) AS recent_start
+  FROM "levanter.metrics"
+  WHERE name = 'train_loss'
+    AND run_id = '<hero-run-id>'
+    AND COALESCE(NULLIF(cluster, ''), 'unknown') = '<cluster>'
+    AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM now() - INTERVAL '60 minutes') * 1000 AS BIGINT)
+    AND timestamp_ms < CAST(EXTRACT(EPOCH FROM now()) * 1000 AS BIGINT)
+)
 SELECT
-  to_timestamp_millis(timestamp_ms) AS observed_at,
-  value AS train_loss
-FROM "telemetry_v1"
-WHERE service = 'levanter'
-  AND name = 'train_loss'
-  AND run_id = '<hero-run-id>'
-  AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM now() - INTERVAL '60 minutes') * 1000 AS BIGINT)
-ORDER BY timestamp_ms DESC
-LIMIT 50;
+  SUM(CASE WHEN timestamp_ms < recent_start THEN 1 ELSE 0 END) AS baseline_samples,
+  AVG(CASE WHEN timestamp_ms < recent_start THEN value END) AS baseline_mean,
+  STDDEV(CASE WHEN timestamp_ms < recent_start THEN value END) AS baseline_stddev,
+  SUM(CASE WHEN timestamp_ms >= recent_start THEN 1 ELSE 0 END) AS recent_samples,
+  AVG(CASE WHEN timestamp_ms >= recent_start THEN value END) AS recent_mean,
+  MIN(CASE WHEN timestamp_ms >= recent_start THEN value END) AS recent_floor,
+  MAX(CASE WHEN timestamp_ms >= recent_start THEN value END) AS recent_peak
+FROM samples;
 ```
+
+With at least 20 baseline and 5 recent samples, the rule fires when `recent_floor`
+exceeds `baseline_mean + max(0.05, 6 * baseline_stddev)`. It treats a missing or
+non-finite standard deviation as zero and also fires when `recent_mean` or
+`recent_peak` is non-finite. Retries keep the same run ID, so these windows can
+include samples from multiple attempts within the hour.
 
 ## Tuning
 

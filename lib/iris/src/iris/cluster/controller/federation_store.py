@@ -19,7 +19,6 @@ from iris.cluster.constraints import (
     Constraint,
     peer_availability_gate,
     routing_constraints,
-    strip_backend_constraints,
     strip_cluster_constraints,
 )
 from iris.cluster.controller import ops, reads, writes
@@ -67,7 +66,7 @@ def build_queued_candidates(tx: Tx) -> list[QueuedCandidate]:
         # Shape only — this pass reads constraints and resources, never the payload.
         request = reconstruct_launch_job_request(job, workdir_files={})
         constraints = [Constraint.from_proto(c) for c in request.constraints]
-        shape = routing_constraints(strip_cluster_constraints(strip_backend_constraints(constraints)))
+        shape = routing_constraints(strip_cluster_constraints(constraints))
         candidates.append(
             QueuedCandidate(
                 job_id=handle.job_id,

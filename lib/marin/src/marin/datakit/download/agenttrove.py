@@ -12,6 +12,11 @@ completeness (``original_teacher`` is populated on every row of the pinned
 revision; ``model`` and ``model_provider`` are null for some streams), so a row
 is dropped when any of them names an excluded family.
 
+The structured-chat SFT export also drops task sources with known weak task
+contracts or unverifiable outcomes. ``original_source`` groups several upstream
+repositories under labels such as ``exp_rpt``, so these exclusions intentionally
+remove whole groups.
+
 Transcripts carrying a task outcome are prefixed with a tag so the model can
 condition on it. Only two streams record a verdict — r2egym rows hold a numeric
 reward (``"1.0"``/``"0.0"``) and swesmith rows hold ``"success"``/``"timeout"``,
@@ -26,22 +31,37 @@ the pinned revision: ``teacher`` (the model that generated the rollout, e.g.
 values normalize to the empty string so the columns stay non-nullable strings.
 """
 
+import pyarrow as pa
 from fray.types import ResourceConfig
+from rigging.filesystem.storage_path import prefix_join
 from zephyr import counters
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
+from marin.datakit.chat_normalize import CHAT_SCHEMA, normalize_chat_step
 from marin.datakit.download.huggingface import download_hf_step
+from marin.datakit.download.opencode import INLINE_TOOL_CALL, opencode_protocol_messages, prompt_tool_definitions
 from marin.datakit.download.rollout_transforms import (
     TRAJECTORY_FAILED_TAG,
     TRAJECTORY_SOLVED_TAG,
     TRAJECTORY_UNVERIFIED_TAG,
+    checked_openai_chat_document,
     load_parquet_batched,
     render_role_message,
     text_document,
 )
+from marin.datakit.download.terminus import terminus_protocol_messages
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
+
+SOURCE_CHAT_SCHEMA = pa.schema(
+    [
+        *CHAT_SCHEMA,
+        pa.field("teacher", pa.string()),
+        pa.field("task_source", pa.string()),
+        pa.field("result", pa.string()),
+    ]
+)
 
 HF_DATASET_ID = "open-thoughts/AgentTrove"
 HF_REVISION = "b395a43"
@@ -54,6 +74,14 @@ EXCLUDED_TEACHER_MARKERS = frozenset({"gpt", "openai", "claude", "anthropic", "g
 # provenance ("GPT-OSS-120B", "openai/gpt-oss-120b") matches two excluded
 # markers. An allowed marker on any field keeps the row outright.
 ALLOWED_TEACHER_MARKERS = frozenset({"gpt-oss"})
+
+# The pinned AgentTrove revision exposes only coarse task-source labels. TaskTrove
+# retired bad task lineages within these groups, and sampled freelancer rows are
+# open-ended job postings rather than executable terminal tasks. Drop the groups
+# rather than retaining unidentifiable siblings of the bad lineages.
+EXCLUDED_TASK_SOURCES = frozenset(
+    {"freelancer", "Inferred Bugs", "MagiCoder Evol Instruct", "exp_rpt", "exp_rle", "unknown"}
+)
 
 PROVENANCE_FIELDS = ("model", "model_provider", "original_teacher")
 
@@ -109,6 +137,49 @@ def row_to_doc(row: dict) -> list[dict]:
     ]
 
 
+def row_to_chat_doc(row: dict) -> list[dict]:
+    if row.get("original_source") in EXCLUDED_TASK_SOURCES:
+        counters.pipeline.update_counter("agenttrove/chat/dropped_source", 1)
+        return []
+    if is_excluded_teacher(row):
+        return []
+    conversations = row.get("conversations")
+    if not conversations:
+        return []
+    if any(INLINE_TOOL_CALL.search(message.get("content") or "") for message in conversations):
+        tools = prompt_tool_definitions("\n".join(message.get("content") or "" for message in conversations[:2]))
+        if tools is None:
+            counters.pipeline.update_counter("agenttrove/chat/missing_tool_definitions_filtered", 1)
+            return []
+        converted = opencode_protocol_messages(conversations, tools)
+        if converted is None:
+            return []
+        messages, metadata = converted
+    else:
+        messages = terminus_protocol_messages(conversations)
+        if messages is None:
+            return []
+        metadata = {}
+    merged_messages: list[dict] = []
+    for message in messages:
+        if merged_messages and message.get("role") == "user" and merged_messages[-1].get("role") == "user":
+            previous = merged_messages[-1]
+            previous["content"] = f"{previous.get('content') or ''}\n\n{message.get('content') or ''}".strip()
+        else:
+            merged_messages.append(dict(message))
+    if merged_count := len(messages) - len(merged_messages):
+        counters.pipeline.update_counter("agenttrove/chat/adjacent_user_merged", merged_count)
+    return checked_openai_chat_document(
+        merged_messages,
+        HF_DATASET_ID,
+        counter_prefix="agenttrove/chat",
+        teacher=row.get("original_teacher") or "",
+        task_source=row.get("original_source") or "",
+        result=row.get("result") or "",
+        **metadata,
+    )
+
+
 def transform(input_path: str, output_path: str) -> None:
     pipeline = (
         Dataset.from_files(f"{input_path}/**/*.parquet")
@@ -119,6 +190,20 @@ def transform(input_path: str, output_path: str) -> None:
     )
     ctx = ZephyrContext(name="agenttrove-transform", resources=ResourceConfig(cpu=1, ram="32g"))
     ctx.execute(pipeline)
+
+
+def transform_chat(input_path: str, output_path: str) -> None:
+    pipeline = (
+        Dataset.from_files(f"{input_path}/**/*.parquet")
+        .flat_map(load_parquet_batched)
+        .flat_map(row_to_chat_doc)
+        .write_parquet(
+            prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"),
+            schema=SOURCE_CHAT_SCHEMA,
+            skip_existing=True,
+        )
+    )
+    ZephyrContext(name="agenttrove-chat-transform", resources=ResourceConfig(cpu=1, ram="32g")).execute(pipeline)
 
 
 def download_agenttrove_step() -> StepSpec:
@@ -146,4 +231,18 @@ def agenttrove_normalize_steps() -> tuple[StepSpec, ...]:
     return (
         processed,
         normalize_step(name="normalized/agenttrove", download=processed),
+    )
+
+
+def agenttrove_chat_normalize_steps() -> tuple[StepSpec, ...]:
+    """Return the structured-chat normalization chain for AgentTrove."""
+    download = download_hf_step("raw/agenttrove", hf_dataset_id=HF_DATASET_ID, revision=HF_REVISION)
+    processed = StepSpec(
+        name="processed-chat/agenttrove",
+        deps=[download],
+        fn=lambda output_path: transform_chat(download.output_path, output_path),
+        hash_attrs={"version": "2026.09.17.native-terminus-source-filter"},
+    )
+    return processed, normalize_chat_step(
+        output_schema=SOURCE_CHAT_SCHEMA, name="normalized-chat/agenttrove", download=processed
     )

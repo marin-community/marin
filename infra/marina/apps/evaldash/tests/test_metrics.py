@@ -1,0 +1,701 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""The evaldash panel and comparison views: cross-cohort selection, coverage filtering, qualified
+aggregates, and head-to-head difference intervals."""
+
+import pytest
+from evaldash.metrics import build_comparison, build_meta, build_model_detail, build_panel, eval_suites, panel_request
+from marin.evaluation.eval_stats import Completeness, MissingPolicy
+from marin.evaluation.records import (
+    BenchmarkMetadataRef,
+    BenchmarkMetricRef,
+    EvalchemyRef,
+    EvalRef,
+    EvalRunRecord,
+    EvalTaskRef,
+    HarborRef,
+    HardwareRef,
+    MetricKind,
+    ModelRef,
+    Provenance,
+    RunStatus,
+    TaskCoverage,
+)
+
+ITEMS = 1000
+
+
+def _record(
+    model: str,
+    eval_name: str,
+    version: str | None,
+    created_at: str,
+    value: float | None,
+    *,
+    coverage: dict[str, TaskCoverage] | None = None,
+    accelerator: str = "v6e-8",
+    family: str | None = None,
+    eval_runtime: str = "i",
+    num_fewshot: int | None = 0,
+    primary_metric: str | None = None,
+    metric_kind: MetricKind | None = None,
+    limit: int | None = None,
+    metric: str = "acc,none",
+) -> EvalRunRecord:
+    succeeded = value is not None
+    metrics = (
+        {eval_name: {metric: value, f"{metric.split(',', 1)[0]}_stderr,none": 0.01, "sample_len": float(ITEMS)}}
+        if succeeded
+        else {}
+    )
+    benchmark = None
+    canonical_metrics: dict[str, dict[str, float]] = {}
+    if primary_metric is not None and metric_kind is not None:
+        source_metric = metric.split(",", 1)[0]
+        benchmark = BenchmarkMetadataRef(
+            schema_version=1,
+            task=eval_name,
+            primary_metric=primary_metric,
+            metric_kind=metric_kind,
+            metrics=(
+                BenchmarkMetricRef(
+                    name=primary_metric,
+                    source_name=source_metric,
+                    kind=metric_kind,
+                    higher_is_better=True,
+                ),
+            ),
+            n_benchmark=next(iter((coverage or {}).values())).n_benchmark if coverage else None,
+            n_attempted=next(iter((coverage or {}).values())).n_attempted if coverage else None,
+        )
+        canonical_source = {
+            "acc": "accuracy",
+            "exact_match": "accuracy",
+            "acc_norm": "normalized_accuracy",
+            "pass@1": "pass_at_1",
+        }.get(source_metric, source_metric)
+        if succeeded and canonical_source == primary_metric:
+            canonical_metrics[eval_name] = {primary_metric: value, f"{primary_metric}_stderr": 0.01}
+    return EvalRunRecord(
+        run_id=f"{model}-{eval_name}-{created_at}",
+        group_id=f"{model}-{created_at}",
+        created_at=created_at,
+        user="tester",
+        version=version,
+        model=ModelRef(name=model, location="loc", backend="vllm"),
+        eval=EvalRef(
+            name=eval_name,
+            mechanism="evalchemy",
+            family=family,
+            tasks=(
+                EvalTaskRef(
+                    name=eval_name,
+                    num_fewshot=num_fewshot,
+                    benchmark=benchmark,
+                ),
+            ),
+            evalchemy=(
+                EvalchemyRef(
+                    apply_chat_template=False,
+                    max_gen_toks=128,
+                    max_eval_instances=limit,
+                    num_concurrent=8,
+                    batch_size=None,
+                    seed=0,
+                )
+                if limit is not None
+                else None
+            ),
+        ),
+        hardware=HardwareRef(platform="tpu", accelerator=accelerator, region_or_cluster="us-central2"),
+        status=RunStatus.SUCCEEDED if succeeded else RunStatus.INFRA_FAILED,
+        error=None,
+        results_path="p",
+        metrics=metrics,
+        canonical_metrics=canonical_metrics,
+        coverage=coverage or {},
+        jobs={},
+        log_tails={},
+        provenance=Provenance(git_sha="s", eval_runtime=eval_runtime, launch_host="h"),
+    )
+
+
+def test_panel_takes_the_latest_valid_result_for_each_benchmark_across_cohorts():
+    """A newer cohort that re-ran only part of a model's benchmark set does not hide the older
+    results that are still the newest available for their own benchmark."""
+    records = [
+        _record("m", "mmlu", "v1", "2026-01-01T00:00:00+00:00", 0.50),
+        _record("m", "mmlu", "v2", "2026-02-01T00:00:00+00:00", 0.70),
+        _record("m", "gsm8k-0shot", "v1", "2026-01-01T00:00:00+00:00", 0.30),
+    ]
+
+    (row,) = build_panel(records, panel_request())["rows"]
+
+    assert row["cells"]["mmlu"]["value"] == pytest.approx(0.70)
+    assert row["cells"]["mmlu"]["version"] == "v2"
+    assert row["cells"]["gsm8k-0shot"]["value"] == pytest.approx(0.30)
+    assert row["cells"]["gsm8k-0shot"]["version"] == "v1"
+
+
+def test_a_row_is_dated_by_its_newest_contributing_cell():
+    records = [
+        _record("m", "gsm8k-0shot", "v1", "2026-01-01T00:00:00+00:00", 0.30),
+        _record("m", "mmlu", "v2", "2026-02-01T00:00:00+00:00", 0.70),
+        _record("m", "drop", "v3", "2026-03-01T00:00:00+00:00", None),
+    ]
+
+    (row,) = build_panel(records, panel_request())["rows"]
+
+    assert row["last_updated"] == "2026-02-01T00:00:00+00:00"
+
+
+def test_panel_can_be_pinned_to_one_cohort():
+    records = [
+        _record("m", "mmlu", "v1", "2026-01-01T00:00:00+00:00", 0.50),
+        _record("m", "mmlu", "v2", "2026-02-01T00:00:00+00:00", 0.70),
+    ]
+
+    (row,) = build_panel(records, panel_request(cohort_version="v1"))["rows"]
+
+    assert row["cells"]["mmlu"]["value"] == pytest.approx(0.50)
+
+
+def test_a_failed_run_leaves_an_explained_gap_rather_than_a_blank_cell():
+    records = [
+        _record("m", "mmlu", None, "2026-01-01T00:00:00+00:00", 0.5),
+        _record("m", "drop", None, "2026-01-02T00:00:00+00:00", None),
+    ]
+
+    (row,) = build_panel(records, panel_request())["rows"]
+
+    assert "drop" not in row["cells"]
+    assert row["missing"]["drop"]["reason"] == "status infra_failed"
+
+
+def test_a_missing_declared_metric_explains_the_gap():
+    record = _record(
+        "m",
+        "drop",
+        None,
+        "2026-01-01T00:00:00+00:00",
+        0.5,
+        primary_metric="f1",
+        metric_kind=MetricKind.CONTINUOUS,
+    )
+
+    (row,) = build_panel([record], panel_request())["rows"]
+
+    assert row["missing"]["drop"]["reason"] == "declared metric f1 not in canonical results"
+
+
+def test_cells_carry_the_interval_and_what_it_covers():
+    """A run whose mechanism reports no attempted count cannot claim it graded everything, so its
+    interval is labelled as covering sampling error alone."""
+    records = [_record("m", "mmlu", None, "2026-01-01T00:00:00+00:00", 0.6)]
+
+    (row,) = build_panel(records, panel_request())["rows"]
+
+    cell = row["cells"]["mmlu"]
+    assert cell["interval_kind"] == "sampling_only"
+    assert cell["low"] < 0.6 < cell["high"]
+    assert cell["n_scored"] == ITEMS
+
+
+def test_a_partly_graded_run_reports_a_wider_identified_interval():
+    """Admitting a run that graded 92% of its trials costs at least 8 points of interval width."""
+    records = [
+        _record(
+            "m",
+            "aime",
+            None,
+            "2026-01-01T00:00:00+00:00",
+            0.6,
+            coverage={"aime": TaskCoverage(n_attempted=1087, n_scored=ITEMS, errors={"AgentTimeoutError": 87})},
+        )
+    ]
+
+    (row,) = build_panel(records, panel_request())["rows"]
+
+    cell = row["cells"]["aime"]
+    assert cell["interval_kind"] == "identified"
+    assert cell["high"] - cell["low"] >= 1 - ITEMS / 1087
+    assert cell["errors"] == {"AgentTimeoutError": 87}
+
+
+def test_a_run_below_the_coverage_gate_is_rejected_with_its_rate():
+    records = [
+        _record(
+            "m",
+            "aime",
+            None,
+            "2026-01-01T00:00:00+00:00",
+            0.6,
+            coverage={"aime": TaskCoverage(n_attempted=2000, n_scored=ITEMS, errors={"AgentTimeoutError": 1000})},
+        )
+    ]
+
+    (row,) = build_panel(records, panel_request())["rows"]
+
+    assert row["cells"] == {}
+    assert row["missing"]["aime"]["reason"] == "coverage 0.500 below 0.90"
+
+
+def test_capped_canary_does_not_replace_a_full_run_and_reports_the_column_protocol():
+    full = _record("m", "gsm8k", None, "2026-01-01T00:00:00+00:00", 0.6)
+    canary = _record(
+        "m",
+        "gsm8k",
+        None,
+        "2026-02-01T00:00:00+00:00",
+        1.0,
+        coverage={"gsm8k": TaskCoverage(n_benchmark=1319, n_attempted=1, n_scored=1, n_correct=1)},
+        primary_metric="accuracy",
+        metric_kind=MetricKind.BINARY,
+        limit=1,
+    )
+    canary_only = _record(
+        "canary-only",
+        "gsm8k",
+        None,
+        "2026-02-01T00:00:00+00:00",
+        1.0,
+        coverage={"gsm8k": TaskCoverage(n_benchmark=1319, n_attempted=1, n_scored=1, n_correct=1)},
+        primary_metric="accuracy",
+        metric_kind=MetricKind.BINARY,
+        limit=1,
+    )
+
+    panel = build_panel([full, canary, canary_only], panel_request())
+
+    rows = {row["model"]: row for row in panel["rows"]}
+    assert rows["m"]["cells"]["gsm8k"]["run_id"] == full.run_id
+    assert rows["canary-only"]["missing"]["gsm8k"]["reason"] == "benchmark coverage 0.001 below 0.90"
+    assert panel["protocols"] == {"gsm8k": {"metric": "accuracy", "kind": "binary"}}
+    assert panel["request"]["min_benchmark_coverage"] == 0.9
+
+
+def test_declared_binary_protocol_survives_continuous_interval_demotion():
+    record = _record(
+        "m",
+        "gsm8k",
+        None,
+        "2026-02-01T00:00:00+00:00",
+        0.6,
+        coverage={"gsm8k": TaskCoverage(n_benchmark=ITEMS, n_attempted=ITEMS, n_scored=ITEMS, n_correct=0)},
+        primary_metric="accuracy",
+        metric_kind=MetricKind.BINARY,
+    )
+
+    panel = build_panel([record], panel_request())
+
+    assert panel["protocols"] == {"gsm8k": {"metric": "accuracy", "kind": "binary"}}
+    assert panel["rows"][0]["cells"]["gsm8k"]["metric_kind"] == "continuous"
+
+
+def test_model_history_keeps_legacy_alias_compatible_with_new_protocol():
+    legacy = _record("m", "drop", None, "2026-01-01T00:00:00+00:00", 0.8, metric="exact_match,none")
+    declared = _record(
+        "m",
+        "drop",
+        None,
+        "2026-02-01T00:00:00+00:00",
+        0.6,
+        primary_metric="accuracy",
+        metric_kind=MetricKind.BINARY,
+    )
+
+    detail = build_model_detail([legacy, declared], "m")
+
+    assert detail is not None
+    assert [point["run_id"] for point in detail["history"]["drop"]] == [legacy.run_id, declared.run_id]
+    runs = {run["run_id"]: run for run in detail["runs"]}
+    assert runs[legacy.run_id]["headline"] is not None
+    assert runs[legacy.run_id]["gap_reason"] is None
+
+
+def test_comparison_accepts_legacy_filter_variants_of_one_metric():
+    records = [
+        _record("a", "gsm8k", None, "2026-01-01T00:00:00+00:00", 0.6, metric="acc,none"),
+        _record("b", "gsm8k", None, "2026-01-01T00:00:00+00:00", 0.5, metric="acc,strict-match"),
+    ]
+
+    comparison = build_comparison(records, panel_request(), ("a", "b"))
+
+    assert comparison["shared"] == ["gsm8k"]
+    assert comparison["rows"][0]["differences"]["b"]["low"] < comparison["rows"][0]["differences"]["b"]["high"]
+
+
+def test_complete_panel_filtering_keeps_only_models_with_every_selected_benchmark():
+    records = [
+        _record("full", "mmlu", None, "2026-01-01T00:00:00+00:00", 0.6),
+        _record("full", "drop", None, "2026-01-01T00:00:00+00:00", 0.4),
+        _record("partial", "mmlu", None, "2026-01-01T00:00:00+00:00", 0.7),
+    ]
+
+    panel = build_panel(records, panel_request(benchmarks=("mmlu", "drop"), completeness=Completeness.COMPLETE_PANEL))
+
+    assert [row["model"] for row in panel["rows"]] == ["full"]
+
+
+def test_panel_filters_on_run_metadata():
+    records = [
+        _record("tpu-model", "mmlu", None, "2026-01-01T00:00:00+00:00", 0.6),
+        _record("gpu-model", "mmlu", None, "2026-01-01T00:00:00+00:00", 0.7, accelerator="h100"),
+    ]
+
+    panel = build_panel(records, panel_request(filters={"accelerator": "h100"}))
+
+    assert [row["model"] for row in panel["rows"]] == ["gpu-model"]
+
+
+def test_no_aggregate_is_produced_unless_a_policy_is_named():
+    """A mean across benchmarks has no interpretation without a declared panel and missing-data
+    policy, so the panel does not offer one by default."""
+    records = [_record("m", "mmlu", None, "2026-01-01T00:00:00+00:00", 0.6)]
+
+    (row,) = build_panel(records, panel_request())["rows"]
+
+    assert row["aggregate"] is None
+
+
+def test_a_requested_aggregate_carries_its_panel_and_missing_policy():
+    records = [
+        _record("m", "mmlu", None, "2026-01-01T00:00:00+00:00", 0.6),
+        _record("m", "drop", None, "2026-01-01T00:00:00+00:00", 0.4),
+    ]
+
+    panel = build_panel(
+        records,
+        panel_request(benchmarks=("mmlu", "drop")),
+        aggregate_policy=MissingPolicy.REQUIRE_COMPLETE,
+    )
+
+    aggregate = panel["rows"][0]["aggregate"]
+    assert aggregate["value"] == pytest.approx(0.5)
+    assert aggregate["panel"] == ["mmlu", "drop"]
+    assert aggregate["missing_policy"] == "require_complete"
+    assert aggregate["metrics"] == ["accuracy", "accuracy"]
+    # Two benchmarks under the same names are not the same benchmarks if different harness versions
+    # defined them, so the aggregate carries the versions it spans.
+    assert aggregate["runtimes"] == ["i"]
+
+
+def test_an_incomplete_panel_has_no_aggregate_under_the_default_policy():
+    records = [_record("m", "mmlu", None, "2026-01-01T00:00:00+00:00", 0.6)]
+
+    panel = build_panel(
+        records,
+        panel_request(benchmarks=("mmlu", "drop")),
+        aggregate_policy=MissingPolicy.REQUIRE_COMPLETE,
+    )
+
+    assert panel["rows"][0]["aggregate"] is None
+
+
+def test_a_bounded_aggregate_widens_for_the_benchmark_a_model_never_ran():
+    records = [_record("m", "mmlu", None, "2026-01-01T00:00:00+00:00", 0.6)]
+
+    panel = build_panel(
+        records,
+        panel_request(benchmarks=("mmlu", "drop")),
+        aggregate_policy=MissingPolicy.BOUND,
+    )
+
+    aggregate = panel["rows"][0]["aggregate"]
+    assert aggregate["covered"] == 1
+    assert aggregate["total"] == 2
+    assert aggregate["high"] - aggregate["low"] >= 0.5
+
+
+def test_panel_annotates_archived_models():
+    records = [_record("keep", "mmlu", None, "2026-01-01T00:00:00+00:00", 0.6)]
+
+    (row,) = build_panel(records, panel_request(), frozenset({"keep"}))["rows"]
+
+    assert row["archived"] is True
+
+
+def test_smoke_suites_stay_out_of_the_panel():
+    records = [
+        _record("m", "mmlu", None, "2026-01-01T00:00:00+00:00", 0.6),
+        _record("m", "mmlu-smoke", None, "2026-01-02T00:00:00+00:00", 0.9),
+    ]
+
+    panel = build_panel(records, panel_request())
+
+    assert panel["benchmarks"] == ["mmlu"]
+
+
+def test_a_family_opens_on_the_variant_with_results_for_the_most_models():
+    half_graded = {"gsm8k": TaskCoverage(n_attempted=2 * ITEMS, n_scored=ITEMS)}
+    records = [
+        _record("a", "gsm8k", None, "2026-01-01T00:00:00+00:00", 0.50, family="gsm8k", coverage=half_graded),
+        _record("b", "gsm8k", None, "2026-01-01T00:00:00+00:00", 0.55, family="gsm8k", coverage=half_graded),
+        _record("c", "gsm8k", None, "2026-01-01T00:00:00+00:00", 0.60, family="gsm8k"),
+        _record("a", "gsm8k-0shot", None, "2026-01-01T00:00:00+00:00", 0.40, family="gsm8k"),
+        _record("b", "gsm8k-0shot", None, "2026-01-01T00:00:00+00:00", 0.45, family="gsm8k"),
+    ]
+
+    strict = build_panel(records, panel_request())
+    relaxed = build_panel(records, panel_request(min_coverage=0.4))
+
+    assert strict["families"] == [{"family": "gsm8k", "variants": ["gsm8k", "gsm8k-0shot"], "default": "gsm8k-0shot"}]
+    assert relaxed["families"][0]["default"] == "gsm8k"
+
+
+def test_a_family_counts_once_in_the_panel_the_coverage_and_the_aggregate():
+    records = [
+        _record("a", "gsm8k", None, "2026-01-01T00:00:00+00:00", 0.50, family="gsm8k"),
+        _record("a", "gsm8k-0shot", None, "2026-01-01T00:00:00+00:00", 0.40, family="gsm8k"),
+        _record("a", "mmlu", None, "2026-01-01T00:00:00+00:00", 0.60),
+    ]
+
+    panel = build_panel(records, panel_request(), aggregate_policy=MissingPolicy.REQUIRE_COMPLETE)
+
+    assert panel["panel"] == ["gsm8k", "mmlu"]
+    assert panel["benchmarks"] == ["gsm8k", "gsm8k-0shot", "mmlu"]
+    (row,) = panel["rows"]
+    assert row["covered"] == 2
+    assert row["aggregate"]["panel"] == ["gsm8k", "mmlu"]
+    assert row["aggregate"]["value"] == pytest.approx(0.55)
+
+
+def test_completeness_is_judged_against_the_variant_each_column_shows():
+    records = [
+        _record("a", "gsm8k", None, "2026-01-01T00:00:00+00:00", 0.50, family="gsm8k"),
+        _record("a", "gsm8k-0shot", None, "2026-01-01T00:00:00+00:00", 0.40, family="gsm8k"),
+        _record("b", "gsm8k", None, "2026-01-01T00:00:00+00:00", 0.60, family="gsm8k"),
+    ]
+
+    panel = build_panel(records, panel_request(completeness=Completeness.COMPLETE_PANEL))
+
+    assert panel["panel"] == ["gsm8k"]
+    assert [row["model"] for row in panel["rows"]] == ["a", "b"]
+
+
+def test_an_explicitly_requested_variant_is_the_one_the_column_shows():
+    records = [
+        _record("a", "gsm8k", None, "2026-01-01T00:00:00+00:00", 0.50, family="gsm8k"),
+        _record("b", "gsm8k", None, "2026-01-01T00:00:00+00:00", 0.60, family="gsm8k"),
+        _record("a", "gsm8k-0shot", None, "2026-01-01T00:00:00+00:00", 0.40, family="gsm8k"),
+    ]
+
+    panel = build_panel(records, panel_request(benchmarks=("gsm8k-0shot",)))
+
+    assert panel["panel"] == ["gsm8k-0shot"]
+    assert [row["cells"].get("gsm8k-0shot", {}).get("value") for row in panel["rows"]] == [pytest.approx(0.40)]
+
+
+def test_an_eval_with_no_declared_family_is_a_column_of_one():
+    records = [
+        _record("a", "gsm8k", None, "2026-01-01T00:00:00+00:00", 0.5, family="gsm8k"),
+        _record("a", "mmlu", None, "2026-01-01T00:00:00+00:00", 0.6),
+    ]
+
+    panel = build_panel(records, panel_request())
+
+    assert panel["families"] == [
+        {"family": "gsm8k", "variants": ["gsm8k"], "default": "gsm8k"},
+        {"family": "mmlu", "variants": ["mmlu"], "default": "mmlu"},
+    ]
+
+
+def test_harbor_evals_share_their_dataset_family_across_versions():
+    records = []
+    for eval_name, dataset_version, family in (
+        ("aime24-v1", "1.0", None),
+        ("aime24-v2", "2.0", None),
+        ("aime24-publication", "2.0", "publication-aime"),
+    ):
+        record = _record("a", eval_name, None, "2026-01-01T00:00:00+00:00", 0.5, family=family)
+        records.append(
+            record.model_copy(
+                update={
+                    "evaluation": record.evaluation.model_copy(
+                        update={
+                            "mechanism": "harbor",
+                            "evalchemy": None,
+                            "harbor": HarborRef(
+                                dataset="aime24",
+                                version=dataset_version,
+                                agent="terminus-2",
+                                env="daytona",
+                            ),
+                        }
+                    )
+                }
+            )
+        )
+
+    assert build_meta(records)["families"] == [
+        {"family": "aime24", "variants": ["aime24-v1", "aime24-v2"]},
+        {"family": "publication-aime", "variants": ["aime24-publication"]},
+    ]
+    assert build_panel(records, panel_request())["families"] == [
+        {"family": "publication-aime", "variants": ["aime24-publication"], "default": "aime24-publication"},
+        {"family": "aime24", "variants": ["aime24-v1", "aime24-v2"], "default": "aime24-v1"},
+    ]
+
+
+def test_variants_with_equally_many_results_default_to_the_first_eval_name():
+    records = [
+        _record("a", "gsm8k", None, "2026-01-01T00:00:00+00:00", 0.5, family="gsm8k"),
+        _record("a", "gsm8k-0shot", None, "2026-01-01T00:00:00+00:00", 0.4, family="gsm8k"),
+    ]
+
+    (column,) = build_panel(records, panel_request())["families"]
+
+    assert column["default"] == "gsm8k"
+
+
+def test_a_variant_in_a_family_keeps_its_own_cell_name_and_provenance():
+    records = [
+        _record(
+            "a",
+            "gsm8k",
+            "v1",
+            "2026-01-01T00:00:00+00:00",
+            0.50,
+            family="gsm8k",
+            eval_runtime="evalchemy==1",
+            num_fewshot=8,
+        ),
+        _record(
+            "a",
+            "gsm8k-0shot",
+            "v2",
+            "2026-02-01T00:00:00+00:00",
+            0.40,
+            family="gsm8k",
+            eval_runtime="evalchemy==2",
+            num_fewshot=0,
+        ),
+    ]
+
+    (row,) = build_panel(records, panel_request())["rows"]
+
+    assert sorted(row["cells"]) == ["gsm8k", "gsm8k-0shot"]
+    assert row["cells"]["gsm8k"]["eval_runtime"] == "evalchemy==1"
+    assert row["cells"]["gsm8k-0shot"]["eval_runtime"] == "evalchemy==2"
+    assert row["cells"]["gsm8k"]["version"] == "v1"
+    assert row["cells"]["gsm8k-0shot"]["version"] == "v2"
+    assert row["cells"]["gsm8k"]["num_fewshot"] == 8
+    assert row["cells"]["gsm8k-0shot"]["num_fewshot"] == 0
+    assert row["cells"]["gsm8k-0shot"]["run_id"] == "a-gsm8k-0shot-2026-02-01T00:00:00+00:00"
+
+
+def test_meta_keeps_the_variants_a_narrowed_panel_is_not_showing():
+    records = [
+        _record("a", "gsm8k", None, "2026-01-01T00:00:00+00:00", 0.5, family="gsm8k"),
+        _record("a", "gsm8k-0shot", None, "2026-01-01T00:00:00+00:00", 0.4, family="gsm8k"),
+    ]
+
+    panel = build_panel(records, panel_request(benchmarks=("gsm8k-0shot",)))
+
+    assert panel["families"] == [{"family": "gsm8k", "variants": ["gsm8k-0shot"], "default": "gsm8k-0shot"}]
+    assert build_meta(records)["families"] == [{"family": "gsm8k", "variants": ["gsm8k", "gsm8k-0shot"]}]
+
+
+def test_meta_reports_suites_facets_and_archived_models():
+    records = [
+        _record("a", "mmlu", None, "2026-01-01T00:00:00+00:00", 0.6),
+        _record("b", "math500", None, "2026-01-02T00:00:00+00:00", 0.5, accelerator="h100"),
+    ]
+
+    meta = build_meta(records, frozenset({"b"}))
+
+    assert meta["archived_models"] == ["b"]
+    assert {group["suite"] for group in meta["suites"]} == {"NLP", "Chat / Math"}
+    assert meta["facets"]["accelerator"] == ["h100", "v6e-8"]
+    assert meta["facets"]["mechanism"] == ["evalchemy"]
+
+
+def test_eval_suites_groups_known_evals_and_buckets_the_rest():
+    grouped = {group["suite"]: group["evals"] for group in eval_suites({"mmlu", "drop", "math500", "mystery"})}
+
+    assert grouped["NLP"] == ["drop", "mmlu"]
+    assert grouped["Chat / Math"] == ["math500"]
+    assert grouped["Other"] == ["mystery"]
+
+
+def test_comparison_scores_models_on_their_shared_benchmarks_only():
+    records = [
+        _record("a", "mmlu", None, "2026-01-01T00:00:00+00:00", 0.60),
+        _record("a", "drop", None, "2026-01-01T00:00:00+00:00", 0.40),
+        _record("b", "mmlu", None, "2026-01-01T00:00:00+00:00", 0.50),
+    ]
+
+    comparison = build_comparison(records, panel_request(), ("a", "b"))
+
+    assert comparison["shared"] == ["mmlu"]
+    assert set(comparison["benchmarks"]) == {"drop", "mmlu"}
+    # `a` has a result on drop that `b` never ran, so the ranking number covers mmlu alone.
+    assert comparison["aggregates"]["a"]["panel"] == ["mmlu"]
+    assert comparison["aggregates"]["a"]["value"] == pytest.approx(0.60)
+
+
+def test_comparison_reports_a_difference_interval_against_each_benchmark_leader():
+    """A ten-point gap over a thousand items each is a real ordering; the interval says so without a
+    reader having to compare two error bars by eye."""
+    records = [
+        _record("a", "mmlu", None, "2026-01-01T00:00:00+00:00", 0.60),
+        _record("b", "mmlu", None, "2026-01-01T00:00:00+00:00", 0.50),
+    ]
+
+    (row,) = build_comparison(records, panel_request(), ("a", "b"))["rows"]
+
+    assert row["leader"] == "a"
+    difference = row["differences"]["b"]
+    assert difference["separated"] is True
+    assert difference["low"] < 0.10 < difference["high"]
+    assert "a" not in row["differences"]
+
+
+def test_a_difference_that_the_runs_cannot_resolve_is_not_reported_as_separated():
+    records = [
+        _record("a", "mmlu", None, "2026-01-01T00:00:00+00:00", 0.601),
+        _record("b", "mmlu", None, "2026-01-01T00:00:00+00:00", 0.600),
+    ]
+
+    (row,) = build_comparison(records, panel_request(), ("a", "b"))["rows"]
+
+    assert row["differences"]["b"]["separated"] is False
+    assert row["differences"]["b"]["low"] < 0.0
+
+
+def test_ungraded_items_can_unsettle_an_ordering_that_sampling_error_alone_would_settle():
+    """The same six-point gap over the same thousand graded items, twice: an ordering when both runs
+    graded everything they attempted, and no ordering once the trailing run left 8% ungraded. The
+    ungraded trials could take any value, and admitting a batch means admitting that."""
+    leader = _record("a", "aime", None, "2026-01-01T00:00:00+00:00", 0.56)
+    complete = _record("b", "aime", None, "2026-01-01T00:00:00+00:00", 0.50)
+    partial = _record(
+        "b",
+        "aime",
+        None,
+        "2026-01-01T00:00:00+00:00",
+        0.50,
+        coverage={"aime": TaskCoverage(n_attempted=1087, n_scored=ITEMS, errors={"AgentTimeoutError": 87})},
+    )
+
+    (settled,) = build_comparison([leader, complete], panel_request(), ("a", "b"))["rows"]
+    (unsettled,) = build_comparison([leader, partial], panel_request(), ("a", "b"))["rows"]
+
+    assert settled["differences"]["b"]["separated"] is True
+    assert unsettled["differences"]["b"]["separated"] is False
+
+
+def test_comparison_honours_the_benchmark_selection_it_was_asked_for():
+    """A comparison launched from a narrowed panel scores the benchmarks that panel was showing."""
+    records = [
+        _record("a", "mmlu", None, "2026-01-01T00:00:00+00:00", 0.60),
+        _record("a", "drop", None, "2026-01-01T00:00:00+00:00", 0.40),
+        _record("b", "mmlu", None, "2026-01-01T00:00:00+00:00", 0.50),
+        _record("b", "drop", None, "2026-01-01T00:00:00+00:00", 0.30),
+    ]
+
+    comparison = build_comparison(records, panel_request(benchmarks=("mmlu",)), ("a", "b"))
+
+    assert comparison["benchmarks"] == ["mmlu"]
+    assert comparison["aggregates"]["a"]["panel"] == ["mmlu"]

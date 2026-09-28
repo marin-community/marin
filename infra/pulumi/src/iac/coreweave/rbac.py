@@ -24,6 +24,18 @@ from iac.config import RbacSpec
 from iac.imports import NO_IMPORTS, ImportRegistrar
 
 GRAFANA_OBSERVER_ROLE = "marin-grafana-node-reader"
+LOOM_SESSION_ROLE = "marin-loom-session-connect"
+
+
+def _managed_auth_user_subjects(usernames: tuple[str, ...]) -> list[dict[str, str]]:
+    return [
+        {
+            "apiGroup": "rbac.authorization.k8s.io",
+            "kind": "User",
+            "name": username,
+        }
+        for username in usernames
+    ]
 
 
 @dataclass(frozen=True)
@@ -128,14 +140,7 @@ def grafana_observer_manifests(usernames: tuple[str, ...]) -> tuple[dict, dict]:
             "kind": "ClusterRole",
             "name": GRAFANA_OBSERVER_ROLE,
         },
-        "subjects": [
-            {
-                "apiGroup": "rbac.authorization.k8s.io",
-                "kind": "User",
-                "name": username,
-            }
-            for username in usernames
-        ],
+        "subjects": _managed_auth_user_subjects(usernames),
     }
     return role, binding
 
@@ -177,4 +182,73 @@ class GrafanaObserverRbac(pulumi.ComponentResource):
             opts=child_opts(depends_on=[cluster_role]),
         )
         imports.register(cluster_role_binding, parent=self, provider_id=GRAFANA_OBSERVER_ROLE)
+        self.register_outputs({})
+
+
+@dataclass(frozen=True)
+class LoomSessionRbacArgs:
+    namespace: str
+    usernames: tuple[str, ...]
+    namespace_dependency: pulumi.Resource
+
+
+def loom_session_manifests(namespace: str, usernames: tuple[str, ...]) -> tuple[dict, dict]:
+    """Return namespaced Pod connect access for Loom's CoreWeave identities."""
+    labels = {
+        "app.kubernetes.io/name": "marin-loom",
+        "app.kubernetes.io/component": "session-connect",
+    }
+    metadata = {"name": LOOM_SESSION_ROLE, "namespace": namespace, "labels": labels}
+    role = {
+        "metadata": metadata,
+        "rules": [
+            {
+                "apiGroups": [""],
+                "resources": ["pods/exec", "pods/portforward"],
+                "verbs": ["create"],
+            }
+        ],
+    }
+    binding = {
+        "metadata": metadata,
+        "roleRef": {
+            "apiGroup": "rbac.authorization.k8s.io",
+            "kind": "Role",
+            "name": LOOM_SESSION_ROLE,
+        },
+        "subjects": _managed_auth_user_subjects(usernames),
+    }
+    return role, binding
+
+
+class LoomSessionRbac(pulumi.ComponentResource):
+    """Pod exec and port-forward access for Loom in one Iris namespace."""
+
+    def __init__(
+        self,
+        name: str,
+        args: LoomSessionRbacArgs,
+        *,
+        k8s_provider: pulumi.ProviderResource,
+        opts: pulumi.ResourceOptions | None = None,
+    ) -> None:
+        super().__init__("marin:coreweave:LoomSessionRbac", name, None, opts)
+        role_manifest, binding_manifest = loom_session_manifests(args.namespace, args.usernames)
+
+        def child_opts(depends_on: list[pulumi.Resource] | None = None) -> pulumi.ResourceOptions:
+            return pulumi.ResourceOptions(parent=self, provider=k8s_provider, depends_on=depends_on)
+
+        role = k8s.rbac.v1.Role(
+            "role",
+            metadata=role_manifest["metadata"],
+            rules=role_manifest["rules"],
+            opts=child_opts(depends_on=[args.namespace_dependency]),
+        )
+        k8s.rbac.v1.RoleBinding(
+            "role-binding",
+            metadata=binding_manifest["metadata"],
+            role_ref=binding_manifest["roleRef"],
+            subjects=binding_manifest["subjects"],
+            opts=child_opts(depends_on=[role]),
+        )
         self.register_outputs({})

@@ -1,10 +1,16 @@
+import { ThinkingMode } from './chat_template'
 import type { Conversation, SamplingParams } from './types'
 
 const CONVERSATIONS_KEY = 'marin-serve:conversations:v1'
 const PARAMS_KEY = 'marin-serve:params:v1'
 const MAX_CONVERSATIONS = 100
 
-export const DEFAULT_PARAMS: SamplingParams = { temperature: 0.7, maxTokens: 1024, topP: 1.0 }
+export const DEFAULT_PARAMS: SamplingParams = {
+  temperature: 0.7,
+  maxTokens: 1024,
+  topP: 1.0,
+  maxToolRounds: 0,
+}
 
 export function newId(): string {
   return crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`
@@ -15,7 +21,16 @@ export function loadConversations(): Conversation[] {
     const raw = localStorage.getItem(CONVERSATIONS_KEY)
     if (!raw) return []
     const parsed = JSON.parse(raw)
-    return Array.isArray(parsed) ? parsed : []
+    if (!Array.isArray(parsed)) return []
+    return parsed.map((conversation) => ({
+      ...conversation,
+      pythonTools: conversation.pythonTools ?? '',
+      shellWorkspace: conversation.shellWorkspace
+        ? { repositoryUrl: '', commits: [], ...conversation.shellWorkspace }
+        : null,
+      thinkingMode: conversation.thinkingMode ?? ThinkingMode.TemplateDefault,
+      customInstructions: conversation.customInstructions ?? '',
+    }))
   } catch {
     return []
   }

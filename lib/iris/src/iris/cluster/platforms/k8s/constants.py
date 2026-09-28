@@ -3,12 +3,20 @@
 
 """Shared Kubernetes constants for Iris cluster components."""
 
+# CoreWeave's Helm repository. ``install_kueue.py`` and ``install_cw_network.py``
+# both ``helm repo add`` this alias on the operator's machine, so the two must
+# name the same URL or whichever ran last repoints the alias for the other.
+CW_REPO_NAME = "coreweave"
+CW_REPO_URL = "https://charts.core-services.ingress.coreweave.com"
+
 DEFAULT_TASK_CACHE_DIR = "/cache"
+NVIDIA_GPU_RESOURCE = "nvidia.com/gpu"
+RDMA_RESOURCE = "rdma/ib"
 
 # NVIDIA GPU nodes commonly carry this taint. Pods requesting GPUs must
 # tolerate it or they will remain Pending.
 NVIDIA_GPU_TOLERATION: dict = {
-    "key": "nvidia.com/gpu",
+    "key": NVIDIA_GPU_RESOURCE,
     "operator": "Exists",
     "effect": "NoSchedule",
 }
