@@ -168,7 +168,7 @@ def build_arms(
         user_owned_name("documents/mismatch-probe-tiny-grug"), fixture_version, data_uri
     )
     role_plan = SkyRLRolePlan(
-        colocate_all=False,
+        colocate_all=True,
         policy_num_nodes=1,
         policy_num_gpus_per_node=2,
         num_inference_engines=1,
@@ -181,7 +181,7 @@ def build_arms(
         micro_train_batch_size_per_gpu=2,
         n_samples_per_prompt=2,
     )
-    topology = SkyRLTopology(num_nodes=2, gpus_per_node=2, gpu_variant="H100", role_plan=role_plan)
+    topology = SkyRLTopology(num_nodes=1, gpus_per_node=2, gpu_variant="H100", role_plan=role_plan)
     execution = IrisSkyRLExecution(
         cluster=CLUSTER,
         cluster_config=f"lib/iris/config/{CLUSTER}.yaml",
