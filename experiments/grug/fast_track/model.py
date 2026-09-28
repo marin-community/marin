@@ -1448,18 +1448,18 @@ def _learned_knob_stats(layer: "Block", i: int) -> dict[str, jax.Array]:
 _LATENT_SELECT_SALT = 0x5E1EC7
 
 
-def _latent_select_idx(cfg: GrugModelConfig, layer_index: jax.Array | int) -> jax.Array | None:
-    """Per-layer hidden-channel indices for ``latent_select`` with a random or rotating pattern."""
+def _latent_select_mask(cfg: GrugModelConfig, layer_index: jax.Array | int) -> jax.Array | None:
+    """Per-layer 0/1 hidden-channel mask for ``latent_select`` with a random or rotating pattern."""
     if not cfg.latent_select or cfg.latent_select_pattern == "first":
         return None
     assert cfg.latent_dim is not None
     d, latent = cfg.hidden_dim, cfg.latent_dim
     if cfg.latent_select_pattern == "random":
         key = random.fold_in(random.PRNGKey(_LATENT_SELECT_SALT), layer_index)
-        idx = jnp.sort(random.permutation(key, d)[:latent])
+        idx = random.permutation(key, d)[:latent]
     else:
         idx = (jnp.arange(latent) + jnp.asarray(layer_index) * (d // cfg.num_layers)) % d
-    return reshard(idx.astype(jnp.float32), P(None))
+    return reshard(jnp.zeros((d,), jnp.float32).at[idx].set(1.0), P(None))
 
 
 def _qk_mult_init(cfg: GrugModelConfig, num_heads: int) -> jax.Array | None:
@@ -2063,9 +2063,9 @@ class MoEMLP(eqx.Module):
     latent_norm: LearnedRMSNorm | None
     w_latent_up: jax.Array | None
     latent_out_norm: LearnedRMSNorm | None
-    latent_select_idx: Float[Array, " L"] | None
-    """Hidden channels read by ``latent_select`` (``latent_select_pattern`` random/rotating); float-stored
-    indices, frozen for the optimizer."""
+    latent_select_mask: Float[Array, " D"] | None
+    """0/1 mask of the hidden channels read by ``latent_select`` (``latent_select_pattern`` random/rotating),
+    frozen for the optimizer. A mask rather than indices because it stays exact under the bf16 compute cast."""
     cfg: GrugModelConfig = eqx.field(static=True)
     latent_selects: bool = eqx.field(static=True, default=False)
     """This layer forms its expert input by ``latent_select`` (see ``latent_select_layers``)."""
@@ -2128,7 +2128,7 @@ class MoEMLP(eqx.Module):
                 if latent is not None and cfg.latent_out_norm
                 else None
             ),
-            latent_select_idx=_latent_select_idx(cfg, layer_index) if selects else None,
+            latent_select_mask=_latent_select_mask(cfg, layer_index) if selects else None,
             expert_mlp=_expert_mlp_init(_bank_config(cfg, 1), expert_width, k_expert),
             expert_mlp_b=(
                 _expert_mlp_init(_bank_config(cfg, 2), expert_width, random.fold_in(k_expert, 2))
@@ -2398,10 +2398,11 @@ class MoEMLP(eqx.Module):
         routed_input = x_flat
         if self.latent_selects:
             assert self.cfg.latent_dim is not None and self.latent_norm is not None
-            if self.latent_select_idx is None:
+            if self.latent_select_mask is None:
                 selected = x_flat[..., : self.cfg.latent_dim]
             else:
-                idx = jax.lax.stop_gradient(self.latent_select_idx).astype(jnp.int32)
+                mask = jax.lax.stop_gradient(self.latent_select_mask) > 0.5
+                (idx,) = jnp.nonzero(mask, size=self.cfg.latent_dim)
                 selected = jnp.take(x_flat, idx, axis=-1)
             if self.w_latent_down is not None:
                 selected = selected + reshard(projected[1], _batch_spec())
