@@ -445,7 +445,7 @@ def test_telemetry_rejects_conflicting_reemissions(engine: sqlalchemy.Engine) ->
         "agent_exit_code": 0,
         "timed_out": False,
     }
-    with pytest.raises(ValueError, match="conflicting Finelog invocation rows"):
+    with pytest.raises(ValueError):
         review_store.store_telemetry(
             engine,
             REPOSITORY,

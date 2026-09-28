@@ -59,6 +59,7 @@ MAX_SYNC_ATTEMPTS = 3
 MAX_ACTIVITY_RESULTS = 500
 STORED_ERROR_MAX_LENGTH = 4_000
 DATABASE_WRITE_BATCH_SIZE = 100
+FINELOG_SEQUENCE_FIELD = "seq"
 
 metadata = MetaData()
 json_type = JSON(none_as_null=True).with_variant(JSONB(none_as_null=True), "postgresql")
@@ -871,12 +872,12 @@ def store_telemetry(
     for row in invocations:
         payload = _payload(row)
         # Finelog can re-emit one invocation with a new ingestion sequence.
-        content = {key: value for key, value in payload.items() if key != "seq"}
+        content = {key: value for key, value in payload.items() if key != FINELOG_SEQUENCE_FIELD}
         previous = invocation_payloads.get(row.invocation_id)
         if previous is not None and previous != content:
             raise ValueError(f"conflicting Finelog invocation rows for {row.invocation_id}")
         invocation_payloads[row.invocation_id] = content
-        sequence = int(payload["seq"]) if payload.get("seq") is not None else -1
+        sequence = int(payload[FINELOG_SEQUENCE_FIELD]) if payload.get(FINELOG_SEQUENCE_FIELD) is not None else -1
         if row.invocation_id in invocation_rows and sequence <= invocation_sequences[row.invocation_id]:
             continue
         invocation_sequences[row.invocation_id] = sequence
