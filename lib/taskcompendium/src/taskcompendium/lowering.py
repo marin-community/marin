@@ -71,10 +71,17 @@ def select_lowerings(
     candidates: Sequence[LoweringCandidate],
     policy: SelectionPolicy,
     *,
+    required_environment: str | None = None,
     rng_key: int | None = None,
 ) -> tuple[LoweringCandidate, ...]:
-    """Select all, the first, or one keyed sample without global RNG state."""
+    """Select compatible candidates, honoring an explicit environment request."""
+    if required_environment is not None:
+        candidates = tuple(
+            candidate for candidate in candidates if candidate.environment_config.environment == required_environment
+        )
     if not candidates:
+        if required_environment is not None:
+            raise ValueError(f"No compatible lowerings for environment {required_environment!r}")
         raise ValueError("No compatible lowerings")
     if policy == SelectionPolicy.SAMPLE:
         if rng_key is None:
