@@ -187,7 +187,7 @@ def _scale_by_adam_gate_router_decay(
     def update_fn(updates, state, params=None):
         if params is None:
             raise ValueError("_scale_by_adam_gate_router_decay requires params for decoupled decay")
-        step = state.count
+        step = optax.tree_utils.tree_get(state, "count")
         updates, next_state = adam.update(updates, state, params)
         wd = weight_decay * jnp.clip(1.0 - step / total_steps, 0.0, None)
         mask = _gate_router_decay_mask(params)
@@ -665,11 +665,17 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     """AdEMAMix (arXiv 2409.03152) on the plain-Adam groups: weight of a slow gradient EMA added to Adam's
     first moment, warmed up linearly over the run (0: off; the paper uses 5-8)."""
     adam_ademamix_beta3: float = 0.999
-    """Decay of the AdEMAMix slow EMA, warmed up over the run as in the paper."""
+    """Decay of the AdEMAMix slow EMA, warmed up over ``adam_ademamix_warmup`` as in the paper."""
+    adam_ademamix_warmup: float = 1.0
+    """Fraction of the run over which AdEMAMix's alpha and beta3 warm up (the paper: the whole run)."""
+    adam_ademamix_cooldown: float = 0.0
+    """Fraction at the end of the run over which alpha decays linearly back to 0 (0: none)."""
     grokfast_lambda: float = 0.0
     """Grokfast-EMA (arXiv 2405.20233): every gradient gets ``lambda`` x its EMA added before the optimizer
     (0: off; the paper uses 2)."""
     grokfast_alpha: float = 0.98
+    grokfast_adam_only: bool = False
+    """Apply Grokfast to the plain-Adam groups only (on MuonH it acts as extra momentum)."""
     snoo_period: int = 0
     """SNOO outer step every this many inner steps (0: off)."""
     snoo_lr: float = 0.5
@@ -727,15 +733,32 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 return optax.chain(*components)
 
             def adam_core(beta1, beta2):
+                core = adam_moments(beta1, beta2)
+                if self.grokfast_lambda and self.grokfast_adam_only:
+                    return optax.chain(scale_by_grokfast_ema(self.grokfast_alpha, self.grokfast_lambda), core)
+                return core
+
+            def adam_moments(beta1, beta2):
                 if not self.adam_ademamix_alpha:
                     return optax.scale_by_adam(beta1, beta2, self.epsilon)
-                return optax.contrib.scale_by_ademamix(
+                warmup = max(1, int(self.adam_ademamix_warmup * num_train_steps))
+                cooldown = int(self.adam_ademamix_cooldown * num_train_steps)
+                alpha = optax.join_schedules(
+                    [
+                        optax.linear_schedule(0.0, self.adam_ademamix_alpha, warmup),
+                        optax.constant_schedule(self.adam_ademamix_alpha),
+                        optax.linear_schedule(self.adam_ademamix_alpha, 0.0, cooldown),
+                    ],
+                    [warmup, max(warmup, num_train_steps - cooldown)],
+                )
+                ademamix = optax.contrib.scale_by_ademamix(
                     beta1,
                     beta2,
-                    _ademamix_beta3_schedule(beta1, self.adam_ademamix_beta3, num_train_steps),
-                    optax.linear_schedule(0.0, self.adam_ademamix_alpha, num_train_steps),
+                    _ademamix_beta3_schedule(beta1, self.adam_ademamix_beta3, warmup),
+                    alpha,
                     self.epsilon,
                 )
+                return ademamix
 
             def adam_transform_at(lr):
                 components = []
@@ -811,7 +834,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 "kda_decay": plain_adam_at(adam_lr * self.kda_decay_lr_mult, self.kda_decay_beta1, self.kda_decay_beta2),
             }
             inner = optax.multi_transform(transforms, self.create_mask)
-            if self.grokfast_lambda:
+            if self.grokfast_lambda and not self.grokfast_adam_only:
                 inner = optax.chain(scale_by_grokfast_ema(self.grokfast_alpha, self.grokfast_lambda), inner)
             if self.snoo_period <= 0:
                 return inner
