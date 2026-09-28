@@ -88,13 +88,13 @@ lower_to_harbor(spec, chosen.convention, chosen.binding, Path("/tmp/arithmetic-t
 ```python
 import asyncio
 
-from taskcompendium.harbor.runner import HarborLaunch, run_trial
+from taskcompendium.harbor.runner import ReplayLaunch, run_trial
 
 result = asyncio.run(
     run_trial(
         Path("/tmp/arithmetic-task"),
         chosen.binding,
-        HarborLaunch("replay", agent_kwargs={"response": "12"}),
+        ReplayLaunch(response="12"),
         Path("/tmp/arithmetic-trials"),
         "arithmetic-run",
     )
@@ -105,11 +105,9 @@ assert result.verifier_result.rewards == {"reward": 1.0}
 For a model run, pass a chat launch to `run_trial` instead. Provide the endpoint's base URL and, if needed, the name of an environment variable containing the API key. The agent reads that variable at request time; the trial configuration retains only its name.
 
 ```python
-launch = HarborLaunch(
-    "chat",
-    model="model-id",
-    agent_kwargs={"api_base": "https://example.com/v1", "api_key_env": "MODEL_API_KEY"},
-)
+from taskcompendium.harbor.runner import ChatLaunch
+
+launch = ChatLaunch(model="model-id", api_base="https://example.com/v1", api_key_env="MODEL_API_KEY")
 ```
 
 Harbor runs the agent in the direct-chat environment, which exposes no filesystem or shell tools. The custom verifier reads the final response and resolves the private verifier kind to a registered handler. The handler receives its validated Pydantic parameters, the response and convention, and Harbor's verifier-side environment. The built-in exact-answer handler extracts and compares the answer directly, without a temporary answer file. A wrong answer receives reward `0.0`; a malformed submission has no reward; a verifier infrastructure failure has no reward and is recorded separately in `taskcompendium-result.json`. The package requires Harbor's [custom-verifier task loading](https://github.com/marin-community/harbor/pull/155) and does not use `tests/test.sh`.
