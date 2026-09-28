@@ -56,7 +56,7 @@ def parquet_files(directory: str) -> list[str]:
     A single-level ``*.parquet`` glob: a recursive glob makes s3fs ``HeadObject``
     the prefix, which the CW object store rejects.
     """
-    return sorted(str(m) for m in StoragePath(f"{directory.rstrip('/')}/*.parquet").glob())
+    return sorted(str(m) for m in (StoragePath(directory) / "*.parquet").glob())
 
 
 def head_rows(path: str, columns: list[str], limit: int) -> list[dict]:

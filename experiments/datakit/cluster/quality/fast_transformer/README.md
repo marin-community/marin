@@ -81,7 +81,7 @@ Calibration is a monotonic remap, so it does not change document ranking; it onl
 warps the bell-shaped raw score so the fixed cutpoints `[0.2, 0.4, 0.6, 0.8]` land
 on the oracle quality levels (labeled-set bucket-vs-level agreement: within-1 ≈0.98).
 The fusion scorer's calibration carries one curve per predicted content type plus a
-default; `calibrate.apply_calibration` routes each document through its type's curve.
+default; `calibrate.Calibration.apply` routes each document through its type's curve.
 
 ## Architecture
 
