@@ -1,18 +1,19 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Produce the hero quality data: fusion scores, then store-ready buckets.
+"""Produce quality data for the registered sources.
 
-Two stages, one step per registered source each, resolved through
-:mod:`experiments.datakit.hero_data` so the steps land at the paths it registers:
+Two stages, one chain of steps per source:
 
-* ``score`` runs :func:`score_fusion.fusion_score_step` over a source's normalized
-  text and its Harrier leaf on GPU workers. It is the producer of record for
-  :func:`hero_data.fusion_scores`; that accessor is pinned to a completed run, so
-  this stage only needs to run again to score under a new pin.
-* ``bucket`` runs :func:`bucket.quality_step` over the pinned fusion scores and
-  content types on CPU workers, writing the :class:`QualityScores` leaves that
-  :func:`hero_data.quality` resolves and the store reads.
+* ``pipeline`` runs the quality pipeline from scratch: :func:`score_fusion.fusion_score_step`
+  over a source's normalized text and Harrier leaf on GPU workers,
+  :func:`content_type.content_type_step` over the same Harrier leaf on CPU workers,
+  and :func:`bucket.quality_step` over those two outputs. Every step lands at its
+  own identity, so a run never touches what :mod:`experiments.datakit.hero_data`
+  registers; registering its output as hero data is a separate, deliberate edit.
+* ``bucket`` reruns only the bucket step over the inputs :mod:`hero_data` pins, at
+  the identity :func:`hero_data.quality` resolves. A refit calibration moves that
+  identity, so this is how a refit reaches the registered data.
 
 Submit through the hub; the workers place on the CoreWeave peer with the data::
 
@@ -31,6 +32,8 @@ from marin.execution.step_spec import StepSpec
 from rigging.log_setup import configure_logging
 
 from experiments.datakit import hero_data
+from experiments.datakit.cluster.quality.fast_transformer.bucket import quality_step
+from experiments.datakit.cluster.quality.fast_transformer.content_type import content_type_step
 from experiments.datakit.cluster.quality.fast_transformer.score_fusion import fusion_score_step
 
 logger = logging.getLogger(__name__)
@@ -48,32 +51,57 @@ def _partition(sources: list[str], index: int, count: int) -> list[str]:
     return sources[index::count]
 
 
-def build_score_steps(sources: list[str]) -> list[StepSpec]:
-    """One fusion score step per source, at the identity the score stage owns."""
+def _remote(step: StepSpec, pip_dependency_groups: list[str] | None = None) -> StepSpec:
+    return replace(step, fn=remote(step.fn, resources=DRIVER_RESOURCES, pip_dependency_groups=pip_dependency_groups))
+
+
+def build_pipeline_steps(sources: list[str]) -> list[StepSpec]:
+    """Score, type and bucket each source from scratch, each step fed by the one before."""
     steps = []
     for source in sources:
-        step = fusion_score_step(
-            name=f"datakit/fusion_scores/{source}",
-            normalized=hero_data.normalized(source),
-            embedding=hero_data.harrier(source),
-            quality_model=hero_data.NEMOTRON_88K,
+        normalized = hero_data.normalized(source)
+        embedding = hero_data.harrier(source)
+        # Wrapped before they become deps: the runner schedules a dep by its
+        # output path, so the instance it meets first is the one it launches.
+        scores = _remote(
+            fusion_score_step(
+                name=f"datakit/fusion_scores/{source}",
+                normalized=normalized,
+                embedding=embedding,
+                quality_model=hero_data.NEMOTRON_88K,
+            ),
+            pip_dependency_groups=["gpu"],
         )
-        steps.append(replace(step, fn=remote(step.fn, resources=DRIVER_RESOURCES, pip_dependency_groups=["gpu"])))
+        types = _remote(
+            content_type_step(
+                name=f"datakit/content_type/{source}",
+                normalized=normalized,
+                embedding=embedding,
+                classifier=hero_data.DOMAIN_MLP_V1,
+            )
+        )
+        quality = _remote(
+            quality_step(
+                name=f"datakit/quality/{source}",
+                source=source,
+                normalized=normalized,
+                scores=scores,
+                content_type=types,
+                quality_model=hero_data.NEMOTRON_88K,
+            )
+        )
+        steps += [scores, types, quality]
     return steps
 
 
 def build_bucket_steps(sources: list[str]) -> list[StepSpec]:
-    """One bucket step per source, at the identity :func:`hero_data.quality` resolves."""
-    steps = []
-    for source in sources:
-        step = hero_data.quality_step_for(source)
-        steps.append(replace(step, fn=remote(step.fn, resources=DRIVER_RESOURCES)))
-    return steps
+    """One bucket step per source over the pinned inputs, at the identity :func:`hero_data.quality` resolves."""
+    return [_remote(hero_data.quality_step_for(source)) for source in sources]
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--stage", choices=("score", "bucket"), required=True)
+    parser.add_argument("--stage", choices=("pipeline", "bucket"), required=True)
     parser.add_argument(
         "--sources", default=None, help="comma-separated source names (default: every registered source)"
     )
@@ -85,7 +113,7 @@ def main() -> None:
     configure_logging(logging.INFO)
     sources = hero_data.source_names() if args.sources is None else [s.strip() for s in args.sources.split(",")]
     sources = _partition(sources, args.partition_index, args.partition_count)
-    build = build_score_steps if args.stage == "score" else build_bucket_steps
+    build = build_pipeline_steps if args.stage == "pipeline" else build_bucket_steps
     StepRunner().run(build(sources), max_concurrent=args.max_concurrent)
 
 

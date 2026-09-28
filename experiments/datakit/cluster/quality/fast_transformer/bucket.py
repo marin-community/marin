@@ -13,7 +13,7 @@ normalized document, in the normalized shard's row order.
 All three leaves hold the normalized shard's documents in its row order, which is
 the order the store walks positionally against decon and tokenize, so the score
 and type sides are read by position. Each batch's ids are checked against both
-sides' (:class:`score_fusion.AlignedColumn`), and a side with rows left over fails
+sides' (:class:`shards.AlignedColumn`), and a side with rows left over fails
 the shard, since either means the leaves came from different normalize runs.
 
 Calibration is :meth:`calibrate.Calibration.apply`: a document routes through its
@@ -25,7 +25,6 @@ cutpoints from rescoring the corpus.
 
 import functools
 import logging
-import os
 from collections.abc import Iterator
 from functools import partial
 
@@ -35,10 +34,9 @@ from fray.types import ResourceConfig
 from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
-from rigging.filesystem.storage_path import prefix_join
 from zephyr import counters
 from zephyr.context import ZephyrContext
-from zephyr.dataset import Dataset, ShardInfo
+from zephyr.dataset import ShardInfo
 
 from experiments.datakit.cluster.quality.fast_transformer.artifact import BUCKET_EDGES, QualityScores
 from experiments.datakit.cluster.quality.fast_transformer.calibrate import Calibration, load_calibration
@@ -48,11 +46,10 @@ from experiments.datakit.cluster.quality.fast_transformer.quality_model import (
     quality_model_dir,
     require_pinned_calibration,
 )
-from experiments.datakit.cluster.quality.fast_transformer.score_fusion import (
-    COORDINATOR_RESOURCES,
-    paired_basenames,
+from experiments.datakit.cluster.quality.fast_transformer.shards import (
+    ShardPool,
+    map_normalized_shards,
     read_aligned_column,
-    shard_output_pattern,
 )
 
 logger = logging.getLogger(__name__)
@@ -63,9 +60,11 @@ QUALITY_BUCKETS_VERSION = 1
 # at once (the cpu and ram ratios below), and 128 workers keep 512 shards in
 # flight with a quarter of the pods a one-shard-per-worker pool needed; the
 # task ram covers the largest shard's 2.68M ids across the three sides.
-WORKER_RESOURCES = ResourceConfig(cpu=4, ram="24g", disk="8g")
-TASK_RESOURCES = ResourceConfig(cpu=1, ram="6g", disk="8g")
-MAX_WORKERS = 128
+POOL = ShardPool(
+    worker=ResourceConfig(cpu=4, ram="24g", disk="8g"),
+    task=ResourceConfig(cpu=1, ram="6g", disk="8g"),
+    max_workers=128,
+)
 
 QUALITY_SCHEMA = pa.schema(
     [
@@ -102,18 +101,18 @@ def _pinned_calibration(model_dir: str, pin: QualityPin) -> Calibration:
 def _bucket_shard(
     batches: Iterator[pa.RecordBatch],
     shard: ShardInfo,
+    side_paths: tuple[str, ...],
     *,
     source: str,
-    score_paths: tuple[str, ...],
-    type_paths: tuple[str, ...],
     model_dir: str,
     pin: QualityPin,
 ) -> Iterator[pa.RecordBatch]:
     """Bucket one shard: walk the normalized ids, taking score and type row for row."""
     calibration = _pinned_calibration(model_dir, pin)
     where = f"{source} shard {shard.shard_idx}"
-    scores = read_aligned_column(score_paths[shard.shard_idx], "score", f"{where} (scores)")
-    types = read_aligned_column(type_paths[shard.shard_idx], "content_type", f"{where} (types)")
+    score_path, type_path = side_paths
+    scores = read_aligned_column(score_path, "score", f"{where} (scores)")
+    types = read_aligned_column(type_path, "content_type", f"{where} (types)")
     documents = 0
     for batch in batches:
         ids = batch.column("id").to_numpy(zero_copy_only=False)
@@ -147,9 +146,7 @@ def bucket_quality_scores(
     scores_dir: str,
     content_type_dir: str,
     quality_model: QualityPin,
-    worker_resources: ResourceConfig = WORKER_RESOURCES,
-    task_resources: ResourceConfig = TASK_RESOURCES,
-    max_workers: int = MAX_WORKERS,
+    pool: ShardPool = POOL,
     zephyr_context: ZephyrContext | None = None,
 ) -> QualityScores:
     """Bucket one source's fusion scores; one Zephyr task per shard, several per worker.
@@ -158,35 +155,17 @@ def bucket_quality_scores(
     failure buckets only the remainder.
     """
     model_dir = quality_model_dir(quality_model)
-    text_dir = normalized.main_output_dir
-    basenames = tuple(paired_basenames(text_dir, scores_dir, content_type_dir))
-    score_paths = tuple(prefix_join(scores_dir, name) for name in basenames)
-    type_paths = tuple(prefix_join(content_type_dir, name) for name in basenames)
-    logger.info(
-        "%s: bucketing %d shards from %s and %s -> %s", source, len(basenames), scores_dir, content_type_dir, output_path
+    outcome = map_normalized_shards(
+        name="quality",
+        text_dir=normalized.main_output_dir,
+        side_dirs=[scores_dir, content_type_dir],
+        columns=["id"],
+        shard_fn=partial(_bucket_shard, source=source, model_dir=model_dir, pin=quality_model),
+        output_path=output_path,
+        schema=QUALITY_SCHEMA,
+        pool=pool,
+        zephyr_context=zephyr_context,
     )
-    pipeline = (
-        Dataset.from_list([prefix_join(text_dir, name) for name in basenames])
-        .load_parquet(columns=["id"], batch_mode=True)
-        .map_shard(
-            partial(
-                _bucket_shard,
-                source=source,
-                score_paths=score_paths,
-                type_paths=type_paths,
-                model_dir=model_dir,
-                pin=quality_model,
-            )
-        )
-        .write_parquet(shard_output_pattern(output_path, basenames), schema=QUALITY_SCHEMA, skip_existing=True)
-    )
-    ctx = zephyr_context or ZephyrContext(
-        name=f"quality-{os.path.basename(text_dir.rstrip('/'))[:8]}",
-        resources=worker_resources,
-        coordinator_resources=COORDINATOR_RESOURCES,
-        max_workers=min(max_workers, len(basenames)),
-    )
-    outcome = ctx.execute(pipeline, verbose=True, map_task_resources=task_resources)
     return QualityScores(
         main_output_dir=output_path,
         model_dir=model_dir,
@@ -204,9 +183,7 @@ def quality_step(
     scores: StepSpec,
     content_type: StepSpec,
     quality_model: QualityPin,
-    worker_resources: ResourceConfig = WORKER_RESOURCES,
-    task_resources: ResourceConfig = TASK_RESOURCES,
-    max_workers: int = MAX_WORKERS,
+    pool: ShardPool = POOL,
     zephyr_context: ZephyrContext | None = None,
 ) -> StepSpec:
     """A step that buckets ``scores`` by ``content_type`` under ``quality_model``'s calibration.
@@ -227,9 +204,7 @@ def quality_step(
             scores_dir=scores.output_path,
             content_type_dir=content_type.output_path,
             quality_model=quality_model,
-            worker_resources=worker_resources,
-            task_resources=task_resources,
-            max_workers=max_workers,
+            pool=pool,
             zephyr_context=zephyr_context,
         ),
     )

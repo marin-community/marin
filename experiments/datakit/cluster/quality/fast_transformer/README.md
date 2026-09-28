@@ -38,26 +38,31 @@ python -m experiments.datakit.cluster.quality.fast_transformer.calibrate \
 ## Hero data: the fusion scorer
 
 The hero corpus is scored by a fusion variant of the model (`doc_embed_dim=1024`)
-that reads a document's first 512 Nemotron tokens and its Harrier embedding. Two
-steps produce the registered data, both resolved through
-`experiments/datakit/hero_data.py` and driven by [`run.py`](run.py):
+that reads a document's first 512 Nemotron tokens and its Harrier embedding. Three
+steps make up the pipeline, chained by [`run.py`](run.py):
 
 ```
 score_fusion.py  fusion_score_step — normalized text + Harrier leaf → id/score (raw sigmoid),
                  one Zephyr task per shard pair on GPU workers, tokenizing in the task
+content_type.py  content_type_step — Harrier leaf → id/content_type/content_type_prob/
+                 content_type_probs from the domain MLP, on CPU workers
 bucket.py        quality_step — fusion scores + content types + per-type calibration →
                  source/id/content_type/raw_score/score/quality_bucket, the QualityScores
                  dataset the store reads, in the normalized row order
-quality_model.py QualityPin — the model directory, its digests, and the calibration
+quality_model.py QualityPin / ContentTypePin — the models, their digests, and the calibration
 ```
 
 Every input leaf of a source holds the normalized shard's documents in the same row
-order, so both steps read their side inputs by position and check each batch's ids
-against them.
+order, so each step reads its side inputs by position and checks each batch's ids
+against them. All three run through one per-shard driver, `shards.map_normalized_shards`.
 
-`hero_data.fusion_scores` is pinned to the completed run of the score stage, and
-`hero_data.quality` recomputes from the bucket step's identity. A refit calibration
-reruns only the bucket stage:
+`run.py --stage pipeline` runs the three steps from scratch; each lands at its own
+identity. The registered hero data in `experiments/datakit/hero_data.py` pins the
+August fusion scores and content types by path, since the scripts that wrote them
+predate these steps, and `hero_data.quality` is the bucket step over those pinned
+inputs. A pipeline run leaves all three alone; registering its output as hero data
+is a separate edit to the pinned maps. A refit calibration reruns only the bucket
+step over the pinned inputs:
 
 ```bash
 uv run iris --cluster=marin job run --target-cluster cw-us-east-02a --job-name hero-quality-bucket \
@@ -108,9 +113,12 @@ Core:
 - [`scorer.py`](scorer.py) — `PooledScorer`: load a trained model + vocab remap and score arbitrary text.
 - [`score.py`](score.py) — `score_normalized`: the per-source quality step (bme + calibration → buckets).
 - [`score_fusion.py`](score_fusion.py) — `fusion_score_step`: raw fusion scores from normalized text and Harrier embeddings.
+- [`shards.py`](shards.py) — `map_normalized_shards`: the per-shard Zephyr driver the three steps share, and the aligned side-leaf reads.
+- [`content_type.py`](content_type.py) — `content_type_step`: per-document content types from Harrier embeddings.
+- [`domain_mlp.py`](domain_mlp.py) — the content-type classifier's forward and loader.
 - [`bucket.py`](bucket.py) — `quality_step`: the store-ready `QualityScores` dataset from fusion scores and content types.
-- [`quality_model.py`](quality_model.py) — `QualityPin` and the model and calibration digests a step checks before writing.
-- [`run.py`](run.py) — the hero fleet driver for the score and bucket stages.
+- [`quality_model.py`](quality_model.py) — `QualityPin`, `ContentTypePin` and the digests a step checks before writing.
+- [`run.py`](run.py) — the fleet driver: the chained pipeline, or a rebucket of the registered hero data.
 - [`metrics.py`](metrics.py) — rank-based AUC / Spearman used by the training holdout.
 - [`artifact.py`](artifact.py) — `QualityScores` step artifact + the fixed `BUCKET_EDGES`.
 
@@ -119,3 +127,4 @@ Core:
 - Labels: `s3://marin-us-east-02a/marin/datakit/quality_labels_20260709.parquet` (5,578 oracle labels; `label_batch` marks `consensus_v3` / `junkgate_web_wiki` / `junkgate_code_math`).
 - Model: `s3://marin-us-east-02a/marin/datakit/models/quality/pooled_junkgate2/` (`.eqx` + `_remap.json` + `_meta.json` + `calib_bme.json`).
 - Fusion model: `s3://marin-us-east-02a/marin/datakit/models/quality/nemotron_88k/` (same layout; `calib_bme.json` holds the per-type curves). Pinned as `hero_data.NEMOTRON_88K`.
+- Content-type classifier: `s3://marin-us-east-02a/marin/datakit/models/content_type/domain_mlp_v1/domain_mlp.npz`. Pinned as `hero_data.DOMAIN_MLP_V1`.

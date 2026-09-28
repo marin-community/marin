@@ -18,12 +18,12 @@ reads ``max_tokens`` tokens, and the cap changes them only for a document whose 
 65,536 characters tokenize to fewer.
 
 The embedding side is read positionally: every leaf of a source holds the normalized
-shard's documents in its row order. :class:`AlignedColumn` checks each batch's ids
+shard's documents in its row order. :class:`shards.AlignedColumn` checks each batch's ids
 against the embedding shard's as it takes them, so an embedding leaf from a different
 normalize run fails the shard instead of pairing documents with the wrong vectors.
 
 Every worker holds one scorer per process (``InlineRunner``) and runs
-:data:`TASK_RESOURCES`-sized tasks concurrently in threads. Tokenization and parquet
+:data:`POOL`'s task-sized tasks concurrently in threads. Tokenization and parquet
 decode release the GIL, so the concurrent tasks are what keep a worker's cores and its
 accelerator busy; the forward is a small fraction of a task's time.
 """
@@ -31,14 +31,11 @@ accelerator busy; the forward is a small fraction of a task's time.
 import functools
 import itertools
 import logging
-import os
 import threading
 from collections.abc import Iterator
-from dataclasses import dataclass
 from functools import partial
 
 import numpy as np
-import polars as pl
 import pyarrow as pa
 from fray.types import ResourceConfig
 from levanter.data.text.formats import TextLmDatasetFormat
@@ -49,10 +46,9 @@ from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize._core import CHUNK_INDEX_FIELD, INPUT_IDS_FIELD, tokenize_batches_with_id
 from pydantic import BaseModel
-from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr import counters
 from zephyr.context import ZephyrContext
-from zephyr.dataset import Dataset, ShardInfo
+from zephyr.dataset import ShardInfo
 from zephyr.runners import InlineRunner
 
 from experiments.datakit.cluster.quality.fast_transformer.data import NUM_RESERVED, PAD_ID, UNK_ID
@@ -63,6 +59,12 @@ from experiments.datakit.cluster.quality.fast_transformer.quality_model import (
     require_pinned_model,
 )
 from experiments.datakit.cluster.quality.fast_transformer.scorer import PooledScorer, load_pooled_scorer
+from experiments.datakit.cluster.quality.fast_transformer.shards import (
+    ShardPool,
+    map_normalized_shards,
+    read_aligned_column,
+    rebatch,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -76,10 +78,11 @@ TEXT_CHAR_CAP = 65_536
 TEXT_FORMAT = TextLmDatasetFormat()
 # One H100 node has 8 GPUs and 128 vCPUs. Sixteen concurrent tasks per worker keep
 # its cores tokenizing while the forwards share one device.
-WORKER_RESOURCES = ResourceConfig.with_gpu("H100", count=1, cpu=16, ram="96g", disk="64g")
-TASK_RESOURCES = ResourceConfig.with_gpu("H100", count=1, cpu=1, ram="6g", disk="64g")
-COORDINATOR_RESOURCES = ResourceConfig(cpu=1, ram="8g", preemptible=False)
-MAX_WORKERS = 256
+POOL = ShardPool(
+    worker=ResourceConfig.with_gpu("H100", count=1, cpu=16, ram="96g", disk="64g"),
+    task=ResourceConfig.with_gpu("H100", count=1, cpu=1, ram="6g", disk="64g"),
+    max_workers=256,
+)
 
 SCORE_SCHEMA = pa.schema([pa.field("id", pa.string()), pa.field("score", pa.float32())])
 
@@ -111,72 +114,6 @@ def fusion_hash_attrs(pin: QualityPin) -> dict[str, str | int]:
         "text_char_cap": TEXT_CHAR_CAP,
         "v": FUSION_SCORES_VERSION,
     }
-
-
-def paired_basenames(*dirs: str) -> list[str]:
-    """The parquet basenames every directory holds, refusing any asymmetry.
-
-    Co-partitioned leaves of one source share their complete basename sets. A leaf
-    that carries a basename another lacks came from a different normalize run, and
-    its documents would otherwise leave no trace in the output.
-    """
-    sets = {d: {os.path.basename(str(p)) for p in (StoragePath(d) / "*.parquet").glob()} for d in dirs}
-    first_dir, first = next(iter(sets.items()))
-    if not first:
-        raise FileNotFoundError(f"no parquet shards under {first_dir}")
-    for other_dir, other in sets.items():
-        if other != first:
-            missing = sorted(first - other)[:3]
-            extra = sorted(other - first)[:3]
-            raise ValueError(
-                f"{other_dir} is not co-partitioned with {first_dir}: {len(first - other)} basenames missing "
-                f"(e.g. {missing}) and {len(other - first)} unexpected (e.g. {extra})"
-            )
-    return sorted(first)
-
-
-@dataclass
-class AlignedColumn:
-    """One co-partitioned shard's column, taken in step with the normalized shard's rows.
-
-    Each :meth:`take` checks the ids of the rows it returns against the documents they
-    are paired with, and :meth:`require_consumed` checks that no row was left over, so a
-    side written from a different normalize run fails the shard rather than misaligning it.
-    """
-
-    ids: np.ndarray
-    values: np.ndarray
-    where: str
-    consumed: int = 0
-
-    def take(self, doc_ids: np.ndarray) -> np.ndarray:
-        """Return the values of the next ``len(doc_ids)`` rows, which must carry ``doc_ids``."""
-        start, end = self.consumed, self.consumed + len(doc_ids)
-        if end > len(self.ids) or not np.array_equal(self.ids[start:end], doc_ids):
-            raise ValueError(
-                f"{self.where}: rows {start}..{end} do not carry the normalized shard's ids; "
-                f"the two sides did not come from one normalize run"
-            )
-        self.consumed = end
-        return self.values[start:end]
-
-    def require_consumed(self) -> None:
-        if self.consumed != len(self.ids):
-            raise ValueError(
-                f"{self.where}: {len(self.ids)} rows against {self.consumed} documents; "
-                f"the two sides did not come from one normalize run"
-            )
-
-
-def read_aligned_column(path: str, column: str, where: str) -> AlignedColumn:
-    """Read ``id`` and ``column`` from one co-partitioned parquet shard, whole."""
-    # polars types a fixed-width list column as an Array with no offsets buffer,
-    # so the int32 offset ceiling that fails a whole-column pyarrow read of the
-    # largest Harrier shards (2,682,446 documents x 1,024 values > 2^31-1) does
-    # not apply, and to_numpy hands back one contiguous [n, width] block.
-    with StoragePath(path).open("rb") as fh:
-        frame = pl.read_parquet(fh, columns=["id", column])
-    return AlignedColumn(frame.get_column("id").to_numpy(), frame.get_column(column).to_numpy(), where)
 
 
 def verify_remap(remap: dict[int, int]) -> int:
@@ -243,15 +180,6 @@ def normalize_embeddings(rows: np.ndarray) -> np.ndarray:
     return x / np.maximum(np.linalg.norm(x, axis=1, keepdims=True), 1e-6)
 
 
-def shard_output_pattern(output_path: str, basenames: tuple[str, ...]):
-    """The ``write_parquet`` pattern that names shard ``i`` after input basename ``i``."""
-
-    def _output_path(shard_idx: int, _total: int) -> str:
-        return prefix_join(output_path, basenames[shard_idx])
-
-    return _output_path
-
-
 def first_chunk_ids(ids: np.ndarray, texts: list[str]) -> list[list[int]]:
     """Tokenize documents through the tokenize stage's core; return each one's first chunk."""
     records = [{"id": doc_id, "text": text[:TEXT_CHAR_CAP]} for doc_id, text in zip(ids, texts, strict=True)]
@@ -265,30 +193,11 @@ def first_chunk_ids(ids: np.ndarray, texts: list[str]) -> list[list[int]]:
     return rows
 
 
-def rebatch(batches: Iterator[pa.RecordBatch], rows_per_batch: int) -> Iterator[pa.RecordBatch]:
-    """Regroup record batches into batches of exactly ``rows_per_batch`` rows, plus a tail."""
-    pending: list[pa.RecordBatch] = []
-    rows = 0
-    for batch in batches:
-        pending.append(batch)
-        rows += batch.num_rows
-        if rows < rows_per_batch:
-            continue
-        table = pa.Table.from_batches(pending)
-        full = rows - rows % rows_per_batch
-        for start in range(0, full, rows_per_batch):
-            yield pa.concat_batches(table.slice(start, rows_per_batch).to_batches())
-        pending = table.slice(full).to_batches()
-        rows -= full
-    if rows:
-        yield pa.concat_batches(pa.Table.from_batches(pending).to_batches())
-
-
 def _score_shard(
     batches: Iterator[pa.RecordBatch],
     shard: ShardInfo,
+    side_paths: tuple[str, ...],
     *,
-    embedding_paths: tuple[str, ...],
     model_dir: str,
     pin: QualityPin,
     batch_docs: int,
@@ -296,7 +205,7 @@ def _score_shard(
     """Score one normalized shard against its embedding shard, in the normalized order."""
     scorer = pinned_scorer(model_dir, pin)
     vocab_size = scorer.model.config.vocab_size
-    embedding_path = embedding_paths[shard.shard_idx]
+    (embedding_path,) = side_paths
     where = f"shard {shard.shard_idx} ({embedding_path})"
     embeddings = read_aligned_column(embedding_path, "embedding", where)
     documents = 0
@@ -320,9 +229,7 @@ def score_fusion(
     embedding_dir: str,
     quality_model: QualityPin,
     batch_docs: int = BATCH_DOCS,
-    worker_resources: ResourceConfig = WORKER_RESOURCES,
-    task_resources: ResourceConfig = TASK_RESOURCES,
-    max_workers: int = MAX_WORKERS,
+    pool: ShardPool = POOL,
     zephyr_context: ZephyrContext | None = None,
 ) -> FusionScores:
     """Score every shard of one normalized source; one Zephyr task per shard pair.
@@ -332,33 +239,20 @@ def score_fusion(
     """
     model_dir = quality_model_dir(quality_model)
     text_dir = normalized.main_output_dir
-    basenames = tuple(paired_basenames(text_dir, embedding_dir))
-    embedding_paths = tuple(prefix_join(embedding_dir, name) for name in basenames)
-    logger.info("scoring %d shards of %s against %s -> %s", len(basenames), text_dir, embedding_dir, output_path)
-    pipeline = (
-        Dataset.from_list([prefix_join(text_dir, name) for name in basenames])
-        .load_parquet(columns=["id", "text"], batch_mode=True)
-        .map_shard(
-            partial(
-                _score_shard,
-                embedding_paths=embedding_paths,
-                model_dir=model_dir,
-                pin=quality_model,
-                batch_docs=batch_docs,
-            )
-        )
-        .write_parquet(shard_output_pattern(output_path, basenames), schema=SCORE_SCHEMA, skip_existing=True)
-    )
-    ctx = zephyr_context or ZephyrContext(
-        name=f"fusion-{os.path.basename(text_dir.rstrip('/'))[:8]}",
-        resources=worker_resources,
-        coordinator_resources=COORDINATOR_RESOURCES,
-        max_workers=min(max_workers, len(basenames)),
+    outcome = map_normalized_shards(
+        name="fusion",
+        text_dir=text_dir,
+        side_dirs=[embedding_dir],
+        columns=["id", "text"],
+        shard_fn=partial(_score_shard, model_dir=model_dir, pin=quality_model, batch_docs=batch_docs),
+        output_path=output_path,
+        schema=SCORE_SCHEMA,
+        pool=pool,
+        zephyr_context=zephyr_context,
+        # InlineRunner keeps the per-process scorer alive across a worker's tasks.
         stage_runner_factory=InlineRunner,
+        shared={"tokenizer_name": quality_model.tokenizer, "tokenizer_backend": TokenizerBackend.HF},
     )
-    ctx.put("tokenizer_name", quality_model.tokenizer)
-    ctx.put("tokenizer_backend", TokenizerBackend.HF)
-    outcome = ctx.execute(pipeline, verbose=True, map_task_resources=task_resources)
     return FusionScores(
         output_dir=output_path,
         source_key=datakit_source_key(text_dir),
@@ -377,9 +271,7 @@ def fusion_score_step(
     embedding: StepSpec,
     quality_model: QualityPin,
     batch_docs: int = BATCH_DOCS,
-    worker_resources: ResourceConfig = WORKER_RESOURCES,
-    task_resources: ResourceConfig = TASK_RESOURCES,
-    max_workers: int = MAX_WORKERS,
+    pool: ShardPool = POOL,
     zephyr_context: ZephyrContext | None = None,
 ) -> StepSpec:
     """A step that scores ``normalized`` against ``embedding`` with ``quality_model``.
@@ -398,9 +290,7 @@ def fusion_score_step(
             embedding_dir=embedding.output_path,
             quality_model=quality_model,
             batch_docs=batch_docs,
-            worker_resources=worker_resources,
-            task_resources=task_resources,
-            max_workers=max_workers,
+            pool=pool,
             zephyr_context=zephyr_context,
         ),
     )
