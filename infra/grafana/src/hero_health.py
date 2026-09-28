@@ -54,8 +54,6 @@ MFU_MIN = 15.0
 EVAL_LOSS_RELATIVE_INCREASE = 0.02
 # The newest evaluation and the two before it.
 EVAL_HISTORY_LENGTH = 3
-# The W&B key of the evaluation loss the regression check reads.
-EVAL_LOSS_METRIC = "eval_dropless/paloma/macro_loss"
 
 _GRAD_NORM = "grad_norm_total"
 _SKIPPED_STEP = "optim_skipped_step"

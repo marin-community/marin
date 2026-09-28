@@ -89,6 +89,7 @@ from collections.abc import Callable, Hashable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
+from http import HTTPStatus
 
 import pyarrow as pa
 import uvicorn
@@ -117,7 +118,6 @@ from github_app import GithubAppAuth
 from github_source import GithubSource
 from hero_health import (
     EVAL_HISTORY_LENGTH,
-    EVAL_LOSS_METRIC,
     EvalHistory,
     Signals,
     WatchedRun,
@@ -176,7 +176,7 @@ from vllm_observability import (
     vllm_run_summary_samples_query,
     vllm_run_summary_table,
 )
-from wandb_source import WandbSource
+from wandb_source import EVAL_LOSS_METRIC, WandbSource
 from zephyr_observability import zephyr_overview_dataset
 from zephyr_stalls import zephyr_progress_query, zephyr_stall_alert_rows
 
@@ -1020,7 +1020,7 @@ def create_app(
                 )
             except UpstreamError as err:
                 logger.warning("W&B evaluation history for %s unavailable: %s", run_id, err)
-                if err.status_code == 504:
+                if err.status_code == HTTPStatus.GATEWAY_TIMEOUT:
                     break
                 continue
             history = eval_history(points)
