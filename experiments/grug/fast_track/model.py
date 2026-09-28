@@ -60,7 +60,7 @@ from experiments.grug.fast_track.router_metrics import (
     reduce_router_stats,
     summarize_router_metrics,
 )
-from experiments.grug.moe.kda import chunk_kda, kda_fused
+from experiments.grug.moe.kda import chunk_kda, doc_starts, kda_fused
 
 _GATED_NORM_RANK = 128
 _QB_HIST_BINS = 10_000
@@ -98,6 +98,11 @@ KDA_MIN_LOG_DECAY = 5.0
 # 16-token chunks keep the kernels' intra-chunk rescaling exact for the -5 per-token log-decay
 # floor (cumulative >= -80 = -DEFLATE_EXP_CAP; see kda_prep_pallas).
 KDA_CHUNK_SIZE = 16
+# kda_dd_rope: per-pair base angular frequencies (rad/token) are log-spaced over this range, periods ~6 to
+# ~800 tokens, spanning the KDA decay's memory lengths (|g| init in kda_dt_range).
+_KDA_ROT_OMEGA_RANGE = (1.0 / 128, 1.0)
+# KDA per-layer activation diagnostics, lifted out of the layer stats into ``train/attn_res/knob_kda_*``.
+_KDA_STAT_PREFIX = "attn_res_knob_kda_"
 
 
 class LocalMixer(StrEnum):
@@ -388,6 +393,16 @@ class GrugModelConfig:
     """Zero-init ``W_β↑`` (β = 0.5 everywhere at init)."""
     kda_gate_per_head: bool = False
     """KDA output gate ``sigmoid(x W_g)`` with one value per head instead of one per channel."""
+    kda_dd_rope: bool = False
+    """Data-dependent rotation of the KDA state: complex-eigenvalue transitions (Mamba-3, arXiv 2603.15569;
+    Selective RoPE, arXiv 2511.17388) via the RoPE trick. Channel pairs ``(j, j + h/2)`` of q and k are rotated
+    by ``theta_t = cumsum_{s<=t} gamma_j * omega_j * softplus(x_s W_rot_down W_rot_up)`` (reset at document
+    starts); ``omega_j`` is log-spaced in ``[1/128, 1]`` rad/token and the per-pair amplitude ``gamma`` is
+    zero-init, so the layer is exact KDA at init. The decay is tied across each pair (``W_a↑`` / ``dt_bias``
+    shrink to ``h/2`` columns per head), which makes each pair's transition ``exp(g) R(delta theta)`` a complex
+    eigenvalue that commutes with the rotation; otherwise the trick is not the rotated recurrence."""
+    kda_dd_rope_rank: int = 16
+    """Hidden width of the low-rank angle projection ``W_rot_down W_rot_up`` (``kda_dd_rope``)."""
     loop_passes: int = 1
     """Apply the whole layer stack this many times per forward (tied weights). Every pass keeps
     extending the AttnRes history and has its own gate queries; each extra pass starts its running
@@ -750,6 +765,13 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be < num_experts, because QB routing selects top-(k+1)")
         if self.local_mixer == LocalMixer.KDA and not self.attn_res:
             raise ValueError("local_mixer=kda requires attn_res (KDA layers run in the unrolled AttnRes loop)")
+        if self.kda_dd_rope:
+            if self.local_mixer != LocalMixer.KDA:
+                raise ValueError("kda_dd_rope requires local_mixer=kda")
+            if self.inferred_head_dim % 2:
+                raise ValueError("kda_dd_rope rotates channel pairs and needs an even head_dim")
+            if self.kda_push_buckets:
+                raise ValueError("kda_dd_rope needs pair-tied decays; kda_push_buckets' per-channel decays are not")
         if self.num_null_experts:
             if self.moe_bank2_experts or self.moe_hash_layers or self.moe_dense_router_grad:
                 raise ValueError("zero-computation experts do not support moe_bank2, hash layers or dense router grad")
@@ -1272,6 +1294,11 @@ def _learned_knob_stats(layer: "Block", i: int) -> dict[str, jax.Array]:
         norm = getattr(layer, name)
         if isinstance(norm, DyT):
             stats[f"attn_res_knob_dyt_alpha_{name.removeprefix('rms_')}_L{i}"] = jax.lax.stop_gradient(norm.dyt_alpha)
+    rot_scale = getattr(layer.attn, "rot_scale", None)
+    if rot_scale is not None:
+        freq = jnp.abs(jax.lax.stop_gradient(rot_scale).astype(jnp.float32)) * _kda_rot_omega(2 * rot_scale.shape[-1])
+        stats[f"attn_res_knob_kda_rot_freq_mean_L{i}"] = jnp.mean(freq)
+        stats[f"attn_res_knob_kda_rot_freq_max_L{i}"] = jnp.max(freq)
     if layer.ple_up is not None:
         stats[f"attn_res_knob_ple_up_norm_L{i}"] = jnp.linalg.norm(
             jax.lax.stop_gradient(layer.ple_up).astype(jnp.float32)
@@ -1318,6 +1345,41 @@ def _kda_push_decay_init(cfg: GrugModelConfig, num_heads: int, head_dim: int) ->
     return jnp.broadcast_to(logits[:, None, None], (cfg.kda_push_buckets, num_heads, head_dim)).astype(jnp.float32)
 
 
+def _kda_rot_omega(head_dim: int) -> jax.Array:
+    """``kda_dd_rope`` base frequencies: one per channel pair, log-spaced over ``_KDA_ROT_OMEGA_RANGE`` (fast first)."""
+    lo, hi = _KDA_ROT_OMEGA_RANGE
+    return jnp.exp(jnp.linspace(math.log(hi), math.log(lo), head_dim // 2))
+
+
+def _segment_cumsum(x: jax.Array, segment_ids: jax.Array | None) -> jax.Array:
+    """Cumulative sum of ``x`` ``(B, S, ...)`` over ``S``, restarting at every packed-document start."""
+    if segment_ids is None:
+        return jnp.cumsum(x, axis=1)
+    starts = doc_starts(segment_ids).astype(bool)
+    starts = jnp.broadcast_to(starts.reshape(*starts.shape, *(1,) * (x.ndim - 2)), x.shape)
+
+    def combine(left, right):
+        (lv, lr), (rv, rr) = left, right
+        return jnp.where(rr, rv, lv + rv), lr | rr
+
+    return jax.lax.associative_scan(combine, (x, starts), axis=1)[0]
+
+
+def _kda_rotate_qk(q, k, rate, segment_ids):
+    """Rotate channel pairs ``(j, j + h/2)`` of q and k by ``theta = segment_cumsum(rate)``: the RoPE trick
+    for the rotated recurrence ``S_t = (I - beta k k^T) exp(g) R(rate_t) S_{t-1} + beta k v^T`` (pair-tied g).
+    Rotations preserve the norm, so this commutes with the kernel's q/k L2 normalization."""
+    theta = _segment_cumsum(rate, segment_ids)
+    cos, sin = jnp.cos(theta), jnp.sin(theta)
+
+    def rotate(x):
+        half = x.shape[-1] // 2
+        x1, x2 = x[..., :half].astype(jnp.float32), x[..., half:].astype(jnp.float32)
+        return jnp.concatenate([x1 * cos - x2 * sin, x1 * sin + x2 * cos], axis=-1).astype(x.dtype)
+
+    return rotate(q), rotate(k)
+
+
 def _kda_kernel(q, k, v, g, beta, segment_ids=None, *, save_chunk_states: bool):
     """KDA on the model layout ``(B, S, H, d)``: the fused Pallas kernels on GPU, else the XLA
     ``chunk_kda`` (heads-first layout)."""
@@ -1340,8 +1402,8 @@ class KimiDeltaAttention(eqx.Module):
     follows ``S_t = (I - beta k k^T) Diag(exp(g)) S_{t-1} + beta k v^T``, read as ``o_t = S_t^T q_t``,
     and is hard-reset at packed-document starts. The output gets a per-head RMSNorm with a learnable
     ``h``-dim scale shared across heads, a full-rank per-channel gate ``sigmoid(x W_g)``, and ``w_o``.
-    No positional encoding and no window. The recurrence runs under ``shard_map`` (batch on the batch
-    axes, heads on ``model``).
+    No positional encoding (unless ``kda_dd_rope``) and no window. The recurrence runs under ``shard_map``
+    (batch on the batch axes, heads on ``model``).
     """
 
     w_q: Float[Array, "D NH"]
@@ -1368,12 +1430,19 @@ class KimiDeltaAttention(eqx.Module):
     """Per-bucket, per-channel log-decay logits of the push buckets (``kda_push_buckets``)."""
     w_push: Float[Array, "D NM"] | None
     """Writer's bucket weights, zero-init (uniform split)."""
+    w_rot_down: Float[Array, "D R"] | None
+    w_rot_up: Float[Array, "R NP"] | None
+    rot_scale: Float[Array, "N P"] | None
+    """``kda_dd_rope`` per-pair angle amplitude ``gamma`` (zero-init: no rotation at init)."""
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "KimiDeltaAttention":
         k_q, k_k, k_v, k_o, k_g, k_ad, k_au, k_b, k_dt = random.split(key, 9)
         d, n, h, r, std = cfg.hidden_dim, cfg.num_heads, cfg.inferred_head_dim, _KDA_GATE_RANK, cfg.initializer_std
+        # kda_dd_rope ties the decay across each rotated channel pair: h/2 decay columns per head.
+        decay_cols = 1 if cfg.kda_decay_per_head else (h // 2 if cfg.kda_dd_rope else h)
+        rot_rank = cfg.kda_dd_rope_rank
         return KimiDeltaAttention(
             w_q=reshard(_init_weight(k_q, (d, n * h), std), P(_FSDP_AXES, "model")),
             w_k=reshard(_init_weight(k_k, (d, n * h), std), P(_FSDP_AXES, "model")),
@@ -1390,11 +1459,11 @@ class KimiDeltaAttention(eqx.Module):
             ),
             w_a_down=reshard(_init_weight(k_ad, (d, r), std), P(_FSDP_AXES, None)),
             w_a_up=reshard(
-                _init_weight(k_au, (r, n if cfg.kda_decay_per_head else n * h), std),
+                _init_weight(k_au, (r, n * decay_cols), std),
                 P(None, None) if cfg.kda_decay_per_head else P(None, "model"),
             ),
             a_log=jnp.zeros((n,)),
-            dt_bias=_kda_dt_bias_init(cfg, k_dt, (n, 1) if cfg.kda_decay_per_head else (n, h)),
+            dt_bias=_kda_dt_bias_init(cfg, k_dt, (n, decay_cols)),
             w_beta=None if cfg.kda_beta_rank else reshard(_init_weight(k_b, (d, n), std), P(None, None)),
             w_beta_down=(
                 reshard(_init_weight(k_b, (d, cfg.kda_beta_rank), std), P(None, None)) if cfg.kda_beta_rank else None
@@ -1422,6 +1491,20 @@ class KimiDeltaAttention(eqx.Module):
             vres_lambda=_vres_lambda_init(cfg),
             push_decay=_kda_push_decay_init(cfg, n, h) if cfg.kda_push_buckets else None,
             w_push=(reshard(jnp.zeros((d, n * cfg.kda_push_buckets)), P(None, None)) if cfg.kda_push_buckets else None),
+            w_rot_down=(
+                reshard(_init_weight(random.fold_in(k_ad, 1), (d, rot_rank), std), P(_FSDP_AXES, None))
+                if cfg.kda_dd_rope
+                else None
+            ),
+            w_rot_up=(
+                reshard(
+                    _init_weight(random.fold_in(k_au, 1), (rot_rank, n * (h // 2)), 1.0 / math.sqrt(rot_rank)),
+                    P(None, "model"),
+                )
+                if cfg.kda_dd_rope
+                else None
+            ),
+            rot_scale=jnp.zeros((n, h // 2)) if cfg.kda_dd_rope else None,
             cfg=cfg,
         )
 
@@ -1435,10 +1518,10 @@ class KimiDeltaAttention(eqx.Module):
         no_beta: bool = False,
         kv_share: dict[str, jax.Array] | None = None,
         value_residual: bool = False,
-    ) -> Float[Array, "B S D"]:
+    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         """``proj_inputs`` optionally replaces the input of the ``q`` / ``k`` / ``v`` projections;
         ``no_decay`` / ``no_beta`` (static, per layer) replace g with 0 / beta with 1; ``kv_share`` /
-        ``value_residual`` as in ``CausalSelfAttention``."""
+        ``value_residual`` as in ``CausalSelfAttention``. Also returns ``kda_dd_rope`` diagnostics."""
         cfg = self.cfg
         head_dim = cfg.inferred_head_dim
         b, s, _ = x.shape
@@ -1467,11 +1550,13 @@ class KimiDeltaAttention(eqx.Module):
         if self.sconv_a is not None:
             a_low = self.sconv_a(a_low, segment_ids)
         a = jnp.einsum("bsr,re->bse", a_low, self.w_a_up)
-        a = rearrange(a, "... (n d) -> ... n d", d=1 if cfg.kda_decay_per_head else head_dim).astype(jnp.float32)
+        a = rearrange(a, "... (n d) -> ... n d", d=self.dt_bias.shape[-1]).astype(jnp.float32)
         scale = jnp.exp(self.a_log.astype(jnp.float32))[:, None]
         g = -KDA_MIN_LOG_DECAY * jax.nn.sigmoid(scale * (a + self.dt_bias.astype(jnp.float32)))
         if cfg.kda_decay_per_head:
             g = jnp.broadcast_to(g, (*g.shape[:-1], head_dim))
+        elif cfg.kda_dd_rope:
+            g = jnp.concatenate([g, g], axis=-1)  # channels j and j + h/2 form one rotated pair
         if self.w_beta_down is not None and self.w_beta_up is not None:
             beta_hidden = jax.nn.silu(jnp.einsum("bsd,dr->bsr", x, self.w_beta_down))
             beta_logits = jnp.einsum("bsr,rn->bsn", beta_hidden, self.w_beta_up.astype(beta_hidden.dtype))
@@ -1487,6 +1572,7 @@ class KimiDeltaAttention(eqx.Module):
         if no_beta:
             beta = jnp.ones_like(beta)
 
+        stats: dict[str, jax.Array] = {}
         spec4 = P(_BATCH_AXES, None, "model", None)
         spec3 = P(_BATCH_AXES, None, "model")
         q, k, v, g = (reshard(t, spec4) for t in (q, k, v, g))
@@ -1494,6 +1580,23 @@ class KimiDeltaAttention(eqx.Module):
         run = functools.partial(_kda_kernel, save_chunk_states=cfg.kda_save_chunk_states)
         args = (q, k, v, g, beta)
         in_specs = (spec4,) * 4 + (spec3,)
+        if self.w_rot_down is not None and self.w_rot_up is not None and self.rot_scale is not None:
+            rot = jnp.einsum("bsr,re->bse", jnp.einsum("bsd,dr->bsr", x, self.w_rot_down), self.w_rot_up)
+            rot = rearrange(rot, "... (n p) -> ... n p", p=head_dim // 2).astype(jnp.float32)
+            freq = self.rot_scale.astype(jnp.float32) * _kda_rot_omega(head_dim)
+            rate = reshard(jax.nn.softplus(rot) * freq, spec4)  # rad/token per channel pair
+            rate_sg = jax.lax.stop_gradient(rate)
+            stats[f"{_KDA_STAT_PREFIX}rot_rate_abs_mean"] = jnp.mean(jnp.abs(rate_sg))
+            stats[f"{_KDA_STAT_PREFIX}rot_rate_std"] = jnp.std(rate_sg)
+            stats[f"{_KDA_STAT_PREFIX}rot_rate_pair_abs_max"] = jnp.max(jnp.mean(jnp.abs(rate_sg), axis=(0, 1)))
+            kernel_run = run
+
+            def run(q, k, v, g, beta, rate, segment_ids=None):
+                q, k = _kda_rotate_qk(q, k, rate, segment_ids)
+                return kernel_run(q, k, v, g, beta, segment_ids)
+
+            args += (rate,)
+            in_specs += (spec4,)
         if segment_ids is not None:
             args += (reshard(jnp.broadcast_to(segment_ids, (b, s)), P(_BATCH_AXES, None)),)
             in_specs += (P(_BATCH_AXES, None),)
@@ -1525,7 +1628,7 @@ class KimiDeltaAttention(eqx.Module):
         if cfg.kda_gate_per_head:
             gate = jnp.repeat(gate, head_dim, axis=-1, total_repeat_length=cfg.num_heads * head_dim)
         o = o * gate
-        return jnp.einsum("bsh,hd->bsd", o, self.w_o, out_sharding=_batch_spec())
+        return jnp.einsum("bsh,hd->bsd", o, self.w_o, out_sharding=_batch_spec()), stats
 
 
 class RMSNorm(eqx.Module):
@@ -2488,9 +2591,10 @@ class Block(eqx.Module):
         sum_components: tuple[str, ...] = (),
         kda_ablation: tuple[bool, bool] = (False, False),
         value_residual: bool = False,
-    ) -> Float[Array, "B S D"]:
+    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         """``sum_stream`` (with ``sum_components``) feeds those q/k/v projections from the straight-sum
-        stream, through the same RMSNorm and GatedNorm, instead of the AttnRes mix ``h``."""
+        stream, through the same RMSNorm and GatedNorm, instead of the AttnRes mix ``h``. Also returns the
+        mixer's diagnostics (KDA only)."""
         attn_in = self.attn_gated_norm(self.rms_attn(_laurel(h, self.laurel_a_attn, self.laurel_b_attn)))
         proj_inputs = None
         attn_components = tuple(c for c in sum_components if c in ("q", "k", "v"))
@@ -2498,9 +2602,10 @@ class Block(eqx.Module):
             assert sum_stream is not None
             sum_in = self.attn_gated_norm(self.rms_attn(sum_stream))
             proj_inputs = {c: sum_in for c in attn_components}
+        stats: dict[str, jax.Array] = {}
         if isinstance(self.attn, KimiDeltaAttention):
             # KDA has no positional encoding or window; it only needs the document boundaries.
-            out = self.attn(
+            out, stats = self.attn(
                 attn_in,
                 _sconv_segment_ids(mask),
                 proj_inputs=proj_inputs,
@@ -2528,7 +2633,7 @@ class Block(eqx.Module):
             out = self.out_norm_attn(out)
         if self.attn_out_scale is not None:
             out = out * self.attn_out_scale.astype(out.dtype)
-        return out
+        return out, stats
 
     def mlp_branch(
         self,
@@ -2582,7 +2687,7 @@ class Block(eqx.Module):
         disable_rope: bool | jax.Array = False,
         is_global: bool | jax.Array = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        x = x + self.attn_branch(x, mask, disable_rope, is_global)
+        x = x + self.attn_branch(x, mask, disable_rope, is_global)[0]
         mlp_out, router_stats = self.mlp_branch(x, mask)
         return x + mlp_out, router_stats
 
@@ -3012,7 +3117,7 @@ def _attn_res_layer(
         v_gate = 2 * cfg.num_layers + layer_index
         v_stream, _, w_v = _attn_res_mix(blocks, block_logits, partial, queries, v_gate, eps, logit_bias, **opts)
         v_stats[_ATTN_RES_W_V] = w_v
-    attn_out = attn_branch(
+    attn_out, attn_stats = attn_branch(
         layer,
         h,
         mask,
@@ -3041,6 +3146,7 @@ def _attn_res_layer(
         **router_stats,
         **v_stats,
         **mem_stats,
+        **attn_stats,
         _ATTN_RES_Z: z_attn + z_mlp,
         _ATTN_RES_W_ATTN: w_attn,
         _ATTN_RES_W_MLP: w_mlp,
@@ -3074,7 +3180,7 @@ def _attn_res_layer_full(diff_args, mask, token_ids, use_long, layer_index, eps,
             blocks, block_logits, None, queries, v_gate, eps, logit_bias, **opts
         )
         sum_components = ("v",)
-    attn_out = type(layer).attn_branch(
+    attn_out, attn_stats = type(layer).attn_branch(
         layer,
         h,
         mask,
@@ -3123,6 +3229,7 @@ def _attn_res_layer_full(diff_args, mask, token_ids, use_long, layer_index, eps,
         **router_stats,
         **v_stats,
         **mem_stats,
+        **attn_stats,
         _ATTN_RES_Z: z_attn + z_mlp,
         _ATTN_RES_W_ATTN: w_attn,
         _ATTN_RES_W_MLP: w_mlp,
@@ -3959,7 +4066,7 @@ class Transformer(eqx.Module):
         )
 
         weight_logs: dict[int, tuple[jax.Array, bool]] = {}
-        memory_logs: dict[str, jax.Array] = {}
+        layer_logs: dict[str, jax.Array] = {}
         nitp_logs: dict[str, jax.Array] = {}
         if cfg.nitp_weight > 0 and not 0 <= cfg.nitp_layer < num_layers:
             raise ValueError(f"nitp_layer must be in 0..{num_layers - 1}, got {cfg.nitp_layer}")
@@ -4015,8 +4122,8 @@ class Transformer(eqx.Module):
                 if cfg.nitp_weight > 0 and pass_index == 0 and i == cfg.nitp_layer:
                     # The plain residual stream after this layer: embedding plus every sublayer output so far.
                     nitp_logs[_NITP_TARGET] = _stream_sum((*blocks[len(extra_sources) :], partial))
-                for name in [k for k in stats if k.startswith(_MEMORY_STAT_PREFIX)]:
-                    memory_logs[f"{name}_L{eff}"] = stats.pop(name)
+                for name in [k for k in stats if k.startswith((_MEMORY_STAT_PREFIX, _KDA_STAT_PREFIX))]:
+                    layer_logs[f"{name}_L{eff}"] = stats.pop(name)
                 has_partial_attn = partial_before is not None
                 stream_col = cfg.attn_res_stream_source
                 weight_logs[2 * eff] = (stats.pop(_ATTN_RES_W_ATTN), has_partial_attn or stream_col)
@@ -4117,7 +4224,7 @@ class Transformer(eqx.Module):
                 final_stats[f"attn_res_scale_attn_L{i}"] = jax.lax.stop_gradient(layer.attn_out_scale)
                 final_stats[f"attn_res_scale_mlp_L{i}"] = jax.lax.stop_gradient(layer.mlp_out_scale)
             final_stats.update(_learned_knob_stats(layer, i))
-        final_stats.update(memory_logs)
+        final_stats.update(layer_logs)
         for i, memory in zip(cfg.memory_layers, self.memory or (), strict=True):
             w_out = jax.lax.stop_gradient(memory.w_out).astype(jnp.float32)
             final_stats[f"{_MEMORY_STAT_PREFIX}out_norm_L{i}"] = jnp.linalg.norm(w_out)
