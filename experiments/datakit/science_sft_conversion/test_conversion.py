@@ -59,6 +59,30 @@ def test_bold_markdown_conclusion_is_valid() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "field, leaked_text",
+    [
+        ("reasoning_content", "The reasoning_content simply lists these source-grounded points."),
+        ("reasoning_content", "The conversion task requires reporting those supplied references."),
+        ("answer", "The answer field will report these explicitly stated facts."),
+    ],
+)
+def test_conversion_process_leaks_are_rejected_without_blocking_unit_conversion(field, leaked_text) -> None:
+    source = Source("probe/physics", "", 0, 0)
+    passage = "One metre is 100 centimetres."
+    completion = {
+        "user": "Convert two metres to centimetres.",
+        "reasoning_content": "The unit conversion process uses 100 centimetres per metre, so 2 * 100 = 200 centimetres.",
+        "answer": "- 2 metres * 100 centimetres/metre = 200 centimetres.\nConclusion: 200 centimetres.",
+    }
+    with pytest.raises(ValueError, match="describes the conversion process"):
+        validated_document(source, "test-2", passage, 0, {**completion, field: leaked_text}, ConversionMode.GROUNDED)
+
+    record = validated_document(source, "test-2", passage, 0, completion, ConversionMode.GROUNDED)
+    assert record["messages"][1]["content"][0]["text"] == completion["reasoning_content"]
+    assert record["messages"][2]["content"][0]["text"] == completion["answer"]
+
+
 def test_worked_solution_stays_out_of_the_user_turn() -> None:
     source = Source("swallow-math-v2/qa", "", 0, 0)
     passage = "Question: What is 2 + 2?\nAnswer: 4."

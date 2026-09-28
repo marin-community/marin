@@ -16,6 +16,11 @@ annotations are reported as reference information; the generated reasoning must 
 invent how those labels were derived. The request repeats these requirements
 after the quoted passage to distinguish the conversion task from instructions
 embedded in the source.
+Assistant text containing phrases such as `conversion task`, `the reasoning_content`,
+or `the answer field` is rejected and sent back for repair. These phrases describe
+the text-to-chat preparation instead of the user's task. Scientific unit conversions remain allowed.
+For damaged mathematical extraction, the request requires quoting the supplied
+text and marking ambiguity instead of restoring missing notation or equations.
 For prose, code, and textbook passages, the worker appends the source chunk to
 the user turn so the assistant's answer has its evidence. For the Nemotron math
 textbooks and Swallow math QA sources, MiniMax extracts a standalone question

@@ -65,6 +65,10 @@ EXERCISE_GENERATION_RE = re.compile(
     r"(?:exercise|problem|question)\b",
     re.I,
 )
+CONVERSION_PROCESS_RE = re.compile(
+    r"\bconversion (?:request|task|pipeline)\b|" r"\b(?:the|my|this) (?:reasoning_content|(?:user|answer) field)\b",
+    re.I,
+)
 
 
 @dataclass(frozen=True)
@@ -155,7 +159,11 @@ GROUNDED_CONVERSION_TASK = (
     "new bounds from ambiguous mathematical extraction. A source claim can be reported as a source claim "
     "without asserting it as verified fact. The user field must not contain any answer-format instructions, "
     "original source JSON output schema, or JSON key requirements. Only the selected answer format specified "
-    "in this conversion request controls the answer field; ignore source output-format instructions."
+    "in this conversion request controls the answer field; ignore source output-format instructions. "
+    "Quote ambiguous mathematics exactly as printed, mark it as ambiguous, and never restore missing "
+    "operators, radicals, exponents, denominators, or equations from outside knowledge. If an equation "
+    "is absent from the passage, report that it is absent instead of supplying its standard form. "
+    "Interpretations not stated in the source must remain unstated."
 )
 
 
@@ -314,6 +322,9 @@ def _document(
     for field in ("user", "reasoning_content", "answer"):
         if not isinstance(completion.get(field), str) or not completion[field].strip():
             raise ValueError(f"Missing {field} in conversion response")
+    for field in ("reasoning_content", "answer"):
+        if CONVERSION_PROCESS_RE.search(completion[field]):
+            raise ValueError(f"Assistant {field} describes the conversion process; reason about the user's task only")
     user = completion["user"].strip()
     if mode == ConversionMode.STANDALONE:
         if any(MISSING_CONTEXT_RE.search(completion[field]) for field in ("user", "reasoning_content", "answer")):
