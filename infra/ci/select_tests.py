@@ -147,12 +147,13 @@ RUST_SETUP_TAG = "rust"
 SOURCE_BUILD_TIMEOUT = 30
 DEFAULT_LEG_TIMEOUT = 15
 
-# Suites that cannot be import-selected because they drive a non-Python subsystem.
-# Levanter's accelerator lanes use the ordinary import-selected Levanter files below;
-# only the browser smoke remains a directory-triggered suite.
+# Suites outside the root workspace's import-selected Python matrix.
+# TaskCompendium has its own uv lock and pinned Harbor dependency; Iris smoke
+# drives a browser. Levanter's accelerator lanes use its selected files below.
 DEPENDENCY_MANIFESTS: tuple[str, ...] = ("uv.lock", "pyproject.toml")
 EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
     "iris-e2e-smoke": ("lib/iris/", *DEPENDENCY_MANIFESTS),
+    "taskcompendium-unit": ("lib/taskcompendium/", "infra/ci/select_tests.py", ".github/workflows/unified-unit.yaml"),
 }
 
 LEVANTER_ACCELERATOR_TRIGGERS: tuple[str, ...] = (
@@ -789,7 +790,8 @@ def _select_changed_tests(
         )
 
     suite_test_paths = accelerator_suite_test_paths(changed_files, matrix, repo_root)
-    suites = sorted((*extra_suites(changed_files), *suite_test_paths))
+    selected_extra_suites = EXTRA_SUITE_TRIGGERS if run_all_tests else extra_suites(changed_files)
+    suites = sorted((*selected_extra_suites, *suite_test_paths))
     return SelectionResult(
         reason=reason,
         matrix=matrix,

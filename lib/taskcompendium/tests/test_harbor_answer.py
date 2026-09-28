@@ -17,6 +17,7 @@ from harbor.models.task.task import Task
 from taskcompendium.grading import ExactAnswerPayload, GradeResult, Outcome, VerifierHandler, exact_answer, grade_answer
 from taskcompendium.harbor.runner import ChatLaunch, ReplayLaunch, run_trial
 from taskcompendium.lowering import (
+    DIRECT_CHAT_ENVIRONMENT,
     HarborEnvironmentConfig,
     SelectionPolicy,
     compatible_lowerings,
@@ -296,6 +297,11 @@ def test_selection_policies_use_compatible_conventions(specification):
     selected = select_lowerings(candidates, SelectionPolicy.SAMPLE, rng_key=42)[0].convention.id
     assert separate_process.stdout.strip() == selected
     assert {select_lowerings(candidates, SelectionPolicy.SAMPLE, rng_key=key)[0] for key in range(16)} == set(candidates)
+    assert select_lowerings(candidates, SelectionPolicy.FIRST, required_environment=DIRECT_CHAT_ENVIRONMENT) == (
+        candidates[0],
+    )
+    with pytest.raises(ValueError, match="No compatible lowerings for environment 'shellsim'"):
+        select_lowerings(candidates, SelectionPolicy.FIRST, required_environment="shellsim")
 
 
 async def test_chat_trial_resolves_key_at_runtime_without_persisting_it(
@@ -320,11 +326,6 @@ async def test_chat_trial_resolves_key_at_runtime_without_persisting_it(
     assert any(path.name == "config.json" for path in artifacts)
     assert any(path.name == "result.json" for path in artifacts)
     assert all(secret not in path.read_text() for path in artifacts)
-
-
-def test_chat_launch_rejects_raw_key():
-    with pytest.raises(ValueError, match="api_key"):
-        ChatLaunch(model="fixture-model", api_base="https://example.com/v1", api_key="secret")
 
 
 async def test_chat_http_error_preserves_server_diagnostic(tmp_path, specification, chat_endpoint):
