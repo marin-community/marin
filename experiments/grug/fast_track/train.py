@@ -730,7 +730,7 @@ def _loss_and_grads(
     """``loop_active`` is a static pass selector for looped growth (see ``GrugModelConfig.loop_grow_step``)."""
     aux_weight = None if step is None else _aux_loss_weight(params.config, step)
     route_key = None
-    if step is not None and params.config.moe_gumbel_tau > 0:
+    if step is not None and (params.config.moe_gumbel_tau > 0 or params.config.erc_loss_weight > 0):
         route_key = jax.random.fold_in(jax.random.PRNGKey(ROUTE_NOISE_SEED), step)
 
     def loss_fn(model):

@@ -77,6 +77,8 @@ _MOE_OUT_GATE_DIMS = 12
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
 # Metrics-dict key that carries the auxiliary-loss residual stream from the forward to the loss.
 _AUX_HIDDEN = "aux_lm_hidden"
+# Folded into the per-step route key for the ERC proxy-token noise, so it is independent of the Gumbel noise.
+_ERC_KEY_SALT = 0xE2C
 # Per-layer product-key memory diagnostics, lifted out of the layer stats into ``train/attn_res/knob_mem_*``.
 _MEMORY_STAT_PREFIX = "attn_res_knob_mem_"
 # Bound on one chunk's gathered ``[tokens, rows, dim]`` memory rows in the product-key EmbeddingBag.
@@ -668,6 +670,16 @@ class GrugModelConfig:
     completed blocks) instead of the final hidden, so the byte objective shapes mid-network features rather than
     the lm_head input."""
     byte_aux_decay_frac: float = 0.5
+    erc_loss_weight: float = 0.0
+    """Expert-router coupling loss (arXiv 2512.23447): each real expert's router column, perturbed by
+    ``U(1 +- eps_i)`` noise (``eps_i`` = half the distance to the nearest other router column over its norm),
+    is a proxy token that runs the token's path into the experts (latent down-projection and ``latent_norm``)
+    and every expert's first projection (``w_gate``, or ``w_up`` when ungated); with ``M[i, j]`` the L2 norm of
+    proxy ``i`` through expert ``j``, the loss is ``mean_{i != j} relu(M_ij - alpha M_ii) + relu(M_ji - alpha M_ii)``
+    over all ``n^2`` entries, summed over MoE layers. Router-parameter only: token-count independent, never
+    touches the QB bias. Training only. 0: off (the paper uses 1)."""
+    erc_alpha: float = 1.0
+    """ERC coupling margin ``alpha`` in [0, 1]; smaller is stricter (the paper's n=256 optimum is 0.5)."""
     window_embed_dim: int = 0
     """Explicit short context window as an AttnRes source: every token gets a small ``window_embed_dim``-wide
     embedding; for position t the embeddings of tokens t, t-1, ..., t-(k-1) (k = hidden_dim / window_embed_dim)
@@ -736,6 +748,9 @@ class GrugModelConfig:
                 raise ValueError("zero-computation experts do not support moe_bank2, hash layers or dense router grad")
             if self.moe_null_target_frac is not None and not 0.0 < self.moe_null_target_frac < 1.0:
                 raise ValueError(f"moe_null_target_frac must be in (0, 1), got {self.moe_null_target_frac}")
+
+        if self.erc_loss_weight > 0 and (self.dense_mlp or self.router_rank or self.moe_bank2_experts):
+            raise ValueError("erc_loss_weight needs a MoE with a full-rank router and one expert bank")
 
         if self.moe_shortcut and not self.attn_res:
             raise ValueError("moe_shortcut requires attn_res (the MoE shortcut is an AttnRes gate)")
@@ -1776,6 +1791,40 @@ class MoEMLP(eqx.Module):
         if self.w_latent_down is not None:
             weights.append(reshard(self.w_latent_down.astype(dtype), P(None, None)))
         return weights
+
+    def erc_loss(self, key: PRNGKeyArray) -> tuple[jax.Array, jax.Array]:
+        """Expert-router coupling loss (``erc_loss_weight``) and ``mean diag(M) / mean offdiag(M)``.
+
+        ``M`` is ``[n, n]`` over the real experts; its ``[n, n, I]`` pre-norm activations are sharded over the
+        expert axis like ``w_up``, so each device computes only its experts' columns.
+        """
+        cfg = self.cfg
+        n = cfg.num_experts
+        sg = jax.lax.stop_gradient
+        assert self.router is not None
+        rows = reshard(self.router[:, :n].astype(jnp.float32).T, P(None, None))
+        fixed = sg(rows)
+        norms = jnp.sqrt(jnp.sum(jnp.square(fixed), axis=-1))
+        sq_dist = norms[:, None] ** 2 + norms[None, :] ** 2 - 2.0 * fixed @ fixed.T
+        dist = jnp.sqrt(jnp.maximum(sq_dist, 0.0)) + jnp.where(jnp.eye(n, dtype=bool), jnp.inf, 0.0)
+        eps = jnp.min(dist, axis=-1) / (2.0 * norms)
+        delta = 1.0 + eps[:, None] * random.uniform(key, rows.shape, minval=-1.0, maxval=1.0)
+        proxy = rows * delta
+        if self.w_latent_down is not None and self.latent_norm is not None:
+            # The proxy follows a token's path into the latent experts.
+            down = reshard(self.w_latent_down.astype(jnp.float32), P(None, None))
+            proxy = self.latent_norm(jnp.einsum("id,dl->il", proxy, down, out_sharding=P(None, None)))
+        em = self.expert_mlp
+        w_in = (em.w_up if em.w_gate is None else em.w_gate).astype(jnp.float32)
+        spec = _padded_spec(w_in)
+        act = jnp.einsum("il,jlh->ijh", proxy, w_in, out_sharding=P(None, spec[0], spec[2]))
+        m = reshard(jnp.sqrt(jnp.sum(jnp.square(act), axis=-1)), P(None, None))
+        diag = jnp.diagonal(m)
+        off = 1.0 - jnp.eye(n, dtype=jnp.float32)
+        alpha = cfg.erc_alpha
+        loss = jnp.mean((jax.nn.relu(m - alpha * diag[:, None]) + jax.nn.relu(m - alpha * diag[None, :])) * off)
+        ratio = sg(jnp.mean(diag) / (jnp.sum(m * off) / (n * (n - 1))))
+        return loss, ratio
 
     def _default_expert_term(
         self,
@@ -4183,6 +4232,21 @@ class Transformer(eqx.Module):
                 byte_in,
             )
             loss = loss + byte_aux_weight.astype(loss_dtype) * byte_loss.astype(loss_dtype)
+        erc_loss, erc_ratios = None, {}
+        if self.config.erc_loss_weight > 0 and train_terms:
+            if route_key is None:
+                raise ValueError("erc_loss_weight needs route_key (the per-step proxy-token noise)")
+            erc_key = jax.random.fold_in(route_key, _ERC_KEY_SALT)
+            erc_terms = []
+            for i, layer in enumerate(self.layers()):
+                if not isinstance(layer.mlp, MoEMLP):
+                    continue
+                layer_loss, erc_ratios[f"train/aux/erc_diag_offdiag_L{i}"] = layer.mlp.erc_loss(
+                    jax.random.fold_in(erc_key, i)
+                )
+                erc_terms.append(layer_loss)
+            erc_loss = functools.reduce(jnp.add, erc_terms)
+            loss = loss + self.config.erc_loss_weight * erc_loss.astype(loss_dtype)
         if return_router_metrics:
             final_gate_metrics = {
                 f"train/attn_res/{name.removeprefix('attn_res_')}": router_metrics.pop(name)
@@ -4207,6 +4271,9 @@ class Transformer(eqx.Module):
                 summarized_metrics["train/attn_res/mtp_loss"] = mtp_loss
             if byte_loss is not None:
                 summarized_metrics["train/aux/byte_loss"] = byte_loss
+            if erc_loss is not None:
+                summarized_metrics["train/aux/erc_loss"] = erc_loss
+                summarized_metrics.update(erc_ratios)
             num_moe_layers = router_metrics["router_z_loss_per_layer"].shape[0]
             summarized_metrics["train/router/z_loss_logging_only"] = (
                 jnp.sum(router_metrics["router_z_loss_per_layer"]) / num_moe_layers
