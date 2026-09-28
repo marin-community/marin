@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Private semantics for one deterministic, single-turn answer task."""
+"""Private semantics for one deterministic task and its final submission."""
 
 import json
 from collections.abc import Mapping

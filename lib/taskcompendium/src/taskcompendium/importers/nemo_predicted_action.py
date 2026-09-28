@@ -24,6 +24,7 @@ from taskcompendium.submission import AnswerFormat, SubmissionConvention
 DATASET = "nvidia/Nemotron-RL-Agentic-Conversational-Tool-Use-Pivot-v1"
 REVISION = "9643c8103d7bfbc2d7fc4d15991d6739c612ff58"
 IMPORTER_REVISION = "taskcompendium-nemo-predicted-action-v1"
+FUNCTION_CALL_TYPE = "function_call"
 
 
 def canonical_sha256(row: dict[str, Any]) -> str:
@@ -37,7 +38,7 @@ def _expected_calls(value: Any) -> tuple[FunctionCall, ...]:
     if value.get("type") == "message":
         raise ValueError("message targets have no correctness comparison")
     if (
-        value.get("type") == "function_call"
+        value.get("type") == FUNCTION_CALL_TYPE
         and isinstance(value.get("name"), str)
         and isinstance(value.get("arguments"), str)
     ):
@@ -46,7 +47,7 @@ def _expected_calls(value: Any) -> tuple[FunctionCall, ...]:
         calls = value["calls"]
         if all(
             isinstance(call, dict)
-            and call.get("type") == "function_call"
+            and call.get("type") == FUNCTION_CALL_TYPE
             and isinstance(call.get("name"), str)
             and isinstance(call.get("arguments"), str)
             for call in calls
