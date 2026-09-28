@@ -29,6 +29,8 @@ from taskcompendium.lowering import (
 RESPONSE_FILE = "response.txt"
 AGENT_LOGS_PATH = "/logs/agent"
 ARTIFACTS_LOGS_PATH = "/logs/artifacts"
+HARBOR_DOWNLOAD_DIRS = frozenset({AGENT_LOGS_PATH, ARTIFACTS_LOGS_PATH})
+HARBOR_EMPTY_DIRS = HARBOR_DOWNLOAD_DIRS | {"/logs/verifier", "/tests"}
 
 
 def _record_response(logs_dir: Path, instruction: str, response: str, context: AgentContext) -> None:
@@ -73,7 +75,7 @@ class NoToolEnvironment(BaseEnvironment):
         raise ValueError("Direct chat has no shell")
 
     async def empty_dirs(self, dirs, *, chmod: bool = True) -> None:
-        if not set(map(str, dirs)).issubset({AGENT_LOGS_PATH, "/logs/verifier", ARTIFACTS_LOGS_PATH, "/tests"}):
+        if not set(map(str, dirs)).issubset(HARBOR_EMPTY_DIRS):
             raise ValueError("Direct chat has no filesystem")
 
     async def upload_file(self, source_path, target_path) -> None:
@@ -86,7 +88,7 @@ class NoToolEnvironment(BaseEnvironment):
         raise ValueError("Direct chat has no filesystem")
 
     async def download_dir(self, source_dir, target_dir) -> None:
-        if source_dir not in {AGENT_LOGS_PATH, ARTIFACTS_LOGS_PATH}:
+        if source_dir not in HARBOR_DOWNLOAD_DIRS:
             raise ValueError("Direct chat has no filesystem")
 
 

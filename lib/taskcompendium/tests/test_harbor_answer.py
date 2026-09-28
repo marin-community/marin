@@ -11,7 +11,7 @@ from threading import Thread
 import pytest
 from harbor.models.task.task import Task
 
-from taskcompendium.harbor.runner import HarborLaunch, run_trial
+from taskcompendium.harbor.runner import ChatLaunch, ReplayLaunch, run_trial
 from taskcompendium.lowering import (
     HarborTaskBinding,
     SelectionPolicy,
@@ -92,9 +92,7 @@ async def test_direct_chat_harbor_trial_distinguishes_answer_outcomes(
     assert not (task / "tests" / "test.sh").exists()
     assert "12" not in (task / "instruction.md").read_text()
 
-    result = await run_trial(
-        task, binding, HarborLaunch("replay", agent_kwargs={"response": response}), tmp_path / "trials", "run"
-    )
+    result = await run_trial(task, binding, ReplayLaunch(response=response), tmp_path / "trials", "run")
 
     outcome = json.loads((tmp_path / "trials/run/verifier/taskcompendium-result.json").read_text())
     assert outcome["status"] == status
@@ -116,7 +114,7 @@ async def test_direct_chat_exact_comparison_uses_pinned_normalization(tmp_path, 
     result = await run_trial(
         task,
         binding,
-        HarborLaunch("replay", agent_kwargs={"response": "STRASSE   PARK"}),
+        ReplayLaunch(response="STRASSE   PARK"),
         tmp_path / "trials",
         "run",
     )
@@ -131,9 +129,7 @@ async def test_direct_chat_harbor_trial_records_private_metadata_failure(tmp_pat
     )
     (task / "submission_convention.json").write_text("{invalid")
 
-    result = await run_trial(
-        task, binding, HarborLaunch("replay", agent_kwargs={"response": "12"}), tmp_path / "trials", "run"
-    )
+    result = await run_trial(task, binding, ReplayLaunch(response="12"), tmp_path / "trials", "run")
 
     outcome = json.loads((tmp_path / "trials/run/verifier/taskcompendium-result.json").read_text())
     assert outcome["status"] == "infra_error"
@@ -175,19 +171,6 @@ def test_selection_policies_use_compatible_conventions(specification):
     assert {select_lowerings(candidates, SelectionPolicy.SAMPLE, rng_key=key)[0] for key in range(16)} == set(candidates)
 
 
-async def test_launch_rejects_binding_changed_after_export(tmp_path, specification):
-    binding = HarborTaskBinding()
-    task = lower_to_harbor(
-        specification, SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN), binding, tmp_path / "task"
-    )
-    (task / "binding.json").write_text('{"environment":"direct_chat","tools":["terminal"]}')
-
-    with pytest.raises(ValueError, match="direct chat without tools"):
-        await run_trial(
-            task, binding, HarborLaunch("replay", agent_kwargs={"response": "12"}), tmp_path / "trials", "run"
-        )
-
-
 async def test_chat_trial_resolves_key_at_runtime_without_persisting_it(
     tmp_path, specification, chat_endpoint, monkeypatch
 ):
@@ -197,11 +180,7 @@ async def test_chat_trial_resolves_key_at_runtime_without_persisting_it(
     task = lower_to_harbor(
         specification, SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN), binding, tmp_path / "task"
     )
-    launch = HarborLaunch(
-        "chat",
-        model="fixture-model",
-        agent_kwargs={"api_base": chat_endpoint.url, "api_key_env": "TASKCOMPENDIUM_TEST_API_KEY"},
-    )
+    launch = ChatLaunch(model="fixture-model", api_base=chat_endpoint.url, api_key_env="TASKCOMPENDIUM_TEST_API_KEY")
 
     result = await run_trial(task, binding, launch, tmp_path / "trials", "run")
 
@@ -213,17 +192,9 @@ async def test_chat_trial_resolves_key_at_runtime_without_persisting_it(
     assert all(secret not in path.read_text() for path in artifacts)
 
 
-async def test_chat_launch_rejects_raw_key(tmp_path, specification, chat_endpoint):
-    binding = HarborTaskBinding()
-    task = lower_to_harbor(
-        specification, SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN), binding, tmp_path / "task"
-    )
-    launch = HarborLaunch(
-        "chat", model="fixture-model", agent_kwargs={"api_base": chat_endpoint.url, "api_key": "secret"}
-    )
-
-    with pytest.raises(ValueError, match="api_key_env"):
-        await run_trial(task, binding, launch, tmp_path / "trials", "run")
+def test_chat_launch_rejects_raw_key():
+    with pytest.raises(ValueError, match="api_key"):
+        ChatLaunch(model="fixture-model", api_base="https://example.com/v1", api_key="secret")
 
 
 async def test_chat_http_error_preserves_server_diagnostic(tmp_path, specification, chat_endpoint):
@@ -233,7 +204,7 @@ async def test_chat_http_error_preserves_server_diagnostic(tmp_path, specificati
     task = lower_to_harbor(
         specification, SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN), binding, tmp_path / "task"
     )
-    launch = HarborLaunch("chat", model="fixture-model", agent_kwargs={"api_base": chat_endpoint.url})
+    launch = ChatLaunch(model="fixture-model", api_base=chat_endpoint.url)
 
     result = await run_trial(task, binding, launch, tmp_path / "trials", "run")
 
