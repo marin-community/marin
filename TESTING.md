@@ -32,6 +32,13 @@ A formatter-only mechanical edit does not require another test run. Rerun the
 repository formatting and lint checks after the edit; rerun tests only when the
 follow-up changes executable behavior or test expectations.
 
+## Adding a New Library
+
+When adding a new `lib/<name>/` package, run its unit tests through
+[unified-unit.yaml](.github/workflows/unified-unit.yaml). Register the package
+and its test directory in [select_tests.py](infra/ci/select_tests.py) so the
+workflow selects those tests for pull requests, pushes, and full-suite runs.
+
 ## Core Rule
 
 A test must fail when behavior is wrong. It should not fail only because an
