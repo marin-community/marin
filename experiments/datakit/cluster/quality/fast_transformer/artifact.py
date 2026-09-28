@@ -18,7 +18,9 @@ BUCKET_EDGES = (0.2, 0.4, 0.6, 0.8)
 
 
 class QualityScores(BaseModel):
-    """Outcome of :func:`score.score_normalized`: calibrated quality scores for one source.
+    """Calibrated quality scores for one source.
+
+    Written by :func:`score.score_normalized` or :func:`bucket.bucket_quality_scores`.
 
     Persisted as the step's ``.artifact``. Load via
     ``read_artifact(step.output_path, QualityScores)``.
@@ -30,9 +32,10 @@ class QualityScores(BaseModel):
             and ``quality_bucket``; :func:`score.score_normalized` adds
             ``source``, and :func:`bucket.bucket_quality_scores` adds ``source``,
             ``raw_score`` and ``content_type``.
-        model_dir: Scorer artifacts + calibration json used. Model dirs are
-            immutable by convention -- the step hash covers the *path*, not the
-            bytes, so retrained models must land in new dirs.
+        model_dir: Scorer artifacts + calibration json used. The bucket step's
+            hash covers the calibration's digest through its ``QualityPin``;
+            ``score_normalized``'s covers only the path, so a retrained model
+            for it must land in a new dir.
         calib_file: Calibration json name inside ``model_dir``.
         bucket_edges: Score cutpoints behind ``quality_bucket``; the store joins
             on the bucket column and records these in its own artifact.

@@ -35,7 +35,7 @@ from collections.abc import Iterator
 import numpy as np
 from fray.cluster import ResourceConfig
 from marin.datakit.normalize import NormalizedData
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr import counters
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, ShardInfo
@@ -91,7 +91,7 @@ def _predict_batch(records: list[dict], *, source: str, model_dir: str, calib_fi
 
 
 def _output_file(output_path: str, shard_file: str) -> str:
-    return f"{output_path.rstrip('/')}/outputs/main/{shard_file}"
+    return prefix_join(output_path, f"outputs/main/{shard_file}")
 
 
 def _make_scored_writer(output_path: str):

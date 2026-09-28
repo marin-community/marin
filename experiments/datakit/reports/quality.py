@@ -17,6 +17,7 @@ from collections import defaultdict
 
 import numpy as np
 from marin.datakit.normalize import NormalizedData
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datakit.cluster.quality.fast_transformer.artifact import BUCKET_EDGES, QualityScores
 from experiments.datakit.reports.common import (
@@ -121,7 +122,7 @@ def _spot_check_docs(sources: dict[str, QualityScores], normalized: dict[str, No
             continue
         basename = posixpath.basename(shards[0])
         scored = head_rows(shards[0], ["source", "id", "score", "quality_bucket"], SPOT_CHECK_SCAN_ROWS)
-        texts = head_rows(posixpath.join(normalized[name].main_output_dir, basename), ["id", "text"], len(scored))
+        texts = head_rows(prefix_join(normalized[name].main_output_dir, basename), ["id", "text"], len(scored))
         for r, t in zip(scored, texts, strict=True):
             if r["id"] != t["id"]:
                 raise ValueError(f"{name}: {basename} is not in its normalized shard's row order at id {r['id']}")
