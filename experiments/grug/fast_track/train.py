@@ -321,7 +321,7 @@ def _to_dropless_local(
         return banks
 
     dropless = [
-        dataclasses.replace(expert_mlp, implementation=implementation, expert_chunks=1)
+        dataclasses.replace(expert_mlp, implementation=implementation, expert_chunks=1, fp8_dispatch=False)
         for expert_mlp in stack_expert_mlps(model)
     ]
     return eqx.tree_at(stack_expert_mlps, model, dropless)
