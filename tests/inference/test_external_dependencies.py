@@ -45,7 +45,7 @@ def _promoted_manifest() -> dict:
         "validation": {"status": "passed"},
         "source": {"fork_commit": "a" * 40},
         "distribution": {"version": "0.0.0.dev20260101+marin.abcdef012345"},
-        "abi": {"cuda_variant": "cu130"},
+        "abi": {"cuda_variant": "cu130", "torch_version": "2.11.0+cu130"},
         "platforms": [
             {
                 "architecture": "x86_64",
@@ -72,6 +72,7 @@ def test_gpu_release_pin_matches_its_descriptor():
     assert VLLM_GPU_RELEASE.source_commit == descriptor.source_commit
     assert VLLM_GPU_RELEASE.version == descriptor.version
     assert VLLM_GPU_RELEASE.torch_backend == descriptor.torch_backend
+    assert VLLM_GPU_RELEASE.torch_version == descriptor.torch_version
     generated = {(w.architecture, w.sm_targets, w.url, w.sha256) for w in VLLM_GPU_RELEASE.wheels}
     pinned = {(w.architecture, w.sm_targets, w.url, w.sha256) for w in descriptor.wheels}
     assert generated == pinned
@@ -92,6 +93,7 @@ def test_render_gpu_release_toml_reencodes_the_wheel_url_and_round_trips(tmp_pat
     assert release.release_tag == "marin-vllm-gpu-20260101-abcdef012345"
     assert release.source_commit == "a" * 40
     assert release.torch_backend == "cu130"
+    assert release.torch_version == "2.11.0+cu130"
     assert [wheel.architecture for wheel in release.wheels] == ["x86_64"]
 
 

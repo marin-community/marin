@@ -6,11 +6,15 @@ description: Diagnose a stated code, JAX, Marin, Iris, Zephyr, or TPU fault or s
 # Debug
 
 Keep working notes in the active task. Do not add repository debug-log files.
-Use `consult-echo` when repository policy requires prior-work search. After
-diagnosing a live infrastructure incident, use `write-ops-log` to publish its
-standalone Echo record and link it from the associated PR or issue. A code bug
-or local debugging session is not an incident unless it caused a service,
-production run, or shared operational system to fail or degrade.
+At the start of a fresh investigation, use `consult-echo` when repository policy
+requires prior-work search. During continued diagnosis or mitigation of the
+same incident, reuse results already read instead of invoking `consult-echo`
+again unless the scope or freshness requirement changes or the user asks for a
+new search. After diagnosing a live infrastructure incident, use
+`write-ops-log` to publish its standalone Echo record and link it from the
+associated PR or issue. A code bug or local debugging session is not an
+incident unless it caused a service, production run, or shared operational
+system to fail or degrade.
 
 ## Infrastructure faults
 

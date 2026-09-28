@@ -9,6 +9,7 @@ export const ThinkingMode = {
 export type ThinkingMode = (typeof ThinkingMode)[keyof typeof ThinkingMode]
 
 export interface ChatTemplateRequestFields {
+  skip_special_tokens: false
   tools?: ToolDefinition[]
   chat_template_kwargs?: Record<string, unknown>
 }
@@ -24,7 +25,8 @@ export function chatTemplateRequestFields(
   if (thinkingMode === ThinkingMode.Disabled) chatTemplateArgs.enable_thinking = false
   if (customInstructions.trim()) chatTemplateArgs.custom_instructions = customInstructions.trim()
 
-  const fields: ChatTemplateRequestFields = {}
+  // The response parser needs model-native thinking and tool-call delimiters.
+  const fields: ChatTemplateRequestFields = { skip_special_tokens: false }
   if (tools.length) fields.tools = tools
   if (Object.keys(chatTemplateArgs).length) fields.chat_template_kwargs = chatTemplateArgs
   return fields

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import duckdb
 import pytest
-from conftest import queried_namespace
+from conftest import install_finelog_dialect_macros, queried_namespace
 from dashboard_stitch import stitch_all
 from rl_observability import recent_rl_runs_dataset, rl_overview_dataset
 from rl_producers import RL_PRODUCER_NAMESPACES, collect_producers, producers_query
@@ -19,6 +19,8 @@ NOW = datetime(2026, 8, 20, 12, tzinfo=UTC)
 WINDOW_START = NOW - timedelta(hours=1)
 CLUSTER = "cw-rno2a"
 RUN_ID = "snowball-e6-muonh-0"
+ASYNC_RUN_ID = "snowball-e6-muonh-0-async"
+UNSTAMPED_RUN_ID = "snowball-e5-unstamped-0"
 _NOW_MS = round(NOW.timestamp() * 1000)
 _WINDOW_START_MS = round(WINDOW_START.timestamp() * 1000)
 JOB_ID = "/atqamar/snowball-e6-muonh-0-attempt-0"
@@ -57,9 +59,12 @@ def _row(
     node_name: str | None = None,
     execution_uid: str = "iris:/atqamar/snowball-e6-muonh-0-attempt-0/0:attempt:0",
     role: str = "",
+    training_loop: str | None = "sync",
     attributes: dict[str, str] | None = None,
 ) -> tuple:
     resource = {"role": role} if role else {}
+    if training_loop is not None:
+        resource["training_loop"] = training_loop
     return (
         CLUSTER,
         service,
@@ -132,21 +137,6 @@ def _run_rows() -> list[tuple]:
                     node_name=NODES[0],
                     role="trainer",
                     attributes={"work_kind": work_kind},
-                )
-            )
-        for name, value in (("rollout_queue_depth", 12.0), ("rollout_capacity", 32.0)):
-            rows.append(
-                _row(
-                    service="marinskyrl",
-                    name=name,
-                    value=value,
-                    moment=moment,
-                    seq=bucket,
-                    run_id=RUN_ID,
-                    job_id=JOB_ID,
-                    node_name=NODES[0],
-                    role="trainer",
-                    attributes={"queue": "rollout_buffer"},
                 )
             )
         # The Ray controller, forwarded under a different role. Forwarded snapshots always arrive
@@ -289,23 +279,6 @@ def _run_rows() -> list[tuple]:
                         attributes={"metric_source": "vllm", "engine": engine, "finished_reason": reason},
                     )
                 )
-        # Staleness as the trainer records it: one observation per admitted group, measured where
-        # the consuming step is known. A group can wait in the buffer across step boundaries.
-        for staleness in (0.0, 1.0, 1.0, 2.0, 4.0):
-            rows.append(
-                _row(
-                    service="marinskyrl",
-                    name="rollout_staleness_steps",
-                    value=staleness,
-                    moment=moment,
-                    seq=bucket,
-                    run_id=RUN_ID,
-                    job_id=JOB_ID,
-                    node_name=NODES[0],
-                    role="trainer",
-                    attributes={"step": str(bucket)},
-                )
-            )
     return rows
 
 
@@ -342,12 +315,7 @@ def store() -> duckdb.DuckDBPyConnection:
     # One table per semantic stream, seeded by routing each row on its service as the server does.
     for stream in sorted(set(_SEMANTIC_STREAM.values())):
         database.execute(f'CREATE TABLE "{stream}"{_SCHEMA}')
-    # finelog's SQL dialect, in the two spellings the dashboards use.
-    database.execute("CREATE MACRO to_timestamp_millis(value) AS to_timestamp(value / 1000.0)::TIMESTAMP")
-    database.execute("CREATE MACRO date_bin(width, moment) AS time_bucket(width, moment)")
-    database.execute("CREATE MACRO json_get(document, key) AS json_extract_string(document, '$.' || key)")
-    # finelog runs DataFusion, which has approx_percentile_cont; duckdb spells it quantile_cont.
-    database.execute("CREATE MACRO approx_percentile_cont(value, q) AS quantile_cont(value, q)")
+    install_finelog_dialect_macros(database)
     placeholders = ", ".join("?" for _ in _COLUMNS)
     service_index = _COLUMNS.index("service")
     routed: dict[str, list] = {}
@@ -366,13 +334,17 @@ def _in_window(sql: str) -> str:
     return sql.replace("{{to}}", f"TIMESTAMP '{NOW.replace(tzinfo=None)}'")
 
 
-def _panel_sql(title: str) -> str:
+def _view_sql(view: str) -> str:
     dataset = rl_overview_dataset((CLUSTER,), RUN_ID, _WINDOW_START_MS, _NOW_MS, 5 * 60 * 1000)
     sources = ",\n".join(f"{source.name} AS ({source.sql})" for source in dataset.sources)
+    return f"WITH {sources}\n{dataset.views[view]}"
+
+
+def _panel_sql(title: str) -> str:
     (panel,) = [panel for panel in _dashboard()["panels"] if panel.get("title") == title]
     (target,) = [target for target in panel["targets"] if target.get("url") == "/v1/rl/overview"]
     (view,) = [param["value"] for param in target["url_options"]["params"] if param["key"] == "view"]
-    return f"WITH {sources}\n{dataset.views[view]}"
+    return _view_sql(view)
 
 
 def test_the_run_variable_offers_a_run_the_trainer_reported(store) -> None:
@@ -400,9 +372,6 @@ def test_the_trainer_panels_render_for_that_run(store) -> None:
     work = store.execute(_panel_sql("Rollouts, samples and tokens completed")).fetchall()
     assert [row[1] for row in work] == [64.0] * 6
 
-    buffer = store.execute(_panel_sql("Rollout buffer occupancy (groups) · async runs only")).fetchall()
-    assert [(row[1], row[2]) for row in buffer] == [(12.0, 32.0)] * 6
-
     # Occupancy is a ratio, so two nodes reporting 3 GB used of 4 GB still reads 0.75 rather
     # than doubling. 6e9 used over 8e9 total.
     occupancy = store.execute(_panel_sql("Ray object store occupancy · needs the Ray collector")).fetchall()
@@ -413,25 +382,13 @@ def test_percentile_panels_compute_over_all_executions_in_each_bucket(store) -> 
     moment = WINDOW_START
     timestamp_ms = _millis(moment)
     store.execute(
-        'DELETE FROM "telemetry_v1.marinskyrl" '
-        "WHERE timestamp_ms = ? AND name IN ('phase_duration_seconds', 'rollout_staleness_steps')",
+        "DELETE FROM \"telemetry_v1.marinskyrl\" WHERE timestamp_ms = ? AND name = 'phase_duration_seconds'",
         [timestamp_ms],
     )
     rows = []
     grouped_values = (("attempt-a", (0.0, 100.0)), ("attempt-b", (10.0, 10.0, 10.0, 10.0, 10.0)))
     for execution_uid, values in grouped_values:
         for seq, value in enumerate(values):
-            rows.append(
-                _row(
-                    service="marinskyrl",
-                    name="rollout_staleness_steps",
-                    value=value,
-                    moment=moment,
-                    seq=seq,
-                    run_id=RUN_ID,
-                    execution_uid=execution_uid,
-                )
-            )
             rows.append(
                 _row(
                     service="marinskyrl",
@@ -452,17 +409,14 @@ def test_percentile_panels_compute_over_all_executions_in_each_bucket(store) -> 
     expected_p50, expected_p99 = store.execute(
         "SELECT quantile_cont(value, 0.5), quantile_cont(value, 0.99) "
         'FROM "telemetry_v1.marinskyrl" '
-        "WHERE timestamp_ms = ? AND name = 'rollout_staleness_steps'",
+        "WHERE timestamp_ms = ? AND name = 'phase_duration_seconds'",
         [timestamp_ms],
     ).fetchone()
 
-    staleness = store.execute(_panel_sql("Off-policy staleness (optimizer steps behind) · async runs only")).fetchall()
-    first_bucket = min(row[0] for row in staleness)
-    first_staleness = {row[1]: row[2] for row in staleness if row[0] == first_bucket}
     straggler = store.execute(_panel_sql("Straggler proxy: rollout wait p99 ÷ p50")).fetchall()
+    first_bucket = min(row[0] for row in straggler)
     first_straggler = next(row[2] for row in straggler if row[0] == first_bucket)
 
-    assert first_staleness == {"p50": pytest.approx(expected_p50), "p99": pytest.approx(expected_p99)}
     assert first_straggler == pytest.approx(expected_p99 / expected_p50)
 
 
@@ -479,7 +433,7 @@ def test_the_node_agent_joins_through_node_name_without_a_run_id(store) -> None:
 
 def test_the_engine_panels_select_by_metric_name_alone(store) -> None:
     # No other MarinSkyRL producer emits these names, so the name identifies the engine path.
-    throughput = store.execute(_panel_sql("Engine token throughput")).fetchall()
+    throughput = store.execute(_panel_sql("vLLM token throughput")).fetchall()
     # A rate over a CUMULATIVE counter: the panel takes the delta between consecutive samples,
     # so a fixture growing by 1024 per bucket per engine yields a constant rate -- and the first
     # bucket has no predecessor to difference against, so it drops out.
@@ -487,10 +441,10 @@ def test_the_engine_panels_select_by_metric_name_alone(store) -> None:
     assert rates == [round(2 * 1024.0 / 300.0, 4)] * len(rates)
     assert len(rates) == 5
 
-    queue = store.execute(_panel_sql("Engine queue and KV-cache")).fetchall()
+    queue = store.execute(_panel_sql("vLLM queue and KV-cache usage")).fetchall()
     assert [(row[1], row[2]) for row in queue] == [(48.0, 12.0)] * 6
 
-    latency = store.execute(_panel_sql("Engine request latency (mean by stage)")).fetchall()
+    latency = store.execute(_panel_sql("vLLM request latency (mean by stage)")).fetchall()
     # Prometheus histograms arrive as `_sum` and `_count`, so the panel reports a mean per stage.
     # A p90 would need bucket interpolation.
     assert {row[1] for row in latency} == {
@@ -618,7 +572,7 @@ def test_engine_rates_keep_two_actors_that_both_report_engine_zero_apart(store) 
             ),
         )
 
-    throughput = store.execute(_panel_sql("Engine token throughput")).fetchall()
+    throughput = store.execute(_panel_sql("vLLM token throughput")).fetchall()
     rates = [round(row[1], 4) for row in throughput]
 
     assert rates == [round(3 * 1024.0 / 300.0, 4)] * len(rates)
@@ -647,7 +601,7 @@ def test_engine_panels_read_the_embedded_stream_as_well_as_the_standalone_one(st
             ),
         )
 
-    rates = [round(row[1], 4) for row in store.execute(_panel_sql("Engine token throughput")).fetchall()]
+    rates = [round(row[1], 4) for row in store.execute(_panel_sql("vLLM token throughput")).fetchall()]
 
     assert rates == [round(3 * 1024.0 / 300.0, 4)] * len(rates)
     assert len(rates) == 5
@@ -687,11 +641,74 @@ def test_a_listed_run_opens_the_view_framed_on_that_run() -> None:
     ]
     (url,) = [link["url"] for link in links]
 
-    assert url.startswith("/d/marin-rl-runs?")
+    # The list spans both training loops and each has its own dashboard, so the row carries the
+    # uid of the one whose run picker can select it.
+    assert url.startswith("/d/${__data.fields.dashboard}?")
     # Without all four the link lands on an empty dashboard: no run selected, or a window that
     # predates the run.
     for parameter in ("var-run=", "var-cluster=", "from=", "to="):
         assert parameter in url, parameter
+
+
+def _run_picker_sql(uid: str) -> str:
+    """The run picker of the dashboard published under this uid, resolved to this window."""
+    (dashboard,) = [board for board in stitch_all(DASHBOARDS, DASHBOARDS / "panels").values() if board.get("uid") == uid]
+    (variable,) = [item for item in dashboard["templating"]["list"] if item["name"] == "run"]
+    (parameter,) = [
+        param for param in variable["query"]["infinityQuery"]["url_options"]["params"] if param["key"] == "sql"
+    ]
+    return _in_window(parameter["value"]).replace("${cluster:sqlstring}", f"'{CLUSTER}'")
+
+
+def test_a_listed_run_opens_the_dashboard_whose_picker_offers_it(store) -> None:
+    # Home's list is loop-blind and each dashboard's run picker takes only its own loop, so an
+    # async row routed to the sync dashboard would land on a picker that cannot select it.
+    for bucket in range(2):
+        store.execute(
+            f'INSERT INTO "telemetry_v1.marinskyrl" VALUES ({", ".join("?" for _ in _COLUMNS)})',
+            list(
+                _row(
+                    service="marinskyrl",
+                    name="policy_step",
+                    value=float(bucket),
+                    moment=WINDOW_START + timedelta(minutes=5 * bucket),
+                    seq=bucket,
+                    run_id=ASYNC_RUN_ID,
+                    job_id=JOB_ID,
+                    node_name=NODES[0],
+                    role="trainer",
+                    training_loop="async",
+                )
+            ),
+        )
+
+    # A run logged before the trainer stamped its loop carries no training_loop attribute.
+    store.execute(
+        f'INSERT INTO "telemetry_v1.marinskyrl" VALUES ({", ".join("?" for _ in _COLUMNS)})',
+        list(
+            _row(
+                service="marinskyrl",
+                name="policy_step",
+                value=0.0,
+                moment=WINDOW_START,
+                seq=0,
+                run_id=UNSTAMPED_RUN_ID,
+                job_id=JOB_ID,
+                node_name=NODES[0],
+                role="trainer",
+                training_loop=None,
+            )
+        ),
+    )
+
+    result = store.execute(_recent_runs_sql())
+    columns = [description[0] for description in result.description]
+    routed = {row["run"]: row["dashboard"] for row in (dict(zip(columns, r, strict=True)) for r in result.fetchall())}
+
+    assert routed == {RUN_ID: "marin-rl-runs", ASYNC_RUN_ID: "marin-async-rl", UNSTAMPED_RUN_ID: "marin-rl-runs"}
+    for uid in set(routed.values()):
+        offered = {run for (run,) in store.execute(_run_picker_sql(uid)).fetchall()}
+        assert offered == {run for run, target in routed.items() if target == uid}, uid
 
 
 def test_the_recent_runs_query_returns_a_row_per_run_and_cluster(store) -> None:

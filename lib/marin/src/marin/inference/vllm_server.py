@@ -56,6 +56,8 @@ logger = logging.getLogger(__name__)
 # this is only a convenience snapshot, capped because vLLM logs can be large.
 _NATIVE_LOG_TAIL_LINES = 1000
 _DEFAULT_VLLM_PORT = 8000
+_VLLM_EAGER_ACKNOWLEDGEMENT = "--i-know-i-am-making-vllm-slow"
+_VLLM_EAGER_GUIDE = "experiments/evaluation/serve/models/README.md"
 _REMOVED_VLLM_MODE_MESSAGE = (
     "MARIN_VLLM_MODE no longer selects a vLLM backend; the Docker sidecar implementation was removed. "
     "Unset MARIN_VLLM_MODE or set it to 'native'."
@@ -72,7 +74,8 @@ _NATIVE_STDERR_LOG = "stderr.log"
 _CUDA_NVCC_DISTRIBUTION = "nvidia-cuda-nvcc"
 # CoreWeave task images provide the NVIDIA driver but not nvcc. FlashInfer JIT-compiles SM100
 # attention, MoE, sampling, and all-reduce kernels even when vLLM itself comes from a native wheel.
-_CUDA_TOOLCHAIN_PACKAGES = (_CUDA_NVCC_DISTRIBUTION, "nvidia-cuda-crt", "nvidia-cuda-nvrtc", "nvidia-nvvm")
+# CUDA torch's cuda-toolkit dependency selects NVRTC for both vLLM variants.
+_CUDA_TOOLCHAIN_PACKAGES = (_CUDA_NVCC_DISTRIBUTION, "nvidia-cuda-crt", "nvidia-nvvm")
 _CUDA_NVCC_BOOTSTRAP = f"""\
 import importlib.metadata
 import os
@@ -260,6 +263,9 @@ class IsolatedCudaVllm:
             "--with",
             _RUNAI_STREAMER_REQUIREMENT,
         ]
+        if self.source is VllmType.MARIN_FORK:
+            # The promoted release records the CUDA torch build; pin it so a conflict cannot select CPU torch.
+            command.extend(("--with", f"torch=={VLLM_GPU_RELEASE.torch_version}"))
         for package in _CUDA_TOOLCHAIN_PACKAGES:
             requirement = f"{package}=={install.toolchain_version}"
             command.extend(("--with", requirement))
@@ -287,7 +293,8 @@ class IsolatedCudaVllm:
     def cache_identity(self) -> str:
         install = self._install()
         toolchain_version = install.toolchain_version
-        return f"cuda:{install.requirement}:{self.python_version}:{install.torch_backend}:{toolchain_version}"
+        torch_identity = VLLM_GPU_RELEASE.torch_version if self.source is VllmType.MARIN_FORK else install.torch_backend
+        return f"cuda:{install.requirement}:{self.python_version}:{torch_identity}:{toolchain_version}"
 
 
 def _write_virtual_hosted_s3_config() -> str:
@@ -1101,6 +1108,39 @@ def _vllm_serve_command(
     ]
 
 
+def _guard_vllm_eager_args(extra_cli_args: list[str] | None) -> list[str]:
+    """Require an explicit acknowledgement before starting vLLM in eager mode."""
+    args = list(extra_cli_args or ())
+    acknowledged = _VLLM_EAGER_ACKNOWLEDGEMENT in args
+    args = [arg for arg in args if arg != _VLLM_EAGER_ACKNOWLEDGEMENT]
+
+    if any(arg == "--config" or arg.startswith("--config=") for arg in args):
+        raise ValueError("Pass vLLM options as explicit flags; Marin does not support --config")
+
+    eager = False
+    for arg in args:
+        if arg.startswith("--enf") and arg != "--enforce-eager":
+            raise ValueError("Use the exact --enforce-eager flag with Marin")
+        if arg.startswith("--no-enf") and arg != "--no-enforce-eager":
+            raise ValueError("Use the exact --no-enforce-eager flag with Marin")
+        if arg == "--enforce-eager":
+            eager = True
+        elif arg == "--no-enforce-eager":
+            eager = False
+
+    if eager and not acknowledged:
+        raise ValueError(
+            "vLLM eager execution requires the separate Marin flag "
+            f"{_VLLM_EAGER_ACKNOWLEDGEMENT}. See {_VLLM_EAGER_GUIDE}."
+        )
+    if eager:
+        logger.warning(
+            "vLLM eager execution disables torch.compile and CUDA graphs and can materially reduce "
+            "steady-state throughput. See https://github.com/marin-community/marin/issues/9339."
+        )
+    return args
+
+
 def _start_vllm_native_process(
     *,
     model_name_or_path: str,
@@ -1112,6 +1152,7 @@ def _start_vllm_native_process(
     log_prefix: str,
 ) -> tuple[VllmServerHandle, list[str]]:
     """Start ``vllm serve`` without imposing an HTTP readiness policy."""
+    extra_cli_args = _guard_vllm_eager_args(extra_cli_args)
     command = _vllm_serve_command(
         launcher=launcher,
         model_name_or_path=model_name_or_path,

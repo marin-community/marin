@@ -30,14 +30,19 @@ class Prompt(Record):
 
 
 class SamplingSpec(Record):
+    """Everything that decides what a sample set contains.
+
+    This is the identity of a sample set, so it holds no execution detail. The model
+    architecture and the batch shape belong to the job that runs the request, not to
+    the work it produces.
+    """
+
     # Bump the release when sampler behavior changes. Unrelated commits do not trigger backfills.
     release: str
     prompts: tuple[Prompt, ...] = Field(min_length=1)
-    batch_size: int = Field(gt=0)
     completions_per_prompt: int = Field(gt=0)
     tokenizer: str
     tokenizer_revision: str = Field(pattern=r"^[0-9a-f]{40}$")
-    model: dict
     temperature: float = Field(ge=0, allow_inf_nan=False)
     max_new_tokens: int = Field(gt=0)
     context_length: int = Field(gt=0)
@@ -64,6 +69,11 @@ def digest(value: object) -> str:
 class SampleRequest(Record):
     checkpoint: Checkpoint
     spec: SamplingSpec
+    # The architecture that restores the checkpoint weights, pinned with the request so every
+    # attempt reads the same layout. It stays out of ``sample_id``: a training-side change, such
+    # as a renamed attention kernel, must not discard completed results. The checkpoint already
+    # pins the layout through ``metadata_digest``, and ``spec.release`` remains the backfill knob.
+    model: dict
     source_revision: str = Field(pattern=r"^[0-9a-f]{40}$")
     target_cluster: str
 

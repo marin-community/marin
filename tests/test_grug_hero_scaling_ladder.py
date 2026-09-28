@@ -158,7 +158,7 @@ def test_scaling_ladder_searches_permanent_and_cluster_temp_roots(monkeypatch):
     trainer = step.build_config(ctx).trainer.trainer
     assert trainer.checkpoint_search_paths("test-d6144") == [
         f"{output_path}/checkpoints",
-        "s3://hero-checkpoints/tmp/ttl=14d/checkpoints-temp/marin-us-east-02a/marin/grug/test-d6144/v/checkpoints",
+        "s3://hero-checkpoints/tmp/ttl=3d/checkpoints-temp/marin-us-east-02a/marin/grug/test-d6144/v/checkpoints",
     ]
 
 

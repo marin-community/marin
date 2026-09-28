@@ -4,6 +4,7 @@
 import os
 
 from iris.cluster.node_agent.cache_reclaim import reclaim_cache
+from iris.cluster.runtime.env import UV_CACHE_PATH, cache_host_dirname
 from rigging.timing import Duration, Timestamp
 
 
@@ -37,3 +38,19 @@ def test_reclaim_cache_uses_file_writes_and_accesses_for_freshness(tmp_path):
     assert not stale.exists()
     assert (recently_written / "weights").read_bytes() == b"written"
     assert (recently_accessed / "weights").read_bytes() == b"accessed"
+
+
+def test_reclaim_cache_leaves_uv_namespace_to_uv(tmp_path):
+    cache_dir = tmp_path / "iris-cache"
+    stale_uv_entry = cache_dir / cache_host_dirname(UV_CACHE_PATH) / "archive-v0"
+    stale_uv_entry.mkdir(parents=True)
+    os.utime(stale_uv_entry, (0.0, 0.0))
+
+    reclaimed = reclaim_cache(
+        cache_dir,
+        max_age=Duration.from_seconds(500),
+        now=Timestamp.from_seconds(1_000),
+    )
+
+    assert reclaimed == 0
+    assert stale_uv_entry.is_dir()

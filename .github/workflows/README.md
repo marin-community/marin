@@ -29,31 +29,50 @@ gh workflow run ops-pulumi-rollout.yaml --ref main -f service=echo
 
 ## Agent prose cleanup
 
-`ops-agent-prose-cleanup.yaml` cleans issue and PR descriptions carrying the
-`agent-generated` label. It runs when an item is opened, edited, reopened, or
-labeled. The workflow executes `scripts/ci/github_prose_cleanup.py` from the
-default branch; `pull_request_target` never checks out the PR head.
+`ops-agent-prose-cleanup.yaml` launches a Loom session for an issue or PR carrying
+the `agent-generated` label whose author has write access or is `marin-ops-agent[bot]`
+or `loom-oa-dev[bot]`; external issues and PRs are not cleaned up. Its goal directs the session to follow the
+writing-style guide and apply the archive, validation, and stale-body checks
+in `scripts/ci/github_prose_cleanup.py` before any update. Actions checks out
+only the trusted default-branch launch and access-check actions. The workflow runs on open, reopen, and label
+events, not edits. The launch uses the low-effort `prose-cleanup` Loom profile published as
+`LOOM_PROSE_CLEANUP_PROFILE`, and its idempotency key is the issue or PR number, so later label
+and reopen events return the existing run instead of starting another. A body that already carries
+the `marin-prose-cleanup` marker skips the launch entirely.
 
-Claude reads the common writing-style guide, the AI-writing checklist, and the
-applicable issue or pull request guide from `.agents/skills/writing-style/`, then
-rewrites the description as a permanent record for a technical reader. The
-workflow prompt narrows that policy to a soft edit: preserve source facts,
-measurements, caveats, links, and useful code examples; do not import facts from
-the diff or comments; do not target a word count; and leave compliant text and
-titles unchanged.
+## Agentic lint
 
-The model job has read-only repository permissions, receives only the filesystem
-`Read` tool, and returns a schema-validated body. A separate write job runs the
-Python finalizer, which applies deterministic presentation checks outside fenced
-and inline code, rejects empty or oversized rewrites, and prepares the GitHub
-update.
+`agentic-lint.yaml` runs a best-effort Loom lint review on a pull request that
+lacks the `agentic-lint` label. The label records that the PR has had a lint
+pass: the `commit` skill applies it at PR creation after the author's local
+`./infra/pre-commit.py --review`, and the Loom session adds it after reporting
+its findings. The launcher runs when a non-draft PR from this repository opens,
+reopens, or becomes ready for review, and only when its author has write access
+or is `marin-ops-agent[bot]`. Pushes to a PR do not launch another review;
+removing the label requests a fresh review of the current head. The idempotency
+key is the PR number and head SHA, so repeated events on one commit reuse a run.
+The review is not a required check, so a failed Loom run does not block merging.
+Loom's `agentic-lint` profile and the workflow's OIDC federation are declared in
+`infra/loom/Pulumi.marin-loom.yaml`; the GitHub profile variable is published
+from `infra/pulumi/github`.
 
-Before an edit, the workflow stores the exact prior description in a collapsed
-`github-actions[bot]` comment. The edited description ends with an `Original
-description` link to that comment. Content hashes make archive creation
-idempotent across retries, and the workflow rechecks the current description
-before writing so a queued run cannot overwrite a newer edit. It skips cleanup
-when the archive or updated body would exceed GitHub's size limit.
+Other GitHub agent entry points use the `github-automation` Loom profile.
+
+Loom launchers that respond to a user-authored issue, comment, review, or pull
+request decide who may trigger them with the `check-write-access` action
+rather than the event payload's `author_association`. The payload hides
+private organization membership, so a regular member with private visibility
+appears as `CONTRIBUTOR` and would be skipped. The action asks GitHub for the
+author's effective repository permission with the workflow token and allows
+`write`, `maintain`, or `admin`; a lookup failure logs the API error and denies
+the launch. Bot accounts do not resolve through that endpoint, so the
+pull-request launchers pass `marin-ops-agent[bot]` through the action's
+`allowed-bots` input. Scheduled and label-driven launchers such as prose
+cleanup do not use the check.
+
+Canary failure workflows launch an independent triage session and continue to
+send the immediate Slack fallback notification. The Iris smoke test still
+uploads screenshots for inspection through the `Marin - Unit` run.
 
 ## External dependency updates
 

@@ -4,12 +4,14 @@
 """Behavior of EvalDash's durable serving catalog and scheduled reconciliation."""
 
 import asyncio
+from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 
 import pytest
 import sqlalchemy
 from evaldash import app as evaldash_app
 from evaldash import fixtures, results_db
+from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.records import EvalRunRecord, list_records, write_record
 from sqlalchemy.pool import StaticPool
 
@@ -74,6 +76,25 @@ def test_older_binary_rejects_a_database_with_unknown_migrations():
 
     with pytest.raises(RuntimeError, match="9999_future"):
         results_db.migrate_schema(engine)
+
+
+def test_snapshot_reads_record_written_before_tokenizer_revision(tmp_path):
+    engine = _engine()
+    results_db.migrate_schema(engine)
+    record = _record(tmp_path)
+    stored = record.model_dump(mode="json")
+    config = asdict(ModelConfig(name=record.model.name, location=record.model.location))
+    config.pop("tokenizer_revision")
+    stored["model"]["config"] = config
+    with engine.begin() as conn:
+        conn.execute(results_db.catalog_runs.insert(), {**results_db.run_row(record), "record": stored})
+
+    loaded = results_db.fetch_snapshot(engine).records[0]
+
+    assert loaded.run_id == record.run_id
+    assert loaded.model.config is not None
+    assert loaded.model.config.tokenizer_revision is None
+    assert loaded.model.config.location == record.model.location
 
 
 def test_reconciler_discovers_new_paths_and_only_rereads_known_paths_when_due(tmp_path):

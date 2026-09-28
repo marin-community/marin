@@ -93,6 +93,7 @@ class VllmGpuRelease:
     source_commit: str
     version: str
     torch_backend: str
+    torch_version: str
     wheels: tuple[VllmGpuWheel, ...]
 
 
@@ -186,6 +187,7 @@ def load_vllm_gpu_release(path: Path) -> VllmGpuRelease:
         source_commit=config["source_commit"],
         version=config["version"],
         torch_backend=config["torch_backend"],
+        torch_version=config["torch_version"],
         wheels=tuple(
             VllmGpuWheel(
                 architecture=wheel["architecture"],
@@ -200,6 +202,8 @@ def load_vllm_gpu_release(path: Path) -> VllmGpuRelease:
         raise ValueError(f"{path}: expected a full vLLM source commit, found {release.source_commit!r}")
     if not re.fullmatch(r"cu[0-9]+", release.torch_backend):
         raise ValueError(f"{path}: expected a CUDA torch backend, found {release.torch_backend!r}")
+    if not release.torch_version.endswith(f"+{release.torch_backend}"):
+        raise ValueError(f"{path}: torch version {release.torch_version!r} does not match {release.torch_backend}")
     architectures = tuple(wheel.architecture for wheel in release.wheels)
     if not architectures or len(set(architectures)) != len(architectures):
         raise ValueError(f"{path}: expected one or more unique wheel architectures, found {architectures!r}")
@@ -244,6 +248,7 @@ def render_gpu_release_toml(manifest: dict) -> str:
         f'source_commit = "{manifest["source"]["fork_commit"]}"',
         f'version = "{manifest["distribution"]["version"]}"',
         f'torch_backend = "{torch_backend}"',
+        f'torch_version = "{manifest["abi"]["torch_version"]}"',
     ]
     for platform in manifest["platforms"]:
         filename = platform["wheel"]["filename"]
@@ -371,6 +376,7 @@ class VllmGpuRelease:
     source_commit: str
     version: str
     torch_backend: str
+    torch_version: str
     wheels: tuple[VllmGpuWheel, ...]
 
 
@@ -388,6 +394,7 @@ VLLM_GPU_RELEASE = VllmGpuRelease(
     source_commit="{vllm_gpu_release.source_commit}",
     version="{vllm_gpu_release.version}",
     torch_backend="{vllm_gpu_release.torch_backend}",
+    torch_version="{vllm_gpu_release.torch_version}",
     wheels=(
 {wheel_entries}
     ),
@@ -600,8 +607,7 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         metavar="MANIFEST",
         help=(
-            f"re-pin config/external/vllm/gpu.toml from a promoted "
-            f"{GPU_RELEASE_MANIFEST_NAME}, then regenerate the pins"
+            f"re-pin config/external/vllm/gpu.toml from a promoted {GPU_RELEASE_MANIFEST_NAME}, then regenerate the pins"
         ),
     )
     args = parser.parse_args()

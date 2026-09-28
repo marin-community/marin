@@ -26,8 +26,11 @@ map in ``hero_data_emb_paths.json`` and adds the active Marin prefix.
 as the registry moves. :func:`tokenized` pins the artifact version instead,
 because the tokenize hash includes one and it has changed under the runs that
 produced this data: each tokenizer was applied to the whole registry in a single
-fleet run, and each of those runs wrote a different version. The dedup stages
-and domain cluster assignment are pinned to specific runs outright.
+fleet run, and each of those runs wrote a different version. The dedup stages,
+domain cluster assignment and decontamination are pinned to specific runs
+outright. Decontamination reads its own source-to-path map, in
+``hero_data_decontam_paths.json``, because the marking rule is still under
+review and every mark hangs off two shared upstream steps.
 
 All paths resolve against ``MARIN_PREFIX``. CoreWeave Datakit has one storage
 root, ``s3://marin-us-east-02a/marin``; use it regardless of worker placement.
@@ -71,6 +74,18 @@ def harrier_paths_path() -> pathlib.Path:
 def harrier_paths() -> dict[str, str]:
     """Load the complete Harrier path map."""
     return json.loads(harrier_paths_path().read_text())
+
+
+@cache
+def decontam_paths_path() -> pathlib.Path:
+    """Return the path to the pinned decontamination path map."""
+    return pathlib.Path(__file__).with_name("hero_data_decontam_paths.json")
+
+
+@cache
+def decontam_paths() -> dict[str, str]:
+    """Load the pinned decontamination path map."""
+    return json.loads(decontam_paths_path().read_text())
 
 
 # The manifest records paths relative to the sole CoreWeave Datakit root.
@@ -179,6 +194,18 @@ def minhash(source: str) -> StepSpec:
     return _read_only(steps.minhash[source])
 
 
+def decontaminated(source: str) -> StepSpec:
+    """Return the pinned decontamination attributes for ``source``.
+
+    A mark's hash covers its eval Bloom and drop-set dependencies, not just its
+    own config, so a change to the marking rule rekeys those two shared steps
+    and repoints all 292 marks at once. The ``v4-final-20260815`` outputs stay
+    where they are, so resolving from current code would hand out paths with
+    nothing behind them.
+    """
+    return _frozen_step(f"hero/decontam/{source}", decontam_paths()[source])
+
+
 def exact_dups() -> StepSpec:
     """Return the pinned global exact-duplicate attributes covering every source."""
     return _frozen_step("hero/exact_dups", f"datakit/{EXACT_DUPS_ID}")
@@ -244,6 +271,7 @@ def all_paths() -> dict[str, str]:
     for source in sorted(sources):
         paths[f"normalized/{source}"] = _read_only(sources[source]).output_path
         paths[f"minhash/{source}"] = _read_only(minhash_steps[source]).output_path
+        paths[f"decontam/{source}"] = decontaminated(source).output_path
         paths[f"tokenize.marin/{source}"] = tokenized(source, MARIN_TOKENIZER).output_path
         paths[f"tokenize.nemotron/{source}"] = tokenized(source, NEMOTRON_TOKENIZER).output_path
         paths[f"harrier/{source}"] = harrier(source)
