@@ -301,6 +301,7 @@ def test_probe_samples_rows_beyond_first_parquet_batch(tmp_path, monkeypatch) ->
             ["Amplitude (2E/k).", "Energy is conserved.", "Motion is periodic.", "The spring stretches."],
         ),
         ("# Amplitude (2E/k).", ["# Amplitude (2E/k)."]),
+        ("\nAmplitude (2E/k).\n", ["\nAmplitude (2E/k).\n"]),
     ],
 )
 async def test_rejected_math_persists_verbatim_evidence_in_every_answer_format(
@@ -357,10 +358,15 @@ async def test_rejected_math_persists_verbatim_evidence_in_every_answer_format(
         assert record["messages"][1]["channel"] == ChatChannel.ANALYSIS
         assert record["messages"][1]["content"][0]["text"] == reasoning
         answer = record["messages"][2]["content"][0]["text"]
-        assert all(paragraph in answer for paragraph in evidence)
-        assert "√" not in answer
+        expected_evidence = [paragraph.strip() for paragraph in evidence]
         if record["source_id"] == f"{source.name}:{row_ids['json']}:0":
-            assert json.loads(answer)["evidence"] == evidence
+            fields = json.loads(answer)
+            assert fields["evidence"] == evidence
+            answer = fields["answer"]
+        if record["source_id"] == f"{source.name}:{row_ids['table']}:0":
+            expected_evidence = [paragraph.replace("\n", "<br>") for paragraph in evidence]
+        assert all(paragraph in answer for paragraph in expected_evidence)
+        assert "√" not in answer
 
 
 @pytest.mark.asyncio

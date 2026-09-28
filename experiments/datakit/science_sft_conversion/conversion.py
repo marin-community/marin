@@ -427,7 +427,7 @@ def _evidence_answer(paragraphs: list[str], selected: Format) -> str:
             steps = "\n".join(f"{index}. {text}" for index, text in enumerate(paragraphs, 1))
             return f"{steps}\n\nFinal answer: {conclusion}"
         case "bullets":
-            return "\n".join(f"- {text}" for text in paragraphs) + f"\n\nConclusion: {conclusion}"
+            return "\n\n".join(f"- Quoted passage:\n{text}" for text in paragraphs) + f"\n\nConclusion: {conclusion}"
         case "short_then_detail":
             return f"Short answer: {conclusion}\n\n{quoted}"
         case "table":
