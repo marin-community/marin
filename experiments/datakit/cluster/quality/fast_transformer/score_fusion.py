@@ -49,7 +49,6 @@ from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize._core import CHUNK_INDEX_FIELD, INPUT_IDS_FIELD, tokenize_batches_with_id
 from pydantic import BaseModel
-from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr import counters
 from zephyr.context import ZephyrContext
@@ -355,7 +354,6 @@ def score_fusion(
         resources=worker_resources,
         coordinator_resources=COORDINATOR_RESOURCES,
         max_workers=min(max_workers, len(basenames)),
-        chunk_storage_prefix=marin_temp_bucket(ttl_days=1, prefix="zephyr", source_prefix=output_path),
         stage_runner_factory=InlineRunner,
     )
     ctx.put("tokenizer_name", quality_model.tokenizer)

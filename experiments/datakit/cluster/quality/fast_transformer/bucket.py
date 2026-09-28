@@ -35,7 +35,6 @@ from fray.types import ResourceConfig
 from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
-from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import prefix_join
 from zephyr import counters
 from zephyr.context import ZephyrContext
@@ -186,7 +185,6 @@ def bucket_quality_scores(
         resources=worker_resources,
         coordinator_resources=COORDINATOR_RESOURCES,
         max_workers=min(max_workers, len(basenames)),
-        chunk_storage_prefix=marin_temp_bucket(ttl_days=1, prefix="zephyr", source_prefix=output_path),
     )
     outcome = ctx.execute(pipeline, verbose=True, map_task_resources=task_resources)
     return QualityScores(
