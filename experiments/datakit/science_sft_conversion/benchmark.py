@@ -40,7 +40,10 @@ async def benchmark(input_url: str, output_url: str, endpoint_name: str, concurr
     semaphore = asyncio.Semaphore(concurrency)
     started = time.monotonic()
 
-    async with httpx.AsyncClient(timeout=httpx.Timeout(REQUEST_TIMEOUT)) as client:
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(REQUEST_TIMEOUT),
+        limits=httpx.Limits(max_connections=concurrency, max_keepalive_connections=concurrency),
+    ) as client:
 
         async def request(sample: dict) -> dict:
             source = source_by_name[sample["source"]]

@@ -87,6 +87,7 @@ def main() -> None:
     parser.add_argument("--instances", type=int, required=True)
     parser.add_argument("--max-sequences", type=int, required=True)
     parser.add_argument("--timeout-hours", type=float, required=True)
+    parser.add_argument("--startup-timeout-seconds", type=float, default=3600)
     parser.add_argument("--cache-ttl-days", type=int, default=14)
     parser.add_argument("--tensor-parallel-size", type=int, default=8)
     parser.add_argument("--data-parallel-size", type=int, default=1)
@@ -109,6 +110,7 @@ def main() -> None:
         engine=VllmEngineConfig(
             launcher=VllmLauncherType.CUDA,
             version="0.30.0",
+            startup_timeout_seconds=args.startup_timeout_seconds,
             max_num_batched_tokens=8192,
             max_num_seqs=args.max_sequences,
             extra_args=(
@@ -135,7 +137,9 @@ def main() -> None:
             broker_resources=ResourceConfig.with_cpu(cpu=4, ram="16g", disk="20g", preemptible=False),
             worker=InferenceWorkerConfig(max_in_flight=args.max_sequences, request_timeout_seconds=1440),
             proxy=InferenceProxyConfig(
-                max_pending_requests=2048, request_timeout_seconds=1800, readiness_timeout_seconds=1800
+                max_pending_requests=2048,
+                request_timeout_seconds=1800,
+                readiness_timeout_seconds=args.startup_timeout_seconds,
             ),
             request_lease_timeout_seconds=1620,
         ),

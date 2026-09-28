@@ -443,7 +443,9 @@ async def convert_work_batch(work: WorkBatch, endpoint: str, concurrency: int) -
         raise ValueError(f"Empty scheduled batch: {work}")
     semaphore = asyncio.Semaphore(concurrency)
     timeout = httpx.Timeout(REQUEST_TIMEOUT)
-    async with httpx.AsyncClient(timeout=timeout) as client:
+    async with httpx.AsyncClient(
+        timeout=timeout, limits=httpx.Limits(max_connections=concurrency, max_keepalive_connections=concurrency)
+    ) as client:
         documents, format_counts = await _convert_batch(client, semaphore, endpoint, source, rows)
     output_table = pa.Table.from_pylist(documents, schema=CHAT_SCHEMA)
     with atomic_rename(output_path, filesystem=output_fs) as temporary_path:
