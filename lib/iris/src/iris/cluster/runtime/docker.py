@@ -327,19 +327,8 @@ def _parse_docker_timestamp(value: str) -> Timestamp | None:
     """Parse a Docker RFC3339 timestamp at the runtime boundary."""
     if not value:
         return None
-    text = value.replace("Z", "+00:00")
-    if "." in text:
-        head, _, tail = text.partition(".")
-        fraction = tail
-        offset = ""
-        for separator in ("+", "-"):
-            if separator in tail:
-                fraction, _, suffix = tail.partition(separator)
-                offset = separator + suffix
-                break
-        text = f"{head}.{fraction[:6]}{offset}"
     try:
-        return Timestamp.from_seconds(datetime.fromisoformat(text).timestamp())
+        return Timestamp.from_seconds(datetime.fromisoformat(value).timestamp())
     except ValueError:
         logger.warning("Docker returned an invalid container start timestamp: %r", value)
         return None
