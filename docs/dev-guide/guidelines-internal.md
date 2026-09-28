@@ -43,20 +43,11 @@ are separate grants. The onboarding agent can identify missing access.
 
 ### Request your GCP and Weights & Biases access
 
-Ask your buddy or another Marin developer:
-
-> Please check that I have the `Marin Dev` role in `hai-gcp-models` and Iris IAP
-> access. Please arrange any missing grants through Pulumi.
-
-Pulumi is the tool Marin uses to manage GCP access. A developer prepares a
-[grant PR](https://github.com/marin-community/marin/blob/main/infra/pulumi/README.md#user-grants),
-a separate reviewer confirms the decrypted account and role with a human before
-merging it, and an operator runs `pulumi up` to apply it. You do not need to run
-Pulumi for onboarding.
+Pulumi is infra-as-code tool Marin uses to manage GCP access. Ask your buddy to prepare a permissions
+[grant PR](https://github.com/marin-community/marin/blob/main/infra/pulumi/README.md#user-grants) and run `pulumi up` to apply it.
 
 DM your buddy: “Add me to the `marin-community` Weights & Biases entity. My
-Weights & Biases handle is `<your-handle>`.” Replace the placeholder with your
-own handle. Ask your buddy or a Marin infrastructure maintainer to route other
+Weights & Biases handle is `<your-handle>`.” Ask your buddy or a Marin infrastructure maintainer to route other
 missing grants.
 
 ### Pulumi operators
