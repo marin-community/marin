@@ -83,18 +83,23 @@ def test_conversion_process_leaks_are_rejected_without_blocking_unit_conversion(
     assert record["messages"][2]["content"][0]["text"] == completion["answer"]
 
 
-def test_grounded_math_rejects_missing_radicals_but_standalone_exercises_can_derive_them() -> None:
+@pytest.mark.parametrize("root_expression", ["√(2E/k)", "(2E/k)^0.5", "(2E/k)**(1/2)"])
+def test_grounded_math_rejects_missing_radicals_but_standalone_exercises_can_derive_them(root_expression) -> None:
     source = Source("probe/physics", "", 0, 0)
     completion = {
         "user": "Report the stated amplitude of the oscillation.",
-        "reasoning_content": "The reported amplitude is √(2E/k).",
-        "answer": "- Amplitude: √(2E/k).\nConclusion: √(2E/k).",
+        "reasoning_content": f"The reported amplitude is {root_expression}.",
+        "answer": f"- Amplitude: {root_expression}.\nConclusion: {root_expression}.",
     }
     with pytest.raises(ValueError, match="square-root notation absent"):
         validated_document(source, "test-2", "Amplitude (2E/k).", 0, completion, ConversionMode.GROUNDED)
 
     record = validated_document(source, "test-2", "Amplitude sqrt(2E/k).", 0, completion, ConversionMode.GROUNDED)
     assert record["messages"][2]["content"][0]["text"] == completion["answer"]
+    exact_source = validated_document(
+        source, "test-2", f"Amplitude {root_expression}.", 0, completion, ConversionMode.GROUNDED
+    )
+    assert exact_source["messages"][2]["content"][0]["text"] == completion["answer"]
     ambiguous = validated_document(
         source,
         "test-2",

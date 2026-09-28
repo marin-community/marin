@@ -69,7 +69,7 @@ CONVERSION_PROCESS_RE = re.compile(
     r"\bconversion (?:request|task|pipeline)\b|" r"\b(?:the|my|this) (?:reasoning_content|(?:user|answer) field)\b",
     re.I,
 )
-RADICAL_NOTATION_RE = re.compile(r"√|\\sqrt\b|\bsqrt\b", re.I)
+RADICAL_NOTATION_RE = re.compile(r"√|\\sqrt\b|\bsqrt\b|(?:\^|\*\*)\s*[({]?\s*(?:0\.5|1\s*/\s*2)\b", re.I)
 RADICAL_SOURCE_RE = re.compile(rf"{RADICAL_NOTATION_RE.pattern}|\bsquare roots?\b", re.I)
 
 
