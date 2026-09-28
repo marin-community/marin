@@ -13,6 +13,7 @@ from jax.sharding import AxisType, Mesh
 from experiments.grug.fast_track.model import (
     GrugModelConfig,
     LocalMixer,
+    NgramStatMode,
     Transformer,
     _ngram_stat_ids,
     write_ngram_stats,
@@ -116,3 +117,29 @@ def test_table_is_frozen_and_reader_trains():
     labels = opt_config.create_mask(model)
     assert labels.ngram_stat_table == "frozen" and labels.ngram_stat_code == "frozen"
     assert labels.ngram_stat_gate_w == "adam"
+
+
+def test_bigram_mode_starts_as_the_model_without_stats():
+    """``ngram_stat_mode=bigram`` adds the reader into the bigram source through a zero-init output, so a filled
+    table changes nothing at init, takes no AttnRes source slot, and the reader output still gets a gradient."""
+    overrides = dict(
+        second_embed=True,
+        second_embed_bigram=True,
+        embed2_rows=64,
+        ngram_stat_orders=(2, 3),
+        ngram_stat_mlp_dim=16,
+        ngram_stat_mode=NgramStatMode.BIGRAM,
+    )
+    mesh, model = _model(**overrides)
+    _, plain = _model(**{**overrides, "ngram_stat_rows": 0})
+    assert model.ngram_stat_norm is None and model.ngram_stat_gate_w is None
+    tokens = jax.random.randint(jax.random.PRNGKey(5), (2, _SEQ), 0, _VOCAB)
+    weights = jnp.ones(tokens.shape, jnp.float32)
+    with jax.set_mesh(mesh):
+        model = eqx.filter_jit(write_ngram_stats)(model, tokens, weights, None)
+        loss_fn = eqx.filter_jit(eqx.filter_value_and_grad(lambda m: m.next_token_loss(tokens, weights)))
+        loss, grads = loss_fn(model)
+        plain_loss, _ = loss_fn(plain)
+    np.testing.assert_allclose(float(loss), float(plain_loss), rtol=1e-6)
+    assert np.abs(np.asarray(grads.ngram_stat_up)).max() > 0
+    assert GrugMoeMuonHConfig().create_mask(model).ngram_stat_up == "adam"

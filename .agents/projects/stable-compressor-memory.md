@@ -412,6 +412,70 @@ What to read off each run:
 
 If S1 passes, the retention check is the same pair at d768 (baseline steps), as for every ladder ML change.
 
+## 6b. First d512 results (batch 93) and fixes
+
+Same-data runs, `SOURCE` mode, paired with base7 (3.0072 / 3.0109) at 2817 equal steps:
+
+| run | orders | Paloma macro loss | Δ | median step |
+|---|---|---|---|---|
+| lc1-b93-scm-s234 / -s1 | 2, 3, 4 | 3.0149 / 3.0269 | +0.0077 / +0.0160 | 181 ms |
+| lc1-b93-scm-s2 / -s1 | 2 | 3.0190 / 3.0183 | +0.0118 / +0.0074 | 178 ms |
+
+The prediction was `|Δ| < 0.003`. It is falsified in the harmful direction: the runs lost +0.010 to +0.012 at
+equal steps. The fixed-time cost is on top of that, since steps took +2–3% longer.
+
+### Why it hurt: the structure, not the statistics
+
+- **One order hurts as much as three.** The harm is the same with one order (+0.0096 mean) as with three
+  (+0.0118). If the statistics themselves were bad, three orders should hurt more. It points to the way the
+  source enters the model.
+- **The toy and the GPU version were wired differently.**
+  - In the toy the reader is *added* to the stream through zero-init outputs. Step 0 is the baseline model.
+  - In `SOURCE` mode the reader is a new AttnRes source. It is RMS-normed, so it has unit scale from step 0,
+    even though the table is empty and its content is noise at first. It is content-gated, with the gate open
+    at sigmoid(2) ≈ 0.88.
+  - AttnRes gates are a softmax over sources, so at init every gate hands it an equal share. That dilutes the
+    embedding and the bigram source at all 13 gates.
+- **W&B end-of-run AttnRes weights (s234, source order: bigram, stat, embedding):**
+  - Layer 0 attention gate: stat 0.165. It took that mass from the bigram source, which fell from 0.604 in
+    base7 to 0.467, and the embedding went from 0.396 to 0.368.
+  - Every other gate: stat about 0.007–0.02, except the last MLP gate at 0.079. The final (lm_head) gate: 0.021.
+  - The stat content gate stayed open. Its bias went from 2.0 to 1.86 and its `w` norm to 0.67.
+- **Reading.** The model learned to route around the source. The early-training disruption and the lost share
+  at layer 0 were not recovered within 2817 steps.
+
+### Fix 1: `ngram_stat_mode=bigram` (no-harm init)
+
+- The reader output is added into the trained bigram table's source, after its norm and content gate.
+- It goes through a zero-initialized `ngram_stat_up`, which is on Adam: MuonH cannot move a zero matrix.
+- Step 0 is exactly the base model; a unit test checks that the loss equals the model without stats.
+- No AttnRes source slot and no softmax share are added. The source-mode norm and gate are not created.
+
+Note: `ngram_stat_up` is now on Adam in both modes. `SOURCE` mode is kept only to reproduce batch 93, with that
+one difference.
+
+### Fix 2: the pre-fill OOM
+
+- **What the log shows.** The pre-fill loop ran all 5634 writes in 230 s, but HBM was full: 77.7 GiB in use.
+  The final eager `float(jnp.mean(table[:, -1] > 0))` then failed to allocate 72 MiB.
+- **The allocator histogram.** It held about 180 live 128 MiB buffers, which match the `code[next]` gather of
+  one write, plus hundreds of 72 MiB and 36 MiB ones.
+- **Cause.** The host dispatched writes far ahead of the GPU with no synchronization. Each queued write held
+  its own temporaries, and the jitted write also carried the whole train state.
+- **Fix.**
+  - Only the table goes through a donated jit (`ngram_stat_table_add`).
+  - Each write is `block_until_ready`'d before the next is dispatched. That costs about 40 ms per batch,
+    untimed.
+  - The filled fraction is computed in a jit.
+  - The EMA gets its own copy of the pre-filled table, since the train step donates the state.
+
+### Revised prediction (bigram mode)
+
+- Same data: neutral at worst, `|Δ| ≤ 0.003` at equal steps. The fixed-time cost of +2–3% step time (about
+  0.004) makes it a fixed-time loss unless it gains.
+- Pre-fill 2×: Δ ≤ −0.005 vs base7. This is the real test of the extra-data lever.
+- 8× beats 2×.
+
 ## 7. Open questions
 
 1. **Rules.** Is an untimed pre-fill from more of the fixed training data allowed? It is a counting pass, not a

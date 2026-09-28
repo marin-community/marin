@@ -112,6 +112,17 @@ _KDA_ROT_OMEGA_RANGE = (1.0 / 128, 1.0)
 _KDA_STAT_PREFIX = "attn_res_knob_kda_"
 
 
+class NgramStatMode(StrEnum):
+    """Where the n-gram statistic reader's output enters the model."""
+
+    SOURCE = "source"
+    """Its own AttnRes source (RMS-normed, content-gated). It takes a softmax share at every gate from step 0, while
+    the table is still empty; at d512 this cost +0.010 to +0.012 Paloma macro loss at equal steps."""
+    BIGRAM = "bigram"
+    """Added to the trained bigram table's source through a zero-initialized reader output, so step 0 is exactly the
+    model without it and no gate's softmax is diluted (needs ``second_embed_bigram``)."""
+
+
 class LocalMixer(StrEnum):
     """Token mixer of the local layers; global layers (every ``global_every``-th + last) are always
     full causal softmax attention."""
@@ -792,7 +803,10 @@ class GrugModelConfig:
     ngram_stat_mlp_dim: int = 0
     """Width of a GELU layer in the statistic reader (0: a linear reader straight to ``hidden_dim``)."""
     ngram_stat_gate: bool = True
-    """Scalar Engram content gate on the statistic source (w = 0, c = +2 at init), like ``bigram_gate``."""
+    """Scalar Engram content gate on the statistic source (w = 0, c = +2 at init), like ``bigram_gate`` (``SOURCE``
+    mode only)."""
+    ngram_stat_mode: NgramStatMode = NgramStatMode.SOURCE
+    """Where the reader's output enters: its own AttnRes source, or added into the bigram source (``NgramStatMode``)."""
     embed2_grad_fp32: bool = True
     """Second table's backward through the fp32 local scatter + psum (True), or JAX's default bf16
     scatter-add (False). Hashed rows see few adds each, so the bf16 path's atomic contention and rounding
@@ -3808,17 +3822,22 @@ class Transformer(eqx.Module):
                         random.fold_in(embed2_key, 21),
                         (cfg.ngram_stat_mlp_dim or _ngram_stat_feature_dim(cfg), cfg.hidden_dim),
                         1.0 / math.sqrt(cfg.ngram_stat_mlp_dim or _ngram_stat_feature_dim(cfg)),
-                    ),
+                    )
+                    * (cfg.ngram_stat_mode is NgramStatMode.SOURCE),  # zero-init (no-harm) in BIGRAM mode
                     P(None, None),
                 )
                 if cfg.ngram_stat_rows
                 else None
             ),
-            ngram_stat_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps) if cfg.ngram_stat_rows else None,
+            ngram_stat_norm=(RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps) if _ngram_stat_source_mode(cfg) else None),
             ngram_stat_gate_w=(
-                jnp.zeros((cfg.hidden_dim,), jnp.float32) if cfg.ngram_stat_rows and cfg.ngram_stat_gate else None
+                jnp.zeros((cfg.hidden_dim,), jnp.float32)
+                if _ngram_stat_source_mode(cfg) and cfg.ngram_stat_gate
+                else None
             ),
-            ngram_stat_gate_b=(jnp.full((), 2.0, jnp.float32) if cfg.ngram_stat_rows and cfg.ngram_stat_gate else None),
+            ngram_stat_gate_b=(
+                jnp.full((), 2.0, jnp.float32) if _ngram_stat_source_mode(cfg) and cfg.ngram_stat_gate else None
+            ),
             token_embed_window=(
                 reshard(
                     _init_weight(random.fold_in(embed2_key, 5), (cfg.vocab_size, cfg.window_embed_dim), 1.0),
@@ -4107,6 +4126,11 @@ class Transformer(eqx.Module):
                         "attn_res_bigram_gate_mean": jax.lax.stop_gradient(jnp.mean(gate)),
                         "attn_res_bigram_gate_std": jax.lax.stop_gradient(jnp.std(gate)),
                     }
+                if self.ngram_stat_table is not None and cfg.ngram_stat_mode is NgramStatMode.BIGRAM:
+                    if not cfg.second_embed_bigram:
+                        raise ValueError("ngram_stat_mode=bigram needs second_embed_bigram")
+                    doc_start = None if segment_ids is None else segment_ids[0]
+                    embed2 = embed2 + self._ngram_stat_read(hidden, token_ids, doc_start)
                 if cfg.second_embed_mode == "input":
                     input_embed2 = embed2
                 else:
@@ -4144,7 +4168,7 @@ class Transformer(eqx.Module):
                     bigram_gate_stats["attn_res_trigram_gate_mean"] = jax.lax.stop_gradient(jnp.mean(gate3))
                     bigram_gate_stats["attn_res_trigram_gate_std"] = jax.lax.stop_gradient(jnp.std(gate3))
                 extra_sources = (*extra_sources, embed3)
-            if self.ngram_stat_table is not None:
+            if self.ngram_stat_table is not None and cfg.ngram_stat_mode is NgramStatMode.SOURCE:
                 doc_start = None if segment_ids is None else segment_ids[0]
                 extra_sources = (*extra_sources, self._ngram_stat_source(hidden, token_ids, doc_start))
             ple_rows = None
@@ -4525,13 +4549,13 @@ class Transformer(eqx.Module):
         hidden, _ = self(token_ids, mask=mask)
         return jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=batch_spec)
 
-    def _ngram_stat_source(
+    def _ngram_stat_read(
         self, hidden: Float[Array, "B S D"], token_ids: Int[Array, "B S"], segment_ids: Int[Array, "B S"] | None
     ) -> Float[Array, "B S D"]:
-        """The statistic table's AttnRes source: gather each position's row of every order (no gradient into the
-        table), read ``[mean code, log count]`` of all orders through the reader, RMS-norm, and content-gate it."""
+        """Gather each position's row of every order (no gradient into the table) and read ``[mean code, log count]``
+        of all orders through the reader to ``hidden_dim``."""
         cfg = self.config
-        assert self.ngram_stat_table is not None and self.ngram_stat_up is not None and self.ngram_stat_norm is not None
+        assert self.ngram_stat_table is not None and self.ngram_stat_up is not None
         ids = _ngram_stat_ids(cfg, token_ids, segment_ids)
         b, s, k = ids.shape
         flat_ids = jax.lax.reshape(ids, (b, s * k), out_sharding=P(_BATCH_AXES, None))
@@ -4546,8 +4570,14 @@ class Transformer(eqx.Module):
                     "bsf,fm->bsm", features, self.ngram_stat_hidden.astype(hidden.dtype), out_sharding=_batch_spec()
                 )
             )
-        read = jnp.einsum("bsf,fd->bsd", features, self.ngram_stat_up.astype(hidden.dtype), out_sharding=_batch_spec())
-        source = self.ngram_stat_norm(read)
+        return jnp.einsum("bsf,fd->bsd", features, self.ngram_stat_up.astype(hidden.dtype), out_sharding=_batch_spec())
+
+    def _ngram_stat_source(
+        self, hidden: Float[Array, "B S D"], token_ids: Int[Array, "B S"], segment_ids: Int[Array, "B S"] | None
+    ) -> Float[Array, "B S D"]:
+        """``NgramStatMode.SOURCE``: the reader's output, RMS-normed and content-gated, as its own AttnRes source."""
+        assert self.ngram_stat_norm is not None
+        source = self.ngram_stat_norm(self._ngram_stat_read(hidden, token_ids, segment_ids))
         if self.ngram_stat_gate_w is not None and self.ngram_stat_gate_b is not None:
             source, _ = _content_gate(hidden, source, self.ngram_stat_gate_w, self.ngram_stat_gate_b, None, None)
         return source
@@ -4926,6 +4956,10 @@ def _content_gate(
     return source * gate[..., None], gate
 
 
+def _ngram_stat_source_mode(cfg: GrugModelConfig) -> bool:
+    return cfg.ngram_stat_rows > 0 and cfg.ngram_stat_mode is NgramStatMode.SOURCE
+
+
 def _ngram_stat_feature_dim(cfg: GrugModelConfig) -> int:
     return len(cfg.ngram_stat_orders) * (cfg.ngram_stat_dim + 1)
 
@@ -4960,8 +4994,22 @@ def write_ngram_stats(
     times its loss weight (0 on the last position and on masked targets). Every device all-gathers the batch's
     row ids, next tokens and weights (a few MB) and scatter-adds the whole batch into its replicated table, so
     no table-sized collective runs. Called after the optimizer step, so a batch never reads its own targets."""
-    cfg = model.config
     assert model.ngram_stat_table is not None and model.ngram_stat_code is not None
+    table = ngram_stat_table_add(
+        model.config, model.ngram_stat_table, model.ngram_stat_code, token_ids, loss_weight, segment_ids
+    )
+    return eqx.tree_at(lambda m: m.ngram_stat_table, model, table)
+
+
+def ngram_stat_table_add(
+    cfg: GrugModelConfig,
+    table: jax.Array,
+    code: jax.Array,
+    token_ids: Int[Array, "B S"],
+    loss_weight: Float[Array, "B S"],
+    segment_ids: Int[Array, "B S"] | None,
+) -> jax.Array:
+    """``write_ngram_stats`` on the bare table (the pre-fill jits this alone, donating only the table)."""
     ids = _ngram_stat_ids(cfg, token_ids, segment_ids)
     next_ids = jnp.roll(token_ids, -1, axis=1)
     orders = len(cfg.ngram_stat_orders)
@@ -4975,26 +5023,25 @@ def write_ngram_stats(
         return table.at[ids.reshape(-1)].add(values.reshape(-1, values.shape[-1]))
 
     # The gathered batch is identical on every device, so the written table is replicated (check_vma can't see it).
-    table = jax.shard_map(
+    return jax.shard_map(
         _local_write,
         mesh=get_abstract_mesh(),
         in_specs=(P(None, None), P(None, None), P(_BATCH_AXES, None, None), P(_BATCH_AXES, None), P(_BATCH_AXES, None)),
         out_specs=P(None, None),
         check_vma=False,
     )(
-        model.ngram_stat_table,
-        model.ngram_stat_code,
+        table,
+        code,
         reshard(ids, P(_BATCH_AXES, None, None)),
         reshard(next_ids, P(_BATCH_AXES, None)),
         reshard(loss_weight, P(_BATCH_AXES, None)),
     )
-    return eqx.tree_at(lambda m: m.ngram_stat_table, model, table)
 
 
 def _num_extra_embeds(cfg: GrugModelConfig) -> int:
     """Extra embedding tables ahead of the token embedding in the AttnRes source list."""
     window_source = cfg.window_embed_dim > 0 and cfg.window_embed_mode == "source"
-    return int(cfg.second_embed) + int(cfg.embed3_rows > 0) + int(window_source) + int(cfg.ngram_stat_rows > 0)
+    return int(cfg.second_embed) + int(cfg.embed3_rows > 0) + int(window_source) + int(_ngram_stat_source_mode(cfg))
 
 
 def _token_window(

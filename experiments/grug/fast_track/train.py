@@ -62,6 +62,7 @@ from experiments.grug.fast_track.model import (
     GrugModelConfig,
     HeadReplay,
     Transformer,
+    ngram_stat_table_add,
     write_ngram_stats,
 )
 
@@ -1043,21 +1044,30 @@ def _segment_ids(batch) -> jax.Array | None:
 
 def _prefill_ngram_stats(state: GrugTrainState, train_loader, *, start_step: int, num_batches: int) -> GrugTrainState:
     """Write ``num_batches`` training batches from ``start_step`` on into the n-gram statistic table (see
-    ``GrugTrainerConfig.ngram_stat_prefill_batches``)."""
+    ``GrugTrainerConfig.ngram_stat_prefill_batches``).
+
+    Only the table goes through the jitted write (donated), and each write is waited on before the next is
+    dispatched: without the wait the host runs hundreds of writes ahead of the GPU, each holding its temporaries,
+    and exhausts HBM (the first d512 pre-fill runs died this way)."""
+    cfg = state.params.config
+    code = state.params.ngram_stat_code
 
     @functools.partial(jax.jit, donate_argnums=(0,))
-    def write(state: GrugTrainState, batch) -> GrugTrainState:
-        params = write_ngram_stats(state.params, batch.tokens, batch.loss_weight, _segment_ids(batch))
-        return dataclasses.replace(state, params=params, ema_params=params if state.ema_params is not None else None)
+    def write(table: jax.Array, batch) -> jax.Array:
+        return ngram_stat_table_add(cfg, table, code, batch.tokens, batch.loss_weight, _segment_ids(batch))
+
+    @jax.jit
+    def filled_fraction(table: jax.Array) -> jax.Array:
+        return jnp.mean((table[:, -1] > 0).astype(jnp.float32))
 
     started = time.time()
+    table = state.params.ngram_stat_table
     batches = train_loader.iter_from_step(start_step)
     for i in range(num_batches):
-        state = write(state, next(batches))
+        table = jax.block_until_ready(write(table, next(batches)))
         if (i + 1) % 500 == 0:
             logger.info("ngram stat prefill: %d / %d batches (%.0fs)", i + 1, num_batches, time.time() - started)
-    table = state.params.ngram_stat_table
-    filled = float(jnp.mean((table[:, -1] > 0).astype(jnp.float32)))
+    filled = float(filled_fraction(table))
     logger.info(
         "ngram stat prefill done: %d batches in %.0fs, %.1f%% rows filled",
         num_batches,
@@ -1065,7 +1075,15 @@ def _prefill_ngram_stats(state: GrugTrainState, train_loader, *, start_step: int
         100 * filled,
     )
     levanter.tracker.log_summary({"ngram_stat/prefill_batches": num_batches, "ngram_stat/prefill_rows_filled": filled})
-    return state
+    params = eqx.tree_at(lambda m: m.ngram_stat_table, state.params, table)
+    # The EMA carries the live table (see the train step). It gets its own copy: the train step donates the state, and
+    # one buffer cannot be donated twice.
+    ema_params = (
+        None
+        if state.ema_params is None
+        else eqx.tree_at(lambda m: m.ngram_stat_table, state.ema_params, jnp.copy(table))
+    )
+    return dataclasses.replace(state, params=params, ema_params=ema_params)
 
 
 def _run_grug_local(config: GrugRunConfig) -> None:
