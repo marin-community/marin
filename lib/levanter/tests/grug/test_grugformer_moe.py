@@ -1416,6 +1416,138 @@ def test_portable_ep_backends_match_dense_cross_shard_value_and_gradients(
     assert result.returncode == 0, result.stderr
 
 
+# XLA:CPU has no ragged-all-to-all thunk, so the CPU check swaps in this all_gather emulation of the
+# collective's semantics: update i of every sender lands on shard i // updates_per_peer at that sender's
+# output offset; rows no update writes keep ``output``'s values.
+_EMULATED_RAGGED_ALL_TO_ALL = """
+def emulated_ragged_all_to_all(
+    operand, output, input_offsets, send_sizes, output_offsets, recv_sizes, *, axis_name, axis_index_groups=None
+):
+    del recv_sizes, axis_index_groups
+    me = jax.lax.axis_index(axis_name)
+    operands = jax.lax.all_gather(operand, axis_name)  # [S, R, H]
+    input_offsets = jax.lax.all_gather(input_offsets, axis_name)  # [S, U]
+    send_sizes = jax.lax.all_gather(send_sizes, axis_name)
+    output_offsets = jax.lax.all_gather(output_offsets, axis_name)
+    num_senders, updates = input_offsets.shape
+    destination = jnp.arange(updates) // (updates // num_senders)
+    rows = jnp.arange(output.shape[0])[:, None, None]
+    hit = (destination == me) & (rows >= output_offsets) & (rows < output_offsets + send_sizes)  # [O, S, U]
+    source_rows = (input_offsets + rows - output_offsets).reshape(output.shape[0], -1)
+    update = jnp.argmax(hit.reshape(output.shape[0], -1), axis=1)
+    source_row = jnp.take_along_axis(source_rows, update[:, None], axis=1)[:, 0]
+    values = operands[update // updates, jnp.clip(source_row, 0, operand.shape[0] - 1)]
+    return jnp.where(hit.any(axis=(1, 2))[:, None], values.astype(output.dtype), output)
+
+jax.lax.ragged_all_to_all = emulated_ragged_all_to_all
+"""
+
+
+@pytest.mark.parametrize("activation", ["relu2", "fused_relu2"])
+@pytest.mark.parametrize("padded", [False, True], ids=["all_valid", "padded"])
+def test_ragged_all_to_all_matches_pooled_wave_for_ungated_relu2_experts(activation: str, padded: bool):
+    """Ragged EP on ungated ReLU^2 experts (``w13`` is ``W_up`` alone) agrees with pooled-wave and dense."""
+    env = os.environ.copy()
+    env["JAX_PLATFORMS"] = "cpu"
+    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=8"
+    script = (
+        """
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+
+        from levanter.grug.grug_moe import moe_mlp
+        from levanter.kernels.pallas.relu2_mlp import fused_relu2
+        from levanter.utils.activation import ActivationFunctionEnum
+        """
+        + textwrap.indent(_EMULATED_RAGGED_ALL_TO_ALL, " " * 8)
+        + """
+        assert jax.device_count() == 8
+        mesh = Mesh(
+            np.asarray(jax.devices()).reshape(2, 4, 1),
+            axis_names=("data", "expert", "model"),
+            axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+        )
+        tokens, hidden, intermediate, num_experts, topk = 64, 8, 12, 16, 4
+        x = jax.random.normal(jax.random.key(0), (tokens, hidden))
+        selected_experts = jnp.argsort(jax.random.uniform(jax.random.key(1), (tokens, num_experts)), axis=-1)[:, :topk]
+        selected_experts = selected_experts.astype(jnp.int32)
+        combine_weights = jax.nn.softmax(jax.random.normal(jax.random.key(2), (tokens, topk)), axis=-1)
+        token_valid = (jnp.arange(tokens) % 5 != 3) if __PADDED__ else jnp.ones((tokens,), dtype=jnp.bool_)
+        w_up = jax.random.normal(jax.random.key(3), (num_experts, hidden, intermediate)) / np.sqrt(hidden)
+        w_down = jax.random.normal(jax.random.key(4), (num_experts, intermediate, hidden)) / np.sqrt(intermediate)
+        cotangent = jax.random.normal(jax.random.key(5), (tokens, hidden))
+        activation = fused_relu2 if "__ACTIVATION__" == "fused_relu2" else ActivationFunctionEnum.relu2
+
+        def dense_output(x, w_up, w_down):
+            pre = jnp.einsum("th,tkhi->tki", x, w_up[selected_experts])
+            expert_output = jnp.einsum("tki,tkih->tkh", jnp.square(jax.nn.relu(pre)), w_down[selected_experts])
+            return jnp.einsum("tkh,tk->th", expert_output, combine_weights * token_valid[:, None])
+
+        def value_and_grads(fn):
+            out = fn(x, w_up, w_down)
+            grads = jax.grad(lambda *args: jnp.sum(fn(*args) * cotangent), argnums=(0, 1, 2))(x, w_up, w_down)
+            return [np.asarray(out), *(np.asarray(g) for g in grads)]
+
+        expected = value_and_grads(dense_output)
+
+        batch_sharding = NamedSharding(mesh, P(("data", "expert"), None))
+        expert_sharding = NamedSharding(mesh, P("expert", None, None))
+        x = jax.device_put(x, batch_sharding)
+        selected_experts = jax.device_put(selected_experts, batch_sharding)
+        combine_weights = jax.device_put(combine_weights, batch_sharding)
+        token_valid = jax.device_put(token_valid, NamedSharding(mesh, P(("data", "expert"))))
+        w_up = jax.device_put(w_up, expert_sharding)
+        w_down = jax.device_put(w_down, expert_sharding)
+        cotangent = jax.device_put(cotangent, batch_sharding)
+
+        dropped = {}
+
+        def backend(implementation):
+            def output(x, w_up, w_down):
+                out, counts = moe_mlp(
+                    x,
+                    selected_experts,
+                    combine_weights,
+                    w_up,
+                    w_down,
+                    token_valid=token_valid,
+                    activation=activation,
+                    implementation=implementation,
+                    mesh=mesh,
+                    capacity_factor=4.0,
+                    pooled_transport_capacity_factor=4.0,
+                    report_capacity_overflow=True,
+                )
+                dropped[implementation] = counts.dropped
+                return out
+
+            return output
+
+        with jax.set_mesh(mesh):
+            ragged = value_and_grads(backend("ragged_all_to_all"))
+            assert int(dropped["ragged_all_to_all"]) == 0
+            pooled = value_and_grads(backend("fixed_pooled_wave_all_to_all"))
+            assert int(dropped["fixed_pooled_wave_all_to_all"]) == 0
+
+        for name, r, p, e in zip(["out", "dx", "dw_up", "dw_down"], ragged, pooled, expected, strict=True):
+            np.testing.assert_allclose(r, p, rtol=1e-5, atol=1e-5, err_msg=f"ragged vs pooled-wave {name}")
+            np.testing.assert_allclose(r, e, rtol=1e-5, atol=1e-5, err_msg=f"ragged vs dense {name}")
+        """
+    )
+    script = script.replace("__ACTIVATION__", activation).replace("__PADDED__", repr(padded))
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(script)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def _simulate_ragged_a2a(operands, outputs, params):
     """Reference semantics of ``ragged_all_to_all``: slice i of sender s goes to shard i // spd.
 

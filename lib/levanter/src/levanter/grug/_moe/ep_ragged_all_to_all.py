@@ -10,7 +10,7 @@ Axis names used in the shape annotations:
     TK      routed assignments on this shard, Tlocal * K
     H       hidden size
     I       expert intermediate size
-    I2      gate and up projections fused, 2 * I
+    I2      gate and up projections fused, 2 * I; I alone for ungated experts
     E       experts in the model
     Elocal  experts held by this shard
     Echunk  experts in one sequential chunk, Elocal / chunks
@@ -61,6 +61,14 @@ RAGGED_REQUIRED_XLA_FLAGS = (
     "--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=true",
     "--xla_enable_nccl_symmetric_buffers_for_collectives=raggedalltoall",
 )
+# XLA's NCCL send/recv lowering of ragged all-to-all. XLA refuses it unless explicitly allowed; it is the
+# only stock kernel that runs with one JAX process per GPU, since the one-shot and device kernels need
+# every peer's buffer addressable from one process.
+RAGGED_NCCL_SEND_RECV_XLA_FLAGS = (
+    "--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=false",
+    "--xla_gpu_unsupported_use_ragged_all_to_all_one_shot_kernel=false",
+    "--xla_gpu_allow_ragged_all_to_all_nccl_send_recv_fallback=true",
+)
 
 
 class _ExpertMlp(Protocol):
@@ -91,12 +99,24 @@ def _ragged_dot_expert_mlp(
     active_group_sizes: Int[Array, "Echunk"],
     activation_fn: Callable[[jax.Array], jax.Array],
 ) -> Float[Array, "C H"]:
-    """Portable expert MLP over XLA's `ragged_dot`, including static trailing rows."""
+    """Portable expert MLP over XLA's `ragged_dot`, including static trailing rows.
+
+    A ``moe_w13_local`` as wide as the intermediate dim holds ``W_up`` alone: the experts are ungated,
+    ``act(x W_up) W_down``.
+    """
     del active_group_sizes
     w13_out = ragged_dot(x_dispatch, moe_w13_local, physical_group_sizes)
     moe_dim = moe_w2_local.shape[1]
-    gate, up = split_moe_w13_output(w13_out, intermediate_dim=moe_dim, interleaved=False)
-    return ragged_dot(activation_fn(gate) * up, moe_w2_local, physical_group_sizes)
+    if _is_ungated(moe_w13_local, moe_w2_local):
+        activated = activation_fn(w13_out)
+    else:
+        gate, up = split_moe_w13_output(w13_out, intermediate_dim=moe_dim, interleaved=False)
+        activated = activation_fn(gate) * up
+    return ragged_dot(activated, moe_w2_local, physical_group_sizes)
+
+
+def _is_ungated(moe_w13_local: Float[Array, "E H I2"], moe_w2_local: Float[Array, "E I H"]) -> bool:
+    return moe_w13_local.shape[-1] == moe_w2_local.shape[1]
 
 
 def _cute_expert_mlp(
@@ -146,14 +166,14 @@ def _quack_grouped_gemm_available() -> bool:
     return True
 
 
-def _select_expert_mlp(activation_fn: Callable[[jax.Array], jax.Array]) -> _ExpertMlp:
+def _select_expert_mlp(activation_fn: Callable[[jax.Array], jax.Array], *, ungated: bool) -> _ExpertMlp:
     """Pick the fastest expert-MLP kernel this process can actually run.
 
-    QuACK's kernel fuses SwiGLU, so it only applies to SiLU. Everything else -- another
-    activation, a non-SM100 GPU, a TPU or CPU, or a build without the GPU extra -- runs the
-    portable `ragged_dot` path, which computes the same function.
+    QuACK's kernel fuses SwiGLU, so it only applies to gated SiLU. Everything else -- ungated
+    experts, another activation, a non-SM100 GPU, a TPU or CPU, or a build without the GPU
+    extra -- runs the portable `ragged_dot` path, which computes the same function.
     """
-    if activation_fn is jax.nn.silu and _quack_grouped_gemm_available():
+    if not ungated and activation_fn is jax.nn.silu and _quack_grouped_gemm_available():
         return _cute_expert_mlp
     return _ragged_dot_expert_mlp
 
@@ -366,7 +386,7 @@ def _moe_mlp_ep_ragged_a2a_local(
             chunk_experts,
         )
 
-    expert_mlp = _select_expert_mlp(activation_fn)
+    expert_mlp = _select_expert_mlp(activation_fn, ungated=_is_ungated(moe_w13_local, moe_w2_local))
     chunk_of_expert = (jnp.arange(num_experts, dtype=jnp.int32) % local_experts) // chunk_experts  # [E]
     # Unwritten rows remain zero for the final combine.
     returned = _loop_local_zeros(

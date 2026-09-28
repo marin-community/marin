@@ -49,6 +49,7 @@ from experiments.grug.fast_track.train import (
     GrugEvalConfig,
     GrugRunConfig,
     GrugTrainerConfig,
+    RaggedTransport,
     WatchMode,
     _compute_flops,
     run_grug,
@@ -335,6 +336,8 @@ def build_h100_ladder_run(
     model_settings: Mapping[str, str] | None = None,
     optimizer_settings: Mapping[str, str] | None = None,
     z_loss_weight: float = Z_LOSS_WEIGHT,
+    ragged_transport: RaggedTransport = RaggedTransport.DEVICE,
+    single_process: bool = False,
 ) -> ArtifactStep[ThroughputResult]:
     """Build one H100 scaling-ladder rung.
 
@@ -344,6 +347,8 @@ def build_h100_ladder_run(
     forces the KMA attention-branch remat on rungs that do not default to it. Evaluation runs at the
     midpoint and end. Permanent checkpoints
     default to the final step, with one rolling hourly checkpoint on region-local temporary storage.
+    ``ragged_transport`` picks the XLA kernel when ``model_settings`` select ``moe_implementation=ragged_all_to_all``;
+    ``single_process`` runs one JAX process owning every GPU of the task, which its peer-writing kernels need.
     """
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
@@ -512,7 +517,8 @@ def build_h100_ladder_run(
                 )
             ),
             stop_after_steps=num_steps,
-            processes_per_task=rung.gpus_per_task,
+            processes_per_task=1 if single_process else rung.gpus_per_task,
+            ragged_transport=ragged_transport,
             max_retries_failure=max_retries_failure,
             max_task_failures=MAX_TASK_FAILURES,
         )
@@ -663,6 +669,18 @@ def _submit_to_cluster(run_id: str, target_cluster: str | None, priority: str) -
     help="Weight of the final-logit logsumexp z-loss (0 disables it).",
 )
 @click.option(
+    "--ragged-transport",
+    type=click.Choice([t.value for t in RaggedTransport]),
+    default=RaggedTransport.DEVICE.value,
+    show_default=True,
+    help="XLA kernel for --model-set moe_implementation=ragged_all_to_all. device/one_shot need --single-process.",
+)
+@click.option(
+    "--single-process",
+    is_flag=True,
+    help="Run one JAX process owning every GPU (default: one process per GPU), so XLA can write peer buffers.",
+)
+@click.option(
     "--model-set",
     multiple=True,
     help="Override a GrugModelConfig field, 'name=value' (repeatable; parsed as the field's declared type).",
@@ -713,6 +731,8 @@ def main(
     head_replay: tuple[int, int, float],
     max_retries: int,
     z_loss_weight: float,
+    ragged_transport: str,
+    single_process: bool,
     model_set: tuple[str, ...],
     opt_set: tuple[str, ...],
     priority: str,
@@ -745,6 +765,8 @@ def main(
         model_settings=_parse_settings(model_set),
         optimizer_settings=_parse_settings(opt_set),
         z_loss_weight=z_loss_weight,
+        ragged_transport=RaggedTransport(ragged_transport),
+        single_process=single_process,
     )
 
 

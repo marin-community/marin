@@ -260,6 +260,11 @@ def _partition_spec_of(x: jax.Array) -> P | None:
     return None
 
 
+# Expert-parallel MoE transports the model supports: the fixed pooled-wave all-to-all, and the near-dropless
+# ragged all-to-all (one XLA ragged_all_to_all per (peer, local expert), expert MLP on grouped ragged_dot).
+MOE_IMPLEMENTATIONS = ("fixed_pooled_wave_all_to_all", "ragged_all_to_all")
+
+
 @dataclass(frozen=True)
 class GrugModelConfig:
     """Hyperparameters for the grug MoE transformer. Defaults mirror the d512 MoE rung."""
@@ -514,6 +519,10 @@ class GrugModelConfig:
     moe_fp8_dispatch: bool = False
     """DeepSeek-V3 FP8 dispatch: the EP dispatch all-to-all sends activations as e4m3 with one fp32 scale per
     128-channel block (~0.52x the bf16 bytes); combine and every backward collective stay bf16 (STE)."""
+    moe_implementation: str = "fixed_pooled_wave_all_to_all"
+    """Expert-parallel transport, one of ``MOE_IMPLEMENTATIONS``. ``ragged_all_to_all`` ignores the pooled-wave
+    knobs (``pooled_transport_capacity_factor``, ``moe_expert_waves``, ``moe_expert_remat``) and sizes its receiver
+    buffers by ``capacity_factor``; its XLA transport kernel is ``GrugRunConfig.ragged_transport``."""
     moe_bank2_experts: int = 0
     """Heterogeneous experts: the last ``moe_bank2_experts`` of ``num_experts`` form a second expert bank with its
     own width (``moe_bank2_intermediate_dim``) and activation (``moe_bank2_activation``). One router scores all
@@ -553,10 +562,11 @@ class GrugModelConfig:
     block's whole MoE output (routed + shared)."""
     moe_fused_relu2: bool = False
     """With ``moe_ungated_kernel``, run the ungated ReLU^2 expert MLP through the fused-epilogue kernels
-    (``levanter.kernels.pallas.relu2_mlp``): ``pre`` and ``d post`` never reach HBM."""
+    (``levanter.kernels.pallas.relu2_mlp``): ``pre`` and ``d post`` never reach HBM. Pooled-wave only; the ragged
+    backend's grouped ``ragged_dot`` experts apply it as a plain elementwise ReLU^2."""
     moe_ungated_kernel: bool = False
-    """With ``moe_ungated_relu2``, run the pooled-wave experts truly ungated (one ``W_up`` GEMM) instead of
-    tying the gate to ``W_up``. Same math; skips the duplicated GEMM."""
+    """With ``moe_ungated_relu2``, run the EP (pooled-wave or ragged) experts truly ungated (one ``W_up`` GEMM)
+    instead of tying the gate to ``W_up``. Same math; skips the duplicated GEMM."""
     moe_dense_router_grad: bool = False
     """Default MoE (Panda et al. 2025): the router also gets a gradient for the experts it did not pick,
     through ``sum_{e not in top-k} (w_e - sg(w_e)) * sg(y_e)``. That term is zero in the forward pass.
@@ -711,6 +721,10 @@ class GrugModelConfig:
     """A second, independently initialized token-embedding table, RMS-normed, as an extra AttnRes source."""
 
     def __post_init__(self) -> None:
+        if self.moe_implementation not in MOE_IMPLEMENTATIONS:
+            raise ValueError(f"moe_implementation must be one of {MOE_IMPLEMENTATIONS}, got {self.moe_implementation!r}")
+        if self.moe_fp8_dispatch and self.moe_implementation != "fixed_pooled_wave_all_to_all":
+            raise ValueError("moe_fp8_dispatch requires moe_implementation=fixed_pooled_wave_all_to_all")
         if not self.dense_mlp and self.num_experts_per_token >= self.num_experts:
             # QB routing takes top-(k+1) and keeps the last entry as the threshold alpha, so a
             # full-bank top-k asks `jax.lax.top_k` for more entries than the router has experts.
@@ -2548,7 +2562,7 @@ def _expert_mlp_init(cfg: "GrugModelConfig", expert_width: int, key: PRNGKeyArra
         intermediate_dim=cfg.intermediate_dim,
         initializer_std=cfg.initializer_std,
         key=key,
-        implementation="fixed_pooled_wave_all_to_all",
+        implementation=cfg.moe_implementation,
         activation=(
             ActivationFunctionEnum.relu if cfg.moe_ungated_relu2 else ActivationFunctionEnum(cfg.expert_activation)
         ),
@@ -2631,10 +2645,10 @@ def _run_expert_bank(
     selected: jax.Array,
     combine_weights: jax.Array,
 ):
-    """Dispatch one expert bank: ungated ReLU^2 through the pooled-wave ungated path (or the tied gate on other
-    backends), gated experts through ``MoEExpertMlp``."""
+    """Dispatch one expert bank: ungated ReLU^2 through the EP backends' ungated path (or the tied gate on the
+    dropless local backends), gated experts through ``MoEExpertMlp``."""
     if em.w_gate is None:
-        ungated = em.implementation == "fixed_pooled_wave_all_to_all" and cfg.moe_ungated_kernel
+        ungated = em.implementation in MOE_IMPLEMENTATIONS and cfg.moe_ungated_kernel
         return moe_mlp(
             routed_input,
             selected,

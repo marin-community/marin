@@ -37,6 +37,7 @@ from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_b
 from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample, grug_lm_example_from_named
 from levanter.eval import TaggedEvaluator, cb_tagged_evaluate, eval_model
+from levanter.grug._moe.ep_ragged_all_to_all import RAGGED_NCCL_SEND_RECV_XLA_FLAGS, RAGGED_REQUIRED_XLA_FLAGS
 from levanter.grug.grug_moe import MoeImplementation
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmExample
@@ -85,6 +86,38 @@ INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT = 1
 # https://github.com/marin-community/marin/issues/5675 bisects to the COLLECTIVES capture set. At d512
 # (lc1-cmdbuf-full, 2817 steps) this is +1.8% ex/s at the same loss; the step is host-launch bound.
 XLA_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer=FUSION,CUBLAS,CUBLASLT,CUSTOM_CALL,CUDNN"
+RAGGED_MOE_IMPLEMENTATION = "ragged_all_to_all"
+# As in moe_hero_ep: the ragged dispatch and combine form one long dependent chain, so admitting several
+# concurrent collectives only contends for the SMs the transport itself needs.
+RAGGED_COLLECTIVE_OVERLAP_LIMIT = 1
+
+
+class RaggedTransport(StrEnum):
+    """XLA GPU kernel behind ``ragged_all_to_all`` (all three ship in the stock x86_64 PJRT plugin).
+
+    ``DEVICE`` and ``ONE_SHOT`` write straight into peer GPUs' buffers, which XLA only allows when one process
+    owns every GPU of the collective (``processes_per_task=1``); ``NCCL`` also runs with one process per GPU.
+    """
+
+    DEVICE = "device"
+    """Device-initiated NCCL GIN + LSA kernel on NCCL symmetric buffers: the GB200 hero's transport."""
+    ONE_SHOT = "one_shot"
+    """XLA's stock default: the host-launched one-shot copy kernel over peer pointers."""
+    NCCL = "nccl"
+    """NCCL send/recv per (peer, expert) update."""
+
+
+RAGGED_TRANSPORT_XLA_FLAGS: dict[RaggedTransport, tuple[str, ...]] = {
+    RaggedTransport.DEVICE: RAGGED_REQUIRED_XLA_FLAGS,
+    RaggedTransport.ONE_SHOT: (
+        "--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=false",
+        "--xla_gpu_unsupported_use_ragged_all_to_all_one_shot_kernel=true",
+    ),
+    RaggedTransport.NCCL: RAGGED_NCCL_SEND_RECV_XLA_FLAGS,
+}
+_RAGGED_TRANSPORT_FLAG_NAMES = frozenset(
+    flag.partition("=")[0] for flags in RAGGED_TRANSPORT_XLA_FLAGS.values() for flag in flags
+)
 
 
 class WatchMode(StrEnum):
@@ -112,11 +145,17 @@ def restore_template_from(state):
     return template
 
 
-def _apply_runtime_defaults(*, inline_watch_enabled: bool) -> None:
+def _apply_runtime_defaults(*, inline_watch_enabled: bool, ragged_transport: RaggedTransport | None) -> None:
+    """Set the runtime env and XLA flag defaults; ``ragged_transport`` is None unless the MoE is ragged."""
     for name, value in RUNTIME_ENV.items():
         os.environ.setdefault(name, value)
     xla_flags = os.environ.get("XLA_FLAGS", "").split()
-    overlap_limit = INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT if inline_watch_enabled else DEFAULT_COLLECTIVE_OVERLAP_LIMIT
+    if ragged_transport is not None:
+        overlap_limit = RAGGED_COLLECTIVE_OVERLAP_LIMIT
+    elif inline_watch_enabled:
+        overlap_limit = INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT
+    else:
+        overlap_limit = DEFAULT_COLLECTIVE_OVERLAP_LIMIT
     flag_defaults = (
         f"{XLA_COLLECTIVE_OVERLAP_FLAG}={overlap_limit}",
         "--xla_gpu_enable_latency_hiding_scheduler=true",
@@ -126,6 +165,11 @@ def _apply_runtime_defaults(*, inline_watch_enabled: bool) -> None:
     )
     explicit_names = {flag.partition("=")[0] for flag in xla_flags}
     xla_flags.extend(flag for flag in flag_defaults if flag.partition("=")[0] not in explicit_names)
+    if ragged_transport is not None:
+        # The transport is selected by ``ragged_transport`` alone: a stray kernel flag in XLA_FLAGS would mix
+        # kernels, so drop it rather than rely on which occurrence XLA's parser keeps.
+        xla_flags = [f for f in xla_flags if f.partition("=")[0] not in _RAGGED_TRANSPORT_FLAG_NAMES]
+        xla_flags.extend(RAGGED_TRANSPORT_XLA_FLAGS[ragged_transport])
     os.environ["XLA_FLAGS"] = " ".join(xla_flags)
 
 
@@ -223,12 +267,25 @@ class GrugRunConfig:
     # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
     # via the iris.hooks.multigpu_main supervisor instead of one process per node.
     processes_per_task: int = 1
+    # XLA kernel behind the ragged all-to-all; read only when `model.moe_implementation` is ragged.
+    ragged_transport: RaggedTransport = RaggedTransport.DEVICE
     # Retry budgets for the training job. The two are separate gates and the job fails when either
     # one trips, thus raise them together. The defaults make a failure terminal, which is what a run
     # that cannot resume wants: a retry would repeat it from step 0. Only a run that both saves and
     # restores checkpoints benefits from a deep budget.
     max_retries_failure: int = 0
     max_task_failures: int = 10
+
+    def __post_init__(self) -> None:
+        if (
+            self.model.moe_implementation == RAGGED_MOE_IMPLEMENTATION
+            and self.ragged_transport is not RaggedTransport.NCCL
+            and self.processes_per_task > 1
+        ):
+            raise ValueError(
+                f"ragged_transport={self.ragged_transport.value} writes into peer GPUs' buffers, which needs one "
+                f"process owning every GPU (processes_per_task=1), got processes_per_task={self.processes_per_task}"
+            )
 
 
 def build_train_dataset(
@@ -1306,7 +1363,10 @@ def run_grug(config: GrugRunConfig) -> None:
 
     # Dispatch snapshots os.environ for the child task, so apply the runtime defaults first.
     inline_watch_enabled = trainer.watch.is_enabled and config.trainer.watch_mode == WatchMode.INLINE
-    _apply_runtime_defaults(inline_watch_enabled=inline_watch_enabled)
+    ragged = config.model.moe_implementation == RAGGED_MOE_IMPLEMENTATION
+    _apply_runtime_defaults(
+        inline_watch_enabled=inline_watch_enabled, ragged_transport=config.ragged_transport if ragged else None
+    )
     dispatch_grug_training_run(
         run_id=trainer.id,
         config=config,
@@ -1323,6 +1383,7 @@ __all__ = [
     "GrugRunConfig",
     "GrugTrainState",
     "GrugTrainerConfig",
+    "RaggedTransport",
     "initial_state",
     "run_grug",
 ]
