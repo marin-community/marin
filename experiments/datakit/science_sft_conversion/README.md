@@ -47,6 +47,24 @@ Output files live under
 registers this Parquet directory as the Datakit source
 `science-forward/minimax-m3-formatted-2026.09.27-v3`. The handle references
 the existing output and does not start conversion.
+
+The 2026-09-28 teacher-exercise update changes newly generated BioCollection
+instruction and Swallow math textbook batches. These batches use teacher
+exercises. BioCollection user turns pose the original challenge with its inputs
+and omit the supplied reference answer. The teacher uses that reference to check
+the reasoning and answer. When a label requires unavailable assay measurements
+or structural coordinates, the reasoning states that limitation and identifies
+the result as a reference annotation; it must not invent a derivation.
+Swallow textbook user turns pose problems exercising the supplied theories and
+starting formulas. They reuse source examples when possible, or provide clearly
+hypothetical givens. Reasoning shows intermediate steps and checks the solution.
+Worked answers stay out of the user turn. These two sources retry teacher
+exercises in another response format after four rejected attempts; they do not
+fall back to passage summaries or verbatim extraction. Exhausting all formats
+fails the batch. Previously committed output batches remain unchanged. The
+producer cutover manifest in the experiment's training-data-sources artifacts
+lists the batches retained from the earlier extraction policy.
+
 Each file covers one 1,024-row source batch; completed batches are skipped on
 restart. The worker gives the assigned format four total attempts, including the
 initial request. A standalone task rejected on all four attempts switches to a

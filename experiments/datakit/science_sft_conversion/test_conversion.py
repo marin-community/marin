@@ -373,6 +373,77 @@ async def test_rejected_math_persists_verbatim_evidence_in_every_answer_format(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "source_name,passage,question,reasoning,answer",
+    [
+        (
+            conversion.BIO_INSTRUCTION,
+            "Question: Complement ATGC using A-T and C-G pairing. Answer: TACG.",
+            "Complement the DNA sequence ATGC using A-T and C-G pairing.",
+            "Pair A with T, T with A, G with C, and C with G to obtain TACG.",
+            "TACG",
+        ),
+        (
+            conversion.SWALLOW_MATH_TEXTBOOK,
+            "Theory: F = ma. Example: m = 2 kg, a = 3 m/s², so F = 6 N.",
+            "Using F = ma, find the force for m = 2 kg and a = 3 m/s².",
+            "Multiply the mass by the acceleration: 2 times 3 gives 6 N.",
+            "6 N",
+        ),
+    ],
+)
+async def test_teacher_exercise_keeps_reference_private_after_rejected_response(
+    tmp_path, monkeypatch, source_name, passage, question, reasoning, answer
+) -> None:
+    monkeypatch.setattr(conversion, "MAX_ATTEMPTS", 1)
+    source = Source(source_name, "", 1, 1)
+    input_path = tmp_path / "input.parquet"
+    pq.write_table(pa.Table.from_pylist([{"id": "teacher-row", "text": passage}]), input_path)
+    output_root = tmp_path / "output"
+    (output_root / "outputs/main").mkdir(parents=True)
+    work = [WorkBatch(WorkItem(source, str(input_path), 0, 1), 0)]
+    first_response = True
+
+    async def response(request: httpx.Request) -> httpx.Response:
+        nonlocal first_response
+        body = json.loads(request.content)
+        assert passage in body["messages"][1]["content"]
+        if first_response:
+            first_response = False
+            completion = {
+                "user": "Using the source passage, summarize it.",
+                "reasoning_content": reasoning,
+                "answer": "",
+            }
+        else:
+            selected = next(f for f in conversion.FORMATS if f"({f.name}):" in body["messages"][1]["content"])
+            formatted_answers = {
+                "paragraphs": f"Answer: {answer}",
+                "numbered": f"1. {reasoning}\nFinal answer: {answer}",
+                "bullets": f"- {reasoning}\nConclusion: {answer}",
+                "short_then_detail": f"Short answer: {answer}\n{reasoning}",
+                "table": f"| Result | Value |\n|---|---|\n| Answer | {answer} |\nConclusion: {answer}",
+                "json": {"answer": answer, "evidence": [reasoning], "caveats": []},
+            }
+            completion = {"user": question, "reasoning_content": reasoning, "answer": formatted_answers[selected.name]}
+        return httpx.Response(
+            200, json={"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(completion)}}]}
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(response)) as client:
+        await convert_work_batches(
+            work, "http://test", client, concurrency=1, concurrent_batches=1, output_root=str(output_root)
+        )
+    record = pq.read_table(_output_path(source, str(input_path), 0, 0, str(output_root))).to_pylist()[0]
+    user = record["messages"][0]["content"][0]["text"]
+    assert question in user
+    assert passage not in user
+    assert answer not in user
+    assert record["messages"][1]["content"][0]["text"] == reasoning
+    assert answer in record["messages"][2]["content"][0]["text"]
+
+
+@pytest.mark.asyncio
 async def test_later_batch_persists_while_first_response_waits(tmp_path) -> None:
     source = Source("probe/physics", "", 1, 8)
     input_path = tmp_path / "input.parquet"
