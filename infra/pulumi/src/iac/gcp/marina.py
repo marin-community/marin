@@ -7,8 +7,8 @@ One runtime service account serves every app and runs its manifest-declared Clou
 the only account that writes the ``marina`` database; people read it through a Cloud SQL
 group login that ``marina migrate`` grants. The grants below are the union of what the
 hosted apps need: Cloud SQL login, the record buckets evaldash indexes, compute listing for
-Iris discovery, the CoreWeave storage keys, the marinmirror token for sync, and the Hugging Face
-token for applet downloads.
+Iris discovery, the CoreWeave storage keys, the marinmirror token for sync, and the read-only
+Hugging Face token for applet downloads.
 """
 
 from collections.abc import Mapping
@@ -29,7 +29,7 @@ _SERVICE = "marina"
 PUBLIC_APPLET_SERVICE = "marina-public-applets"
 _DATA_BUCKET = "marin-marina"
 _MIRROR_TOKEN_SECRET = "marinmirror-token"
-_HF_TOKEN_SECRET = "HF_TOKEN"
+_HF_TOKEN_SECRET = "HF_TOKEN_READONLY"
 _COREWEAVE_SECRETS = ("cw-object-storage-key-id", "cw-object-storage-key-secret")
 # The Cloud SQL group login `marina migrate` grants read on every app schema.
 _READER_GROUP = "group:eng-all@openathena.ai"
