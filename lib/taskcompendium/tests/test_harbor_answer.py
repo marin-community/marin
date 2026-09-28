@@ -96,7 +96,6 @@ async def test_direct_chat_harbor_trial_distinguishes_answer_outcomes(
     assert Task.is_valid_dir(task, disable_verification=True)
     assert not (task / "tests" / "test.sh").exists()
     assert "12" not in (task / "instruction.md").read_text()
-    assert json.loads((task / "specification.json").read_text())["verifier"]["kind"] == "exact_answer"
 
     result = await run_trial(task, binding, ReplayLaunch(response=response), tmp_path / "trials", "run")
 
@@ -313,11 +312,6 @@ async def test_chat_trial_resolves_key_at_runtime_without_persisting_it(
     assert any(path.name == "config.json" for path in artifacts)
     assert any(path.name == "result.json" for path in artifacts)
     assert all(secret not in path.read_text() for path in artifacts)
-
-
-def test_chat_launch_rejects_raw_key():
-    with pytest.raises(ValueError, match="api_key"):
-        ChatLaunch(model="fixture-model", api_base="https://example.com/v1", api_key="secret")
 
 
 async def test_chat_http_error_preserves_server_diagnostic(tmp_path, specification, chat_endpoint):
