@@ -292,6 +292,78 @@ def test_probe_samples_rows_beyond_first_parquet_batch(tmp_path, monkeypatch) ->
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "passage, evidence",
+    [
+        (
+            "# Why This Chapter?\n\nAmplitude (2E/k).\n\nEnergy is conserved.\n\n"
+            "Motion is periodic.\n\nThe spring stretches.",
+            ["Amplitude (2E/k).", "Energy is conserved.", "Motion is periodic.", "The spring stretches."],
+        ),
+        ("# Amplitude (2E/k).", ["# Amplitude (2E/k)."]),
+    ],
+)
+async def test_rejected_math_persists_verbatim_evidence_in_every_answer_format(
+    tmp_path, monkeypatch, passage, evidence
+) -> None:
+    monkeypatch.setattr(conversion, "MAX_ATTEMPTS", 1)
+    source = Source("probe/physics", "", 1, 6)
+    row_ids = {}
+    for index in range(1000):
+        row_id = f"row-{index}"
+        row_ids.setdefault(format_for(source.name, row_id, 0).name, row_id)
+        if len(row_ids) == 6:
+            break
+    assert len(row_ids) == 6
+    input_path = tmp_path / "input.parquet"
+    pq.write_table(pa.Table.from_pylist([{"id": row_id, "text": passage} for row_id in row_ids.values()]), input_path)
+    output_root = tmp_path / "output"
+    (output_root / "outputs/main").mkdir(parents=True)
+    work = [WorkBatch(WorkItem(source, str(input_path), 0, 6), 0)]
+    reasoning = (
+        "The supplied expression lacks an explicit root. "
+        "Quoting it preserves the visible evidence without restoring notation."
+    )
+
+    async def response(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        schema = body["response_format"]["json_schema"]
+        if schema["name"] == "source_evidence":
+            paragraphs = json.loads(body["messages"][1]["content"])
+            indices = [paragraph["index"] for paragraph in paragraphs if paragraph["paragraph"] in evidence]
+            completion = {"paragraph_indices": indices, "reasoning_content": reasoning}
+        else:
+            answer = "Answer: √(2E/k)."
+            if schema["schema"]["properties"]["answer"]["type"] == "object":
+                answer = {"answer": "√(2E/k).", "evidence": [], "caveats": []}
+            completion = {
+                "user": "Report the supplied amplitude.",
+                "reasoning_content": "The amplitude is √(2E/k).",
+                "answer": answer,
+            }
+        return httpx.Response(
+            200, json={"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(completion)}}]}
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(response)) as client:
+        await convert_work_batches(
+            work, "http://test", client, concurrency=2, concurrent_batches=1, output_root=str(output_root)
+        )
+
+    records = pq.read_table(_output_path(source, str(input_path), 0, 0, str(output_root))).to_pylist()
+    assert {record["source_id"] for record in records} == {f"{source.name}:{row_id}:0" for row_id in row_ids.values()}
+    for record in records:
+        assert passage in record["messages"][0]["content"][0]["text"]
+        assert record["messages"][1]["channel"] == ChatChannel.ANALYSIS
+        assert record["messages"][1]["content"][0]["text"] == reasoning
+        answer = record["messages"][2]["content"][0]["text"]
+        assert all(paragraph in answer for paragraph in evidence)
+        assert "√" not in answer
+        if record["source_id"] == f"{source.name}:{row_ids['json']}:0":
+            assert json.loads(answer)["evidence"] == evidence
+
+
+@pytest.mark.asyncio
 async def test_later_batch_persists_while_first_response_waits(tmp_path) -> None:
     source = Source("probe/physics", "", 1, 8)
     input_path = tmp_path / "input.parquet"

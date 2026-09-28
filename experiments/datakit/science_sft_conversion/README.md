@@ -31,7 +31,7 @@ For source-grounded tasks that summarize the supplied passage, the validator rej
 notation when the source contains no radical notation or explicit square-root wording.
 Standalone worked exercises can derive new radicals.
 The check permits prose explaining that square-root notation is missing; it targets
-added `√`, `\sqrt`, and `sqrt` notation.
+added half powers such as `^0.5` or `**(1/2)`, `√`, `\sqrt`, and `sqrt` notation.
 For prose, code, and textbook passages, the worker appends the source chunk to
 the user turn so the assistant's answer has its evidence. For the Nemotron math
 textbooks and Swallow math QA sources, MiniMax extracts a standalone question
@@ -48,11 +48,20 @@ registers this Parquet directory as the Datakit source
 `science-forward/minimax-m3-formatted-2026.09.27-v3`. The handle references
 the existing output and does not start conversion.
 Each file covers one 1,024-row source batch; completed batches are skipped on
-restart. A failed batch remains unwritten and fails the Iris task after four
-attempts at each of the six answer formats. The worker starts with the format
-chosen by the source ID hash, then tries the remaining formats in a fixed order
-if validation keeps failing. Its logged format counts reflect the format
-actually written. The source artifact stays unchanged.
+restart. The worker gives the assigned format four total attempts, including the
+initial request. A standalone task rejected on all four attempts switches to a
+source-grounded task with the complete source chunk attached to the user turn.
+After four source-grounded responses fail semantic or format validation, MiniMax
+selects source paragraph indices and generates a short reasoning trace. The
+formatter copies the selected paragraphs into the originally assigned answer
+format, preserving the supplied notation in the answer. The complete original
+chunk remains in the user turn. Generated reasoning follows the same validation
+as other responses; neither source claims nor reasoning are independently fact
+checked. This verbatim extraction fallback has four total attempts. Exhausting
+those attempts leaves the batch unwritten and fails the Iris task. Repeated HTTP
+failures instead rotate through the remaining answer formats before failing the
+batch. Logged format counts reflect the format actually written. The source
+artifact stays unchanged.
 
 The production scheduler shuffles source batches reproducibly with seed
 20260927, then rotates across the 17 sources one batch at a time. Its first 17

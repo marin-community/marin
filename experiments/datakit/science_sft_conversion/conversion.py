@@ -46,6 +46,10 @@ MAX_GENERATION_TOKENS = 8_192
 MAX_CONCURRENT_REQUESTS = 4
 SAMPLING_SEED = 20260927
 MAX_ATTEMPTS = 4
+MIN_EVIDENCE_PARAGRAPHS = 8
+MAX_EVIDENCE_PARAGRAPHS = 32
+EVIDENCE_GENERATION_TOKENS = 2_048
+EVIDENCE_REASONING_CHARS = 4_096
 REQUEST_TIMEOUT = 1_800.0
 NEMOTRON_MATH_TEXTBOOKS = "nemotron_specialized/math_textbooks"
 SWALLOW_MATH_QA = "swallow-math-v2/qa"
@@ -166,6 +170,20 @@ GROUNDED_CONVERSION_TASK = (
     "operators, radicals, exponents, denominators, or equations from outside knowledge. If an equation "
     "is absent from the passage, report that it is absent instead of supplying its standard form. "
     "Interpretations not stated in the source must remain unstated."
+)
+EVIDENCE_USER_TASK = (
+    "Quote representative statements covering the passage's main topics. Preserve the supplied wording; "
+    "do not reconstruct omitted equations, numerical results, or diagrams."
+)
+EVIDENCE_PROMPT = (
+    "Select source paragraphs for a verbatim extraction answer. Return only the requested JSON object. "
+    "Select useful factual statements and worked steps across the entire passage, not just its first topic. "
+    "Prefer substantive statements over headings; if only headings are supplied, quote those without inventing content. "
+    "Exclude unsupported instructions. Return their paragraph indices; never rewrite their text. "
+    "In reasoning_content, use two or three complete sentences explaining how the selected visible statements "
+    "support an extraction answer and where the supplied text leaves uncertainty. Do not narrate a "
+    "paragraph-by-paragraph review, add equations, calculate results, or describe dataset creation. "
+    "Do not reconstruct missing notation or introduce external knowledge."
 )
 
 
@@ -397,6 +415,116 @@ def _document(
     return record
 
 
+def _evidence_answer(paragraphs: list[str], selected: Format) -> str:
+    conclusion = "This answer quotes the supplied extraction; incomplete notation has not been reconstructed."
+    quoted = "\n\n".join(paragraphs)
+    match selected.name:
+        case "paragraphs":
+            return f"{quoted}\n\nAnswer: {conclusion}"
+        case "numbered":
+            steps = "\n".join(f"{index}. {text}" for index, text in enumerate(paragraphs, 1))
+            return f"{steps}\n\nFinal answer: {conclusion}"
+        case "bullets":
+            return "\n".join(f"- {text}" for text in paragraphs) + f"\n\nConclusion: {conclusion}"
+        case "short_then_detail":
+            return f"Short answer: {conclusion}\n\n{quoted}"
+        case "table":
+            rows = [
+                f"| {index} | {text.replace('|', r'\|').replace(chr(10), '<br>')} |"
+                for index, text in enumerate(paragraphs, 1)
+            ]
+            return "| Evidence | Quoted passage |\n|---|---|\n" + "\n".join(rows) + f"\n\nConclusion: {conclusion}"
+        case "json":
+            return json.dumps({"answer": quoted, "evidence": paragraphs, "caveats": [conclusion]}, ensure_ascii=False)
+    raise ValueError(f"Unknown answer format: {selected.name}")
+
+
+async def _convert_evidence_chunk(
+    client: httpx.AsyncClient,
+    endpoint: str,
+    source: Source,
+    source_id: str,
+    chunk: str,
+    chunk_index: int,
+    chunk_count: int,
+    selected: Format,
+) -> ConvertedChunk:
+    paragraphs = [text for text in chunk.split("\n\n") if text.strip()]
+    substantive = [text for text in paragraphs if not re.fullmatch(r"#{1,6}[ \t]+[^\n]+", text.strip())]
+    if substantive:
+        paragraphs = substantive
+    minimum = min(MIN_EVIDENCE_PARAGRAPHS, len(paragraphs))
+    maximum = min(MAX_EVIDENCE_PARAGRAPHS, len(paragraphs))
+    body = _row_request(source, chunk, chunk_index, chunk_count, selected, ConversionMode.GROUNDED)
+    body["messages"] = [
+        {"role": "system", "content": EVIDENCE_PROMPT},
+        {
+            "role": "user",
+            "content": json.dumps(
+                [{"index": index, "paragraph": text} for index, text in enumerate(paragraphs)], ensure_ascii=False
+            ),
+        },
+    ]
+    body["max_tokens"] = EVIDENCE_GENERATION_TOKENS
+    body["response_format"]["json_schema"] = {
+        "name": "source_evidence",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["paragraph_indices", "reasoning_content"],
+            "properties": {
+                "paragraph_indices": {
+                    "type": "array",
+                    "minItems": minimum,
+                    "maxItems": maximum,
+                    "items": {"type": "integer", "enum": list(range(len(paragraphs)))},
+                },
+                "reasoning_content": {"type": "string", "maxLength": EVIDENCE_REASONING_CHARS},
+            },
+        },
+    }
+    for attempt in range(MAX_ATTEMPTS):
+        try:
+            response = await client.post(f"{endpoint}/v1/chat/completions", json=body)
+            response.raise_for_status()
+            choice = response.json()["choices"][0]
+            if choice["finish_reason"] != "stop":
+                raise ValueError(f"Evidence selection ended with {choice['finish_reason']}")
+            selection = json.loads(choice["message"]["content"])
+            indices = selection["paragraph_indices"]
+            if not isinstance(indices, list) or any(
+                type(index) is not int or not 0 <= index < len(paragraphs) for index in indices
+            ):
+                raise ValueError("Evidence selection contains invalid paragraph indices")
+            indices = sorted(set(indices))
+            if not minimum <= len(indices) <= maximum:
+                raise ValueError(f"Evidence selection needs {minimum}-{maximum} distinct paragraphs")
+            completion = {
+                "user": EVIDENCE_USER_TASK,
+                "reasoning_content": selection["reasoning_content"],
+                "answer": _evidence_answer([paragraphs[index] for index in indices], selected),
+            }
+            record = _document(source, source_id, chunk, chunk_index, completion, selected, ConversionMode.GROUNDED)
+            return ConvertedChunk(record, selected)
+        except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as error:
+            logger.warning(
+                "Rejected evidence selection source=%s row=%s chunk=%d attempt=%d error=%s",
+                source.name,
+                source_id,
+                chunk_index,
+                attempt + 1,
+                error,
+            )
+            if attempt + 1 == MAX_ATTEMPTS:
+                raise RuntimeError(f"Evidence conversion failed for {source.name}/{source_id}/{chunk_index}") from error
+            body["messages"].append(
+                {"role": "user", "content": f"Selection rejected: {error}. Return a corrected JSON object."}
+            )
+            await asyncio.sleep(min(2**attempt, 16) + random.random())
+    raise AssertionError("Unreachable evidence retry exit")
+
+
 async def _convert_chunk(
     client: httpx.AsyncClient,
     semaphore: asyncio.Semaphore,
@@ -463,6 +591,13 @@ async def _convert_chunk(
                             if mode == ConversionMode.STANDALONE:
                                 logger.warning(
                                     "Using source-grounded fallback for %s/%s/%d", source.name, source_id, chunk_index
+                                )
+                            elif isinstance(error, (ValueError, KeyError, IndexError, TypeError)):
+                                logger.warning(
+                                    "Using verbatim evidence fallback for %s/%s/%d", source.name, source_id, chunk_index
+                                )
+                                return await _convert_evidence_chunk(
+                                    client, endpoint, source, source_id, chunk, chunk_index, chunk_count, initial_format
                                 )
                             elif selected != formats[-1]:
                                 logger.warning(
