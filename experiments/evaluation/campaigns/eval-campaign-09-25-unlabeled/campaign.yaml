@@ -5,12 +5,3 @@ harbor_model_info:
     max_input_tokens: 32768
   open-athena-Snowball-67B-A2B-5.7T-Mixed-RLVR-Step38:
     max_input_tokens: 32768
-
-# BixBench reserves half of Pi's context for compaction. The benchmark's
-# 32,768-token reserve is valid for the standard 65,536-token agent context,
-# but must scale with the two models whose native context is only 32,768.
-harbor_agent_kwargs:
-  inclusionAI-Ling-lite-1.5:
-    compaction_reserve_tokens: 16384
-  open-athena-Snowball-67B-A2B-5.7T-Mixed-RLVR-Step38:
-    compaction_reserve_tokens: 16384

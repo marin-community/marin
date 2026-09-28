@@ -35,7 +35,7 @@ agents:
   override_setup_timeout_sec: 360
   override_timeout_sec: 1800
   kwargs:
-    compaction_reserve_tokens: 32768
+    # Pi derives its shared compaction reserve from max_output_tokens.
     model_info:
       max_input_tokens: 65536
       max_output_tokens: 16384
