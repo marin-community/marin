@@ -12,9 +12,9 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
-from taskcompendium.grading import validate_verifier
 from taskcompendium.models import SCHEMA_VERSION, TaskSpec
 from taskcompendium.submission import SubmissionConvention, render_instruction
+from taskcompendium.verifier_registry import validate_verifier
 
 DIRECT_CHAT_ENVIRONMENT = "direct_chat"
 SPECIFICATION_FILE = "specification.json"
