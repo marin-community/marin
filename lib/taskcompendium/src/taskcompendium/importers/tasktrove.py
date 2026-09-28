@@ -1,7 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Read the pinned TaskTrove Clean archive format without extracting it."""
+"""Read a pinned TaskTrove Clean task archive without extracting it.
+
+Each task is a gzip-compressed tarball containing ``task.toml`` with a
+``[metadata]`` source identity, ``instruction.md``, and ``tests/verifier.toml``;
+other members can supply environment or test files. The reader retains regular
+members as bytes and checks their paths, count, and total size before import.
+"""
 
 import io
 import tarfile
