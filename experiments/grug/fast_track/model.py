@@ -606,6 +606,9 @@ class GrugModelConfig:
     """Initial ``(l1, l2)`` of ``value_residual_layers`` (modded-nanogpt's learnable 0.5 / 0.5)."""
     learnable_qk_mult: bool = False
     """A learnable scalar per softmax-attention layer (init ``qk_mult``) in place of the fixed ``qk_mult``."""
+    qk_mult_per_head: bool = False
+    """With ``learnable_qk_mult``, one logit scale per head instead of per layer, so each head picks its own
+    softmax temperature (with q and k normalized, qk_mult is the whole temperature)."""
     aux_lm_layer: int | None = None
     """Early auxiliary LM loss: the residual stream after this layer (the plain sum of the AttnRes
     sources) goes through a parameter-free RMS norm and the shared lm_head. None disables it."""
@@ -815,7 +818,7 @@ class CausalSelfAttention(eqx.Module):
     value_embed: Float[Array, "V NH"] | None
     ve_lambda: Float[Array, " 2"] | None  # (lambda1 on v, lambda2 on the value embedding)
     ve_gate: Float[Array, "D N"] | None
-    qk_mult: Float[Array, ""] | None  # learnable logit scale (cfg.learnable_qk_mult); else cfg.qk_mult
+    qk_mult: Float[Array, "..."] | None  # learnable logit scale, [] or [N] per head (cfg.learnable_qk_mult)
     xsa_scale: Float[Array, " N"] | None  # per-head XSA strength (cfg.xsa_mode == "learned")
     xsa_gate: Float[Array, "D N"] | None  # per-token XSA gate weights (cfg.xsa_mode == "gated")
     head_mix: Float[Array, "D 2N"] | None  # [w1 | w2] projections of cfg.mla_head_mix (w2 half zero-init)
@@ -861,7 +864,7 @@ class CausalSelfAttention(eqx.Module):
                 ),
                 ve_lambda=jnp.array([1.0, 0.0]) if use_ve else None,
                 ve_gate=(reshard(jnp.zeros((d, n)), P(None, None)) if cfg.value_embeds == ValueEmbeds.GATED else None),
-                qk_mult=jnp.asarray(cfg.qk_mult, jnp.float32) if cfg.learnable_qk_mult else None,
+                qk_mult=_qk_mult_init(cfg, n),
                 xsa_scale=(
                     jnp.full((n,), 1.0 if cfg.xsa_mode == "learned" else 0.0, jnp.float32)
                     if cfg.xsa_mode in ("learned", "tanh")
@@ -902,7 +905,7 @@ class CausalSelfAttention(eqx.Module):
             value_embed=None,
             ve_lambda=None,
             ve_gate=None,
-            qk_mult=jnp.asarray(cfg.qk_mult, jnp.float32) if cfg.learnable_qk_mult else None,
+            qk_mult=_qk_mult_init(cfg, n),
             xsa_scale=(
                 jnp.full((n,), 1.0 if cfg.xsa_mode == "learned" else 0.0, jnp.float32)
                 if cfg.xsa_mode in ("learned", "tanh")
@@ -1112,7 +1115,11 @@ class CausalSelfAttention(eqx.Module):
                     keep = ~jnp.asarray(disable_rope, dtype=jnp.bool_)
                     q = jnp.where(keep, q_roped, q)
                     k = jnp.where(keep, k_roped, k)
-            q = q * (self.cfg.qk_mult if self.qk_mult is None else self.qk_mult.astype(q.dtype))
+            if self.qk_mult is None:
+                q = q * self.cfg.qk_mult
+            else:
+                qk_mult = self.qk_mult.astype(q.dtype)
+                q = q * (qk_mult[:, None] if qk_mult.ndim else qk_mult)
             if self.ssmax_scale is not None:
                 log_keys = jnp.log1p(_positions_in_document(sconv_segment_ids, seq_len).astype(jnp.float32))
                 q = q * (1.0 + self.ssmax_scale[:, None] * log_keys[..., None, None]).astype(q.dtype)
@@ -1191,6 +1198,12 @@ def _learned_knob_stats(layer: "Block", i: int) -> dict[str, jax.Array]:
             jax.lax.stop_gradient(layer.ple_up).astype(jnp.float32)
         )
     return stats
+
+
+def _qk_mult_init(cfg: GrugModelConfig, num_heads: int) -> jax.Array | None:
+    if not cfg.learnable_qk_mult:
+        return None
+    return jnp.full((num_heads,) if cfg.qk_mult_per_head else (), cfg.qk_mult, jnp.float32)
 
 
 def _vres_lambda_init(cfg: GrugModelConfig) -> jax.Array | None:
@@ -3750,7 +3763,11 @@ class Transformer(eqx.Module):
                 final_stats[f"attn_res_w_g{gate:02d}_p"] = mean_weights[-1]
         for i, layer in enumerate(layers):
             if isinstance(layer.attn, CausalSelfAttention) and layer.attn.qk_mult is not None:
-                final_stats[f"attn_res_qk_mult_L{i}"] = jax.lax.stop_gradient(layer.attn.qk_mult)
+                qk_mult = jax.lax.stop_gradient(layer.attn.qk_mult)
+                final_stats[f"attn_res_qk_mult_L{i}"] = jnp.mean(qk_mult)
+                if qk_mult.ndim:
+                    final_stats[f"attn_res_qk_mult_min_L{i}"] = jnp.min(qk_mult)
+                    final_stats[f"attn_res_qk_mult_max_L{i}"] = jnp.max(qk_mult)
             if layer.attn_out_scale is not None and layer.mlp_out_scale is not None:
                 final_stats[f"attn_res_scale_attn_L{i}"] = jax.lax.stop_gradient(layer.attn_out_scale)
                 final_stats[f"attn_res_scale_mlp_L{i}"] = jax.lax.stop_gradient(layer.mlp_out_scale)
