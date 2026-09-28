@@ -57,6 +57,7 @@ from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.fast_track.byte_targets import token_byte_table
 from experiments.grug.fast_track.model import (
     FINAL_HIDDEN_KEY,
+    NEWTON_GRAM_KEY,
     DenseMLP,
     GrugModelConfig,
     HeadReplay,
@@ -582,6 +583,17 @@ def _make_mixture_stage_callback(train_dataset: MixtureDataset, batch_schedule: 
 
 @register_dataclass
 @dataclass(frozen=True)
+class NewtonMuonState:
+    """``newton_muon`` preconditioner state, per layer in layer order (``GrugModelConfig.newton_muon``)."""
+
+    second_moment: jax.Array  # [L, n, n] EMA of the expert-input Z Z^T / N
+    inverse: jax.Array  # [L, n, n] (second_moment + damping I)^{-1}, refreshed every newton_muon_every steps
+    eigenvalues: jax.Array  # [L, n] ascending eigenvalues of second_moment at the last refresh
+    damping: jax.Array  # [L] gamma * tr(second_moment) / n at the last refresh
+
+
+@register_dataclass
+@dataclass(frozen=True)
 class GrugTrainState:
     step: jax.Array
     params: Transformer
@@ -592,6 +604,7 @@ class GrugTrainState:
     replay_hidden: jax.Array | None = None  # [slots, B, S, D] stored final hidden states (head replay)
     replay_labels: jax.Array | None = None  # [slots, B, S]
     replay_weight: jax.Array | None = None  # [slots, B, S]
+    newton_muon: NewtonMuonState | None = None
 
 
 def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
@@ -612,6 +625,100 @@ def _next_qb_betas(state: GrugTrainState, new_betas: jax.Array) -> jax.Array:
     if freeze_step is None:
         return new_betas
     return jnp.where(state.step + 1 >= freeze_step, state.pending_qb_betas, new_betas)
+
+
+def _initial_newton_muon(config: GrugModelConfig) -> NewtonMuonState | None:
+    if not config.newton_muon:
+        return None
+    n = config.latent_dim if config.latent_dim is not None else config.hidden_dim
+    layers = config.num_layers
+
+    def replicated(x):
+        return jax.sharding.reshard(x, P(*(None,) * x.ndim))
+
+    return NewtonMuonState(
+        second_moment=replicated(jnp.zeros((layers, n, n), jnp.float32)),
+        inverse=replicated(jnp.broadcast_to(jnp.eye(n, dtype=jnp.float32), (layers, n, n))),
+        eigenvalues=replicated(jnp.zeros((layers, n), jnp.float32)),
+        damping=replicated(jnp.zeros((layers,), jnp.float32)),
+    )
+
+
+def _refresh_newton_muon(
+    config: GrugModelConfig, state: NewtonMuonState, gram: jax.Array, step: jax.Array
+) -> NewtonMuonState:
+    """Every ``newton_muon_every`` steps, fold this batch's ``Z Z^T / N`` into the EMA and re-invert.
+
+    The first step sets the EMA to the batch moment (the paper starts from ``1e-3 I``, which at its
+    ``k``-step refresh makes the first ``k`` steps plain Muon with a rescaled gradient in the momentum).
+    The damped inverse is taken through ``eigh``, which also gives the spectrum for logging.
+    """
+
+    def refresh(prev: NewtonMuonState) -> NewtonMuonState:
+        beta = config.newton_muon_beta
+        second_moment = jnp.where(step == 0, gram, beta * prev.second_moment + (1.0 - beta) * gram)
+        n = second_moment.shape[-1]
+        damping = config.newton_muon_eps * jnp.trace(second_moment, axis1=-2, axis2=-1) / n
+        eigenvalues, eigenvectors = jnp.linalg.eigh(second_moment)
+        scaled = eigenvectors / (jnp.maximum(eigenvalues, 0.0) + damping[:, None])[:, None, :]
+        inverse = jnp.einsum("lij,lkj->lik", scaled, eigenvectors)
+        return NewtonMuonState(second_moment, inverse, eigenvalues, damping)
+
+    return jax.lax.cond(step % config.newton_muon_every == 0, refresh, lambda prev: prev, state)
+
+
+def _newton_precondition(grads: Transformer, inverse: jax.Array) -> Transformer:
+    """Right-precondition the routed-expert gate/up gradients: ``G <- G K^{-1}`` (arXiv 2604.01472).
+
+    The stacks are ``[L, E, n_in, n_out]`` (``x @ W``), so the paper's ``G K^{-1}`` on an ``[out, in]``
+    matrix is ``K^{-1} G`` here, contracting the input axis, which is gathered for the product.
+    """
+
+    def precondition(grad: jax.Array, layer_inverse: jax.Array) -> jax.Array:
+        spec = tuple(jax.typeof(grad).sharding.spec)
+        spec = P(*spec, *(None,) * (grad.ndim - len(spec)))
+        gathered = P(spec[0], spec[1], None, spec[3])
+        product = jnp.einsum(
+            "lnm,lemi->leni",
+            layer_inverse,
+            jax.sharding.reshard(grad, gathered).astype(jnp.float32),
+            out_sharding=gathered,
+        )
+        return jax.sharding.reshard(product.astype(grad.dtype), spec)
+
+    sites, replacements = [], []
+    for k, indices in enumerate(grads.stack_layer_indices()):
+        layer_inverse = inverse[np.asarray(indices)]
+        mlp = grads.layer_stacks()[k].stacked.mlp
+        for bank in ("expert_mlp", "expert_mlp_b"):
+            for leaf in ("w_gate", "w_up"):
+                grad = None if getattr(mlp, bank) is None else getattr(getattr(mlp, bank), leaf)
+                if grad is not None:
+                    sites.append((k, bank, leaf))
+                    replacements.append(precondition(grad, layer_inverse))
+
+    def expert_leaves(model: Transformer) -> list[jax.Array]:
+        return [getattr(getattr(model.layer_stacks()[k].stacked.mlp, b), leaf) for k, b, leaf in sites]
+
+    return eqx.tree_at(expert_leaves, grads, replacements)
+
+
+def _newton_muon_metrics(state: NewtonMuonState) -> dict[str, jax.Array]:
+    """Per-layer spectrum of the expert-input second moment ``K``: raw and damped condition numbers."""
+    lo = jnp.maximum(state.eigenvalues[:, 0], 0.0)
+    hi = state.eigenvalues[:, -1]
+    cond = hi / jnp.maximum(lo, 1e-30)
+    damped_cond = (hi + state.damping) / (lo + state.damping)
+    metrics = {
+        "train/newton_muon/log10_cond_mean": jnp.mean(jnp.log10(cond)),
+        "train/newton_muon/damped_cond_mean": jnp.mean(damped_cond),
+    }
+    for i in range(cond.shape[0]):
+        metrics[f"train/newton_muon/log10_cond_L{i}"] = jnp.log10(cond[i])
+        metrics[f"train/newton_muon/damped_cond_L{i}"] = damped_cond[i]
+        metrics[f"train/newton_muon/eig_max_L{i}"] = hi[i]
+        metrics[f"train/newton_muon/eig_min_L{i}"] = lo[i]
+    return metrics
 
 
 def initial_state(
@@ -636,6 +743,7 @@ def initial_state(
         opt_state=opt_state,
         pending_qb_betas=jnp.zeros((num_moe_layers, model_config.num_experts + model_config.num_null_experts)),
         **_empty_head_replay(head_replay_shape, mp),
+        newton_muon=_initial_newton_muon(model_config),
     )
 
 
@@ -839,6 +947,14 @@ def _make_train_step(
             qb_params, batch, mp, z_loss, state.step, loop_active, head_replay, byte_table, byte_weight
         )
         final_hidden = summarized_metrics.pop(FINAL_HIDDEN_KEY, None)
+        newton_muon = state.newton_muon
+        opt_grads = grads
+        if newton_muon is not None:
+            newton_muon = _refresh_newton_muon(
+                qb_params.config, newton_muon, summarized_metrics.pop(NEWTON_GRAM_KEY), state.step
+            )
+            opt_grads = _newton_precondition(grads, newton_muon.inverse)
+            summarized_metrics.update(_newton_muon_metrics(newton_muon))
         metrics = {"train/loss": loss, **summarized_metrics}
         opt_state_in = state.opt_state
         if os.environ.get("GRUG_SKIP_OPTIMIZER"):
@@ -850,7 +966,7 @@ def _make_train_step(
             params = qb_params
             master_params = state.master_params
         else:
-            updates, opt_state = optimizer.update(grads, opt_state_in, qb_params)
+            updates, opt_state = optimizer.update(opt_grads, opt_state_in, qb_params)
             params = optax.apply_updates(qb_params, updates)
             master_params = None
 
@@ -892,6 +1008,7 @@ def _make_train_step(
             # Dense blocks have no router, so the forward emits no qb_beta_per_layer; keep the
             # (zeros) pending betas -- _apply_qb_betas is already a no-op for dense.
             pending_qb_betas=_next_qb_betas(state, metrics.get("qb_beta_per_layer", state.pending_qb_betas)),
+            newton_muon=newton_muon,
         )
 
         return next_state, metrics, watch_stats
@@ -1219,7 +1336,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     router_metrics = {
                         key: value
                         for key, value in metrics.items()
-                        if key.startswith(("train/router/", "moe_bias/", "train/attn_res/", "train/aux/"))
+                        if key.startswith(
+                            ("train/router/", "moe_bias/", "train/attn_res/", "train/aux/", "train/newton_muon/")
+                        )
                         and key not in ("train/router/routing_counts_per_layer", "qb_beta_per_layer")
                     }
                     if router_metrics:

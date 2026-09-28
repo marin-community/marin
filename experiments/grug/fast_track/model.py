@@ -75,6 +75,10 @@ _MOE_OUT_GATE_DIMS = 12
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
+# ``newton_muon``: the per-layer expert-input second moment ``Z^T Z / N`` ([L, n, n], layer order) the
+# forward returns to the trainer, and the per-shard partial sums it is reduced from.
+NEWTON_GRAM_KEY = "_newton_gram"
+NEWTON_GRAM_LOCAL_KEY = "newton_gram_local"
 # Metrics-dict key that carries the auxiliary-loss residual stream from the forward to the loss.
 _AUX_HIDDEN = "aux_lm_hidden"
 # Folded into the per-step route key for the ERC proxy-token noise, so it is independent of the Gumbel noise.
@@ -352,6 +356,17 @@ class GrugModelConfig:
     ``attn_out`` (the attention sublayer output) and ``mlp_out`` (the MoE sublayer output)."""
     qb_freeze_step: int | None = None
     """Stop updating the QB router biases from this step on (they keep their last value)."""
+    newton_muon: bool = False
+    """Newton-Muon (arXiv 2604.01472) right-preconditioning of the routed-expert gate/up gradients:
+    ``G <- G (K + gamma tr(K)/n I)^{-1}`` before momentum and Newton-Schulz, with ``K`` an EMA of the
+    second moment ``Z Z^T / N`` of the expert input. All routed experts of a layer read the same (latent)
+    input, so each layer keeps one ``[latent, latent]`` ``K``, which the forward emits and the trainer holds."""
+    newton_muon_beta: float = 0.95
+    """EMA decay of ``K`` per refresh (the paper's short-track record: 0.95)."""
+    newton_muon_eps: float = 0.2
+    """Ridge ``gamma``: the damping added to ``K`` is ``gamma * tr(K) / n`` (the paper: 0.2)."""
+    newton_muon_every: int = 32
+    """Refresh ``K`` and its inverse every this many steps (the paper: 32); the first step initializes ``K``."""
     embed_gated_norm: bool = True
     """GatedNorm after the embedding RMSNorm (else the RMSNorm alone)."""
     final_gated_norm: bool = True
@@ -780,6 +795,9 @@ class GrugModelConfig:
 
         if self.erc_loss_weight > 0 and (self.dense_mlp or self.router_rank or self.moe_bank2_experts):
             raise ValueError("erc_loss_weight needs a MoE with a full-rank router and one expert bank")
+
+        if self.newton_muon and (self.dense_mlp or self.newton_muon_every < 1):
+            raise ValueError("newton_muon needs routed experts (dense_mlp=False) and newton_muon_every >= 1")
 
         if self.moe_shortcut and not self.attn_res:
             raise ValueError("moe_shortcut requires attn_res (the MoE shortcut is an AttnRes gate)")
@@ -1807,6 +1825,20 @@ def _qb_beta_hist(
     )
 
 
+def _local_input_gram(z: Float[Array, "T L"]) -> Float[Array, "shards L L"]:
+    """Per-shard ``Z^T Z`` of the expert input (fp32 accumulation, no gradient) for ``newton_muon``.
+
+    Like the router partials, the cross-device sum is deferred to one reduction after the layer scan.
+    """
+
+    def _local(x: jax.Array) -> jax.Array:
+        return jnp.einsum("tl,tm->lm", x, x, preferred_element_type=jnp.float32)[None]
+
+    return shard_map(
+        _local, mesh=get_abstract_mesh(), in_specs=P(_BATCH_AXES, None), out_specs=P(_BATCH_AXES, None, None)
+    )(reshard(jax.lax.stop_gradient(z), P(_BATCH_AXES, None)))
+
+
 class MoEMLP(eqx.Module):
     """QB-routed MoE with sigmoid combine weights."""
 
@@ -2146,6 +2178,8 @@ class MoEMLP(eqx.Module):
         if self.w_latent_down is not None and self.latent_norm is not None:
             # Keep the expert input scale independent of the down-projection initialization.
             routed_input = self.latent_norm(reshard(projected[1], _batch_spec()))
+        if self.cfg.newton_muon:
+            router_stats[NEWTON_GRAM_LOCAL_KEY] = _local_input_gram(routed_input)
         bank_mlps = [self.expert_mlp] if self.expert_mlp_b is None else [self.expert_mlp, self.expert_mlp_b]
         real_selected, real_weights, null_out = selected_experts, combine_weights, None
         if self.cfg.num_null_experts:
@@ -3952,6 +3986,9 @@ class Transformer(eqx.Module):
                 "margin_min_per_layer": stacked_router_stats["margin_min"],
                 "margin_max_per_layer": stacked_router_stats["margin_max"],
             }
+            if cfg.newton_muon:
+                gram_sum = jnp.sum(stacked_router_stats[NEWTON_GRAM_LOCAL_KEY], axis=1)
+                router_metrics[NEWTON_GRAM_KEY] = reshard(gram_sum / (batch_size * seq_len), P(None, None, None))
         router_metrics.update(final_gate_stats)
         router_metrics.update(bigram_gate_stats)
         hidden = self.final_norm(hidden)
@@ -4407,6 +4444,8 @@ class Transformer(eqx.Module):
                 return loss, {"train/cross_entropy_loss": cross_entropy_loss, **final_gate_metrics}
             summarized_metrics = summarize_router_metrics(router_metrics)
             summarized_metrics.update(final_gate_metrics)
+            if NEWTON_GRAM_KEY in router_metrics:
+                summarized_metrics[NEWTON_GRAM_KEY] = router_metrics[NEWTON_GRAM_KEY]
             if self.config.num_null_experts:
                 summarized_metrics.update(_null_slot_metrics(self.config, router_metrics["routing_counts_per_layer"]))
             summarized_metrics["train/cross_entropy_loss"] = cross_entropy_loss
