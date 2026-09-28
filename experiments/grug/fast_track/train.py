@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import concurrent.futures
 import dataclasses
 import functools
 import gc
@@ -1249,7 +1250,12 @@ def _routing_dumper(config: GrugRunConfig, model: Transformer, mesh: Mesh, batch
         raise ValueError("routing_dump_steps needs routing_dump_path")
     cfg = config.model
     num_sequences = trainer_cfg.routing_dump_batches * batch_size
-    tokens, segments = _routing_dump_sequences(config.data, seq_len=cfg.max_seq_len, num_sequences=num_sequences)
+    # The dataset's per-example jit pins its output to a CPU device, which conflicts with the train loop's GPU
+    # context mesh; JAX's mesh context is thread-local, so fetch on a worker thread (as the data loader does).
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        tokens, segments = pool.submit(
+            _routing_dump_sequences, config.data, seq_len=cfg.max_seq_len, num_sequences=num_sequences
+        ).result()
     sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
     add = _routing_counts_step(trainer_cfg.trainer.mp)
     shape = (cfg.num_layers, cfg.vocab_size, cfg.num_experts + cfg.num_null_experts)
