@@ -351,7 +351,6 @@ class Trainer:
 
     @property
     def progress_watchdog(self) -> Optional[ProgressWatchdog]:
-        """The stall watchdog, or ``None`` when no progress deadline is configured."""
         return self._progress_watchdog
 
     @typing.overload

@@ -71,7 +71,7 @@ class ProgressHealth:
         return ProgressTimeout(self.event, self.elapsed, self.timeout)
 
 
-def _deadline(
+def _progress_health(
     event: ProgressEvent,
     elapsed: float,
     timeout: float | None,
@@ -190,7 +190,7 @@ class ProgressWatchdog(Callback[Any]):
             # compiling its first step. Elapsed time is all that bounds this: the step deadline
             # stays unarmed until a step completes, and the process deadline has no progress
             # event to measure from.
-            return _deadline(
+            return _progress_health(
                 ProgressEvent.PROCESS_STARTED,
                 now - self._created_at,
                 self._startup_timeout,
@@ -208,13 +208,13 @@ class ProgressWatchdog(Callback[Any]):
         deadlines: list[ProgressHealth] = []
         if active_step_started_at is not None and self._step_timeout is not None:
             deadlines.append(
-                _deadline(ProgressEvent.TRAIN_STEP_STARTED, now - active_step_started_at, self._step_timeout)
+                _progress_health(ProgressEvent.TRAIN_STEP_STARTED, now - active_step_started_at, self._step_timeout)
             )
         # A completed step always leaves a recorded progress event behind it.
         assert last_progress is not None
         event, event_time = last_progress
         if self._process_timeout is not None:
-            deadlines.append(_deadline(event, now - event_time, self._process_timeout))
+            deadlines.append(_progress_health(event, now - event_time, self._process_timeout))
 
         for deadline in deadlines:
             if deadline.state is ProgressState.STALLED:

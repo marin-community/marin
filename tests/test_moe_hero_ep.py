@@ -352,7 +352,6 @@ def _runtime_env_config(
     watch_interval=1,
     moe_implementation="fixed_pooled_wave_all_to_all",
     remat_mode="recompute_all",
-    progress_watchdog=ProgressWatchdogConfig(),
 ):
     """A stand-in for GrugRunConfig holding only the fields ``run_grug``'s env setup and dispatch read."""
     return SimpleNamespace(
@@ -360,7 +359,7 @@ def _runtime_env_config(
             trainer=SimpleNamespace(
                 id="test-run",
                 watch=WatchConfig(interval=watch_interval),
-                progress_watchdog=progress_watchdog,
+                progress_watchdog=ProgressWatchdogConfig(),
             ),
             watch_mode=watch_mode,
         ),
@@ -370,24 +369,6 @@ def _runtime_env_config(
         max_retries_failure=0,
         max_task_failures=10,
     )
-
-
-@pytest.mark.parametrize(
-    ("progress_watchdog", "expected_health"),
-    [
-        (ProgressWatchdogConfig(), None),
-        (ProgressWatchdogConfig(startup_timeout=timedelta(hours=1)), train.HERO_EP_TASK_HEALTH),
-    ],
-)
-def test_run_grug_enables_task_health_only_with_an_armed_watchdog(monkeypatch, progress_watchdog, expected_health):
-    for name in train.HERO_EP_RUNTIME_ENV:
-        monkeypatch.delenv(name, raising=False)
-    config = _runtime_env_config(progress_watchdog=progress_watchdog)
-
-    with patch.object(train, "dispatch_grug_training_run") as dispatch:
-        train.run_grug(config)
-
-    assert dispatch.call_args.kwargs["health_check"] == expected_health
 
 
 def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch):

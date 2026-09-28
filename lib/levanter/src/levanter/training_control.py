@@ -336,7 +336,7 @@ def _serve_task_health(
 
 
 class TrainingDashboard(Generic[ConfigT]):
-    """Publish the process-zero training status page through Iris."""
+    """Serve task-local health and publish the global process-zero dashboard through Iris."""
 
     def __init__(
         self,
@@ -349,6 +349,7 @@ class TrainingDashboard(Generic[ConfigT]):
         self._request_checkpoint = request_checkpoint
         self._run_id = run_id
         self._watchdog = watchdog
+        self._local_process_index = int(os.environ.get(IRIS_MULTIGPU_LOCAL_PROCESS_INDEX_ENV, "0"))
         self._server_stack: ExitStack | None = None
         self._registry_stack: ExitStack | None = None
 
@@ -356,8 +357,7 @@ class TrainingDashboard(Generic[ConfigT]):
         health_enabled = task_health_enabled()
         if health_enabled and self._watchdog is None:
             raise RuntimeError("Iris task health requires a progress watchdog")
-        local_process_index = int(os.environ.get(IRIS_MULTIGPU_LOCAL_PROCESS_INDEX_ENV, "0"))
-        if jax.process_index() != 0 and (not health_enabled or local_process_index != 0):
+        if jax.process_index() != 0 and (not health_enabled or self._local_process_index != 0):
             return self
 
         try:
@@ -375,8 +375,7 @@ class TrainingDashboard(Generic[ConfigT]):
                 raise RuntimeError("Iris task health requires task metadata")
             return
         health_enabled = task_health_enabled()
-        local_process_index = int(os.environ.get(IRIS_MULTIGPU_LOCAL_PROCESS_INDEX_ENV, "0"))
-        serves_health = health_enabled and local_process_index == 0
+        serves_health = health_enabled and self._local_process_index == 0
         serves_dashboard = jax.process_index() == 0
         server_stack = ExitStack()
         try:
