@@ -166,6 +166,14 @@ its native results and trajectories and writes flattened trajectory steps to the
 ordinary job tree remains resume state. Load the normalized tables with
 pandas/duckdb, or read rows back with `EvalSample.model_validate`, to zoom into any run.
 
+Evalchemy transport failures retain their `failure_category` in the source artifact and an
+infrastructure-error marker in the normalized sample. Coverage excludes these items from `n_scored`,
+and metrics are recomputed from scored items. A run with infrastructure errors and less than 90%
+attempted-item coverage records `infra_failed`; pipeline steps do not cache it as a successful eval.
+
+For repeated Evalchemy samples, `samples.trial_id` is the string form of `sample_repeat`; a
+single-attempt sample leaves it empty. This keeps independent answers to the same question distinct.
+
 Evaldash treats these records as the source of truth. Its background ingestor scans every configured
 object-store prefix and upserts the `eval_runs` and `eval_metrics` tables implemented in
 `infra/marina/apps/evaldash/results_db.py`. Evaluation launchers do not read DB config or connect to Postgres.

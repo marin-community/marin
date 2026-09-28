@@ -51,13 +51,17 @@ def test_load_parquet_columns(tmp_path):
     assert result == [{"id": r["id"], "name": r["name"]} for r in RECORDS]
 
 
-def test_load_parquet_row_range(tmp_path):
+@pytest.mark.parametrize(
+    "row_start,row_end",
+    [(2, 7), (2, None), (None, 7)],
+)
+def test_load_parquet_row_range(tmp_path, row_start, row_end):
     path = str(tmp_path / "data.parquet")
     _write_test_parquet(path, RECORDS, row_group_size=3)
 
-    spec = InputFileSpec(path=path, row_start=2, row_end=7)
+    spec = InputFileSpec(path=path, row_start=row_start, row_end=row_end)
     result = list(load_parquet(spec))
-    assert [r["id"] for r in result] == [2, 3, 4, 5, 6]
+    assert [r["id"] for r in result] == list(range(10))[row_start:row_end]
 
 
 def test_load_parquet_filter(tmp_path):
