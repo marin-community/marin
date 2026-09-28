@@ -93,6 +93,19 @@ def test_predicted_action_rejects_message_target_with_weak_source_scoring():
         import_row(row, canonical_sha256(row))
 
 
+def test_predicted_action_rejects_source_settings_that_prevent_expected_calls():
+    row = json.loads((FIXTURES / "predicted-action.json").read_text())
+    row["responses_create_params"]["tool_choice"] = "none"
+    with pytest.raises(ValueError, match="tool_choice=none"):
+        import_row(row, canonical_sha256(row))
+
+    row["responses_create_params"]["tool_choice"] = "auto"
+    row["responses_create_params"]["parallel_tool_calls"] = False
+    row["expected_action"] = {"type": "function_call_batch", "calls": [row["expected_action"]] * 2}
+    with pytest.raises(ValueError, match="parallel_tool_calls=false"):
+        import_row(row, canonical_sha256(row))
+
+
 @pytest.mark.parametrize("arguments", ["[1]", '{"id":1,"id":2}', '{"id":NaN}', '{"id":1e309}'])
 def test_predicted_action_rejects_invalid_expected_arguments(arguments):
     row = json.loads((FIXTURES / "predicted-action.json").read_text())

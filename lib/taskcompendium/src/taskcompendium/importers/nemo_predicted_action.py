@@ -131,6 +131,10 @@ def import_row(row: dict[str, Any], expected_sha256: str) -> tuple[TaskSpec, Sub
     if parallel_tool_calls is not None and not isinstance(parallel_tool_calls, bool):
         raise ValueError("source parallel_tool_calls must be a boolean")
     expected_calls = _expected_calls(row.get("expected_action"))
+    if tool_choice == "none":
+        raise ValueError("expected function calls contradict tool_choice=none")
+    if parallel_tool_calls is False and len(expected_calls) > 1:
+        raise ValueError("multiple expected calls contradict parallel_tool_calls=false")
     advertised = {function.name for function in functions}
     if any(call.name not in advertised for call in expected_calls):
         raise ValueError("expected function call is absent from source tools")
