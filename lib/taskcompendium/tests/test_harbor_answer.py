@@ -13,6 +13,7 @@ from harbor.models.task.task import Task
 
 from taskcompendium.harbor.runner import ChatLaunch, ReplayLaunch, run_trial
 from taskcompendium.lowering import (
+    DIRECT_CHAT_ENVIRONMENT,
     HarborEnvironmentConfig,
     SelectionPolicy,
     compatible_lowerings,
@@ -174,6 +175,11 @@ def test_selection_policies_use_compatible_conventions(specification):
     assert select_lowerings(candidates, SelectionPolicy.ALL) == candidates
     assert select_lowerings(candidates, SelectionPolicy.FIRST) == (candidates[0],)
     assert {select_lowerings(candidates, SelectionPolicy.SAMPLE, rng_key=key)[0] for key in range(16)} == set(candidates)
+    assert select_lowerings(candidates, SelectionPolicy.FIRST, required_environment=DIRECT_CHAT_ENVIRONMENT) == (
+        candidates[0],
+    )
+    with pytest.raises(ValueError, match="No compatible lowerings for environment 'shellsim'"):
+        select_lowerings(candidates, SelectionPolicy.FIRST, required_environment="shellsim")
 
 
 async def test_chat_trial_resolves_key_at_runtime_without_persisting_it(
