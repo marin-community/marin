@@ -24,7 +24,7 @@ from taskcompendium.lowering import (
     read_specification,
     select_lowerings,
 )
-from taskcompendium.models import AnswerType, Source, TaskRequirements, TaskSpec, VerifierSpec
+from taskcompendium.models import AnswerType, Source, TaskRequirements, TaskSpec, VerifierKind, VerifierSpec
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
 
 
@@ -162,18 +162,17 @@ def test_direct_chat_rejects_unsatisfied_requirements(tmp_path, specification):
 @pytest.mark.parametrize(
     "verifier,message",
     [
-        (VerifierSpec(kind="unknown_kind", parameters_json="{}"), "Unknown verifier kind"),
         (
-            VerifierSpec(kind="exact_answer", parameters_json='{"expected": 12}'),
+            VerifierSpec(kind=VerifierKind.EXACT_ANSWER, parameters_json='{"expected": 12}'),
             "Invalid 'exact_answer' verifier parameters",
         ),
         (
-            VerifierSpec(kind="exact_answer", parameters_json='{"expected": "12", "extra": true}'),
+            VerifierSpec(kind=VerifierKind.EXACT_ANSWER, parameters_json='{"expected": "12", "extra": true}'),
             "Invalid 'exact_answer' verifier parameters",
         ),
     ],
 )
-def test_lowering_rejects_unknown_or_invalid_verifier_before_writing(tmp_path, specification, verifier, message):
+def test_lowering_rejects_invalid_verifier_before_writing(tmp_path, specification, verifier, message):
     specification = specification.model_copy(update={"verifier": verifier})
 
     with pytest.raises(ValueError, match=message):
@@ -222,6 +221,22 @@ def test_old_verifier_schema_is_rejected_on_read(tmp_path, specification):
     path.write_text(json.dumps(payload))
 
     with pytest.raises(ValueError, match=r"Unsupported TaskSpec schema: 0\.1"):
+        read_specification(path)
+
+
+def test_exported_specification_rejects_unknown_verifier_kind(tmp_path, specification):
+    task = lower_to_harbor(
+        specification,
+        SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        HarborEnvironmentConfig(),
+        tmp_path / "task",
+    )
+    path = task / "specification.json"
+    payload = json.loads(path.read_text())
+    payload["verifier"]["kind"] = "unknown_kind"
+    path.write_text(json.dumps(payload))
+
+    with pytest.raises(ValueError, match="unknown_kind"):
         read_specification(path)
 
 
