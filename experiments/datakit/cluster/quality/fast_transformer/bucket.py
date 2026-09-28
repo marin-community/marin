@@ -189,7 +189,6 @@ def bucket_quality_scores(
     outcome = ctx.execute(pipeline, verbose=True, map_task_resources=task_resources)
     return QualityScores(
         main_output_dir=output_path,
-        samples_output_dir=None,
         model_dir=model_dir,
         calib_file=CALIBRATION_FILE,
         bucket_edges=list(BUCKET_EDGES),

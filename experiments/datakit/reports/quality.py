@@ -7,22 +7,31 @@ Aggregates the per-source :class:`QualityScores` artifacts into one page: the
 score distribution (histogram + fixed-0.2 bucket bars), per-domain bucket mix,
 a sortable per-source table with anomaly flags (``uninformative`` = near-constant
 score, the variance-gate case; ``homogeneous`` = spread but one dominant bucket),
-and an interactive spot-check drawer over the samples side output (which already
-carries text, so no separate fetch). Reads are bounded per source.
+and an interactive spot-check drawer. Quality outputs carry no text; the
+spot-check reads it from the source's normalized shard of the same basename,
+which holds the same documents in the same row order. Reads are bounded per source.
 """
 
+import posixpath
 from collections import defaultdict
 
 import numpy as np
+from marin.datakit.normalize import NormalizedData
 
 from experiments.datakit.cluster.quality.fast_transformer.artifact import BUCKET_EDGES, QualityScores
-from experiments.datakit.cluster.quality.fast_transformer.score import SAMPLE_PCT
-from experiments.datakit.reports.common import StageReport, render_template, sample_rows, write_report
+from experiments.datakit.reports.common import (
+    StageReport,
+    head_rows,
+    parquet_files,
+    render_template,
+    sample_rows,
+    write_report,
+)
 
 NB = len(BUCKET_EDGES) + 1
 HBINS = 25  # score histogram bins
 MAIN_ROWS_PER_SOURCE = 500  # scored rows read per source (bounds memory + gives representative stats)
-SAMPLE_ROWS_PER_SOURCE = 60  # rows read from the samples side output per source
+SPOT_CHECK_SCAN_ROWS = 2_000  # rows of each source's first shard scanned for spot-check docs
 SAMPLE_PER_CELL = 5  # docs shown per (source, bucket) in the spot-check
 TEXT_CHARS = 1600
 UNINFORMATIVE_STD = 0.03  # below this within-source std the FT can't discriminate (variance gate)
@@ -99,17 +108,24 @@ def _anomaly_flags(mix: list[int], scores: np.ndarray) -> list[tuple[str, str]]:
     return []
 
 
-def _spot_check_docs(sources: dict[str, QualityScores]) -> list[dict]:
-    """Bounded read of each source's samples side output (which carries text),
-    keeping up to SAMPLE_PER_CELL docs per (source, bucket)."""
+def _spot_check_docs(sources: dict[str, QualityScores], normalized: dict[str, NormalizedData]) -> list[dict]:
+    """Up to SAMPLE_PER_CELL docs per (source, bucket) from each source's first shard.
+
+    The text of a scored row is the same row of the normalized shard with the
+    same basename; the ids are checked as the two are zipped.
+    """
     kept: dict[tuple[str, int], list[dict]] = defaultdict(list)
-    for qs in sources.values():
-        if qs.samples_output_dir is None:
+    for name, qs in sources.items():
+        shards = parquet_files(qs.main_output_dir)
+        if not shards:
             continue
-        rows = sample_rows(
-            qs.samples_output_dir, ["source", "id", "score", "quality_bucket", "text"], SAMPLE_ROWS_PER_SOURCE
-        )
-        for r in rows:
+        basename = posixpath.basename(shards[0])
+        scored = head_rows(shards[0], ["source", "id", "score", "quality_bucket"], SPOT_CHECK_SCAN_ROWS)
+        texts = head_rows(posixpath.join(normalized[name].main_output_dir, basename), ["id", "text"], len(scored))
+        for r, t in zip(scored, texts, strict=True):
+            if r["id"] != t["id"]:
+                raise ValueError(f"{name}: {basename} is not in its normalized shard's row order at id {r['id']}")
+            r["text"] = t["text"]
             cell = (r["source"], int(r["quality_bucket"]))
             if len(kept[cell]) >= SAMPLE_PER_CELL:
                 continue
@@ -177,8 +193,8 @@ def _build_report_data(rows: list[dict], docs: list[dict], *, scorer: str) -> di
             "ndom": len(domains),
             "sampling": (
                 f"distribution + per-source stats from the first {MAIN_ROWS_PER_SOURCE} scored rows "
-                f"per source (file order); spot-check docs from the scorer's ~{SAMPLE_PCT:.0%} systematic "
-                f"sample side output (≤{SAMPLE_PER_CELL} per source x bucket)"
+                f"per source (file order); spot-check docs from the first {SPOT_CHECK_SCAN_ROWS} rows of each "
+                f"source's first shard (≤{SAMPLE_PER_CELL} per source x bucket)"
             ),
         },
         "overall": overall,
@@ -188,7 +204,10 @@ def _build_report_data(rows: list[dict], docs: list[dict], *, scorer: str) -> di
     }
 
 
-def quality_report(output_path: str, sources: dict[str, QualityScores]) -> StageReport:
+def quality_report(
+    output_path: str, sources: dict[str, QualityScores], normalized: dict[str, NormalizedData]
+) -> StageReport:
+    """Render the quality stage report; ``normalized`` supplies each source's text, keyed like ``sources``."""
     scorers = {qs.model_dir for qs in sources.values()}
     assert len(scorers) == 1, f"mixed scorer model dirs across sources: {scorers}"
     (scorer,) = scorers
@@ -196,13 +215,12 @@ def quality_report(output_path: str, sources: dict[str, QualityScores]) -> Stage
     rows: list[dict] = []
     for qs in sources.values():
         rows.extend(sample_rows(qs.main_output_dir, ["source", "id", "score", "quality_bucket"], MAIN_ROWS_PER_SOURCE))
-    docs = _spot_check_docs(sources)
+    docs = _spot_check_docs(sources, normalized)
     data = _build_report_data(rows, docs, scorer=scorer)
 
     o = data["overall"]
     stats = {
         "total_scored": sum(qs.counters.get("ft_quality/scored", 0) for qs in sources.values()),
-        "total_sampled": sum(qs.counters.get("ft_quality/sampled", 0) for qs in sources.values()),
         "docs_sampled": o["n"],
         "n_sources": data["meta"]["nsrc"],
         "n_domains": data["meta"]["ndom"],

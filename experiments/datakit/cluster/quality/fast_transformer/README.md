@@ -17,7 +17,7 @@ rubric.py    type-aware oracle rubric — how docs are scored 1..5 (labeling its
 train.py     train the pooled FastTransformer on the labels → model.eqx + remap + meta
 calibrate.py fit the monotonic bme calibration on the labels → calib_bme.json
 score.py     score_normalized — the reference pipeline's per-source quality step
-             (datakit/quality/<source>) → source/id/score/quality_bucket + samples
+             (datakit/quality/<source>) → source/id/score/quality_bucket
 ```
 
 The stage report (single HTML page over all sources) lives in
@@ -103,7 +103,7 @@ Core:
 - [`train.py`](train.py) — `train_from_labels`: train the deployed scorer from the label parquet, plus `fit`/`train_regressor` and the holdout metrics.
 - [`calibrate.py`](calibrate.py) — fit the monotonic bme calibration (`calib_bme.json`) and apply it, globally or per content type.
 - [`scorer.py`](scorer.py) — `PooledScorer`: load a trained model + vocab remap and score arbitrary text.
-- [`score.py`](score.py) — `score_normalized`: the per-source quality step (bme + calibration → buckets + samples side output).
+- [`score.py`](score.py) — `score_normalized`: the per-source quality step (bme + calibration → buckets).
 - [`score_fusion.py`](score_fusion.py) — `fusion_score_step`: raw fusion scores from normalized text and Harrier embeddings.
 - [`bucket.py`](bucket.py) — `quality_step`: the store-ready `QualityScores` dataset from fusion scores and content types.
 - [`quality_model.py`](quality_model.py) — `QualityPin` and the model and calibration digests a step checks before writing.
