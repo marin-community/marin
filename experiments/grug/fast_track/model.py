@@ -429,6 +429,13 @@ class GrugModelConfig:
     """``blocks``: expert ``e`` reads contiguous block ``e mod (in_dim / expert_read_subset)``; ``random``: a fixed
     random subset per expert; ``shared``: every expert reads channels ``[0, expert_read_subset)`` (the control that
     isolates the per-expert split from the masking itself)."""
+    expert_read_groups: int = 0
+    """If > 0 (G), routed expert ``e`` reads only channel group ``e mod G`` of the MLP-pre-normed stream: the
+    stream is split into G contiguous slices of width ``hidden_dim / G``, each re-normalized by its own learnable
+    RMSNorm (``expert_read_norm``, a stacked ``[G, W]`` gain), and the experts' ``w_up`` are real ``[E, W, I]``
+    matrices. Each (token, slot) assignment dispatches only its expert's slice, so the dispatch bytes shrink by
+    G. The gather-based, per-slice-normed counterpart of ``expert_read_subset``; needs ``latent_dim=None``
+    and an explicit ``latent_out_dim``."""
     latent_write_select: bool = False
     """With a MoE latent, drop ``w_latent_up``: the combined routed output is written into the first ``latent_dim``
     hidden channels (the rest get zero), scaled by ``initializer_std * sqrt(latent_dim)``, the gain of the
@@ -1019,6 +1026,23 @@ class GrugModelConfig:
             self.expert_in_dim % self.expert_read_subset or self.moe_bank2_experts or self.moe_const_experts
         ):
             raise ValueError("expert_read_subset must divide the expert input width, without moe_bank2 or const experts")
+        if self.expert_read_groups and (
+            self.latent_dim is not None
+            or self.latent_select
+            or self.latent_out_dim is None
+            or self.hidden_dim % self.expert_read_groups
+            or self.expert_read_subset
+            or self.moe_bank2_experts
+            or self.moe_const_experts
+            or self.num_null_experts
+            or self.moe_dense_router_grad
+            or self.newton_muon
+            or self.erc_loss_weight > 0
+        ):
+            raise ValueError(
+                "expert_read_groups must divide hidden_dim and needs latent_dim=None, an explicit latent_out_dim, one "
+                "expert bank and no expert_read_subset, null/const experts, dense router grad, Newton-Muon or ERC"
+            )
         if self.latent_select_layers not in ("all", "kda", "global"):
             raise ValueError(f"latent_select_layers must be all, kda or global, got {self.latent_select_layers!r}")
         if self.latent_select_layers != "all" and self.local_mixer != LocalMixer.KDA:
@@ -1074,7 +1098,9 @@ class GrugModelConfig:
 
     @property
     def expert_in_dim(self) -> int:
-        """Width the routed experts read."""
+        """Width the routed experts read (one ``expert_read_groups`` slice when set)."""
+        if self.expert_read_groups:
+            return self.hidden_dim // self.expert_read_groups
         return self.latent_dim if self.latent_dim is not None else self.hidden_dim
 
     @property
@@ -1730,6 +1756,12 @@ def _learned_knob_stats(layer: "Block", i: int) -> dict[str, jax.Array]:
         read = [em.w_up] if em.w_gate is None else [em.w_gate, em.w_up]
         stats[f"attn_res_knob_expert_read_pr_L{i}"] = _participation_ratio(read, "eri,esi->rs")
         stats[f"attn_res_knob_expert_write_pr_L{i}"] = _participation_ratio([em.w_down], "eir,eis->rs")
+    if isinstance(layer.mlp, MoEMLP) and layer.mlp.expert_read_norm is not None:
+        norm = layer.mlp.expert_read_norm
+        gain = norm.weight if isinstance(norm, RMSNorm) else 1.0 + norm.gamma
+        gain = jnp.abs(jax.lax.stop_gradient(gain).astype(jnp.float32))
+        for g in range(gain.shape[0]):
+            stats[f"attn_res_knob_expert_read_gain_g{g}_L{i}"] = jnp.mean(gain[g])
     # Mean |gamma| of the zero-centered gains: the attention / MLP pre-norms, and every norm inside the mixer
     # and MoE (KV latent, KDA output, latent / router norms) plus the Peri-LN output norms.
     groups = {
@@ -2451,6 +2483,8 @@ class MoEMLP(eqx.Module):
     latent_norm: LearnedRMSNorm | None
     w_latent_up: jax.Array | None
     latent_out_norm: LearnedRMSNorm | None
+    expert_read_norm: LearnedRMSNorm | None
+    """Per-group ``[G, W]`` learnable RMSNorm of the ``expert_read_groups`` input slices."""
     latent_select_mask: Float[Array, " D"] | None
     """0/1 mask of the hidden channels read by ``latent_select`` (``latent_select_pattern`` random/rotating),
     frozen for the optimizer. A mask rather than indices because it stays exact under the bf16 compute cast."""
@@ -2516,6 +2550,9 @@ class MoEMLP(eqx.Module):
                 _learned_rms_norm(cfg, out_width, cfg.layer_norm_eps)
                 if cfg.latent_out_norm and (latent is not None or cfg.latent_out_dim is not None)
                 else None
+            ),
+            expert_read_norm=(
+                _grouped_rms_norm(cfg, cfg.expert_read_groups, expert_width) if cfg.expert_read_groups else None
             ),
             latent_select_mask=_latent_select_mask(cfg, layer_index) if selects else None,
             expert_mlp=_expert_mlp_init(_bank_config(cfg, 1), expert_width, out_width, k_expert),
@@ -2897,14 +2934,27 @@ class MoEMLP(eqx.Module):
         outputs, overflows, bank_keeps, col = [], [], [], 0
         overlap_out = None
         for (start, _, bank_k), em, bank_index in zip(banks, bank_mlps, (1, 2), strict=False):
-            out, overflow, *bank_overlap_out = _run_expert_bank(
-                em,
-                _bank_config(self.cfg, bank_index),
-                routed_input,
-                (real_selected[:, col : col + bank_k] - start).astype(jnp.int32),
-                real_weights[:, col : col + bank_k],
-                overlap if bank_index == 1 else None,
-            )
+            bank_selected = (real_selected[:, col : col + bank_k] - start).astype(jnp.int32)
+            if self.expert_read_norm is not None:
+                router_stats.update(_expert_read_group_shares(bank_selected, self.cfg.expert_read_groups))
+                out, overflow, *bank_overlap_out = _run_grouped_read_bank(
+                    em,
+                    _bank_config(self.cfg, bank_index),
+                    self.expert_read_norm,
+                    routed_input,
+                    bank_selected,
+                    real_weights[:, col : col + bank_k],
+                    overlap,
+                )
+            else:
+                out, overflow, *bank_overlap_out = _run_expert_bank(
+                    em,
+                    _bank_config(self.cfg, bank_index),
+                    routed_input,
+                    bank_selected,
+                    real_weights[:, col : col + bank_k],
+                    overlap if bank_index == 1 else None,
+                )
             if bank_overlap_out:
                 overlap_out = bank_overlap_out[0]
             if overflow.assignment_keep is not None:
@@ -3703,6 +3753,54 @@ def _run_expert_bank(
         overlap=overlap,
         report_assignment_keep=cfg.moe_drop_renorm,
     )
+
+
+def _grouped_rms_norm(cfg: "GrugModelConfig", groups: int, width: int) -> LearnedRMSNorm:
+    """A learned RMSNorm with a stacked ``[groups, width]`` gain, normalizing each ``[..., groups, width]`` slice."""
+    norm = _learned_rms_norm(cfg, width, cfg.layer_norm_eps)
+    return jax.tree.map(lambda g: jnp.broadcast_to(g, (groups, width)), norm)
+
+
+def _expert_read_group_shares(selected: Int[Array, "T K"], groups: int) -> dict[str, jax.Array]:
+    """Fraction of the routed assignments that go to each ``expert_read_groups`` channel group."""
+    group = (selected % groups).reshape(-1)
+    return {
+        f"{_LAYER_KNOB_PREFIX}expert_read_share_g{g}": jax.lax.stop_gradient(jnp.mean((group == g).astype(jnp.float32)))
+        for g in range(groups)
+    }
+
+
+def _run_grouped_read_bank(
+    em: MoEExpertMlp,
+    cfg: "GrugModelConfig",
+    read_norm: LearnedRMSNorm,
+    x_flat: Float[Array, "T D"],
+    selected: Int[Array, "T K"],
+    combine_weights: Float[Array, "T K"],
+    overlap: MoeOverlapWork | None,
+):
+    """Run the routed experts on per-assignment ``expert_read_groups`` slices.
+
+    Splits ``x_flat`` into G normed ``[T, G, W]`` slices, gathers each (token, slot)'s slice ``g(expert) =
+    expert mod G`` to ``[T, K, W]`` and dispatches the ``T*K`` slot rows as single-slot tokens (top-1 over the
+    same experts, in the same token-major order, so capacity and drops match the ``[T, D]`` dispatch), then sums
+    the K weighted slot outputs back per token.
+    """
+    t, k = selected.shape
+    groups = cfg.expert_read_groups
+    slices = jnp.reshape(x_flat, (t, groups, x_flat.shape[-1] // groups), out_sharding=P(_BATCH_AXES, None, None))
+    slices = read_norm(slices)
+    slot_rows = jnp.take_along_axis(slices, (selected % groups)[:, :, None], axis=1)
+    flat_rows = jnp.reshape(slot_rows, (t * k, slot_rows.shape[-1]), out_sharding=P(_BATCH_AXES, None))
+    flat_selected = jnp.reshape(selected, (t * k, 1), out_sharding=P(_BATCH_AXES, None))
+    flat_weights = jnp.reshape(combine_weights, (t * k, 1), out_sharding=P(_BATCH_AXES, None))
+    out, overflow, *overlap_out = _run_expert_bank(em, cfg, flat_rows, flat_selected, flat_weights, overlap)
+    slot_out = jnp.reshape(out, (t, k, out.shape[-1]), out_sharding=P(_BATCH_AXES, None, None))
+    out = jnp.sum(slot_out.astype(jnp.float32), axis=1).astype(out.dtype)
+    if overflow.assignment_keep is not None:
+        keep = jnp.reshape(overflow.assignment_keep, (t, k), out_sharding=P(_BATCH_AXES, None))
+        overflow = overflow._replace(assignment_keep=keep)
+    return out, overflow, *overlap_out
 
 
 def _drop_renorm_factor(
