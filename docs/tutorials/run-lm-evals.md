@@ -197,6 +197,11 @@ the served model's context and output budget are skipped; the record reports the
 attempted count, and scored coverage. Compare scores together with these counts because the models'
 context windows differ.
 
+The Grug catalog entry enables the `grug` reasoning parser. Serving it requires a Marin GPU vLLM
+wheel that includes [the parser](https://github.com/marin-community/vllm/pull/79). If the pinned wheel
+does not include it, use `--model-config` with a copy of the catalog YAML that omits
+`serve.reasoning_parser`. The evaluation record preserves that effective model configuration.
+
 The `qwen3-32b` / `tb2-lite` path follows the H100x2 acceptance run recorded in
 [issue #6503](https://github.com/marin-community/marin/issues/6503). Harbor trial restore and
 persistence use the selected GCS or S3 records store after
