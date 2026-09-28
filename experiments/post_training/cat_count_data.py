@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 TRAIN_FILENAME = "train.parquet"
 VALIDATION_FILENAME = "validation.parquet"
+ENV_CLASS = "cat_count"
 DEFAULT_TRAIN_NS = (1, 2, 4, 7, 10, 20)
 HELDOUT_NS = (3, 5, 13, 16)
 
@@ -49,7 +50,7 @@ def cat_count_record(n: int, split: str, index: int) -> dict[str, object]:
                 "content": f"Reply with the word cat exactly {n} times, separated by single spaces. Nothing else.",
             }
         ],
-        "env_class": "cat_count",
+        "env_class": ENV_CLASS,
         "reward_spec": {"method": "rule", "ground_truth": n},
         "extra_info": {"n": n, "split": split, "index": index},
     }

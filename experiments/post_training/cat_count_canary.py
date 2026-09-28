@@ -5,13 +5,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 
 import click
 import yaml
 from marin.execution.build_context import resolve_version
 from marin.execution.fingerprint import fingerprint_hash
-from marin.execution.lazy import ArtifactStep
+from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import (
@@ -34,6 +36,7 @@ from marin.rl.skyrl import (
 from experiments.models import qwen2_5_0_5b, qwen2_5_0_5b_instruct, qwen3_0_6b
 from experiments.post_training.cat_count_data import (
     DEFAULT_TRAIN_NS,
+    ENV_CLASS,
     HELDOUT_NS,
     TRAIN_FILENAME,
     VALIDATION_FILENAME,
@@ -54,35 +57,29 @@ JOB_TIMEOUT_SECONDS = 7200
 @dataclass(frozen=True)
 class ModelChoice:
     step: ArtifactStep
-    tokenizer_uri: str
-    tokenizer_revision: str
     chat_template: str
-    chat_template_kwargs: dict[str, object] | None = None
+    chat_template_kwargs: Mapping[str, object] | None = None
 
 
-MODELS = {
-    "qwen2.5-0.5b-instruct": ModelChoice(
-        qwen2_5_0_5b_instruct,
-        "Qwen/Qwen2.5-0.5B-Instruct",
-        "7ae557604adf67be50417f59c2c2f167def9a775",
-        "qwen2_5_with_generation_tag_simplified",
-    ),
-    "qwen2.5-0.5b": ModelChoice(
-        qwen2_5_0_5b,
-        "Qwen/Qwen2.5-0.5B",
-        "060db6499f32faf8b98477b0a26969ef7d8b9987",
-        "qwen2_5_with_generation_tag_simplified",
-    ),
-    "qwen3-0.6b": ModelChoice(
-        qwen3_0_6b,
-        "Qwen/Qwen3-0.6B",
-        "c1899de",
-        "qwen3_without_thinking",
-        {"enable_thinking": False},
-    ),
-}
+MODELS = MappingProxyType(
+    {
+        "qwen2.5-0.5b-instruct": ModelChoice(
+            qwen2_5_0_5b_instruct,
+            "qwen2_5_with_generation_tag_simplified",
+        ),
+        "qwen2.5-0.5b": ModelChoice(
+            qwen2_5_0_5b,
+            "qwen2_5_with_generation_tag_simplified",
+        ),
+        "qwen3-0.6b": ModelChoice(
+            qwen3_0_6b,
+            "qwen3_without_thinking",
+            MappingProxyType({"enable_thinking": False}),
+        ),
+    }
+)
 
-PRESET_STEPS = {"dry": 1, "calibrate": 30, "gate": 60, "gate-filter": 60, "on-policy": 30}
+PRESET_STEPS = MappingProxyType({"dry": 1, "calibrate": 30, "gate": 60, "gate-filter": 60, "on-policy": 30})
 
 
 def role_plan(*, batch_size: int = TRAIN_BATCH_SIZE, group_size: int = GROUP_SIZE) -> SkyRLRolePlan:
@@ -127,6 +124,8 @@ PROTECTED_SETTINGS = (
             "trainer.ref.megatron_config",
             "trainer.ref.model.path",
             "trainer.resume_mode",
+            "trainer.seed",
+            "trainer.max_ckpts_to_keep",
             "trainer.eval_before_train",
             "trainer.ckpt_interval",
             "generator.chat_template",
@@ -203,7 +202,7 @@ def training_config(
             "max_new_tokens_per_turn": 64,
             "max_turns": 1,
         },
-        "environment": {"env_class": "cat_count"},
+        "environment": {"env_class": ENV_CLASS},
         "trainer": {
             "strategy": "megatron",
             "flash_attn": False,
@@ -269,7 +268,7 @@ def training_config(
     }
     _materialize_role_plan_config(config, plan)
     if choice.chat_template_kwargs is not None:
-        config["generator"]["chat_template_kwargs"] = choice.chat_template_kwargs
+        config["generator"]["chat_template_kwargs"] = dict(choice.chat_template_kwargs)
     for setting in settings:
         apply_setting(config, setting)
     trainer = config["trainer"]
@@ -328,6 +327,7 @@ def build_run(
     )
     base_name = f"checkpoints/{EXPERIMENT_NAME}/{identity}"
     choice = MODELS[model]
+    download = choice.step.build_config(StepContext.for_fingerprint(choice.step.runtime_args, choice.step.deps))
     return skyrl_step(
         SkyRLSpec(
             name=user_owned_name(base_name),
@@ -336,8 +336,8 @@ def build_run(
             runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
             model=ArtifactHfModel(
                 step=choice.step,
-                tokenizer_uri=choice.tokenizer_uri,
-                tokenizer_revision=choice.tokenizer_revision,
+                tokenizer_uri=download.hf_dataset_id,
+                tokenizer_revision=download.revision,
             ),
             train_data=(ArtifactDataSource(data, relative_path=TRAIN_FILENAME),),
             validation_data=(ArtifactDataSource(data, relative_path=VALIDATION_FILENAME),),

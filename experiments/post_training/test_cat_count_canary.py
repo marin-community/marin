@@ -89,16 +89,17 @@ def test_both_lanes_render_megatron_launch_with_complete_custom_eval_mix():
     )
 
 
-def test_preset_and_override_contract():
-    dry = training_config(preset="dry")
-    filtered = training_config(preset="gate-filter")
-    modified = training_config(settings=("trainer.policy.optimizer_config.lr=5e-6",))
-    assert dry["trainer"]["max_steps"] == 1
-    assert dry["generator"]["eval_n_samples_per_prompt"] == 8
-    assert filtered["trainer"]["algorithm"]["dynamic_sampling"]["type"] == "filter"
-    assert modified["trainer"]["policy"]["optimizer_config"]["lr"] == 5e-6
+@pytest.mark.parametrize(
+    "setting",
+    (
+        "trainer.policy={megatron_config: {tensor_model_parallel_size: 2}}",
+        "trainer.seed=23",
+        "trainer.max_ckpts_to_keep=2",
+    ),
+)
+def test_owned_settings_reject_parent_and_canonical_overrides(setting):
     with pytest.raises(click.BadParameter):
-        training_config(settings=("trainer.policy={megatron_config: {tensor_model_parallel_size: 2}}",))
+        training_config(settings=(setting,))
 
 
 def test_model_pins_and_distinct_artifact_identities():
@@ -108,7 +109,9 @@ def test_model_pins_and_distinct_artifact_identities():
     ):
         choice = MODELS[model]
         download = choice.step.build_config(StepContext.for_fingerprint(choice.step.runtime_args, choice.step.deps))
-        assert download.revision == choice.tokenizer_revision == revision
+        run = build_run(version="2026.09.26", preset="dry", model=model)
+        config = run.build_config(StepContext.for_fingerprint(run.runtime_args, run.deps))
+        assert download.revision == config.model.tokenizer_revision == revision
     async_run = build_run(version="2026.09.26", preset="dry", entrypoint="fully_async")
     standard_run = build_run(version="2026.09.26", preset="dry", entrypoint="standard")
     changed_run = build_run(version="2026.09.26", preset="dry", settings=("trainer.policy.optimizer_config.lr=5e-6",))
