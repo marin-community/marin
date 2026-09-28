@@ -26,7 +26,7 @@ from rigging.timing import Deadline, Duration, ExponentialBackoff, Timestamp
 from iris.chaos import chaos, chaos_raise
 from iris.cluster.bundle import BundleStore
 from iris.cluster.config import TaskOutputPolicy
-from iris.cluster.health import HEALTH_PORT_NAME
+from iris.cluster.health import HEALTH_PORT_ENV, HEALTH_PORT_NAME
 from iris.cluster.log_keys import INJECTED_ERROR_SOURCE, STDERR_SOURCE, classify_log_level, task_log_key
 from iris.cluster.platforms.types import probe_outbound_ip
 from iris.cluster.runtime.docker import DockerContainerHandle
@@ -758,6 +758,8 @@ class TaskAttempt:
 
         env.update(self._task_env)
         env.update(dict(self.request.environment.env_vars))
+        if self.request.HasField("health_check"):
+            env[HEALTH_PORT_ENV] = iris_env[HEALTH_PORT_ENV]
         # CPU tasks on TPU hosts also need to share the cache's package files.
         if self._worker_metadata.device.HasField("tpu"):
             env[UV_LINK_MODE_ENV] = "symlink"

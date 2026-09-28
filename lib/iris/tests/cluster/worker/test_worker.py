@@ -19,6 +19,7 @@ from finelog.client import LogClient
 from finelog.rpc import logging_pb2
 from google.protobuf import json_format
 from iris.cluster.config import TaskOutputPolicy
+from iris.cluster.health import HEALTH_PORT_ENV
 from iris.cluster.log_keys import worker_log_key
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.types import (
@@ -781,6 +782,22 @@ def test_port_env_vars_set(mock_worker, mock_runtime):
         int(config.env["IRIS_PORT_METRICS"]),
     }
     assert len(ports) == 3
+
+
+def test_health_port_env_uses_the_worker_allocation(mock_worker, mock_runtime):
+    request = create_run_task_request(ports=["healthz"])
+    request.environment.env_vars[HEALTH_PORT_ENV] = "1"
+    request.health_check.startup_timeout.milliseconds = 30_000
+    request.health_check.period.milliseconds = 5_000
+    request.health_check.request_timeout.milliseconds = 1_000
+    request.health_check.failure_threshold = 3
+
+    task_id = mock_worker.submit_task(request)
+    task = mock_worker.get_task(task_id)
+    task.thread.join(timeout=15.0)
+
+    env = mock_runtime.create_container.call_args[0][0].env
+    assert env[HEALTH_PORT_ENV] == str(task.ports["healthz"])
 
 
 def test_worker_region_env_uses_physical_metadata(mock_worker, mock_runtime, monkeypatch):
