@@ -10,7 +10,7 @@ import pulumi
 import pulumi_github as github
 
 from iac.github.resources import repository_name
-from scripts.ci.dependency_update_policy import GITHUB_ACTIONS_APP_ID, REQUIRED_CHECKS
+from scripts.ci.dependency_update_policy import GITHUB_ACTIONS_APP_ID, REQUIRED_CHECKS, REQUIRED_CI_RULESET_NAME
 
 APP_SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 UPDATER_ENVIRONMENT = "external-runtime-updater"
@@ -241,7 +241,7 @@ def register_dependency_updater(
     required_ci_ruleset = github.RepositoryRuleset(
         "require-main-ci",
         repository=plan.repository,
-        name="require main CI",
+        name=REQUIRED_CI_RULESET_NAME,
         target="branch",
         enforcement="active",
         conditions=_default_branch_conditions(),

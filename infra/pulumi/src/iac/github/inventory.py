@@ -1,10 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Read GitHub Actions secret metadata through the GitHub CLI."""
+"""Read GitHub secret and ruleset metadata through the GitHub CLI."""
 
 import json
 import subprocess
+from dataclasses import dataclass
 
 from iac.github.credentials import (
     CredentialManifest,
@@ -18,6 +19,12 @@ from iac.github.credentials import (
 GITHUB_API_PAGE_SIZE = 100
 
 
+@dataclass(frozen=True)
+class RequiredStatusCheck:
+    context: str
+    integration_id: int
+
+
 def _gh_json(*args: str) -> object:
     result = subprocess.run(["gh", *args], check=True, capture_output=True, text=True)
     return json.loads(result.stdout)
@@ -27,6 +34,24 @@ def _gh_paginated_items(endpoint: str, collection: str) -> tuple[dict, ...]:
     pages = _gh_json("api", "--paginate", "--slurp", endpoint)
     assert isinstance(pages, list)
     return tuple(item for page in pages for item in page[collection])
+
+
+def github_required_status_checks(repository: str, ruleset_name: str) -> tuple[RequiredStatusCheck, ...]:
+    """Return the required checks from one repository ruleset."""
+    rulesets = _gh_json("api", f"repos/{repository}/rulesets?includes_parents=false")
+    assert isinstance(rulesets, list)
+    matches = [ruleset for ruleset in rulesets if ruleset["name"] == ruleset_name]
+    if len(matches) != 1:
+        raise ValueError(f"expected one {ruleset_name!r} ruleset for {repository}; found {len(matches)}")
+    ruleset = _gh_json("api", f"repos/{repository}/rulesets/{matches[0]['id']}")
+    assert isinstance(ruleset, dict)
+    status_rules = [rule for rule in ruleset["rules"] if rule["type"] == "required_status_checks"]
+    if len(status_rules) != 1:
+        raise ValueError(f"expected one required-status-check rule in {ruleset_name!r}; found {len(status_rules)}")
+    return tuple(
+        RequiredStatusCheck(context=check["context"], integration_id=check["integration_id"])
+        for check in status_rules[0]["parameters"]["required_status_checks"]
+    )
 
 
 def github_secret_inventory(manifest: CredentialManifest) -> tuple[LiveSecret, ...]:

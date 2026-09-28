@@ -26,6 +26,8 @@ from iac.github.credentials import (
     RepositoryCredential,
     SecretReference,
 )
+from iac.github.inventory import RequiredStatusCheck
+from scripts.ci.dependency_update_policy import GITHUB_ACTIONS_APP_ID, REQUIRED_CHECKS
 
 BUILTIN_ACTIONS_SECRETS = frozenset({"GITHUB_TOKEN"})
 SECRET_REFERENCE = re.compile(r"\bsecrets\.([A-Za-z_][A-Za-z0-9_]*)")
@@ -38,6 +40,19 @@ class WorkflowJobEnvironment:
     start_line: int
     end_line: int
     name: str
+
+
+def audit_required_ci_checks(live_checks: tuple[RequiredStatusCheck, ...]) -> tuple[Finding, ...]:
+    """Report drift between the updater gate and GitHub's required CI ruleset."""
+    expected = {
+        RequiredStatusCheck(context=context, integration_id=GITHUB_ACTIONS_APP_ID) for context in REQUIRED_CHECKS
+    }
+    live = set(live_checks)
+    if live == expected:
+        return ()
+    missing = sorted(f"{check.context}:{check.integration_id}" for check in expected - live)
+    unexpected = sorted(f"{check.context}:{check.integration_id}" for check in live - expected)
+    return (Finding("required-ci-drift", f"missing={missing}, unexpected={unexpected}"),)
 
 
 def _workflow_job_environments(path: Path) -> tuple[WorkflowJobEnvironment, ...]:

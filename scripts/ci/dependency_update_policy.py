@@ -62,4 +62,5 @@ REQUIRED_CHECKS = (
     "rust-checks",
     "unit-tests",
 )
+REQUIRED_CI_RULESET_NAME = "require main CI"
 GITHUB_ACTIONS_APP_ID = 15368

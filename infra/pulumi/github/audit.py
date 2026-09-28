@@ -2,19 +2,27 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Audit GitHub Actions credentials against stack config and workflow references."""
+"""Audit GitHub credentials and required checks against declared policy."""
 
 import argparse
 import json
 import sys
+from dataclasses import replace
 from pathlib import Path
 
-from iac.github.audit import audit_credentials, discover_secret_references
-from iac.github.credentials import load_stack_manifest
-from iac.github.inventory import github_secret_inventory
+import yaml
+
+# File invocation omits the repository root needed by scripts.ci.dependency_update_policy.
+REPO_ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(REPO_ROOT))
+
+from iac.github.audit import audit_credentials, audit_required_ci_checks, discover_secret_references  # noqa: E402
+from iac.github.credentials import load_stack_manifest  # noqa: E402
+from iac.github.inventory import github_required_status_checks, github_secret_inventory  # noqa: E402
+
+from scripts.ci.dependency_update_policy import REQUIRED_CI_RULESET_NAME  # noqa: E402
 
 STACK_DIR = Path(__file__).resolve().parent
-REPO_ROOT = STACK_DIR.parents[2]
 DEFAULT_STACK_CONFIG = STACK_DIR / "Pulumi.marin-community.yaml"
 
 
@@ -38,6 +46,12 @@ def main() -> None:
     references = discover_secret_references(REPO_ROOT)
     live_secrets = github_secret_inventory(manifest) if args.live else None
     report = audit_credentials(manifest, references, live_secrets)
+    if args.live:
+        stack_config = yaml.safe_load(args.stack_config.read_text())
+        repository = stack_config["config"]["marin-github:dependencyUpdater"]["repository"]
+        assert isinstance(repository, str)
+        live_checks = github_required_status_checks(repository, REQUIRED_CI_RULESET_NAME)
+        report = replace(report, errors=report.errors + audit_required_ci_checks(live_checks))
     if args.json:
         print(json.dumps(report.as_dict(), indent=2, sort_keys=True))
     else:

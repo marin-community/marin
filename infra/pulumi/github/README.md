@@ -99,9 +99,12 @@ through the `external-runtime-updater` Actions environment, whose deployment pol
 and rejects pull-request branches.
 
 Pulumi gives the app a pull-request-only bypass of the one-review rule and no required-CI bypass.
-Organization admins retain an always-on emergency bypass on both rulesets. The CI ruleset requires
-GitHub Actions' own `marin-integration`, `marin-lint`, `rust-checks`, and `unit-tests` runs; matching
-context names from another integration do not satisfy it.
+Organization admins retain a pull-request-only emergency bypass on both rulesets. The CI ruleset
+requires GitHub Actions' own `marin-docs`, `marin-integration`, `marin-lint`, `rust-checks`, and
+`unit-tests` runs; matching context names from another integration do not satisfy it. The live
+audit checks that this ruleset matches the dependency updater's `REQUIRED_CHECKS` policy. Apply
+the stack whenever that policy changes. The `agentic-lint` review is best effort and is not a
+required status check.
 
 The app review bypass must exist in both the review ruleset and classic `main` branch protection.
 GitHub enforces both controls: a ruleset-only bypass can leave an updater PR with green CI still

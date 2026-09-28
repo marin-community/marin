@@ -84,7 +84,7 @@ commit subject between the old and new revisions. It opens or refreshes one
 `automation/external-dependencies` pull request when generated state changes
 using the dedicated `marin-external-runtime-updater` GitHub App. The workflow
 checks the app author, branch, title, exact head SHA, and changed-file allowlist,
-then waits up to one hour for the four required main checks before squash
+then waits up to one hour for the five required main checks before squash
 merging. A failure or timeout leaves the pull request open and makes the
 scheduled workflow red.
 
