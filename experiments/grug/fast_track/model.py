@@ -77,6 +77,10 @@ _MOE_OUT_GATE_DIMS = 12
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
 # Metrics-dict key that carries the auxiliary-loss residual stream from the forward to the loss.
 _AUX_HIDDEN = "aux_lm_hidden"
+# Per-layer product-key memory diagnostics, lifted out of the layer stats into ``train/attn_res/knob_mem_*``.
+_MEMORY_STAT_PREFIX = "attn_res_knob_mem_"
+# Bound on one chunk's gathered ``[tokens, rows, dim]`` memory rows in the product-key EmbeddingBag.
+_MEMORY_BAG_CHUNK_ELEMS = 1 << 26
 # Metrics-dict keys carrying the AttnRes z-loss term (with gradient) from the forward to the loss.
 _ATTN_RES_Z = "attn_res_z_term"
 # Per-gate token-mean AttnRes source weights (variable length per gate), popped into logging scalars.
@@ -632,6 +636,18 @@ class GrugModelConfig:
     """Per-layer embeddings (Gemma 3n PLE): a ``[vocab, num_layers * ple_dim]`` token table whose layer-``l`` slice
     (RMS-normed) is added to layer ``l``'s attention input as ``h + (gelu(rms(h) W_gate) * ple_l) W_up``, ``W_up``
     zero-init. Stored and sharded like the second table (``embed2_fsdp``, ``embed2_grad_fp32``). 0: off."""
+    memory_layers: tuple[int, ...] = ()
+    """Product-key memory layers (arXiv 1907.05242; memory+ of arXiv 2412.09764): each listed 0-indexed layer
+    adds ``(bag(V, topk(rms(x W_q) . rms(K))) * silu(x W_gate)) W_out`` to its MoE output, ``x`` the RMS-normed
+    MoE input. Each head's query is split in two halves scored against the head's two ``memory_keys``-row
+    codebooks; the ``memory_topk^2`` candidate sums keep the top ``memory_topk`` of ``memory_keys^2`` slots,
+    softmax-weighted. Heads share one ``[memory_keys^2, hidden_dim]`` value table per layer, stored like the
+    second table (``embed2_fsdp``) and trained by the ``memory`` Adam group. ``W_out`` is zero-init. Empty: off."""
+    memory_keys: int = 512
+    memory_topk: int = 32
+    memory_heads: int = 4
+    memory_key_dim: int = 256
+    """Query / key width per memory head (both halves together)."""
     byte_aux_bytes: int = 0
     """Byte-level auxiliary loss: a separate head predicts the first ``byte_aux_bytes`` UTF-8 bytes of the
     next token (256-way each, positions past the token's end masked), weighted by a schedule the trainer
@@ -709,6 +725,14 @@ class GrugModelConfig:
 
         if self.moe_shortcut and not self.attn_res:
             raise ValueError("moe_shortcut requires attn_res (the MoE shortcut is an AttnRes gate)")
+        if self.memory_layers:
+            if not self.attn_res:
+                raise ValueError("memory_layers requires attn_res (the memory runs in the AttnRes loop)")
+            layers = set(self.memory_layers)
+            if not layers <= set(range(self.num_layers)) or len(layers) != len(self.memory_layers):
+                raise ValueError(f"memory_layers must be distinct layers in 0..{self.num_layers - 1}")
+            if self.memory_key_dim % 2 or self.memory_topk > self.memory_keys:
+                raise ValueError("memory_key_dim must be even and memory_topk <= memory_keys")
 
     @property
     def num_null_experts(self) -> int:
@@ -2099,6 +2123,173 @@ def _ple_inject(layer: "Block", h: Float[Array, "B S D"], extras: dict[str, jax.
     return h + jnp.einsum("bsp,pd->bsd", low, layer.ple_up.astype(h.dtype), out_sharding=_batch_spec())
 
 
+def _memory_bag_chunks(x: jax.Array, rows_per_token: int, dim: int) -> jax.Array:
+    """``[b, s, ...]`` -> ``[chunks, c, ...]`` with ``c * rows_per_token * dim`` at most ``_MEMORY_BAG_CHUNK_ELEMS``
+    (or ``c`` odd), so the gathered ``[c, rows, dim]`` rows of one chunk bound the bag's transient memory."""
+    tokens = x.shape[0] * x.shape[1]
+    chunk = tokens
+    while chunk % 2 == 0 and chunk * rows_per_token * dim > _MEMORY_BAG_CHUNK_ELEMS:
+        chunk //= 2
+    return x.reshape(tokens // chunk, chunk, *x.shape[2:])
+
+
+def _memory_bag_local(values: jax.Array, slots: jax.Array, weights: jax.Array) -> jax.Array:
+    b, s, rows = slots.shape
+    dim = values.shape[1]
+
+    def chunk_bag(args):
+        ids, w = args
+        return jnp.einsum("cr,crd->cd", w, values[ids].astype(jnp.float32))
+
+    chunks = (_memory_bag_chunks(slots, rows, dim), _memory_bag_chunks(weights, rows, dim))
+    return jax.lax.map(chunk_bag, chunks).reshape(b, s, dim).astype(values.dtype)
+
+
+def _memory_bag_bwd_local(values, slots, weights, g):
+    b, s, rows = slots.shape
+    dim = values.shape[1]
+
+    def chunk_grad(d_table, args):
+        ids, w, g_c = args
+        g32 = g_c.astype(jnp.float32)
+        d_w = jnp.einsum("cd,crd->cr", g32, values[ids].astype(jnp.float32))
+        d_table = d_table.at[ids.reshape(-1)].add((w[..., None] * g32[:, None, :]).reshape(-1, dim))
+        return d_table, d_w
+
+    chunks = (
+        _memory_bag_chunks(slots, rows, dim),
+        _memory_bag_chunks(weights, rows, dim),
+        _memory_bag_chunks(g, rows, dim),
+    )
+    # The accumulator is per-shard (varying over the batch axes) until the psum.
+    d_table0 = jax.lax.pcast(jnp.zeros(values.shape, jnp.float32), _BATCH_AXES, to="varying")
+    d_table, d_w = jax.lax.scan(chunk_grad, d_table0, chunks)
+    return jax.lax.psum(d_table.astype(values.dtype), _BATCH_AXES), d_w.reshape(b, s, rows)
+
+
+@jax.custom_vjp
+def _memory_bag(values: jax.Array, slots: Int[Array, "B S R"], weights: Float[Array, "B S R"]) -> jax.Array:
+    """EmbeddingBag ``out[b, s] = sum_r weights[b, s, r] * values[slots[b, s, r]]`` from a replicated table
+    (``slots`` and ``weights`` batch-sharded).
+
+    Like ``_embedding_gather``, each batch shard gathers locally and the backward scatter-adds its row
+    cotangents in float32 before one psum; forward and backward walk the tokens in chunks so the gathered
+    ``[tokens, R, D]`` rows are never materialized whole.
+    """
+    return shard_map(
+        _memory_bag_local,
+        mesh=get_abstract_mesh(),
+        in_specs=(P(None, None), P(_BATCH_AXES, None, None), P(_BATCH_AXES, None, None)),
+        out_specs=P(_BATCH_AXES, None, None),
+    )(values, slots, weights)
+
+
+def _memory_bag_fwd(values, slots, weights):
+    return _memory_bag(values, slots, weights), (values, slots, weights)
+
+
+def _memory_bag_bwd(residuals, g):
+    values, slots, weights = residuals
+    d_values, d_weights = shard_map(
+        _memory_bag_bwd_local,
+        mesh=get_abstract_mesh(),
+        in_specs=(P(None, None), P(_BATCH_AXES, None, None), P(_BATCH_AXES, None, None), P(_BATCH_AXES, None, None)),
+        out_specs=(P(None, None), P(_BATCH_AXES, None, None)),
+    )(values, slots, weights, reshard(g, P(_BATCH_AXES, None, None)))
+    return d_values, np.zeros(slots.shape, dtype=jax.dtypes.float0), d_weights
+
+
+_memory_bag.defvjp(_memory_bag_fwd, _memory_bag_bwd)
+
+
+def _memory_address_local(q: jax.Array, keys: jax.Array, topk: int):
+    """Product-key addressing of one batch shard: ``q [b, s, H, 2, K/2]`` against ``keys [H, 2, n, K/2]``,
+    both RMS-normed. Returns the top ``topk`` slots per head and their softmax weights (``[b, s, H*topk]``),
+    the batch-global per-slot hit counts and the batch-global mean top-1 score and top-1 weight."""
+    n, half = keys.shape[2], keys.shape[3]
+    scores = jnp.einsum(
+        "bshcd,hcnd->bshcn", rms_norm(q.astype(jnp.float32)), rms_norm(keys.astype(jnp.float32))
+    ) / math.sqrt(half)
+    s1, i1 = jax.lax.top_k(scores[..., 0, :], topk)
+    s2, i2 = jax.lax.top_k(scores[..., 1, :], topk)
+    candidates = (s1[..., :, None] + s2[..., None, :]).reshape(*s1.shape[:-1], topk * topk)
+    best, flat = jax.lax.top_k(candidates, topk)
+    slots = jnp.take_along_axis(i1, flat // topk, axis=-1) * n + jnp.take_along_axis(i2, flat % topk, axis=-1)
+    weights = jax.nn.softmax(best, axis=-1)
+    b, s = slots.shape[:2]
+    slots = slots.reshape(b, s, -1)
+    counts = jax.lax.psum(jnp.zeros((n * n,), jnp.int32).at[slots.reshape(-1)].add(1), _BATCH_AXES)
+    num_heads = jax.lax.psum(float(best[..., 0].size), _BATCH_AXES)
+    top1_score = jax.lax.psum(jnp.sum(jax.lax.stop_gradient(best[..., 0])), _BATCH_AXES) / num_heads
+    top1_weight = jax.lax.psum(jnp.sum(jax.lax.stop_gradient(weights[..., 0])), _BATCH_AXES) / num_heads
+    return slots, weights.reshape(b, s, -1), counts, top1_score, top1_weight
+
+
+class ProductKeyMemory(eqx.Module):
+    """Product-key memory+ sublayer (arXiv 1907.05242, 2412.09764); see ``GrugModelConfig.memory_layers``."""
+
+    w_q: Float[Array, "D Q"]
+    keys: Float[Array, "H 2 N K"]
+    values: Float[Array, "M D"]
+    w_gate: Float[Array, "D D"]
+    w_out: Float[Array, "D D"]
+    topk: int = eqx.field(static=True)
+    fsdp: bool = eqx.field(static=True)
+
+    @staticmethod
+    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "ProductKeyMemory":
+        q_key, k_key, v_key, g_key = random.split(key, 4)
+        d, n, heads = cfg.hidden_dim, cfg.memory_keys, cfg.memory_heads
+        return ProductKeyMemory(
+            w_q=reshard(_init_weight(q_key, (d, heads * cfg.memory_key_dim), cfg.initializer_std), P(None, None)),
+            keys=reshard(random.normal(k_key, (heads, 2, n, cfg.memory_key_dim // 2), jnp.float32), P()),
+            values=reshard(
+                _init_weight(v_key, (n * n, d), 1.0 / math.sqrt(d)),
+                P(_FSDP_AXES, None) if cfg.embed2_fsdp else P(None, None),
+            ),
+            w_gate=reshard(_init_weight(g_key, (d, d), cfg.initializer_std), P(None, None)),
+            w_out=reshard(jnp.zeros((d, d), jnp.float32), P(None, None)),
+            topk=cfg.memory_topk,
+            fsdp=cfg.embed2_fsdp,
+        )
+
+    def __call__(self, x: Float[Array, "B S D"]) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+        heads, _, n, half = self.keys.shape
+        q = jnp.einsum("bsd,dq->bsq", x, self.w_q.astype(x.dtype), out_sharding=_batch_spec())
+        q = q.reshape(*q.shape[:2], heads, 2, half)
+        slots, weights, counts, top1_score, top1_weight = shard_map(
+            functools.partial(_memory_address_local, topk=self.topk),
+            mesh=get_abstract_mesh(),
+            in_specs=(P(_BATCH_AXES), P()),
+            out_specs=(P(_BATCH_AXES, None, None), P(_BATCH_AXES, None, None), P(None), P(), P()),
+        )(q, self.keys)
+        table = reshard(self.values, P(None, None)) if self.fsdp else self.values
+        bag = _memory_bag(table, slots, weights).astype(x.dtype)
+        gate = jax.nn.silu(jnp.einsum("bsd,de->bse", x, self.w_gate.astype(x.dtype), out_sharding=_batch_spec()))
+        out = jnp.einsum("bsd,de->bse", bag * gate, self.w_out.astype(x.dtype), out_sharding=_batch_spec())
+        usage = jax.lax.stop_gradient(counts).astype(jnp.float32)
+        usage = usage / jnp.sum(usage)
+        entropy = -jnp.sum(jnp.where(usage > 0, usage * jnp.log(jnp.maximum(usage, 1e-30)), 0.0))
+        stats = {
+            f"{_MEMORY_STAT_PREFIX}slot_frac": jnp.mean((usage > 0).astype(jnp.float32)),
+            f"{_MEMORY_STAT_PREFIX}usage_entropy": entropy / math.log(n * n),
+            f"{_MEMORY_STAT_PREFIX}top1_score": top1_score,
+            f"{_MEMORY_STAT_PREFIX}top1_weight": top1_weight,
+        }
+        return out, stats
+
+
+def _memory_branch(
+    h: Float[Array, "B S D"], extras: dict[str, jax.Array | None] | None
+) -> tuple[Float[Array, "B S D"] | None, dict[str, jax.Array]]:
+    """This layer's product-key memory output on the RMS-normed MoE input, or None without ``extras["memory"]``."""
+    memory = None if extras is None else extras.get("memory")
+    if memory is None:
+        return None, {}
+    assert isinstance(memory, ProductKeyMemory)
+    return memory(rms_norm(h))
+
+
 class Block(eqx.Module):
     rms_attn: RMSNorm | DyT
     attn_gated_norm: GatedNorm
@@ -2773,9 +2964,13 @@ def _attn_res_layer(
         blocks, block_logits, mlp_partial, queries, 2 * layer_index + 1, eps, logit_bias, **opts
     )
     mlp_out, router_stats = layer.mlp_branch(h, mask, **_route_kwargs(cfg, physical, token_ids, noise_key))
+    mem_out, mem_stats = _memory_branch(h, logit_bias)
+    if mem_out is not None:
+        mlp_out = mlp_out + mem_out
     return partial + mlp_out, {
         **router_stats,
         **v_stats,
+        **mem_stats,
         _ATTN_RES_Z: z_attn + z_mlp,
         _ATTN_RES_W_ATTN: w_attn,
         _ATTN_RES_W_MLP: w_mlp,
@@ -2851,9 +3046,13 @@ def _attn_res_layer_full(diff_args, mask, token_ids, use_long, layer_index, eps,
         sum_parts,
         **_route_kwargs(cfg, layer_index % cfg.num_layers, token_ids, noise_key),
     )
+    mem_out, mem_stats = _memory_branch(h, logit_bias)
+    if mem_out is not None:
+        mlp_out = mlp_out + mem_out
     stats = {
         **router_stats,
         **v_stats,
+        **mem_stats,
         _ATTN_RES_Z: z_attn + z_mlp,
         _ATTN_RES_W_ATTN: w_attn,
         _ATTN_RES_W_MLP: w_mlp,
@@ -3006,6 +3205,8 @@ class Transformer(eqx.Module):
     embed2_up: jax.Array | None
     token_embed_ple: jax.Array | None
     """Per-layer-embedding table ``[vocab, num_layers * ple_dim]`` (``ple_dim``)."""
+    memory: tuple[ProductKeyMemory, ...] | None
+    """Product-key memories of ``memory_layers``, in that order."""
     embed2_lambda: Float[Array, " G"] | None
     """Per-gate weight of the second embedding on each sublayer input (``second_embed_mode="input"``)."""
     attn_res_query_bias: Float[Array, "G N"] | None
@@ -3118,6 +3319,14 @@ class Transformer(eqx.Module):
                     P(_FSDP_AXES, None) if cfg.embed2_fsdp else P(None, None),
                 )
                 if cfg.ple_dim
+                else None
+            ),
+            memory=(
+                tuple(
+                    ProductKeyMemory.init(cfg, key=random.fold_in(embed2_key, 1000 + layer))
+                    for layer in cfg.memory_layers
+                )
+                if cfg.memory_layers
                 else None
             ),
             embed2_lambda=(
@@ -3659,6 +3868,7 @@ class Transformer(eqx.Module):
         )
 
         weight_logs: dict[int, tuple[jax.Array, bool]] = {}
+        memory_logs: dict[str, jax.Array] = {}
 
         def run_pass(state, pass_index):
             """One pass over the physical layers, extending the history; returns the new state, the
@@ -3689,6 +3899,9 @@ class Transformer(eqx.Module):
                 if ple_rows is not None:
                     ple_i = rms_norm(ple_rows[..., i * cfg.ple_dim : (i + 1) * cfg.ple_dim], eps)
                     layer_extras = {**(logit_bias or {}), "ple": ple_i}
+                if i in cfg.memory_layers:
+                    assert self.memory is not None
+                    layer_extras = {**(layer_extras or {}), "memory": self.memory[cfg.memory_layers.index(i)]}
                 layer_args = (
                     (layer, blocks, block_logits, partial, queries, layer_extras),
                     long_layer_mask if use_long else short_layer_mask,
@@ -3705,6 +3918,8 @@ class Transformer(eqx.Module):
                 else:
                     partial, blocks, block_logits, stats = _attn_res_layer_passthrough(*layer_args, kv_share)
                 z_out.append(stats.pop(_ATTN_RES_Z))
+                for name in [k for k in stats if k.startswith(_MEMORY_STAT_PREFIX)]:
+                    memory_logs[f"{name}_L{eff}"] = stats.pop(name)
                 has_partial_attn = partial_before is not None
                 stream_col = cfg.attn_res_stream_source
                 weight_logs[2 * eff] = (stats.pop(_ATTN_RES_W_ATTN), has_partial_attn or stream_col)
@@ -3805,6 +4020,10 @@ class Transformer(eqx.Module):
                 final_stats[f"attn_res_scale_attn_L{i}"] = jax.lax.stop_gradient(layer.attn_out_scale)
                 final_stats[f"attn_res_scale_mlp_L{i}"] = jax.lax.stop_gradient(layer.mlp_out_scale)
             final_stats.update(_learned_knob_stats(layer, i))
+        final_stats.update(memory_logs)
+        for i, memory in zip(cfg.memory_layers, self.memory or (), strict=True):
+            w_out = jax.lax.stop_gradient(memory.w_out).astype(jnp.float32)
+            final_stats[f"{_MEMORY_STAT_PREFIX}out_norm_L{i}"] = jnp.linalg.norm(w_out)
         hidden = reshard(mixed.astype(hidden.dtype), _batch_spec())
         if aux_hidden is not None:
             final_stats[_AUX_HIDDEN] = aux_hidden

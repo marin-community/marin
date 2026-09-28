@@ -118,6 +118,10 @@ _OKLS_FAMILIES: dict[str, re.Pattern] = {
 }
 
 
+_MEMORY_VALUES = re.compile(r"memory\.\d+\.values")
+_MEMORY_ADAM = re.compile(r"memory\.\d+\.(keys|w_out)")
+
+
 def _kda_leaf(path_lower: str) -> str | None:
     match = _KDA_ATTN_LEAF.fullmatch(path_lower)
     return None if match is None else match.group(1)
@@ -676,6 +680,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     grokfast_alpha: float = 0.98
     ple_lr_mult: float = 1.0
     """Adam LR multiplier of the per-layer embedding table (``ple_dim``)."""
+    memory_lr_mult: float = 1.0
+    """Adam LR multiplier of the product-key memory value tables (``memory_layers``)."""
     grokfast_adam_only: bool = False
     """Apply Grokfast to the plain-Adam groups only (on MuonH it acts as extra momentum)."""
     snoo_period: int = 0
@@ -834,6 +840,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 ),
                 "embed2": plain_adam_at(adam_lr * self.embed2_lr_mult),
                 "ple": plain_adam_at(adam_lr * self.ple_lr_mult),
+                "memory": plain_adam_at(adam_lr * self.memory_lr_mult),
                 "kda_decay": plain_adam_at(adam_lr * self.kda_decay_lr_mult, self.kda_decay_beta1, self.kda_decay_beta2),
             }
             inner = optax.multi_transform(transforms, self.create_mask)
@@ -900,6 +907,12 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 r"(?:^|\.)(value_embed|ve_lambda|ve_gate|xsa_scale|xsa_gate|head_mix|ssmax_scale|shared_gate|laurel_[ab]_\w+|ple_up|moe_out_gate_[wb]|bigram_gate_[wb]|bigram_gate_[ab]_lr|trigram_gate_[wb]|trigram_gate_[ab]_lr|bank_scale|bias_\w+|dyt_alpha|dyt_beta|qk_mult|diff_lambda|diff_lambda_init|vres_lambda|null_const_[vw])$",
                 path_lower,
             ):
+                return "adam"
+            # Product-key memory: sparse value tables at their own LR; codebooks and the zero-init output on Adam
+            # (MuonH cannot move a zero matrix); the query and gate projections fall through to MuonH.
+            if _MEMORY_VALUES.fullmatch(path_lower):
+                return "memory"
+            if _MEMORY_ADAM.fullmatch(path_lower):
                 return "adam"
             if "token_embed_ple" in path_lower:
                 return "ple"
