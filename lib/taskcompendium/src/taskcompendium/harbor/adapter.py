@@ -116,7 +116,7 @@ class ReplayAgent(BaseAgent):
 class DirectChatAgent(BaseAgent):
     """Send the rendered request to an OpenAI-compatible chat endpoint."""
 
-    def __init__(self, *args, api_base: str, api_key_env: str | None = None, request_timeout: float = 120, **kwargs):
+    def __init__(self, *args, api_base: str, request_timeout: float, api_key_env: str | None = None, **kwargs):
         super().__init__(*args, **kwargs)
         if self.model_name is None:
             raise ValueError("Direct chat requires a model name")

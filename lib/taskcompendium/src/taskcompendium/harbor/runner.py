@@ -20,6 +20,8 @@ from taskcompendium.lowering import (
     validate_binding,
 )
 
+DEFAULT_CHAT_TIMEOUT = 120
+
 
 class ReplayLaunch(BaseModel):
     """A fixed response for exercising the Harbor trial path."""
@@ -37,7 +39,7 @@ class ChatLaunch(BaseModel):
     model: str
     api_base: str
     api_key_env: str | None = None
-    request_timeout: float = 120
+    request_timeout: float = DEFAULT_CHAT_TIMEOUT
 
 
 async def run_trial(
