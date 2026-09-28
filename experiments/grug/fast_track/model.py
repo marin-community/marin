@@ -614,6 +614,9 @@ class GrugModelConfig:
     """Initial ``(l1, l2)`` of ``value_residual_layers`` (modded-nanogpt's learnable 0.5 / 0.5)."""
     learnable_qk_mult: bool = False
     """A learnable scalar per softmax-attention layer (init ``qk_mult``) in place of the fixed ``qk_mult``."""
+    attn_gate_elementwise: bool = False
+    """Gated attention (arXiv 2505.06708, its best variant G1): the output gate is per channel,
+    ``2 sigmoid(x W_g)`` with ``W_g`` [D, N*H] zero-init, instead of one scalar per head."""
     qk_mult_per_head: bool = False
     """With ``learnable_qk_mult``, one logit scale per head instead of per layer, so each head picks its own
     softmax temperature (with q and k normalized, qk_mult is the whole temperature)."""
@@ -818,7 +821,7 @@ class CausalSelfAttention(eqx.Module):
     w_k: Float[Array, "D MH"] | None
     w_v: Float[Array, "D MH"] | None
     w_o: Float[Array, "NH D"]
-    attn_gate: Float[Array, "D N"]
+    attn_gate: Float[Array, "D G"]  # G = N heads (headwise) or N*H channels (cfg.attn_gate_elementwise)
     sconv_k: "ShortConv | None"  # SConv after the K projection (cfg.sconv)
     sconv_q: "ShortConv | None"  # MLA only: SConv after the q projection ("q" in cfg.sconv_sites)
     rel_pos: "InklingRelPos | None"  # Inkling relative-position bias (replaces RoPE when set)
@@ -848,7 +851,11 @@ class CausalSelfAttention(eqx.Module):
         """``layer_index`` (0-indexed, may be traced under the stacked init) sets the DIFF ``lambda_init``."""
         d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.stored_kv_heads, cfg.inferred_head_dim
         std = cfg.initializer_std
-        attn_gate = reshard(jnp.zeros((d, n)), P(None, None))
+        attn_gate = (
+            reshard(jnp.zeros((d, n * h)), P(None, "model"))
+            if cfg.attn_gate_elementwise
+            else reshard(jnp.zeros((d, n)), P(None, None))
+        )
         if cfg.mla:
             k_q, k_dkv, k_uk, k_uv, k_o, k_rel, k_ve = random.split(key, 7)
             # A separate key stream, so turning mla_diff_attn on leaves every other initial weight unchanged.
@@ -1176,8 +1183,9 @@ class CausalSelfAttention(eqx.Module):
             w1, w2 = 1.0 + w[..., :n_heads], w[..., n_heads:]
             mixed = jnp.einsum("bsg,bsgd->bsd", w1 / n_heads, attn_out.astype(jnp.float32))
             attn_out = attn_out + (w2[..., None] * mixed[:, :, None, :]).astype(attn_out.dtype)
-        # Headwise gating: sigmoid(x @ attn_gate) produces one scalar per head.
-        gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
+        # Headwise gating: sigmoid(x @ attn_gate) produces one scalar per head (or per channel).
+        gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))
+        gate = rearrange(gate, "... (n d) -> ... n d", d=head_dim) if self.cfg.attn_gate_elementwise else gate[..., None]
         attn_out = gate * attn_out
         # Merge heads into hidden dim while keeping model-axis sharding for w_o.
         attn_out = jnp.reshape(
