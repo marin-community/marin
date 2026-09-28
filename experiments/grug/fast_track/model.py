@@ -406,6 +406,13 @@ class GrugModelConfig:
     latent_select_plus_proj: bool = False
     """In the selecting layers, add a learned ``w_latent_down`` projection to the selected channels before
     ``latent_norm`` (projection on top of selection)."""
+    expert_read_subset: int = 0
+    """If > 0, each routed expert reads only this many of its input channels (a fixed 0/1 mask on the rows of
+    ``w_up``/``w_gate``, applied at init and in the forward, so the masked rows stay zero under MuonH): the experts
+    together cover the whole input, but each one reads a slice. ``expert_read_subset_pattern`` picks the slices."""
+    expert_read_subset_pattern: str = "blocks"
+    """``blocks``: expert ``e`` reads contiguous block ``e mod (in_dim / expert_read_subset)``; ``random``: a fixed
+    random subset per expert."""
     latent_write_select: bool = False
     """With a MoE latent, drop ``w_latent_up``: the combined routed output is written into the first ``latent_dim``
     hidden channels (the rest get zero), scaled by ``initializer_std * sqrt(latent_dim)``, the gain of the
@@ -988,6 +995,14 @@ class GrugModelConfig:
             raise ValueError(
                 f"latent_select_pattern must be first, random or rotating, got {self.latent_select_pattern!r}"
             )
+        if self.expert_read_subset_pattern not in ("blocks", "random"):
+            raise ValueError(
+                f"expert_read_subset_pattern must be blocks or random, got {self.expert_read_subset_pattern!r}"
+            )
+        if self.expert_read_subset and (
+            self.expert_in_dim % self.expert_read_subset or self.moe_bank2_experts or self.moe_const_experts
+        ):
+            raise ValueError("expert_read_subset must divide the expert input width, without moe_bank2 or const experts")
         if self.latent_select_layers not in ("all", "kda", "global"):
             raise ValueError(f"latent_select_layers must be all, kda or global, got {self.latent_select_layers!r}")
         if self.latent_select_layers != "all" and self.local_mixer != LocalMixer.KDA:
@@ -2821,6 +2836,8 @@ class MoEMLP(eqx.Module):
         if self.cfg.newton_muon:
             router_stats[NEWTON_GRAM_LOCAL_KEY] = _local_input_gram(routed_input)
         bank_mlps = [self.expert_mlp] if self.expert_mlp_b is None else [self.expert_mlp, self.expert_mlp_b]
+        if self.cfg.expert_read_subset:
+            bank_mlps = [_mask_expert_reads(em, self.cfg) for em in bank_mlps]
         real_selected, real_weights, null_out = selected_experts, combine_weights, None
         if self.cfg.num_null_experts:
             real_selected, real_weights, null_out = self._split_null_slots(
@@ -3470,6 +3487,33 @@ def _batch_shards() -> int:
     return math.prod(mesh.shape[a] for a in axes)
 
 
+_EXPERT_READ_SUBSET_SALT = 0x5B5E7
+
+
+def _expert_read_mask(cfg: "GrugModelConfig", num_experts: int, in_dim: int) -> jax.Array:
+    """``[E, in_dim, 1]`` 0/1 mask of the input channels each routed expert reads (``expert_read_subset``)."""
+    width = cfg.expert_read_subset
+    if cfg.expert_read_subset_pattern == "blocks":
+        start = (jnp.arange(num_experts) % (in_dim // width)) * width
+        channel = jnp.arange(in_dim)
+        mask = (channel[None, :] >= start[:, None]) & (channel[None, :] < start[:, None] + width)
+    else:
+        keys = random.split(random.PRNGKey(_EXPERT_READ_SUBSET_SALT), num_experts)
+        ranks = jax.vmap(lambda k: jnp.argsort(random.permutation(k, in_dim)))(keys)
+        mask = ranks < width
+    return mask.astype(jnp.float32)[:, :, None]
+
+
+def _mask_expert_reads(em: MoEExpertMlp, cfg: "GrugModelConfig") -> MoEExpertMlp:
+    """Zero the input rows of ``w_up`` (and ``w_gate``) outside each expert's ``expert_read_subset`` slice."""
+    mask = _expert_read_mask(cfg, em.w_up.shape[0], em.w_up.shape[1])
+    mask = reshard(mask, P(*_padded_spec(em.w_up)[:2], None))
+    em = eqx.tree_at(lambda m: m.w_up, em, em.w_up * mask.astype(em.w_up.dtype))
+    if em.w_gate is not None:
+        em = eqx.tree_at(lambda m: m.w_gate, em, em.w_gate * mask.astype(em.w_gate.dtype))
+    return em
+
+
 def _expert_mlp_init(cfg: "GrugModelConfig", in_width: int, out_width: int, key: PRNGKeyArray) -> MoEExpertMlp:
     """The routed expert bank; ``moe_ungated_relu2`` drops the gate (``w_gate=None``) and uses ReLU."""
     mlp = MoEExpertMlp.init(
@@ -3493,7 +3537,10 @@ def _expert_mlp_init(cfg: "GrugModelConfig", in_width: int, out_width: int, key:
     if cfg.init_std_mult_experts != 1.0:
         mult = cfg.init_std_mult_experts
         mlp = eqx.tree_at(lambda m: (m.w_up, m.w_down), mlp, (mlp.w_up * mult, mlp.w_down * mult))
-    return eqx.tree_at(lambda m: m.w_gate, mlp, None, is_leaf=lambda x: x is None) if cfg.moe_ungated_relu2 else mlp
+    if cfg.moe_ungated_relu2:
+        mlp = eqx.tree_at(lambda m: m.w_gate, mlp, None, is_leaf=lambda x: x is None)
+    # Masked input rows start at zero, so they stay zero (no gradient) and take no share of the MuonH norm.
+    return _mask_expert_reads(mlp, cfg) if cfg.expert_read_subset else mlp
 
 
 def _positions_in_document(segment_ids: Int[Array, "B S"] | None, seq_len: int) -> jax.Array:
