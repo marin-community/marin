@@ -21,6 +21,19 @@ STACK_DEPTH = 12
 _IDLE_FRAMES = frozenset({"wait", "get", "select", "poll", "sleep", "_wait_for_tstate_lock", "accept", "recv", "read"})
 
 
+_CPU_STAT = "/sys/fs/cgroup/cpu.stat"
+
+
+def _cgroup_throttle() -> tuple[int, int] | None:
+    """``(nr_throttled, throttled_usec)`` of this container's cgroup (v2), or None where it isn't readable."""
+    try:
+        with open(_CPU_STAT) as f:
+            fields = dict(line.split() for line in f)
+    except OSError:
+        return None
+    return int(fields.get("nr_throttled", 0)), int(fields.get("throttled_usec", 0))
+
+
 def _stack_key(frame) -> str:
     frames = traceback.extract_stack(frame)[-STACK_DEPTH:]
     return " <- ".join(f"{f.name}({f.filename.rsplit('/', 1)[-1]}:{f.lineno})" for f in reversed(frames))
@@ -33,6 +46,7 @@ class HostStallSampler:
     def __init__(self, threshold: float):
         self.threshold = threshold
         self._armed_at: float | None = None
+        self._throttle_at_arm: tuple[int, int] | None = None
         self._samples: collections.Counter[tuple[str, str]] = collections.Counter()
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -50,6 +64,7 @@ class HostStallSampler:
         with self._lock:
             self._samples.clear()
             self._armed_at = time.perf_counter()
+            self._throttle_at_arm = _cgroup_throttle()
 
     def disarm(self, step: int) -> None:
         with self._lock:
@@ -61,6 +76,9 @@ class HostStallSampler:
         for (thread, stack), n in samples.items():
             by_thread[thread][stack] += n
         lines = [f"host stall {time.perf_counter() - armed_at:.3f} s after step {step}"]
+        now, before = _cgroup_throttle(), self._throttle_at_arm
+        if now is not None and before is not None:
+            lines[0] += f"; cgroup throttled {now[0] - before[0]} periods, {(now[1] - before[1]) / 1e6:.3f} s"
         for thread, stacks in by_thread.items():
             ticks = sum(stacks.values())
             busy = [(stack, n) for stack, n in stacks.most_common() if stack.split("(", 1)[0] not in _IDLE_FRAMES]
