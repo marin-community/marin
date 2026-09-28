@@ -7,6 +7,7 @@ import hashlib
 import json
 import logging
 from collections.abc import Mapping
+from contextlib import nullcontext
 from dataclasses import asdict, replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -50,6 +51,7 @@ from marin.evaluation.records import (
     read_record,
 )
 from marin.evaluation.runner import (
+    EndpointRoute,
     Evaluation,
     EvaluationBatch,
     EvaluationError,
@@ -206,7 +208,7 @@ def _failed_evaluation(
     )
 
 
-def _evaluation(root: Path, name: str, executor) -> Evaluation:
+def _evaluation(root: Path, name: str, executor, endpoint_route: EndpointRoute = EndpointRoute.CAPABILITY) -> Evaluation:
     return Evaluation(
         identity=EvaluationIdentity(
             run_id=f"run-{name}",
@@ -216,6 +218,7 @@ def _evaluation(root: Path, name: str, executor) -> Evaluation:
             eval_runtime="test-runtime",
         ),
         executor=executor,
+        endpoint_route=endpoint_route,
     )
 
 
@@ -237,7 +240,13 @@ def _remote_session(endpoint: str = "https://inference.example/v1") -> RemoteInf
 def _patch_inference_runtime(monkeypatch: pytest.MonkeyPatch, remote) -> None:
     """Point the batch runner at a fake inference runtime with ``remote`` as its session factory."""
     monkeypatch.setattr("marin.evaluation.runner.configure_coreweave_s3", lambda: None)
-    monkeypatch.setattr("marin.evaluation.runner.iris_ctx", lambda: SimpleNamespace(job_id="/orchestrator"))
+    monkeypatch.setattr(
+        "marin.evaluation.runner.iris_ctx",
+        lambda: SimpleNamespace(
+            job_id="/orchestrator",
+            client=SimpleNamespace(resolve_endpoint=lambda _name: "http://10.0.0.1:8000"),
+        ),
+    )
     monkeypatch.setattr("marin.evaluation.runner.remote_inference", remote)
     monkeypatch.setattr(
         "marin.evaluation.runner.inference_config_for_model",
@@ -272,6 +281,7 @@ def _hosted_judge_batch(tmp_path, evaluations: tuple[Evaluation, ...]) -> Evalua
 
 def test_run_evaluation_batch_shares_one_hosted_judge_across_evaluations(tmp_path, monkeypatch):
     opened_models: list[str] = []
+    observed_candidates: list[RemoteInferenceSession] = []
     observed_judges: list[RemoteInferenceSession | None] = []
 
     class InferenceContext:
@@ -290,12 +300,13 @@ def test_run_evaluation_batch_shares_one_hosted_judge_across_evaluations(tmp_pat
         return InferenceContext(_remote_session(f"https://{model}.example/v1"))
 
     def executor(
-        _session: RemoteInferenceSession,
+        session: RemoteInferenceSession,
         _output_dir: str,
         _env_vars: Mapping[str, str],
         *,
         judge: RemoteInferenceSession | None = None,
     ) -> EvaluationOutcome:
+        observed_candidates.append(session)
         observed_judges.append(judge)
         return EvaluationOutcome(metrics={"task": {"accuracy": 1.0}})
 
@@ -308,6 +319,7 @@ def test_run_evaluation_batch_shares_one_hosted_judge_across_evaluations(tmp_pat
     run_evaluation_batch(batch)
 
     assert opened_models == ["candidate", "judge"]
+    assert all(candidate.model.endpoint.base_url == "https://candidate.example/v1" for candidate in observed_candidates)
     assert len(observed_judges) == 2
     assert observed_judges[0] is observed_judges[1]
     assert observed_judges[0] is not None
@@ -316,6 +328,44 @@ def test_run_evaluation_batch_shares_one_hosted_judge_across_evaluations(tmp_pat
     assert record.judge is not None
     assert record.judge.model.name == "judge"
     assert record.judge.hardware.accelerator == "H100x1"
+
+
+def test_run_evaluation_batch_refreshes_direct_endpoint_between_evaluations(tmp_path, monkeypatch):
+    observed_urls: list[str] = []
+    addresses = iter(("http://10.0.0.1:8000", "http://10.0.0.2:8000"))
+
+    def executor(
+        session: RemoteInferenceSession,
+        _output_dir: str,
+        _env_vars: Mapping[str, str],
+        *,
+        judge: RemoteInferenceSession | None = None,
+    ) -> EvaluationOutcome:
+        observed_urls.append(session.model.endpoint.base_url)
+        return EvaluationOutcome(metrics={"task": {"accuracy": 1.0}})
+
+    _patch_inference_runtime(monkeypatch, lambda _config: nullcontext(_remote_session()))
+    monkeypatch.setattr(
+        "marin.evaluation.runner.iris_ctx",
+        lambda: SimpleNamespace(
+            job_id="/orchestrator",
+            client=SimpleNamespace(resolve_endpoint=lambda _name: next(addresses)),
+        ),
+    )
+    batch = replace(
+        _hosted_judge_batch(
+            tmp_path,
+            (
+                _evaluation(tmp_path, "one", executor, EndpointRoute.DIRECT),
+                _evaluation(tmp_path, "two", executor, EndpointRoute.DIRECT),
+            ),
+        ),
+        judge=None,
+    )
+
+    run_evaluation_batch(batch)
+
+    assert observed_urls == ["http://10.0.0.1:8000/v1", "http://10.0.0.2:8000/v1"]
 
 
 def test_run_evaluation_batch_records_every_eval_when_hosted_judge_fails_to_start(tmp_path, monkeypatch):
@@ -372,7 +422,7 @@ def _write_evalchemy_output(
     primary_sources = {}
     for task, count in sample_counts.items():
         source_name = next(name.split(",", 1)[0] for name in results[task] if "stderr" not in name)
-        canonical_name = "accuracy" if source_name in {"acc", "exact_match"} else source_name
+        canonical_name = "accuracy" if source_name in {"acc", "exact_match", "accuracy_avg"} else source_name
         primary_sources[task] = source_name
         benchmark_metadata[task] = {
             "schema_version": 1,
@@ -478,6 +528,41 @@ def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp
     assert all(row.storage_format == "finestore" for row in catalog_rows)
 
 
+@pytest.mark.parametrize("n_scored, expected_status", [(9, RunStatus.SUCCEEDED), (8, RunStatus.INFRA_FAILED)])
+def test_evaluate_batch_gates_transport_failure_coverage(tmp_path, monkeypatch, n_scored, expected_status):
+    def executor(
+        _session: RemoteInferenceSession,
+        _output_dir: str,
+        _env_vars: Mapping[str, str],
+        *,
+        judge: RemoteInferenceSession | None = None,
+    ) -> EvaluationOutcome:
+        return EvaluationOutcome(
+            metrics={"math500": {"accuracy,none": 1.0}},
+            coverage={
+                "math500": TaskCoverage(
+                    n_attempted=10,
+                    n_scored=n_scored,
+                    errors={EVALCHEMY_INFRASTRUCTURE_ERROR: 10 - n_scored},
+                )
+            },
+        )
+
+    batch = replace(_hosted_judge_batch(tmp_path, (_evaluation(tmp_path, "math500", executor),)), judge=None)
+    monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", lambda _record: None)
+
+    if expected_status is RunStatus.INFRA_FAILED:
+        with pytest.raises(RuntimeError, match="1 of 1 evals failed"):
+            evaluate_batch(batch, _remote_session(), orchestrator_job_id="/orchestrator", env_vars={})
+    else:
+        evaluate_batch(batch, _remote_session(), orchestrator_job_id="/orchestrator", env_vars={})
+
+    record = read_record(str(tmp_path / "records" / "run-math500" / "record.json"))
+    assert record.status is expected_status
+    assert record.metrics["math500"]["accuracy,none"] == 1.0
+    assert record.coverage["math500"].n_scored == n_scored
+
+
 def test_evaluate_batch_persists_run_scoped_speculative_metrics(tmp_path, monkeypatch):
     def scrape(prompt: int, generated: int, drafts: int, draft_tokens: int, accepted: int):
         return tuple(
@@ -505,6 +590,10 @@ vllm:spec_decode_num_accepted_tokens_total {accepted}
     clock = iter((10.0, 12.0))
     monkeypatch.setattr("marin.evaluation.inference_metrics.time.monotonic", lambda: next(clock))
     monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", lambda _row: None)
+    monkeypatch.setattr(
+        "marin.evaluation.runner.iris_ctx",
+        lambda: SimpleNamespace(client=SimpleNamespace(resolve_endpoint=lambda _name: "http://10.0.0.1:8000")),
+    )
     speculative = SpeculativeServingConfig(
         method=SpeculativeMethod.EAGLE3,
         model=ResolvedModelLocator(uri="s3://models/draft", identity="draft@2026.09.23:abc123"),
@@ -671,6 +760,7 @@ def test_evalchemy_executor_excludes_infrastructure_failures(tmp_path, monkeypat
         "mmlu_5shot/mmlu_anatomy": {"acc,none": 1.0, "sample_len": 1.0},
         "mmlu_5shot/mmlu_astronomy": {"acc,none": 1.0},
     }
+    assert outcome.canonical_metrics["mmlu_5shot/mmlu_anatomy"]["accuracy"] == 1.0
     assert outcome.coverage == {
         "mmlu_5shot/mmlu_anatomy": TaskCoverage(
             n_benchmark=2,
@@ -715,6 +805,97 @@ def test_evalchemy_executor_excludes_infrastructure_failures(tmp_path, monkeypat
             errors={EVALCHEMY_INFRASTRUCTURE_ERROR: 1},
         ),
     }
+
+
+@pytest.mark.parametrize(
+    ("task_name", "benchmark_name", "source_metric"),
+    [
+        ("math500", "MATH500", "accuracy"),
+        ("mmlu-pro", "MMLUPro", "accuracy_avg"),
+    ],
+)
+def test_evalchemy_executor_preserves_native_transport_failure_when_rebuilding(
+    tmp_path, monkeypatch, task_name, benchmark_name, source_metric
+):
+    output_dir = f"file://{tmp_path / task_name}"
+    failed = _lm_eval_generation(1, "accuracy", 0.0, "")
+    failed["failure_category"] = "model_transport"
+    _write_evalchemy_output(
+        output_dir,
+        task_name,
+        {benchmark_name: {source_metric: 0.5}},
+        {benchmark_name: [_lm_eval_generation(0, "accuracy", 1.0, "4"), failed]},
+    )
+    monkeypatch.setattr(
+        "marin.evaluation.evalchemy.runner._run_evalchemy_child",
+        lambda _model, _config, _output_dir, _env_vars: "/eval/completed",
+    )
+    executor = EvalchemyExecutor(
+        EvalchemyRunConfig(
+            name=task_name,
+            tasks=(EvalTaskConfig(name=benchmark_name, num_fewshot=0, task_alias=task_name, generation=True),),
+        )
+    )
+
+    outcome = executor(_remote_session(), output_dir, {})
+
+    assert outcome.coverage == {
+        task_name: TaskCoverage(
+            n_benchmark=2,
+            n_attempted=2,
+            n_scored=1,
+            n_correct=1,
+            errors={EVALCHEMY_INFRASTRUCTURE_ERROR: 1},
+        )
+    }
+    assert outcome.metrics[task_name]["accuracy,none"] == 1.0
+    assert outcome.canonical_metrics[task_name]["accuracy"] == 1.0
+    samples = [sample_from_archive_row(row) for row in ReadView(output_dir).scan("samples").to_pylist()]
+    assert sum("[EVALCHEMY_INFRASTRUCTURE_ERROR]" in (sample.output or "") for sample in samples) == 1
+
+
+def test_evalchemy_executor_excludes_failed_multiple_choice_request(tmp_path, monkeypatch):
+    output_dir = f"file://{tmp_path / 'multiple-choice-transport-failure'}"
+    successful = {
+        "doc_id": 0,
+        "doc": {"question": "Which answer?", "choices": ["A", "B"]},
+        "target": 0,
+        "arguments": [["Which answer?", "A"], ["Which answer?", "B"]],
+        "resps": [[-1.0, True], [-2.0, True]],
+        "filtered_resps": [0],
+        "filter": "none",
+        "metrics": ["acc"],
+        "acc": 1.0,
+    }
+    failed = {**successful, "doc_id": 1, "acc": 0.0, "failure_category": "model_transport"}
+    _write_evalchemy_output(
+        output_dir,
+        "mmlu_0shot",
+        {"mmlu": {"acc,none": 0.5}},
+        {"mmlu": [successful, failed]},
+    )
+    monkeypatch.setattr(
+        "marin.evaluation.evalchemy.runner._run_evalchemy_child",
+        lambda _model, _config, _output_dir, _env_vars: "/eval/completed",
+    )
+    executor = EvalchemyExecutor(EvalchemyRunConfig(name="mmlu", tasks=(EvalTaskConfig(name="mmlu", num_fewshot=0),)))
+
+    outcome = executor(_remote_session(), output_dir, {})
+
+    assert outcome.coverage["mmlu_0shot"] == TaskCoverage(
+        n_benchmark=2,
+        n_attempted=2,
+        n_scored=1,
+        n_correct=1,
+        errors={EVALCHEMY_INFRASTRUCTURE_ERROR: 1},
+    )
+    assert outcome.metrics["mmlu_0shot"]["acc,none"] == 1.0
+    assert outcome.canonical_metrics["mmlu_0shot"]["accuracy"] == 1.0
+    samples = [sample_from_archive_row(row) for row in ReadView(output_dir).scan("samples").to_pylist()]
+    assert any(
+        sample.kind is SampleKind.MULTIPLE_CHOICE and EVALCHEMY_INFRASTRUCTURE_ERROR in (sample.output or "")
+        for sample in samples
+    )
 
 
 def test_evalchemy_executor_uses_aggregate_count_when_custom_task_omits_sample_scores(tmp_path, monkeypatch):
@@ -819,6 +1000,7 @@ def test_submit_evaluation_batch_resolves_declared_secrets_outside_the_pickled_b
             eval_runtime="test-runtime",
         ),
         executor=_successful_evaluation,
+        endpoint_route=EndpointRoute.CAPABILITY,
     )
     batch = EvaluationBatch(
         group_id="group",
@@ -994,6 +1176,7 @@ def test_build_evaluation_batch_uses_submission_cluster_for_direct_endpoint(monk
     batch = build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester")
 
     assert batch.capability_origin == "https://custom-controller.example"
+    assert all(evaluation.endpoint_route is EndpointRoute.DIRECT for evaluation in batch.evaluations)
 
 
 def test_build_evaluation_batch_merges_the_shared_daytona_spec(monkeypatch):
@@ -1026,6 +1209,7 @@ def test_build_evaluation_batch_merges_the_shared_daytona_spec(monkeypatch):
         )
     }
     assert {evaluation.identity.eval_runtime for evaluation in batch.evaluations} == {HARBOR_RUNTIME}
+    assert all(evaluation.endpoint_route is EndpointRoute.CAPABILITY for evaluation in batch.evaluations)
     assert all(evaluation.identity.eval_ref.harbor.config_digest for evaluation in batch.evaluations)
     assert all(evaluation.identity.eval_ref.harbor.task_limit == 1 for evaluation in batch.evaluations)
 

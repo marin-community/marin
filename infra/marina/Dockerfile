@@ -63,8 +63,9 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --package marin-marina
 COPY --from=web /build/apps /app/apps
 ENV MARINA_APPS_DIR=/app/apps
-# Each app package is importable by its own name, the way the kernel imports it, so a
-# manifest-declared command can run an app module.
+# App packages that declare jobs are importable by name for their commands.
+# A backend/ package is loaded by the kernel under a private name when its URL
+# name conflicts with an installed package.
 ENV PYTHONPATH=/app/apps
 # Echo's two ONNX models are baked in rather than fetched on demand: Cloud Run keeps no
 # disk between instances, so every cold start would otherwise download them before it

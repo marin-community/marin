@@ -45,7 +45,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from marin.evaluation.eval_stats import SAMPLE_COUNT_METRIC, UNGRADED_ERROR
 from marin.evaluation.evaluation_config import eval_task_directory
-from marin.evaluation.metric_selection import base_metric, declared_metric, primary_filter
+from marin.evaluation.metric_selection import REPEAT_MEAN_SUFFIX, base_metric, declared_metric, primary_filter
 from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, BenchmarkMetadataRef, EvalTaskRef, TaskCoverage
 
 
@@ -87,6 +87,9 @@ _CONTENT_TYPES = {
 # :func:`is_scratch_artifact`.
 _SCRATCH_SEGMENT = re.compile(r"(?:^|/)tmp[a-z0-9_]{6,}/")
 _INFRASTRUCTURE_ERROR_PREFIX = f"[{EVALCHEMY_INFRASTRUCTURE_ERROR}]"
+# The pinned Evalchemy normalizer marks these failures in its native sample table. Preserve that
+# decision when Marin rebuilds the same rows from Evalchemy's raw source artifacts.
+_INFRASTRUCTURE_FAILURE_CATEGORIES = frozenset({"agent_timeout", "model_transport", "grader_infrastructure"})
 EVALCHEMY_SOURCE_ROOT = PurePosixPath(prefix_join(SOURCES_PREFIX, "evalchemy"))
 EVALCHEMY_NATIVE_SOURCE_DIR = "native"
 
@@ -105,6 +108,8 @@ def is_scratch_artifact(relative_path: str) -> bool:
 # Live runs are normalized by Evalchemy. These conversion helpers remain for historical exports and
 # for rebuilding an archive's table from preserved sources after damage or an interrupted migration.
 # FineStore itself owns only the normalized schema and storage API.
+_FAILURE_CATEGORY_KEY = "failure_category"
+
 _LM_EVAL_STRUCTURAL_KEYS = frozenset(
     {
         "doc",
@@ -124,9 +129,11 @@ _LM_EVAL_STRUCTURAL_KEYS = frozenset(
         "sample_shard",
         "source_id",
         "task_name",
+        _FAILURE_CATEGORY_KEY,
         "doc_hash",
         "prompt_hash",
         "target_hash",
+        "completion_responses",
     }
 )
 
@@ -214,6 +221,8 @@ def _lm_eval_grading(
     ``,<filter>`` suffix. This accepts both encodings.
     """
     picked = declared_metric(metrics, primary_metric_name)
+    if picked is None and primary_metric_name is not None and primary_metric_name.endswith(REPEAT_MEAN_SUFFIX):
+        picked = declared_metric(metrics, primary_metric_name.removesuffix(REPEAT_MEAN_SUFFIX))
     if picked is None:
         return None
     name, value = picked
@@ -239,6 +248,12 @@ def sample_from_lm_eval(task: str, raw: dict, primary_metric_name: str | None = 
         metrics,
         extraction_filter if isinstance(extraction_filter, str) else None,
         primary_metric_name,
+    )
+    failure_category = raw.get(_FAILURE_CATEGORY_KEY)
+    failure_marker = (
+        f"{_INFRASTRUCTURE_ERROR_PREFIX} {failure_category}"
+        if isinstance(failure_category, str) and failure_category in _INFRASTRUCTURE_FAILURE_CATEGORIES
+        else None
     )
     common = {
         "task": task,
@@ -266,8 +281,10 @@ def sample_from_lm_eval(task: str, raw: dict, primary_metric_name: str | None = 
             kind=SampleKind.MULTIPLE_CHOICE,
             prompt_text=context,
             choices=choices,
-            model_choice=max(scored)[1] if scored else None,
+            model_choice=max(scored)[1] if scored and failure_marker is None else None,
             target_choice=_resolve_target_choice(target, choices),
+            output=failure_marker,
+            extracted=failure_marker,
             **common,
         )
 
@@ -291,6 +308,9 @@ def sample_from_lm_eval(task: str, raw: dict, primary_metric_name: str | None = 
     filtered = raw.get("filtered_resps")
     if isinstance(filtered, list) and filtered:
         filtered = filtered[0]
+    if failure_marker is not None:
+        output = failure_marker
+        filtered = output
     messages = _parse_chat_messages(prompt)
     return EvalSample(
         kind=SampleKind.GENERATION,
@@ -900,8 +920,8 @@ def _add_lm_eval_rows(
         raw = json.loads(line)
         extraction_filter = raw.get("filter")
         extraction_filter = extraction_filter if isinstance(extraction_filter, str) else None
-        sample_repeat = raw.get("sample_repeat")
-        trial_id = "" if sample_repeat is None else str(sample_repeat)
+        repeat = raw.get("sample_repeat")
+        trial_id = str(repeat) if repeat is not None else ""
         for sample in samples_from_lm_eval(task, raw, primary_metric_name):
             # An explicit filter only carries information a grading does not already name; a
             # filtered response without a per-sample grade would otherwise lose its filter.

@@ -130,6 +130,10 @@ inheritance, and the Docker gotcha (setup runs in a separate container, so
 `export` does not reach the command — use `env_vars`) all live in
 `iris.cluster.setup_scripts`. See https://github.com/marin-community/marin/issues/6595.
 
+Iris-managed uv installs use symlinks on TPU worker hosts, including CPU tasks
+scheduled there. Other hosts default to copy mode. Kubernetes keeps copies because its
+node agent may clean the shared uv cache while tasks run.
+
 ## Architecture Notes
 
 ### The TaskBackend contract

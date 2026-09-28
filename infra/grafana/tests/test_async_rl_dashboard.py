@@ -185,7 +185,7 @@ def store(telemetry_table):
                 timestamp=BASE_EPOCH_MS + len(rows) if timestamp is None else timestamp,
                 seq=len(rows),
                 attributes={"role": "trainer", "step": "1", **(attributes or {})},
-                resource={"role": "trainer", "host": process, "training_loop": "async"},
+                resource={"role": "trainer", "host": process, "training_type": "async"},
                 body=body,
             )
         )
@@ -367,10 +367,6 @@ def store(telemetry_table):
             ("policy/mismatch/pooled/pos_last256/log_ratio_abs_mean", 0.23),
             ("policy/log_ratio_pos_first256/log_ratio_abs_mean", 0.01),
             ("policy/log_ratio_pos_last256/log_ratio_abs_mean", 0.04),
-            ("policy/grad_cosine", 0.2),
-            ("policy/grad_cosine_min", -0.3),
-            ("policy/grad_cosine_max", 0.4),
-            ("policy/grad_norm_reduced", 3),
             ("policy/offpolicy_mask/masked_fraction", 0.05),
             ("policy/offpolicy_mask/vetoed_sequence_fraction", 0.02),
             ("policy/m2_mask/m2_before", 0.03),
@@ -388,7 +384,7 @@ def store(telemetry_table):
     # One copy of every row per predicate the panels filter on, each copy falsifying one
     # predicate and carrying a value no assertion below expects. The other run is a sync
     # run, which the run picker has to leave out of its dropdown as well.
-    sync_resource = json.dumps({"role": "trainer", "host": "trainer", "training_loop": "sync"})
+    sync_resource = json.dumps({"role": "trainer", "host": "trainer", "training_type": "sync"})
     distractors = []
     for row in rows:
         for column, replacement in (
@@ -457,7 +453,6 @@ PANEL_ROWS = {
     "Trainer/vLLM logprob mismatch by staleness bucket": 4,
     "Trainer logprob drift within the update": 4,
     "Position dependence of |log \u03c1|": 8,
-    "Gradient direction persistence": 9,
     "Correction activity": 14,
 }
 
@@ -619,7 +614,7 @@ def test_health_sums_nonfinite_deltas_and_keeps_exporter_processes_separate(stor
                 value,
                 timestamp=BASE_EPOCH_MS + 1000,
                 seq=1000,
-                resource={"role": "trainer", "host": process, "training_loop": "async"},
+                resource={"role": "trainer", "host": process, "training_type": "async"},
             ),
         )
     rows = query(store, "Exporter and nonfinite observations")
@@ -946,14 +941,6 @@ def test_position_panel_keeps_ratio_families_and_positions_separate(store):
     assert [row["value"] for row in rows if "mismatch/pooled/pos_last256" in row["series"]] == [0.23, 0.46]
     assert [row["value"] for row in rows if "log_ratio_pos_last256" in row["series"]] == [0.04, 0.08]
     assert not any("pos_middle" in row["series"] for row in rows)
-
-
-def test_gradient_direction_panel_reports_band_and_reduced_norm(store):
-    rows = query(store, "Gradient direction persistence")
-    assert [row["value"] for row in rows if "grad_cosine_min" in row["series"]] == [-0.3, -0.6]
-    assert [row["value"] for row in rows if "grad_cosine_max" in row["series"]] == [0.4, 0.8]
-    assert [row["value"] for row in rows if "grad_norm_reduced" in row["series"]] == [3, 6]
-    assert [row["value"] for row in rows if "raw_grad_norm" in row["series"]] == [4]
 
 
 def test_correction_panel_distinguishes_populations_and_bounds_reference_coverage(store):
