@@ -19,6 +19,7 @@ import urllib.parse
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import timedelta
+from enum import StrEnum
 from typing import Any, Callable, List, Optional, ParamSpec, Sequence, TypeVar, Union
 
 import equinox
@@ -448,6 +449,17 @@ def _temporary_checkpoint_record(checkpoint_path: str) -> _TemporaryCheckpointRe
     )
 
 
+class CheckpointRetention(StrEnum):
+    """Retention for a requested checkpoint.
+
+    A temporary checkpoint goes under the temporary base path, when one is configured, and later saves prune it.
+    A permanent checkpoint goes under the permanent base path and is kept.
+    """
+
+    TEMPORARY = "temporary"
+    PERMANENT = "permanent"
+
+
 class Checkpointer:
     """
     A checkpointer class that saves checkpoints with two different, but overlapping policies: time and step.
@@ -518,7 +530,7 @@ class Checkpointer:
         self.write_config = write_config or TensorStoreWriteConfig()
         self._temporary_checkpoints = []
         self._checkpoint_request_lock = threading.Lock()
-        self._checkpoint_requested = False
+        self._requested_retention: CheckpointRetention | None = None
 
         # ensure that the step_policies are sorted. We could sort, but instead we'll just insist that they are sorted
         # since it's probably a typo if they aren't
@@ -597,9 +609,9 @@ class Checkpointer:
         # then we could end up with a situation where one process saves a checkpoint, and then another process
         # saves a checkpoint for the next step, etc. This leads to partial checkpoints, no good.
         # we fix by having process 0 make the decision
-        checkpoint_requested = self._consume_checkpoint_request()
-        my_should_save = force or checkpoint_requested
-        my_save_permanent_ckpt = force
+        requested_retention = self._consume_checkpoint_request()
+        my_should_save = force or requested_retention is not None
+        my_save_permanent_ckpt = force or requested_retention == CheckpointRetention.PERMANENT
 
         if not force:
             current_every = self._get_current_step_save_interval(step)
@@ -607,7 +619,7 @@ class Checkpointer:
             if current_every is not None and step % current_every == 0:
                 my_should_save = True
                 my_save_permanent_ckpt = True
-            elif not checkpoint_requested and self.save_interval and last_save_time >= self.save_interval:
+            elif requested_retention is None and self.save_interval and last_save_time >= self.save_interval:
                 my_should_save = True
                 my_save_permanent_ckpt = False
 
@@ -652,15 +664,20 @@ class Checkpointer:
                 base_path_override=save_base_path,
             )
 
-    def request_checkpoint(self) -> None:
-        """Request a checkpoint on the next step, subject to the save policy."""
-        with self._checkpoint_request_lock:
-            self._checkpoint_requested = True
+    def request_checkpoint(self, retention: CheckpointRetention) -> None:
+        """Request a checkpoint on the next step.
 
-    def _consume_checkpoint_request(self) -> bool:
+        Requests made before that step coalesce into one save, which is permanent if any request was.
+        A step the save policy already makes permanent stays permanent.
+        """
         with self._checkpoint_request_lock:
-            requested = self._checkpoint_requested
-            self._checkpoint_requested = False
+            if self._requested_retention != CheckpointRetention.PERMANENT:
+                self._requested_retention = retention
+
+    def _consume_checkpoint_request(self) -> CheckpointRetention | None:
+        with self._checkpoint_request_lock:
+            requested = self._requested_retention
+            self._requested_retention = None
         return requested
 
     def _discover_temporary_checkpoints(self) -> list["_TemporaryCheckpointRecord"]:

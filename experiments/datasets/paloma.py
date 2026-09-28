@@ -14,8 +14,13 @@ from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.llama import llama3_tokenizer
 
-# Pinned Paloma download.
+# Pinned Paloma download (out-of-region: gated HF, no in-region download step).
 _PALOMA_RAW = "raw/paloma-fc6827/65cd6fc"
+# In-region byte-lossless text reconstruction of the eval sets (see experiments/grug/fast_track/paloma_detok.py).
+# Use this raw_prefix to rebuild the caches under any tokenizer without the out-of-region raw.
+_PALOMA_DETOK_RAW = "raw/paloma-detok"
+# Default cache version; bump when repointing raw or rebuilding under a new tokenizer.
+_PALOMA_VERSION = "2026.06.28"
 
 # The Paloma eval subsets and their directories within the HF dataset
 # (https://huggingface.co/datasets/allenai/paloma). The subset name keys the handle;
@@ -40,20 +45,45 @@ _PALOMA_SUBSETS = {
 }
 
 
-def paloma_dataset(subset: str, *, tokenizer: str = llama3_tokenizer) -> ArtifactStep[TokenizedCache]:
-    """One Paloma subset as a validation handle."""
+def paloma_dataset(
+    subset: str,
+    *,
+    tokenizer: str = llama3_tokenizer,
+    tag: str = "llama3",
+    raw_prefix: str = _PALOMA_RAW,
+    version: str = _PALOMA_VERSION,
+) -> ArtifactStep[TokenizedCache]:
+    """One Paloma subset as a validation handle.
+
+    ``tag`` names the tokenizer in the cache path. The cache is content-addressed by name+version
+    only (not by the tokenizer), so a non-default ``tokenizer`` MUST pass a distinct ``tag`` or it
+    silently resolves to the existing ``llama3`` cache -- feeding the wrong vocab to the model.
+
+    ``raw_prefix`` selects the raw source: the out-of-region pinned download (default) or the in-region
+    detokenized reconstruction (``_PALOMA_DETOK_RAW``). Pair the detok prefix with a fresh ``version``
+    so a new-tokenizer build writes a clean cache instead of colliding with a failed prior stub.
+    """
     return tokenized(
-        f"paloma/{subset}-llama3",
+        f"paloma/{subset}-{tag}",
         tokenizer=tokenizer,
-        version="2026.06.28",
-        paths=[f"{_PALOMA_RAW}/{_PALOMA_SUBSETS[subset]}/val/val*.jsonl.gz"],
+        version=version,
+        paths=[f"{raw_prefix}/{_PALOMA_SUBSETS[subset]}/val/val*.jsonl.gz"],
         validation=True,
     )
 
 
-def paloma_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, ArtifactStep[TokenizedCache]]:
+def paloma_datasets(
+    *,
+    tokenizer: str = llama3_tokenizer,
+    tag: str = "llama3",
+    raw_prefix: str = _PALOMA_RAW,
+    version: str = _PALOMA_VERSION,
+) -> dict[str, ArtifactStep[TokenizedCache]]:
     """All Paloma subsets, keyed by subset name."""
-    return {subset: paloma_dataset(subset, tokenizer=tokenizer) for subset in _PALOMA_SUBSETS}
+    return {
+        subset: paloma_dataset(subset, tokenizer=tokenizer, tag=tag, raw_prefix=raw_prefix, version=version)
+        for subset in _PALOMA_SUBSETS
+    }
 
 
 if __name__ == "__main__":

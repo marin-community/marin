@@ -17,6 +17,7 @@ from google.protobuf import json_format
 
 from iris.cluster.constraints import INHERITED_CONSTRAINT_KEYS
 from iris.cluster.runtime.types import MountKind, MountSpec
+from iris.cluster.setup_scripts import DEFAULT_UV_LINK_MODE, UV_LINK_MODE_ENV
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.rpc import job_pb2
 
@@ -43,11 +44,12 @@ VENV_PATH = f"{WORKDIR_PATH}/.venv"
 # bring its own image: build_common_iris_env points each tool here explicitly, so
 # nothing depends on that image's HOME.
 UV_CACHE_PATH = "/uv/cache"
+UV_CACHE_RECOVERY_SIGNAL_PREFIX = ".iris-recovery-"
 HF_HUB_CACHE_PATH = "/hf/cache"
 CARGO_HOME_PATH = "/cargo"
 # Unclaimed node-local scratch, for anything that needs a real directory on the
 # node rather than a bucket. Tasks pick their own subdirectory; nothing prunes
-# it. `iris.runtime.jax_init` puts XLA's per-fusion autotune cache under
+# it. `iris.jax.init` puts XLA's per-fusion autotune cache under
 # `/cache/xla` because XLA opens that directory from C++ through `tsl::Env`,
 # which has no object-store filesystem.
 SCRATCH_CACHE_PATH = "/cache"
@@ -90,6 +92,7 @@ _UV_WRAPPER_SCRIPT = r"""#!/bin/bash
 set -u
 recovery_cache="$IRIS_WORKDIR/.uv-recovery-cache"
 recovery_marker="$IRIS_WORKDIR/.iris-uv-cache-recovery"
+shared_cache="${UV_CACHE_DIR:-}"
 
 case "${1:-} ${2:-}" in
   "sync "*|"pip install") ;;
@@ -106,7 +109,13 @@ fi
 
 printf '%s\n' "${UV_CACHE_DIR:-}" > "$recovery_marker"
 echo 'uv install failed; retrying with task-local cache' >&2
-  exec env UV_CACHE_DIR="$recovery_cache" "$IRIS_UV_EXECUTABLE" "$@" --reinstall
+env UV_CACHE_DIR="$recovery_cache" "$IRIS_UV_EXECUTABLE" "$@" --reinstall
+retry_status=$?
+if [ "$retry_status" -eq 0 ] && [ -n "${IRIS_ATTEMPT_UID:-}" ]; then
+  touch "$shared_cache/__UV_CACHE_RECOVERY_SIGNAL_PREFIX__${IRIS_ATTEMPT_UID}" || \
+    echo 'uv cache recovery succeeded, but Iris could not record it' >&2
+fi
+exit "$retry_status"
 """
 
 
@@ -124,7 +133,7 @@ def render_setup_steps(scripts: Sequence[str]) -> list[str]:
         'export IRIS_UV_EXECUTABLE="$(command -v uv)"',
         f'mkdir -p "{_UV_WRAPPER_DIR}"',
         f"cat > {_UV_WRAPPER_PATH} <<'{_UV_WRAPPER_DELIMITER}'",
-        _UV_WRAPPER_SCRIPT.rstrip("\n"),
+        _UV_WRAPPER_SCRIPT.replace("__UV_CACHE_RECOVERY_SIGNAL_PREFIX__", UV_CACHE_RECOVERY_SIGNAL_PREFIX).rstrip("\n"),
         _UV_WRAPPER_DELIMITER,
         f'chmod +x "{_UV_WRAPPER_PATH}"',
         f'export PATH="{_UV_WRAPPER_DIR}:$PATH"',
@@ -260,6 +269,8 @@ def build_common_iris_env(
     # must not land on a node directory every other task can read. HF_HUB_CACHE
     # covers the part worth sharing -- the content-addressed model/dataset blobs.
     env["UV_CACHE_DIR"] = UV_CACHE_PATH
+    # Kubernetes may clean the shared cache while tasks run, so its venvs own copies.
+    env[UV_LINK_MODE_ENV] = DEFAULT_UV_LINK_MODE
     env["UV_PYTHON_INSTALL_DIR"] = f"{UV_CACHE_PATH}/python"
     env["HF_HUB_CACHE"] = HF_HUB_CACHE_PATH
     # CARGO_HOME moves the crate registry onto the mount; a rustup toolchain

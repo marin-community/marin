@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import tracemalloc
 from types import SimpleNamespace
 
 import pyarrow as pa
@@ -31,6 +32,7 @@ from marin.evaluation.lm_eval_samples import (
     preserved_sample_sources,
     rebuild_lm_eval_samples,
     run_artifacts,
+    sample_from_lm_eval,
     summarize_native_eval_samples,
 )
 from marin.evaluation.records import DEFAULT_SCAN_PREFIXES, EvalTaskRef, TaskCoverage
@@ -244,6 +246,60 @@ def test_export_lm_eval_samples_preserves_unicode_line_separator(tmp_path):
     assert sample.prompt_messages[0].content == content
 
 
+def test_export_lm_eval_samples_bounds_peak_python_memory(tmp_path):
+    results = tmp_path / "run" / "results"
+    sample_path = results / "mmlu_pro" / "model" / "samples_mmlu_pro_20260807.jsonl"
+    sample_path.parent.mkdir(parents=True)
+    prompt = "Read the question and choose one answer. " + ("context " * 1_024)
+    rows = []
+    for doc_id in range(2_048):
+        rows.append(
+            json.dumps(
+                {
+                    "doc_id": doc_id,
+                    "doc": {"question": "Which answer is correct?", "choices": ["A", "B"]},
+                    "target": 0,
+                    "arguments": [[prompt, "A"], [prompt, "B"]],
+                    "resps": [[-1.0, True], [-2.0, True]],
+                    "filtered_resps": [0],
+                    "acc": 1.0,
+                }
+            )
+        )
+    sample_path.write_text("\n".join(rows) + "\n")
+    del rows
+
+    source_size = sample_path.stat().st_size
+    tracemalloc.start()
+    try:
+        exported = export_lm_eval_samples(str(results))
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert exported.samples == 2_048
+    assert peak < source_size * 5 / 2
+
+
+def test_native_evalchemy_generation_preserves_prompt():
+    prompt = json.dumps([{"role": "user", "content": "How many eggs?"}])
+
+    sample = sample_from_lm_eval(
+        "gsm8k_5shot",
+        {
+            "doc_id": 0,
+            "doc": {"question": "How many eggs?"},
+            "target": "18",
+            "arguments": [[[prompt], {"temperature": 1.0}]],
+            "resps": [["18"]],
+            "filtered_resps": ["18"],
+        },
+    )
+
+    assert sample.prompt_messages is not None
+    assert [(message.role, message.content) for message in sample.prompt_messages] == [("user", "How many eggs?")]
+
+
 def _lm_eval_row(doc_id: int, extraction_filter: str, score: float, response: str) -> dict:
     """One lm-eval --log_samples row: a task applying two filters writes one of these per filter."""
     return {
@@ -325,6 +381,28 @@ def test_each_extraction_filter_keeps_its_own_sample(tmp_path):
     assert by_filter["strict-match"].grading.filter == "strict-match"
 
 
+def test_repeated_evalchemy_samples_keep_each_trial_and_score(tmp_path):
+    results = tmp_path / "run" / "results"
+    rows = []
+    for repeat, score in enumerate((1.0, 0.0, 1.0)):
+        row = _lm_eval_row(0, "none", score, str(repeat))
+        row["sample_repeat"] = repeat
+        row["source_id"] = 2
+        row["sample_ordinal"] = 0
+        rows.append(row)
+    _write_jsonl(results, rows)
+
+    assert export_lm_eval_samples(str(results)).samples == 3
+    assert rebuild_lm_eval_samples(str(results)) == 3
+
+    stored = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
+    assert {row["trial_id"]: sample_from_archive_row(row).metrics for row in stored} == {
+        "0": {"exact_match": 1.0},
+        "1": {"exact_match": 0.0},
+        "2": {"exact_match": 1.0},
+    }
+
+
 def test_sample_metrics_exclude_the_row_format_stamp(tmp_path):
     # lm-eval stamps each row with its own numeric schema_version; it is not a score.
     results = tmp_path / "run" / "results"
@@ -333,6 +411,38 @@ def test_sample_metrics_exclude_the_row_format_stamp(tmp_path):
 
     [row] = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
     assert sample_from_archive_row(row).metrics == {"exact_match": 1.0}
+
+
+def test_sample_metrics_exclude_evalchemy_provenance_indices(tmp_path):
+    # Custom Evalchemy tasks can omit per-sample metrics while adding numeric provenance fields.
+    # Treating those row indices as scores makes every item after the first look correct.
+    results = tmp_path / "run" / "results"
+    row = _lm_eval_row(0, "none", 1.0, "4")
+    row.pop("metrics")
+    row.pop("exact_match")
+    row.update(
+        {
+            "sample_id": "MMLUPro:0:0:0",
+            "sample_namespace": "MMLUPro",
+            "sample_ordinal": 17,
+            "sample_repeat": 0,
+            "sample_shard": 0,
+            "source_id": 17,
+        }
+    )
+    _write_jsonl(results, [row])
+
+    coverage = export_lm_eval_samples(str(results)).coverage
+
+    [archived] = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
+    sample = sample_from_archive_row(archived)
+    assert archived["filter"] == "none"
+    assert sample.metrics == {}
+    assert sample.grading is None
+    assert sample.correct is None
+    assert coverage == {
+        "gsm8k_5shot": TaskCoverage(n_attempted=1, n_scored=0, n_correct=None, n_unanswered=0, errors={"ungraded": 1})
+    }
 
 
 def test_export_preserves_its_sources_and_rebuilds_from_them(tmp_path):

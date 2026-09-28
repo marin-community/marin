@@ -13,10 +13,13 @@ from pathlib import Path
 from rigging import telemetry
 from rigging.timing import Duration, Timestamp
 
+from iris.cluster.runtime.env import UV_CACHE_PATH, cache_host_dirname
+
 logger = logging.getLogger(__name__)
 
 CACHE_RECLAIM_INTERVAL = Duration.from_minutes(5)
 _CACHE_RECLAIM_PREFIX = ".iris-reclaim-"
+_UV_CACHE_NAMESPACE = cache_host_dirname(UV_CACHE_PATH)
 _RECLAIM_FAILURES = telemetry.counter("iris_cache_reclaim_failures", unit="{failure}")
 
 
@@ -78,6 +81,10 @@ def reclaim_cache(
     reclaimed = 0
     for namespace in cache_dir.iterdir():
         if namespace.is_symlink() or not namespace.is_dir():
+            continue
+        # uv coordinates cache changes with its own lock. Recovery clears this
+        # namespace through `uv cache clean`; direct deletion can race installs.
+        if namespace.name == _UV_CACHE_NAMESPACE:
             continue
         for entry in namespace.iterdir():
             try:

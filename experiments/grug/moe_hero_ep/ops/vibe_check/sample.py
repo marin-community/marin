@@ -54,7 +54,7 @@ def restore_model(request: SampleRequest, mesh: jax.sharding.Mesh) -> Transforme
     metadata = json.loads((checkpoint_path / "metadata.json").read_text())
     if digest(metadata) != request.checkpoint.metadata_digest or metadata.get("is_temporary") is not False:
         raise ValueError("Checkpoint metadata changed or checkpoint is not permanent")
-    config = draccus.decode(GrugModelConfig, request.spec.model)
+    config = draccus.decode(GrugModelConfig, request.model)
     template = eqx.filter_eval_shape(Transformer.init, config, key=jax.random.PRNGKey(0))
     manifest = read_manifest(checkpoint)
     if manifest is not None:
@@ -142,8 +142,11 @@ def sample(request: SampleRequest, store_root: str) -> None:
     logger.info("Install kernel cache")
     with log_time("Kernel cache setup"):
         install(cutlass_kernel_cache())
-    if jax.device_count() != request.spec.batch_size or jax.default_backend() != "gpu":
-        raise ValueError("The hero sampler requires one GPU per batch row")
+    if jax.default_backend() != "gpu":
+        raise ValueError("The hero sampler requires the JAX GPU backend")
+    # One row per GPU: the batch axis is sharded across the whole mesh. A wider rack covers the
+    # prompt bank in fewer passes without changing what any row generates.
+    batch_size = jax.device_count()
     logger.info("Load tokenizer: %s at %s", request.spec.tokenizer, request.spec.tokenizer_revision)
     with log_time("Tokenizer loading"):
         tokenizer = AutoTokenizer.from_pretrained(request.spec.tokenizer, revision=request.spec.tokenizer_revision)
@@ -208,6 +211,7 @@ def sample(request: SampleRequest, store_root: str) -> None:
                 request.spec,
                 prompt_ids,
                 expected_ids,
+                batch_size=batch_size,
                 eos_token_id=tokenizer.eos_token_id,
                 logprobs=logprobs,
                 decode=decode,
@@ -217,6 +221,7 @@ def sample(request: SampleRequest, store_root: str) -> None:
             completions = generate(
                 request.spec,
                 prompt_ids,
+                batch_size=batch_size,
                 eos_token_id=tokenizer.eos_token_id,
                 logits=logits,
                 decode=decode,

@@ -17,8 +17,7 @@ on:
 
 permissions:
   contents: read
-  issues: write    # claude triage files issues
-  id-token: write  # claude-code-action OIDC
+  id-token: write  # Loom federation OIDC
 
 jobs:
   grug-multislice-smoke:
@@ -111,10 +110,10 @@ jobs:
           GRUG_MULTISLICE_STEPS: ${{ inputs.steps || env.GRUG_MULTISLICE_STEPS }}
 
       # Bound the wait below the job timeout (180) so a hung ferry fails this
-      # *step* (failure(), runner stays alive for Claude triage) instead of
-      # tripping the job timeout (cancelled(), which force-kills triage). See the
+      # *step* (failure(), runner stays alive for the Loom launch) instead of
+      # tripping the job timeout, which can interrupt the Loom launch. See the
       # same note in marin-canary-ferry.yaml. Healthy runs finish in ~20m, so 135
-      # leaves 45m for diagnostics + triage.
+      # leaves time for diagnostics.
       - name: Wait for Grug multislice smoke
         id: wait
         timeout-minutes: 135
@@ -168,30 +167,21 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
-      - name: Claude triage
-        id: claude_triage
+      - name: Launch Loom triage
+        id: loom_triage
         if: (failure() || cancelled()) && github.event_name == 'schedule'
-        uses: ./.github/actions/claude-triage
-        timeout-minutes: 30
+        uses: ./.github/actions/loom-canary-triage
+        timeout-minutes: 5
         with:
-          oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
+          profile: ${{ vars.LOOM_GITHUB_AUTOMATION_PROFILE }}
           lane: grug-multislice
           job-id: ${{ steps.submit.outputs.job_id }}
           run-id: ${{ env.RUN_ID }}
           iris-config: ${{ env.IRIS_CONFIG }}
           wandb-entity: ${{ env.WANDB_ENTITY }}
           wandb-project: ${{ env.WANDB_PROJECT }}
-          wandb-api-key: ${{ secrets.WANDB_API_KEY }}
           gha-run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
-      - name: Upload Slack message
-        if: failure() || cancelled()
-        uses: actions/upload-artifact@v7
-        with:
-          name: slack-message
-          path: slack_message.md
-          retention-days: 1
-          if-no-files-found: ignore
 
   notify-slack:
     needs: grug-multislice-smoke

@@ -3,7 +3,7 @@
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, TypedDict
+from typing import Any, Literal, TypedDict
 
 import numpy as np
 from draccus import PluginRegistry
@@ -56,6 +56,7 @@ class ChatLmDatasetFormat(LmDatasetFormatBase):
     chat_template_kwargs: str | None = "chat_template_kwargs"
     pack: bool | int | None = None  # None => default pack behavior (currently pack)
     mask_user_turns: bool = True
+    slice_strategy: Literal["left", "right", "raise", "drop"] = "left"
 
     def build_preprocessor(
         self, tokenizer: MarinTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True

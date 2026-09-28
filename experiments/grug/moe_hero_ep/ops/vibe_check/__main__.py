@@ -23,6 +23,7 @@ from experiments.grug.moe_hero_ep.ops.vibe_check.config import (
     STORE_ROOT,
     TARGET_CLUSTER,
     discover_requests,
+    sampling_model,
     sampling_resources,
     sampling_spec,
 )
@@ -78,7 +79,9 @@ def main(action: str, store_root: str, priority: str | None, submission: str) ->
                 handle.write(summary)
         return
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-    requests = discover_requests(hero_checkpoint_paths(), spec, revision, target_cluster=TARGET_CLUSTER)
+    requests = discover_requests(
+        hero_checkpoint_paths(), spec, sampling_model(), revision, target_cluster=TARGET_CLUSTER
+    )
     if action == "inventory":
         for request in sorted(requests, key=lambda value: value.checkpoint.step):
             logger.info("%s step=%d %s", request.sample_id, request.checkpoint.step, request.checkpoint.uri)

@@ -21,7 +21,6 @@ from experiments.post_training.tasktrove.mcqa_routing import (
     batch_lines,
     final_route,
     parse_batch_output,
-    read_batch_output,
     select_tasks,
 )
 from experiments.post_training.tasktrove.mcqa_routing_pipeline import (
@@ -223,13 +222,6 @@ def test_parse_batch_output_falls_back_for_missing_request():
         ("task-000", "sft", "fallback"),
         ("task-001", "sft", "fallback"),
     ]
-
-
-def test_read_batch_output_allows_failed_batch_without_output():
-    output, errors = read_batch_output("unused", "unused", {"id": "batch-1", "status": "failed"})
-
-    assert output == ""
-    assert errors is None
 
 
 def test_aggregate_worker_outputs_writes_complete_sorted_ledger(tmp_path):

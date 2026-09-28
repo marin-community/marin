@@ -46,7 +46,7 @@ config:
     default:
       agent: codex
       description: Interactive Marin work with repository-owned workflow instructions
-      model: gpt-5.6-sol
+      model: &codexModel gpt-6-sol
       effort: xhigh
       protocol: acp
       mode: auto
@@ -73,7 +73,7 @@ config:
     marina:
       agent: codex
       description: Interactive questions over read-only Marina application APIs
-      model: gpt-5.6-sol
+      model: *codexModel
       effort: low
       protocol: acp
       mode: auto
@@ -90,7 +90,7 @@ config:
     github:
       agent: codex
       description: GitHub-triggered Marin issue and pull-request sessions
-      model: gpt-5.6-sol
+      model: *codexModel
       effort: xhigh
       protocol: acp
       mode: auto
@@ -103,7 +103,7 @@ config:
     fork-ferry:
       agent: codex
       description: Refresh Marin forks and validate their pinned revisions
-      model: gpt-5.6-sol
+      model: *codexModel
       effort: xhigh
       protocol: acp
       mode: auto
@@ -111,7 +111,7 @@ config:
       strict: true
       envClear: true
       ambientAllowlist: []
-      idleArchiveSeconds: 3600
+      idleArchiveSeconds: 60
       maxConcurrent: 4
       turnBudget: 100
       prelude: weaver
@@ -130,7 +130,7 @@ config:
     pr-review:
       agent: codex
       description: Review trusted Marin pull requests from immutable head commits
-      model: gpt-5.6-sol
+      model: *codexModel
       effort: xhigh
       protocol: acp
       mode: auto
@@ -138,8 +138,8 @@ config:
       strict: true
       envClear: true
       ambientAllowlist: []
-      idleArchiveSeconds: 900
-      maxConcurrent: 4
+      idleArchiveSeconds: 60
+      maxConcurrent: 16
       turnBudget: 200
       prelude: weaver
       instructionsFile: profiles/pr-review/AGENTS.md
@@ -149,10 +149,10 @@ config:
         - marin-community/marin
       allowedTools: []
       mcpAccess: *builtinMcpAccess
-    codehealth-refinement:
+    agentic-lint:
       agent: codex
-      description: Refine agentic-lint from persisted review and lint activity
-      model: gpt-5.6-sol
+      description: Review pull-request lint catalog findings at an immutable head
+      model: *codexModel
       effort: xhigh
       protocol: acp
       mode: auto
@@ -160,7 +160,73 @@ config:
       strict: true
       envClear: true
       ambientAllowlist: []
-      idleArchiveSeconds: 3600
+      idleArchiveSeconds: 60
+      maxConcurrent: 4
+      turnBudget: 200
+      prelude: weaver
+      instructionsFile: profiles/agentic-lint/AGENTS.md
+      env: *loomIrisUser
+      restricted: false
+      githubRepositories:
+        - marin-community/marin
+      allowedTools: []
+      mcpAccess: *builtinMcpAccess
+    github-automation:
+      agent: codex
+      description: Run trusted GitHub and scheduled Marin agent tasks
+      model: *codexModel
+      effort: xhigh
+      protocol: acp
+      mode: auto
+      class: automation
+      strict: true
+      envClear: true
+      ambientAllowlist: []
+      idleArchiveSeconds: 1800
+      maxConcurrent: 12
+      turnBudget: 250
+      prelude: weaver
+      instructionsFile: profiles/github-automation/AGENTS.md
+      env: *loomIrisUser
+      restricted: false
+      githubRepositories:
+        - marin-community/marin
+      allowedTools: []
+      mcpAccess: *builtinMcpAccess
+    prose-cleanup:
+      agent: codex
+      description: Rewrite agent-authored issue and PR descriptions in house style
+      model: *codexModel
+      effort: low
+      protocol: acp
+      mode: auto
+      class: automation
+      strict: true
+      envClear: true
+      ambientAllowlist: []
+      idleArchiveSeconds: 60
+      maxConcurrent: 16
+      turnBudget: 40
+      prelude: weaver
+      instructionsFile: profiles/prose-cleanup/AGENTS.md
+      env: *loomIrisUser
+      restricted: false
+      githubRepositories:
+        - marin-community/marin
+      allowedTools: []
+      mcpAccess: *builtinMcpAccess
+    codehealth-refinement:
+      agent: codex
+      description: Refine agentic-lint from persisted review and lint activity
+      model: *codexModel
+      effort: xhigh
+      protocol: acp
+      mode: auto
+      class: automation
+      strict: true
+      envClear: true
+      ambientAllowlist: []
+      idleArchiveSeconds: 60
       maxConcurrent: 1
       turnBudget: 400
       prelude: weaver
@@ -180,7 +246,7 @@ config:
     ops:
       agent: codex
       description: Coordinate Grafana alerts and delegate incident triage for Marin
-      model: gpt-5.6-sol
+      model: *codexModel
       effort: xhigh
       protocol: acp
       mode: auto
@@ -202,7 +268,7 @@ config:
     slack:
       agent: codex
       description: Slack-triggered Marin conversations and repository work
-      model: gpt-5.6-sol
+      model: *codexModel
       effort: medium
       protocol: acp
       mode: auto
@@ -219,11 +285,83 @@ config:
       serviceAccountId: marin-grafana
       createServiceAccount: false
   marin-loom:githubFederations:
-    - name: fork-ferry
+    - name: agentic-lint
       repositoryId: &marinRepositoryId "775839592"
+      workflowRef: marin-community/marin/.github/workflows/agentic-lint.yaml@refs/heads/main
+      profile: agentic-lint
+      serviceTag: agentic-lint
+      event: pull_request_target
+      ref: refs/heads/main
+    - name: fork-ferry
+      repositoryId: *marinRepositoryId
       workflowRef: marin-community/marin/.github/workflows/ops-fork-ferry.yaml@refs/heads/main
       profile: fork-ferry
       serviceTag: fork-ferry
+      ref: refs/heads/main
+    - name: ops-loom-github
+      repositoryId: *marinRepositoryId
+      workflowRef: marin-community/marin/.github/workflows/ops-loom-github.yaml@refs/heads/main
+      profile: &githubAutomationProfile github-automation
+      serviceTag: *githubAutomationProfile
+    - name: nightshift-cleanup
+      repositoryId: *marinRepositoryId
+      workflowRef: marin-community/marin/.github/workflows/ops-nightshift-cleanup.yaml@refs/heads/main
+      profile: *githubAutomationProfile
+      serviceTag: *githubAutomationProfile
+      ref: refs/heads/main
+    - name: nightshift-ci-tests
+      repositoryId: *marinRepositoryId
+      workflowRef: marin-community/marin/.github/workflows/ops-nightshift-ci-tests.yaml@refs/heads/main
+      profile: *githubAutomationProfile
+      serviceTag: *githubAutomationProfile
+      ref: refs/heads/main
+    - name: nightshift-doc-drift
+      repositoryId: *marinRepositoryId
+      workflowRef: marin-community/marin/.github/workflows/ops-nightshift-doc-drift.yaml@refs/heads/main
+      profile: *githubAutomationProfile
+      serviceTag: *githubAutomationProfile
+      ref: refs/heads/main
+    - name: agent-prose-cleanup
+      repositoryId: *marinRepositoryId
+      workflowRef: marin-community/marin/.github/workflows/ops-agent-prose-cleanup.yaml@refs/heads/main
+      profile: prose-cleanup
+      serviceTag: prose-cleanup
+      ref: refs/heads/main
+    - name: canary-ferry
+      repositoryId: *marinRepositoryId
+      workflowRef: marin-community/marin/.github/workflows/marin-canary-ferry.yaml@refs/heads/main
+      profile: *githubAutomationProfile
+      serviceTag: *githubAutomationProfile
+      ref: refs/heads/main
+    - name: canary-ferry-coreweave
+      repositoryId: *marinRepositoryId
+      workflowRef: marin-community/marin/.github/workflows/marin-canary-ferry-coreweave.yaml@refs/heads/main
+      profile: *githubAutomationProfile
+      serviceTag: *githubAutomationProfile
+      ref: refs/heads/main
+    - name: canary-datakit-tier1
+      repositoryId: *marinRepositoryId
+      workflowRef: marin-community/marin/.github/workflows/marin-canary-datakit-tier1.yaml@refs/heads/main
+      profile: *githubAutomationProfile
+      serviceTag: *githubAutomationProfile
+      ref: refs/heads/main
+    - name: canary-datakit-tier2
+      repositoryId: *marinRepositoryId
+      workflowRef: marin-community/marin/.github/workflows/marin-canary-datakit-tier2.yaml@refs/heads/main
+      profile: *githubAutomationProfile
+      serviceTag: *githubAutomationProfile
+      ref: refs/heads/main
+    - name: canary-datakit-tier3
+      repositoryId: *marinRepositoryId
+      workflowRef: marin-community/marin/.github/workflows/marin-canary-datakit-tier3.yaml@refs/heads/main
+      profile: *githubAutomationProfile
+      serviceTag: *githubAutomationProfile
+      ref: refs/heads/main
+    - name: canary-grug-multislice
+      repositoryId: *marinRepositoryId
+      workflowRef: marin-community/marin/.github/workflows/marin-canary-grug-multislice.yaml@refs/heads/main
+      profile: *githubAutomationProfile
+      serviceTag: *githubAutomationProfile
       ref: refs/heads/main
     - name: pr-review
       repositoryId: *marinRepositoryId

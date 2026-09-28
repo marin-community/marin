@@ -154,6 +154,11 @@ class VllmBackend:
             *(("--tokenizer", spec.tokenizer) if spec.tokenizer is not None else ()),
             *(("--tokenizer-revision", spec.tokenizer_revision) if spec.tokenizer_revision is not None else ()),
             *chat_template_args,
+            *(
+                ("--speculative-config", self.config.speculative.vllm_argument())
+                if self.config.speculative is not None
+                else ()
+            ),
             *self.config.extra_args,
             *extra_args,
         ]
