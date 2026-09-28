@@ -51,6 +51,7 @@ from experiments.evaluation.evals import (
     EVALS,
     EvalchemyDefinition,
     EvaluationDefinition,
+    GraphWalksDefinition,
     HarborDefinition,
     harbor_model_agent_kwargs,
 )
@@ -185,6 +186,21 @@ def _resolve_definitions(
             )
             continue
 
+        if isinstance(definition, GraphWalksDefinition):
+            resolved.append(
+                (
+                    name,
+                    _ResolvedDefinition(
+                        record_ref=definition.record_ref_for(),
+                        runtime_descriptor=definition.runtime_descriptor,
+                        executor=definition.executor_for(model, limit),
+                        endpoint_route=EndpointRoute.DIRECT,
+                        secret_env={},
+                    ),
+                )
+            )
+            continue
+
         config: ValidatedHarborConfig = next(validated_configs)
         validate_harbor_dataset_source(config)
         runtime_task_limit = definition.max_eval_instances if limit is None else limit
@@ -251,8 +267,10 @@ def build_evaluation_batch(
     ):
         model = replace(model, serve=resolved_serve_config(model))
     definitions = _resolve_definitions(requested_definitions, model, spec.limit, spec.seed)
-    if judge is not None and any(isinstance(definition.executor, EvalchemyExecutor) for _, definition in definitions):
-        raise ValueError("--judge-model serves Harbor verifiers only; remove it or drop the Evalchemy evaluations")
+    if judge is not None and any(
+        not isinstance(definition, HarborDefinition) for _, definition in requested_definitions
+    ):
+        raise ValueError("--judge-model serves Harbor verifiers only; remove it or drop non-Harbor evaluations")
     records_prefix = records_prefix_for(accelerator, spec)
     created_at = datetime.now(UTC).isoformat()
     evaluations: list[Evaluation] = []

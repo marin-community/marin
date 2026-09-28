@@ -612,10 +612,13 @@ def test_meta_reports_suites_facets_and_archived_models():
 
 
 def test_eval_suites_groups_known_evals_and_buckets_the_rest():
-    grouped = {group["suite"]: group["evals"] for group in eval_suites({"mmlu", "drop", "math500", "mystery"})}
+    grouped = {
+        group["suite"]: group["evals"] for group in eval_suites({"mmlu", "drop", "math500", "graphwalks", "mystery"})
+    }
 
     assert grouped["NLP"] == ["drop", "mmlu"]
     assert grouped["Chat / Math"] == ["math500"]
+    assert grouped["Long context"] == ["graphwalks"]
     assert grouped["Other"] == ["mystery"]
 
 

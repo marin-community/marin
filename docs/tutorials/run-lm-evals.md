@@ -1,6 +1,6 @@
 # Running Evaluations with Marin
 
-The shared evaluation launcher runs Evalchemy and Harbor evaluations against a registered model or a
+The shared evaluation launcher runs Evalchemy, Harbor, and GraphWalks evaluations against a registered model or a
 file-backed model configuration. It starts one OpenAI-compatible model server, runs every selected
 evaluation against that endpoint, writes one durable record per evaluation, and tears the server
 down.
@@ -179,6 +179,24 @@ uv run python -m experiments.evaluation.cli launch \
   --limit 1
 ```
 
+Run [GraphWalks](https://huggingface.co/datasets/openai/graphwalks) on the two GPU models:
+
+```bash
+uv run python -m experiments.evaluation.cli launch \
+  --model grug-67b-a2b-datakit-sft-262k-2026-09-21 \
+  --evals graphwalks --no-wait
+
+uv run python -m experiments.evaluation.cli launch \
+  --model qwen3.6-35b-a3b \
+  --evals graphwalks --no-wait
+```
+
+The `graphwalks` key uses the pinned `openai/graphwalks` dataset and grades the final
+`Final Answer: [...]` line with set F1, following the dataset card. Prompts that cannot fit within
+the served model's context and output budget are skipped; the record reports the benchmark size,
+attempted count, and scored coverage. Compare scores together with these counts because the models'
+context windows differ.
+
 The `qwen3-32b` / `tb2-lite` path follows the H100x2 acceptance run recorded in
 [issue #6503](https://github.com/marin-community/marin/issues/6503). Harbor trial restore and
 persistence use the selected GCS or S3 records store after
@@ -229,6 +247,8 @@ when RunAI reports a transient read failure.
 | `chat` | Evalchemy | MATH500, AIME24, and OlympiadBench; requires a chat-template model. |
 | `math` | Evalchemy | MATH500, AIME24, and zero-shot GSM8K; requires a chat-template model. |
 | `agentic` | Harbor | Terminal-Bench 2, SWE-bench, GAIA, BFCL, Aider, MedAgentBench, and FinanceAgent in Daytona. |
+
+GraphWalks is also available as the standalone `graphwalks` evaluation key.
 
 The `code` suite is registered but is not runnable with the current pinned evaluation image because
 its HumanEvalPlus and MBPPPlus dependencies are absent. Individual evaluation keys are defined in

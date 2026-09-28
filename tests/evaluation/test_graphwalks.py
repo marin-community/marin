@@ -1,0 +1,83 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""GraphWalks' published scoring contract and durable evaluation output."""
+
+import datasets
+import requests
+import transformers
+from finestore.eval import sample_from_archive_row
+from finestore.reader import ReadView
+from marin.evaluation.graphwalks import GraphWalksExecutor, grade_answer
+from marin.inference.types import OpenAIEndpoint, RunningModel
+
+
+def test_graphwalks_grades_unordered_sets_and_empty_answers():
+    scores, extracted, failed = grade_answer("Reasoning\nFinal Answer: [b, a, b]", ("a", "b"))
+    assert extracted == ["b", "a", "b"]
+    assert not failed
+    assert scores == {"f1": 1.0, "precision": 1.0, "recall": 1.0, "exact_match": 1.0}
+
+    scores, extracted, failed = grade_answer("Final Answer: []", ())
+    assert extracted == []
+    assert not failed
+    assert scores["f1"] == 1.0
+
+
+def test_graphwalks_requires_answer_on_last_line():
+    scores, _, failed = grade_answer("Final Answer: [a]\nThanks!", ("a",))
+    assert failed
+    assert scores["f1"] == 0.0
+    assert scores["exact_match"] == 0.0
+
+
+def test_graphwalks_records_scored_sample_and_context_coverage(tmp_path, monkeypatch):
+    class Tokenizer:
+        def encode(self, text, *, add_special_tokens):
+            return list(text)
+
+        def apply_chat_template(self, messages, *, tokenize, add_generation_prompt):
+            return list(messages[0]["content"])
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"choices": [{"message": {"content": "Reasoning\nFinal Answer: [b, a]"}}]}
+
+    rows = [
+        {
+            "prompt": "Find parents",
+            "answer_nodes": ["a", "b"],
+            "prompt_chars": 12,
+            "problem_type": "parents",
+            "date_added": "02-27-2026",
+        },
+        {
+            "prompt": "x" * 6000,
+            "answer_nodes": ["a"],
+            "prompt_chars": 6000,
+            "problem_type": "bfs",
+            "date_added": "02-27-2026",
+        },
+    ]
+    monkeypatch.setattr(datasets, "load_dataset", lambda *args, **kwargs: rows)
+    monkeypatch.setattr(transformers.AutoTokenizer, "from_pretrained", lambda *args, **kwargs: Tokenizer())
+    monkeypatch.setattr(requests, "post", lambda *args, **kwargs: Response())
+
+    class Session:
+        model = RunningModel(endpoint=OpenAIEndpoint(base_url="http://localhost/v1", model="test"), tokenizer="test")
+
+    root = str(tmp_path / "run")
+    outcome = GraphWalksExecutor(max_model_len=5000)(Session(), root, {})
+
+    assert outcome.coverage["graphwalks"].n_benchmark == 2
+    assert outcome.coverage["graphwalks"].n_attempted == 1
+    assert outcome.coverage["graphwalks"].n_scored == 1
+    assert outcome.metrics["graphwalks"]["skipped_context"] == 1.0
+    assert outcome.canonical_metrics["graphwalks"]["f1"] == 1.0
+    [row] = ReadView(root).scan("samples").to_pylist(maps_as_pydicts="strict")
+    sample = sample_from_archive_row(row)
+    assert sample.grading.score == 1.0
+    assert sample.prompt_messages[0].content == "Find parents"
