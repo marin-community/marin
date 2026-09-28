@@ -343,6 +343,8 @@ def build_h100_ladder_run(
     z_loss_weight: float = Z_LOSS_WEIGHT,
     ragged_transport: RaggedTransport = RaggedTransport.DEVICE,
     single_process: bool = False,
+    routing_dump_steps: tuple[int, ...] = (),
+    routing_dump_batches: int = 8,
 ) -> ArtifactStep[ThroughputResult]:
     """Build one H100 scaling-ladder rung.
 
@@ -354,6 +356,8 @@ def build_h100_ladder_run(
     default to the final step, with one rolling hourly checkpoint on region-local temporary storage.
     ``ragged_transport`` picks the XLA kernel when ``model_settings`` select ``moe_implementation=ragged_all_to_all``;
     ``single_process`` runs one JAX process owning every GPU of the task, which its peer-writing kernels need.
+    ``routing_dump_steps`` writes expert-routing count dumps to ``<output>/routing/`` (see
+    ``GrugTrainerConfig.routing_dump_steps``).
     """
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
@@ -434,6 +438,8 @@ def build_h100_ladder_run(
         head_replay_period=head_replay[1],
         head_replay_scale=head_replay[2],
         ngram_stat_prefill_batches=ngram_stat_prefill_batches,
+        routing_dump_steps=routing_dump_steps,
+        routing_dump_batches=routing_dump_batches,
     )
     train_resources = ResourceConfig.with_gpu(
         "H100",
@@ -516,6 +522,7 @@ def build_h100_ladder_run(
                 grug_trainer,
                 trainer=trainer,
                 hlo_dump_path=prefix_join(ctx.output_path, "train_step.hlo.txt") if dump_hlo else None,
+                routing_dump_path=prefix_join(ctx.output_path, "routing") if routing_dump_steps else None,
             ),
             eval=(
                 None
@@ -709,6 +716,19 @@ def _submit_to_cluster(run_id: str, target_cluster: str | None, priority: str) -
     help="Run one JAX process owning every GPU (default: one process per GPU), so XLA can write peer buffers.",
 )
 @click.option(
+    "--routing-dump-steps",
+    default="",
+    help="Comma-separated completed-step counts at which to dump per-layer (token, expert) routing counts over "
+    "fixed held-out batches to <output>/routing/routing_step<N>.npz (0: at init; past the end: the final step).",
+)
+@click.option(
+    "--routing-dump-batches",
+    type=click.IntRange(min=1),
+    default=8,
+    show_default=True,
+    help="Train-size batches of held-out sequences per routing dump.",
+)
+@click.option(
     "--model-set",
     multiple=True,
     help="Override a GrugModelConfig field, 'name=value' (repeatable; parsed as the field's declared type).",
@@ -762,6 +782,8 @@ def main(
     z_loss_weight: float,
     ragged_transport: str,
     single_process: bool,
+    routing_dump_steps: str,
+    routing_dump_batches: int,
     model_set: tuple[str, ...],
     opt_set: tuple[str, ...],
     priority: str,
@@ -797,6 +819,8 @@ def main(
         z_loss_weight=z_loss_weight,
         ragged_transport=RaggedTransport(ragged_transport),
         single_process=single_process,
+        routing_dump_steps=tuple(int(step) for step in routing_dump_steps.split(",") if step),
+        routing_dump_batches=routing_dump_batches,
     )
 
 

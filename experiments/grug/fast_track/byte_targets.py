@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 _HEX_BYTE_TOKEN = re.compile(r"<0x([0-9A-Fa-f]+)>")
 
 
-def _token_bytes(tokenizer: MarinTokenizer, idx: int, dot: int, special: frozenset[int]) -> bytes:
+def token_bytes(tokenizer: MarinTokenizer, idx: int, dot: int, special: frozenset[int]) -> bytes:
     """UTF-8 bytes of one token: empty for special tokens, the literal byte for ``<0xNN>`` tokens, else the
     decode of ``[".", idx]`` minus the leading dot (the prefix keeps a token's leading space)."""
     if idx in special:
@@ -31,7 +31,7 @@ def token_byte_table(tokenizer: MarinTokenizer, vocab_size: int, num_bytes: int)
     table = np.full((vocab_size, num_bytes), -1, np.int32)
     lengths = np.zeros(vocab_size, np.int32)
     for idx in range(min(vocab_size, len(tokenizer))):
-        b = _token_bytes(tokenizer, idx, dot, special)
+        b = token_bytes(tokenizer, idx, dot, special)
         lengths[idx] = len(b)
         table[idx, : min(len(b), num_bytes)] = list(b[:num_bytes])
     logger.info(

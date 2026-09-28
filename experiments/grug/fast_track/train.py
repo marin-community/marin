@@ -38,6 +38,7 @@ from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample, grug_lm_example_from_named
 from levanter.eval import TaggedEvaluator, cb_tagged_evaluate, eval_model
 from levanter.grug._moe.ep_ragged_all_to_all import RAGGED_NCCL_SEND_RECV_XLA_FLAGS, RAGGED_REQUIRED_XLA_FLAGS
+from levanter.grug.attention import AttentionMask
 from levanter.grug.grug_moe import MoeImplementation
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmExample
@@ -235,6 +236,13 @@ class GrugTrainerConfig:
     # With ``lm_head_unigram_bias``: before step 0, set the lm_head bias to the log unigram frequencies of the
     # first this many training batches (untimed, before the loop).
     lm_head_unigram_batches: int = 64
+    # Expert-specialization dump: once this many steps have completed (0: before the first step; a step past
+    # the end: after the last one), route ``routing_dump_batches`` train-size batches of fixed held-out
+    # sequences (the validation sets round-robin, see ``_routing_dump_sequences``) and write per-layer
+    # (token, expert) assignment counts to ``<routing_dump_path>/routing_step<N>.npz`` (``_routing_dumper``).
+    routing_dump_steps: tuple[int, ...] = ()
+    routing_dump_batches: int = 8
+    routing_dump_path: str | None = None
 
     # Grug builds its own compact (replica_dcn, data, expert, model) mesh instead of using
     # the Trainer's logical axis mapping; `data` absorbs whatever these two leave free.
@@ -1140,6 +1148,146 @@ def _init_unigram_bias(state: GrugTrainState, train_loader, *, num_batches: int)
     return dataclasses.replace(state, params=params, ema_params=ema_params)
 
 
+ROUTING_DUMP_FILE = "routing_step{step}.npz"
+
+
+def _routing_dump_sequences(
+    data_config: LmDataConfig, *, seq_len: int, num_sequences: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """``num_sequences`` fixed held-out sequences and their segment ids (``-1`` marks padding): every
+    validation set from its start, round-robin over the sets in name order, so each dump sees the same
+    tokens. Raises when the validation sets hold fewer sequences."""
+    sets = data_config.validation_sets(Axis("position", seq_len))
+    if not sets:
+        raise ValueError("routing_dump_steps needs validation sets")
+    names = sorted(sets)
+    datasets = {name: sets[name].as_sync_dataset() for name in names}
+    lengths = {name: len(datasets[name]) for name in names}
+    picks: list[tuple[str, int]] = []
+    for index in range(max(lengths.values())):
+        picks += [(name, index) for name in names if index < lengths[name]]
+    if len(picks) < num_sequences:
+        raise ValueError(f"routing dump needs {num_sequences} sequences, the validation sets hold {len(picks)}")
+    picks = picks[:num_sequences]
+    fetched = {}
+    for name in names:
+        indices = [index for n, index in picks if n == name]
+        if indices:
+            examples = [grug_lm_example_from_named(ex) for ex in datasets[name].get_batch(indices)]
+            fetched.update({(name, index): ex for index, ex in zip(indices, examples, strict=True)})
+    tokens, segments = [], []
+    for pick in picks:
+        example = fetched[pick]
+        tokens.append(np.asarray(example.tokens, np.int32))
+        seg = example.attn_mask.segment_ids
+        segments.append(np.zeros(seq_len, np.int32) if seg is None else np.asarray(seg[0], np.int32))
+    return np.stack(tokens), np.stack(segments)
+
+
+def _routing_counts_step(mp: jmp.Policy):
+    """Jitted ``(params, qb_betas, tokens, segment_ids, counts) -> counts``: adds one batch's routed
+    assignments (every top-K slot, weight 1, and a combine-weight-weighted copy) to the ``[L, V, E]``
+    counts by current token and by previous token (same document only)."""
+
+    @jax.jit
+    def add(params: Transformer, qb_betas: jax.Array, tokens: jax.Array, segment_ids: jax.Array, counts):
+        model = _cast_to_compute(mp, _apply_qb_betas(params, qb_betas))
+        selected, weights = model.routing_assignments(tokens, AttentionMask.causal().with_segment_ids(segment_ids))
+        k = selected.shape[-1]
+        valid = segment_ids >= 0
+        prev_tokens = jnp.pad(tokens[:, :-1], ((0, 0), (1, 0)))
+        prev_valid = valid & (jnp.pad(segment_ids[:, :-1], ((0, 0), (1, 0)), constant_values=-1) == segment_ids)
+        out_spec = P(None, None, None)
+
+        def slots(x):
+            return jnp.broadcast_to(x[..., None], (*x.shape, k))
+
+        cur, prev, cur_ok, prev_ok = slots(tokens), slots(prev_tokens), slots(valid), slots(prev_valid)
+        current, previous, weighted = counts
+        for layer in range(selected.shape[0]):
+            sel = selected[layer]
+            current = current.at[layer, cur, sel].add(cur_ok.astype(jnp.int32), out_sharding=out_spec)
+            previous = previous.at[layer, prev, sel].add(prev_ok.astype(jnp.int32), out_sharding=out_spec)
+            w = jnp.where(cur_ok, weights[layer].astype(jnp.float32), 0.0)
+            weighted = weighted.at[layer, cur, sel].add(w, out_sharding=out_spec)
+        return current, previous, weighted
+
+    return add
+
+
+def write_routing_dump(
+    path: str,
+    counts: tuple[np.ndarray, np.ndarray, np.ndarray],
+    cfg: GrugModelConfig,
+    layer_kinds: np.ndarray,
+    step: int,
+    num_tokens: int,
+) -> None:
+    """Write one routing dump (``analyze_routing.py`` reads it) to an fsspec ``path``."""
+    current, previous, weighted = counts
+    with fsspec.open(path, "wb") as f:
+        np.savez_compressed(
+            f,
+            counts=current,
+            counts_prev=previous,
+            counts_weighted=weighted,
+            num_experts=cfg.num_experts,
+            num_null_experts=cfg.num_null_experts,
+            top_k=cfg.num_experts_per_token,
+            layer_kinds=layer_kinds,
+            step=step,
+            num_tokens=num_tokens,
+        )
+
+
+def _routing_dumper(config: GrugRunConfig, model: Transformer, mesh: Mesh, batch_size: int) -> Callable[..., None]:
+    """Build the ``routing_dump_steps`` dump: ``dump(state)`` routes the fixed held-out batches and writes
+    ``routing_step<N>.npz`` (``counts``, ``counts_prev``, ``counts_weighted`` as ``[L, V, E]``, plus the
+    routing metadata) under ``routing_dump_path``, once per step; process 0 writes."""
+    trainer_cfg = config.trainer
+    if trainer_cfg.routing_dump_path is None:
+        raise ValueError("routing_dump_steps needs routing_dump_path")
+    cfg = config.model
+    num_sequences = trainer_cfg.routing_dump_batches * batch_size
+    tokens, segments = _routing_dump_sequences(config.data, seq_len=cfg.max_seq_len, num_sequences=num_sequences)
+    sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
+    add = _routing_counts_step(trainer_cfg.trainer.mp)
+    shape = (cfg.num_layers, cfg.vocab_size, cfg.num_experts + cfg.num_null_experts)
+    replicated = NamedSharding(mesh, P(None, None, None))
+    layer_kinds = np.asarray(model.layer_kinds())
+
+    def global_batch(host: np.ndarray) -> jax.Array:
+        return jax.make_array_from_callback(host.shape, sharding, lambda index: host[index])
+
+    dumped: set[int] = set()
+
+    def dump(state: GrugTrainState) -> None:
+        step = int(state.step)
+        if step in dumped:
+            return
+        dumped.add(step)
+        started = time.time()
+        counts = (
+            jax.device_put(np.zeros(shape, np.int32), replicated),
+            jax.device_put(np.zeros(shape, np.int32), replicated),
+            jax.device_put(np.zeros(shape, np.float32), replicated),
+        )
+        for start in range(0, num_sequences, batch_size):
+            batch = slice(start, start + batch_size)
+            counts = add(
+                state.params, state.pending_qb_betas, global_batch(tokens[batch]), global_batch(segments[batch]), counts
+            )
+        current, previous, weighted = (np.asarray(c) for c in jax.block_until_ready(counts))
+        path = f"{trainer_cfg.routing_dump_path.rstrip('/')}/{ROUTING_DUMP_FILE.format(step=step)}"
+        if jax.process_index() == 0:
+            write_routing_dump(path, (current, previous, weighted), cfg, layer_kinds, step, int(np.sum(segments >= 0)))
+        logger.info(
+            "routing dump at step %d: %d sequences in %.1fs -> %s", step, num_sequences, time.time() - started, path
+        )
+
+    return dump
+
+
 def _run_grug_local(config: GrugRunConfig) -> None:
     """Entry point for the grug template training loop."""
     if config.tensorstore_cache_bytes is not None:
@@ -1325,6 +1473,14 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             )
         if state.params.lm_head_bias is not None and int(state.step) == 0:
             state = _init_unigram_bias(state, train_loader, num_batches=config.trainer.lm_head_unigram_batches)
+        dump_routing = None
+        pending_dumps = set(config.trainer.routing_dump_steps)
+        if pending_dumps:
+            dump_routing = _routing_dumper(config, state.params, mesh, batch_schedule.batch_size_at_step(0))
+            if 0 in pending_dumps and int(state.step) == 0:
+                dump_routing(state)
+            # A resumed run skips the dumps it already passed.
+            pending_dumps = {step for step in pending_dumps if step > int(state.step)}
         batch_source = train_loader.iter_from_step(int(state.step))
         iterator = LoadingTimeTrackerIterator(batch_source)
 
@@ -1516,6 +1672,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         if watch_stats is not None:
                             levanter.tracker.log(jax.device_get(watch_stats), step=step)
 
+                    if dump_routing is not None and int(state.step) in pending_dumps:
+                        dump_routing(state)
+                        pending_dumps.discard(int(state.step))
                     if checkpointer is not None:
                         with callbacks.progress_event_scope(
                             state_callbacks.emit_event,
@@ -1544,6 +1703,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         else:
             # Mirror classic trainer behavior: force callbacks on the last completed step.
             state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
+            if dump_routing is not None and pending_dumps:
+                # Steps past the end of the run dump the final weights.
+                dump_routing(state)
             blends: list[tuple[str, Callable[[str], float]]] = [
                 (f"eval_blend{a:g}", lambda _path, a=a: a) for a in config.trainer.ema_blend_sweep
             ]

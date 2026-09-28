@@ -17,6 +17,7 @@ import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import NamedTuple
 
 import equinox as eqx
 import jax
@@ -109,6 +110,12 @@ _ATTN_RES_Z = "attn_res_z_term"
 _ATTN_RES_W_ATTN = "attn_res_weights_attn"
 _ATTN_RES_W_MLP = "attn_res_weights_mlp"
 _ATTN_RES_W_V = "attn_res_weights_v"
+# Per-layer router stats carrying each token's ``[T, K]`` selected experts and combine weights to
+# ``Transformer.routing_assignments``.
+_ROUTING_SELECTED = "routing_selected"
+_ROUTING_WEIGHTS = "routing_weights"
+ROUTING_SELECTED_KEY = "routing_selected_per_layer"
+ROUTING_WEIGHTS_KEY = "routing_weights_per_layer"
 
 # Kimi K3's KDA layer: low-rank forget-gate width, and the per-token log-decay floor
 # ``g = -KDA_MIN_LOG_DECAY * sigmoid(...)``.
@@ -804,6 +811,16 @@ class GrugModelConfig:
     """Rank ``r`` of a learned token-identity bias on the router logits, ``A[token_id] @ B_l``: ``A`` is one
     shared ``[vocab, r]`` table (random, like an embedding) and ``B_l`` a zero-init ``[r, E]`` per layer, so
     the model is unchanged at init. Added before QB, which then balances it. 0: off."""
+    router_embed_tie: tuple[str, ...] = ()
+    """Router-embedding ties ``"L:E:V"`` (``L`` a layer index or ``*`` for every layer): layer ``L``'s router
+    column for expert ``E`` is ``alpha * token_embed[V]``, so its logit is ``alpha * token_embed[V] . x`` on
+    the normed MLP input ``x``. The embedding row is the shared input-embedding parameter (the LM gradient
+    reaches it through the tie); ``alpha`` is a learnable scalar per tie, initialized to
+    ``||router[:, E]|| / ||token_embed[V]||`` so the tied column starts at the untied column's scale. The
+    replaced router column gets no gradient. Seeds expert specialization (expert-specialization study)."""
+    router_bias_seed: tuple[str, ...] = ()
+    """Fixed router logit priors ``"L:E:V:b"`` (``L`` a layer index or ``*``): add ``b`` to expert ``E``'s
+    router logit (before QB and the combine) wherever the current token is ``V``. Needs attn_res."""
     router_logit_soft_cap: float | None = None
     """Tanh soft-cap ``c * tanh(z / c)`` on the router logits (after ``router_token_bias_rank``), before the
     QB-biased top-K selection and the combine weights; QB estimates its thresholds on the capped logits.
@@ -1004,6 +1021,17 @@ class GrugModelConfig:
             raise ValueError("moe_drop_renorm needs moe_implementation=fixed_pooled_wave_all_to_all")
         if self.router_token_bias_rank and not self.attn_res:
             raise ValueError("router_token_bias_rank needs attn_res (the scanned stack has no router extras)")
+        if self.router_embed_tie or self.router_bias_seed:
+            if self.dense_mlp or self.router_rank:
+                raise ValueError("router_embed_tie / router_bias_seed need MoE layers with the full-rank router")
+            if self.router_bias_seed and not self.attn_res:
+                raise ValueError("router_bias_seed needs attn_res (the scanned stack has no router extras)")
+            ties = _router_ties(self)
+            if len({(t.layer, t.expert) for t in ties}) != len(ties):
+                raise ValueError(f"router_embed_tie ties one (layer, expert) twice: {self.router_embed_tie}")
+            for spec in (*ties, *_router_seeds(self)):
+                if not (0 <= spec.expert < self.num_experts and 0 <= spec.token < self.vocab_size):
+                    raise ValueError(f"router tie/seed out of range (experts {self.num_experts}): {spec}")
         for name in ("router_logit_soft_cap", "attn_res_logit_soft_cap"):
             cap = getattr(self, name)
             if cap is not None and cap <= 0:
@@ -2778,13 +2806,15 @@ class MoEMLP(eqx.Module):
         noise_key: jax.Array | None = None,
         overlap: MoeOverlapWork | None = None,
         router_tok_rows: Float[Array, "B S r"] | None = None,
+        router_seed_bias: Float[Array, "B S E"] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         """``projected`` holds ``x_flat @ w`` for each of ``input_projection_weights`` when the caller
         computed them already (fused with other projections of the same input). ``hash_token_ids`` picks
         the experts by token-id hash (``moe_hash_layers``); ``noise_key`` adds the training-only Gumbel
         noise of ``moe_gumbel_tau`` to the expert selection; ``router_tok_rows`` are the tokens' rows of the
-        shared ``router_token_bias_rank`` table. ``overlap`` is ``[T, D]`` token-local work run under the
-        first bank's dispatch all-to-all (``moe_shared_overlap``) and added to the output."""
+        shared ``router_token_bias_rank`` table and ``router_seed_bias`` the ``router_bias_seed`` logit bias.
+        ``overlap`` is ``[T, D]`` token-local work run under the first bank's dispatch all-to-all
+        (``moe_shared_overlap``) and added to the output."""
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
         if projected is None:
@@ -2810,6 +2840,9 @@ class MoEMLP(eqx.Module):
                 self.router_tok_b.astype(jnp.float32),
                 out_sharding=_partition_spec_of(router_logits),
             )
+        if router_seed_bias is not None:
+            seed_bias = rearrange(router_seed_bias, "b s e -> (b s) e")
+            router_logits = router_logits + reshard(seed_bias, _partition_spec_of(router_logits))
         cap = self.cfg.router_logit_soft_cap
         if cap is not None:
             router_logits = cap * jnp.tanh(router_logits / cap)
@@ -2873,6 +2906,9 @@ class MoEMLP(eqx.Module):
             combine_weights_f = combine_weights_f * reshard(gain, _partition_spec_of(combine_weights_f))
         combine_weights = combine_weights_f.astype(x.dtype)
         mesh = get_abstract_mesh()
+        # Per-token assignments for the routing dump (``Transformer.routing_assignments``); unused (and so
+        # dead-code eliminated) in the training forward.
+        assignments = {_ROUTING_SELECTED: selected_experts.astype(jnp.int32), _ROUTING_WEIGHTS: combine_weights_f}
         # Per-shard partials only; the cross-device reduction happens once after the layer scan.
         router_stats = local_routing_stats(
             reshard(selected_experts, P(_BATCH_AXES, None)),
@@ -3010,7 +3046,7 @@ class MoEMLP(eqx.Module):
 
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         routed = reshard(routed, _batch_spec())
-        return routed, router_stats
+        return routed, {**router_stats, **assignments}
 
 
 def _shared_experts_tail(
@@ -3065,6 +3101,7 @@ def moe_and_shared_fused(
     noise_key: jax.Array | None = None,
     shared_gate: Float[Array, " D"] | None = None,
     router_tok_rows: Float[Array, "B S r"] | None = None,
+    router_seed_bias: Float[Array, "B S E"] | None = None,
 ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
     """Routed MoE plus the shared SwiGLU experts with every projection of ``x`` in one GEMM.
 
@@ -3117,6 +3154,7 @@ def moe_and_shared_fused(
         hash_token_ids=hash_token_ids,
         noise_key=noise_key,
         router_tok_rows=router_tok_rows,
+        router_seed_bias=router_seed_bias,
         overlap=overlap,
     )
     if overlap is not None:
@@ -3516,10 +3554,11 @@ class Block(eqx.Module):
         hash_token_ids: Int[Array, "B S"] | None = None,
         noise_key: jax.Array | None = None,
         router_tok_rows: Float[Array, "B S r"] | None = None,
+        router_seed_bias: Float[Array, "B S E"] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         """``sum_stream`` feeds ``sum_parts`` (``router`` / ``latent`` / ``shared``) instead of ``h``;
-        ``hash_token_ids`` / ``noise_key`` / ``router_tok_rows`` go to the router (``moe_hash_layers``,
-        ``moe_gumbel_tau``, ``router_token_bias_rank``)."""
+        ``hash_token_ids`` / ``noise_key`` / ``router_tok_rows`` / ``router_seed_bias`` go to the router
+        (``moe_hash_layers``, ``moe_gumbel_tau``, ``router_token_bias_rank``, ``router_bias_seed``)."""
         normed = self.mlp_gated_norm(self.rms_mlp(_laurel(h, self.laurel_a_mlp, self.laurel_b_mlp)))
         if self.sconv_mlp_in is not None:
             normed = self.sconv_mlp_in(normed, _sconv_segment_ids(mask))
@@ -3534,11 +3573,23 @@ class Block(eqx.Module):
             out = self.mlp(mlp_in, moe_output_reshard=False)
         elif self.shared is not None:
             out, stats = moe_and_shared_fused(
-                self.mlp, self.shared, mlp_in, part_inputs, hash_token_ids, noise_key, self.shared_gate, router_tok_rows
+                self.mlp,
+                self.shared,
+                mlp_in,
+                part_inputs,
+                hash_token_ids,
+                noise_key,
+                self.shared_gate,
+                router_tok_rows,
+                router_seed_bias,
             )
         else:
             out, stats = self.mlp(
-                mlp_in, hash_token_ids=hash_token_ids, noise_key=noise_key, router_tok_rows=router_tok_rows
+                mlp_in,
+                hash_token_ids=hash_token_ids,
+                noise_key=noise_key,
+                router_tok_rows=router_tok_rows,
+                router_seed_bias=router_seed_bias,
             )
         if self.moe_out_gate_w is not None and self.moe_out_gate_b is not None:
             gate_logit = jnp.einsum(
@@ -3567,6 +3618,106 @@ class Block(eqx.Module):
         x = x + attn_out
         mlp_out, router_stats = self.mlp_branch(x, mask)
         return x + mlp_out, router_stats
+
+
+class RouterTie(NamedTuple):
+    """One ``router_embed_tie`` entry: layer ``layer``'s router column ``expert`` is tied to ``token_embed[token]``."""
+
+    layer: int
+    expert: int
+    token: int
+
+
+class RouterSeed(NamedTuple):
+    """One ``router_bias_seed`` entry: ``bias`` on expert ``expert``'s logit in layer ``layer`` at token ``token``."""
+
+    layer: int
+    expert: int
+    token: int
+    bias: float
+
+
+def _spec_layers(text: str, num_layers: int) -> list[int]:
+    if text == "*":
+        return list(range(num_layers))
+    layer = int(text)
+    if not 0 <= layer < num_layers:
+        raise ValueError(f"router tie/seed layer must be '*' or in 0..{num_layers - 1}, got {text!r}")
+    return [layer]
+
+
+def _router_ties(cfg: "GrugModelConfig") -> tuple[RouterTie, ...]:
+    """``cfg.router_embed_tie`` parsed, ``*`` expanded to every layer, in spec order."""
+    ties = []
+    for spec in cfg.router_embed_tie:
+        parts = spec.split(":")
+        if len(parts) != 3:
+            raise ValueError(f"router_embed_tie entries are 'L:E:V', got {spec!r}")
+        ties += [RouterTie(layer, int(parts[1]), int(parts[2])) for layer in _spec_layers(parts[0], cfg.num_layers)]
+    return tuple(ties)
+
+
+def _router_seeds(cfg: "GrugModelConfig") -> tuple[RouterSeed, ...]:
+    """``cfg.router_bias_seed`` parsed, ``*`` expanded to every layer."""
+    seeds = []
+    for spec in cfg.router_bias_seed:
+        parts = spec.split(":")
+        if len(parts) != 4:
+            raise ValueError(f"router_bias_seed entries are 'L:E:V:b', got {spec!r}")
+        seeds += [
+            RouterSeed(layer, int(parts[1]), int(parts[2]), float(parts[3]))
+            for layer in _spec_layers(parts[0], cfg.num_layers)
+        ]
+    return tuple(seeds)
+
+
+def _router_seed_bias(cfg: "GrugModelConfig", physical_layer: int, token_ids: Int[Array, "B S"]) -> jax.Array | None:
+    """``[B, S, E]`` router logit bias of this layer's ``router_bias_seed`` entries (None when it has none)."""
+    seeds = [s for s in _router_seeds(cfg) if s.layer == physical_layer]
+    if not seeds:
+        return None
+    table = np.zeros((len(seeds), cfg.num_experts + cfg.num_null_experts), np.float32)
+    for j, s in enumerate(seeds):
+        table[j, s.expert] = s.bias
+    hits = (token_ids[..., None] == jnp.asarray([s.token for s in seeds], dtype=token_ids.dtype)).astype(jnp.float32)
+    return jnp.einsum("bsn,ne->bse", hits, jnp.asarray(table), out_sharding=_batch_spec())
+
+
+def _router_tie_alpha_init(model: "Transformer") -> Float[Array, " N"]:
+    """Per tie ``||router[:, E]|| / ||token_embed[V]||`` at init, so a tied column starts at its untied scale."""
+    ties = _router_ties(model.config)
+    rows = jnp.linalg.norm(model.token_embed[np.asarray([t.token for t in ties])].astype(jnp.float32), axis=-1)
+    routers = _routers_by_layer(model)
+    cols = jnp.stack([jnp.linalg.norm(routers[t.layer][:, t.expert].astype(jnp.float32)) for t in ties])
+    return reshard(cols / rows, P(None))
+
+
+def _routers_by_layer(model: "Transformer") -> dict[int, jax.Array]:
+    """Each layer's ``[D, E]`` router, by layer index."""
+    routers = {}
+    for stack, indices in zip(model.layer_stacks(), model.stack_layer_indices(), strict=True):
+        router = stack.stacked.mlp.router
+        assert router is not None
+        routers.update({layer: router[j] for j, layer in enumerate(indices)})
+    return routers
+
+
+def _tie_routers(model: "Transformer") -> "Transformer":
+    """Replace each ``router_embed_tie`` column by ``alpha * token_embed[V]`` (gradients reach the embedding)."""
+    ties = _router_ties(model.config)
+    assert model.router_tie_alpha is not None
+    rows = model.token_embed[np.asarray([t.token for t in ties])]
+    cols = rows * model.router_tie_alpha[:, None].astype(rows.dtype)
+    tied = []
+    for stack, indices in zip(model.layer_stacks(), model.stack_layer_indices(), strict=True):
+        router = stack.stacked.mlp.router
+        assert router is not None
+        spec = _partition_spec_of(router)
+        for j, t in enumerate(ties):
+            if t.layer in indices:
+                router = router.at[indices.index(t.layer), :, t.expert].set(cols[j].astype(router.dtype))
+        tied.append(reshard(router, spec))
+    return eqx.tree_at(lambda t: [s.stacked.mlp.router for s in t.layer_stacks()], model, tied)
 
 
 @functools.lru_cache(maxsize=4)
@@ -4271,12 +4422,13 @@ def _route_kwargs(
     noise_key: jax.Array | None,
     extras: dict[str, jax.Array | None] | None,
 ) -> dict[str, jax.Array | None]:
-    """Router extras for one layer: token ids on ``moe_hash_layers``, the per-layer noise key otherwise, and
-    the tokens' ``router_token_bias_rank`` rows (``extras["router_tok"]``)."""
+    """Router extras for one layer: token ids on ``moe_hash_layers``, the per-layer noise key otherwise, the
+    tokens' ``router_token_bias_rank`` rows (``extras["router_tok"]``) and the ``router_bias_seed`` bias."""
     return {
         "hash_token_ids": token_ids if physical_layer in cfg.moe_hash_layers else None,
         "noise_key": noise_key,
         "router_tok_rows": None if extras is None else extras.get("router_tok"),
+        "router_seed_bias": _router_seed_bias(cfg, physical_layer, token_ids) if cfg.router_bias_seed else None,
     }
 
 
@@ -4528,6 +4680,8 @@ class Transformer(eqx.Module):
     """Per-layer-embedding table ``[vocab, num_layers * ple_dim]`` (``ple_dim``)."""
     router_tok_a: Float[Array, "V r"] | None
     """Shared token table of the router token-identity bias (``router_token_bias_rank``), ``N(0, 1/r)``."""
+    router_tie_alpha: Float[Array, " N"] | None
+    """Per-tie scale of the ``router_embed_tie`` router columns ``alpha * token_embed[V]``."""
     memory: tuple[ProductKeyMemory, ...] | None
     """Product-key memories of ``memory_layers``, in that order."""
     embed2_lambda: Float[Array, " G"] | None
@@ -4611,7 +4765,7 @@ class Transformer(eqx.Module):
             return ArrayStacked.init(len(layers), Block)(cfg, key=keys, layer_index=layer_index, use_kda=use_kda)
 
         softmax_layers, kda_layers = _stack_layer_indices(cfg)
-        return Transformer(
+        model = Transformer(
             token_embed=token_embed,
             embed_norm=_learned_rms_norm(cfg, cfg.hidden_dim, cfg.layer_norm_eps),
             embed_gated_norm=(
@@ -4940,8 +5094,12 @@ class Transformer(eqx.Module):
                 reshard(jnp.zeros((cfg.vocab_size,), jnp.float32), P(None)) if cfg.lm_head_unigram_bias else None
             ),
             kv_stream=KvStream.init(cfg, key=random.fold_in(key, _KV_STREAM_KEY_SALT)) if cfg.kv_stream_dim else None,
+            router_tie_alpha=None,
             config=cfg,
         )
+        if cfg.router_embed_tie:
+            model = eqx.tree_at(lambda m: m.router_tie_alpha, model, _router_tie_alpha_init(model), is_leaf=_is_none)
+        return model
 
     def layer_stacks(self) -> list[ArrayStacked[Block]]:
         """The block stacks; stack ``k`` holds layers ``stack_layer_indices()[k]``."""
@@ -4969,15 +5127,20 @@ class Transformer(eqx.Module):
         mask: AttentionMask | jax.Array | None = None,
         loop_active: bool | None = None,
         route_key: jax.Array | None = None,
+        return_routing: bool = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         """``loop_active`` (static, with ``loop_grow_step``) selects one pass (False) or all ``loop_passes``
-        (True); None runs all passes. ``route_key`` (training only) seeds ``moe_gumbel_tau``."""
+        (True); None runs all passes. ``route_key`` (training only) seeds ``moe_gumbel_tau``.
+        ``return_routing`` adds every layer's ``[L, T, K]`` selected experts and combine weights to the
+        metrics (``ROUTING_SELECTED_KEY`` / ``ROUTING_WEIGHTS_KEY``)."""
         if mask is None:
             mask = AttentionMask.causal()
 
         cfg = self.config
         if cfg.router_share_block > 1:
             self = _share_routers(self, cfg.router_share_block)
+        if cfg.router_embed_tie:
+            self = _tie_routers(self)
         gather = _embedding_gather if cfg.embed_grad_fp32 else _embedding_gather_autodiff
         hidden = raw_embed = gather(self.token_embed, token_ids)
         if cfg.embed_norm_mode == "rms":
@@ -5188,6 +5351,11 @@ class Transformer(eqx.Module):
                 "margin_min_per_layer": stacked_router_stats["margin_min"],
                 "margin_max_per_layer": stacked_router_stats["margin_max"],
             }
+            if return_routing:
+                if cfg.loop_passes != 1:
+                    raise ValueError("return_routing needs loop_passes=1 (passes merge the per-layer stats)")
+                router_metrics[ROUTING_SELECTED_KEY] = stacked_router_stats[_ROUTING_SELECTED]
+                router_metrics[ROUTING_WEIGHTS_KEY] = stacked_router_stats[_ROUTING_WEIGHTS]
             if cfg.newton_muon:
                 gram_sum = jnp.sum(stacked_router_stats[NEWTON_GRAM_LOCAL_KEY], axis=1)
                 router_metrics[NEWTON_GRAM_KEY] = reshard(gram_sum / (batch_size * seq_len), P(None, None, None))
@@ -5481,6 +5649,10 @@ class Transformer(eqx.Module):
             final_stats["attn_res_knob_router_tok_a_rms"] = jnp.sqrt(
                 jnp.mean(jnp.square(jax.lax.stop_gradient(self.router_tok_a).astype(jnp.float32)))
             )
+        if self.router_tie_alpha is not None:
+            alpha = jax.lax.stop_gradient(self.router_tie_alpha).astype(jnp.float32)
+            for j, tie in enumerate(_router_ties(cfg)):
+                final_stats[f"attn_res_knob_router_tie_alpha_L{tie.layer}_e{tie.expert}_v{tie.token}"] = alpha[j]
         if cfg.attn_res_key_rank is not None:
             final_stats["attn_res_knob_lrkey_qnorm_final"] = jnp.linalg.norm(
                 jax.lax.stop_gradient(self.attn_res_query_final)
@@ -5514,6 +5686,33 @@ class Transformer(eqx.Module):
             else {}
         )
         return hidden, jax.tree.map(lambda *xs: jnp.stack(xs), *layer_stats), final_stats
+
+    def routing_assignments(
+        self,
+        token_ids: Int[Array, "B S"],
+        mask: AttentionMask | jax.Array | None = None,
+    ) -> tuple[Int[Array, "L B S K"], Float[Array, "L B S K"]]:
+        """Every MoE layer's selected experts and their combine weights per token (a debug forward; the
+        training path never materializes them). Null-expert slots keep their ids ``>= num_experts``."""
+        if self.config.dense_mlp:
+            raise ValueError("routing_assignments needs MoE layers")
+        _, metrics = self(token_ids, mask=mask, return_routing=True)
+        b, s = token_ids.shape
+        selected, weights = metrics[ROUTING_SELECTED_KEY], metrics[ROUTING_WEIGHTS_KEY]
+        spec = P(None, _BATCH_AXES, None, None)
+        return (
+            jax.lax.reshape(selected, (selected.shape[0], b, s, selected.shape[-1]), out_sharding=spec),
+            jax.lax.reshape(weights, (weights.shape[0], b, s, weights.shape[-1]), out_sharding=spec),
+        )
+
+    def layer_kinds(self) -> tuple[str, ...]:
+        """Per layer, its mixer and context, e.g. ``kda_local`` or ``mla_global``."""
+        cfg = self.config
+        return tuple(
+            ("kda" if isinstance(layer.attn, KimiDeltaAttention) else "mla" if cfg.mla else "gqa")
+            + ("_global" if _is_long_layer(i, cfg.num_layers, cfg.global_every, cfg.global_layers) else "_local")
+            for i, layer in enumerate(self.layers())
+        )
 
     @named_call
     def logits(
