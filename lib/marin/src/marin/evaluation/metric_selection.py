@@ -20,6 +20,9 @@ DISPERSION_SUFFIXES = (LM_EVAL_STDERR_SUFFIX, REPEAT_STDERR_SUFFIX)
 # Chat models often solve gsm8k-style tasks without emitting the strict ``#### N`` format.
 FILTER_PRIORITY = ("flexible-extract",)
 
+# MRCR reports ``mrcr_accuracy`` for the run and ``accuracy`` for each example.
+SAMPLE_METRIC_ALIASES = {"mrcr_accuracy": "accuracy"}
+
 
 def primary_filter(filters: Iterable[str]) -> str | None:
     """Pick the extraction filter Evaldash should show by default."""
@@ -51,6 +54,15 @@ def declared_metric(metrics: Mapping[str, float], declared: str | None) -> tuple
         return None
     name = min(candidates)
     return name, candidates[name]
+
+
+def declared_sample_metric(metrics: Mapping[str, float], declared: str | None) -> tuple[str, float] | None:
+    """Select a sample metric, accounting for declared aggregate-to-sample names."""
+    picked = declared_metric(metrics, declared)
+    if picked is not None or declared is None:
+        return picked
+    alias = SAMPLE_METRIC_ALIASES.get(declared)
+    return declared_metric(metrics, alias) if alias is not None else None
 
 
 def primary_metric(metrics: Mapping[str, float]) -> tuple[str, float] | None:

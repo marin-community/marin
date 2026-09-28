@@ -55,6 +55,10 @@ and renders the agent's turns, tool calls, observations, and reward. A sample's 
 payload, the trajectory, lives as an archive blob referenced by URI, so paging the light columns
 never materializes it.
 
+For MRCR, the run metric `mrcr_accuracy` is recorded as `accuracy` on each sample. When an older
+archive has that sample score but no pass flag or grading object, the browser uses the score to show
+the grade and classify a perfect score as correct. Missing sample scores remain ungraded.
+
 The sample and artifact endpoints accept both FineStore format v2 and format v1 during the writer
 rollout. V2 reads are pinned to `HEAD`. V1 reads use `finestore.migrations.LegacyReadView`, which
 captures the listed shards without modifying the archive and therefore has no commit token. Current
