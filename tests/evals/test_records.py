@@ -337,6 +337,7 @@ def test_record_json_includes_normalized_evalchemy_configuration(tmp_path):
 
     assert raw["eval"]["evalchemy"] == {
         "apply_chat_template": True,
+        "chat_tokenizer_backend": "none",
         "max_gen_toks": 2048,
         "max_eval_instances": 64,
         "num_concurrent": 16,
