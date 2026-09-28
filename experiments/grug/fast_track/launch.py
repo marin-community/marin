@@ -22,7 +22,10 @@ from enum import StrEnum
 from typing import Any
 
 import click
+import equinox as eqx
+import jax
 import jmp
+import numpy as np
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
@@ -48,6 +51,7 @@ from experiments.grug.fast_track.model import (
     AttnResLayerBackward,
     GrugModelConfig,
     LocalMixer,
+    Transformer,
     upper_softmax_slice_mask,
 )
 from experiments.grug.fast_track.train import (
@@ -339,6 +343,7 @@ def build_h100_ladder_run(
     ngram_stat_prefill_batches: int = 0,
     max_retries_failure: int = MAX_RETRIES_FAILURE,
     model_settings: Mapping[str, str] | None = None,
+    embed2_rows_frac: float | None = None,
     optimizer_settings: Mapping[str, str] | None = None,
     z_loss_weight: float = Z_LOSS_WEIGHT,
     ragged_transport: RaggedTransport = RaggedTransport.DEVICE,
@@ -373,6 +378,8 @@ def build_h100_ladder_run(
             raise ValueError("attn_res_remat_attention requires the kma recipe")
         model = dataclasses.replace(model, attn_res_remat_attention=True)
     model = _apply_settings(model, model_settings or {})
+    if embed2_rows_frac is not None:
+        model = dataclasses.replace(model, embed2_rows=_embed2_rows_for_fraction(model, embed2_rows_frac))
     mp_policy = "params=float32,compute=bfloat16,output=bfloat16"
     expert_axis_size = 1 if dense else rung.gpus_per_task
     replica_axis_size = 1
@@ -759,6 +766,13 @@ def _job_env_args(job_env: tuple[str, ...]) -> list[str]:
     help="Iris scheduling priority for --submit.",
 )
 @click.option(
+    "--embed2-rows-frac",
+    type=float,
+    default=None,
+    help="Size the hashed bigram table so its params are this fraction of the model's other params (rule A: 0.408, "
+    "the d512 candidate ratio); overrides embed2_rows.",
+)
+@click.option(
     "--job-env",
     multiple=True,
     help="Environment variable for the submitted job, KEY=VALUE (repeatable; e.g. XLA_PYTHON_CLIENT_MEM_FRACTION=0.9).",
@@ -805,6 +819,7 @@ def main(
     model_set: tuple[str, ...],
     opt_set: tuple[str, ...],
     priority: str,
+    embed2_rows_frac: float | None,
     job_env: tuple[str, ...],
     submit: bool,
     target_cluster: str | None,
@@ -834,6 +849,7 @@ def main(
         ngram_stat_prefill_batches=ngram_stat_prefill_batches,
         max_retries_failure=max_retries,
         model_settings=_parse_settings(model_set),
+        embed2_rows_frac=embed2_rows_frac,
         optimizer_settings=_parse_settings(opt_set),
         z_loss_weight=z_loss_weight,
         ragged_transport=RaggedTransport(ragged_transport),
@@ -892,6 +908,35 @@ def _parse_as(annotation: Any, text: str, name: str) -> Any:
             raise ValueError(f"{name}: {text!r} is not one of {args}")
         return text
     raise ValueError(f"{name}: unsupported field type {annotation}")
+
+
+# Bigram-table rows are rounded to a multiple of this so the row-sharded table splits evenly over 8 GPUs.
+EMBED2_ROWS_MULTIPLE = 8192
+
+
+def _embed2_rows_for_fraction(model: GrugModelConfig, fraction: float) -> int:
+    """Rows of the hashed bigram table (``token_embed2``) that make its parameter count ``fraction`` of the model's
+    other parameters, counted from the model's shapes (``jax.eval_shape`` on a 1-device CPU mesh)."""
+    if not model.second_embed or fraction <= 0:
+        raise ValueError(f"embed2_rows_frac needs second_embed and a positive fraction, got {fraction}")
+    mesh = jax.sharding.Mesh(
+        np.array(jax.devices("cpu")[:1], dtype=object).reshape((1, 1, 1, 1)),
+        ("replica_dcn", "data", "expert", "model"),
+        axis_types=(jax.sharding.AxisType.Explicit,) * 4,
+    )
+    probe = dataclasses.replace(model, embed2_rows=EMBED2_ROWS_MULTIPLE)
+    with jax.set_mesh(mesh):
+        shapes = eqx.filter_eval_shape(lambda: Transformer.init(probe, key=jax.random.PRNGKey(0)))
+    total, table = 0, 0
+    for path, leaf in jax.tree_util.tree_flatten_with_path(shapes)[0]:
+        if hasattr(leaf, "shape"):
+            count = math.prod(leaf.shape)
+            total += count
+            if jax.tree_util.keystr(path).endswith("token_embed2"):
+                table += count
+    params_per_row = table / EMBED2_ROWS_MULTIPLE
+    rows = fraction * (total - table) / params_per_row
+    return max(EMBED2_ROWS_MULTIPLE, round(rows / EMBED2_ROWS_MULTIPLE) * EMBED2_ROWS_MULTIPLE)
 
 
 def _apply_settings(config: Any, settings: Mapping[str, str]) -> Any:
