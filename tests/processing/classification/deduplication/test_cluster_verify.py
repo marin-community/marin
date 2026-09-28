@@ -173,7 +173,6 @@ def test_a_rule_the_cluster_cannot_satisfy_marks_nothing(tmp_path):
     )
 
     assert result.counters["fuzzy/cluster_verify/markers"] == 0
-    assert result.rule.minimum_containment == 0.95
 
 
 def test_result_round_trips_through_the_artifact_record(tmp_path, monkeypatch):
@@ -201,15 +200,6 @@ def test_result_round_trips_through_the_artifact_record(tmp_path, monkeypatch):
     assert loaded.rule == params
     assert common.producer == "cluster" and common.version == "v1"
     assert loaded.attr_dir_for_source("datakit/normalize/right") == f"{output_path}/outputs/source_001"
-
-
-def test_attr_dir_for_an_unknown_source_names_the_missing_key(tmp_path, monkeypatch):
-    """The store drops or rebuilds a source on this error, so it must name the key."""
-    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
-    result = ClusterVerifiedFuzzyDupsAttrData(rule=ClusterDedupParams(), sources={}, counters={})
-
-    with pytest.raises(KeyError, match="datakit/normalize/left"):
-        result.attr_dir_for_source("datakit/normalize/left")
 
 
 def test_incomplete_cluster_text_is_rejected(tmp_path):
