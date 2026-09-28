@@ -16,6 +16,7 @@ import logging
 import random
 import re
 from collections import Counter
+from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import StrEnum
 from itertools import zip_longest
@@ -376,6 +377,16 @@ async def _convert_chunk(
                         record = _document(source, source_id, chunk, chunk_index, json.loads(content), selected, mode)
                         return ConvertedChunk(record, selected)
                     except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as error:
+                        logger.warning(
+                            "Rejected conversion source=%s row=%s chunk=%d mode=%s format=%s attempt=%d error=%s",
+                            source.name,
+                            source_id,
+                            chunk_index,
+                            mode,
+                            selected.name,
+                            attempt + 1,
+                            error,
+                        )
                         if content is not None:
                             body["messages"].extend(
                                 [
@@ -419,41 +430,54 @@ async def _convert_batch(
     source: Source,
     rows: list[dict],
 ) -> tuple[list[dict], Counter[str]]:
-    jobs = []
-    for row in rows:
-        source_id = str(row["id"])
-        chunks = split_source(row["text"])
-        if not chunks:
-            raise ValueError(f"Empty source row {source.name}/{source_id}")
-        for chunk_index, chunk in enumerate(chunks):
-            jobs.append(_convert_chunk(client, semaphore, endpoint, source, source_id, chunk, chunk_index, len(chunks)))
-    results = await asyncio.gather(*jobs)
+    tasks = []
+    async with asyncio.TaskGroup() as group:
+        for row in rows:
+            source_id = str(row["id"])
+            chunks = split_source(row["text"])
+            if not chunks:
+                raise ValueError(f"Empty source row {source.name}/{source_id}")
+            for chunk_index, chunk in enumerate(chunks):
+                tasks.append(
+                    group.create_task(
+                        _convert_chunk(client, semaphore, endpoint, source, source_id, chunk, chunk_index, len(chunks))
+                    )
+                )
+    results = [task.result() for task in tasks]
     return [result.record for result in results], Counter(result.answer_format.name for result in results)
 
 
-async def convert_work_batch(work: WorkBatch, endpoint: str, concurrency: int) -> None:
+def _read_batch_rows(work: WorkBatch) -> list[dict]:
     item = work.item
-    source = item.source
-    output_url = _output_path(source, item.url, item.row_group, work.batch_index, OUTPUT_ROOT)
-    output_fs, output_path = filesystem_for(output_url)
-    if output_fs.exists(output_path):
-        return
     fs, path = filesystem_for(item.url)
     with fs.open(path, "rb") as stream:
         table = pq.ParquetFile(stream).read_row_group(item.row_group, columns=["id", "text"])
     rows = table.slice(work.batch_index * INPUT_BATCH_SIZE, INPUT_BATCH_SIZE).to_pylist()
     if not rows:
         raise ValueError(f"Empty scheduled batch: {work}")
-    semaphore = asyncio.Semaphore(concurrency)
-    timeout = httpx.Timeout(REQUEST_TIMEOUT)
-    async with httpx.AsyncClient(
-        timeout=timeout, limits=httpx.Limits(max_connections=concurrency, max_keepalive_connections=concurrency)
-    ) as client:
-        documents, format_counts = await _convert_batch(client, semaphore, endpoint, source, rows)
+    return rows
+
+
+def _write_batch(documents: list[dict], output_url: str) -> None:
+    output_fs, output_path = filesystem_for(output_url)
     output_table = pa.Table.from_pylist(documents, schema=CHAT_SCHEMA)
     with atomic_rename(output_path, filesystem=output_fs) as temporary_path:
         with output_fs.open(temporary_path, "wb") as destination:
             pq.write_table(output_table, destination, compression="zstd")
+
+
+async def convert_work_batch(
+    work: WorkBatch, endpoint: str, client: httpx.AsyncClient, semaphore: asyncio.Semaphore, output_root: str
+) -> None:
+    item = work.item
+    source = item.source
+    output_url = _output_path(source, item.url, item.row_group, work.batch_index, output_root)
+    output_fs, output_path = filesystem_for(output_url)
+    if await asyncio.to_thread(output_fs.exists, output_path):
+        return
+    rows = await asyncio.to_thread(_read_batch_rows, work)
+    documents, format_counts = await _convert_batch(client, semaphore, endpoint, source, rows)
+    await asyncio.to_thread(_write_batch, documents, output_url)
     logger.info(
         "Converted %s row group %d batch %d: %d rows, %d chat records, formats=%s",
         source.name,
@@ -465,7 +489,32 @@ async def convert_work_batch(work: WorkBatch, endpoint: str, concurrency: int) -
     )
 
 
-async def run_worker(max_items: int | None, max_batches: int | None, endpoint_name: str, concurrency: int) -> None:
+async def _consume_batches(
+    work: Iterator[WorkBatch], endpoint: str, client: httpx.AsyncClient, semaphore: asyncio.Semaphore, output_root: str
+) -> None:
+    for batch in work:
+        await convert_work_batch(batch, endpoint, client, semaphore, output_root)
+
+
+async def convert_work_batches(
+    work: list[WorkBatch],
+    endpoint: str,
+    client: httpx.AsyncClient,
+    concurrency: int,
+    concurrent_batches: int,
+    output_root: str,
+) -> None:
+    """Overlap batch tails while keeping a shared limit on outstanding requests."""
+    semaphore = asyncio.Semaphore(concurrency)
+    batches = iter(work)
+    async with asyncio.TaskGroup() as group:
+        for _ in range(concurrent_batches):
+            group.create_task(_consume_batches(batches, endpoint, client, semaphore, output_root))
+
+
+async def run_worker(
+    max_items: int | None, max_batches: int | None, endpoint_name: str, concurrency: int, concurrent_batches: int
+) -> None:
     info = get_job_info()
     if info is None:
         raise RuntimeError("Run the conversion worker as an Iris task")
@@ -479,13 +528,19 @@ async def run_worker(max_items: int | None, max_batches: int | None, endpoint_na
     work = stratified_batches(_work_items(), SAMPLING_SEED, max_batches)[info.task_index :: info.num_tasks]
     if max_items is not None:
         work = work[:max_items]
-    for item in work:
-        await convert_work_batch(item, endpoint, concurrency)
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(REQUEST_TIMEOUT),
+        limits=httpx.Limits(max_connections=concurrency, max_keepalive_connections=concurrency),
+    ) as http_client:
+        await convert_work_batches(work, endpoint, http_client, concurrency, concurrent_batches, OUTPUT_ROOT)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--max-items", type=int, help="Limit each task to this many stratified batches for a smoke run")
+    parser.add_argument(
+        "--concurrent-batches", type=int, required=True, help="Batches sharing each task's request budget"
+    )
     parser.add_argument("--max-batches", type=int, help="Limit each row group to this many batches for a smoke run")
     parser.add_argument("--endpoint", default=ENDPOINT)
     parser.add_argument("--concurrency", type=int, default=MAX_CONCURRENT_REQUESTS)
@@ -493,7 +548,9 @@ def main() -> None:
     if args.concurrency < 1:
         parser.error("--concurrency must be positive")
     logging.basicConfig(level=logging.INFO)
-    asyncio.run(run_worker(args.max_items, args.max_batches, args.endpoint, args.concurrency))
+    if args.concurrent_batches < 1:
+        parser.error("concurrent-batches must be positive")
+    asyncio.run(run_worker(args.max_items, args.max_batches, args.endpoint, args.concurrency, args.concurrent_batches))
 
 
 if __name__ == "__main__":

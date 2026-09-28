@@ -72,7 +72,7 @@ uv run iris --cluster=cw-rno2a job run --priority interactive --enable-extra-res
   --job-name science-sft-conversion-smoke-20260927 \
   --cpu 8 --memory 32GB --disk 20GB --extra cpu --no-wait \
   -- python -m experiments.datakit.science_sft_conversion.conversion \
-    --max-items 1 --max-batches 1
+    --max-items 1 --max-batches 1 --concurrent-batches 1
 ```
 
 After checking the first generated records and model response, submit the
@@ -82,7 +82,7 @@ full resumable workload:
 uv run iris --cluster=cw-rno2a job run --priority interactive --enable-extra-resources \
   --job-name science-sft-conversion-v3-stratified-stage-20260927 --replicas 17 --max-retries 8 \
   --cpu 8 --memory 32GB --disk 20GB --extra cpu --no-wait \
-  -- python -m experiments.datakit.science_sft_conversion.conversion
+  -- python -m experiments.datakit.science_sft_conversion.conversion --concurrent-batches 2
 ```
 
 To inspect the conversion across all 17 sources while the full run proceeds,
@@ -165,6 +165,13 @@ requests, about 83 per replica when all 23 are serving. This stays below the
 proxy's 2,048-request budget. Adjust client concurrency
 using measured completion throughput and queue latency. Stop the old conversion
 job before submitting its replacement against the same output directory.
+Each Iris client task processes two source batches concurrently through one HTTP pool
+and one shared request semaphore. A slow tail in one batch therefore permits
+the other batch to use available request slots. Output paths are determined by
+source, input shard, row group, and batch index. Previously committed files are
+skipped; unfinished batches are recomputed on restart and committed atomically
+when complete. A failed batch cancels the other batch's outstanding requests
+and fails the task. Source reads and output writes run outside the event loop.
 
 ```bash
 uv run iris --cluster=cw-rno2a job run --priority interactive --enable-extra-resources \
@@ -176,10 +183,10 @@ uv run iris --cluster=cw-rno2a job run --priority interactive --enable-extra-res
     --model-cache-path s3://marin-us-east-02a/marin/users/benfeuer/science-sft-models/MiniMaxAI_MiniMax-M3-MXFP8_c5454eb03678d8710e54a4e0fc681b9f3b4a3dba
 
 uv run iris --cluster=cw-rno2a job run --priority interactive --enable-extra-resources \
-  --job-name science-sft-conversion-v3-stratified-20260927 --replicas 17 --max-retries 8 \
+  --job-name science-sft-conversion-v3-pipelined-20260928 --replicas 17 --max-retries 8 \
   --cpu 8 --memory 32GB --disk 20GB --extra cpu --no-wait \
   -- python -m experiments.datakit.science_sft_conversion.conversion \
-    --endpoint /benfeuer/minimax-m3-science-sft-scaled --concurrency 112
+    --endpoint /benfeuer/minimax-m3-science-sft-scaled --concurrency 112 --concurrent-batches 2
 ```
 
 ## Full-conversion handoff
@@ -203,7 +210,7 @@ resubmitting, especially if the SFT child job was already launched.
 
 ```bash
 uv run python -m experiments.datakit.science_sft_conversion.finish \
-  --producer-job /benfeuer/science-sft-conversion-v3-stratified-20260927 \
+  --producer-job /benfeuer/science-sft-conversion-v3-pipelined-20260928 \
   --serving-job /benfeuer/minimax-m3-science-sft-scaled-r2-20260927 \
   --store-path s3://marin-us-east-02a/marin/users/benfeuer/science-sft-converted-store/2026.09.27-v3 \
   --num-shards 1024 --max-workers 32 --timeout-hours 2880 --version 2026.09.27-v3

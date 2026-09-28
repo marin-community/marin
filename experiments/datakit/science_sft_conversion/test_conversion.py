@@ -3,20 +3,27 @@
 
 """Regression coverage for science SFT conversion output validation."""
 
+import asyncio
+import json
+import re
 from pathlib import Path
 
+import httpx
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from marin.datakit.chat_normalize import CHAT_SCHEMA, ChatChannel
 
+from experiments.datakit.science_sft_conversion import conversion
 from experiments.datakit.science_sft_conversion.audit import audit
 from experiments.datakit.science_sft_conversion.conversion import (
     ConversionMode,
     Source,
+    WorkBatch,
     WorkItem,
     _document,
     _output_path,
+    convert_work_batches,
     format_for,
     stratified_batches,
 )
@@ -166,3 +173,140 @@ def test_early_conversion_covers_every_source_without_losing_batches() -> None:
     assert {batch.batch_index for batch in scheduled if batch.item.source.name == "source-0"} == set(range(98))
     assert len([batch for batch in scheduled if batch.item.source.name == "source-1"]) == 1
     assert scheduled == stratified_batches(items, seed=20260927, max_batches=None)
+
+
+@pytest.mark.asyncio
+async def test_later_batch_persists_while_first_response_waits(tmp_path) -> None:
+    source = Source("probe/physics", "", 1, 8)
+    input_path = tmp_path / "input.parquet"
+    pq.write_table(
+        pa.Table.from_pylist([{"id": f"row-{index}", "text": f"row-{index}"} for index in range(8)]),
+        input_path,
+        row_group_size=4,
+    )
+    work = [WorkBatch(WorkItem(source, str(input_path), index, 4), 0) for index in range(2)]
+    output_root = tmp_path / "output"
+    (output_root / "outputs/main").mkdir(parents=True)
+    release_first = asyncio.Event()
+    active = 0
+    peak_active = 0
+    answers = {
+        "paragraphs": "Explanation.\nAnswer: 2.",
+        "numbered": "1. Add the numbers.\nFinal answer: 2.",
+        "bullets": "- Add the numbers.\nConclusion: 2.",
+        "short_then_detail": "Short answer: 2.\nAdd the numbers.",
+        "table": "| Item | Value |\n| --- | --- |\n| Answer | 2 |",
+        "json": json.dumps({"answer": 2, "evidence": "Addition", "caveats": []}),
+    }
+
+    async def response(request: httpx.Request) -> httpx.Response:
+        nonlocal active, peak_active
+        body = json.loads(request.content)
+        prompt = body["messages"][1]["content"]
+        match = re.search(r"<source_passage>\n(row-\d+)", prompt)
+        assert match is not None
+        row_id = match.group(1)
+        selected = format_for(source.name, row_id, 0)
+        active += 1
+        peak_active = max(peak_active, active)
+        try:
+            if row_id == "row-0":
+                await release_first.wait()
+            else:
+                # Let concurrent HTTP handlers run before completing this response.
+                await asyncio.sleep(0)
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "finish_reason": "stop",
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "user": "Add 1 and 1.",
+                                        "reasoning_content": "1 + 1 = 2.",
+                                        "answer": answers[selected.name],
+                                    }
+                                )
+                            },
+                        }
+                    ]
+                },
+            )
+        finally:
+            active -= 1
+
+    first_output = Path(_output_path(source, str(input_path), 0, 0, str(output_root)))
+    second_output = Path(_output_path(source, str(input_path), 1, 0, str(output_root)))
+    async with httpx.AsyncClient(transport=httpx.MockTransport(response)) as client:
+        task = asyncio.create_task(
+            convert_work_batches(
+                work, "http://test", client, concurrency=2, concurrent_batches=2, output_root=str(output_root)
+            )
+        )
+
+        async def wait_for_second_output() -> None:
+            while not await asyncio.to_thread(second_output.exists):
+                await asyncio.sleep(0)
+
+        try:
+            await asyncio.wait_for(wait_for_second_output(), timeout=5)
+            assert not first_output.exists()
+            assert {row["source_id"] for row in pq.read_table(second_output).to_pylist()} == {
+                f"{source.name}:row-{index}:0" for index in range(4, 8)
+            }
+        finally:
+            release_first.set()
+            await task
+
+    assert peak_active == 2
+    assert {row["source_id"] for row in pq.read_table(first_output).to_pylist()} == {
+        f"{source.name}:row-{index}:0" for index in range(4)
+    }
+
+
+@pytest.mark.asyncio
+async def test_failed_batch_cancels_pending_response_without_writing_output(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(conversion, "MAX_ATTEMPTS", 1)
+    source = Source("probe/physics", "", 1, 4)
+    input_path = tmp_path / "input.parquet"
+    pq.write_table(
+        pa.Table.from_pylist([{"id": text, "text": text} for text in ("failed", "waiting-a", "waiting-b", "waiting-c")]),
+        input_path,
+        row_group_size=2,
+    )
+    work = [WorkBatch(WorkItem(source, str(input_path), index, 2), 0) for index in range(2)]
+    output_root = tmp_path / "output"
+    (output_root / "outputs/main").mkdir(parents=True)
+    waiting_started = asyncio.Event()
+    started: set[str] = set()
+    cancelled: set[str] = set()
+
+    async def response(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        prompt = body["messages"][1]["content"]
+        text = prompt.split("<source_passage>\n", 1)[1].split("\n</source_passage>", 1)[0]
+        if text == "failed":
+            await waiting_started.wait()
+            return httpx.Response(400, json={"error": "request rejected"})
+        started.add(text)
+        if len(started) == 3:
+            waiting_started.set()
+        try:
+            await asyncio.Event().wait()
+            raise AssertionError("Pending response should be cancelled")
+        finally:
+            cancelled.add(text)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(response)) as client:
+        with pytest.raises(ExceptionGroup, match="unhandled errors in a TaskGroup") as errors:
+            await asyncio.wait_for(
+                convert_work_batches(
+                    work, "http://test", client, concurrency=4, concurrent_batches=2, output_root=str(output_root)
+                ),
+                timeout=5,
+            )
+    assert errors.value.subgroup(RuntimeError) is not None
+    assert cancelled == {"waiting-a", "waiting-b", "waiting-c"}
+    assert not list(output_root.rglob("*.parquet"))
