@@ -68,7 +68,7 @@ class ServeConfig:
 
     ``backend`` selects vLLM or Levanter. Parallelism, context, and engine limits become first-class
     inference settings. The remaining typed vLLM fields map onto command-line flags or process
-    settings. The two ``vllm_*`` boolean process settings and the RunAI S3 request timeout apply to
+    settings. The two ``vllm_*`` boolean process settings and the RunAI streamer settings apply to
     GPU workers. ``vllm_extra_args`` is the escape hatch for flags without a typed field. Multi-node
     topology flags are owned by the launcher; a typed GPU memory limit cannot also appear in the
     escape hatch.
@@ -92,6 +92,7 @@ class ServeConfig:
     reasoning_parser: str | None = None
     vllm_batch_invariant: bool | None = None
     vllm_use_flashinfer_sampler: bool | None = None
+    runai_streamer_concurrency: int | None = None
     runai_streamer_s3_request_timeout_ms: int | None = None
     vllm_extra_args: tuple[str, ...] = ()
     speculative: SpeculativeServingConfig | None = None
@@ -128,6 +129,11 @@ class ServeConfig:
                 raise ValueError("runai_streamer_s3_request_timeout_ms must be positive")
             if self.backend is not ServeBackend.VLLM:
                 raise ValueError("runai_streamer_s3_request_timeout_ms requires the vLLM backend")
+        if self.runai_streamer_concurrency is not None:
+            if self.runai_streamer_concurrency <= 0:
+                raise ValueError("runai_streamer_concurrency must be positive")
+            if self.backend is not ServeBackend.VLLM:
+                raise ValueError("runai_streamer_concurrency requires the vLLM backend")
 
 
 @dataclass(frozen=True)
