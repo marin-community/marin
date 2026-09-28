@@ -30,10 +30,23 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 _MAX_READ_ATTEMPTS = 8
+_MAX_S3_READ_ATTEMPTS = 8
+_S3_READ_BACKOFF_INITIAL = 0.1
+_S3_READ_BACKOFF_MAXIMUM = 5.0
 _MAX_S3_WRITE_ATTEMPTS = 8
 _S3_WRITE_BACKOFF_INITIAL = 1.0
 _S3_WRITE_BACKOFF_MAXIMUM = 10 * 60.0
 _S3_MISSING_CODES = frozenset({"NotFound", "NoSuchKey", "404"})
+_S3_CONDITIONAL_READ_RETRY_CODES = frozenset({"PathStyleRequestNotAllowed"})
+
+
+def _is_retryable_s3_conditional_read(error: Exception) -> bool:
+    if is_transient_s3_error(error):
+        return True
+    response = getattr(error, "response", None)
+    if not isinstance(response, dict):
+        return False
+    return response.get("Error", {}).get("Code") in _S3_CONDITIONAL_READ_RETRY_CODES
 
 
 class ConditionalWriteError(RuntimeError):
@@ -207,23 +220,57 @@ class S3ConditionalObject:
 
     def version(self) -> str | None:
         bucket, key = self._parts()
-        try:
-            response = self._client(self.endpoint_url).head_object(Bucket=bucket, Key=key)
-        except ClientError as exc:
-            if exc.response["Error"]["Code"] in _S3_MISSING_CODES:
-                return None
-            raise
+        client = self._client(self.endpoint_url)
+
+        def head() -> dict | None:
+            try:
+                return client.head_object(Bucket=bucket, Key=key)
+            except ClientError as exc:
+                if exc.response["Error"]["Code"] in _S3_MISSING_CODES:
+                    return None
+                raise
+
+        response = retry_with_backoff(
+            head,
+            retryable=_is_retryable_s3_conditional_read,
+            max_attempts=_MAX_S3_READ_ATTEMPTS,
+            backoff=ExponentialBackoff(
+                initial=_S3_READ_BACKOFF_INITIAL,
+                maximum=_S3_READ_BACKOFF_MAXIMUM,
+                factor=2.0,
+                jitter=0.25,
+            ),
+            operation=f"conditional S3 version read {self.path}",
+        )
+        if response is None:
+            return None
         return response["ETag"]
 
     def read(self) -> VersionedBytes | None:
         bucket, key = self._parts()
-        try:
-            response = self._client(self.endpoint_url).get_object(Bucket=bucket, Key=key)
-        except ClientError as exc:
-            if exc.response["Error"]["Code"] in _S3_MISSING_CODES:
-                return None
-            raise
-        return VersionedBytes(data=response["Body"].read(), version=response["ETag"])
+        client = self._client(self.endpoint_url)
+
+        def get() -> VersionedBytes | None:
+            try:
+                response = client.get_object(Bucket=bucket, Key=key)
+            except ClientError as exc:
+                if exc.response["Error"]["Code"] in _S3_MISSING_CODES:
+                    return None
+                raise
+            return VersionedBytes(data=response["Body"].read(), version=response["ETag"])
+
+        return retry_with_backoff(
+            get,
+            retryable=_is_retryable_s3_conditional_read,
+            max_attempts=_MAX_S3_READ_ATTEMPTS,
+            backoff=ExponentialBackoff(
+                initial=_S3_READ_BACKOFF_INITIAL,
+                maximum=_S3_READ_BACKOFF_MAXIMUM,
+                factor=2.0,
+                jitter=0.25,
+            ),
+            operation=f"conditional S3 read {self.path}",
+        )
 
     def write(self, data: bytes, *, expected_version: str | None) -> str:
         client = self._client(self.endpoint_url)

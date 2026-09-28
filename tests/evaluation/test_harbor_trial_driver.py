@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 import yaml
 from marin.evaluation.harbor.dataset import local_harbor_dataset_path
-from marin.evaluation.harbor.driver_config import preflight_harbor_configs
+from marin.evaluation.harbor.driver_config import _driver_environment, preflight_harbor_configs
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(180)]
 
@@ -52,12 +52,10 @@ def _external_python(
     check: bool = True,
     extra_python_path: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    environment = dict(os.environ)
+    environment = _driver_environment()
     environment["PYTHONHASHSEED"] = hash_seed
-    python_paths = [str(_ROOT / "lib/marin/src")]
     if extra_python_path is not None:
-        python_paths.insert(0, str(extra_python_path))
-    environment["PYTHONPATH"] = os.pathsep.join(python_paths)
+        environment["PYTHONPATH"] = os.pathsep.join((str(extra_python_path), environment["PYTHONPATH"]))
     return subprocess.run(
         [
             "uv",
@@ -74,6 +72,37 @@ def _external_python(
         text=True,
         env=environment,
     )
+
+
+def test_external_driver_retries_spurious_path_style_response():
+    result = _external_python(
+        "-c",
+        textwrap.dedent(
+            """
+            from io import BytesIO
+            from unittest.mock import MagicMock, patch
+
+            from botocore.exceptions import ClientError
+            from rigging.filesystem.conditional_object import S3ConditionalObject
+
+            client = MagicMock()
+            client.get_object.side_effect = [
+                ClientError(
+                    {"Error": {"Code": "PathStyleRequestNotAllowed", "Message": "use virtual-host addressing"}},
+                    "GetObject",
+                ),
+                {"Body": BytesIO(b"one"), "ETag": '"v1"'},
+            ]
+            S3ConditionalObject._client = staticmethod(lambda _endpoint: client)
+            with patch("rigging.timing.time.sleep", lambda _delay: None):
+                result = S3ConditionalObject("s3://bucket/HEAD").read()
+            assert result is not None
+            assert result.data == b"one"
+            """
+        ),
+    )
+
+    assert result.returncode == 0
 
 
 def _preflight(

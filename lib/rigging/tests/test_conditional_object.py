@@ -118,6 +118,29 @@ def test_s3_conditional_object_maps_missing_head_to_no_version(monkeypatch):
     assert S3ConditionalObject("s3://bucket/HEAD").version() is None
 
 
+@pytest.mark.parametrize("operation", ["read", "version"])
+def test_s3_conditional_object_retries_spurious_path_style_response(monkeypatch, operation):
+    client = MagicMock()
+    error = ClientError(
+        {"Error": {"Code": "PathStyleRequestNotAllowed", "Message": "use virtual-host addressing"}},
+        "GetObject" if operation == "read" else "HeadObject",
+    )
+    if operation == "read":
+        client.get_object.side_effect = [error, {"Body": BytesIO(b"one"), "ETag": '"v1"'}]
+    else:
+        client.head_object.side_effect = [error, {"ETag": '"v1"'}]
+    monkeypatch.setattr(S3ConditionalObject, "_client", staticmethod(lambda _path: client))
+    monkeypatch.setattr("rigging.timing.time.sleep", lambda _delay: None)
+
+    result = getattr(S3ConditionalObject("s3://bucket/HEAD"), operation)()
+
+    if operation == "read":
+        assert result is not None
+        assert result.data == b"one"
+    else:
+        assert result == '"v1"'
+
+
 def test_s3_conditional_object_maps_precondition_failure(monkeypatch):
     client = MagicMock()
     client.put_object.side_effect = ClientError(

@@ -5,6 +5,7 @@
 
 import json
 import logging
+import os
 import subprocess
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
@@ -23,7 +24,8 @@ from marin.external_dependencies import HARBOR
 from marin.inference.iris import InferenceBackendState
 
 _TRIAL_DRIVER = Path(__file__).with_name("trial_driver.py")
-_DRIVER_PYTHONPATH = str(Path(__file__).parents[3])
+_LIB_DIR = Path(__file__).parents[5]
+_DRIVER_PYTHONPATH = os.pathsep.join(str(_LIB_DIR / project / "src") for project in ("marin", "rigging", "finestore"))
 _OWNER_ONLY_MODE = 0o600
 # Harbor can exhaust a trial's upstream retry budget in tens of seconds when an endpoint disappears.
 _BACKEND_POLL_SECONDS = 5.0
