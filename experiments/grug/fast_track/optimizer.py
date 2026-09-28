@@ -674,6 +674,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     """Grokfast-EMA (arXiv 2405.20233): every gradient gets ``lambda`` x its EMA added before the optimizer
     (0: off; the paper uses 2)."""
     grokfast_alpha: float = 0.98
+    ple_lr_mult: float = 1.0
+    """Adam LR multiplier of the per-layer embedding table (``ple_dim``)."""
     grokfast_adam_only: bool = False
     """Apply Grokfast to the plain-Adam groups only (on MuonH it acts as extra momentum)."""
     snoo_period: int = 0
@@ -831,6 +833,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                     learning_rate * self.sinkhorn_lr_mult,
                 ),
                 "embed2": plain_adam_at(adam_lr * self.embed2_lr_mult),
+                "ple": plain_adam_at(adam_lr * self.ple_lr_mult),
                 "kda_decay": plain_adam_at(adam_lr * self.kda_decay_lr_mult, self.kda_decay_beta1, self.kda_decay_beta2),
             }
             inner = optax.multi_transform(transforms, self.create_mask)
@@ -898,7 +901,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 path_lower,
             ):
                 return "adam"
-            if re.search(r"token_embed(2|3|_ple)", path_lower) and self.embed2_lr_mult != 1.0:
+            if "token_embed_ple" in path_lower:
+                return "ple"
+            if re.search(r"token_embed(2|3)", path_lower) and self.embed2_lr_mult != 1.0:
                 return "embed2"
             if "token_embed" in path_lower:
                 return self.embed_group
