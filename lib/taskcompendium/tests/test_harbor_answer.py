@@ -13,7 +13,7 @@ from harbor.models.task.task import Task
 
 from taskcompendium.harbor.runner import ChatLaunch, ReplayLaunch, run_trial
 from taskcompendium.lowering import (
-    HarborTaskBinding,
+    HarborEnvironmentConfig,
     SelectionPolicy,
     compatible_lowerings,
     lower_to_harbor,
@@ -85,14 +85,14 @@ def specification() -> TaskSpec:
 async def test_direct_chat_harbor_trial_distinguishes_answer_outcomes(
     tmp_path, specification, answer_format, response, reward, status
 ):
-    binding = HarborTaskBinding()
+    environment_config = HarborEnvironmentConfig()
     convention = SubmissionConvention(id=answer_format.value, answer_format=answer_format)
-    task = lower_to_harbor(specification, convention, binding, tmp_path / "task")
+    task = lower_to_harbor(specification, convention, environment_config, tmp_path / "task")
     assert Task.is_valid_dir(task, disable_verification=True)
     assert not (task / "tests" / "test.sh").exists()
     assert "12" not in (task / "instruction.md").read_text()
 
-    result = await run_trial(task, binding, ReplayLaunch(response=response), tmp_path / "trials", "run")
+    result = await run_trial(task, environment_config, ReplayLaunch(response=response), tmp_path / "trials", "run")
 
     outcome = json.loads((tmp_path / "trials/run/verifier/taskcompendium-result.json").read_text())
     assert outcome["status"] == status
@@ -106,14 +106,17 @@ async def test_direct_chat_harbor_trial_distinguishes_answer_outcomes(
 
 async def test_direct_chat_exact_comparison_uses_pinned_normalization(tmp_path, specification):
     specification = specification.model_copy(update={"verifier": ExactAnswer(expected="Straße Park")})
-    binding = HarborTaskBinding()
+    environment_config = HarborEnvironmentConfig()
     task = lower_to_harbor(
-        specification, SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN), binding, tmp_path / "task"
+        specification,
+        SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        environment_config,
+        tmp_path / "task",
     )
 
     result = await run_trial(
         task,
-        binding,
+        environment_config,
         ReplayLaunch(response="STRASSE   PARK"),
         tmp_path / "trials",
         "run",
@@ -123,13 +126,16 @@ async def test_direct_chat_exact_comparison_uses_pinned_normalization(tmp_path, 
 
 
 async def test_direct_chat_harbor_trial_records_private_metadata_failure(tmp_path, specification):
-    binding = HarborTaskBinding()
+    environment_config = HarborEnvironmentConfig()
     task = lower_to_harbor(
-        specification, SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN), binding, tmp_path / "task"
+        specification,
+        SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        environment_config,
+        tmp_path / "task",
     )
     (task / "submission_convention.json").write_text("{invalid")
 
-    result = await run_trial(task, binding, ReplayLaunch(response="12"), tmp_path / "trials", "run")
+    result = await run_trial(task, environment_config, ReplayLaunch(response="12"), tmp_path / "trials", "run")
 
     outcome = json.loads((tmp_path / "trials/run/verifier/taskcompendium-result.json").read_text())
     assert outcome["status"] == "infra_error"
@@ -144,7 +150,7 @@ def test_direct_chat_rejects_unsatisfied_requirements(tmp_path, specification):
         lower_to_harbor(
             specification,
             SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
-            HarborTaskBinding(),
+            HarborEnvironmentConfig(),
             tmp_path / "task",
         )
 
@@ -153,9 +159,9 @@ def test_file_result_cannot_use_text_submission_convention(tmp_path, specificati
     specification = specification.model_copy(update={"answer_type": AnswerType.FILE})
     convention = SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN)
 
-    assert compatible_lowerings(specification, (convention,), (HarborTaskBinding(),)) == ()
+    assert compatible_lowerings(specification, (convention,), (HarborEnvironmentConfig(),)) == ()
     with pytest.raises(ValueError, match="cannot carry 'file'"):
-        lower_to_harbor(specification, convention, HarborTaskBinding(), tmp_path / "task")
+        lower_to_harbor(specification, convention, HarborEnvironmentConfig(), tmp_path / "task")
     assert not (tmp_path / "task").exists()
 
 
@@ -164,7 +170,7 @@ def test_selection_policies_use_compatible_conventions(specification):
         SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
         SubmissionConvention(id="json", answer_format=AnswerFormat.JSON),
     )
-    candidates = compatible_lowerings(specification, conventions, (HarborTaskBinding(),))
+    candidates = compatible_lowerings(specification, conventions, (HarborEnvironmentConfig(),))
 
     assert select_lowerings(candidates, SelectionPolicy.ALL) == candidates
     assert select_lowerings(candidates, SelectionPolicy.FIRST) == (candidates[0],)
@@ -176,13 +182,16 @@ async def test_chat_trial_resolves_key_at_runtime_without_persisting_it(
 ):
     secret = "taskcompendium-local-test-secret"
     monkeypatch.setenv("TASKCOMPENDIUM_TEST_API_KEY", secret)
-    binding = HarborTaskBinding()
+    environment_config = HarborEnvironmentConfig()
     task = lower_to_harbor(
-        specification, SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN), binding, tmp_path / "task"
+        specification,
+        SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        environment_config,
+        tmp_path / "task",
     )
     launch = ChatLaunch(model="fixture-model", api_base=chat_endpoint.url, api_key_env="TASKCOMPENDIUM_TEST_API_KEY")
 
-    result = await run_trial(task, binding, launch, tmp_path / "trials", "run")
+    result = await run_trial(task, environment_config, launch, tmp_path / "trials", "run")
 
     assert result.verifier_result.rewards == {"reward": 1.0}
     assert chat_endpoint.authorizations == [f"Bearer {secret}"]
@@ -200,13 +209,16 @@ def test_chat_launch_rejects_raw_key():
 async def test_chat_http_error_preserves_server_diagnostic(tmp_path, specification, chat_endpoint):
     chat_endpoint.status = 400
     chat_endpoint.body = b'{"error":"model unavailable"}'
-    binding = HarborTaskBinding()
+    environment_config = HarborEnvironmentConfig()
     task = lower_to_harbor(
-        specification, SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN), binding, tmp_path / "task"
+        specification,
+        SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        environment_config,
+        tmp_path / "task",
     )
     launch = ChatLaunch(model="fixture-model", api_base=chat_endpoint.url)
 
-    result = await run_trial(task, binding, launch, tmp_path / "trials", "run")
+    result = await run_trial(task, environment_config, launch, tmp_path / "trials", "run")
 
     assert result.exception_info is not None
     assert "model unavailable" in (tmp_path / "trials/run/result.json").read_text()

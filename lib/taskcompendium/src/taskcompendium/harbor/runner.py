@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Resolve a launch separately from a task-owned Harbor binding."""
+"""Resolve a launch separately from a task-owned Harbor environment configuration."""
 
 from pathlib import Path
 from typing import Any
@@ -12,12 +12,12 @@ from harbor.trial.trial import Trial
 from pydantic import BaseModel, ConfigDict
 
 from taskcompendium.lowering import (
-    BINDING_FILE,
+    ENVIRONMENT_CONFIG_FILE,
     SPECIFICATION_FILE,
-    HarborTaskBinding,
-    read_binding,
+    HarborEnvironmentConfig,
+    read_environment_config,
     read_specification,
-    validate_binding,
+    validate_environment_config,
 )
 
 DEFAULT_CHAT_TIMEOUT = 120
@@ -44,15 +44,15 @@ class ChatLaunch(BaseModel):
 
 async def run_trial(
     task_dir: Path,
-    binding: HarborTaskBinding,
+    environment_config: HarborEnvironmentConfig,
     launch: ReplayLaunch | ChatLaunch,
     trials_dir: Path,
     trial_name: str,
 ) -> TrialResult:
     """Run a lowered task and return Harbor's trial result."""
-    if binding != read_binding(task_dir / BINDING_FILE):
-        raise ValueError("Launch binding differs from the exported task binding")
-    validate_binding(read_specification(task_dir / SPECIFICATION_FILE), binding)
+    if environment_config != read_environment_config(task_dir / ENVIRONMENT_CONFIG_FILE):
+        raise ValueError("Launch environment configuration differs from the exported task")
+    validate_environment_config(read_specification(task_dir / SPECIFICATION_FILE), environment_config)
     if isinstance(launch, ReplayLaunch):
         agent: dict[str, Any] = {
             "import_path": "taskcompendium.harbor.adapter:ReplayAgent",
