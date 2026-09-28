@@ -43,8 +43,8 @@ are separate grants. The onboarding agent can identify missing access.
 
 ### Request your GCP and Weights & Biases access
 
-Once you have GitHub write access, open your own PR to add your Google account
-to the `Marin Dev` role. The PR changes
+Open your own PR to add your Google account to the `Marin Dev` role. Use a fork
+if you do not have repository write access. The PR changes
 [`iam_data.yaml`](https://github.com/marin-community/marin/blob/main/infra/pulumi/src/iac/gcp/iam_data.yaml)
 with an encrypted principal and a reference under the `marindev` grant. From
 the repository root, replace the example address with your Google account
