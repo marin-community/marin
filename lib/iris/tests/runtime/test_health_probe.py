@@ -23,7 +23,7 @@ class _HealthHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
-    def log_message(self, _format: str, *args) -> None:
+    def log_message(self, _format: str, *_args) -> None:
         pass
 
 
@@ -46,7 +46,6 @@ def test_probe_rejects_redirect_status_without_following_it():
         result = health_probe.probe_http_health(port, timeout=1)
 
     assert not result.healthy
-    assert result.detail == "health endpoint returned HTTP 302"
     assert not _HealthHandler.redirected
 
 

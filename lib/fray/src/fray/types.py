@@ -722,6 +722,7 @@ class JobRequest:
         priority: Forwarded to the underlying backend if supported. 0 leaves
             the backend to use its default priority.
         timeout: Backend-enforced execution deadline, if supported.
+        health_check: Optional application health policy for each task attempt.
     """
 
     name: str

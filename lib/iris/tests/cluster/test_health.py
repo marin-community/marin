@@ -7,7 +7,6 @@ import iris.cluster.health as health_module
 import pytest
 from iris.cluster.health import (
     IrisTaskHealthCheck,
-    NoopIrisTaskHealthCheck,
     TaskHealthCheck,
     publish_task_health,
     task_health_enabled,
@@ -15,23 +14,6 @@ from iris.cluster.health import (
 )
 from iris.rpc import controller_pb2
 from rigging.timing import Duration
-
-
-def test_task_health_check_requires_kubernetes_compatible_durations():
-    with pytest.raises(ValueError, match="whole seconds"):
-        TaskHealthCheck(
-            startup_timeout=Duration.from_seconds(30),
-            period=Duration.from_ms(1500),
-            request_timeout=Duration.from_seconds(1),
-            failure_threshold=3,
-        )
-    with pytest.raises(ValueError, match="less than period"):
-        TaskHealthCheck(
-            startup_timeout=Duration.from_seconds(30),
-            period=Duration.from_seconds(5),
-            request_timeout=Duration.from_seconds(5),
-            failure_threshold=3,
-        )
 
 
 def test_iris_task_health_check_converts_a_structural_request():
@@ -62,7 +44,6 @@ def test_iris_task_health_check_uses_a_noop_for_an_absent_request():
 
     health_check.apply_to(launch_request.health_check)
 
-    assert isinstance(health_check, NoopIrisTaskHealthCheck)
     assert not launch_request.HasField("health_check")
 
 

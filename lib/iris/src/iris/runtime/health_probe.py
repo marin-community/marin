@@ -5,7 +5,6 @@
 
 import argparse
 import http.client
-import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +14,8 @@ from iris.runtime.health import (
     HEALTH_PATH,
     HEALTH_PORT_FILE,
     HEALTH_TERMINATION_FILE,
+    MAX_PORT,
+    write_health_state,
 )
 
 MAX_RESPONSE_BYTES = 4096
@@ -29,7 +30,7 @@ class ProbeResult:
 def _read_port() -> int:
     path = Path(HEALTH_PORT_FILE)
     port = int(path.read_text(encoding="utf-8").strip())
-    if not 1 <= port <= 65535:
+    if not 1 <= port <= MAX_PORT:
         raise ValueError(f"published port {port} is outside the valid range")
     return port
 
@@ -64,14 +65,6 @@ def probe_http_health(port: int, timeout: float) -> ProbeResult:
     return ProbeResult(False, detail)
 
 
-def _write_atomic(path: Path, value: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temporary.write_text(value, encoding="utf-8")
-    os.replace(temporary, path)
-    path.chmod(0o644)
-
-
 def _failure_count() -> int:
     path = Path(HEALTH_FAILURE_COUNT_FILE)
     try:
@@ -83,15 +76,15 @@ def _failure_count() -> int:
 def _record_live_result(result: ProbeResult, failure_threshold: int) -> None:
     count_path = Path(HEALTH_FAILURE_COUNT_FILE)
     if result.healthy:
-        _write_atomic(count_path, "0\n")
+        write_health_state(count_path, "0\n")
         Path(HEALTH_TERMINATION_FILE).unlink(missing_ok=True)
         return
 
     count = _failure_count() + 1
-    _write_atomic(count_path, f"{count}\n")
+    write_health_state(count_path, f"{count}\n")
     if count >= failure_threshold:
         termination_path = Path(HEALTH_TERMINATION_FILE)
-        _write_atomic(termination_path, f"Task health check failed {count} consecutive times: {result.detail}\n")
+        write_health_state(termination_path, f"Task health check failed {count} consecutive times: {result.detail}\n")
 
 
 def main(argv: list[str] | None = None) -> int:

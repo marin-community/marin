@@ -4,6 +4,9 @@
 """Tests for pod manifest building: naming, env vars, volumes, constraints, init containers."""
 
 import json
+import os
+import subprocess
+import sys
 from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import dataclass
@@ -426,7 +429,8 @@ def test_build_pod_manifest_task_container_falls_back_to_logs_on_error():
     assert container["terminationMessagePolicy"] == "FallbackToLogsOnError"
 
 
-def test_build_pod_manifest_uses_native_task_health_probes():
+@pytest.mark.parametrize("use_venv", [False, True])
+def test_build_pod_manifest_uses_native_task_health_probes(tmp_path, use_venv):
     request = make_run_req("/test-job/0")
     request.ports.append("healthz")
     request.health_check.startup_timeout.milliseconds = 30 * 60 * 1000
@@ -445,13 +449,26 @@ def test_build_pod_manifest_uses_native_task_health_probes():
     assert container["startupProbe"]["periodSeconds"] == 10
     assert container["startupProbe"]["timeoutSeconds"] == 4
     assert container["startupProbe"]["failureThreshold"] == 181
-    assert "--phase startup" in container["startupProbe"]["exec"]["command"][2]
     assert container["livenessProbe"]["periodSeconds"] == 10
     assert container["livenessProbe"]["timeoutSeconds"] == 4
     assert container["livenessProbe"]["failureThreshold"] == 13
-    assert "--failure-threshold 13" in container["livenessProbe"]["exec"]["command"][2]
     assert container["terminationMessagePath"] == "/tmp/iris/health-termination-log"
     assert container["terminationMessagePolicy"] == "FallbackToLogsOnError"
+
+    venv = tmp_path / "venv"
+    interpreter = venv / "bin" / "python" if use_venv else tmp_path / "python"
+    interpreter.parent.mkdir(parents=True, exist_ok=True)
+    interpreter.write_text(f"#!{sys.executable}\nimport json, sys\nprint(json.dumps(sys.argv[1:]))\n")
+    interpreter.chmod(0o755)
+    probe_env = {**os.environ, "IRIS_VENV": str(venv), "IRIS_PYTHON": str(tmp_path / "python")}
+    for probe, expected_args in (
+        ("startupProbe", ["--phase", "startup", "--timeout", "3"]),
+        ("livenessProbe", ["--phase", "live", "--timeout", "3", "--failure-threshold", "13"]),
+    ):
+        result = subprocess.run(
+            container[probe]["exec"]["command"], env=probe_env, capture_output=True, text=True, check=True
+        )
+        assert json.loads(result.stdout) == ["-m", "iris.runtime.health_probe", *expected_args]
 
 
 def test_build_pod_manifest_gpu():

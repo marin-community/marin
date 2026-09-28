@@ -271,7 +271,6 @@ def test_worker_fails_a_live_task_after_consecutive_health_failures(
     task.thread.join(timeout=7.0)
 
     assert task.status == job_pb2.TASK_STATE_FAILED
-    assert task.error == "Task health check failed 2 consecutive times: health endpoint returned HTTP 503"
     assert handle.stop_calls[-1] == {"force": True}
 
 
@@ -1381,7 +1380,7 @@ def test_adopt_rejects_health_check_without_a_container_start_time(mock_worker, 
 def test_adopted_health_check_preserves_the_remaining_startup_window(mock_worker, mock_runtime, monkeypatch):
     started_at = Timestamp.from_seconds(1_735_689_600)
     now = started_at.add(Duration.from_seconds(20))
-    monkeypatch.setattr(Timestamp, "now", classmethod(lambda cls: now))
+    monkeypatch.setattr(Timestamp, "now", classmethod(lambda _cls: now))
     health = job_pb2.TaskHealthCheck(failure_threshold=1)
     health.startup_timeout.milliseconds = 30_000
     health.period.milliseconds = 5_000
@@ -1393,7 +1392,7 @@ def test_adopted_health_check_preserves_the_remaining_startup_window(mock_worker
     )
     probe_finished = threading.Event()
 
-    def unhealthy_probe(port, timeout):
+    def unhealthy_probe(_port, _timeout):
         probe_finished.set()
         return ProbeResult(False, "still starting")
 

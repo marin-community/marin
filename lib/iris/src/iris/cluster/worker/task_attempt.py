@@ -15,7 +15,7 @@ import subprocess
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from finelog.client import LogClient, Table
@@ -110,6 +110,50 @@ def _format_exit_error(exit_code: int | None, oom_killed: bool = False) -> str:
 
 _DISK_CHECK_INTERVAL_SECONDS = 60.0
 _HEALTH_LIVE_MARKER = ".iris_health_live"
+
+
+@dataclass
+class _HealthMonitor:
+    task_id: JobName
+    policy: job_pb2.TaskHealthCheck
+    port: int | None
+    startup_deadline: Deadline
+    live_marker: Path
+    live: bool = field(init=False)
+    failures: int = 0
+    next_probe: Deadline = field(default_factory=lambda: Deadline.from_ms(0))
+
+    def __post_init__(self) -> None:
+        self.live = self.live_marker.exists()
+
+    def error(self) -> str | None:
+        self.next_probe = Deadline.from_now(duration_from_proto(self.policy.period))
+        if self.port is None:
+            return f"Task health port {HEALTH_PORT_NAME!r} was not allocated"
+
+        result = probe_http_health(self.port, self.policy.request_timeout.milliseconds / 1000)
+        if result.healthy:
+            self.failures = 0
+            if not self.live:
+                self.live_marker.touch()
+                self.live = True
+            return None
+        if not self.live:
+            if self.startup_deadline.expired():
+                return f"Task health did not start before its deadline: {result.detail}"
+            return None
+
+        self.failures += 1
+        logger.warning(
+            "Task %s health check failed (%d/%d): %s",
+            self.task_id,
+            self.failures,
+            self.policy.failure_threshold,
+            result.detail,
+        )
+        if self.failures >= self.policy.failure_threshold:
+            return f"Task health check failed {self.failures} consecutive times: {result.detail}"
+        return None
 
 
 class TaskCancelled(Exception):
@@ -909,10 +953,17 @@ class TaskAttempt:
         log_reader: RuntimeLogReader,
     ) -> _TaskOutcome:
         last_disk_check = 0.0
-        health = self.request.health_check if self.request.HasField("health_check") else None
-        next_health_probe = Deadline.from_ms(0)
-        health_failures = 0
-        health_live = bool(self.workdir and (self.workdir / _HEALTH_LIVE_MARKER).exists())
+        health_monitor = None
+        if self.request.HasField("health_check"):
+            assert self._health_startup_deadline is not None
+            assert self.workdir is not None
+            health_monitor = _HealthMonitor(
+                self.task_id,
+                self.request.health_check,
+                self.ports.get(HEALTH_PORT_NAME),
+                self._health_startup_deadline,
+                self.workdir / _HEALTH_LIVE_MARKER,
+            )
         while True:
             if rule := chaos("worker.task_monitor"):
                 time.sleep(rule.delay_seconds)
@@ -1002,38 +1053,12 @@ class TaskAttempt:
                             exit_code=status.exit_code or -1,
                         )
 
-            if health is not None and status.phase == ContainerPhase.RUNNING and next_health_probe.expired():
-                next_health_probe = Deadline.from_now(duration_from_proto(health.period))
-                port = self.ports.get(HEALTH_PORT_NAME)
-                if port is None:
-                    health_error = f"Task health port {HEALTH_PORT_NAME!r} was not allocated"
-                else:
-                    result = probe_http_health(port, health.request_timeout.milliseconds / 1000)
-                    health_error = None
-                    if result.healthy:
-                        health_failures = 0
-                        if not health_live:
-                            health_live = True
-                            assert self.workdir is not None
-                            (self.workdir / _HEALTH_LIVE_MARKER).touch()
-                    elif not health_live:
-                        assert self._health_startup_deadline is not None
-                        if self._health_startup_deadline.expired():
-                            health_error = f"Task health did not start before its deadline: {result.detail}"
-                    else:
-                        health_failures += 1
-                        logger.warning(
-                            "Task %s health check failed (%d/%d): %s",
-                            self.task_id,
-                            health_failures,
-                            health.failure_threshold,
-                            result.detail,
-                        )
-                        if health_failures >= health.failure_threshold:
-                            health_error = (
-                                f"Task health check failed {health_failures} consecutive times: {result.detail}"
-                            )
-
+            if (
+                health_monitor is not None
+                and status.phase == ContainerPhase.RUNNING
+                and health_monitor.next_probe.expired()
+            ):
+                health_error = health_monitor.error()
                 if handle.status().phase == ContainerPhase.STOPPED:
                     continue
                 if health_error is not None:

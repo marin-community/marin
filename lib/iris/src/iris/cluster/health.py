@@ -93,14 +93,13 @@ class NoopIrisTaskHealthCheck(IrisTaskHealthCheck):
     """Health policy that leaves task health disabled."""
 
     def apply_to(self, target: job_pb2.TaskHealthCheck) -> None:
-        pass
+        del target
 
 
 NOOP_IRIS_TASK_HEALTH_CHECK = NoopIrisTaskHealthCheck()
 
 
 def validate_task_health_check(health_check: job_pb2.TaskHealthCheck) -> None:
-    """Validate a health policy received through the Iris API."""
     TaskHealthCheck(
         startup_timeout=duration_from_proto(health_check.startup_timeout),
         period=duration_from_proto(health_check.period),
@@ -123,7 +122,7 @@ def task_health_port() -> int:
         port = int(raw_port)
     except ValueError as error:
         raise RuntimeError(f"{HEALTH_PORT_ENV} must be an integer") from error
-    if not 0 <= port <= 65535:
+    if not 0 <= port <= runtime_health.MAX_PORT:
         raise RuntimeError(f"{HEALTH_PORT_ENV} must be between 0 and 65535")
     return port
 
@@ -131,14 +130,9 @@ def task_health_port() -> int:
 def publish_task_health(port: int) -> None:
     """Publish the bound application health port for the backend probe."""
     requested_port = task_health_port()
-    if not 1 <= port <= 65535:
+    if not 1 <= port <= runtime_health.MAX_PORT:
         raise ValueError("published health port must be between 1 and 65535")
     if requested_port and port != requested_port:
         raise ValueError(f"health server bound port {port}, expected {requested_port}")
 
-    path = Path(HEALTH_PORT_FILE)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temporary.write_text(f"{port}\n", encoding="utf-8")
-    os.replace(temporary, path)
-    path.chmod(0o644)
+    runtime_health.write_health_state(Path(HEALTH_PORT_FILE), f"{port}\n")
