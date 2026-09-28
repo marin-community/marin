@@ -5064,12 +5064,14 @@ class Transformer(eqx.Module):
         )
         return hidden, lm_head
 
-    def _output_bigram_stats(self, token_ids: Int[Array, "B S"]) -> dict[str, jax.Array]:
-        """Norms of ``U`` and ``W`` and the RMS of the prior's logit term on a small token slice."""
+    def _output_bigram_stats(self) -> dict[str, jax.Array]:
+        """Norms of ``U`` and ``W`` and the RMS of the prior's logit term over a fixed, evenly spaced set of probe
+        token ids (a slice of the batch-sharded tokens can't be taken under explicit sharding)."""
         assert self.output_bigram_u is not None and self.output_bigram_w is not None
         u = jax.lax.stop_gradient(self.output_bigram_u).astype(jnp.float32)
         w = jax.lax.stop_gradient(self.output_bigram_w).astype(jnp.float32)
-        sample = rms_norm(u[token_ids[0, :_OUTPUT_BIGRAM_STAT_TOKENS]])
+        probe = jnp.arange(_OUTPUT_BIGRAM_STAT_TOKENS) * (u.shape[0] // _OUTPUT_BIGRAM_STAT_TOKENS)
+        sample = rms_norm(u[probe])
         return {
             "train/attn_res/knob_output_bigram_u_norm": jnp.linalg.norm(u),
             "train/attn_res/knob_output_bigram_w_norm": jnp.linalg.norm(w),
@@ -5270,7 +5272,7 @@ class Transformer(eqx.Module):
                 if name.startswith("attn_res_")
             }
             if self.output_bigram_w is not None:
-                final_gate_metrics.update(self._output_bigram_stats(token_ids))
+                final_gate_metrics.update(self._output_bigram_stats())
             if not router_metrics:
                 # Dense model: no router to summarize.
                 return loss, {"train/cross_entropy_loss": cross_entropy_loss, **final_gate_metrics}
