@@ -389,7 +389,7 @@ def fetch_samples(
     metric_columns = tuple(sorted({name for row in metric_maps if row for name in row}))
     primary = _sample_primary_metric(metric_columns, primary_metric_name)
     correct_values = [
-        value if value is not None or primary is None or not row or primary not in row else row[primary] >= 1.0
+        value if value is not None or primary is None or not row or row.get(primary) is None else row[primary] >= 1.0
         for value, row in zip(stored_correct, metric_maps, strict=True)
     ]
     n_correct = sum(1 for value in correct_values if value is True)
