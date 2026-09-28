@@ -45,7 +45,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from marin.evaluation.eval_stats import SAMPLE_COUNT_METRIC, UNGRADED_ERROR
 from marin.evaluation.evaluation_config import eval_task_directory
-from marin.evaluation.metric_selection import base_metric, declared_metric, primary_filter
+from marin.evaluation.metric_selection import REPEAT_MEAN_SUFFIX, base_metric, declared_metric, primary_filter
 from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, BenchmarkMetadataRef, EvalTaskRef, TaskCoverage
 
 
@@ -218,6 +218,8 @@ def _lm_eval_grading(
     ``,<filter>`` suffix. This accepts both encodings.
     """
     picked = declared_metric(metrics, primary_metric_name)
+    if picked is None and primary_metric_name is not None and primary_metric_name.endswith(REPEAT_MEAN_SUFFIX):
+        picked = declared_metric(metrics, primary_metric_name.removesuffix(REPEAT_MEAN_SUFFIX))
     if picked is None:
         return None
     name, value = picked
@@ -243,6 +245,12 @@ def sample_from_lm_eval(task: str, raw: dict, primary_metric_name: str | None = 
         metrics,
         extraction_filter if isinstance(extraction_filter, str) else None,
         primary_metric_name,
+    )
+    failure_category = raw.get("failure_category")
+    failure_marker = (
+        f"{_INFRASTRUCTURE_ERROR_PREFIX} {failure_category}"
+        if isinstance(failure_category, str) and failure_category in _INFRASTRUCTURE_FAILURE_CATEGORIES
+        else None
     )
     common = {
         "task": task,
@@ -270,8 +278,10 @@ def sample_from_lm_eval(task: str, raw: dict, primary_metric_name: str | None = 
             kind=SampleKind.MULTIPLE_CHOICE,
             prompt_text=context,
             choices=choices,
-            model_choice=max(scored)[1] if scored else None,
+            model_choice=max(scored)[1] if scored and failure_marker is None else None,
             target_choice=_resolve_target_choice(target, choices),
+            output=failure_marker,
+            extracted=failure_marker,
             **common,
         )
 
@@ -295,9 +305,8 @@ def sample_from_lm_eval(task: str, raw: dict, primary_metric_name: str | None = 
     filtered = raw.get("filtered_resps")
     if isinstance(filtered, list) and filtered:
         filtered = filtered[0]
-    failure_category = raw.get("failure_category")
-    if isinstance(failure_category, str) and failure_category in _INFRASTRUCTURE_FAILURE_CATEGORIES:
-        output = f"{_INFRASTRUCTURE_ERROR_PREFIX} {failure_category}"
+    if failure_marker is not None:
+        output = failure_marker
         filtered = output
     messages = _parse_chat_messages(prompt)
     return EvalSample(

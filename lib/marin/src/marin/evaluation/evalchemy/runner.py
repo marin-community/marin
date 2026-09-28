@@ -28,7 +28,7 @@ from marin.evaluation.evalchemy.runtime import (
 )
 from marin.evaluation.evaluation_config import EvalTaskConfig, eval_task_directory
 from marin.evaluation.lm_eval_samples import rebuild_lm_eval_samples, summarize_native_eval_samples
-from marin.evaluation.metric_selection import declared_metric
+from marin.evaluation.metric_selection import REPEAT_MEAN_SUFFIX, declared_metric
 from marin.evaluation.records import (
     EVALCHEMY_INFRASTRUCTURE_ERROR,
     BenchmarkMetadataRef,
@@ -203,6 +203,8 @@ def _apply_recovered_canonical_metrics(
         normalized: dict[str, float] = {}
         for metric in benchmark.metrics:
             picked = declared_metric(recovered, metric.source_name)
+            if picked is None and metric.source_name.endswith(REPEAT_MEAN_SUFFIX):
+                picked = declared_metric(recovered, metric.source_name.removesuffix(REPEAT_MEAN_SUFFIX))
             if picked is not None:
                 normalized[metric.name] = picked[1]
         if normalized:
