@@ -865,26 +865,36 @@ def store_telemetry(
     findings: Sequence[LintFindingRecord],
 ) -> None:
     """Mirror bounded Finelog activity for single-store exploration queries."""
-    invocation_rows: list[dict[str, object]] = []
+    invocation_rows: dict[str, dict[str, object]] = {}
+    invocation_payloads: dict[str, dict[str, object]] = {}
+    invocation_sequences: dict[str, int] = {}
     for row in invocations:
         payload = _payload(row)
-        invocation_rows.append(
-            {
-                "invocation_id": row.invocation_id,
-                "repository": repository,
-                "ts": _utc_datetime(row.ts),
-                "pr_number": row.pr_number,
-                "head_sha": row.head_sha,
-                "catalog_sha": row.lint_catalog_sha,
-                "successful": (
-                    payload.get("agent_exit_code") is not None
-                    and int(payload["agent_exit_code"]) == 0
-                    and not bool(payload.get("timed_out"))
-                ),
-                "finding_count": int(payload.get("finding_count") or 0),
-                "record": payload,
-            }
-        )
+        # Finelog can re-emit one invocation with a new ingestion sequence.
+        content = {key: value for key, value in payload.items() if key != "seq"}
+        previous = invocation_payloads.get(row.invocation_id)
+        if previous is not None and previous != content:
+            raise ValueError(f"conflicting Finelog invocation rows for {row.invocation_id}")
+        invocation_payloads[row.invocation_id] = content
+        sequence = int(payload["seq"]) if payload.get("seq") is not None else -1
+        if row.invocation_id in invocation_rows and sequence <= invocation_sequences[row.invocation_id]:
+            continue
+        invocation_sequences[row.invocation_id] = sequence
+        invocation_rows[row.invocation_id] = {
+            "invocation_id": row.invocation_id,
+            "repository": repository,
+            "ts": _utc_datetime(row.ts),
+            "pr_number": row.pr_number,
+            "head_sha": row.head_sha,
+            "catalog_sha": row.lint_catalog_sha,
+            "successful": (
+                payload.get("agent_exit_code") is not None
+                and int(payload["agent_exit_code"]) == 0
+                and not bool(payload.get("timed_out"))
+            ),
+            "finding_count": int(payload.get("finding_count") or 0),
+            "record": payload,
+        }
     finding_rows: list[dict[str, object]] = []
     for row in findings:
         payload = _payload(row)
@@ -900,7 +910,7 @@ def store_telemetry(
             }
         )
     with engine.begin() as conn:
-        _upsert_many(conn, lint_invocations, invocation_rows, ("repository", "invocation_id"))
+        _upsert_many(conn, lint_invocations, list(invocation_rows.values()), ("repository", "invocation_id"))
         _upsert_many(conn, lint_findings, finding_rows, ("repository", "finding_id"))
 
 
