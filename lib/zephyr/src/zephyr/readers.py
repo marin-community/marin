@@ -65,7 +65,9 @@ def iter_parquet_row_groups(
         return
 
     pf = source
-    has_row_range = row_start is not None and row_end is not None
+    has_row_range = row_start is not None or row_end is not None
+    start = 0 if row_start is None else row_start
+    end = pf.metadata.num_rows if row_end is None else row_end
 
     cumulative_rows = 0
 
@@ -77,20 +79,18 @@ def iter_parquet_row_groups(
         cumulative_rows = rg_end
 
         if has_row_range:
-            assert row_start is not None and row_end is not None
-            if rg_end <= row_start:
+            if rg_end <= start:
                 continue
-            if rg_start >= row_end:
+            if rg_start >= end:
                 return
 
         table = pf.read_row_group(i, columns=columns)
 
         if has_row_range:
-            assert row_start is not None and row_end is not None
-            is_interior = rg_start >= row_start and rg_end <= row_end
+            is_interior = rg_start >= start and rg_end <= end
             if not is_interior:
-                local_start = max(0, row_start - rg_start)
-                local_end = min(rg_num_rows, row_end - rg_start)
+                local_start = max(0, start - rg_start)
+                local_end = min(rg_num_rows, end - rg_start)
                 table = table.slice(local_start, local_end - local_start)
 
         if len(table) > 0:
@@ -321,7 +321,7 @@ def load_parquet_batch(source: str | InputFileSpec) -> Iterator[pa.RecordBatch]:
 def load_parquet(source: str | InputFileSpec) -> Iterator[dict]:
     """Load Parquet file and yield records as dicts.
 
-    When given an InputFileSpec with row_start/row_end, reads only the exact rows
+    When given an InputFileSpec with row_start or row_end, reads only the exact rows
     in that range. Row groups are read efficiently (only overlapping groups are loaded),
     then rows are filtered to the precise range. When filter_expr is provided, the filter
     is pushed down to PyArrow for efficient filtering at read time.
@@ -382,11 +382,14 @@ def load_vortex(source: str | InputFileSpec) -> Iterator[dict]:
     dataset = vf.to_dataset()
 
     # Empty vortex files have no schema, so column projection would fail
-    if dataset.count_rows() == 0:
+    num_rows = dataset.count_rows()
+    if num_rows == 0:
         return
 
-    if spec.row_start is not None and spec.row_end is not None:
-        indices = pa.array(np.arange(spec.row_start, spec.row_end, dtype=np.uint64))
+    if spec.row_start is not None or spec.row_end is not None:
+        start = 0 if spec.row_start is None else spec.row_start
+        end = num_rows if spec.row_end is None else spec.row_end
+        indices = pa.array(np.arange(start, end, dtype=np.uint64))
         table = dataset.take(indices, columns=columns, filter=pa_filter)
     else:
         table = dataset.to_table(columns=columns, filter=pa_filter)

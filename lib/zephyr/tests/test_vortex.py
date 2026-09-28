@@ -50,6 +50,15 @@ class TestVortexReader:
         assert len(records) == 100
         assert set(records[0].keys()) == {"id", "name"}
 
+    @pytest.mark.parametrize(
+        "row_start,row_end",
+        [(10, 20), (10, None), (None, 20)],
+    )
+    def test_load_vortex_row_range(self, vortex_file, row_start, row_end):
+        spec = InputFileSpec(path=str(vortex_file), row_start=row_start, row_end=row_end)
+        records = list(load_vortex(spec))
+        assert [record["id"] for record in records] == list(range(100))[row_start:row_end]
+
     def test_load_vortex_empty_file(self, tmp_path):
         """Test loading an empty vortex file."""
         empty_path = tmp_path / "empty.vortex"
