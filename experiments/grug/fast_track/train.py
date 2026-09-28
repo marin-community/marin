@@ -1474,21 +1474,26 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         last_step_duration = duration
                         levanter.tracker.log({"throughput/hook_time": time.perf_counter() - hook_start}, step=step)
                         levanter.tracker.log({"throughput/loading_time": iterator.this_load_time}, step=step)
-                        router_metrics = {
-                            key: value
-                            for key, value in metrics.items()
-                            if key.startswith(
-                                (
-                                    "train/router/",
-                                    "moe_bias/",
-                                    "train/attn_res/",
-                                    "train/aux/",
-                                    "train/newton_muon/",
-                                    "train/optim/",
+                        # One batched device-to-host copy: handing the tracker device scalars makes it fetch each
+                        # one separately, which cost 0.1-0.7 s of host time per logging step (and more with one
+                        # process driving every GPU).
+                        router_metrics = jax.device_get(
+                            {
+                                key: value
+                                for key, value in metrics.items()
+                                if key.startswith(
+                                    (
+                                        "train/router/",
+                                        "moe_bias/",
+                                        "train/attn_res/",
+                                        "train/aux/",
+                                        "train/newton_muon/",
+                                        "train/optim/",
+                                    )
                                 )
-                            )
-                            and key not in ("train/router/routing_counts_per_layer", "qb_beta_per_layer")
-                        }
+                                and key not in ("train/router/routing_counts_per_layer", "qb_beta_per_layer")
+                            }
+                        )
                         if router_metrics:
                             levanter.tracker.log(router_metrics, step=step)
                         if "train/cross_entropy_loss" in metrics:
@@ -1506,10 +1511,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                                 top_k=config.model.num_experts_per_token,
                                 num_layers=config.model.num_layers,
                             )
-                            levanter.tracker.log(drop_metrics, step=step)
+                            levanter.tracker.log(jax.device_get(drop_metrics), step=step)
 
                         if watch_stats is not None:
-                            levanter.tracker.log(watch_stats, step=step)
+                            levanter.tracker.log(jax.device_get(watch_stats), step=step)
 
                     if checkpointer is not None:
                         with callbacks.progress_event_scope(
