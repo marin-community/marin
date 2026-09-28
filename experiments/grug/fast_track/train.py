@@ -635,8 +635,14 @@ def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
 
 
 def _next_qb_betas(state: GrugTrainState, new_betas: jax.Array) -> jax.Array:
-    """This step's QB betas, or the held ones once ``qb_freeze_step`` is reached."""
-    freeze_step = state.params.config.qb_freeze_step
+    """This step's QB betas (damped toward the held ones by ``qb_bias_damping``), or the held ones once
+    ``qb_freeze_step`` is reached. The bias is ``-beta`` mean-centered, a linear map, so damping the betas is
+    damping the bias: ``b <- (1 - gamma) b + gamma (-beta)``."""
+    config = state.params.config
+    if config.qb_bias_damping is not None:
+        gamma = config.qb_bias_damping
+        new_betas = (1.0 - gamma) * state.pending_qb_betas + gamma * new_betas
+    freeze_step = config.qb_freeze_step
     if freeze_step is None:
         return new_betas
     return jnp.where(state.step + 1 >= freeze_step, state.pending_qb_betas, new_betas)

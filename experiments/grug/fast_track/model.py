@@ -64,6 +64,8 @@ from experiments.grug.moe.kda import chunk_kda, doc_starts, kda_fused
 
 _GATED_NORM_RANK = 128
 _QB_HIST_BINS = 10_000
+# Tokens (split evenly over the batch shards) whose top-K sets ``qb_bias_damping``'s churn metric re-routes.
+_QB_CHURN_TOKENS = 1024
 _CE_TOKENS_PER_RANK = 65_536
 # A vocab tile of 8192 in the fused lm_head + cross-entropy loop measured ~3% faster than 4096 at d512.
 _CE_BLOCK_SIZES = BlockSizes(b_block_size=_CE_TOKENS_PER_RANK, v_block_size=8192)
@@ -153,6 +155,8 @@ class RouterCombine(StrEnum):
     SIGMOID_RAW = "sigmoid_raw"
     """``sigmoid(logit)`` times a constant (``routing_renorm_sum / (K/2)``, so the sum matches at init),
     no renormalization: a token's total expert weight can vary."""
+    SQRT_SOFTPLUS_RENORM = "sqrt_softplus_renorm"
+    """``sqrt(softplus(logit))`` (DeepSeek-V4's SqrtSoftplus gate), renormalized to sum to ``routing_renorm_sum``."""
 
 
 class ValueEmbeds(StrEnum):
@@ -391,6 +395,21 @@ class GrugModelConfig:
     ``attn_out`` (the attention sublayer output) and ``mlp_out`` (the MoE sublayer output)."""
     qb_freeze_step: int | None = None
     """Stop updating the QB router biases from this step on (they keep their last value)."""
+    qb_bias_damping: float | None = None
+    """Damped QB bias update (StableMoE arXiv 2204.08396; phi-balancing arXiv 2605.15403): ``b <- (1 - gamma) b +
+    gamma (-beta)`` instead of ``b <- -beta``. Setting it (1.0 is the undamped update) also logs
+    ``knob_router_qb_churn``: the fraction of the first ``_QB_CHURN_TOKENS`` tokens whose top-K set changes
+    when this step's logits are re-routed with the next step's bias. None: undamped, no churn metric."""
+    router_logit_scale: bool = False
+    """A learnable scalar per MoE layer (init 1, Adam) multiplying the router logits before QB and the combine.
+    Selection is scale-invariant under QB (a positive scale is monotone and QB re-thresholds), so it sets only
+    the combine temperature, which a norm-pinned router (``router_group=muonh``) cannot change otherwise."""
+    expert_output_gain: bool = False
+    """A learnable gain per expert (init 1, Adam) on each routed expert's output, folded into the combine weight
+    of every (token, slot) as ``w * gain[expert]`` (so every MoE backend runs it unchanged)."""
+    simbal_loss_weight: float = 0.0
+    """SimBal (arXiv 2506.14038): adds ``weight * sum_l ||R_l^T R_l - I||_1`` over the real-expert router
+    columns ``R_l`` [D, E] to the training loss (unnormalized, as in the paper; it uses 0.1). 0: off."""
     newton_muon: bool = False
     """Newton-Muon (arXiv 2604.01472) right-preconditioning of the routed-expert gate/up gradients:
     ``G <- G (K + gamma tr(K)/n I)^{-1}`` before momentum and Newton-Schulz, with ``K`` an EMA of the
@@ -893,6 +912,10 @@ class GrugModelConfig:
             raise ValueError(
                 "latent_select needs latent_dim <= hidden_dim and no ERC loss (ERC maps router rows via w_latent_down)"
             )
+        if self.qb_bias_damping is not None and not 0.0 < self.qb_bias_damping <= 1.0:
+            raise ValueError(f"qb_bias_damping must be in (0, 1], got {self.qb_bias_damping}")
+        if self.simbal_loss_weight > 0 and (self.dense_mlp or self.router_rank):
+            raise ValueError("simbal_loss_weight needs a MoE with a full-rank router")
         if self.erc_loss_weight > 0 and (self.dense_mlp or self.router_rank or self.moe_bank2_experts):
             raise ValueError("erc_loss_weight needs a MoE with a full-rank router and one expert bank")
 
@@ -1441,6 +1464,8 @@ def _learned_knob_stats(layer: "Block", i: int) -> dict[str, jax.Array]:
         freq = jnp.abs(jax.lax.stop_gradient(rot_scale).astype(jnp.float32)) * _kda_rot_omega(2 * rot_scale.shape[-1])
         stats[f"attn_res_knob_kda_rot_freq_mean_L{i}"] = jnp.mean(freq)
         stats[f"attn_res_knob_kda_rot_freq_max_L{i}"] = jnp.max(freq)
+    if isinstance(layer.mlp, MoEMLP):
+        stats.update(_router_knob_stats(layer.mlp, i))
     if layer.ple_up is not None:
         stats[f"attn_res_knob_ple_up_norm_L{i}"] = jnp.linalg.norm(
             jax.lax.stop_gradient(layer.ple_up).astype(jnp.float32)
@@ -1462,6 +1487,30 @@ def _learned_knob_stats(layer: "Block", i: int) -> dict[str, jax.Array]:
         if gammas:
             flat = jnp.concatenate([jax.lax.stop_gradient(g).reshape(-1) for g in gammas])
             stats[f"attn_res_knob_gain_abs_{name}_L{i}"] = jnp.mean(jnp.abs(flat))
+    return stats
+
+
+def _router_knob_stats(mlp: "MoEMLP", i: int) -> dict[str, jax.Array]:
+    """Router logit scale, per-expert output gains and, with SimBal or the logit scale, the router's Frobenius
+    norm and mean |cosine| between its real-expert columns."""
+    sg = jax.lax.stop_gradient
+    cfg = mlp.cfg
+    stats = {}
+    if mlp.router_logit_scale is not None:
+        stats[f"attn_res_knob_router_logit_scale_L{i}"] = sg(mlp.router_logit_scale)
+    if mlp.expert_output_gain is not None:
+        gain = sg(mlp.expert_output_gain[: cfg.num_experts]).astype(jnp.float32)
+        stats[f"attn_res_knob_expert_gain_mean_L{i}"] = jnp.mean(gain)
+        stats[f"attn_res_knob_expert_gain_std_L{i}"] = jnp.std(gain)
+        stats[f"attn_res_knob_expert_gain_min_L{i}"] = jnp.min(gain)
+        stats[f"attn_res_knob_expert_gain_max_L{i}"] = jnp.max(gain)
+    if mlp.router is not None and (cfg.simbal_loss_weight > 0 or cfg.router_logit_scale):
+        r = reshard(sg(mlp.router[:, : cfg.num_experts]).astype(jnp.float32), P(None, None))
+        norms = jnp.sqrt(jnp.sum(jnp.square(r), axis=0))
+        cos = jnp.einsum("de,df->ef", r / norms, r / norms, out_sharding=P(None, None))
+        n = cfg.num_experts
+        stats[f"attn_res_knob_router_norm_L{i}"] = jnp.sqrt(jnp.sum(jnp.square(norms)))
+        stats[f"attn_res_knob_router_col_cos_abs_L{i}"] = (jnp.sum(jnp.abs(cos)) - n) / (n * (n - 1))
     return stats
 
 
@@ -2077,6 +2126,8 @@ class MoEMLP(eqx.Module):
     expert_mlp: MoEExpertMlp
     expert_mlp_b: MoEExpertMlp | None
     bank_scale: Float[Array, " 2"] | None
+    router_logit_scale: Float[Array, ""] | None
+    expert_output_gain: Float[Array, " E"] | None
     null_const_v: Float[Array, "C L"] | None
     null_const_w: Float[Array, "C L 2"] | None
     w_latent_down: jax.Array | None
@@ -2156,6 +2207,8 @@ class MoEMLP(eqx.Module):
                 else None
             ),
             bank_scale=jnp.ones((2,), jnp.float32) if cfg.moe_bank2_experts and cfg.moe_bank2_scale else None,
+            router_logit_scale=jnp.ones((), jnp.float32) if cfg.router_logit_scale else None,
+            expert_output_gain=jnp.ones((e,), jnp.float32) if cfg.expert_output_gain else None,
             null_const_v=(
                 jnp.zeros((cfg.moe_const_experts, expert_width), jnp.float32) if cfg.moe_const_experts else None
             ),
@@ -2174,6 +2227,53 @@ class MoEMLP(eqx.Module):
         if self.w_latent_down is not None:
             weights.append(reshard(self.w_latent_down.astype(dtype), P(None, None)))
         return weights
+
+    def simbal_loss(self) -> jax.Array:
+        """SimBal router orthogonality loss ``||R^T R - I||_1`` over the real-expert columns (``simbal_loss_weight``)."""
+        assert self.router is not None
+        r = reshard(self.router[:, : self.cfg.num_experts].astype(jnp.float32), P(None, None))
+        gram = jnp.einsum("de,df->ef", r, r, out_sharding=P(None, None))
+        return jnp.sum(jnp.abs(gram - jnp.eye(self.cfg.num_experts, dtype=jnp.float32)))
+
+    def _qb_churn_stats(
+        self,
+        router_logits: Float[Array, "T E"],
+        beta: Float[Array, " E"],
+        banks: list[tuple[int, int, int]],
+        mesh: jax.sharding.AbstractMesh,
+    ) -> dict[str, jax.Array]:
+        """Bias-induced routing churn (``qb_bias_damping``): the first ``_QB_CHURN_TOKENS`` tokens are routed
+        with this step's bias and with the next step's (damped) bias on the same logits; returns the fraction
+        of their top-K sets and of their slots that differ."""
+        gamma = self.cfg.qb_bias_damping
+        assert gamma is not None
+        bias_now = jax.lax.stop_gradient(self.router_bias).astype(jnp.float32)
+        beta = jax.lax.stop_gradient(beta).astype(jnp.float32)
+        bias_next = (1.0 - gamma) * bias_now - gamma * (beta - jnp.mean(beta))
+        shards = math.prod(_mesh_axis_size(mesh, axis) for axis in _BATCH_AXES)
+        per_shard = max(1, _QB_CHURN_TOKENS // shards)
+
+        def _local(logits: jax.Array, now: jax.Array, nxt: jax.Array) -> tuple[jax.Array, jax.Array]:
+            logits = jax.lax.stop_gradient(logits[:per_shard])
+
+            def route(bias: jax.Array) -> jax.Array:
+                biased = logits + bias
+                picks = [jax.lax.top_k(biased[:, st : st + size], bank_k)[1] + st for st, size, bank_k in banks]
+                return jnp.concatenate(picks, axis=-1)
+
+            sel_now, sel_next = route(now), route(nxt)
+            kept = jnp.any(sel_next[:, :, None] == sel_now[:, None, :], axis=-1)
+            set_churn = jnp.mean(jnp.any(~kept, axis=-1).astype(jnp.float32))
+            slot_churn = jnp.mean((~kept).astype(jnp.float32))
+            return jax.lax.pmean(set_churn, _BATCH_AXES), jax.lax.pmean(slot_churn, _BATCH_AXES)
+
+        set_churn, slot_churn = shard_map(
+            _local, mesh=mesh, in_specs=(P(_BATCH_AXES, None), P(), P()), out_specs=(P(), P())
+        )(reshard(router_logits, P(_BATCH_AXES, None)), reshard(bias_now, P()), reshard(bias_next, P()))
+        return {
+            f"{_LAYER_KNOB_PREFIX}router_qb_churn": set_churn,
+            f"{_LAYER_KNOB_PREFIX}router_qb_slot_churn": slot_churn,
+        }
 
     def erc_loss(self, key: PRNGKeyArray) -> tuple[jax.Array, jax.Array]:
         """Expert-router coupling loss (``erc_loss_weight``) and ``mean diag(M) / mean offdiag(M)``.
@@ -2340,6 +2440,8 @@ class MoEMLP(eqx.Module):
             router_logits = jnp.einsum("tr,re->te", z.astype(jnp.float32), self.router_up.astype(jnp.float32))
         else:
             router_logits = projected[0].astype(jnp.float32)
+        if self.router_logit_scale is not None:
+            router_logits = router_logits * self.router_logit_scale.astype(jnp.float32)
         biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
         router_probs = jax.nn.softmax(router_logits, axis=-1)
         k = self.cfg.num_experts_per_token
@@ -2379,9 +2481,25 @@ class MoEMLP(eqx.Module):
         elif self.cfg.router_combine == RouterCombine.SIGMOID_RAW:
             combine_weights_f = jax.nn.sigmoid(unbiased_topk) * (renorm_sum / (k / 2))
         else:
-            combine_weights_f = jax.nn.sigmoid(unbiased_topk)
+            if self.cfg.router_combine == RouterCombine.SQRT_SOFTPLUS_RENORM:
+                # The floor keeps sqrt's gradient finite if softplus underflows to 0 (logit below about -100).
+                combine_weights_f = jnp.sqrt(jnp.maximum(jax.nn.softplus(unbiased_topk), 1e-30))
+            else:
+                combine_weights_f = jax.nn.sigmoid(unbiased_topk)
             denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
             combine_weights_f = combine_weights_f * (renorm_sum / (denom + 1e-9))
+        if self.expert_output_gain is not None:
+            # Scaling expert e's output by g_e is scaling its combine weight in every (token, slot) that picked it.
+            gain = shard_map(
+                _local_gather,
+                mesh=get_abstract_mesh(),
+                in_specs=(P(None), P(_BATCH_AXES, None)),
+                out_specs=P(_BATCH_AXES, None),
+            )(
+                reshard(self.expert_output_gain.astype(jnp.float32), P(None)),
+                reshard(selected_experts, P(_BATCH_AXES, None)),
+            )
+            combine_weights_f = combine_weights_f * reshard(gain, _partition_spec_of(combine_weights_f))
         combine_weights = combine_weights_f.astype(x.dtype)
         mesh = get_abstract_mesh()
         # Per-shard partials only; the cross-device reduction happens once after the layer scan.
@@ -2414,6 +2532,8 @@ class MoEMLP(eqx.Module):
         router_stats["qb_beta"] = beta
         router_stats["margin_min"] = margin_min
         router_stats["margin_max"] = margin_max
+        if self.cfg.qb_bias_damping is not None:
+            router_stats.update(self._qb_churn_stats(router_logits, beta, banks, mesh))
 
         routed_input = x_flat
         if self.latent_selects:
@@ -4813,6 +4933,12 @@ class Transformer(eqx.Module):
                 erc_terms.append(layer_loss)
             erc_loss = functools.reduce(jnp.add, erc_terms)
             loss = loss + self.config.erc_loss_weight * erc_loss.astype(loss_dtype)
+        simbal_loss = None
+        if self.config.simbal_loss_weight > 0 and train_terms:
+            simbal_loss = functools.reduce(
+                jnp.add, [layer.mlp.simbal_loss() for layer in self.layers() if isinstance(layer.mlp, MoEMLP)]
+            )
+            loss = loss + self.config.simbal_loss_weight * simbal_loss.astype(loss_dtype)
         if return_router_metrics:
             final_gate_metrics = {
                 f"train/attn_res/{name.removeprefix('attn_res_')}": router_metrics.pop(name)
@@ -4839,6 +4965,8 @@ class Transformer(eqx.Module):
                 summarized_metrics["train/attn_res/mtp_loss"] = mtp_loss
             if byte_loss is not None:
                 summarized_metrics["train/aux/byte_loss"] = byte_loss
+            if simbal_loss is not None:
+                summarized_metrics["train/aux/simbal_loss"] = simbal_loss
             if erc_loss is not None:
                 summarized_metrics["train/aux/erc_loss"] = erc_loss
                 summarized_metrics.update(erc_ratios)

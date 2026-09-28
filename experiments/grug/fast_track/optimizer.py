@@ -138,6 +138,11 @@ def _is_gate_or_router_weight(path_lower: str) -> bool:
     return path_lower.endswith((".attn_gate", ".router", ".router_down", ".router_up"))
 
 
+def _is_router_weight(path_lower: str) -> bool:
+    """True for the MoE router weight leaves (full-rank ``router`` or low-rank ``router_down`` / ``router_up``)."""
+    return path_lower.endswith((".mlp.router", ".mlp.router_down", ".mlp.router_up"))
+
+
 def _is_zero_centered_gain(path_lower: str) -> bool:
     """True for the ``gamma`` leaves of zero-centered RMSNorms (``zero_centered_gains``)."""
     return path_lower.endswith(".gamma")
@@ -391,7 +396,8 @@ def _sinkhorn_hyperball(momentum: float, iters: int, nesterov: bool, learning_ra
 
 # Leaves the trainer writes as data statistics (never trained): the fixed-encoder n-gram table and its code.
 _FROZEN_LEAVES = re.compile(r"(?:^|\.)(ngram_stat_(table|code)|latent_select_mask)$")
-_HYPERBALL_GROUPS = frozenset({"muonh", "adamh", "kda_beta", "muonh_attn", "muonh_routed", "sinkhornh"})
+_HYPERBALL_GROUPS = frozenset({"muonh", "adamh", "kda_beta", "muonh_attn", "muonh_routed", "muonh_router", "sinkhornh"})
+_ROUTER_GROUPS = ("adam", "muonh")
 
 
 class SnooState(NamedTuple):
@@ -704,6 +710,15 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     """Adam LR multiplier of the product-key memory value tables (``memory_layers``)."""
     grokfast_adam_only: bool = False
     """Apply Grokfast to the plain-Adam groups only (on MuonH it acts as extra momentum)."""
+    router_group: str = "adam"
+    """Update rule of the MoE router weights: ``adam`` or ``muonh`` (Newton-Schulz + hyperball per layer, as the
+    routers of DeepSeek-V4 arXiv 2606.19348 and Kimi K3 are on Muon). MuonH pins each router's Frobenius norm,
+    and with it the logit temperature; pair it with the model's ``router_logit_scale``."""
+    router_lr_mult: float = 1.0
+    """LR multiplier of the router weights alone (of ``adam_lr`` or, with ``router_group=muonh``, the MuonH LR)."""
+    router_weight_decay: float | None = None
+    """Decoupled weight decay of the Adam router weights alone (annealed like ``gate_router_weight_decay``);
+    None: the shared ``gate_router_weight_decay``."""
     snoo_period: int = 0
     """SNOO outer step every this many inner steps (0: off)."""
     snoo_lr: float = 0.5
@@ -810,6 +825,18 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 components.append(optax.scale(-lr))
                 return optax.chain(*components)
 
+            def router_adam_at(lr):
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                adam = adam_core(self.beta1, self.beta2)
+                decay = self.gate_router_weight_decay if self.router_weight_decay is None else self.router_weight_decay
+                if decay > 0.0:
+                    adam = _scale_by_adam_decoupled_decay(adam, decay, 0.0, num_train_steps)
+                components.append(cautious(adam) if self.adam_cautious else adam)
+                components.append(optax.scale(-lr))
+                return optax.chain(*components)
+
             transforms = {
                 "muonh": muonh_transform_at(learning_rate),
                 "adamh": adamh_transform_at(learning_rate),
@@ -867,6 +894,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 "value_embed": plain_adam_at(adam_lr * self.value_embed_lr_mult),
                 "memory": plain_adam_at(adam_lr * self.memory_lr_mult),
                 "kda_decay": plain_adam_at(adam_lr * self.kda_decay_lr_mult, self.kda_decay_beta1, self.kda_decay_beta2),
+                "router": router_adam_at(adam_lr * self.router_lr_mult),
+                "muonh_router": muonh_transform_at(learning_rate * self.router_lr_mult),
             }
             inner = optax.multi_transform(transforms, self.create_mask)
             if self.grokfast_lambda and not self.grokfast_adam_only:
@@ -893,6 +922,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             raise ValueError(f"kda_beta_mlp_group must be kda_beta or adam, got {self.kda_beta_mlp_group!r}")
         if self.embed_group not in ("adam", "adamh", "sinkhorn"):
             raise ValueError(f"embed_group must be adam, adamh or sinkhorn, got {self.embed_group!r}")
+        if self.router_group not in _ROUTER_GROUPS:
+            raise ValueError(f"router_group must be one of {_ROUTER_GROUPS}, got {self.router_group!r}")
+        if self.router_group == "muonh" and self.router_weight_decay is not None:
+            raise ValueError("router_weight_decay applies to the Adam router; MuonH keeps the router norm fixed")
 
     def create_mask(self, params):
         paths = leaf_key_paths(params)
@@ -933,7 +966,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             if path_lower.endswith(".value_embed") and self.value_embed_lr_mult != 1.0:
                 return "value_embed"
             if ".rel_pos." in path_lower or re.search(
-                r"(?:^|\.)(value_embed|ve_lambda|ve_gate|xsa_scale|xsa_gate|head_mix|ssmax_scale|shared_gate|laurel_[ab]_\w+|ple_up|moe_out_gate_[wb]|bigram_gate_[wb]|bigram_gate_[ab]_lr|trigram_gate_[wb]|trigram_gate_[ab]_lr|bank_scale|bias_\w+|dyt_alpha|dyt_beta|qk_mult|diff_lambda|diff_lambda_init|vres_lambda|rot_scale|null_const_[vw]|comba_d|v_filter_[wb]|gamma|ngram_stat_gate_[wb]|ngram_stat_up)$",
+                r"(?:^|\.)(value_embed|ve_lambda|ve_gate|xsa_scale|xsa_gate|head_mix|ssmax_scale|shared_gate|laurel_[ab]_\w+|ple_up|moe_out_gate_[wb]|bigram_gate_[wb]|bigram_gate_[ab]_lr|trigram_gate_[wb]|trigram_gate_[ab]_lr|bank_scale|router_logit_scale|expert_output_gain|bias_\w+|dyt_alpha|dyt_beta|qk_mult|diff_lambda|diff_lambda_init|vres_lambda|rot_scale|null_const_[vw]|comba_d|v_filter_[wb]|gamma|ngram_stat_gate_[wb]|ngram_stat_up)$",
                 path_lower,
             ):
                 return "adam"
@@ -949,6 +982,12 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 return "embed2"
             if "token_embed" in path_lower:
                 return self.embed_group
+            if _is_router_weight(path_lower):
+                if self.router_group == "muonh":
+                    return "muonh_router" if self.router_lr_mult != 1.0 else "muonh"
+                if self.router_lr_mult != 1.0 or self.router_weight_decay is not None:
+                    return "router"
+                return "adam"
             if "router_bias" in path_lower or _is_gate_or_router_weight(path_lower):
                 return "adam"
             if "output_proj" in path_lower or "lm_head" in path_lower:
