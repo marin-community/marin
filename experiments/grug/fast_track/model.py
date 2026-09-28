@@ -597,6 +597,11 @@ class GrugModelConfig:
     attn_res_full: bool = False
     """Full (not Block) AttnRes: every attention and MoE sublayer output is its own source. Needs
     attn_res_layer_backward=SAVE."""
+    moe_shortcut: bool = False
+    """Shortcut-connected MoE (ScMoE, arXiv 2404.05019; LongCat-Flash arXiv 2509.01322): layer ``l``'s MoE
+    gate mixes the same AttnRes sources as layer ``l``'s attention gate (with its own query), excluding that
+    attention's output, which still enters the history for later gates. The MoE dispatch then does not
+    depend on the attention, so its all-to-all can overlap the attention compute. Needs ``attn_res``."""
     mla_share_kv_latent: bool = False
     """Every MLA layer after the first reuses the first MLA layer's normed KV latent (own W_uk / W_uv, so
     absorption still works), halving the MLA KV cache at d512. Needs attn_res_layer_backward=SAVE."""
@@ -698,6 +703,9 @@ class GrugModelConfig:
                 raise ValueError("zero-computation experts do not support moe_bank2, hash layers or dense router grad")
             if self.moe_null_target_frac is not None and not 0.0 < self.moe_null_target_frac < 1.0:
                 raise ValueError(f"moe_null_target_frac must be in (0, 1), got {self.moe_null_target_frac}")
+
+        if self.moe_shortcut and not self.attn_res:
+            raise ValueError("moe_shortcut requires attn_res (the MoE shortcut is an AttnRes gate)")
 
     @property
     def num_null_experts(self) -> int:
@@ -2748,9 +2756,14 @@ def _attn_res_layer(
         kda_ablation,
         physical in cfg.value_residual_layers,
     )
+    # The MLP re-attends over the history including this layer's attention write, or without it
+    # (moe_shortcut) so the MoE does not wait on the attention.
+    shortcut_partial = partial
     partial = attn_out if partial is None else partial + attn_out
-    # The MLP re-attends over the history including this layer's attention write.
-    h, z_mlp, w_mlp = _attn_res_mix(blocks, block_logits, partial, queries, 2 * layer_index + 1, eps, logit_bias, **opts)
+    mlp_partial = shortcut_partial if cfg.moe_shortcut else partial
+    h, z_mlp, w_mlp = _attn_res_mix(
+        blocks, block_logits, mlp_partial, queries, 2 * layer_index + 1, eps, logit_bias, **opts
+    )
     mlp_out, router_stats = layer.mlp_branch(h, mask, **_route_kwargs(cfg, physical, token_ids, noise_key))
     return partial + mlp_out, {
         **router_stats,
@@ -2801,14 +2814,20 @@ def _attn_res_layer_full(diff_args, mask, token_ids, use_long, layer_index, eps,
         value_residual=layer_index % cfg.num_layers in cfg.value_residual_layers,
     )
     sum_components = cfg.attn_res_sum_inputs
+    # moe_shortcut: the MoE gate reads the history before this layer's attention write.
+    shortcut_history = (blocks, block_logits)
+    first_reader = 2 * layer_index + 1 + int(cfg.moe_shortcut)
     blocks = (*blocks, attn_out)
     block_logits = (
         *block_logits,
-        _attn_res_source_logits(attn_out, queries[2 * layer_index + 1 :], eps, cfg.attn_res_head_norm),
+        _attn_res_source_logits(attn_out, queries[first_reader:], eps, cfg.attn_res_head_norm),
     )
-    h, z_mlp, w_mlp = _attn_res_mix(blocks, block_logits, None, queries, 2 * layer_index + 1, eps, logit_bias, **opts)
+    mlp_blocks, mlp_block_logits = shortcut_history if cfg.moe_shortcut else (blocks, block_logits)
+    h, z_mlp, w_mlp = _attn_res_mix(
+        mlp_blocks, mlp_block_logits, None, queries, 2 * layer_index + 1, eps, logit_bias, **opts
+    )
     if "mlp" in sum_components:
-        h = _stream_sum(blocks)
+        h = _stream_sum(mlp_blocks)
     sum_parts: tuple[str, ...] = ()
     if "mlp_shared" in sum_components:
         sum_parts += ("shared",)
@@ -2820,7 +2839,7 @@ def _attn_res_layer_full(diff_args, mask, token_ids, use_long, layer_index, eps,
     mlp_out, router_stats = layer.mlp_branch(
         h,
         mask,
-        _stream_sum(blocks) if sum_parts else None,
+        _stream_sum(mlp_blocks) if sum_parts else None,
         sum_parts,
         **_route_kwargs(cfg, layer_index % cfg.num_layers, token_ids, noise_key),
     )
@@ -3681,7 +3700,8 @@ class Transformer(eqx.Module):
                 has_partial_attn = partial_before is not None
                 stream_col = cfg.attn_res_stream_source
                 weight_logs[2 * eff] = (stats.pop(_ATTN_RES_W_ATTN), has_partial_attn or stream_col)
-                weight_logs[2 * eff + 1] = (stats.pop(_ATTN_RES_W_MLP), not cfg.attn_res_full or stream_col)
+                has_partial_mlp = has_partial_attn if cfg.moe_shortcut else not cfg.attn_res_full
+                weight_logs[2 * eff + 1] = (stats.pop(_ATTN_RES_W_MLP), has_partial_mlp or stream_col)
                 if _ATTN_RES_W_V in stats:
                     # V-gate query rows follow the per-layer gates (loop_passes == 1).
                     weight_logs[2 * num_layers + i] = (stats.pop(_ATTN_RES_W_V), has_partial_attn)
