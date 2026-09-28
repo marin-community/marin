@@ -49,9 +49,10 @@ Ask them to prepare a grant PR through the
 [Pulumi user-grant workflow](https://github.com/marin-community/marin/blob/main/infra/pulumi/README.md#user-grants).
 Creating the encrypted grant requires KMS access, which a new developer does
 not yet have. An authorized contributor runs `add-grant`; a separate reviewer
-checks the account and role with `review-grant`, merges the PR, and runs
-`pulumi up` on the `infra/pulumi` `marin` stack. The grant is live after that
-update succeeds. Do not put your email in a public issue or PR.
+decrypts the grant with `review-grant` and gets explicit human confirmation of
+the account and role before merging the PR. The reviewer then runs `pulumi up`
+on the `infra/pulumi` `marin` stack. The grant is live after that update
+succeeds. Do not put your email in a public issue or PR.
 
 DM your buddy: “Add me to the `marin-community` Weights & Biases entity. My
 Weights & Biases handle is `<your-handle>`.” Replace the placeholder with your
