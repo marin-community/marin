@@ -26,6 +26,7 @@ from marin.rl.skyrl import (
     SkyRLRuntimeProfile,
     SkyRLSpec,
     SkyRLTopology,
+    _materialize_role_plan_config,
     _role_plan_config_values,
     skyrl_step,
 )
@@ -82,24 +83,26 @@ MODELS = {
 }
 
 PRESET_STEPS = {"dry": 1, "calibrate": 30, "gate": 60, "gate-filter": 60, "on-policy": 30}
-ROLE_SETTINGS = frozenset(
-    _role_plan_config_values(
-        SkyRLRolePlan(
-            colocate_all=False,
-            policy_num_nodes=1,
-            policy_num_gpus_per_node=GPUS_PER_NODE,
-            num_inference_engines=GPUS_PER_NODE,
-            inference_engine_tensor_parallel_size=1,
-            inference_engine_pipeline_parallel_size=1,
-            inference_engine_data_parallel_size=1,
-            inference_engine_expert_parallel_size=1,
-            train_batch_size=TRAIN_BATCH_SIZE,
-            policy_mini_batch_size=TRAIN_BATCH_SIZE,
-            micro_train_batch_size_per_gpu=1,
-            n_samples_per_prompt=GROUP_SIZE,
-        )
+
+
+def role_plan(*, batch_size: int = TRAIN_BATCH_SIZE, group_size: int = GROUP_SIZE) -> SkyRLRolePlan:
+    return SkyRLRolePlan(
+        colocate_all=False,
+        policy_num_nodes=1,
+        policy_num_gpus_per_node=GPUS_PER_NODE,
+        num_inference_engines=GPUS_PER_NODE,
+        inference_engine_tensor_parallel_size=1,
+        inference_engine_pipeline_parallel_size=1,
+        inference_engine_data_parallel_size=1,
+        inference_engine_expert_parallel_size=1,
+        train_batch_size=batch_size,
+        policy_mini_batch_size=batch_size,
+        micro_train_batch_size_per_gpu=1,
+        n_samples_per_prompt=group_size,
     )
-)
+
+
+ROLE_SETTINGS = frozenset(_role_plan_config_values(role_plan()))
 DERIVED_SETTINGS = frozenset(
     {
         "generator.max_input_length",
@@ -136,23 +139,6 @@ PROTECTED_SETTINGS = (
         }
     )
 )
-
-
-def role_plan(*, batch_size: int = TRAIN_BATCH_SIZE, group_size: int = GROUP_SIZE) -> SkyRLRolePlan:
-    return SkyRLRolePlan(
-        colocate_all=False,
-        policy_num_nodes=1,
-        policy_num_gpus_per_node=GPUS_PER_NODE,
-        num_inference_engines=GPUS_PER_NODE,
-        inference_engine_tensor_parallel_size=1,
-        inference_engine_pipeline_parallel_size=1,
-        inference_engine_data_parallel_size=1,
-        inference_engine_expert_parallel_size=1,
-        train_batch_size=batch_size,
-        policy_mini_batch_size=batch_size,
-        micro_train_batch_size_per_gpu=1,
-        n_samples_per_prompt=group_size,
-    )
 
 
 def apply_setting(config: dict, text: str) -> None:
@@ -226,9 +212,6 @@ def training_config(
             "epochs": 2,
             "max_steps": max_steps,
             "update_epochs_per_batch": 1 if preset == "on-policy" else 2,
-            "train_batch_size": plan.train_batch_size,
-            "policy_mini_batch_size": plan.policy_mini_batch_size,
-            "micro_train_batch_size_per_gpu": plan.micro_train_batch_size_per_gpu,
             "micro_forward_batch_size_per_gpu": 1,
             "eval_batch_size": len(train_ns) + len(HELDOUT_NS),
             "eval_interval": 1 if preset == "dry" else 10,
@@ -260,14 +243,6 @@ def training_config(
                 "megatron_config": geometry,
             },
             "ref": {"megatron_config": geometry},
-            "placement": {
-                "colocate_all": False,
-                "colocate_policy_ref": True,
-                "policy_num_nodes": 1,
-                "policy_num_gpus_per_node": GPUS_PER_NODE,
-                "ref_num_nodes": 1,
-                "ref_num_gpus_per_node": GPUS_PER_NODE,
-            },
             "fully_async": {
                 "max_staleness_steps": 0 if preset == "on-policy" else 2,
                 "num_parallel_generation_workers": batch_size,
@@ -283,12 +258,6 @@ def training_config(
             "async_engine": True,
             "batched": False,
             "use_conversation_multi_turn": True,
-            "num_inference_engines": plan.num_inference_engines,
-            "inference_engine_tensor_parallel_size": 1,
-            "inference_engine_pipeline_parallel_size": 1,
-            "inference_engine_data_parallel_size": 1,
-            "inference_engine_expert_parallel_size": 1,
-            "n_samples_per_prompt": group_size,
             "gpu_memory_utilization": 0.7,
             "enforce_eager": False,
             "chat_template": {"source": "name", "name_or_path": choice.chat_template},
@@ -298,6 +267,7 @@ def training_config(
         },
         "data": {"kind": "parquet", "shuffle": False, "train_data": [], "val_data": []},
     }
+    _materialize_role_plan_config(config, plan)
     if choice.chat_template_kwargs is not None:
         config["generator"]["chat_template_kwargs"] = choice.chat_template_kwargs
     for setting in settings:
