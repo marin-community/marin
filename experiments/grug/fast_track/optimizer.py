@@ -390,7 +390,7 @@ def _sinkhorn_hyperball(momentum: float, iters: int, nesterov: bool, learning_ra
 
 
 # Leaves the trainer writes as data statistics (never trained): the fixed-encoder n-gram table and its code.
-_FROZEN_LEAVES = re.compile(r"(?:^|\.)ngram_stat_(table|code)$")
+_FROZEN_LEAVES = re.compile(r"(?:^|\.)(ngram_stat_(table|code)|latent_select_idx)$")
 _HYPERBALL_GROUPS = frozenset({"muonh", "adamh", "kda_beta", "muonh_attn", "muonh_routed", "sinkhornh"})
 
 

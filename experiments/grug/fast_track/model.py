@@ -366,10 +366,20 @@ class GrugModelConfig:
     router_combine: "RouterCombine" = dataclasses.field(default_factory=lambda: RouterCombine.SIGMOID_RENORM)
     routing_renorm_sum: float = 2.5
     """Total combine weight of a token's K routed experts (``RouterCombine``)."""
+    latent_select_pattern: str = "first"
+    """Which ``latent_dim`` hidden channels ``latent_select`` reads: ``first`` (channels ``[0, latent_dim)`` in
+    every layer), ``random`` (a fixed random subset per layer), or ``rotating`` (a contiguous window offset by
+    ``hidden_dim / num_layers`` per layer, wrapping around)."""
     latent_select: bool = False
     """With a MoE latent, form the expert input by selecting the first ``latent_dim`` channels of the hidden
     state (then the learnable ``latent_norm``) instead of projecting with ``w_latent_down``. The output side
     keeps ``w_latent_up``."""
+    latent_select_layers: str = "all"
+    """Layers whose MoE uses ``latent_select``: ``all``, ``kda`` (the KDA layers; the global layers project) or
+    ``global`` (the global attention layers; the KDA layers project)."""
+    latent_select_plus_proj: bool = False
+    """In the selecting layers, add a learned ``w_latent_down`` projection to the selected channels before
+    ``latent_norm`` (projection on top of selection)."""
     latent_out_norm: bool = False
     """Kimi K3 normalized LatentMoE: a learnable RMSNorm on the combined routed output before ``W_latent_up``."""
     proj_biases: tuple[str, ...] = ()
@@ -853,6 +863,14 @@ class GrugModelConfig:
             if self.moe_null_target_frac is not None and not 0.0 < self.moe_null_target_frac < 1.0:
                 raise ValueError(f"moe_null_target_frac must be in (0, 1), got {self.moe_null_target_frac}")
 
+        if self.latent_select_pattern not in ("first", "random", "rotating"):
+            raise ValueError(
+                f"latent_select_pattern must be first, random or rotating, got {self.latent_select_pattern!r}"
+            )
+        if self.latent_select_layers not in ("all", "kda", "global"):
+            raise ValueError(f"latent_select_layers must be all, kda or global, got {self.latent_select_layers!r}")
+        if self.latent_select_layers != "all" and self.local_mixer != LocalMixer.KDA:
+            raise ValueError("latent_select_layers kda/global needs local_mixer=KDA")
         if self.latent_select and (
             self.latent_dim is None or self.latent_dim > self.hidden_dim or self.erc_loss_weight > 0
         ):
@@ -1425,6 +1443,23 @@ def _learned_knob_stats(layer: "Block", i: int) -> dict[str, jax.Array]:
             flat = jnp.concatenate([jax.lax.stop_gradient(g).reshape(-1) for g in gammas])
             stats[f"attn_res_knob_gain_abs_{name}_L{i}"] = jnp.mean(jnp.abs(flat))
     return stats
+
+
+_LATENT_SELECT_SALT = 0x5E1EC7
+
+
+def _latent_select_idx(cfg: GrugModelConfig, layer_index: jax.Array | int) -> jax.Array | None:
+    """Per-layer hidden-channel indices for ``latent_select`` with a random or rotating pattern."""
+    if not cfg.latent_select or cfg.latent_select_pattern == "first":
+        return None
+    assert cfg.latent_dim is not None
+    d, latent = cfg.hidden_dim, cfg.latent_dim
+    if cfg.latent_select_pattern == "random":
+        key = random.fold_in(random.PRNGKey(_LATENT_SELECT_SALT), layer_index)
+        idx = jnp.sort(random.permutation(key, d)[:latent])
+    else:
+        idx = (jnp.arange(latent) + jnp.asarray(layer_index) * (d // cfg.num_layers)) % d
+    return reshard(idx.astype(jnp.float32), P(None))
 
 
 def _qk_mult_init(cfg: GrugModelConfig, num_heads: int) -> jax.Array | None:
@@ -2028,10 +2063,17 @@ class MoEMLP(eqx.Module):
     latent_norm: LearnedRMSNorm | None
     w_latent_up: jax.Array | None
     latent_out_norm: LearnedRMSNorm | None
+    latent_select_idx: Float[Array, " L"] | None
+    """Hidden channels read by ``latent_select`` (``latent_select_pattern`` random/rotating); float-stored
+    indices, frozen for the optimizer."""
     cfg: GrugModelConfig = eqx.field(static=True)
+    latent_selects: bool = eqx.field(static=True, default=False)
+    """This layer forms its expert input by ``latent_select`` (see ``latent_select_layers``)."""
 
     @staticmethod
-    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "MoEMLP":
+    def init(
+        cfg: GrugModelConfig, *, key: PRNGKeyArray, layer_index: jax.Array | int = 0, use_kda: bool = False
+    ) -> "MoEMLP":
         k_router, k_expert, k_down, k_up = random.split(key, 4)
         mesh = get_abstract_mesh()
 
@@ -2044,6 +2086,9 @@ class MoEMLP(eqx.Module):
         # own projection keeps `hidden_dim`.
         expert_width = cfg.latent_dim if cfg.latent_dim is not None else d
         latent = cfg.latent_dim
+        selects = cfg.latent_select and (
+            cfg.latent_select_layers == "all" or (cfg.latent_select_layers == "kda") == use_kda
+        )
         return MoEMLP(
             router=(
                 None if cfg.router_rank else reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None))
@@ -2069,7 +2114,7 @@ class MoEMLP(eqx.Module):
             router_bias=jnp.zeros((e,)),
             w_latent_down=(
                 None
-                if latent is None or cfg.latent_select
+                if latent is None or (selects and not cfg.latent_select_plus_proj)
                 else reshard(_init_weight(k_down, (d, latent), cfg.initializer_std), P(_FSDP_AXES, "model"))
             ),
             latent_norm=None if latent is None else _learned_rms_norm(cfg, latent, cfg.layer_norm_eps),
@@ -2083,6 +2128,7 @@ class MoEMLP(eqx.Module):
                 if latent is not None and cfg.latent_out_norm
                 else None
             ),
+            latent_select_idx=_latent_select_idx(cfg, layer_index) if selects else None,
             expert_mlp=_expert_mlp_init(_bank_config(cfg, 1), expert_width, k_expert),
             expert_mlp_b=(
                 _expert_mlp_init(_bank_config(cfg, 2), expert_width, random.fold_in(k_expert, 2))
@@ -2097,6 +2143,7 @@ class MoEMLP(eqx.Module):
                 jnp.zeros((cfg.moe_const_experts, expert_width, 2), jnp.float32) if cfg.moe_const_experts else None
             ),
             cfg=cfg,
+            latent_selects=selects,
         )
 
     def input_projection_weights(self, dtype: jnp.dtype) -> list[jax.Array]:
@@ -2349,12 +2396,19 @@ class MoEMLP(eqx.Module):
         router_stats["margin_max"] = margin_max
 
         routed_input = x_flat
-        if self.w_latent_down is not None and self.latent_norm is not None:
+        if self.latent_selects:
+            assert self.cfg.latent_dim is not None and self.latent_norm is not None
+            if self.latent_select_idx is None:
+                selected = x_flat[..., : self.cfg.latent_dim]
+            else:
+                idx = jax.lax.stop_gradient(self.latent_select_idx).astype(jnp.int32)
+                selected = jnp.take(x_flat, idx, axis=-1)
+            if self.w_latent_down is not None:
+                selected = selected + reshard(projected[1], _batch_spec())
+            routed_input = self.latent_norm(selected)
+        elif self.w_latent_down is not None and self.latent_norm is not None:
             # Keep the expert input scale independent of the down-projection initialization.
             routed_input = self.latent_norm(reshard(projected[1], _batch_spec()))
-        elif self.cfg.latent_select and self.latent_norm is not None:
-            assert self.cfg.latent_dim is not None
-            routed_input = self.latent_norm(x_flat[..., : self.cfg.latent_dim])
         if self.cfg.newton_muon:
             router_stats[NEWTON_GRAM_LOCAL_KEY] = _local_input_gram(routed_input)
         bank_mlps = [self.expert_mlp] if self.expert_mlp_b is None else [self.expert_mlp, self.expert_mlp_b]
@@ -2724,7 +2778,7 @@ class Block(eqx.Module):
             mlp = DenseMLP.init(cfg.hidden_dim, cfg.intermediate_dim, cfg.initializer_std, key=mlp_key)
             shared = None
         else:
-            mlp = MoEMLP.init(cfg, key=mlp_key)
+            mlp = MoEMLP.init(cfg, key=mlp_key, layer_index=layer_index, use_kda=use_kda)
             shared = None
             if cfg.shared_expert_intermediate_dim > 0:
                 num_shared_experts = cfg.num_shared_experts
