@@ -259,6 +259,16 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
     ]
 
 
+def test_taskcompendium_change_selects_isolated_suite(tmp_path: Path) -> None:
+    selection = select_changed_tests(["lib/taskcompendium/src/taskcompendium/lowering.py"], tmp_path)
+
+    assert selection.matrix == []
+    assert selection.suites == ["taskcompendium-unit"]
+
+    full_selection = select_changed_tests([], tmp_path, run_all_tests=True)
+    assert "taskcompendium-unit" in full_selection.suites
+
+
 def test_source_files_map_to_dotted_modules(tmp_path: Path) -> None:
     write(tmp_path, "lib/levanter/src/levanter/store/cache.py")
     assert classify(["lib/levanter/src/levanter/store/cache.py"], tmp_path).src_modules == {"levanter.store.cache"}
