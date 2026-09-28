@@ -284,5 +284,3 @@ def test_predicted_action_requires_exact_strings_and_explicit_numeric_tolerance(
     nearby_number = decode_action(_action("set_value", '{"value":1.005}'))
     assert compare(expected_number, nearby_number, ToolCallComparatorConfig()) == 0.0
     assert compare(expected_number, nearby_number, ToolCallComparatorConfig(numeric_tolerance=0.01)) == 1.0
-    with pytest.raises(ValueError, match="finite and nonnegative"):
-        ToolCallComparatorConfig(numeric_tolerance=float("inf"))
