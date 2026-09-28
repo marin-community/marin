@@ -20,6 +20,13 @@ class AnswerType(StrEnum):
     NATIVE_ACTION = "native_action"
 
 
+class VerifierKind(StrEnum):
+    """The registered grader used to check a submission."""
+
+    EXACT_ANSWER = "exact_answer"
+    TASKTROVE_MCQA = "tasktrove_mcqa"
+
+
 class Source(BaseModel):
     """Pinned provenance for the source row and the importer that converted it."""
 
@@ -46,7 +53,7 @@ class VerifierSpec(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    kind: str
+    kind: VerifierKind
     parameters_json: str = Field(repr=False)
 
 

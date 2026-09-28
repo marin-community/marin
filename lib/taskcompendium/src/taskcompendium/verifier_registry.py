@@ -8,13 +8,13 @@ from types import MappingProxyType
 
 from pydantic import ValidationError
 
-from taskcompendium.grading import EXACT_ANSWER_KIND, ExactAnswerVerifier, GradeResult, GradingAttempt, Verifier
-from taskcompendium.models import TaskSpec, VerifierSpec
+from taskcompendium.grading import ExactAnswerVerifier, GradeResult, GradingAttempt, Verifier
+from taskcompendium.models import TaskSpec, VerifierKind, VerifierSpec
 from taskcompendium.submission import SubmissionConvention
-from taskcompendium.verifiers.tasktrove_mcqa import TASKTROVE_MCQA_KIND, TaskTroveMcqaVerifier
+from taskcompendium.verifiers.tasktrove_mcqa import TaskTroveMcqaVerifier
 
-VERIFIERS: Mapping[str, type[Verifier]] = MappingProxyType(
-    {EXACT_ANSWER_KIND: ExactAnswerVerifier, TASKTROVE_MCQA_KIND: TaskTroveMcqaVerifier}
+VERIFIERS: Mapping[VerifierKind, type[Verifier]] = MappingProxyType(
+    {VerifierKind.EXACT_ANSWER: ExactAnswerVerifier, VerifierKind.TASKTROVE_MCQA: TaskTroveMcqaVerifier}
 )
 
 
@@ -25,7 +25,7 @@ def resolve_verifier(specification: VerifierSpec) -> Verifier:
     try:
         return verifier_type.model_validate_json(specification.parameters_json)
     except ValidationError as error:
-        raise ValueError(f"Invalid {specification.kind!r} verifier parameters: {error}") from error
+        raise ValueError(f"Invalid {specification.kind.value!r} verifier parameters: {error}") from error
 
 
 def validate_verifier(specification: VerifierSpec) -> None:

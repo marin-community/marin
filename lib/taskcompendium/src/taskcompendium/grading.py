@@ -10,10 +10,9 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
-from taskcompendium.models import VerifierSpec
+from taskcompendium.models import VerifierKind, VerifierSpec
 from taskcompendium.submission import SubmissionConvention, extract_answer
 
-EXACT_ANSWER_KIND = "exact_answer"
 WHITESPACE = re.compile(r"\s+")
 
 
@@ -75,7 +74,7 @@ class ExactAnswerVerifier(Verifier):
 def exact_answer(expected: str, ignore_case: bool = True, collapse_whitespace: bool = True) -> VerifierSpec:
     """Construct a pinned exact-answer verifier descriptor."""
     verifier = ExactAnswerVerifier(expected=expected, ignore_case=ignore_case, collapse_whitespace=collapse_whitespace)
-    return VerifierSpec(kind=EXACT_ANSWER_KIND, parameters_json=verifier.model_dump_json())
+    return VerifierSpec(kind=VerifierKind.EXACT_ANSWER, parameters_json=verifier.model_dump_json())
 
 
 def _normalize_exact(value: str, verifier: ExactAnswerVerifier) -> str:

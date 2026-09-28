@@ -8,10 +8,8 @@ from typing import Self
 from pydantic import model_validator
 
 from taskcompendium.grading import GradeResult, GradingAttempt, Outcome, Verifier
-from taskcompendium.models import VerifierSpec
+from taskcompendium.models import VerifierKind, VerifierSpec
 from taskcompendium.submission import extract_answer
-
-TASKTROVE_MCQA_KIND = "tasktrove_mcqa"
 
 
 class TaskTroveMcqaVerifier(Verifier):
@@ -43,4 +41,4 @@ class TaskTroveMcqaVerifier(Verifier):
 def tasktrove_mcqa(expected: str, options: int) -> VerifierSpec:
     """Construct a private TaskTrove MCQA verifier descriptor."""
     verifier = TaskTroveMcqaVerifier(expected=expected.strip().upper(), options=options)
-    return VerifierSpec(kind=TASKTROVE_MCQA_KIND, parameters_json=verifier.model_dump_json())
+    return VerifierSpec(kind=VerifierKind.TASKTROVE_MCQA, parameters_json=verifier.model_dump_json())

@@ -24,7 +24,7 @@ from taskcompendium.lowering import (
     read_specification,
     select_lowerings,
 )
-from taskcompendium.models import AnswerType, Source, TaskRequirements, TaskSpec, VerifierSpec
+from taskcompendium.models import AnswerType, Source, TaskRequirements, TaskSpec, VerifierKind, VerifierSpec
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
 
 
@@ -162,18 +162,17 @@ def test_direct_chat_rejects_unsatisfied_requirements(tmp_path, specification):
 @pytest.mark.parametrize(
     "verifier,message",
     [
-        (VerifierSpec(kind="unknown_kind", parameters_json="{}"), "Unknown verifier kind"),
         (
-            VerifierSpec(kind="exact_answer", parameters_json='{"expected": 12}'),
+            VerifierSpec(kind=VerifierKind.EXACT_ANSWER, parameters_json='{"expected": 12}'),
             "Invalid 'exact_answer' verifier parameters",
         ),
         (
-            VerifierSpec(kind="exact_answer", parameters_json='{"expected": "12", "extra": true}'),
+            VerifierSpec(kind=VerifierKind.EXACT_ANSWER, parameters_json='{"expected": "12", "extra": true}'),
             "Invalid 'exact_answer' verifier parameters",
         ),
     ],
 )
-def test_lowering_rejects_unknown_or_invalid_verifier_before_writing(tmp_path, specification, verifier, message):
+def test_lowering_rejects_invalid_verifier_before_writing(tmp_path, specification, verifier, message):
     specification = specification.model_copy(update={"verifier": verifier})
 
     with pytest.raises(ValueError, match=message):
