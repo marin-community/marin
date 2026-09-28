@@ -211,9 +211,9 @@ def all_sft_sources() -> dict[str, DatakitChatSource]:
     token_counts["agenttrove-glm53-compactions"] = 0.25
     token_counts["wildchat-glm53-format-completions"] = 0.01
     token_counts["synthetic-misconceptions-conversations"] = 0.002
-    # Marin-tokenizer count of the 729 rendered pilot conversations (mean 17.6k), plus the
-    # full run's 4.2k extra output tokens per attempt, times ~72.1k verified attempts.
-    token_counts["rts-glm-5.3-rollouts"] = 1.57
+    # Marin-tokenizer mean of 2,000 sampled rendered conversations (23.1k) times the
+    # 71,274 materialized conversations.
+    token_counts["rts-glm-5.3-rollouts"] = 1.65
     return {
         name: DatakitChatSource(
             name=name,
