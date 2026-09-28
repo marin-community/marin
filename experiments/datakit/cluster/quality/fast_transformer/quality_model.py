@@ -43,6 +43,26 @@ class QualityPin:
     """HuggingFace name of the corpus tokenizer whose ids the scorer reads."""
 
 
+@dataclass(frozen=True)
+class ContentTypePin:
+    """A content-type classifier's identity: its weight file, digest and label order."""
+
+    name: str
+    """Classifier tag, folded into the step hashes."""
+
+    model_path: str
+    """Weight ``.npz`` relative to ``MARIN_PREFIX``."""
+
+    model_sha256: str
+    """sha256 over the weight file's bytes."""
+
+    labels: tuple[str, ...]
+    """Classes the head emits, in head order. Fixed at the labels the classifier was
+    fitted on, and checked against the weight file's own label array, so a
+    checkpoint with a different head cannot write a different meaning into the
+    same column."""
+
+
 def quality_model_dir(pin: QualityPin) -> str:
     """Resolve the pin's model directory against the active ``MARIN_PREFIX``."""
     return prefix_join(marin_prefix(), pin.model_path)
@@ -112,5 +132,21 @@ def require_pinned_calibration(pin: QualityPin, model_dir: str) -> str:
         raise ValueError(
             f"{model_dir}/{CALIBRATION_FILE} digests to {digest}, but {pin.name} pins "
             f"{pin.calibration_sha256}; the bucketed path claims a different calibration"
+        )
+    return digest
+
+
+def classifier_path(pin: ContentTypePin) -> str:
+    """Resolve the classifier's weight file against the active ``MARIN_PREFIX``."""
+    return prefix_join(marin_prefix(), pin.model_path)
+
+
+def require_pinned_classifier(pin: ContentTypePin, path: str) -> str:
+    """Return the weight file's digest, refusing bytes that are not ``pin``'s."""
+    digest = _file_digest(StoragePath(path)).hex()
+    if digest != pin.model_sha256:
+        raise ValueError(
+            f"{path} digests to {digest}, but {pin.name} pins {pin.model_sha256}; "
+            f"its types would be written to a path that claims {pin.name}"
         )
     return digest

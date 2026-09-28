@@ -53,7 +53,7 @@ from marin.processing.tokenize.attributes import tokenize_attributes_step
 
 from experiments.datakit.cluster.domain.v0.assign import assign_hash_attrs
 from experiments.datakit.cluster.quality.fast_transformer.bucket import quality_step
-from experiments.datakit.cluster.quality.fast_transformer.quality_model import QualityPin
+from experiments.datakit.cluster.quality.fast_transformer.quality_model import ContentTypePin, QualityPin
 from experiments.datakit.reference_pipeline import select_sources, zephyr_datakit_steps
 
 _MARIN_PREFIX_ENV = "MARIN_PREFIX"
@@ -150,6 +150,16 @@ NEMOTRON_88K = QualityPin(
     tokenizer=NEMOTRON_TOKENIZER.name,
 )
 
+# The content-type classifier behind the per-type calibration in NEMOTRON_88K and
+# behind :func:`content_type`'s pinned leaves: the Harrier-embedding MLP fitted on
+# the 88k label set.
+DOMAIN_MLP_V1 = ContentTypePin(
+    name="domain_mlp_v1",
+    model_path="datakit/models/content_type/domain_mlp_v1/domain_mlp.npz",
+    model_sha256="e9221ce6156928fbc967a3368be6ad9b58e6804fb99860dcfe2038ccf833c0df",
+    labels=("prose", "code", "math", "multilingual", "structured", "agentic", "other"),
+)
+
 
 def _refuse_to_run(output_path: str) -> NoReturn:
     """Fail loudly: these steps describe data that already exists."""
@@ -218,12 +228,13 @@ def fusion_scores(source: str, quality_model: QualityPin = NEMOTRON_88K) -> Step
     from the Nemotron tokenization and the Harrier embeddings; the tokenization it
     read has since been deleted, so the leaves are pinned by path. The producer of
     record is :func:`score_fusion.fusion_score_step`, which tokenizes the normalized
-    text itself; a rerun lands at that step's own identity and repoints this map.
+    text itself. A rerun lands at that step's own identity; this map changes only
+    when such a run is deliberately registered in place of the August one.
     """
     if quality_model.model_sha256 != NEMOTRON_88K.model_sha256:
         raise ValueError(
             f"the pinned fusion scores were written by {NEMOTRON_88K.name}; score the corpus under "
-            f"{quality_model.name} with run.py --stage score before bucketing it"
+            f"{quality_model.name} with run.py --stage pipeline"
         )
     return _frozen_step(f"hero/fusion_scores/{source}", pinned_map("fusion_scores")[source])
 
@@ -231,8 +242,10 @@ def fusion_scores(source: str, quality_model: QualityPin = NEMOTRON_88K) -> Step
 def content_type(source: str) -> StepSpec:
     """Return the pinned predicted content types for ``source``.
 
-    One row per document from the ``domain_mlp_v1`` classifier over the Harrier
-    embeddings, written beside the fusion scores in their row order. The calibration
+    One row per document from the :data:`DOMAIN_MLP_V1` classifier over the Harrier
+    embeddings, in the normalized row order. Written by a script that predates
+    :func:`content_type.content_type_step`, the producer of record, so the leaves
+    are pinned by path; a rerun lands at the step's own identity. The calibration
     in :data:`NEMOTRON_88K` carries one curve per predicted type, which is what
     :func:`quality` applies.
     """

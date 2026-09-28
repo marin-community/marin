@@ -163,3 +163,16 @@ def test_fusion_scores_refuse_a_pin_that_is_another_model():
 def test_the_bucket_driver_resolves_to_the_registered_quality_path():
     (step,) = quality_run.build_bucket_steps(["stack-v3"])
     assert step.output_path == hero_data.quality("stack-v3").output_path
+
+
+def test_the_pipeline_driver_chains_fresh_steps_and_leaves_the_registered_data_alone():
+    scores, types, quality = quality_run.build_pipeline_steps(["stack-v3"])
+
+    # The bucket step reads the scores and types this run produces, not the pinned ones.
+    assert {dep.output_path for dep in quality.deps} >= {scores.output_path, types.output_path}
+    registered = {
+        hero_data.fusion_scores("stack-v3").output_path,
+        hero_data.content_type("stack-v3").output_path,
+        hero_data.quality("stack-v3").output_path,
+    }
+    assert registered.isdisjoint({scores.output_path, types.output_path, quality.output_path})
