@@ -51,6 +51,7 @@ MAX_EVIDENCE_PARAGRAPHS = 32
 EVIDENCE_GENERATION_TOKENS = 2_048
 EVIDENCE_REASONING_CHARS = 4_096
 REQUEST_TIMEOUT = 1_800.0
+DEFERRED_RETRY_DELAY = 60.0
 NEMOTRON_MATH_TEXTBOOKS = "nemotron_specialized/math_textbooks"
 SWALLOW_MATH_QA = "swallow-math-v2/qa"
 BIO_INSTRUCTION = "biocollection/instruction_stream"
@@ -58,6 +59,7 @@ SWALLOW_MATH_TEXTBOOK = "swallow-math-v2/textbook"
 TEACHER_EXERCISE_SOURCES = frozenset({BIO_INSTRUCTION, SWALLOW_MATH_TEXTBOOK})
 QUESTION_SOLUTION_SOURCES = frozenset({NEMOTRON_MATH_TEXTBOOKS, SWALLOW_MATH_QA})
 BIO_INPUT_RE = re.compile(r"<(dna|rna|protein|peptide|smiles)>(.*?)</\1>", re.S | re.I)
+BIO_PLACEHOLDER_RE = re.compile(r"\[\[MOLECULAR_INPUT_(\d+)\]\]")
 NUMBERED_STEP_RE = re.compile(r"^(?:\d+[.)]|step\s+\d+\b)", re.I)
 MISSING_CONTEXT_RE = re.compile(
     r"\b(?:the|source|provided|above) passage\b"
@@ -124,6 +126,16 @@ class ConversionMode(StrEnum):
 class ConvertedChunk:
     record: dict
     answer_format: Format
+
+
+class ConversionRejected(ValueError):
+    """A generated chunk exhausted validation retries without a usable conversation."""
+
+
+@dataclass(frozen=True)
+class RejectedChunk:
+    source_id: str
+    error: str
 
 
 FORMATS = (
@@ -439,6 +451,16 @@ def _row_request(
             "Never leave an extra indexed term undefined."
         )
         if source.name == BIO_INSTRUCTION:
+            molecular_inputs = list(BIO_INPUT_RE.finditer(chunk))
+            if molecular_inputs:
+                reinforcement += (
+                    "\n\nIMMUTABLE STUDENT INPUTS: In the user field, refer to each selected molecular input "
+                    "using its placeholder below. The pipeline expands that placeholder to the exact tagged "
+                    "source string. Do not retype, shorten, or edit the molecular string in the user field.\n"
+                    + "\n".join(
+                        f"[[MOLECULAR_INPUT_{index}]] = {match.group(0)}" for index, match in enumerate(molecular_inputs)
+                    )
+                )
             reinforcement += (
                 "\n\nPRIVATE COMPUTED STRING CHECKS (not part of the student question):\n"
                 + _biology_teacher_checks(chunk)
@@ -493,6 +515,16 @@ def _document(
                 "quote the supplied expression exactly and mark damaged notation as ambiguous"
             )
     user = completion["user"].strip()
+    if mode == ConversionMode.TEACHER_EXERCISE and source.name == BIO_INSTRUCTION:
+        molecular_inputs = list(BIO_INPUT_RE.finditer(chunk))
+
+        def expand_input(match: re.Match) -> str:
+            index = int(match.group(1))
+            if index >= len(molecular_inputs):
+                raise ValueError(f"Unknown molecular input placeholder {index}")
+            return molecular_inputs[index].group(0)
+
+        user = BIO_PLACEHOLDER_RE.sub(expand_input, user)
     if mode != ConversionMode.GROUNDED:
         if any(MISSING_CONTEXT_RE.search(completion[field]) for field in ("user", "reasoning_content", "answer")):
             raise ValueError("Conversion refers to a passage omitted from the user turn")
@@ -657,7 +689,11 @@ async def _convert_evidence_chunk(
                 error,
             )
             if attempt + 1 == MAX_ATTEMPTS:
-                raise RuntimeError(f"Evidence conversion failed for {source.name}/{source_id}/{chunk_index}") from error
+                if isinstance(error, httpx.HTTPError):
+                    raise RuntimeError(
+                        f"Evidence conversion failed for {source.name}/{source_id}/{chunk_index}"
+                    ) from error
+                raise ConversionRejected(f"Evidence conversion failed: {error}") from error
             body["messages"].append(
                 {"role": "user", "content": f"Selection rejected: {error}. Return a corrected JSON object."}
             )
@@ -731,9 +767,11 @@ async def _convert_chunk(
                         if attempt + 1 == MAX_ATTEMPTS:
                             if mode == ConversionMode.TEACHER_EXERCISE:
                                 if selected == formats[-1]:
-                                    raise RuntimeError(
-                                        f"Teacher exercise failed for {source.name}/{source_id}/{chunk_index}"
-                                    ) from error
+                                    if isinstance(error, httpx.HTTPError):
+                                        raise RuntimeError(
+                                            f"Teacher exercise failed for {source.name}/{source_id}/{chunk_index}"
+                                        ) from error
+                                    raise ConversionRejected(f"Teacher exercise failed: {error}") from error
                                 logger.warning(
                                     "Trying another teacher exercise format for %s/%s/%d after %s",
                                     source.name,
@@ -775,8 +813,16 @@ async def _convert_batch(
     endpoint: str,
     source: Source,
     rows: list[dict],
-) -> tuple[list[dict], Counter[str]]:
+    completed: dict[str, dict],
+) -> tuple[list[dict], Counter[str], list[RejectedChunk]]:
+    async def convert(row_id: str, chunk: str, index: int, count: int) -> ConvertedChunk | RejectedChunk:
+        try:
+            return await _convert_chunk(client, semaphore, endpoint, source, row_id, chunk, index, count)
+        except ConversionRejected as error:
+            return RejectedChunk(f"{source.name}:{row_id}:{index}", str(error))
+
     tasks = []
+    records = []
     async with asyncio.TaskGroup() as group:
         for row in rows:
             source_id = str(row["id"])
@@ -784,13 +830,19 @@ async def _convert_batch(
             if not chunks:
                 raise ValueError(f"Empty source row {source.name}/{source_id}")
             for chunk_index, chunk in enumerate(chunks):
-                tasks.append(
-                    group.create_task(
-                        _convert_chunk(client, semaphore, endpoint, source, source_id, chunk, chunk_index, len(chunks))
-                    )
-                )
+                key = f"{source.name}:{source_id}:{chunk_index}"
+                if key in completed:
+                    records.append(completed[key])
+                    continue
+                tasks.append(group.create_task(convert(source_id, chunk, chunk_index, len(chunks))))
     results = [task.result() for task in tasks]
-    return [result.record for result in results], Counter(result.answer_format.name for result in results)
+    converted = [result for result in results if isinstance(result, ConvertedChunk)]
+    rejected = [result for result in results if isinstance(result, RejectedChunk)]
+    return (
+        records + [result.record for result in converted],
+        Counter(result.answer_format.name for result in converted),
+        rejected,
+    )
 
 
 def _read_batch_rows(work: WorkBatch) -> list[dict]:
@@ -807,6 +859,7 @@ def _read_batch_rows(work: WorkBatch) -> list[dict]:
 def _write_batch(documents: list[dict], output_url: str) -> None:
     output_fs, output_path = filesystem_for(output_url)
     output_table = pa.Table.from_pylist(documents, schema=CHAT_SCHEMA)
+    output_fs.makedirs(output_path.rsplit("/", 1)[0], exist_ok=True)
     with atomic_rename(output_path, filesystem=output_fs) as temporary_path:
         with output_fs.open(temporary_path, "wb") as destination:
             pq.write_table(output_table, destination, compression="zstd")
@@ -814,16 +867,44 @@ def _write_batch(documents: list[dict], output_url: str) -> None:
 
 async def convert_work_batch(
     work: WorkBatch, endpoint: str, client: httpx.AsyncClient, semaphore: asyncio.Semaphore, output_root: str
-) -> None:
+) -> bool:
     item = work.item
     source = item.source
     output_url = _output_path(source, item.url, item.row_group, work.batch_index, output_root)
     output_fs, output_path = filesystem_for(output_url)
     if await asyncio.to_thread(output_fs.exists, output_path):
-        return
+        return True
+    partial_url = prefix_join(output_root, f"partials/{output_url.rsplit('/', 1)[-1]}")
+    partial_fs, partial_path = filesystem_for(partial_url)
+    completed = {}
+    if await asyncio.to_thread(partial_fs.exists, partial_path):
+        with partial_fs.open(partial_path, "rb") as stream:
+            completed = {record["source_id"]: record for record in pq.read_table(stream).to_pylist()}
     rows = await asyncio.to_thread(_read_batch_rows, work)
-    documents, format_counts = await _convert_batch(client, semaphore, endpoint, source, rows)
+    documents, format_counts, rejected = await _convert_batch(client, semaphore, endpoint, source, rows, completed)
+    rejection_url = prefix_join(output_root, f"rejections/{output_url.rsplit('/', 1)[-1]}.json")
+    rejection_fs, rejection_path = filesystem_for(rejection_url)
+    if rejected:
+        await asyncio.to_thread(_write_batch, documents, partial_url)
+        rejection_fs.makedirs(rejection_path.rsplit("/", 1)[0], exist_ok=True)
+        with atomic_rename(rejection_path, filesystem=rejection_fs) as temporary_path:
+            with rejection_fs.open(temporary_path, "w") as stream:
+                json.dump(
+                    {
+                        "output": output_url,
+                        "completed_chunks": len(documents),
+                        "rejected_chunks": [{"source_id": item.source_id, "error": item.error} for item in rejected],
+                    },
+                    stream,
+                )
+        logger.error(
+            "Deferred %s: %d rejected chunks; %d valid chunks persisted", output_url, len(rejected), len(documents)
+        )
+        return False
     await asyncio.to_thread(_write_batch, documents, output_url)
+    for fs, path in ((partial_fs, partial_path), (rejection_fs, rejection_path)):
+        if await asyncio.to_thread(fs.exists, path):
+            await asyncio.to_thread(fs.rm, path)
     logger.info(
         "Converted %s row group %d batch %d: %d rows, %d chat records, formats=%s",
         source.name,
@@ -833,13 +914,20 @@ async def convert_work_batch(
         len(documents),
         dict(format_counts),
     )
+    return True
 
 
 async def _consume_batches(
-    work: Iterator[WorkBatch], endpoint: str, client: httpx.AsyncClient, semaphore: asyncio.Semaphore, output_root: str
+    work: Iterator[WorkBatch],
+    endpoint: str,
+    client: httpx.AsyncClient,
+    semaphore: asyncio.Semaphore,
+    output_root: str,
+    deferred: list[WorkBatch],
 ) -> None:
     for batch in work:
-        await convert_work_batch(batch, endpoint, client, semaphore, output_root)
+        if not await convert_work_batch(batch, endpoint, client, semaphore, output_root):
+            deferred.append(batch)
 
 
 async def convert_work_batches(
@@ -852,10 +940,17 @@ async def convert_work_batches(
 ) -> None:
     """Overlap batch tails while keeping a shared limit on outstanding requests."""
     semaphore = asyncio.Semaphore(concurrency)
-    batches = iter(work)
-    async with asyncio.TaskGroup() as group:
-        for _ in range(concurrent_batches):
-            group.create_task(_consume_batches(batches, endpoint, client, semaphore, output_root))
+    pending = work
+    while pending:
+        batches = iter(pending)
+        deferred = []
+        async with asyncio.TaskGroup() as group:
+            for _ in range(concurrent_batches):
+                group.create_task(_consume_batches(batches, endpoint, client, semaphore, output_root, deferred))
+        pending = deferred
+        if pending:
+            logger.error("Retrying %d incomplete batches; full coverage and SFT handoff remain blocked", len(pending))
+            await asyncio.sleep(DEFERRED_RETRY_DELAY)
 
 
 async def run_worker(

@@ -632,3 +632,95 @@ async def test_failed_batch_cancels_pending_response_without_writing_output(tmp_
     assert errors.value.subgroup(RuntimeError) is not None
     assert cancelled == {"waiting-a", "waiting-b", "waiting-c"}
     assert not list(output_root.rglob("*.parquet"))
+
+
+@pytest.mark.asyncio
+async def test_biology_placeholder_preserves_long_input_and_keeps_reference_private(tmp_path) -> None:
+    sequence = "ACGT" * 900
+    passage = f"Question: count symbols in <dna>{sequence}</dna>. Private reference: 3600."
+    source = Source(conversion.BIO_INSTRUCTION, "", 1, 1)
+    input_path = tmp_path / "input.parquet"
+    pq.write_table(pa.Table.from_pylist([{"id": "long", "text": passage}]), input_path)
+    output_root = tmp_path / "output"
+
+    async def response(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        prompt = body["messages"][1]["content"]
+        assert f"[[MOLECULAR_INPUT_0]] = <dna>{sequence}</dna>" in prompt
+        selected = next(f for f in conversion.FORMATS if f"({f.name}):" in prompt)
+        completion = {
+            "user": "Count the symbols in [[MOLECULAR_INPUT_0]].",
+            "reasoning_content": "There are 900 repetitions of four symbols, giving 3600.",
+            "answer": conversion._evidence_answer(["900 times four gives 3600."], selected),
+        }
+        if selected.name == "json":
+            completion["answer"] = json.loads(completion["answer"])
+        return httpx.Response(
+            200, json={"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(completion)}}]}
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(response)) as client:
+        await convert_work_batches(
+            [WorkBatch(WorkItem(source, str(input_path), 0, 1), 0)], "http://test", client, 1, 1, str(output_root)
+        )
+    record = pq.read_table(_output_path(source, str(input_path), 0, 0, str(output_root))).to_pylist()[0]
+    user = record["messages"][0]["content"][0]["text"]
+    assert f"<dna>{sequence}</dna>" in user
+    assert "MOLECULAR_INPUT" not in user
+    assert "Private reference" not in user
+    assert "3600" not in user
+
+
+@pytest.mark.asyncio
+async def test_rejected_chunk_preserves_siblings_and_retries_after_other_batches(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(conversion, "MAX_ATTEMPTS", 1)
+    monkeypatch.setattr(conversion, "DEFERRED_RETRY_DELAY", 0)
+    source = Source(conversion.BIO_INSTRUCTION, "", 1, 3)
+    input_path = tmp_path / "input.parquet"
+    rows = [
+        {"id": name, "text": f"{name}: Question: count symbols in <dna>ACGT</dna>. Reference: 4."}
+        for name in ["bad", "sibling", "other"]
+    ]
+    pq.write_table(pa.Table.from_pylist(rows), input_path, row_group_size=2)
+    work = [WorkBatch(WorkItem(source, str(input_path), 0, 2), 0), WorkBatch(WorkItem(source, str(input_path), 1, 1), 0)]
+    output_root = tmp_path / "output"
+    recovered = False
+    requested = []
+
+    async def response(request: httpx.Request) -> httpx.Response:
+        nonlocal recovered
+        body = json.loads(request.content)
+        prompt = body["messages"][1]["content"]
+        row_id = prompt.split("<source_passage>\n", 1)[1].split(":", 1)[0]
+        requested.append(row_id)
+        if row_id == "other":
+            partials = list((output_root / "partials").glob("*.parquet"))
+            assert len(partials) == 1
+            assert [r["source_id"] for r in pq.read_table(partials[0]).to_pylist()] == [f"{source.name}:sibling:0"]
+            rejected = json.loads(next((output_root / "rejections").glob("*.json")).read_text())
+            assert [r["source_id"] for r in rejected["rejected_chunks"]] == [f"{source.name}:bad:0"]
+            assert not Path(_output_path(source, str(input_path), 0, 0, str(output_root))).exists()
+            recovered = True
+        selected = next(f for f in conversion.FORMATS if f"({f.name}):" in prompt)
+        completion = {
+            "user": "Count the symbols in [[MOLECULAR_INPUT_0]].",
+            "reasoning_content": "The input has four symbols.",
+            "answer": conversion._evidence_answer(["Four symbols."], selected),
+        }
+        if row_id == "bad" and not recovered:
+            completion["user"] = "Count symbols in <dna>ACGTA</dna>."
+        if selected.name == "json":
+            completion["answer"] = json.loads(completion["answer"])
+        return httpx.Response(
+            200, json={"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(completion)}}]}
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(response)) as client:
+        await convert_work_batches(work, "http://test", client, 2, 1, str(output_root))
+    records = [
+        row for path in (output_root / "outputs/main").glob("*.parquet") for row in pq.read_table(path).to_pylist()
+    ]
+    assert {row["source_id"] for row in records} == {f"{source.name}:{name}:0" for name in ["bad", "sibling", "other"]}
+    assert requested.count("sibling") == 1
+    assert not list((output_root / "partials").glob("*"))
+    assert not list((output_root / "rejections").glob("*"))

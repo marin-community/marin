@@ -16,6 +16,19 @@ object with an `answer` string and `evidence` and `caveats` arrays of strings.
 The worker supplies this schema to vLLM for constrained generation, then
 serializes the answer object into the Harmony final message. The constraints
 cover JSON syntax and string escaping, including backslashes and quotes.
+
+Biological teacher questions reference molecular strings with
+`[[MOLECULAR_INPUT_0]]` placeholders. The worker inserts the exact tagged source
+string before validating and publishing the conversation. Reference answers
+remain private teacher material.
+
+Exhausted generation-validation retries persist valid sibling conversations
+under `partials/` and rejected chunk IDs with their reasons under `rejections/`.
+Workers continue through other stratified batches, then retry incomplete
+batches using their saved valid chunks. A final `outputs/main/` batch is
+published only after every expected chunk passes validation. Unresolved chunks
+keep conversion running and block the audited packing/SFT handoff. HTTP,
+storage, and unexpected implementation errors still propagate.
 Other formats use an answer string in the response schema.
 Grounded tasks extract reported facts and reuse supplied worked steps. Supplied
 annotations are reported as reference information; the generated reasoning must not
