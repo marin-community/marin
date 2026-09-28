@@ -95,6 +95,20 @@ def test_grounded_math_rejects_missing_radicals_but_standalone_exercises_can_der
 
     record = validated_document(source, "test-2", "Amplitude sqrt(2E/k).", 0, completion, ConversionMode.GROUNDED)
     assert record["messages"][2]["content"][0]["text"] == completion["answer"]
+    ambiguous = validated_document(
+        source,
+        "test-2",
+        "Amplitude (2E/k).",
+        0,
+        {
+            "user": "Quote the stated amplitude and flag missing notation.",
+            "reasoning_content": "The extraction does not show square roots, so the original notation is ambiguous.",
+            "answer": "- The extracted amplitude is (2E/k).\nConclusion: The square-root notation is ambiguous.",
+        },
+        ConversionMode.GROUNDED,
+    )
+    assert "square roots" in ambiguous["messages"][1]["content"][0]["text"]
+    assert "(2E/k)" in ambiguous["messages"][2]["content"][0]["text"]
     exercise = validated_document(
         source,
         "test-2",

@@ -24,6 +24,8 @@ text and marking ambiguity instead of restoring missing notation or equations.
 For source-grounded tasks that summarize the supplied passage, the validator rejects added square-root
 notation when the source contains no radical notation or explicit square-root wording.
 Standalone worked exercises can derive new radicals.
+The check permits prose explaining that square-root notation is missing; it targets
+added `√`, `\sqrt`, and `sqrt` notation.
 For prose, code, and textbook passages, the worker appends the source chunk to
 the user turn so the assistant's answer has its evidence. For the Nemotron math
 textbooks and Swallow math QA sources, MiniMax extracts a standalone question

@@ -69,7 +69,8 @@ CONVERSION_PROCESS_RE = re.compile(
     r"\bconversion (?:request|task|pipeline)\b|" r"\b(?:the|my|this) (?:reasoning_content|(?:user|answer) field)\b",
     re.I,
 )
-RADICAL_RE = re.compile(r"√|\\sqrt\b|\bsqrt\b|\bsquare roots?\b", re.I)
+RADICAL_NOTATION_RE = re.compile(r"√|\\sqrt\b|\bsqrt\b", re.I)
+RADICAL_SOURCE_RE = re.compile(rf"{RADICAL_NOTATION_RE.pattern}|\bsquare roots?\b", re.I)
 
 
 @dataclass(frozen=True)
@@ -326,8 +327,8 @@ def _document(
     for field in ("reasoning_content", "answer"):
         if CONVERSION_PROCESS_RE.search(completion[field]):
             raise ValueError(f"Assistant {field} describes the conversion process; reason about the user's task only")
-    if mode == ConversionMode.GROUNDED and not RADICAL_RE.search(chunk):
-        if any(RADICAL_RE.search(completion[field]) for field in ("user", "reasoning_content", "answer")):
+    if mode == ConversionMode.GROUNDED and not RADICAL_SOURCE_RE.search(chunk):
+        if any(RADICAL_NOTATION_RE.search(completion[field]) for field in ("user", "reasoning_content", "answer")):
             raise ValueError(
                 "Source-grounded conversion adds square-root notation absent from the passage; "
                 "quote the supplied expression exactly and mark damaged notation as ambiguous"
