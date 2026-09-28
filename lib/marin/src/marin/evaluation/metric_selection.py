@@ -21,7 +21,8 @@ DISPERSION_SUFFIXES = (LM_EVAL_STDERR_SUFFIX, REPEAT_STDERR_SUFFIX)
 FILTER_PRIORITY = ("flexible-extract",)
 
 # MRCR reports ``mrcr_accuracy`` for the run and ``accuracy`` for each example.
-SAMPLE_METRIC_ALIASES = {"mrcr_accuracy": "accuracy"}
+MRCR_RUN_METRIC = "mrcr_accuracy"
+MRCR_SAMPLE_METRIC = "accuracy"
 
 
 def primary_filter(filters: Iterable[str]) -> str | None:
@@ -61,8 +62,9 @@ def declared_sample_metric(metrics: Mapping[str, float], declared: str | None) -
     picked = declared_metric(metrics, declared)
     if picked is not None or declared is None:
         return picked
-    alias = SAMPLE_METRIC_ALIASES.get(declared)
-    return declared_metric(metrics, alias) if alias is not None else None
+    if declared == MRCR_RUN_METRIC:
+        return declared_metric(metrics, MRCR_SAMPLE_METRIC)
+    return None
 
 
 def primary_metric(metrics: Mapping[str, float]) -> tuple[str, float] | None:
