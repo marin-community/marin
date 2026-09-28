@@ -378,8 +378,8 @@ async def test_rejected_math_persists_verbatim_evidence_in_every_answer_format(
     [
         (
             conversion.BIO_INSTRUCTION,
-            "Question: Complement ATGC using A-T and C-G pairing. Answer: TACG.",
-            "Complement the DNA sequence ATGC using A-T and C-G pairing.",
+            "Question: Complement <dna>ATGC</dna> using A-T and C-G pairing. Answer: TACG.",
+            "Complement the DNA sequence <dna>ATGC</dna> using A-T and C-G pairing.",
             "Pair A with T, T with A, G with C, and C with G to obtain TACG.",
             "TACG",
         ),
@@ -408,24 +408,22 @@ async def test_teacher_exercise_keeps_reference_private_after_rejected_response(
         nonlocal first_response
         body = json.loads(request.content)
         assert passage in body["messages"][1]["content"]
+        selected = next(f for f in conversion.FORMATS if f"({f.name}):" in body["messages"][1]["content"])
+        formatted_answers = {
+            "paragraphs": f"Answer: {answer}",
+            "numbered": f"1. {reasoning}\nFinal answer: {answer}",
+            "bullets": f"- {reasoning}\nConclusion: {answer}",
+            "short_then_detail": f"Short answer: {answer}\n{reasoning}",
+            "table": f"| Result | Value |\n|---|---|\n| Answer | {answer} |\nConclusion: {answer}",
+            "json": {"answer": answer, "evidence": [reasoning], "caveats": []},
+        }
+        completion = {"user": question, "reasoning_content": reasoning, "answer": formatted_answers[selected.name]}
         if first_response:
             first_response = False
-            completion = {
-                "user": "Using the source passage, summarize it.",
-                "reasoning_content": reasoning,
-                "answer": "",
-            }
-        else:
-            selected = next(f for f in conversion.FORMATS if f"({f.name}):" in body["messages"][1]["content"])
-            formatted_answers = {
-                "paragraphs": f"Answer: {answer}",
-                "numbered": f"1. {reasoning}\nFinal answer: {answer}",
-                "bullets": f"- {reasoning}\nConclusion: {answer}",
-                "short_then_detail": f"Short answer: {answer}\n{reasoning}",
-                "table": f"| Result | Value |\n|---|---|\n| Answer | {answer} |\nConclusion: {answer}",
-                "json": {"answer": answer, "evidence": [reasoning], "caveats": []},
-            }
-            completion = {"user": question, "reasoning_content": reasoning, "answer": formatted_answers[selected.name]}
+            if source_name == conversion.BIO_INSTRUCTION:
+                completion["user"] = question.replace("ATGC", "ATGAC")
+            else:
+                completion["answer"] = ""
         return httpx.Response(
             200, json={"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(completion)}}]}
         )
