@@ -380,6 +380,10 @@ class GrugModelConfig:
     latent_select_plus_proj: bool = False
     """In the selecting layers, add a learned ``w_latent_down`` projection to the selected channels before
     ``latent_norm`` (projection on top of selection)."""
+    latent_write_select: bool = False
+    """With a MoE latent, drop ``w_latent_up``: the combined routed output is written into the first ``latent_dim``
+    hidden channels (the rest get zero), scaled by ``initializer_std * sqrt(latent_dim)``, the gain of the
+    replaced matrix at init (MuonH holds that matrix's norm fixed)."""
     latent_out_norm: bool = False
     """Kimi K3 normalized LatentMoE: a learnable RMSNorm on the combined routed output before ``W_latent_up``."""
     proj_biases: tuple[str, ...] = ()
@@ -871,6 +875,8 @@ class GrugModelConfig:
             raise ValueError(f"latent_select_layers must be all, kda or global, got {self.latent_select_layers!r}")
         if self.latent_select_layers != "all" and self.local_mixer != LocalMixer.KDA:
             raise ValueError("latent_select_layers kda/global needs local_mixer=KDA")
+        if self.latent_write_select and (self.latent_dim is None or self.latent_dim > self.hidden_dim):
+            raise ValueError("latent_write_select needs latent_dim <= hidden_dim")
         if self.latent_select and (
             self.latent_dim is None or self.latent_dim > self.hidden_dim or self.erc_loss_weight > 0
         ):
@@ -2120,7 +2126,7 @@ class MoEMLP(eqx.Module):
             latent_norm=None if latent is None else _learned_rms_norm(cfg, latent, cfg.layer_norm_eps),
             w_latent_up=(
                 None
-                if latent is None
+                if latent is None or cfg.latent_write_select
                 else reshard(_init_weight(k_up, (latent, d), cfg.initializer_std), P("model", _FSDP_AXES))
             ),
             latent_out_norm=(
@@ -2460,6 +2466,11 @@ class MoEMLP(eqx.Module):
                 self.w_latent_up.astype(routed_flat.dtype),
                 out_sharding=_batch_spec(),
             )
+        elif self.cfg.latent_write_select:
+            assert self.cfg.latent_dim is not None
+            gain = self.cfg.initializer_std * math.sqrt(self.cfg.latent_dim)
+            pad = self.cfg.hidden_dim - self.cfg.latent_dim
+            routed_flat = jnp.pad(routed_flat * gain, ((0, 0), (0, pad)))
 
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         routed = reshard(routed, _batch_spec())
