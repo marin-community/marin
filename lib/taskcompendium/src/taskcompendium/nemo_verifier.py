@@ -7,7 +7,7 @@ import json
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
-from taskcompendium.grading import GradeResult, GradingAttempt, Outcome, VerifierHandler
+from taskcompendium.grading import GradeResult, GradingAttempt, Outcome, Verifier
 from taskcompendium.models import FunctionCall, ToolCallComparatorConfig, VerifierSpec
 from taskcompendium.predicted_action import compare, decode_action, parse_arguments
 from taskcompendium.submission import AnswerFormat
@@ -29,8 +29,8 @@ class FunctionCallPayload(BaseModel):
         return self
 
 
-class PredictedActionPayload(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+class PredictedActionVerifier(Verifier):
+    """Compare a final action with the source function calls."""
 
     expected_calls: tuple[FunctionCallPayload, ...]
     numeric_tolerance: float | None = None
@@ -43,37 +43,32 @@ class PredictedActionPayload(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def validate_action(self) -> "PredictedActionPayload":
+    def validate_action(self) -> "PredictedActionVerifier":
         if not self.expected_calls:
             raise ValueError("Predicted-action verifier requires expected function calls")
         ToolCallComparatorConfig(self.numeric_tolerance)
         return self
 
+    def grade(self, attempt: GradingAttempt) -> GradeResult:
+        if attempt.convention.answer_format != AnswerFormat.FINAL_ACTION:
+            return GradeResult(Outcome.INFRA_ERROR, None, "Incompatible final-action convention")
+        try:
+            if attempt.response is None:
+                raise ValueError("Final action is missing")
+            message = json.loads(attempt.response)
+            if not isinstance(message, dict):
+                raise ValueError("Final action must be an object")
+            actual = decode_action(message)
+        except (ValueError, TypeError) as error:
+            return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
+        expected = tuple(FunctionCall(call.name, call.arguments) for call in self.expected_calls)
+        reward = compare(expected, actual, ToolCallComparatorConfig(self.numeric_tolerance))
+        return GradeResult(Outcome.GRADED, reward)
+
 
 def predicted_action_verifier(expected_calls: tuple[FunctionCall, ...]) -> VerifierSpec:
     """Construct a private strict function-call verifier descriptor."""
-    payload = PredictedActionPayload(
+    verifier = PredictedActionVerifier(
         expected_calls=tuple(FunctionCallPayload(name=call.name, arguments=call.arguments) for call in expected_calls)
     )
-    return VerifierSpec(kind=KIND, parameters=payload.model_dump(mode="json"))
-
-
-def _grade_action(payload: PredictedActionPayload, attempt: GradingAttempt) -> GradeResult:
-    if attempt.convention.answer_format != AnswerFormat.FINAL_ACTION:
-        return GradeResult(Outcome.INFRA_ERROR, None, "Incompatible final-action convention")
-    try:
-        if attempt.response is None:
-            raise ValueError("Final action is missing")
-        message = json.loads(attempt.response)
-        if not isinstance(message, dict):
-            raise ValueError("Final action must be an object")
-        actual = decode_action(message)
-    except (ValueError, TypeError) as error:
-        return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
-    expected = tuple(FunctionCall(call.name, call.arguments) for call in payload.expected_calls)
-    reward = compare(expected, actual, ToolCallComparatorConfig(payload.numeric_tolerance))
-    return GradeResult(Outcome.GRADED, reward)
-
-
-def nemo_predicted_action_handler() -> VerifierHandler[PredictedActionPayload]:
-    return VerifierHandler(PredictedActionPayload, _grade_action)
+    return VerifierSpec(kind=KIND, parameters_json=verifier.model_dump_json())

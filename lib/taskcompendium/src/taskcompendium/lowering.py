@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Export a direct-chat TaskSpec convention as a Harbor task package."""
+"""Export a direct-chat TaskSpec submission as a Harbor task package."""
 
 import hashlib
 import json
@@ -12,9 +12,9 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
-from taskcompendium.grading import validate_verifier
 from taskcompendium.models import SCHEMA_VERSION, TaskSpec
 from taskcompendium.submission import SubmissionConvention, render_instruction, submission_compatible
+from taskcompendium.verifier_registry import validate_verifier
 
 DIRECT_CHAT_ENVIRONMENT = "direct_chat"
 SPECIFICATION_FILE = "specification.json"

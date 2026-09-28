@@ -87,10 +87,10 @@ def extract_answer(response: str | None, convention: SubmissionConvention) -> st
         raise ValueError("Final answer is empty")
     if convention.answer_format == AnswerFormat.PLAIN:
         return response
-    if convention.answer_format != AnswerFormat.JSON:
+    elif convention.answer_format == AnswerFormat.JSON:
+        value = json.loads(response, object_pairs_hook=_object_with_unique_fields)
+        if not isinstance(value, dict) or not isinstance(value.get("answer"), str) or not value["answer"].strip():
+            raise ValueError("JSON submission requires a nonempty string answer")
+        return value["answer"]
+    else:
         raise ValueError(f"Unsupported answer format: {convention.answer_format}")
-
-    value = json.loads(response, object_pairs_hook=_object_with_unique_fields)
-    if not isinstance(value, dict) or not isinstance(value.get("answer"), str) or not value["answer"].strip():
-        raise ValueError("JSON submission requires a nonempty string answer")
-    return value["answer"]

@@ -61,7 +61,7 @@ def test_exported_nemo_verifier_grades_in_fresh_process(tmp_path):
     task = lower_to_harbor(specification, convention, HarborEnvironmentConfig(), tmp_path / "task")
     script = (
         "import json, sys; from pathlib import Path; "
-        "from taskcompendium.grading import grade_answer; "
+        "from taskcompendium.verifier_registry import grade_answer; "
         "from taskcompendium.lowering import read_submission_convention, read_specification; "
         "root = Path(sys.argv[1]); "
         "result = grade_answer(read_specification(root / 'specification.json'), "
@@ -107,7 +107,7 @@ def test_predicted_action_rejects_crafted_message_target_on_private_read(tmp_pat
     specification, convention = import_row(row, canonical_sha256(row))
     task = lower_to_harbor(specification, convention, HarborEnvironmentConfig(), tmp_path / "task")
     data = json.loads((task / "specification.json").read_text())
-    data["verifier"]["parameters"] = {"expected_message": "Any response"}
+    data["verifier"]["parameters_json"] = json.dumps({"expected_message": "Any response"})
     (task / "specification.json").write_text(json.dumps(data))
 
     with pytest.raises(ValueError, match="Invalid 'nemo_predicted_action' verifier parameters"):
@@ -119,7 +119,9 @@ def test_predicted_action_rejects_boolean_numeric_tolerance_on_private_read(tmp_
     specification, convention = import_row(row, canonical_sha256(row))
     task = lower_to_harbor(specification, convention, HarborEnvironmentConfig(), tmp_path / "task")
     data = json.loads((task / "specification.json").read_text())
-    data["verifier"]["parameters"]["numeric_tolerance"] = True
+    parameters = json.loads(data["verifier"]["parameters_json"])
+    parameters["numeric_tolerance"] = True
+    data["verifier"]["parameters_json"] = json.dumps(parameters)
     (task / "specification.json").write_text(json.dumps(data))
 
     with pytest.raises(ValueError, match="Invalid 'nemo_predicted_action' verifier parameters"):

@@ -18,7 +18,7 @@ from harbor.models.agent.context import AgentContext
 from harbor.models.verifier.result import VerifierResult
 from harbor.verifier.base import BaseVerifier
 
-from taskcompendium.grading import GradeResult, Outcome, grade_answer
+from taskcompendium.grading import GradeResult, Outcome
 from taskcompendium.lowering import (
     SPECIFICATION_FILE,
     SUBMISSION_CONVENTION_FILE,
@@ -26,6 +26,7 @@ from taskcompendium.lowering import (
     read_submission_convention,
 )
 from taskcompendium.submission import AnswerFormat
+from taskcompendium.verifier_registry import grade_answer
 
 RESPONSE_FILE = "response.txt"
 ACTION_FILE = "action.json"
