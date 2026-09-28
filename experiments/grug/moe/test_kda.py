@@ -459,3 +459,131 @@ def test_floor_decay_is_exact_with_16_token_chunks():
         *(jnp.swapaxes(x, 1, 2) for x in (q, k, v, g, beta)), chunk_size=16, matmul_dtype=jnp.float32, interpret=True
     )
     np.testing.assert_allclose(np.asarray(jnp.swapaxes(fused, 1, 2)), np.asarray(ref), rtol=1e-4, atol=1e-4)
+
+
+def _erase(batch, heads, length, dk, *, seed):
+    """A channel-wise erase gate in (0, 2) (Gated DeltaNet-2's negative-eigenvalue range)."""
+    return jnp.asarray(2.0 * np.random.RandomState(seed).rand(batch, heads, length, dk), jnp.float32)
+
+
+def test_erase_gate_matches_explicit_asymmetric_recurrence():
+    """recurrent_kda's erase gate is S_t = (I - beta k (b*k)^T) D S_{t-1} + beta k v^T, spelled out
+    with explicit d_k x d_k transition matrices (one head, fp32)."""
+    q, k, v, g, beta = _inputs(1, 1, 12, 8, 4, seed=30)
+    b = _erase(1, 1, 12, 8, seed=31)
+    out, state = recurrent_kda(q, k, v, g, beta, erase=b)
+
+    qn = np.asarray(q[0, 0], np.float64)
+    kn = np.asarray(k[0, 0], np.float64)
+    qn = qn / np.sqrt((qn * qn).sum(-1, keepdims=True) + 1e-6) * 8**-0.5
+    kn = kn / np.sqrt((kn * kn).sum(-1, keepdims=True) + 1e-6)
+    s = np.zeros((8, 4))
+    outs = []
+    for t in range(12):
+        e = np.asarray(b[0, 0, t]) * kn[t]
+        bt = float(beta[0, 0, t])
+        s = (np.eye(8) - bt * np.outer(kn[t], e)) @ np.diag(np.exp(np.asarray(g[0, 0, t]))) @ s
+        s = s + bt * np.outer(kn[t], np.asarray(v[0, 0, t]))
+        outs.append(s.T @ qn[t])
+    np.testing.assert_allclose(np.asarray(out[0, 0]), np.stack(outs), rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(state[0, 0]), s, rtol=1e-5, atol=1e-5)
+
+
+def _erase_impls(chunk_size):
+    return {
+        "xla": lambda *a, **kw: chunk_kda(*a, chunk_size=chunk_size, matmul_dtype=jnp.float32, **kw),
+        "xla_sequential": lambda *a, **kw: chunk_kda(
+            *a, chunk_size=chunk_size, matmul_dtype=jnp.float32, scan_impl="sequential", **kw
+        ),
+        "pallas": lambda *a, **kw: chunk_kda(
+            *a,
+            chunk_size=chunk_size,
+            matmul_dtype=jnp.float32,
+            prep_impl="pallas_interpret",
+            scan_impl="pallas_interpret",
+            **kw,
+        ),
+        "pallas_prep_assoc_scan": lambda *a, **kw: chunk_kda(
+            *a, chunk_size=chunk_size, matmul_dtype=jnp.float32, prep_impl="pallas_interpret", **kw
+        ),
+    }
+
+
+@pytest.mark.parametrize("impl", list(_erase_impls(16)))
+@pytest.mark.parametrize(("length", "chunk_size"), [(64, 16), (61, 32)])
+def test_erase_gate_chunked_matches_recurrent(impl, length, chunk_size):
+    """Every chunked path with a random erase gate equals the sequential recurrence in value, final
+    state and gradient (all six inputs and the initial state), including a padded tail."""
+    q, k, v, g, beta = _inputs(2, 2, length, 16, 16, seed=32)
+    b = _erase(2, 2, length, 16, seed=33)
+    s0 = jnp.asarray(np.random.RandomState(34).randn(2, 2, 16, 16) * 0.1, jnp.float32)
+    w_out = jnp.asarray(np.random.RandomState(35).randn(2, 2, length, 16), jnp.float32)
+    w_state = jnp.asarray(np.random.RandomState(36).randn(2, 2, 16, 16), jnp.float32)
+    fn = _erase_impls(chunk_size)[impl]
+
+    def loss(run, q, k, v, g, beta, b, s0):
+        out, state = run(q, k, v, g, beta, erase=b, initial_state=s0)
+        return jnp.sum(w_out * out) + jnp.sum(w_state * state)
+
+    args = (q, k, v, g, beta, b, s0)
+    out, state = fn(q, k, v, g, beta, erase=b, initial_state=s0)
+    out_ref, state_ref = recurrent_kda(q, k, v, g, beta, erase=b, initial_state=s0)
+    np.testing.assert_allclose(np.asarray(out), np.asarray(out_ref), rtol=1e-4, atol=1e-4)
+    np.testing.assert_allclose(np.asarray(state), np.asarray(state_ref), rtol=1e-4, atol=1e-4)
+    argnums = tuple(range(1, 8))
+    got = jax.grad(loss, argnums=argnums)(fn, *args)
+    want = jax.grad(loss, argnums=argnums)(recurrent_kda, *args)
+    for x, y in zip(got, want, strict=True):
+        np.testing.assert_allclose(np.asarray(x), np.asarray(y), rtol=2e-4, atol=2e-4)
+
+
+@pytest.mark.parametrize("impl", ["recurrent", *_erase_impls(16)])
+def test_erase_gate_of_ones_is_kda(impl):
+    """b = 1 reproduces KDA bit for bit (the erase key is k * 1)."""
+    q, k, v, g, beta = _inputs(1, 2, 48, 16, 16, seed=37)
+    fn = recurrent_kda if impl == "recurrent" else _erase_impls(16)[impl]
+    out, state = fn(q, k, v, g, beta, erase=jnp.ones_like(k))
+    out_ref, state_ref = fn(q, k, v, g, beta)
+    np.testing.assert_array_equal(np.asarray(out), np.asarray(out_ref))
+    np.testing.assert_array_equal(np.asarray(state), np.asarray(state_ref))
+
+
+@pytest.mark.parametrize("grouped", [False, True])
+def test_kda_fused_erase_gate_with_packed_documents(grouped):
+    """kda_fused with an erase gate, packed documents (resets mid-chunk) and optionally grouped-query
+    k/v equals running each document through the recurrence, in value and gradient."""
+    doc_lengths = _DOC_LAYOUTS["mid_chunk"]
+    length, heads, d = sum(doc_lengths), 4, 16
+    rng = np.random.RandomState(38)
+    kv_heads = 2 if grouped else heads
+    q = jnp.asarray(rng.randn(1, length, heads, d), jnp.float32)
+    k = jnp.asarray(rng.randn(1, length, kv_heads, d), jnp.float32)
+    v = jnp.asarray(rng.randn(1, length, kv_heads, d), jnp.float32)
+    g = -0.3 * jnp.abs(jnp.asarray(rng.randn(1, length, heads, d), jnp.float32))
+    beta = jnp.asarray(rng.rand(1, length, heads), jnp.float32)
+    b = jnp.asarray(2.0 * rng.rand(1, length, heads, d), jnp.float32)
+    seg = jnp.asarray(np.repeat(np.arange(len(doc_lengths)), doc_lengths)[None], jnp.int32)
+    w = jnp.asarray(rng.randn(1, length, heads, d), jnp.float32)
+
+    def fused(q, k, v, g, beta, b):
+        return kda_fused(
+            q, k, v, g, beta, erase=b, segment_ids=seg, chunk_size=16, matmul_dtype=jnp.float32, interpret=True
+        )
+
+    def reference(q, k, v, g, beta, b):
+        rep = heads // kv_heads
+        k, v = jnp.repeat(k, rep, axis=2), jnp.repeat(v, rep, axis=2)
+        heads_first = [jnp.swapaxes(x, 1, 2) for x in (q, k, v, g, beta, b)]
+
+        def run(q, k, v, g, beta, b):
+            return recurrent_kda(q, k, v, g, beta, erase=b)[0]
+
+        return jnp.swapaxes(_per_document(run, heads_first, doc_lengths), 1, 2)
+
+    args = (q, k, v, g, beta, b)
+    np.testing.assert_allclose(np.asarray(fused(*args)), np.asarray(reference(*args)), rtol=1e-4, atol=1e-4)
+    argnums = tuple(range(6))
+    got = jax.grad(lambda *a: jnp.sum(w * fused(*a)), argnums=argnums)(*args)
+    want = jax.grad(lambda *a: jnp.sum(w * reference(*a)), argnums=argnums)(*args)
+    for x, y in zip(got, want, strict=True):
+        np.testing.assert_allclose(np.asarray(x), np.asarray(y), rtol=2e-4, atol=2e-4)

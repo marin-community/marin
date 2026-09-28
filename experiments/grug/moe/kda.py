@@ -18,7 +18,12 @@ dims ``(..., L, d)`` (in grug the leading dims are ``(batch, heads)``):
 
 State ``S ∈ R^{d_k x d_v}`` maps keys to values; the read is ``o_t = S_t^T q_t`` and
 the per-channel decay ``alpha_t = exp(g_t) ∈ (0,1]^{d_k}`` left-multiplies ``S`` on
-the key axis. KDA is the per-channel generalization of scalar Gated DeltaNet
+the key axis. With an optional channel-wise erase gate ``b_t`` (Gated DeltaNet-2, arXiv
+2605.22791) the transition reads and erases along ``e_t = b_t ⊙ k_t`` while the write stays on
+``k_t``: ``S_t = (I - beta_t k_t e_t^T) Diag(alpha_t) S_{t-1} + beta_t k_t v_t^T`` (``b = 1`` is KDA).
+In the chunked WY/UT form only the erase side of the delta-correction matrix and the
+state-read keys change: ``A[r,i] = -beta_r (e_r . k_i) ...`` and ``K_cumdecay = T (beta e)``.
+KDA is the per-channel generalization of scalar Gated DeltaNet
 (``levanter.layers.gated_deltanet``); in the scalar limit (``g`` broadcast over
 ``d_k``) the two agree. All decay math is done in fp32.
 
@@ -105,6 +110,7 @@ def recurrent_kda(
     initial_state: jax.Array | None = None,
     use_qk_l2norm: bool = True,
     segment_ids: Int[Array, "... L"] | None = None,
+    erase: Float[Array, "... L Dk"] | None = None,
 ) -> tuple[Float[Array, "... L Dv"], jax.Array]:
     """Sequential per-channel gated delta rule (reference / decode kernel).
 
@@ -118,11 +124,14 @@ def recurrent_kda(
         segment_ids: optional ``(..., L)`` document ids of packed sequences; the state
             is reset to zero at every document start (a token whose id differs from
             its predecessor), so documents never see each other.
+        erase: optional ``(..., L, d_k)`` channel-wise erase gate ``b``: the state is read
+            and erased along ``b ⊙ k`` (k after its L2-norm) and written along ``k``.
 
     Returns:
         ``(outputs (..., L, d_v), final_state (..., d_k, d_v))``.
     """
     q, k = _prepare_qk(q, k, use_qk_l2norm)
+    e = k if erase is None else k * erase.astype(jnp.float32)
     v = v.astype(jnp.float32)
     g = g.astype(jnp.float32)
     beta = beta.astype(jnp.float32)
@@ -137,6 +146,7 @@ def recurrent_kda(
     # Move the length axis to the front for lax.scan.
     q_t = jnp.moveaxis(q, -2, 0)  # (L, ..., d_k)
     k_t = jnp.moveaxis(k, -2, 0)
+    e_t = jnp.moveaxis(e, -2, 0)
     v_t = jnp.moveaxis(v, -2, 0)
     g_t = jnp.moveaxis(g, -2, 0)
     b_t = jnp.moveaxis(beta, -1, 0)  # (L, ...)
@@ -146,15 +156,15 @@ def recurrent_kda(
         keep_t = jnp.moveaxis(1.0 - doc_starts(jnp.broadcast_to(segment_ids, beta.shape)), -1, 0)
 
     def step(s_prev: jax.Array, inp):
-        q_i, k_i, v_i, g_i, b_i, keep_i = inp
+        q_i, k_i, e_i, v_i, g_i, b_i, keep_i = inp
         s_prev = s_prev * (jnp.exp(g_i) * keep_i[..., None])[..., :, None]  # Diag(alpha), 0 at doc starts
-        kv = jnp.sum(k_i[..., :, None] * s_prev, axis=-2)  # S^T k  -> (..., d_v)
+        kv = jnp.sum(e_i[..., :, None] * s_prev, axis=-2)  # S^T e  -> (..., d_v)
         delta = (v_i - kv) * b_i[..., None]
         s_new = s_prev + k_i[..., :, None] * delta[..., None, :]
         o_i = jnp.sum(q_i[..., :, None] * s_new, axis=-2)  # S^T q -> (..., d_v)
         return s_new, o_i
 
-    state, out_t = lax.scan(step, state, (q_t, k_t, v_t, g_t, b_t, keep_t))
+    state, out_t = lax.scan(step, state, (q_t, k_t, e_t, v_t, g_t, b_t, keep_t))
     out = jnp.moveaxis(out_t, 0, -2)  # (..., L, d_v)
     return out, state
 
@@ -210,6 +220,7 @@ def chunk_kda(
     scan_impl: str = "parallel",
     prep_impl: str = "xla",
     segment_ids: Int[Array, "... L"] | None = None,
+    erase: Float[Array, "... L Dk"] | None = None,
 ) -> tuple[Float[Array, "... L Dv"], jax.Array]:
     """Chunkwise-parallel per-channel gated delta rule (KDA train/prefill kernel).
 
@@ -232,6 +243,8 @@ def chunk_kda(
     ``segment_ids`` (broadcastable to ``(..., L)``) packs several documents per row: the
     state is hard-reset at every document start (see :func:`recurrent_kda`), implemented
     with per-chunk document masks (no -inf gates). Not supported by ``scan_impl="sequential"``.
+
+    ``erase`` is the channel-wise erase gate of :func:`recurrent_kda` (every path supports it).
 
     ``prep_impl`` / ``scan_impl`` pick the implementation of the two stages. The fastest
     H100 configuration is ``prep_impl="pallas", scan_impl="pallas", chunk_size=64``: one
@@ -258,6 +271,8 @@ def chunk_kda(
         v = v.astype(jnp.float32)
         g = g.astype(jnp.float32)
         beta = beta.astype(jnp.float32)
+        if erase is not None:
+            erase = erase.astype(jnp.float32)
 
     lead = q.shape[:-2]
     orig_len = q.shape[-2]
@@ -269,6 +284,8 @@ def chunk_kda(
         v = jnp.pad(v, [(0, 0)] * (v.ndim - 2) + [(0, pad), (0, 0)])
         g = jnp.pad(g, [(0, 0)] * (g.ndim - 2) + [(0, pad), (0, 0)])
         beta = jnp.pad(beta, [(0, 0)] * (beta.ndim - 1) + [(0, pad)])
+        if erase is not None:
+            erase = jnp.pad(erase, [(0, 0)] * (erase.ndim - 2) + [(0, pad), (0, 0)])
 
     n_chunks = q.shape[-2] // chunk_size
     c = chunk_size
@@ -289,6 +306,8 @@ def chunk_kda(
     vc = to_chunks(v)
     gc = to_chunks(g)
     bc = beta.reshape(*lead, n_chunks, c)
+    # Erase keys (the XLA prep takes them after the L2-norm; the fused kernel applies the gate itself).
+    ec = kc if erase is None else kc * to_chunks(erase)
 
     if initial_state is None:
         state = jnp.zeros((*lead, dk, dv), dtype=jnp.float32)
@@ -300,7 +319,7 @@ def chunk_kda(
             raise ValueError("scan_impl='sequential' only supports prep_impl='xla'")
         if segment_ids is not None:
             raise ValueError("scan_impl='sequential' does not support segment_ids")
-        inter = _chunk_intermediates(qc, kc, vc, gc, bc, mm, mm_dtype, c, None)
+        inter = _chunk_intermediates(qc, kc, ec, vc, gc, bc, mm, mm_dtype, c, None)
         strict_upper = jnp.triu(jnp.ones((c, c), dtype=bool), k=1)
         out, state = _sequential_chunk_recurrence(
             inter.q_inflate,
@@ -316,7 +335,7 @@ def chunk_kda(
         )
     elif scan_impl in ("parallel", "pallas", "pallas_interpret"):
         if prep_impl == "xla":
-            prep = _chunk_prep_xla(qc, kc, vc, gc, bc, mm, mm_dtype, c, masks)
+            prep = _chunk_prep_xla(qc, kc, ec, vc, gc, bc, mm, mm_dtype, c, masks)
         elif prep_impl in ("pallas", "pallas_interpret"):
             prep = _chunk_prep_pallas(
                 q,
@@ -329,6 +348,7 @@ def chunk_kda(
                 mm_dtype,
                 use_qk_l2norm=use_qk_l2norm,
                 interpret=prep_impl == "pallas_interpret",
+                erase=erase,
             )
         else:
             raise ValueError(f"prep_impl must be 'xla', 'pallas' or 'pallas_interpret', got {prep_impl!r}")
@@ -386,8 +406,11 @@ class _ChunkIntermediates(NamedTuple):
     k_cumdecay: jax.Array
 
 
-def _chunk_intermediates(qc, kc, vc, gc, bc, mm, mm_dtype, c, masks: _SegmentMasks | None) -> _ChunkIntermediates:
+def _chunk_intermediates(qc, kc, ec, vc, gc, bc, mm, mm_dtype, c, masks: _SegmentMasks | None) -> _ChunkIntermediates:
     """XLA intra-chunk prep shared by both recurrences: gates, ``A``, its inverse, U/W.
+
+    ``ec`` are the erase keys (``kc`` itself without an erase gate): they read the state and the
+    earlier in-chunk writes, so they take the erase side of ``A`` and of ``k_cumdecay``.
 
     With document masks the cumulative log-decay restarts at every document start (a
     masked within-document cumsum), so a document's decay factors never contain another
@@ -406,9 +429,9 @@ def _chunk_intermediates(qc, kc, vc, gc, bc, mm, mm_dtype, c, masks: _SegmentMas
     exp_ng = jnp.exp(jnp.minimum(-g_cum, _DEFLATE_EXP_CAP))  # deflation factor, capped
 
     v_beta = vc * bc[..., None]
-    k_beta = kc * bc[..., None]
+    k_beta = ec * bc[..., None]
 
-    # Delta-correction matrix A[r,i] = -beta_r (k_r . k_i) exp(g_cum_r - g_cum_i),
+    # Delta-correction matrix A[r,i] = -beta_r (e_r . k_i) exp(g_cum_r - g_cum_i),
     # folded via inflate/deflate so it is a plain matmul. Strictly lower triangular.
     k_beta_inflate = k_beta * exp_g
     k_deflate = kc * exp_ng
@@ -428,7 +451,7 @@ def _chunk_intermediates(qc, kc, vc, gc, bc, mm, mm_dtype, c, masks: _SegmentMas
     return _ChunkIntermediates(g_cum, qc * exp_g, k_deflate, v_pseudo, k_cumdecay)
 
 
-def _chunk_prep_xla(qc, kc, vc, gc, bc, mm, mm_dtype, c, masks: _SegmentMasks | None) -> ChunkPrep:
+def _chunk_prep_xla(qc, kc, ec, vc, gc, bc, mm, mm_dtype, c, masks: _SegmentMasks | None) -> ChunkPrep:
     """Reference (XLA) prep: intermediates plus the per-chunk attention, the keys
     decayed to the chunk end and the whole-chunk decay. ``fused_chunk_prep`` computes
     the same tuple in one kernel.
@@ -437,7 +460,7 @@ def _chunk_prep_xla(qc, kc, vc, gc, bc, mm, mm_dtype, c, masks: _SegmentMasks | 
     against the incoming state) is zero past the chunk's first document; only the last
     document's keys feed the outgoing state; and the incoming state is dropped (decay 0)
     if a document starts inside the chunk."""
-    inter = _chunk_intermediates(qc, kc, vc, gc, bc, mm, mm_dtype, c, masks)
+    inter = _chunk_intermediates(qc, kc, ec, vc, gc, bc, mm, mm_dtype, c, masks)
     lower = jnp.tril(jnp.ones((c, c), dtype=bool))
     if masks is not None:
         lower = lower & masks.same
@@ -464,7 +487,7 @@ def _heads_first_to_model_layout(x: jax.Array, trailing: int) -> jax.Array:
 
 
 def _fused_prep(
-    q, k, v, g, beta, c, mm_dtype, *, use_qk_l2norm: bool, interpret: bool, gate=None, starts=None
+    q, k, v, g, beta, c, mm_dtype, *, use_qk_l2norm: bool, interpret: bool, gate=None, starts=None, erase=None
 ) -> ChunkPrep:
     """Fused Pallas prep on model-layout ``(B, L, H, d)`` inputs; per-chunk outputs ``(G, n, ...)``."""
     return fused_chunk_prep(
@@ -477,12 +500,15 @@ def _fused_prep(
         mm_dtype=jnp.float32 if mm_dtype is None else mm_dtype,
         gate=gate,
         doc_starts=starts,
+        erase=erase,
         use_qk_l2norm=use_qk_l2norm,
         interpret=interpret,
     )
 
 
-def _chunk_prep_pallas(q, k, v, g, beta, starts, c, mm_dtype, *, use_qk_l2norm: bool, interpret: bool) -> ChunkPrep:
+def _chunk_prep_pallas(
+    q, k, v, g, beta, starts, c, mm_dtype, *, use_qk_l2norm: bool, interpret: bool, erase=None
+) -> ChunkPrep:
     """Fused Pallas prep from heads-first ``(*lead, L, d)`` inputs; outputs ``(*lead, n, ...)``.
 
     ``starts`` (document starts, ``(*lead, L)``) must be the same for every head; the
@@ -499,6 +525,7 @@ def _chunk_prep_pallas(q, k, v, g, beta, starts, c, mm_dtype, *, use_qk_l2norm: 
         use_qk_l2norm=use_qk_l2norm,
         interpret=interpret,
         starts=starts,
+        erase=None if erase is None else _heads_first_to_model_layout(erase, 1),
     )
     return ChunkPrep(*(x.reshape(*lead, *x.shape[1:]) for x in prep))
 
@@ -580,6 +607,7 @@ def kda_fused(
     *,
     gate: tuple[Float[Array, "H Dk"], Float[Array, "H Dk"]] | None = None,
     segment_ids: Int[Array, "B L"] | None = None,
+    erase: Float[Array, "B L H Dk"] | None = None,
     chunk_size: int = 64,
     use_qk_l2norm: bool = True,
     matmul_dtype: jnp.dtype = jnp.bfloat16,
@@ -599,7 +627,8 @@ def kda_fused(
     computed on-chip (Kimi Linear's gate with ``rate = -exp(A_log)``).
 
     ``segment_ids`` (``(B, L)``) packs documents: the state is hard-reset at every
-    document start (see :func:`recurrent_kda`). ``save_chunk_states`` keeps the state pass's
+    document start (see :func:`recurrent_kda`). ``erase`` (``(B, L, H, d_k)``) is the channel-wise
+    erase gate of :func:`recurrent_kda`, applied on-chip. ``save_chunk_states`` keeps the state pass's
     per-chunk states for the backward (see :func:`chunk_state_pass`).
     """
     b, length, heads, _ = q.shape
@@ -607,6 +636,8 @@ def kda_fused(
     if pad:  # zero padding: k = 0 (no write) and g = 0 (no decay) leave the state unchanged
         q, k, v, g = (jnp.pad(x, ((0, 0), (0, pad), (0, 0), (0, 0))) for x in (q, k, v, g))
         beta = jnp.pad(beta, ((0, 0), (0, pad), (0, 0)))
+        if erase is not None:
+            erase = jnp.pad(erase, ((0, 0), (0, pad), (0, 0), (0, 0)))
     starts = None
     if segment_ids is not None:
         seg = jnp.pad(segment_ids, ((0, 0), (0, pad)), mode="edge") if pad else segment_ids
@@ -623,6 +654,7 @@ def kda_fused(
         interpret=interpret,
         gate=gate,
         starts=starts,
+        erase=erase,
     )
     state = jnp.zeros((b * heads, q.shape[-1], v.shape[-1]), jnp.float32)
     out, _ = chunk_state_pass(

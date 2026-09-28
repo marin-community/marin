@@ -85,7 +85,10 @@ _AUX_HIDDEN = "aux_lm_hidden"
 _ERC_KEY_SALT = 0xE2C
 _NITP_TARGET = "nitp_target"
 # Per-layer product-key memory diagnostics, lifted out of the layer stats into ``train/attn_res/knob_mem_*``.
-_MEMORY_STAT_PREFIX = "attn_res_knob_mem_"
+# Per-layer stats with this prefix returned by a layer are exported as ``<name>_L<layer>``.
+_LAYER_KNOB_PREFIX = "attn_res_knob_"
+_MEMORY_STAT_PREFIX = f"{_LAYER_KNOB_PREFIX}mem_"
+_KDA_ERASE_STAT_PREFIX = f"{_LAYER_KNOB_PREFIX}kda_erase_"
 # Bound on one chunk's gathered ``[tokens, rows, dim]`` memory rows in the product-key EmbeddingBag.
 _MEMORY_BAG_CHUNK_ELEMS = 1 << 26
 # Metrics-dict keys carrying the AttnRes z-loss term (with gradient) from the forward to the loss.
@@ -540,6 +543,11 @@ class GrugModelConfig:
     """Gated DeltaNet-2 (arXiv 2605.22791) write gate: each KDA value channel is scaled by ``2 sigmoid(x W_w)``
     before the delta-rule update, a channel-wise write strength next to KDA's per-head beta. Runs through the
     existing kernel."""
+    kda_erase_gate: bool = False
+    """Gated DeltaNet-2 (arXiv 2605.22791) erase gate: the KDA delta rule reads and erases along
+    ``e = b * k`` and writes along ``k``, ``S_t = (I - beta k e^T) D_t S_{t-1} + beta k v^T``, with a
+    channel-wise ``b = 2 sigmoid(x W_b)`` (``W_b`` zero-init, so exactly KDA at init; ``beta * b`` spans
+    the paper's (0, 2) negative-eigenvalue range). Runs through the KDA kernels' erase-key path."""
     kda_beta_negative: bool = False
     """KDA write strength ``beta = 2 * sigmoid(logit - log 3)`` in (0, 2), so the transition ``I - beta k k^T``
     can have negative eigenvalues (Grazzi et al. 2025); the shift keeps the mean beta at init at 1/2."""
@@ -1398,16 +1406,34 @@ def _kda_rotate_qk(q, k, rate, segment_ids):
     return rotate(q), rotate(k)
 
 
-def _kda_kernel(q, k, v, g, beta, segment_ids=None, *, save_chunk_states: bool):
+def _kda_kernel_rotating(q, k, v, g, beta, extras: dict[str, jax.Array], *, save_chunk_states: bool):
+    """``_kda_kernel`` after rotating q and k by ``extras["rot_rate"]`` (``kda_dd_rope``)."""
+    extras = dict(extras)
+    q, k = _kda_rotate_qk(q, k, extras.pop("rot_rate"), extras.get("segment_ids"))
+    return _kda_kernel(q, k, v, g, beta, extras, save_chunk_states=save_chunk_states)
+
+
+def _kda_kernel(q, k, v, g, beta, extras: dict[str, jax.Array], *, save_chunk_states: bool):
     """KDA on the model layout ``(B, S, H, d)``: the fused Pallas kernels on GPU, else the XLA
-    ``chunk_kda`` (heads-first layout)."""
+    ``chunk_kda`` (heads-first layout). ``extras`` optionally holds ``segment_ids`` and ``erase``."""
+    segment_ids, erase = extras.get("segment_ids"), extras.get("erase")
     if jax.default_backend() == "gpu":
         return kda_fused(
-            q, k, v, g, beta, segment_ids=segment_ids, chunk_size=KDA_CHUNK_SIZE, save_chunk_states=save_chunk_states
+            q,
+            k,
+            v,
+            g,
+            beta,
+            segment_ids=segment_ids,
+            erase=erase,
+            chunk_size=KDA_CHUNK_SIZE,
+            save_chunk_states=save_chunk_states,
         )
     q, k, v, g, beta = (jnp.swapaxes(x, 1, 2) for x in (q, k, v, g, beta))
     seg = None if segment_ids is None else segment_ids[:, None, :]  # same documents for every head
-    return jnp.swapaxes(chunk_kda(q, k, v, g, beta, chunk_size=KDA_CHUNK_SIZE, segment_ids=seg)[0], 1, 2)
+    erase = None if erase is None else jnp.swapaxes(erase, 1, 2)
+    out = chunk_kda(q, k, v, g, beta, chunk_size=KDA_CHUNK_SIZE, segment_ids=seg, erase=erase)[0]
+    return jnp.swapaxes(out, 1, 2)
 
 
 class KimiDeltaAttention(eqx.Module):
@@ -1430,6 +1456,7 @@ class KimiDeltaAttention(eqx.Module):
     w_o: Float[Array, "NH D"]
     w_g: Float[Array, "D NH"]  # [D, N] with cfg.kda_gate_per_head
     w_write: Float[Array, "D NH"] | None  # channel-wise value write gate (cfg.kda_write_gate)
+    w_erase: Float[Array, "D NH"] | None  # channel-wise key erase gate, zero-init (cfg.kda_erase_gate)
     w_a_down: Float[Array, "D R"]
     w_a_up: Float[Array, "R NH"]
     a_log: Float[Array, " N"]
@@ -1475,6 +1502,7 @@ class KimiDeltaAttention(eqx.Module):
                 if cfg.kda_write_gate
                 else None
             ),
+            w_erase=reshard(jnp.zeros((d, n * h)), P(_FSDP_AXES, "model")) if cfg.kda_erase_gate else None,
             w_a_down=reshard(_init_weight(k_ad, (d, r), std), P(_FSDP_AXES, None)),
             w_a_up=reshard(
                 _init_weight(k_au, (r, n * decay_cols), std),
@@ -1539,7 +1567,8 @@ class KimiDeltaAttention(eqx.Module):
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         """``proj_inputs`` optionally replaces the input of the ``q`` / ``k`` / ``v`` projections;
         ``no_decay`` / ``no_beta`` (static, per layer) replace g with 0 / beta with 1; ``kv_share`` /
-        ``value_residual`` as in ``CausalSelfAttention``. Also returns ``kda_dd_rope`` diagnostics."""
+        ``value_residual`` as in ``CausalSelfAttention``. Also returns logging stats (``kda_dd_rope`` rates;
+        the erase gate's mean and mean binary entropy with ``kda_erase_gate``)."""
         cfg = self.cfg
         head_dim = cfg.inferred_head_dim
         b, s, _ = x.shape
@@ -1595,9 +1624,17 @@ class KimiDeltaAttention(eqx.Module):
         spec3 = P(_BATCH_AXES, None, "model")
         q, k, v, g = (reshard(t, spec4) for t in (q, k, v, g))
         beta = reshard(beta, spec3)
-        run = functools.partial(_kda_kernel, save_chunk_states=cfg.kda_save_chunk_states)
-        args = (q, k, v, g, beta)
-        in_specs = (spec4,) * 4 + (spec3,)
+        extras: dict[str, jax.Array] = {}
+        extra_specs: dict[str, P] = {}
+        if self.w_erase is not None:
+            erase_logits = jnp.einsum("bsh,hd->bsd", proj_inputs.get("k", x), self.w_erase).astype(jnp.float32)
+            erase_logits = rearrange(erase_logits, "... (n d) -> ... n d", d=head_dim)
+            extras["erase"], extra_specs["erase"] = reshard(2.0 * jax.nn.sigmoid(erase_logits), spec4), spec4
+            # b / 2 = sigmoid(z): H = -p log p - (1 - p) log(1 - p), max log 2 (the zero-init value).
+            p_erase = jax.nn.sigmoid(erase_logits)
+            entropy = -(p_erase * jax.nn.log_sigmoid(erase_logits) + (1 - p_erase) * jax.nn.log_sigmoid(-erase_logits))
+            stats[f"{_KDA_ERASE_STAT_PREFIX}mean"] = jax.lax.stop_gradient(jnp.mean(2.0 * p_erase))
+            stats[f"{_KDA_ERASE_STAT_PREFIX}entropy"] = jax.lax.stop_gradient(jnp.mean(entropy))
         if self.w_rot_down is not None and self.w_rot_up is not None and self.rot_scale is not None:
             rot = jnp.einsum("bsr,re->bse", jnp.einsum("bsd,dr->bsr", x, self.w_rot_down), self.w_rot_up)
             rot = rearrange(rot, "... (n p) -> ... n p", p=head_dim // 2).astype(jnp.float32)
@@ -1607,17 +1644,14 @@ class KimiDeltaAttention(eqx.Module):
             stats[f"{_KDA_STAT_PREFIX}rot_rate_abs_mean"] = jnp.mean(jnp.abs(rate_sg))
             stats[f"{_KDA_STAT_PREFIX}rot_rate_std"] = jnp.std(rate_sg)
             stats[f"{_KDA_STAT_PREFIX}rot_rate_pair_abs_max"] = jnp.max(jnp.mean(jnp.abs(rate_sg), axis=(0, 1)))
-            kernel_run = run
-
-            def run(q, k, v, g, beta, rate, segment_ids=None):
-                q, k = _kda_rotate_qk(q, k, rate, segment_ids)
-                return kernel_run(q, k, v, g, beta, segment_ids)
-
-            args += (rate,)
-            in_specs += (spec4,)
+            extras["rot_rate"], extra_specs["rot_rate"] = rate, spec4
         if segment_ids is not None:
-            args += (reshard(jnp.broadcast_to(segment_ids, (b, s)), P(_BATCH_AXES, None)),)
-            in_specs += (P(_BATCH_AXES, None),)
+            extras["segment_ids"] = reshard(jnp.broadcast_to(segment_ids, (b, s)), P(_BATCH_AXES, None))
+            extra_specs["segment_ids"] = P(_BATCH_AXES, None)
+        kernel_fn = _kda_kernel_rotating if "rot_rate" in extras else _kda_kernel
+        run = functools.partial(kernel_fn, save_chunk_states=cfg.kda_save_chunk_states)
+        args = (q, k, v, g, beta, extras)
+        in_specs = (spec4,) * 4 + (spec3, extra_specs)
         # The Pallas custom VJPs are not vma-annotated, so skip the varying-axes check.
         kernel = jax.shard_map(run, mesh=get_abstract_mesh(), in_specs=in_specs, out_specs=spec4, check_vma=False)
         if self.push_decay is None or self.w_push is None:
@@ -1637,7 +1671,7 @@ class KimiDeltaAttention(eqx.Module):
                 if cfg.kda_push_mode == "hybrid":
                     # Keep the per-token floor the chunked kernels assume (see KDA_CHUNK_SIZE).
                     g_m = jnp.maximum(g_m + g, -KDA_MIN_LOG_DECAY)
-                bucket_args = (q, k, v, reshard(g_m, spec4), reshard(beta * pi[..., m], spec3), *args[5:])
+                bucket_args = (q, k, v, reshard(g_m, spec4), reshard(beta * pi[..., m], spec3), extras)
                 o_m = kernel(*bucket_args)
                 o = o_m if o is None else o + o_m
         o = self.o_norm(o.astype(x.dtype))
@@ -2627,8 +2661,8 @@ class Block(eqx.Module):
         value_residual: bool = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         """``sum_stream`` (with ``sum_components``) feeds those q/k/v projections from the straight-sum
-        stream, through the same RMSNorm and GatedNorm, instead of the AttnRes mix ``h``. Also returns the
-        mixer's diagnostics (KDA only)."""
+        stream, through the same RMSNorm and GatedNorm, instead of the AttnRes mix ``h``. Returns the
+        branch output and the mixer's logging stats."""
         attn_in = self.attn_gated_norm(self.rms_attn(_laurel(h, self.laurel_a_attn, self.laurel_b_attn)))
         proj_inputs = None
         attn_components = tuple(c for c in sum_components if c in ("q", "k", "v"))
@@ -2659,6 +2693,7 @@ class Block(eqx.Module):
                 proj_inputs=proj_inputs,
                 value_residual=value_residual,
             )
+            stats = {}
         if self.bias_attn_out is not None:
             out = out + unshard(self.bias_attn_out).astype(out.dtype)
         if self.sconv_attn is not None:
@@ -2721,7 +2756,8 @@ class Block(eqx.Module):
         disable_rope: bool | jax.Array = False,
         is_global: bool | jax.Array = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        x = x + self.attn_branch(x, mask, disable_rope, is_global)[0]
+        attn_out, _ = self.attn_branch(x, mask, disable_rope, is_global)
+        x = x + attn_out
         mlp_out, router_stats = self.mlp_branch(x, mask)
         return x + mlp_out, router_stats
 
@@ -3178,6 +3214,7 @@ def _attn_res_layer(
         mlp_out = mlp_out + mem_out
     return partial + mlp_out, {
         **router_stats,
+        **attn_stats,
         **v_stats,
         **mem_stats,
         **attn_stats,
@@ -3261,6 +3298,7 @@ def _attn_res_layer_full(diff_args, mask, token_ids, use_long, layer_index, eps,
         mlp_out = mlp_out + mem_out
     stats = {
         **router_stats,
+        **attn_stats,
         **v_stats,
         **mem_stats,
         **attn_stats,
@@ -4159,7 +4197,7 @@ class Transformer(eqx.Module):
                 if cfg.nitp_weight > 0 and pass_index == 0 and i == cfg.nitp_layer:
                     # The plain residual stream after this layer: embedding plus every sublayer output so far.
                     nitp_logs[_NITP_TARGET] = _stream_sum((*blocks[len(extra_sources) :], partial))
-                for name in [k for k in stats if k.startswith((_MEMORY_STAT_PREFIX, _KDA_STAT_PREFIX))]:
+                for name in [k for k in stats if k.startswith(_LAYER_KNOB_PREFIX)]:
                     layer_logs[f"{name}_L{eff}"] = stats.pop(name)
                 has_partial_attn = partial_before is not None
                 stream_col = cfg.attn_res_stream_source

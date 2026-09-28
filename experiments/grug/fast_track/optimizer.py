@@ -93,8 +93,9 @@ def _scale_invariant_hyperball_updates(params, direction_updates, learning_rate:
 # MuonH catch-all, the ShortConv kernels and output-norm scale are ``.weight`` leaves (Adam), and the zero-init
 # angle amplitude ``rot_scale`` is on the generic Adam list.
 _KDA_ATTN_LEAF = re.compile(r"kda_blocks\.stacked\.attn\.(\w+)")
-# Low-rank forget gate, per-head A_log and per-channel dt_bias: Adam (no weight decay).
-_KDA_ADAM_LEAVES = frozenset({"w_a_down", "w_a_up", "a_log", "dt_bias", "push_decay", "w_push"})
+# Low-rank forget gate, per-head A_log, per-channel dt_bias and the zero-init push / erase-gate
+# projections (MuonH cannot move a zero matrix): Adam (no weight decay).
+_KDA_ADAM_LEAVES = frozenset({"w_a_down", "w_a_up", "a_log", "dt_bias", "push_decay", "w_push", "w_erase"})
 # Write-strength projection: MuonH at ``kda_beta_lr_mult`` x the MuonH LR.
 _KDA_BETA_LEAF = "w_beta"
 # Low-rank write-strength MLP (``kda_beta_rank``): LR group chosen by ``kda_beta_mlp_group``.
