@@ -25,6 +25,7 @@ from marin.datakit.download.numinamath_v1_5 import numinamath_v1_5_chat_normaliz
 from marin.datakit.download.open_swe_traces import OPEN_SWE_TRACES_PARTITIONS, open_swe_traces_chat_normalize_steps
 from marin.datakit.download.openthoughts4_code import openthoughts4_code_chat_normalize_steps
 from marin.datakit.download.penfever_rollouts import penfever_rollouts_chat_normalize_steps
+from marin.datakit.download.rts_glm53_rollouts import rts_glm53_rollouts_chat_normalize_steps
 from marin.datakit.download.superior_reasoning import superior_reasoning_chat_normalize_steps
 from marin.datakit.download.swe_rebench_openhands import swe_rebench_openhands_chat_normalize_steps
 from marin.datakit.download.swe_zero_12m import swe_zero_12m_chat_normalize_steps
@@ -173,6 +174,7 @@ def all_sft_sources() -> dict[str, DatakitChatSource]:
         ("numinamath-1.5", numinamath_v1_5_chat_normalize_steps),
         ("numinamath-tir", numinamath_tir_chat_normalize_steps),
         ("openthoughts4-code-glm-5.2-n4", openthoughts4_code_chat_normalize_steps),
+        ("rts-glm-5.3-rollouts", rts_glm53_rollouts_chat_normalize_steps),
         ("superior-reasoning", superior_reasoning_chat_normalize_steps),
         ("swe-rebench-openhands", swe_rebench_openhands_chat_normalize_steps),
         ("swe-zero-12m", swe_zero_12m_chat_normalize_steps),
@@ -209,6 +211,9 @@ def all_sft_sources() -> dict[str, DatakitChatSource]:
     token_counts["agenttrove-glm53-compactions"] = 0.25
     token_counts["wildchat-glm53-format-completions"] = 0.01
     token_counts["synthetic-misconceptions-conversations"] = 0.002
+    # Marin-tokenizer count of the 729 rendered pilot conversations (mean 17.6k), plus the
+    # full run's 4.2k extra output tokens per attempt, times ~72.1k verified attempts.
+    token_counts["rts-glm-5.3-rollouts"] = 1.57
     return {
         name: DatakitChatSource(
             name=name,
