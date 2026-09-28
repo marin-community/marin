@@ -135,6 +135,7 @@ PROTECTED_SETTINGS = (
             "generator.run_engines_locally",
             "generator.backend",
             "generator.use_conversation_multi_turn",
+            "generator.require_exact_chat_transport",
             "environment.env_class",
             "data.kind",
         }
@@ -259,6 +260,7 @@ def training_config(
             "async_engine": True,
             "batched": False,
             "use_conversation_multi_turn": True,
+            "require_exact_chat_transport": True,
             "gpu_memory_utilization": 0.7,
             "enforce_eager": False,
             "chat_template": {"source": "name", "name_or_path": choice.chat_template},
