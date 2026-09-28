@@ -52,7 +52,7 @@ The 2026-09-28 teacher-exercise update changes newly generated BioCollection
 instruction and Swallow math textbook batches. These batches use teacher
 exercises. BioCollection user turns pose the original challenge with its inputs
 and omit the supplied reference answer. A validation check rejects altered tagged
-DNA, RNA, protein, and SMILES strings in the learner question. The teacher uses that reference to check
+DNA, RNA, protein, peptide, and SMILES strings in the learner question. The teacher uses that reference to check
 the reasoning and answer. When a label requires unavailable assay measurements
 or structural coordinates, the reasoning states that limitation and identifies
 the result as a reference annotation; it must not invent a derivation.
