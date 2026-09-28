@@ -36,6 +36,6 @@ agents:
 datasets:
 - name: ds-1000
   version: mini-200
-  registry_url: https://raw.githubusercontent.com/marin-community/harbor/7b56cc802917e55e4461cc041d3f9bb731c4e46a/registry.json
+  registry_url: https://raw.githubusercontent.com/marin-community/harbor/7d15093b519ac9284e83460fd48f2c390830f59e/registry.json
 verifier:
   override_timeout_sec: 300

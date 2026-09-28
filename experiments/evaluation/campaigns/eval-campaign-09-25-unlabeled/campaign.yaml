@@ -18,9 +18,6 @@ harbor_harness_profiles:
         compaction_reserve_tokens: 16384
       open-athena-Snowball-67B-A2B-5.7T-Mixed-RLVR-Step38:
         compaction_reserve_tokens: 16384
-        # Pi's remaining-output calculation and local token count together
-        # require two tokens of headroom at this model's served boundary.
-        context_window_safety_tokens: 2
 
 harbor_eval_harness_profiles:
   bixbench-pi: pi-65k-16k
