@@ -44,14 +44,11 @@ are separate grants. The onboarding agent can identify missing access.
 ### Request your GCP and Weights & Biases access
 
 Once you have GitHub write access, open your own PR to add your Google account
-to the `Marin Dev` role. Send your account email and a one-line reason to your
-buddy privately. The PR changes
+to the `Marin Dev` role. The PR changes
 [`iam_data.yaml`](https://github.com/marin-community/marin/blob/main/infra/pulumi/src/iac/gcp/iam_data.yaml)
-with an encrypted principal and a reference under the `marindev` grant. Your
-buddy or another operator with KMS access can generate that edit in their
-checkout and give you the patch to commit. New developers cannot run the
-encryption command before they have KMS access. The operator replaces the
-example address with yours:
+with an encrypted principal and a reference under the `marindev` grant. From
+the repository root, replace the example address with your Google account
+address and generate the edit:
 
 ```bash
 uv run --package marin-iac --extra deploy \
@@ -59,8 +56,10 @@ uv run --package marin-iac --extra deploy \
     --project-role projects/hai-gcp-models/roles/marindev
 ```
 
-Open the PR against `main` without putting your email in its title, body, or
-comments. Ask your buddy to follow the
+The command requires KMS access. If you do not have it, ask a Pulumi operator
+to help prepare the encrypted edit for your branch. Open the PR against `main`
+without putting your email in its title, body, or comments. Send the PR link to
+your buddy and ask them to follow the
 [Pulumi user-grant workflow](https://github.com/marin-community/marin/blob/main/infra/pulumi/README.md#user-grants):
 decrypt the PR with `review-grant`, get explicit human confirmation of the
 account and role, merge it, then preview and run `pulumi up` on the
