@@ -678,6 +678,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     """Grokfast-EMA (arXiv 2405.20233): every gradient gets ``lambda`` x its EMA added before the optimizer
     (0: off; the paper uses 2)."""
     grokfast_alpha: float = 0.98
+    value_embed_lr_mult: float = 1.0
+    """Adam LR multiplier of the value-embedding tables (``value_embeds``); like the bigram table, a sparse
+    token table may want a hotter LR than the dense Adam leaves."""
     ple_lr_mult: float = 1.0
     """Adam LR multiplier of the per-layer embedding table (``ple_dim``)."""
     memory_lr_mult: float = 1.0
@@ -840,6 +843,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 ),
                 "embed2": plain_adam_at(adam_lr * self.embed2_lr_mult),
                 "ple": plain_adam_at(adam_lr * self.ple_lr_mult),
+                "value_embed": plain_adam_at(adam_lr * self.value_embed_lr_mult),
                 "memory": plain_adam_at(adam_lr * self.memory_lr_mult),
                 "kda_decay": plain_adam_at(adam_lr * self.kda_decay_lr_mult, self.kda_decay_beta1, self.kda_decay_beta2),
             }
@@ -903,6 +907,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             if "attn_res_query" in path_lower:
                 return "attn_res_query"
             # Inkling rel-pos weights (r_proj and the shared bias bank); value embeddings and their mixing weights.
+            if path_lower.endswith(".value_embed") and self.value_embed_lr_mult != 1.0:
+                return "value_embed"
             if ".rel_pos." in path_lower or re.search(
                 r"(?:^|\.)(value_embed|ve_lambda|ve_gate|xsa_scale|xsa_gate|head_mix|ssmax_scale|shared_gate|laurel_[ab]_\w+|ple_up|moe_out_gate_[wb]|bigram_gate_[wb]|bigram_gate_[ab]_lr|trigram_gate_[wb]|trigram_gate_[ab]_lr|bank_scale|bias_\w+|dyt_alpha|dyt_beta|qk_mult|diff_lambda|diff_lambda_init|vres_lambda|null_const_[vw])$",
                 path_lower,
