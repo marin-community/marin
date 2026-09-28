@@ -134,6 +134,10 @@ VERIFIED_FUZZY_DUPS_PATH = "datakit/verify_fuzzy_dups_c757e4f0"
 # under a path naming this pin. The tokenizer is the corpus tokenizer whose ids the
 # scorer reads -- its vocabulary is shared with the Nemotron-Flash-1B tokenizer the
 # checkpoint was trained on.
+# TODO: train the next quality scorer on the Marin (Llama 3) tokenizer. Nemotron was
+# chosen so the scorer could read the corpus's pretokenized ids, and score_fusion now
+# tokenizes the text itself, so nothing ties the scorer to it. This pin stays on
+# Nemotron because it identifies the model behind the registered hero scores.
 NEMOTRON_88K = QualityPin(
     name="nemotron88k_v1",
     model_path="datakit/models/quality/nemotron_88k",

@@ -91,7 +91,10 @@ The fusion scorer projects and layer-norms the document embedding to `hidden_dim
 appends it as a gated super-token the real tokens attend to, and adds it to the head
 through a zero-initialized skip. Its deployed config: `pool_window=16`,
 `embed_dim=256`, `hidden_dim=384`, `num_layers=4`, `num_heads=8`, `max_tokens=512`,
-Nemotron token ids over a 131,072-entry vocabulary.
+Nemotron token ids over a 131,072-entry vocabulary. Nemotron was chosen so the scorer
+could read the corpus's pretokenized ids; since the score step tokenizes the text
+itself, the next scorer should move to the Marin (Llama 3) tokenizer (see the TODO on
+`hero_data.NEMOTRON_88K`).
 
 ## Files
 
