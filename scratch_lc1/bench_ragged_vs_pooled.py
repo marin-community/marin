@@ -23,6 +23,7 @@ import statistics
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 import jax
 import jax.numpy as jnp
@@ -182,12 +183,16 @@ def run_parent(args: argparse.Namespace) -> None:
             env["RAGGED_DOT_IMPL"] = args.ragged_dot_impl
         cmd = [sys.executable, "-m", MODULE, "--child", variant, *_forwarded(args)]
         print(f"=== {variant}: {' '.join(cmd)}", flush=True)
-        proc = subprocess.run(cmd, env=env, text=True, capture_output=True, check=False)
-        sys.stdout.write(proc.stdout[-4000:])
-        results = [line for line in proc.stdout.splitlines() if line.startswith(RESULT_PREFIX)]
+        env["NCCL_DEBUG"] = "WARN"
+        log_path = f"/tmp/bench_{variant}.log"
+        with open(log_path, "w") as log:
+            proc = subprocess.run(cmd, env=env, text=True, stdout=log, stderr=subprocess.STDOUT, check=False)
+        output = Path(log_path).read_text()
+        sys.stdout.write(output[-4000:])
+        results = [line for line in output.splitlines() if line.startswith(RESULT_PREFIX)]
         if proc.returncode != 0 or not results:
             # Keep going: one transport failing to lower (e.g. the device kernel) must not hide the others.
-            print(f"!!! {variant} failed (exit {proc.returncode}):\n{proc.stderr[-6000:]}", flush=True)
+            print(f"!!! {variant} failed (exit {proc.returncode}):\n{output[-6000:]}", flush=True)
             rows.append((variant, None))
             continue
         rows.append((variant, json.loads(results[-1][len(RESULT_PREFIX) :])))
