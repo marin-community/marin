@@ -54,7 +54,7 @@ quality_model.py QualityPin / ContentTypePin — the models, their digests, and 
 
 Every input leaf of a source holds the normalized shard's documents in the same row
 order, so each step reads its side inputs by position and checks each batch's ids
-against them.
+against them. All three run through one per-shard driver, `shards.map_normalized_shards`.
 
 `run.py --stage pipeline` runs the three steps from scratch; each lands at its own
 identity. The registered hero data in `experiments/datakit/hero_data.py` pins the
@@ -113,6 +113,7 @@ Core:
 - [`scorer.py`](scorer.py) — `PooledScorer`: load a trained model + vocab remap and score arbitrary text.
 - [`score.py`](score.py) — `score_normalized`: the per-source quality step (bme + calibration → buckets).
 - [`score_fusion.py`](score_fusion.py) — `fusion_score_step`: raw fusion scores from normalized text and Harrier embeddings.
+- [`shards.py`](shards.py) — `map_normalized_shards`: the per-shard Zephyr driver the three steps share, and the aligned side-leaf reads.
 - [`content_type.py`](content_type.py) — `content_type_step`: per-document content types from Harrier embeddings.
 - [`domain_mlp.py`](domain_mlp.py) — the content-type classifier's forward and loader.
 - [`bucket.py`](bucket.py) — `quality_step`: the store-ready `QualityScores` dataset from fusion scores and content types.

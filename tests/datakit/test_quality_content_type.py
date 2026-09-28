@@ -14,7 +14,7 @@ import pytest
 from marin.datakit.normalize import NormalizedData
 
 from experiments.datakit.cluster.quality.fast_transformer import domain_mlp
-from experiments.datakit.cluster.quality.fast_transformer.content_type import predict_content_types
+from experiments.datakit.cluster.quality.fast_transformer.content_type import POOL, predict_content_types
 from experiments.datakit.cluster.quality.fast_transformer.quality_model import ContentTypePin
 from experiments.datakit.cluster.quality.fast_transformer.score_fusion import normalize_embeddings
 
@@ -63,7 +63,11 @@ def make_source(root: Path, ids: list[str], embedding_ids: list[str]) -> tuple[N
 
 def run(tmp_path: Path, normalized: NormalizedData, embedding_dir: str, pin: ContentTypePin):
     return predict_content_types(
-        str(tmp_path / "out"), normalized=normalized, embedding_dir=embedding_dir, classifier=pin, max_workers=1
+        str(tmp_path / "out"),
+        normalized=normalized,
+        embedding_dir=embedding_dir,
+        classifier=pin,
+        pool=replace(POOL, max_workers=1),
     )
 
 

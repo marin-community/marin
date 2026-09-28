@@ -6,7 +6,7 @@
 The per-type quality calibration routes a document through its predicted content
 type. This step stores that type for every document: one Zephyr task per
 normalized shard walks the shard's ids, takes the Harrier rows beside them
-(:class:`score_fusion.AlignedColumn`, which checks the ids), runs the
+(:class:`shards.AlignedColumn`, which checks the ids), runs the
 :mod:`domain_mlp` classifier over the L2-normalized embeddings, and writes one
 output shard under the same basename in the normalized row order.
 
@@ -22,7 +22,6 @@ read, so the object store bounds the step rather than the matmuls.
 
 import functools
 import logging
-import os
 from collections.abc import Iterator
 from functools import partial
 
@@ -34,10 +33,9 @@ from marin.datakit.source_key import DatakitArtifactPath
 from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
 from pydantic import BaseModel
-from rigging.filesystem.storage_path import prefix_join
 from zephyr import counters
 from zephyr.context import ZephyrContext
-from zephyr.dataset import Dataset, ShardInfo
+from zephyr.dataset import ShardInfo
 
 from experiments.datakit.cluster.quality.fast_transformer import domain_mlp
 from experiments.datakit.cluster.quality.fast_transformer.quality_model import (
@@ -45,13 +43,12 @@ from experiments.datakit.cluster.quality.fast_transformer.quality_model import (
     classifier_path,
     require_pinned_classifier,
 )
-from experiments.datakit.cluster.quality.fast_transformer.score_fusion import (
-    COORDINATOR_RESOURCES,
-    normalize_embeddings,
-    paired_basenames,
+from experiments.datakit.cluster.quality.fast_transformer.score_fusion import normalize_embeddings
+from experiments.datakit.cluster.quality.fast_transformer.shards import (
+    ShardPool,
+    map_normalized_shards,
     read_aligned_column,
     rebatch,
-    shard_output_pattern,
 )
 
 logger = logging.getLogger(__name__)
@@ -63,9 +60,11 @@ CONTENT_TYPE_VERSION = 1
 BLOCK_ROWS = 65_536
 # Four tasks per worker, like the bucket step. A task holds one int8 embedding
 # shard, one float32 block and its activations.
-WORKER_RESOURCES = ResourceConfig(cpu=8, ram="32g", disk="8g")
-TASK_RESOURCES = ResourceConfig(cpu=2, ram="8g", disk="8g")
-MAX_WORKERS = 128
+POOL = ShardPool(
+    worker=ResourceConfig(cpu=8, ram="32g", disk="8g"),
+    task=ResourceConfig(cpu=2, ram="8g", disk="8g"),
+    max_workers=128,
+)
 
 
 class ContentTypes(BaseModel):
@@ -134,14 +133,14 @@ def type_batch(model: domain_mlp.DomainMlp, labels: tuple[str, ...], ids: pa.Arr
 def _type_shard(
     batches: Iterator[pa.RecordBatch],
     shard: ShardInfo,
+    side_paths: tuple[str, ...],
     *,
-    embedding_paths: tuple[str, ...],
     model_path: str,
     pin: ContentTypePin,
 ) -> Iterator[pa.RecordBatch]:
     """Type one normalized shard from its embedding shard, in the normalized order."""
     model = pinned_classifier(model_path, pin)
-    embedding_path = embedding_paths[shard.shard_idx]
+    (embedding_path,) = side_paths
     embeddings = read_aligned_column(embedding_path, "embedding", f"shard {shard.shard_idx} ({embedding_path})")
     documents = 0
     for batch in rebatch(batches, BLOCK_ROWS):
@@ -159,9 +158,7 @@ def predict_content_types(
     normalized: NormalizedData,
     embedding_dir: str,
     classifier: ContentTypePin,
-    worker_resources: ResourceConfig = WORKER_RESOURCES,
-    task_resources: ResourceConfig = TASK_RESOURCES,
-    max_workers: int = MAX_WORKERS,
+    pool: ShardPool = POOL,
     zephyr_context: ZephyrContext | None = None,
 ) -> ContentTypes:
     """Type every shard of one normalized source; one Zephyr task per shard.
@@ -169,29 +166,17 @@ def predict_content_types(
     Output shards that already exist are skipped, so a rerun after a partial failure
     types only the remainder.
     """
-    text_dir = normalized.main_output_dir
-    basenames = tuple(paired_basenames(text_dir, embedding_dir))
-    embedding_paths = tuple(prefix_join(embedding_dir, name) for name in basenames)
-    logger.info("typing %d shards of %s from %s -> %s", len(basenames), text_dir, embedding_dir, output_path)
-    pipeline = (
-        Dataset.from_list([prefix_join(text_dir, name) for name in basenames])
-        .load_parquet(columns=["id"], batch_mode=True)
-        .map_shard(
-            partial(_type_shard, embedding_paths=embedding_paths, model_path=classifier_path(classifier), pin=classifier)
-        )
-        .write_parquet(
-            shard_output_pattern(output_path, basenames),
-            schema=content_type_schema(classifier.labels),
-            skip_existing=True,
-        )
+    outcome = map_normalized_shards(
+        name="content-type",
+        text_dir=normalized.main_output_dir,
+        side_dirs=[embedding_dir],
+        columns=["id"],
+        shard_fn=partial(_type_shard, model_path=classifier_path(classifier), pin=classifier),
+        output_path=output_path,
+        schema=content_type_schema(classifier.labels),
+        pool=pool,
+        zephyr_context=zephyr_context,
     )
-    ctx = zephyr_context or ZephyrContext(
-        name=f"content-type-{os.path.basename(text_dir.rstrip('/'))[:8]}",
-        resources=worker_resources,
-        coordinator_resources=COORDINATOR_RESOURCES,
-        max_workers=min(max_workers, len(basenames)),
-    )
-    outcome = ctx.execute(pipeline, verbose=True, map_task_resources=task_resources)
     return ContentTypes(
         output_dir=output_path,
         embedding_dir=embedding_dir,
@@ -208,9 +193,7 @@ def content_type_step(
     normalized: StepSpec,
     embedding: StepSpec,
     classifier: ContentTypePin,
-    worker_resources: ResourceConfig = WORKER_RESOURCES,
-    task_resources: ResourceConfig = TASK_RESOURCES,
-    max_workers: int = MAX_WORKERS,
+    pool: ShardPool = POOL,
     zephyr_context: ZephyrContext | None = None,
 ) -> StepSpec:
     """A step that types ``normalized`` from its Harrier leaf ``embedding`` with ``classifier``.
@@ -227,9 +210,7 @@ def content_type_step(
             normalized=read_artifact(normalized.output_path, NormalizedData),
             embedding_dir=embedding.output_path,
             classifier=classifier,
-            worker_resources=worker_resources,
-            task_resources=task_resources,
-            max_workers=max_workers,
+            pool=pool,
             zephyr_context=zephyr_context,
         ),
     )

@@ -4,6 +4,7 @@
 """The bucket step end to end on a local pool: order, calibration, and the co-partition guard."""
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -13,7 +14,7 @@ import pytest
 from marin.datakit.normalize import NormalizedData
 
 from experiments.datakit.cluster.quality.fast_transformer.artifact import BUCKET_EDGES
-from experiments.datakit.cluster.quality.fast_transformer.bucket import bucket_quality_scores
+from experiments.datakit.cluster.quality.fast_transformer.bucket import POOL, bucket_quality_scores
 from experiments.datakit.cluster.quality.fast_transformer.calibrate import Calibration
 from experiments.datakit.cluster.quality.fast_transformer.quality_model import (
     CALIBRATION_FILE,
@@ -56,7 +57,7 @@ def run_bucket(tmp_path: Path, normalized: NormalizedData, pin: QualityPin, max_
         scores_dir=str(tmp_path / "scores"),
         content_type_dir=str(tmp_path / "types"),
         quality_model=pin,
-        max_workers=max_workers,
+        pool=replace(POOL, max_workers=max_workers),
     )
 
 
