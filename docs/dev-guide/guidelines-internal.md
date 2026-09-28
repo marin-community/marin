@@ -43,16 +43,30 @@ are separate grants. The onboarding agent can identify missing access.
 
 ### Request your GCP and Weights & Biases access
 
-Initiate your own `Marin Dev` access request. Send your Google account email and
-a one-line reason to your buddy or a Marin infrastructure maintainer privately.
-Ask them to prepare a grant PR through the
-[Pulumi user-grant workflow](https://github.com/marin-community/marin/blob/main/infra/pulumi/README.md#user-grants).
-Creating the encrypted grant requires KMS access, which a new developer does
-not yet have. An authorized contributor runs `add-grant`; a separate reviewer
-decrypts the grant with `review-grant` and gets explicit human confirmation of
-the account and role before merging the PR. The reviewer then runs `pulumi up`
-on the `infra/pulumi` `marin` stack. The grant is live after that update
-succeeds. Do not put your email in a public issue or PR.
+Once you have GitHub write access, open your own PR to add your Google account
+to the `Marin Dev` role. Send your account email and a one-line reason to your
+buddy privately. The PR changes
+[`iam_data.yaml`](https://github.com/marin-community/marin/blob/main/infra/pulumi/src/iac/gcp/iam_data.yaml)
+with an encrypted principal and a reference under the `marindev` grant. Your
+buddy or another operator with KMS access can generate that edit in their
+checkout and give you the patch to commit. New developers cannot run the
+encryption command before they have KMS access. The operator replaces the
+example address with yours:
+
+```bash
+uv run --package marin-iac --extra deploy \
+  python infra/pulumi/iam_principal.py grant you@example.com \
+    --project-role projects/hai-gcp-models/roles/marindev
+```
+
+Open the PR against `main` without putting your email in its title, body, or
+comments. Ask your buddy to follow the
+[Pulumi user-grant workflow](https://github.com/marin-community/marin/blob/main/infra/pulumi/README.md#user-grants):
+decrypt the PR with `review-grant`, get explicit human confirmation of the
+account and role, merge it, then preview and run `pulumi up` on the
+`infra/pulumi` `marin` stack. Your buddy needs Pulumi operator access to apply
+the grant; otherwise they should hand that step to an operator. The grant is
+live after `pulumi up` succeeds.
 
 DM your buddy: “Add me to the `marin-community` Weights & Biases entity. My
 Weights & Biases handle is `<your-handle>`.” Replace the placeholder with your
