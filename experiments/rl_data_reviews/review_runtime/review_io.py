@@ -11,6 +11,7 @@ import json
 import os
 import shutil
 import sys
+import traceback
 import urllib.error
 import urllib.request
 from contextlib import contextmanager
@@ -48,6 +49,30 @@ def append_event(path: Path, value: Any) -> None:
     with path.open("a") as stream:
         stream.write(json_text({"at": utc_now(), **value}) + "\n")
         stream.flush()
+
+
+def execution_error(error: Exception, root: Path, verifier_executed: bool) -> dict:
+    """Persist a failed native execution with its traceback and verifier state."""
+    append_event(
+        root / "verifier-trace.jsonl",
+        {
+            "event": "execution_error",
+            "type": type(error).__name__,
+            "detail": str(error),
+            "traceback": traceback.format_exc(),
+        },
+    )
+    return {
+        "verification": {
+            "status": "error",
+            "score": None,
+            "passed": None,
+            "reason": str(error),
+            "diagnostics": {"exception_type": type(error).__name__},
+        },
+        "verifier_executed": verifier_executed,
+        "done": False,
+    }
 
 
 def digest(path: Path) -> str:

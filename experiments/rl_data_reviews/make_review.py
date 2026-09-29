@@ -166,7 +166,14 @@ def candidates(source: dict, base: Path) -> Iterable[Task]:
         )
 
 
-def sampled_tasks(config: dict, base: Path, n: int, seed: int) -> tuple[list[Task], int, dict[tuple, int]]:
+@dataclass(frozen=True)
+class TaskSample:
+    tasks: list[Task]
+    population_count: int
+    source_counts: dict[tuple, int]
+
+
+def sampled_tasks(config: dict, base: Path, n: int, seed: int) -> TaskSample:
     """Reservoir-sample a local source without retaining every prepared row."""
     rng = random.Random(seed)
     selected = []
@@ -189,7 +196,7 @@ def sampled_tasks(config: dict, base: Path, n: int, seed: int) -> tuple[list[Tas
                 selected[position] = task
     if total < n:
         raise ValueError(f"Requested {n} tasks but source contains only {total}")
-    return sorted(selected, key=lambda task: task.row_index), total, counts
+    return TaskSample(sorted(selected, key=lambda task: task.row_index), total, counts)
 
 
 def checkout_identity(path: Path, directories: list[str]) -> dict:
@@ -485,7 +492,7 @@ def review_record(
     method: str,
     coverage: dict,
     tests_executed: bool,
-    ev: list[dict],
+    evidence_records: list[dict],
     model: dict,
 ) -> dict:
     if opinion["verdict"] not in VERDICTS:
@@ -496,7 +503,7 @@ def review_record(
         "subject_id": subject_id,
         "reviewer": actor,
         "publisher": {"id": "make_review", "label": "make_review", "kind": "organization"},
-        "reviewed_at": ev[0]["retrieved_at"],
+        "reviewed_at": evidence_records[0]["retrieved_at"],
         "imported_at": utc_now(),
         "method": method,
         "tests_executed": tests_executed,
@@ -505,7 +512,7 @@ def review_record(
         "verdict": opinion["verdict"],
         "metrics": opinion["metrics"],
         "findings": [{"id": f"{identifier}/finding/{i}", **finding} for i, finding in enumerate(opinion["findings"])],
-        "evidence": ev,
+        "evidence": evidence_records,
         "derived_from_review_ids": opinion.get("derived_from_review_ids", []),
         "supersedes_review_id": None,
         "attributes": {},
@@ -617,8 +624,7 @@ def check_credentials(value: Any) -> None:
             check_credentials(child)
 
 
-def make_review(config_path: Path, n: int, seed: int, output: Path, resume: bool, limit: int) -> dict:
-    config_path = config_path.resolve()
+def review_config(config_path: Path) -> dict:
     config = json.loads(config_path.read_text())
     base = config_path.parent
     native = config["runtime"]
@@ -642,7 +648,248 @@ def make_review(config_path: Path, n: int, seed: int, output: Path, resume: bool
         raise ValueError("Provide an explicit model name, base_url, and positive timeout")
     if model.get("api_key_env"):
         os.environ[model["api_key_env"]]
-    tasks, population, source_counts = sampled_tasks(config, base, n, seed)
+    return config
+
+
+@dataclass
+class PanelReviews:
+    collection: dict
+    source_populations: dict[str, int]
+    task_sources: dict[str, str]
+    task_coverages: dict[str, dict]
+
+
+def independent_reviews(
+    sample: TaskSample, config: dict, output: Path, snapshot_id: str, seed: int, limit: int, identity: dict, schema: dict
+) -> PanelReviews:
+    tasks, source_counts = sample.tasks, sample.source_counts
+    n = len(tasks)
+    model = config["model"]
+    bundle = {
+        "schema_version": "0.3.0",
+        "execution_provenance": {
+            "marinskyrl_commit": identity["marinskyrl"]["commit"],
+            "marinskyrl_dirty": identity["marinskyrl"]["dirty"],
+            "marinskyrl_python_tree_sha256": identity["marinskyrl"]["python_tree_sha256"],
+            "harbor_commit": identity.get("harbor", {}).get("commit"),
+        },
+        "created_at": utc_now(),
+        "subjects": [],
+        "reviews": [],
+        "tag_assignments": [],
+        "source_mappings": [],
+    }
+    source_subjects = {}
+    source_populations = {}
+    task_sources = {}
+    task_coverages = {}
+    outcomes = []
+    for index, task in enumerate(tasks):
+        outcome = attempt(task, config, output / "tasks" / f"{index:04d}", output)
+        outcomes.append(outcome)
+        print(
+            f'Attempt {index + 1}/{n}: {task.source_id}/{task.id}; verifier={outcome["verification"]["status"]}',
+            flush=True,
+        )
+    for index, (task, result) in enumerate(zip(tasks, outcomes, strict=True)):
+        task_root = output / "tasks" / f"{index:04d}"
+        source_key = (task.repository, task.dataset_revision or "snapshot:" + snapshot_id, task.source_id)
+        source_id = "source:" + hashlib.sha256(json_text(source_key).encode()).hexdigest()[:20]
+        task_id = source_id + "/task/" + task.id
+        if source_id not in source_subjects:
+            subject = {
+                "id": source_id,
+                "level": "source",
+                "repository": task.repository,
+                "dataset_revision": task.dataset_revision,
+                "source_id": task.source_id,
+                "task_id": None,
+                "task_path": None,
+                "row_index": None,
+            }
+            source_subjects[source_id] = subject
+            bundle["subjects"].append(subject)
+        bundle["subjects"].append(
+            {
+                **source_subjects[source_id],
+                "id": task_id,
+                "level": "task",
+                "task_id": task.id,
+                "task_path": task.task_path,
+                "row_index": task.row_index,
+            }
+        )
+        source_populations[source_id] = source_counts[(task.repository, task.dataset_revision, task.source_id)]
+        task_sources[task_id] = source_id
+        coverage = {
+            "scope": "single_task",
+            "sample_count": 1,
+            "population_count": None,
+            "sampling_method": "Seeded reservoir sampling without replacement over local input rows",
+            "seed": str(seed),
+            "samples": [{"task_path": task.task_path, "row_index": task.row_index}],
+        }
+        task_coverages[task_id] = coverage
+        verification = result["verification"]
+        runtime_id = task_id + "/runtime"
+        runtime_opinion = {
+            "summary": (
+                f'Native {task.route} verification: {verification["status"]}. ' + (verification.get("reason") or "")
+            ),
+            "verdict": "unrated" if verification["status"] == "verified" else "inconclusive",
+            "metrics": [{"key": "native_verifier_score", "value": verification["score"], "scale": None}],
+            "findings": [],
+        }
+        execution = output / result["execution_path"]
+        native_evidence = [task_root / "attempt.json", execution / "verifier-trace.jsonl"]
+        native_evidence.extend(
+            path for path in [execution / "solver-trace.json", execution / "harbor-result.json"] if path.is_file()
+        )
+        runtime_review = review_record(
+            runtime_id,
+            task_id,
+            runtime_opinion,
+            "runtime_execution",
+            coverage,
+            result["verifier_executed"],
+            [evidence(path, output) for path in native_evidence],
+            model,
+        )
+        runtime_review["reviewer"] = {
+            "id": "native-verifier",
+            "label": "Native task verifier",
+            "kind": "organization",
+        }
+        runtime_review["attributes"] = {
+            "verification": verification,
+            "execution_path": result["execution_path"],
+            "route": task.route,
+        }
+        bundle["reviews"].append(runtime_review)
+        execution = output / result["execution_path"]
+        entries = text_bundle(execution, output, limit)
+        for judge in range(PANEL_SIZE):
+            stage = task_root / "judges" / str(judge + 1)
+            opinion = task_judgment(model, task, result, entries, stage, limit)
+            review = review_record(
+                task_id + f"/judge/{judge + 1}",
+                task_id,
+                opinion,
+                "model_judgment",
+                coverage,
+                result["verifier_executed"],
+                [
+                    evidence(path, output)
+                    for path in [
+                        stage / "parsed.json",
+                        task_root / "attempt.json",
+                        *sorted(stage.glob("segments/*/parsed.json")),
+                        *sorted(stage.glob("segments.json")),
+                    ]
+                ],
+                model,
+            )
+            review["attributes"] = {
+                "judge_index": judge + 1,
+                "independent_session": True,
+                "prompt": JUDGE_PROMPT,
+                "evidence_segments": len(list(stage.glob("segments/*/parsed.json"))) or 1,
+                "segment_consolidation_prompt": (
+                    PANEL_CONSOLIDATION_PROMPT if (stage / "segments.json").exists() else None
+                ),
+            }
+            bundle["reviews"].append(review)
+            bundle["tag_assignments"].extend(tags_for(review, opinion))
+            validate_collection(bundle, output, schema)
+        write_json(output / "panel-reviews.partial.json", bundle)
+        print(
+            f'Task {index + 1}/{n}: {task.source_id}/{task.id}; verifier={verification["status"]}; judges=3',
+            flush=True,
+        )
+    return PanelReviews(bundle, source_populations, task_sources, task_coverages)
+
+
+def coalesce_reviews(panel: PanelReviews, model: dict, output: Path, limit: int, schema: dict) -> None:
+    bundle = panel.collection
+    source_populations, task_sources, task_coverages = panel.source_populations, panel.task_sources, panel.task_coverages
+    stage = output / "coalescer"
+    required_syntheses = []
+    for subject in bundle["subjects"]:
+        contributing = [
+            review["id"]
+            for review in bundle["reviews"]
+            if review["subject_id"] == subject["id"]
+            or (subject["level"] == "source" and task_sources[review["subject_id"]] == subject["id"])
+        ]
+        required_syntheses.append(
+            {"subject_id": subject["id"], "level": subject["level"], "derived_from_review_ids": contributing}
+        )
+    merged = judgment(
+        model,
+        COALESCE_PROMPT,
+        {
+            "required_syntheses": required_syntheses,
+            "required_synthesis_count": len(required_syntheses),
+            "instruction": (
+                "Return every listed synthesis, including the source-level synthesis. "
+                "Use these exact subject IDs and contributing review IDs."
+            ),
+            "collection": synthesis_input(bundle),
+            "schema": schema,
+        },
+        stage,
+        limit,
+    )
+    expected = {subject["id"] for subject in bundle["subjects"]}
+    if {item["subject_id"] for item in merged["syntheses"]} != expected or len(merged["syntheses"]) != len(expected):
+        (stage / "parsed.json").unlink()
+        raise ValueError("Coalescer must produce exactly one synthesis per sampled task and source; raw output saved")
+    inputs = list(bundle["reviews"])
+    for opinion in merged["syntheses"]:
+        subject_id = opinion["subject_id"]
+        source_level = subject_id in source_populations
+        contributing = [
+            review
+            for review in inputs
+            if review["subject_id"] == subject_id or (source_level and task_sources[review["subject_id"]] == subject_id)
+        ]
+        required_ids = {review["id"] for review in contributing}
+        if set(opinion["derived_from_review_ids"]) != required_ids:
+            (stage / "parsed.json").unlink()
+            raise ValueError("Synthesis must preserve references to every applicable runtime and judge opinion")
+        if source_level:
+            task_ids = sorted({review["subject_id"] for review in contributing})
+            coverage = {
+                **task_coverages[task_ids[0]],
+                "scope": "source_sample",
+                "sample_count": len(task_ids),
+                "samples": [sample for tid in task_ids for sample in task_coverages[tid]["samples"]],
+            }
+            coverage["population_count"] = source_populations[subject_id]
+        else:
+            coverage = task_coverages[subject_id]
+        review = review_record(
+            subject_id + "/synthesis",
+            subject_id,
+            opinion,
+            "synthesis",
+            coverage,
+            all(r["tests_executed"] for r in contributing),
+            [evidence(stage / "parsed.json", output)],
+            model,
+        )
+        bundle["reviews"].append(review)
+        bundle["tag_assignments"].extend(tags_for(review, opinion))
+
+
+def make_review(config_path: Path, n: int, seed: int, output: Path, resume: bool, limit: int) -> dict:
+    config_path = config_path.resolve()
+    config = review_config(config_path)
+    base = config_path.parent
+    native = config["runtime"]
+    model = config["model"]
+    sample = sampled_tasks(config, base, n, seed)
+    tasks, population = sample.tasks, sample.population_count
     identity = {
         "config": config,
         "tasks": [asdict(task) for task in tasks],
@@ -694,218 +941,9 @@ def make_review(config_path: Path, n: int, seed: int, output: Path, resume: bool
             result = json.loads(final_path.read_text())
             validate_collection(result, output, schema)
             return result
-        bundle = {
-            "schema_version": "0.3.0",
-            "execution_provenance": {
-                "marinskyrl_commit": identity["marinskyrl"]["commit"],
-                "marinskyrl_dirty": identity["marinskyrl"]["dirty"],
-                "marinskyrl_python_tree_sha256": identity["marinskyrl"]["python_tree_sha256"],
-                "harbor_commit": identity.get("harbor", {}).get("commit"),
-            },
-            "created_at": utc_now(),
-            "subjects": [],
-            "reviews": [],
-            "tag_assignments": [],
-            "source_mappings": [],
-        }
-        source_subjects = {}
-        source_populations = {}
-        task_sources = {}
-        task_coverages = {}
-        outcomes = []
-        for index, task in enumerate(tasks):
-            outcome = attempt(task, config, output / "tasks" / f"{index:04d}", output)
-            outcomes.append(outcome)
-            print(
-                f'Attempt {index + 1}/{n}: {task.source_id}/{task.id}; verifier={outcome["verification"]["status"]}',
-                flush=True,
-            )
-        for index, (task, result) in enumerate(zip(tasks, outcomes, strict=True)):
-            task_root = output / "tasks" / f"{index:04d}"
-            source_key = (task.repository, task.dataset_revision or "snapshot:" + snapshot_id, task.source_id)
-            source_id = "source:" + hashlib.sha256(json_text(source_key).encode()).hexdigest()[:20]
-            task_id = source_id + "/task/" + task.id
-            if source_id not in source_subjects:
-                subject = {
-                    "id": source_id,
-                    "level": "source",
-                    "repository": task.repository,
-                    "dataset_revision": task.dataset_revision,
-                    "source_id": task.source_id,
-                    "task_id": None,
-                    "task_path": None,
-                    "row_index": None,
-                }
-                source_subjects[source_id] = subject
-                bundle["subjects"].append(subject)
-            bundle["subjects"].append(
-                {
-                    **source_subjects[source_id],
-                    "id": task_id,
-                    "level": "task",
-                    "task_id": task.id,
-                    "task_path": task.task_path,
-                    "row_index": task.row_index,
-                }
-            )
-            source_populations[source_id] = source_counts[(task.repository, task.dataset_revision, task.source_id)]
-            task_sources[task_id] = source_id
-            coverage = {
-                "scope": "single_task",
-                "sample_count": 1,
-                "population_count": None,
-                "sampling_method": "Seeded reservoir sampling without replacement over local input rows",
-                "seed": str(seed),
-                "samples": [{"task_path": task.task_path, "row_index": task.row_index}],
-            }
-            task_coverages[task_id] = coverage
-            verification = result["verification"]
-            runtime_id = task_id + "/runtime"
-            runtime_opinion = {
-                "summary": (
-                    f'Native {task.route} verification: {verification["status"]}. ' + (verification.get("reason") or "")
-                ),
-                "verdict": "unrated" if verification["status"] == "verified" else "inconclusive",
-                "metrics": [{"key": "native_verifier_score", "value": verification["score"], "scale": None}],
-                "findings": [],
-            }
-            execution = output / result["execution_path"]
-            native_evidence = [task_root / "attempt.json", execution / "verifier-trace.jsonl"]
-            native_evidence.extend(
-                path for path in [execution / "solver-trace.json", execution / "harbor-result.json"] if path.is_file()
-            )
-            runtime_review = review_record(
-                runtime_id,
-                task_id,
-                runtime_opinion,
-                "runtime_execution",
-                coverage,
-                result["verifier_executed"],
-                [evidence(path, output) for path in native_evidence],
-                model,
-            )
-            runtime_review["reviewer"] = {
-                "id": "native-verifier",
-                "label": "Native task verifier",
-                "kind": "organization",
-            }
-            runtime_review["attributes"] = {
-                "verification": verification,
-                "execution_path": result["execution_path"],
-                "route": task.route,
-            }
-            bundle["reviews"].append(runtime_review)
-            execution = output / result["execution_path"]
-            entries = text_bundle(execution, output, limit)
-            for judge in range(PANEL_SIZE):
-                stage = task_root / "judges" / str(judge + 1)
-                opinion = task_judgment(model, task, result, entries, stage, limit)
-                review = review_record(
-                    task_id + f"/judge/{judge + 1}",
-                    task_id,
-                    opinion,
-                    "model_judgment",
-                    coverage,
-                    result["verifier_executed"],
-                    [
-                        evidence(path, output)
-                        for path in [
-                            stage / "parsed.json",
-                            task_root / "attempt.json",
-                            *sorted(stage.glob("segments/*/parsed.json")),
-                            *sorted(stage.glob("segments.json")),
-                        ]
-                    ],
-                    model,
-                )
-                review["attributes"] = {
-                    "judge_index": judge + 1,
-                    "independent_session": True,
-                    "prompt": JUDGE_PROMPT,
-                    "evidence_segments": len(list(stage.glob("segments/*/parsed.json"))) or 1,
-                    "segment_consolidation_prompt": (
-                        PANEL_CONSOLIDATION_PROMPT if (stage / "segments.json").exists() else None
-                    ),
-                }
-                bundle["reviews"].append(review)
-                bundle["tag_assignments"].extend(tags_for(review, opinion))
-                validate_collection(bundle, output, schema)
-            write_json(output / "panel-reviews.partial.json", bundle)
-            print(
-                f'Task {index + 1}/{n}: {task.source_id}/{task.id}; verifier={verification["status"]}; judges=3',
-                flush=True,
-            )
-        stage = output / "coalescer"
-        required_syntheses = []
-        for subject in bundle["subjects"]:
-            contributing = [
-                review["id"]
-                for review in bundle["reviews"]
-                if review["subject_id"] == subject["id"]
-                or (subject["level"] == "source" and task_sources[review["subject_id"]] == subject["id"])
-            ]
-            required_syntheses.append(
-                {"subject_id": subject["id"], "level": subject["level"], "derived_from_review_ids": contributing}
-            )
-        merged = judgment(
-            model,
-            COALESCE_PROMPT,
-            {
-                "required_syntheses": required_syntheses,
-                "required_synthesis_count": len(required_syntheses),
-                "instruction": (
-                    "Return every listed synthesis, including the source-level synthesis. "
-                    "Use these exact subject IDs and contributing review IDs."
-                ),
-                "collection": synthesis_input(bundle),
-                "schema": schema,
-            },
-            stage,
-            limit,
-        )
-        expected = {subject["id"] for subject in bundle["subjects"]}
-        if {item["subject_id"] for item in merged["syntheses"]} != expected or len(merged["syntheses"]) != len(expected):
-            (stage / "parsed.json").unlink()
-            raise ValueError(
-                "Coalescer must produce exactly one synthesis per sampled task and source; raw output saved"
-            )
-        inputs = list(bundle["reviews"])
-        for opinion in merged["syntheses"]:
-            subject_id = opinion["subject_id"]
-            source_level = subject_id in source_subjects
-            contributing = [
-                review
-                for review in inputs
-                if review["subject_id"] == subject_id
-                or (source_level and task_sources[review["subject_id"]] == subject_id)
-            ]
-            required_ids = {review["id"] for review in contributing}
-            if set(opinion["derived_from_review_ids"]) != required_ids:
-                (stage / "parsed.json").unlink()
-                raise ValueError("Synthesis must preserve references to every applicable runtime and judge opinion")
-            if source_level:
-                task_ids = sorted({review["subject_id"] for review in contributing})
-                coverage = {
-                    **task_coverages[task_ids[0]],
-                    "scope": "source_sample",
-                    "sample_count": len(task_ids),
-                    "samples": [sample for tid in task_ids for sample in task_coverages[tid]["samples"]],
-                }
-                coverage["population_count"] = source_populations[subject_id]
-            else:
-                coverage = task_coverages[subject_id]
-            review = review_record(
-                subject_id + "/synthesis",
-                subject_id,
-                opinion,
-                "synthesis",
-                coverage,
-                all(r["tests_executed"] for r in contributing),
-                [evidence(stage / "parsed.json", output)],
-                model,
-            )
-            bundle["reviews"].append(review)
-            bundle["tag_assignments"].extend(tags_for(review, opinion))
+        panel = independent_reviews(sample, config, output, snapshot_id, seed, limit, identity, schema)
+        bundle = panel.collection
+        coalesce_reviews(panel, model, output, limit, schema)
         validate_collection(bundle, output, schema)
         write_json(final_path, bundle)
         write_json(

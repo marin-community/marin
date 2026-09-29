@@ -11,6 +11,7 @@ import argparse
 import hashlib
 import json
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 from make_review import validate_collection
@@ -96,12 +97,17 @@ def upload_artifacts(artifacts):
     )
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--run-dir", type=Path, required=True)
-    parser.add_argument("--atlas-id", required=True)
-    args = parser.parse_args()
-    root = args.run_dir.resolve()
+@dataclass(frozen=True)
+class ReviewPublication:
+    root: Path
+    atlas_id: str
+    collection: dict
+    payload: dict
+    subject: dict
+    attestation_path: Path | None
+
+
+def validated_publication(root: Path, atlas_id: str) -> ReviewPublication:
     path = root / "quality-reviews.json"
     collection = json.loads(path.read_text())
     schema = json.loads((root / "quality-review.schema.json").read_text())
@@ -109,12 +115,12 @@ def main():
     provenance = collection["execution_provenance"]
     if not provenance or not provenance["marinskyrl_commit"]:
         raise ValueError("Native reviews must record the MSkyRL commit")
-    live = sql("SELECT payload FROM catalog_sources WHERE id=:id AND active", {"id": args.atlas_id})["rows"]
+    live = sql("SELECT payload FROM catalog_sources WHERE id=:id AND active", {"id": atlas_id})["rows"]
     if len(live) != 1:
         raise ValueError("Atlas source is absent or inactive")
     payload = live[0]["payload"]
     subjects = [s for s in collection["subjects"] if s["level"] == "source"]
-    if len(subjects) != 1 or subjects[0]["source_id"] != args.atlas_id:
+    if len(subjects) != 1 or subjects[0]["source_id"] != atlas_id:
         raise ValueError("Review subject does not identify the requested Atlas population")
     if subjects[0]["dataset_revision"] != (payload.get("dataset_revision") or payload.get("revision")):
         raise ValueError("Reviewed data revision differs from the current Atlas source")
@@ -124,14 +130,11 @@ def main():
         attestation_path = root / f"publication/native-revision-attestation-{payload['revision']}.json"
         attestation_path.parent.mkdir(parents=True, exist_ok=True)
         attestation_path.write_text(json.dumps(attestation, indent=2))
-    review_id = hashlib.sha256(path.read_bytes()).hexdigest()
-    updated = max(r["reviewed_at"] for r in collection["reviews"] if r["reviewed_at"])
-    rating = quality(collection)
-    sql(
-        """INSERT INTO catalog_reviews (id,source_id,collection,updated_at)
-        VALUES (:id,:source,CAST(:collection AS JSONB),:date) ON CONFLICT (id) DO NOTHING""",
-        {"id": review_id, "source": args.atlas_id, "collection": json.dumps(collection), "date": updated},
-    )
+    return ReviewPublication(root, atlas_id, collection, payload, subjects[0], attestation_path)
+
+
+def archive_evidence(publication: ReviewPublication, review_id: str) -> None:
+    root, collection, attestation_path = publication.root, publication.collection, publication.attestation_path
     evidence_paths = {item["snapshot_path"] for review in collection["reviews"] for item in review["evidence"]}
     if attestation_path:
         evidence_paths.add(str(attestation_path.relative_to(root)))
@@ -161,6 +164,22 @@ def main():
         batch.append(artifact)
     if batch:
         upload_artifacts(batch)
+
+
+def publish_review(root: Path, atlas_id: str) -> dict:
+    publication = validated_publication(root, atlas_id)
+    collection, payload = publication.collection, publication.payload
+    provenance = collection["execution_provenance"]
+    path = root / "quality-reviews.json"
+    review_id = hashlib.sha256(path.read_bytes()).hexdigest()
+    updated = max(r["reviewed_at"] for r in collection["reviews"] if r["reviewed_at"])
+    rating = quality(collection)
+    sql(
+        """INSERT INTO catalog_reviews (id,source_id,collection,updated_at)
+        VALUES (:id,:source,CAST(:collection AS JSONB),:date) ON CONFLICT (id) DO NOTHING""",
+        {"id": review_id, "source": atlas_id, "collection": json.dumps(collection), "date": updated},
+    )
+    archive_evidence(publication, review_id)
     native = [review for review in collection["reviews"] if review["method"] == "runtime_execution"]
     sql(
         """UPDATE catalog_sources SET quality=:quality,review_id=:review,review_date=:date,
@@ -169,14 +188,14 @@ def main():
             "quality": rating,
             "review": review_id,
             "date": updated,
-            "revision": subjects[0]["dataset_revision"],
+            "revision": publication.subject["dataset_revision"],
             "verifier": payload.get("verifier_revision"),
             "traces": len(native),
-            "source": args.atlas_id,
+            "source": atlas_id,
         },
     )
     result = {
-        "atlas_id": args.atlas_id,
+        "atlas_id": atlas_id,
         "review_id": review_id,
         "quality": rating,
         "review_date": updated,
@@ -184,7 +203,15 @@ def main():
         "url": review_url(review_id),
     }
     (root / "atlas-publication.json").write_text(json.dumps(result, indent=2) + "\n")
-    print(json.dumps(result))
+    return result
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--run-dir", type=Path, required=True)
+    parser.add_argument("--atlas-id", required=True)
+    args = parser.parse_args()
+    print(json.dumps(publish_review(args.run_dir.resolve(), args.atlas_id)))
 
 
 if __name__ == "__main__":

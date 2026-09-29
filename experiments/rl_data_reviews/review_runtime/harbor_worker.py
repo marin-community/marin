@@ -8,12 +8,11 @@ import asyncio
 import hashlib
 import json
 import os
-import traceback
 from pathlib import Path
 
 from harbor.models.trial.config import TrialConfig
 from harbor.trial.trial import Trial
-from review_io import append_event, capture_native_sources, native_calls, write_json
+from review_io import append_event, capture_native_sources, execution_error, native_calls, write_json
 from skyrl_train.trajectory_runners.harbor.contracts import verification_from_harbor_result
 
 
@@ -91,26 +90,7 @@ def main() -> None:
         try:
             result = asyncio.run(run_task(json.loads(args.input.read_text()), args.output))
         except Exception as error:
-            append_event(
-                args.output / "verifier-trace.jsonl",
-                {
-                    "event": "execution_error",
-                    "type": type(error).__name__,
-                    "detail": str(error),
-                    "traceback": traceback.format_exc(),
-                },
-            )
-            result = {
-                "verification": {
-                    "status": "error",
-                    "score": None,
-                    "passed": None,
-                    "reason": str(error),
-                    "diagnostics": {"exception_type": type(error).__name__},
-                },
-                "verifier_executed": False,
-                "done": False,
-            }
+            result = execution_error(error, args.output, False)
         finally:
             capture_native_sources(args.output, called)
     write_json(args.output / "attempt.json", result)

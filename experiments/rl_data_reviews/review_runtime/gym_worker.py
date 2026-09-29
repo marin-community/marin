@@ -7,12 +7,11 @@ import argparse
 import contextlib
 import copy
 import json
-import traceback
 from pathlib import Path
 
 import skyrl_gym
 from omegaconf import OmegaConf
-from review_io import append_event, capture_native_sources, model_completion, native_calls, write_json
+from review_io import append_event, capture_native_sources, execution_error, model_completion, native_calls, write_json
 from skyrl_gym.verification import RolloutEvidence, VerificationResult
 from skyrl_train.trajectory_runners.skyrl_gym_contracts import fold_verification_results, verification_from_env_step
 
@@ -109,29 +108,11 @@ def main() -> None:
         try:
             result = run_task(json.loads(args.input.read_text()), args.output)
         except Exception as error:
-            append_event(
-                args.output / "verifier-trace.jsonl",
-                {
-                    "event": "execution_error",
-                    "type": type(error).__name__,
-                    "detail": str(error),
-                    "traceback": traceback.format_exc(),
-                },
+            trace = args.output / "verifier-trace.jsonl"
+            verifier_executed = trace.is_file() and any(
+                json.loads(line)["event"] == "verify_start" for line in trace.read_text().splitlines()
             )
-            result = {
-                "verification": {
-                    "status": "error",
-                    "score": None,
-                    "passed": None,
-                    "reason": str(error),
-                    "diagnostics": {"exception_type": type(error).__name__},
-                },
-                "verifier_executed": any(
-                    json.loads(line)["event"] == "verify_start"
-                    for line in (args.output / "verifier-trace.jsonl").read_text().splitlines()
-                ),
-                "done": False,
-            }
+            result = execution_error(error, args.output, verifier_executed)
         finally:
             capture_native_sources(args.output, called)
     write_json(args.output / "attempt.json", result)

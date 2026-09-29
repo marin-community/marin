@@ -11,7 +11,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, Protocol
 
-from .server.nemotron_records import SWE_SELECTIONS, count_records, record_selection
+from .server.nemotron_records import SWE_GYM_SOURCE, SWE_REBENCH_SOURCE, SWE_SELECTIONS, count_records, record_selection
 
 
 class Digest(Protocol):
@@ -34,7 +34,7 @@ def audit_blend(path: Path, gym_instances: set[str]) -> dict[str, Any]:
             row = json.loads(line)
             if record_selection(row) in SWE_SELECTIONS:
                 source_id = row["metadata"]["instance_id"]
-                swe_instances[source_id] = "SWE-Gym/SWE-Gym" if source_id in gym_instances else "nebius/SWE-rebench-V2"
+                swe_instances[source_id] = SWE_GYM_SOURCE if source_id in gym_instances else SWE_REBENCH_SOURCE
     digest = hashlib.sha256()
     groups = count_records(records(path, digest), swe_instances)
     return {"total": sum(group["count"] for group in groups), "sha256": digest.hexdigest(), "groups": groups}

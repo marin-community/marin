@@ -121,29 +121,32 @@ def registry_environments(source_text: str) -> list[dict[str, str]]:
     return rows
 
 
+@dataclass(frozen=True)
+class SourceRow:
+    id: str
+    origin: str
+    name: str
+    display_name: str
+    revision: str
+    revised_at: str
+    difficulty: str | None = None
+    quality: str | None = None
+    traces: int | None = None
+    task_count: int | None = None
+    is_benchmark: bool = False
+    turns: str = "Unknown"
+    type: str | None = None
+    status: str = "Available"
+    kind: str = "Dataset"
+    family: str = ""
+    notes: str = ""
+    count_basis: str = "Not published"
+    count_precision: str = "unknown"
+    classification_basis: str = "Not declared"
+
+
 def source_row(origin: str, name: str, revision: str, revised_at: str) -> dict[str, Any]:
-    return {
-        "id": f"{origin}:{name}",
-        "origin": origin,
-        "name": name,
-        "display_name": name,
-        "revision": revision,
-        "revised_at": revised_at,
-        "difficulty": None,
-        "quality": None,
-        "traces": None,
-        "task_count": None,
-        "is_benchmark": False,
-        "turns": "Unknown",
-        "type": None,
-        "status": "Available",
-        "kind": "Dataset",
-        "family": "",
-        "notes": "",
-        "count_basis": "Not published",
-        "count_precision": "unknown",
-        "classification_basis": "Not declared",
-    }
+    return asdict(SourceRow(f"{origin}:{name}", origin, name, name, revision, revised_at))
 
 
 def dataset_metadata(client: httpx.Client, dataset_id: str) -> dict[str, Any]:

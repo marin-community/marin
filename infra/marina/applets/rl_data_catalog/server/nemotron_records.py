@@ -98,6 +98,9 @@ RECORD_SOURCES = {
         "Nemotron-RL-Agentic-Indirect-Prompt-Injection-v1", "", "Agentic", "Multi-turn", "agentic-safety"
     ),
 }
+SWE_GYM_SOURCE = "SWE-Gym/SWE-Gym"
+SWE_REBENCH_SOURCE = "nebius/SWE-rebench-V2"
+SWE_SOURCES = {SWE_GYM_SOURCE, SWE_REBENCH_SOURCE}
 SWE_RECORD_SOURCE = "ultra_sft_step3200_swe_pivot_len40k"
 SWE_AGENT = "swe_pivot_single_step_tool_use_with_argument_comparison_agent"
 SWE_UNLABELED = f"agent:{SWE_AGENT}"
@@ -121,7 +124,7 @@ def record_selection(record: dict[str, Any]) -> str:
 
 def record_source(dataset: str, swe_source: str = "") -> RecordSource:
     if dataset in SWE_SELECTIONS:
-        if swe_source not in {"nebius/SWE-rebench-V2", "SWE-Gym/SWE-Gym"}:
+        if swe_source not in SWE_SOURCES:
             raise ValueError(f"SWE record requires a resolved source: {swe_source}")
         return RecordSource(swe_source, SWE_SELECTIONS[dataset], "Agentic", "Multi-turn", "swe-repo")
     source = RECORD_SOURCES[dataset.removeprefix("ultra_sft_step3200_")]

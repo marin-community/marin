@@ -122,7 +122,7 @@ def migrate(connection: Connection) -> None:
 
     connection.execute(
         text("UPDATE catalog_sources SET payload = payload || CAST(:classification AS JSONB) WHERE origin = :origin"),
-        {"classification": json.dumps(TASKTROVE_CLASSIFICATION), "origin": "Task Trove"},
+        {"classification": json.dumps(TASKTROVE_CLASSIFICATION), "origin": TASKTROVE_ORIGIN},
     )
     rows = [
         dict(payload)
