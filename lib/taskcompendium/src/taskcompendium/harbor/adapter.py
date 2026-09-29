@@ -1,7 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Minimal Harbor runtime for direct-chat answer tasks."""
+"""Run exported answer tasks through Harbor's agent and verifier lifecycle.
+
+ChatAgent sends one prepared model request and saves the complete assistant
+message. Advertised function calls are submissions and are never executed.
+NoToolEnvironment satisfies Harbor's lifecycle without exposing shell or file
+access to the agent. SemanticVerifier reads the private task specification and
+saved submission, extracts the answer using its convention, and grades it.
+Agent messages and grading outcomes are written to host-side trial logs.
+"""
 
 import asyncio
 import json
@@ -31,10 +39,14 @@ from taskcompendium.verifier_registry import grade_answer
 
 SUBMISSION_FILE = "submission.json"
 CHAT_COMPLETIONS_PATH = "/chat/completions"
+# Harbor normally downloads agent logs and task-produced artifacts from these paths.
 AGENT_LOGS_PATH = "/logs/agent"
-VERIFIER_LOGS_PATH = "/logs/verifier"
 ARTIFACTS_LOGS_PATH = "/logs/artifacts"
+# Harbor clears verifier output and private verifier inputs before running a trial.
+VERIFIER_LOGS_PATH = "/logs/verifier"
 TESTS_PATH = "/tests"
+# Direct chat writes logs on the host, so these bookkeeping operations are no-ops.
+# Only Harbor's standard paths are accepted; other filesystem operations fail.
 HARBOR_DOWNLOAD_DIRS = frozenset({AGENT_LOGS_PATH, ARTIFACTS_LOGS_PATH})
 HARBOR_EMPTY_DIRS = HARBOR_DOWNLOAD_DIRS | {VERIFIER_LOGS_PATH, TESTS_PATH}
 
