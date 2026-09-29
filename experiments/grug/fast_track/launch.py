@@ -16,7 +16,7 @@ import shlex
 import sys
 import types
 import typing
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import timedelta
 from enum import StrEnum
 from typing import Any
@@ -46,6 +46,7 @@ from rigging.filesystem.storage_path import prefix_join
 from experiments.datasets.paloma import _PALOMA_DETOK_RAW, paloma_datasets
 from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.grug.checkpointing import RESTORE_BARRIER_TIMEOUT
+from experiments.grug.fast_track.analyze_routing import token_strings_from_tokenizer
 from experiments.grug.fast_track.heuristic import MoeHeuristic
 from experiments.grug.fast_track.model import (
     AttnResLayerBackward,
@@ -135,6 +136,57 @@ V16384_VOCAB = 16384
 PALOMA_DETOK_VERSION = "2026.09.17"
 # In-process read cache for the tensorstore data loader. 1 GB is ample for the flat cache.
 TENSORSTORE_CACHE_BYTES = 1_000_000_000
+
+
+class RouterTieClass(StrEnum):
+    """Named token classes ``--router-tie-class`` expands to a ``router_embed_tie`` centroid."""
+
+    LATEX = "latex"
+    DIGITS = "digits"
+    NEWLINE = "newline"
+
+
+# Common LaTeX command names that also appear as tokens without their backslash (after a separate backslash token).
+LATEX_COMMAND_NAMES = frozenset(
+    "mathbf mathrm mathcal mathbb mathsf mathit boldsymbol frac dfrac tfrac sqrt ldots cdots cdot "
+    "alpha beta gamma delta epsilon varepsilon zeta theta vartheta kappa lambda sigma varphi omega Omega "
+    "Delta Gamma Lambda Sigma infty partial nabla leq geq neq approx equiv subseteq otimes oplus "
+    "rightarrow Rightarrow leftarrow mapsto forall quad qquad operatorname displaystyle textbf textit "
+    "emph overline underline hspace vspace".split()
+)
+
+
+_ROUTER_TIE_CLASS_MEMBER: dict[RouterTieClass, Callable[[str], bool]] = {
+    RouterTieClass.LATEX: lambda t: "\\" in t or t.strip() in LATEX_COMMAND_NAMES,
+    RouterTieClass.DIGITS: lambda t: t.strip().isdigit(),
+    RouterTieClass.NEWLINE: lambda t: "\n" in t,
+}
+
+
+def router_tie_class_ids(token_class: RouterTieClass, token_strings: list[str]) -> tuple[int, ...]:
+    """The non-special token ids of ``token_class`` (``token_strings`` from ``token_strings_from_tokenizer``):
+    ``latex`` has a backslash or is a ``LATEX_COMMAND_NAMES`` name, ``digits`` is all digits once stripped,
+    ``newline`` has a newline."""
+    member = _ROUTER_TIE_CLASS_MEMBER[token_class]
+    return tuple(idx for idx, text in enumerate(token_strings) if not text.startswith("<special ") and member(text))
+
+
+def router_tie_class_specs(items: tuple[str, ...], tokenizer: str, vocab_size: int) -> tuple[str, ...]:
+    """``router_embed_tie`` centroid specs for ``--router-tie-class L:E:CLASS`` items."""
+    if not items:
+        return ()
+    token_strings = token_strings_from_tokenizer(tokenizer, vocab_size)
+    specs = []
+    for item in items:
+        layer, sep, rest = item.partition(":")
+        expert, sep2, name = rest.partition(":")
+        if not (sep and sep2):
+            raise click.BadParameter(f"--router-tie-class expects 'L:E:CLASS', got {item!r}")
+        ids = router_tie_class_ids(RouterTieClass(name), token_strings)
+        click.echo(f"router tie class {name!r} at {layer}:{expert}: {len(ids)} tokens", err=True)
+        specs.append(f"{layer}:{expert}:" + "|".join(str(v) for v in ids))
+    return tuple(specs)
+
 
 # Model geometry shared across rungs.
 SEQ_LEN = 4096
@@ -350,6 +402,7 @@ def build_h100_ladder_run(
     single_process: bool = False,
     routing_dump_steps: tuple[int, ...] = (),
     routing_dump_batches: int = 8,
+    router_tie_specs: tuple[str, ...] = (),
 ) -> ArtifactStep[ThroughputResult]:
     """Build one H100 scaling-ladder rung.
 
@@ -362,7 +415,8 @@ def build_h100_ladder_run(
     ``ragged_transport`` picks the XLA kernel when ``model_settings`` select ``moe_implementation=ragged_all_to_all``;
     ``single_process`` runs one JAX process owning every GPU of the task, which its peer-writing kernels need.
     ``routing_dump_steps`` writes expert-routing count dumps to ``<output>/routing/`` (see
-    ``GrugTrainerConfig.routing_dump_steps``).
+    ``GrugTrainerConfig.routing_dump_steps``). ``router_tie_specs`` are appended to the model's
+    ``router_embed_tie`` after ``model_settings``.
     """
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
@@ -378,6 +432,8 @@ def build_h100_ladder_run(
             raise ValueError("attn_res_remat_attention requires the kma recipe")
         model = dataclasses.replace(model, attn_res_remat_attention=True)
     model = _apply_settings(model, model_settings or {})
+    if router_tie_specs:
+        model = dataclasses.replace(model, router_embed_tie=model.router_embed_tie + router_tie_specs)
     if embed2_rows_frac is not None:
         model = dataclasses.replace(model, embed2_rows=_embed2_rows_for_fraction(model, embed2_rows_frac))
     mp_policy = "params=float32,compute=bfloat16,output=bfloat16"
@@ -749,6 +805,12 @@ def _job_env_args(job_env: tuple[str, ...]) -> list[str]:
     help="Train-size batches of held-out sequences per routing dump.",
 )
 @click.option(
+    "--router-tie-class",
+    multiple=True,
+    help="Tie layer L's (or '*': every layer's) router column E to the embedding centroid of a token class, "
+    f"'L:E:CLASS' with CLASS one of {[c.value for c in RouterTieClass]} (repeatable; see router_tie_class_ids).",
+)
+@click.option(
     "--model-set",
     multiple=True,
     help="Override a GrugModelConfig field, 'name=value' (repeatable; parsed as the field's declared type).",
@@ -816,6 +878,7 @@ def main(
     single_process: bool,
     routing_dump_steps: str,
     routing_dump_batches: int,
+    router_tie_class: tuple[str, ...],
     model_set: tuple[str, ...],
     opt_set: tuple[str, ...],
     priority: str,
@@ -826,6 +889,8 @@ def main(
 ) -> ArtifactStep[ThroughputResult]:
     if submit:
         _submit_to_cluster(run_id, target_cluster, priority, job_env)  # re-execs iris; never returns
+    # In the job: the tokenizer is staged from the cluster's mirror; the class sizes print in the job log.
+    router_tie_specs = router_tie_class_specs(router_tie_class, V16384_TOKENIZER, V16384_VOCAB)
     return build_h100_ladder_run(
         run_id=run_id,
         size=size,
@@ -856,6 +921,7 @@ def main(
         single_process=single_process,
         routing_dump_steps=tuple(int(step) for step in routing_dump_steps.split(",") if step),
         routing_dump_batches=routing_dump_batches,
+        router_tie_specs=router_tie_specs,
     )
 
 

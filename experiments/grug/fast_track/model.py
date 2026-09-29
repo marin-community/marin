@@ -817,7 +817,12 @@ class GrugModelConfig:
     the normed MLP input ``x``. The embedding row is the shared input-embedding parameter (the LM gradient
     reaches it through the tie); ``alpha`` is a learnable scalar per tie, initialized to
     ``||router[:, E]|| / ||token_embed[V]||`` so the tied column starts at the untied column's scale. The
-    replaced router column gets no gradient. Seeds expert specialization (expert-specialization study)."""
+    replaced router column gets no gradient. ``"L:E:V1|V2|..."`` ties to the centroid
+    ``alpha * mean(token_embed[V1], token_embed[V2], ...)`` of the current rows (every row gets gradient).
+    Seeds expert specialization (expert-specialization study); parsed once by ``_router_ties``."""
+    router_embed_tie_release_step: int | None = None
+    """Release the ``router_embed_tie`` ties at this step: the router columns take their tied value (so the
+    function is continuous) and then train freely; the tied program runs only before it. None: tied throughout."""
     router_bias_seed: tuple[str, ...] = ()
     """Fixed router logit priors ``"L:E:V:b"`` (``L`` a layer index or ``*``): add ``b`` to expert ``E``'s
     router logit (before QB and the combine) wherever the current token is ``V``. Needs attn_res."""
@@ -1029,9 +1034,15 @@ class GrugModelConfig:
             ties = _router_ties(self)
             if len({(t.layer, t.expert) for t in ties}) != len(ties):
                 raise ValueError(f"router_embed_tie ties one (layer, expert) twice: {self.router_embed_tie}")
-            for spec in (*ties, *_router_seeds(self)):
-                if not (0 <= spec.expert < self.num_experts and 0 <= spec.token < self.vocab_size):
+            specs = [(t, t.tokens) for t in ties] + [(s, (s.token,)) for s in _router_seeds(self)]
+            for spec, tokens in specs:
+                if not (0 <= spec.expert < self.num_experts and all(0 <= v < self.vocab_size for v in tokens)):
                     raise ValueError(f"router tie/seed out of range (experts {self.num_experts}): {spec}")
+        if self.router_embed_tie_release_step is not None:
+            if not self.router_embed_tie:
+                raise ValueError("router_embed_tie_release_step needs router_embed_tie")
+            if self.router_embed_tie_release_step <= 0:
+                raise ValueError(f"router_embed_tie_release_step must be positive: {self.router_embed_tie_release_step}")
         for name in ("router_logit_soft_cap", "attn_res_logit_soft_cap"):
             cap = getattr(self, name)
             if cap is not None and cap <= 0:
@@ -3621,11 +3632,18 @@ class Block(eqx.Module):
 
 
 class RouterTie(NamedTuple):
-    """One ``router_embed_tie`` entry: layer ``layer``'s router column ``expert`` is tied to ``token_embed[token]``."""
+    """One ``router_embed_tie`` entry: layer ``layer``'s router column ``expert`` is tied to the mean of
+    ``token_embed[tokens]`` (a single row for one token)."""
 
     layer: int
     expert: int
-    token: int
+    tokens: tuple[int, ...]
+
+    @property
+    def tag(self) -> str:
+        """Metric-name suffix: ``L{layer}_e{expert}_v{token}``, or ``..._c{n}`` for an ``n``-token centroid."""
+        target = f"v{self.tokens[0]}" if len(self.tokens) == 1 else f"c{len(self.tokens)}"
+        return f"L{self.layer}_e{self.expert}_{target}"
 
 
 class RouterSeed(NamedTuple):
@@ -3648,12 +3666,24 @@ def _spec_layers(text: str, num_layers: int) -> list[int]:
 
 def _router_ties(cfg: "GrugModelConfig") -> tuple[RouterTie, ...]:
     """``cfg.router_embed_tie`` parsed, ``*`` expanded to every layer, in spec order."""
+    return _parse_router_ties(cfg.router_embed_tie, cfg.num_layers)
+
+
+@functools.lru_cache(maxsize=16)
+def _parse_router_ties(specs: tuple[str, ...], num_layers: int) -> tuple[RouterTie, ...]:
     ties = []
-    for spec in cfg.router_embed_tie:
+    for spec in specs:
         parts = spec.split(":")
         if len(parts) != 3:
-            raise ValueError(f"router_embed_tie entries are 'L:E:V', got {spec!r}")
-        ties += [RouterTie(layer, int(parts[1]), int(parts[2])) for layer in _spec_layers(parts[0], cfg.num_layers)]
+            raise ValueError(f"router_embed_tie entries are 'L:E:V' or 'L:E:V1|V2|...', got {spec!r}")
+        try:
+            expert = int(parts[1])
+            tokens = tuple(int(v) for v in parts[2].split("|"))
+        except ValueError as e:
+            raise ValueError(f"router_embed_tie expert and token ids must be integers, got {spec!r}") from e
+        if len(set(tokens)) != len(tokens):
+            raise ValueError(f"router_embed_tie token ids repeat in {spec!r}")
+        ties += [RouterTie(layer, expert, tokens) for layer in _spec_layers(parts[0], num_layers)]
     return tuple(ties)
 
 
@@ -3683,10 +3713,20 @@ def _router_seed_bias(cfg: "GrugModelConfig", physical_layer: int, token_ids: In
     return jnp.einsum("bsn,ne->bse", hits, jnp.asarray(table), out_sharding=_batch_spec())
 
 
-def _router_tie_alpha_init(model: "Transformer") -> Float[Array, " N"]:
-    """Per tie ``||router[:, E]|| / ||token_embed[V]||`` at init, so a tied column starts at its untied scale."""
+def _router_tie_directions(model: "Transformer") -> Float[Array, "N D"]:
+    """Per tie, the mean of its current ``token_embed`` rows (each distinct token set gathered once)."""
     ties = _router_ties(model.config)
-    rows = jnp.linalg.norm(model.token_embed[np.asarray([t.token for t in ties])].astype(jnp.float32), axis=-1)
+    means = {
+        tokens: jnp.mean(model.token_embed[np.asarray(tokens)], axis=0)
+        for tokens in dict.fromkeys(t.tokens for t in ties)
+    }
+    return jnp.stack([means[t.tokens] for t in ties])
+
+
+def _router_tie_alpha_init(model: "Transformer") -> Float[Array, " N"]:
+    """Per tie ``||router[:, E]|| / ||direction||`` at init, so a tied column starts at its untied scale."""
+    ties = _router_ties(model.config)
+    rows = jnp.linalg.norm(_router_tie_directions(model).astype(jnp.float32), axis=-1)
     routers = _routers_by_layer(model)
     cols = jnp.stack([jnp.linalg.norm(routers[t.layer][:, t.expert].astype(jnp.float32)) for t in ties])
     return reshard(cols / rows, P(None))
@@ -3702,11 +3742,13 @@ def _routers_by_layer(model: "Transformer") -> dict[int, jax.Array]:
     return routers
 
 
-def _tie_routers(model: "Transformer") -> "Transformer":
-    """Replace each ``router_embed_tie`` column by ``alpha * token_embed[V]`` (gradients reach the embedding)."""
+def tie_routers(model: "Transformer") -> "Transformer":
+    """Replace each ``router_embed_tie`` column by ``alpha * mean(token_embed[V...])`` (gradients reach the
+    embedding). Applied to the parameters it is the ``router_embed_tie_release_step`` rewrite: the untied
+    forward of the result equals the tied forward of ``model``."""
     ties = _router_ties(model.config)
     assert model.router_tie_alpha is not None
-    rows = model.token_embed[np.asarray([t.token for t in ties])]
+    rows = _router_tie_directions(model)
     cols = rows * model.router_tie_alpha[:, None].astype(rows.dtype)
     tied = []
     for stack, indices in zip(model.layer_stacks(), model.stack_layer_indices(), strict=True):
@@ -5128,9 +5170,12 @@ class Transformer(eqx.Module):
         loop_active: bool | None = None,
         route_key: jax.Array | None = None,
         return_routing: bool = False,
+        router_tie_active: bool | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         """``loop_active`` (static, with ``loop_grow_step``) selects one pass (False) or all ``loop_passes``
         (True); None runs all passes. ``route_key`` (training only) seeds ``moe_gumbel_tau``.
+        ``router_tie_active`` (static) applies the ``router_embed_tie`` ties; None applies them unless
+        ``router_embed_tie_release_step`` is set (a released model's router columns already hold them).
         ``return_routing`` adds every layer's ``[L, T, K]`` selected experts and combine weights to the
         metrics (``ROUTING_SELECTED_KEY`` / ``ROUTING_WEIGHTS_KEY``)."""
         if mask is None:
@@ -5139,8 +5184,10 @@ class Transformer(eqx.Module):
         cfg = self.config
         if cfg.router_share_block > 1:
             self = _share_routers(self, cfg.router_share_block)
-        if cfg.router_embed_tie:
-            self = _tie_routers(self)
+        if cfg.router_embed_tie and (
+            cfg.router_embed_tie_release_step is None if router_tie_active is None else router_tie_active
+        ):
+            self = tie_routers(self)
         gather = _embedding_gather if cfg.embed_grad_fp32 else _embedding_gather_autodiff
         hidden = raw_embed = gather(self.token_embed, token_ids)
         if cfg.embed_norm_mode == "rms":
@@ -5651,8 +5698,15 @@ class Transformer(eqx.Module):
             )
         if self.router_tie_alpha is not None:
             alpha = jax.lax.stop_gradient(self.router_tie_alpha).astype(jnp.float32)
+            directions = jax.lax.stop_gradient(_router_tie_directions(self)).astype(jnp.float32)
+            routers = _routers_by_layer(self)
             for j, tie in enumerate(_router_ties(cfg)):
-                final_stats[f"attn_res_knob_router_tie_alpha_L{tie.layer}_e{tie.expert}_v{tie.token}"] = alpha[j]
+                final_stats[f"attn_res_knob_router_tie_alpha_{tie.tag}"] = alpha[j]
+                # 1 while tied; after the release, how far the freed column has turned from the tie direction.
+                column = jax.lax.stop_gradient(routers[tie.layer][:, tie.expert]).astype(jnp.float32)
+                final_stats[f"attn_res_knob_router_tie_cos_{tie.tag}"] = jnp.dot(column, directions[j]) / (
+                    jnp.linalg.norm(column) * jnp.linalg.norm(directions[j])
+                )
         if cfg.attn_res_key_rank is not None:
             final_stats["attn_res_knob_lrkey_qnorm_final"] = jnp.linalg.norm(
                 jax.lax.stop_gradient(self.attn_res_query_final)
@@ -5828,11 +5882,14 @@ class Transformer(eqx.Module):
         head_replay: "HeadReplay | None" = None,
         byte_table: Int[Array, "V N"] | None = None,
         byte_aux_weight: jax.Array | None = None,
+        router_tie_active: bool | None = None,
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
         """``aux_loss_weight`` scales the early auxiliary LM loss (``aux_lm_layer``); it is skipped at 0.
         ``train_terms`` adds the training-only objectives (MTP, AttnRes z-loss); evals leave it off so they
         score the plain next-token loss."""
-        hidden, router_metrics = self(token_ids, mask=mask, loop_active=loop_active, route_key=route_key)
+        hidden, router_metrics = self(
+            token_ids, mask=mask, loop_active=loop_active, route_key=route_key, router_tie_active=router_tie_active
+        )
         aux_hidden = router_metrics.pop(_AUX_HIDDEN, None)
         nitp_target = router_metrics.pop(_NITP_TARGET, None)
         attn_res_z = router_metrics.pop(_ATTN_RES_Z, None)

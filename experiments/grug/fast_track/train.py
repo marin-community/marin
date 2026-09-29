@@ -67,6 +67,7 @@ from experiments.grug.fast_track.model import (
     MtpMode,
     Transformer,
     ngram_stat_table_add,
+    tie_routers,
     write_ngram_stats,
 )
 from experiments.grug.fast_track.optimizer import magma_metrics, optimizer_diagnostics
@@ -881,8 +882,10 @@ def _loss_and_grads(
     head_replay: HeadReplay | None = None,
     byte_table: jax.Array | None = None,
     byte_weight: jax.Array | None = None,
+    router_tie_active: bool | None = None,
 ):
-    """``loop_active`` is a static pass selector for looped growth (see ``GrugModelConfig.loop_grow_step``)."""
+    """``loop_active`` is a static pass selector for looped growth (see ``GrugModelConfig.loop_grow_step``);
+    ``router_tie_active`` statically applies the router ties (see ``GrugModelConfig.router_embed_tie_release_step``)."""
     aux_weight = None if step is None else _aux_loss_weight(params.config, step)
     route_key = None
     cfg = params.config
@@ -906,13 +909,16 @@ def _loss_and_grads(
             head_replay=head_replay,
             byte_table=byte_table,
             byte_aux_weight=byte_weight,
+            router_tie_active=router_tie_active,
         )
 
     return jax.value_and_grad(loss_fn, has_aux=True)(params)
 
 
-def _compute_diagnostic_watch_stats(params, batch, mp: jmp.Policy, z_loss: float | None, watch_config: WatchConfig):
-    (_, _), grads = _loss_and_grads(params, batch, mp, z_loss)
+def _compute_diagnostic_watch_stats(
+    params, batch, mp: jmp.Policy, z_loss: float | None, watch_config: WatchConfig, router_tie_active: bool
+):
+    (_, _), grads = _loss_and_grads(params, batch, mp, z_loss, router_tie_active=router_tie_active)
     return compute_watch_stats(
         watch_targets=watch_config.watch_targets,
         include_norms=watch_config.include_norms,
@@ -937,10 +943,10 @@ def _make_diagnostic_watch_step(mp: jmp.Policy, *, z_loss_weight: float, watch_c
     diagnostic_watch_config = replace(watch_config, watch_targets=list(watch_targets))
     z_loss = z_loss_weight if z_loss_weight > 0 else None
 
-    @jax.jit
-    def diagnostic_watch_step(params: Transformer, batch, pending_qb_betas: jax.Array):
+    @functools.partial(jax.jit, static_argnames=("router_tie_active",))
+    def diagnostic_watch_step(params: Transformer, batch, pending_qb_betas: jax.Array, router_tie_active: bool):
         params = _apply_qb_betas(params, pending_qb_betas)
-        return _compute_diagnostic_watch_stats(params, batch, mp, z_loss, diagnostic_watch_config)
+        return _compute_diagnostic_watch_stats(params, batch, mp, z_loss, diagnostic_watch_config, router_tie_active)
 
     return diagnostic_watch_step
 
@@ -970,8 +976,8 @@ def _make_train_step(
     else:
         watch_targets = ()
 
-    @functools.partial(jax.jit, donate_argnums=(0,), static_argnames=("loop_active",))
-    def train_step(state: GrugTrainState, batch, loop_active: bool | None = None):
+    @functools.partial(jax.jit, donate_argnums=(0,), static_argnames=("loop_active", "router_tie_active"))
+    def train_step(state: GrugTrainState, batch, loop_active: bool | None = None, router_tie_active: bool | None = None):
         # Apply pending QB betas to router biases inside JIT (avoids eager
         # host-side kernel launches that can cause SPMD sync issues).
         qb_params = _apply_qb_betas(state.params, state.pending_qb_betas)
@@ -993,7 +999,16 @@ def _make_train_step(
             progress = state.step.astype(jnp.float32) / max(byte_aux_steps, 1)
             byte_weight = qb_params.config.byte_aux_weight * jnp.clip(1.0 - progress, 0.0, 1.0)
         (loss, summarized_metrics), grads = _loss_and_grads(
-            qb_params, batch, mp, z_loss, state.step, loop_active, head_replay, byte_table, byte_weight
+            qb_params,
+            batch,
+            mp,
+            z_loss,
+            state.step,
+            loop_active,
+            head_replay,
+            byte_table,
+            byte_weight,
+            router_tie_active,
         )
         final_hidden = summarized_metrics.pop(FINAL_HIDDEN_KEY, None)
         newton_muon = state.newton_muon
@@ -1120,6 +1135,40 @@ def _prefill_ngram_stats(state: GrugTrainState, train_loader, *, start_step: int
         else eqx.tree_at(lambda m: m.ngram_stat_table, state.ema_params, jnp.copy(table))
     )
     return dataclasses.replace(state, params=params, ema_params=ema_params)
+
+
+_materialize_router_ties = eqx.filter_jit(tie_routers)
+
+
+def _router_ties_active(config: GrugModelConfig, step: int) -> bool:
+    """Whether the train step at ``step`` runs the tied router (before ``router_embed_tie_release_step``)."""
+    release = config.router_embed_tie_release_step
+    return release is None or step < release
+
+
+def _router_tie_view(model: Transformer, step: int) -> Transformer:
+    """The model an untied forward (evals, routing dumps) sees at ``step``: before the tie release, the ties
+    materialized into the router columns (the same function as the tied forward)."""
+    release = model.config.router_embed_tie_release_step
+    if release is not None and step < release:
+        return _materialize_router_ties(model)
+    return model
+
+
+def _release_router_ties(state: GrugTrainState) -> GrugTrainState:
+    """The ``router_embed_tie_release_step`` rewrite: every param copy's tied router columns take their tied value
+    ``alpha * mean(token_embed[V...])`` (the EMA its own), so the untied program continues the tied function. The
+    optimizer state is kept: the tied columns got zero gradient, so their Adam moments are zero and restart."""
+
+    def release(model: Transformer | None) -> Transformer | None:
+        return None if model is None else _materialize_router_ties(model)
+
+    return dataclasses.replace(
+        state,
+        params=release(state.params),
+        master_params=release(state.master_params),
+        ema_params=release(state.ema_params),
+    )
 
 
 def _init_unigram_bias(state: GrugTrainState, train_loader, *, num_batches: int) -> GrugTrainState:
@@ -1278,10 +1327,11 @@ def _routing_dumper(config: GrugRunConfig, model: Transformer, mesh: Mesh, batch
             jax.device_put(np.zeros(shape, np.int32), replicated),
             jax.device_put(np.zeros(shape, np.float32), replicated),
         )
+        params = _router_tie_view(state.params, step)
         for start in range(0, num_sequences, batch_size):
             batch = slice(start, start + batch_size)
             counts = add(
-                state.params, state.pending_qb_betas, global_batch(tokens[batch]), global_batch(segments[batch]), counts
+                params, state.pending_qb_betas, global_batch(tokens[batch]), global_batch(segments[batch]), counts
             )
         current, previous, weighted = (np.asarray(c) for c in jax.block_until_ready(counts))
         path = f"{trainer_cfg.routing_dump_path.rstrip('/')}/{ROUTING_DUMP_FILE.format(step=step)}"
@@ -1494,8 +1544,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             step_getter=lambda s: s.step,
             model_getter=lambda s: s.params,
             # From the EMA start on, evals score the EMA weights.
-            eval_model_getter=lambda s: (
-                s.ema_params if s.ema_params is not None and int(s.step) > ema_start_step else s.params
+            eval_model_getter=lambda s: _router_tie_view(
+                s.ema_params if s.ema_params is not None and int(s.step) > ema_start_step else s.params, int(s.step)
             ),
             opt_state_getter=lambda s: s.opt_state,
         )
@@ -1594,7 +1644,12 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         and current_step % watch_config.interval == 0
                     )
                     if watch_due and diagnostic_watch_step is not None:
-                        watch_stats = diagnostic_watch_step(state.params, batch, state.pending_qb_betas)
+                        watch_stats = diagnostic_watch_step(
+                            state.params,
+                            batch,
+                            state.pending_qb_betas,
+                            router_tie_active=_router_ties_active(config.model, current_step),
+                        )
                         jax.block_until_ready(watch_stats)
                     else:
                         watch_stats = None
@@ -1611,7 +1666,11 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     grow_step = config.model.loop_grow_step
                     # Looped growth compiles one program per pass count (a traced switch would keep both alive).
                     loop_active = None if grow_step is None else int(state.step) >= grow_step
-                    state, metrics, inline_watch_stats = train_step(state, batch, loop_active=loop_active)
+                    # The router tie release likewise switches programs once (plus a host-side param rewrite below).
+                    router_tie_active = _router_ties_active(config.model, current_step)
+                    state, metrics, inline_watch_stats = train_step(
+                        state, batch, loop_active=loop_active, router_tie_active=router_tie_active
+                    )
                     if inline_watch_stats is not None and watch_due:
                         watch_stats = inline_watch_stats
                     step = int(state.step) - 1
@@ -1620,7 +1679,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     ready_time = time.perf_counter()
                     stall_sampler.arm()
                     if config.trainer.hlo_dump_path is not None and not hlo_written and jax.process_index() == 0:
-                        _write_train_step_hlo(train_step, state, batch, loop_active, config.trainer.hlo_dump_path)
+                        _write_train_step_hlo(
+                            train_step, state, batch, loop_active, router_tie_active, config.trainer.hlo_dump_path
+                        )
                     hlo_written = True
                     state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_FINISHED)
 
@@ -1629,6 +1690,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                             f"Non-finite loss ({float(metrics['train/loss'])}) at step {int(state.step)}."
                         )
                     duration = time.perf_counter() - step_start
+                    if int(state.step) == config.model.router_embed_tie_release_step:
+                        # Before the callbacks, so the checkpoint and evals at this step already see the release.
+                        state = _release_router_ties(state)
+                        logger.info("router ties released at step %d", int(state.step))
                     hook_start = time.perf_counter()
                     with jax.profiler.TraceAnnotation("callbacks"):
                         state_callbacks.run(state, loss=metrics["train/loss"], step_duration=duration)
@@ -1790,9 +1855,13 @@ def _warn_on_long_gc(phase: str, info: dict) -> None:
         logger.warning("gc gen%d pause %.3f s on process %d", info.get("generation", -1), pause, jax.process_index())
 
 
-def _write_train_step_hlo(train_step, state, batch, loop_active: bool | None, path: str) -> None:
+def _write_train_step_hlo(
+    train_step, state, batch, loop_active: bool | None, router_tie_active: bool, path: str
+) -> None:
     """Write the optimized HLO of ``train_step`` (with op metadata) to ``path``; recompiles once."""
-    text = train_step.lower(state, batch, loop_active=loop_active).compile().as_text()
+    text = (
+        train_step.lower(state, batch, loop_active=loop_active, router_tie_active=router_tie_active).compile().as_text()
+    )
     with fsspec.open(path, "w") as f:
         f.write(text)
     logger.info("Wrote train-step HLO (%d chars) to %s", len(text), path)
