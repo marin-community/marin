@@ -4,6 +4,8 @@
 """A pinned answer task through Harbor's custom-verifier trial lifecycle."""
 
 import json
+import subprocess
+import sys
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
@@ -11,6 +13,7 @@ from threading import Thread
 import pytest
 from harbor.models.task.task import Task
 
+from taskcompendium.grading import exact_answer
 from taskcompendium.harbor.runner import ChatLaunch, ReplayLaunch, run_trial
 from taskcompendium.lowering import (
     DIRECT_CHAT_ENVIRONMENT,
@@ -18,9 +21,10 @@ from taskcompendium.lowering import (
     SelectionPolicy,
     compatible_lowerings,
     lower_to_harbor,
+    read_specification,
     select_lowerings,
 )
-from taskcompendium.models import AnswerType, ExactAnswer, Source, TaskRequirements, TaskSpec
+from taskcompendium.models import AnswerType, Source, TaskRequirements, TaskSpec, VerifierKind, VerifierSpec
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
 
 
@@ -65,7 +69,7 @@ def specification() -> TaskSpec:
     return TaskSpec(
         id="arithmetic-7-plus-5",
         instructions="What is 7 + 5?",
-        verifier=ExactAnswer(expected="12"),
+        verifier=exact_answer("12"),
         source=Source(dataset="hand-authored", revision="2026-09-16", row="arithmetic-7-plus-5", importer_revision="1"),
         requirements=TaskRequirements(),
         answer_type=AnswerType.NUMBER,
@@ -105,7 +109,7 @@ async def test_direct_chat_harbor_trial_distinguishes_answer_outcomes(
 
 
 async def test_direct_chat_exact_comparison_uses_pinned_normalization(tmp_path, specification):
-    specification = specification.model_copy(update={"verifier": ExactAnswer(expected="Straße Park")})
+    specification = specification.model_copy(update={"verifier": exact_answer("Straße Park")})
     environment_config = HarborEnvironmentConfig()
     task = lower_to_harbor(
         specification,
@@ -155,6 +159,71 @@ def test_direct_chat_rejects_unsatisfied_requirements(tmp_path, specification):
         )
 
 
+@pytest.mark.parametrize(
+    "verifier,message",
+    [
+        (
+            VerifierSpec(kind=VerifierKind.EXACT_ANSWER, parameters_json='{"expected": 12}'),
+            "Invalid 'exact_answer' verifier parameters",
+        ),
+        (
+            VerifierSpec(kind=VerifierKind.EXACT_ANSWER, parameters_json='{"expected": "12", "extra": true}'),
+            "Invalid 'exact_answer' verifier parameters",
+        ),
+    ],
+)
+def test_lowering_rejects_invalid_verifier_before_writing(tmp_path, specification, verifier, message):
+    specification = specification.model_copy(update={"verifier": verifier})
+
+    with pytest.raises(ValueError, match=message):
+        lower_to_harbor(
+            specification,
+            SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+            HarborEnvironmentConfig(),
+            tmp_path / "task",
+        )
+    assert not (tmp_path / "task").exists()
+
+
+def test_exported_specification_resolves_verifier_in_fresh_process(tmp_path, specification):
+    task = lower_to_harbor(
+        specification,
+        SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        HarborEnvironmentConfig(),
+        tmp_path / "task",
+    )
+    script = (
+        "import json, sys; from pathlib import Path; "
+        "from taskcompendium.verifier_registry import grade_answer; "
+        "from taskcompendium.lowering import read_submission_convention, read_specification; "
+        "root = Path(sys.argv[1]); "
+        "result = grade_answer(read_specification(root / 'specification.json'), "
+        "read_submission_convention(root / 'submission_convention.json'), '12', object()); "
+        "print(json.dumps({'status': result.status, 'reward': result.reward}))"
+    )
+
+    completed = subprocess.run([sys.executable, "-c", script, str(task)], capture_output=True, text=True, check=True)
+
+    assert json.loads(completed.stdout) == {"status": "graded", "reward": 1.0}
+
+
+def test_old_verifier_schema_is_rejected_on_read(tmp_path, specification):
+    task = lower_to_harbor(
+        specification,
+        SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        HarborEnvironmentConfig(),
+        tmp_path / "task",
+    )
+    path = task / "specification.json"
+    payload = json.loads(path.read_text())
+    payload["schema_version"] = "0.1"
+    payload["verifier"] = {"expected": "12", "ignore_case": True, "ignore_whitespace": True}
+    path.write_text(json.dumps(payload))
+
+    with pytest.raises(ValueError, match=r"Unsupported TaskSpec schema: 0\.1"):
+        read_specification(path)
+
+
 def test_file_result_cannot_use_text_submission_convention(tmp_path, specification):
     specification = specification.model_copy(update={"answer_type": AnswerType.FILE})
     convention = SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN)
@@ -174,6 +243,8 @@ def test_selection_policies_use_compatible_conventions(specification):
 
     assert select_lowerings(candidates, SelectionPolicy.ALL) == candidates
     assert select_lowerings(candidates, SelectionPolicy.FIRST) == (candidates[0],)
+    repeated = [select_lowerings(candidates, SelectionPolicy.SAMPLE, rng_key=42) for _ in range(10)]
+    assert all(selection == repeated[0] for selection in repeated)
     assert {select_lowerings(candidates, SelectionPolicy.SAMPLE, rng_key=key)[0] for key in range(16)} == set(candidates)
     assert select_lowerings(candidates, SelectionPolicy.FIRST, required_environment=DIRECT_CHAT_ENVIRONMENT) == (
         candidates[0],

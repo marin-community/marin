@@ -199,7 +199,7 @@ def training_config(
         "expert_tensor_parallel_size": 1,
     }
     config = {
-        "entrypoint": entrypoint,
+        "entrypoint": "standard",
         "context_budget": {
             "request_window_tokens": 128,
             "max_new_tokens_per_turn": 64,
@@ -245,10 +245,11 @@ def training_config(
                 "megatron_config": geometry,
             },
             "ref": {"megatron_config": geometry},
-            "fully_async": {
-                "max_staleness_steps": 0 if preset == "on-policy" else 2,
-                "num_parallel_generation_workers": batch_size,
-                "max_buffered_groups": max(1, batch_size // 2),
+            "rollout_buffer": {
+                "max_staleness_steps": 0 if entrypoint == "standard" or preset == "on-policy" else 2,
+                "batch_policy": "full_batch",
+                "max_in_flight": batch_size,
+                "object_store_root": None,
             },
         },
         "generator": {
@@ -257,8 +258,6 @@ def training_config(
             "vllm_attention_backend": "FLASH_ATTN",
             "run_engines_locally": True,
             "weight_sync_backend": "nccl",
-            "async_engine": True,
-            "batched": False,
             "use_conversation_multi_turn": True,
             "require_exact_chat_transport": True,
             "gpu_memory_utilization": 0.7,
@@ -278,10 +277,8 @@ def training_config(
     trainer = config["trainer"]
     trainer["eval_before_train"] = trainer["eval_interval"] > 0
     trainer["ckpt_interval"] = max(1, trainer["eval_interval"])
-    if entrypoint == "fully_async":
-        workers = trainer["fully_async"]["num_parallel_generation_workers"]
-        if workers < batch_size:
-            raise click.BadParameter("generation workers cannot fill a training batch")
+    if entrypoint == "standard" and trainer["rollout_buffer"]["max_staleness_steps"] != 0:
+        raise click.BadParameter("the standard lane requires zero rollout staleness")
     return config
 
 
@@ -312,13 +309,7 @@ def build_run(
     )
     max_steps = config["trainer"]["max_steps"]
     row_multiplier = 4 if preset == "gate-filter" else 1
-    prefetch_rows = 0
-    if entrypoint == "fully_async":
-        async_config = config["trainer"]["fully_async"]
-        workers = async_config["num_parallel_generation_workers"]
-        buffer = async_config["max_buffered_groups"] or workers
-        in_flight_groups = workers + buffer
-        prefetch_rows = ((in_flight_groups + batch_size - 1) // batch_size) * batch_size
+    prefetch_rows = config["trainer"]["rollout_buffer"]["max_staleness_steps"] * batch_size
     train_rows = (batch_size * max_steps + prefetch_rows) * row_multiplier
     identity = f"{model}-{entrypoint}-{preset}-{fingerprint_hash(yaml.safe_dump(config) + repr(train_ns))}"
     data_name = f"documents/{EXPERIMENT_NAME}/{identity}"

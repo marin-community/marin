@@ -81,7 +81,7 @@ def test_both_lanes_render_megatron_launch_with_complete_custom_eval_mix():
         assert launch["skyrl"]["generator"]["num_inference_engines"] == 2
         assert launch["skyrl"]["data"]["shuffle"] is False
 
-    assert launches["fully_async"]["skyrl"]["entrypoint"] == "fully_async"
+    assert launches["fully_async"]["skyrl"]["entrypoint"] == "standard"
     assert launches["standard"]["skyrl"]["entrypoint"] == "standard"
     assert (
         launches["fully_async"]["skyrl"]["generator"]["chat_template"]

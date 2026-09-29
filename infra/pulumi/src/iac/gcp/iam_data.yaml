@@ -93,6 +93,7 @@ principals:
   human-073: CiQAKk3j6XhHG0zB0wc8wvTpRg+a917RHbGNiKEfMOjUg5U7wooSNgCdtF6ixFHhqzu9HE/B1BG+tZfnvFdja1vsa5ENcA6A9Ct91HlL1KEVF0TRQWLh335BYvlk3A==
   human-075: CiQAKk3j6V2XjAnKG39Q8zgl3j8jK9Zk9dwrtR6fPz4RFPxErg8SQgCdtF6iJ1/xLdoLq2J7yUCspueUSGAPi9yG/Vma+6MOZKvL1znD+mVqUNmKckGVsezo7ULL6czGhn3RDgHehmJt2w==
   human-076: CiQAKk3j6VCsdaf6iHkrQzBdlzqwnko2/2xSXpg6RLWtjZ6k26ASQwCdtF6iNOPCdpO/Jn/4zwO6i/ffJUGqWJn+Y5mPP+8dbnFawlJMKFovCvIXPb8GTU81BMqkiqrTNT+ZgzgB5gnumLA=
+  human-077: CiQAKk3j6aPIMjFtL+rRfCCWIrVZ2OvqVWM2ZhbjBzULMI9jhxkSQgCdtF6im2W4j1VU64K8XsbYaaSp/urL9he0B1R2cPow1fnCh86SzxC7rv75+uCOoFcepnbgC6bIULK81oCFcoTgng==
 custom_roles:
 - role_id: marinGcpResourcePreviewer
   title: Marin GCP Resource Previewer
@@ -965,6 +966,7 @@ project_grants:
   - principal: human-072
   - principal: human-075
   - principal: human-076
+  - principal: human-077
 - role: projects/hai-gcp-models/roles/ray1
   members:
   - serviceAccount:748532799086-compute@developer.gserviceaccount.com
