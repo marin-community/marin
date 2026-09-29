@@ -7,12 +7,17 @@ import json
 from pathlib import Path
 from typing import Any
 
-from harbor.agents.installed.base import BaseInstalledAgent  # pyrefly: ignore[missing-import]
+from harbor.agents.installed.base import (  # pyrefly: ignore[missing-import]
+    BaseInstalledAgent,
+    NonZeroAgentExitCodeError,
+)
 from harbor.environments.base import BaseEnvironment  # pyrefly: ignore[missing-import]
 from harbor.models.agent.context import AgentContext  # pyrefly: ignore[missing-import]
+from harbor.verifier.verifier import VerifierRuntimeError  # pyrefly: ignore[missing-import]
 
 RUNNER_FILENAME = "run_sotopia_agent.py"
 SUMMARY_FILENAME = "sotopia-summary.json"
+EVALUATOR_INFRASTRUCTURE_EXIT_CODE = 75
 DEFAULT_MODEL = "gpt-4o"
 UNAUTHENTICATED_API_KEY = "EMPTY"
 
@@ -104,15 +109,22 @@ class SotopiaAgent(BaseInstalledAgent):
                 f"/logs/agent/{SUMMARY_FILENAME}",
             )
         )
-        await self.exec_as_agent(
-            environment,
-            command=command,
-            env=self._runner_env(
-                target_model=target_model,
-                partner_model=partner_model,
-                evaluator_model=evaluator_model,
-            ),
-        )
+        try:
+            await self.exec_as_agent(
+                environment,
+                command=command,
+                env=self._runner_env(
+                    target_model=target_model,
+                    partner_model=partner_model,
+                    evaluator_model=evaluator_model,
+                ),
+            )
+        except NonZeroAgentExitCodeError as error:
+            if error.result is None or error.result.return_code != EVALUATOR_INFRASTRUCTURE_EXIT_CODE:
+                raise
+            raise VerifierRuntimeError(
+                "SOTOPIA evaluator failed before producing a complete participant rating"
+            ) from error
 
     def populate_context_post_run(self, context: AgentContext) -> None:
         summary_path = self.logs_dir / SUMMARY_FILENAME

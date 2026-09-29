@@ -27,8 +27,17 @@ Transcript = list[list[tuple[str, str, Message]]]
 
 EVALUATOR_MAX_ATTEMPTS = 5
 EVALUATOR_RETRY_BASE_DELAY = 1.0
+# ``SotopiaAgent`` translates this runner exit into Harbor's retryable
+# ``VerifierRuntimeError``.  The evaluator is SOTOPIA's grader, not the model
+# under evaluation, so a malformed or unavailable evaluator response must not
+# become a scoreable generic agent exit.
+EVALUATOR_INFRASTRUCTURE_EXIT_CODE = 75
 
 logger = logging.getLogger(__name__)
+
+
+class EvaluatorInfrastructureError(RuntimeError):
+    """The SOTOPIA episode evaluator failed to produce a complete grade."""
 
 
 class EpisodeResult(TypedDict):
@@ -60,20 +69,23 @@ class CapturingEpisodeEvaluator(EpisodeLLMEvaluator[SotopiaDimensions]):
         temperature: float | None = 0.0,
     ) -> EvaluatorResponse:
         for attempt in range(EVALUATOR_MAX_ATTEMPTS):
-            response = await super().__acall__(
-                turn_number=turn_number,
-                messages=messages,
-                history=history,
-                temperature=temperature,
-            )
-            evaluation = unweighted_aggregate_evaluate(response)
+            try:
+                response = await super().__acall__(
+                    turn_number=turn_number,
+                    messages=messages,
+                    history=history,
+                    temperature=temperature,
+                )
+                evaluation = unweighted_aggregate_evaluate(response)
+            except Exception as error:
+                raise EvaluatorInfrastructureError("SOTOPIA evaluator call failed") from error
             rewards = [evaluation.p1_rate, evaluation.p2_rate]
             if all(reward is not None for reward in rewards):
                 self.last_response = response
                 return response
 
             if attempt + 1 == EVALUATOR_MAX_ATTEMPTS:
-                raise ValueError(
+                raise EvaluatorInfrastructureError(
                     "SOTOPIA evaluator omitted a participant rating after "
                     f"{EVALUATOR_MAX_ATTEMPTS} attempts: {rewards!r}"
                 )
@@ -154,7 +166,7 @@ def _build_result(
     evaluation = unweighted_aggregate_evaluate(terminal_evaluator.last_response)
     rewards = [evaluation.p1_rate, evaluation.p2_rate]
     if any(reward is None for reward in rewards):
-        raise ValueError(f"SOTOPIA evaluator omitted a participant rating: {rewards!r}")
+        raise EvaluatorInfrastructureError(f"SOTOPIA evaluator omitted a participant rating: {rewards!r}")
     typed_rewards = [reward for reward in rewards if reward is not None]
 
     return {
@@ -222,14 +234,18 @@ def main() -> None:
     target_model = os.environ["SOTOPIA_TARGET_MODEL"]
     partner_model = os.environ["SOTOPIA_PARTNER_MODEL"]
     evaluator_model = os.environ["SOTOPIA_EVALUATOR_MODEL"]
-    result = asyncio.run(
-        run_episode(
-            config,
-            target_model=target_model,
-            partner_model=partner_model,
-            evaluator_model=evaluator_model,
+    try:
+        result = asyncio.run(
+            run_episode(
+                config,
+                target_model=target_model,
+                partner_model=partner_model,
+                evaluator_model=evaluator_model,
+            )
         )
-    )
+    except EvaluatorInfrastructureError:
+        logger.exception("SOTOPIA evaluator failed before producing a complete grade")
+        raise SystemExit(EVALUATOR_INFRASTRUCTURE_EXIT_CODE) from None
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
 
