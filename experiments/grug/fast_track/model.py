@@ -84,6 +84,8 @@ _MOE_OUT_GATE_DIMS = 12
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
+# Batch axes a ``P(_FSDP_AXES, None)`` table is replicated over: their tokens all add to the same rows.
+_TABLE_REPLICA_AXES = tuple(axis for axis in _BATCH_AXES if axis not in _FSDP_AXES)
 # ``newton_muon``: the per-layer expert-input second moment ``Z^T Z / N`` ([L, n, n], layer order) the
 # forward returns to the trainer, and the per-shard partial sums it is reduced from.
 NEWTON_GRAM_KEY = "_newton_gram"
@@ -104,6 +106,9 @@ _MEMORY_STAT_PREFIX = f"{_LAYER_KNOB_PREFIX}mem_"
 _KDA_ERASE_STAT_PREFIX = f"{_LAYER_KNOB_PREFIX}kda_erase_"
 # Bound on one chunk's gathered ``[tokens, rows, dim]`` memory rows in the product-key EmbeddingBag.
 _MEMORY_BAG_CHUNK_ELEMS = 1 << 26
+# Bound on one chunk's FSDP-group-gathered ``[tokens, dim]`` rows in ``_row_sharded_embedding_gather``: 256 MiB
+# in float32 (the backward's cotangent), so d1024's 2^30-element group batch walks in 16 chunks.
+_ROW_GATHER_CHUNK_ELEMS = 1 << 26
 # Metrics-dict keys carrying the AttnRes z-loss term (with gradient) from the forward to the loss.
 _ATTN_RES_Z = "attn_res_z_term"
 # Per-gate token-mean AttnRes source weights (variable length per gate), popped into logging scalars.
@@ -270,6 +275,105 @@ def _embedding_gather_autodiff(token_embed: jax.Array, token_ids: Int[Array, "B 
         in_specs=(P(None, None), P(_BATCH_AXES, None)),
         out_specs=P(_BATCH_AXES, None, None),
     )(token_embed, token_ids)
+
+
+def _fsdp_group_size() -> int:
+    mesh = get_abstract_mesh()
+    return math.prod(_mesh_axis_size(mesh, axis) for axis in _FSDP_AXES)
+
+
+def _row_gather_chunks(x: jax.Array, group: int, token_elems: int) -> jax.Array:
+    """Flat local ``[t, ...]`` -> ``[chunks, c, ...]`` with ``group * c * token_elems`` at most
+    ``_ROW_GATHER_CHUNK_ELEMS`` (or ``c`` odd): the FSDP group's gathered rows of one chunk bound the transients."""
+    chunk = x.shape[0]
+    while chunk % 2 == 0 and group * chunk * token_elems > _ROW_GATHER_CHUNK_ELEMS:
+        chunk //= 2
+    return x.reshape(-1, chunk, *x.shape[1:])
+
+
+def _row_shard_local_ids(table_rows: int, ids: jax.Array) -> tuple[jax.Array, jax.Array]:
+    """FSDP-group-gathered ids relative to this shard's rows, clipped, and whether this shard owns them."""
+    local = ids - jax.lax.axis_index(_FSDP_AXES) * table_rows
+    valid = (local >= 0) & (local < table_rows)
+    return jnp.clip(local, 0, table_rows - 1), valid
+
+
+def _row_sharded_gather_local(table: jax.Array, ids: jax.Array) -> jax.Array:
+    b, s = ids.shape
+    rows, dim = table.shape
+    group = _fsdp_group_size()
+
+    def chunk_rows(chunk_ids):
+        local, valid = _row_shard_local_ids(rows, jax.lax.all_gather(chunk_ids, _FSDP_AXES, tiled=True))
+        partial = jnp.where(valid[:, None], table[local], jnp.zeros((), table.dtype))
+        # Exactly one shard contributes each row, so the sum is exact in the table dtype.
+        return jax.lax.psum_scatter(partial, _FSDP_AXES, scatter_dimension=0, tiled=True)
+
+    return jax.lax.map(chunk_rows, _row_gather_chunks(ids.reshape(-1), group, dim)).reshape(b, s, dim)
+
+
+def _row_sharded_scatter_local(rows: int, dtype: jnp.dtype, ids: jax.Array, g: jax.Array) -> jax.Array:
+    dim = g.shape[-1]
+    group = _fsdp_group_size()
+    chunk_ids = _row_gather_chunks(ids.reshape(-1), group, dim)
+    chunk_g = _row_gather_chunks(g.reshape(-1, dim), group, dim)
+
+    def chunk_grad(d_table, args):
+        c_ids, c_g = args
+        local, valid = _row_shard_local_ids(rows, jax.lax.all_gather(c_ids, _FSDP_AXES, tiled=True))
+        cot = jax.lax.all_gather(c_g, _FSDP_AXES, tiled=True).astype(jnp.float32)
+        return d_table.at[local].add(jnp.where(valid[:, None], cot, 0.0)), None
+
+    d_table0 = jax.lax.pcast(jnp.zeros((rows, dim), jnp.float32), _BATCH_AXES, to="varying")
+    d_table, _ = jax.lax.scan(chunk_grad, d_table0, (chunk_ids, chunk_g))
+    return jax.lax.psum(d_table, _TABLE_REPLICA_AXES).astype(dtype)
+
+
+@jax.custom_vjp
+def _row_sharded_embedding_gather(table: jax.Array, token_ids: Int[Array, "B S"]) -> Float[Array, "B S D"]:
+    """``_embedding_gather`` from a table row-sharded ``P(_FSDP_AXES, None)``, without all-gathering the table.
+
+    Each FSDP shard all-gathers its group's token ids, looks up the rows it owns (zeros elsewhere) and
+    reduce-scatters them back to the owning tokens; the backward all-gathers the cotangent and scatter-adds the
+    rows it owns in float32, so neither the table nor a dense table-sized gradient crosses the network. Both
+    walk the tokens in chunks (``_ROW_GATHER_CHUNK_ELEMS``) to bound the gathered ``[tokens, D]`` temporaries.
+    """
+    return shard_map(
+        _row_sharded_gather_local,
+        mesh=get_abstract_mesh(),
+        in_specs=(P(_FSDP_AXES, None), P(_BATCH_AXES, None)),
+        out_specs=P(_BATCH_AXES, None, None),
+    )(table, reshard(token_ids, P(_BATCH_AXES, None)))
+
+
+def _row_sharded_embedding_gather_fwd(table: jax.Array, token_ids: jax.Array):
+    residual_like = jnp.zeros((0, *table.shape), table.dtype)
+    return _row_sharded_embedding_gather(table, token_ids), (token_ids, residual_like)
+
+
+def _row_sharded_embedding_gather_bwd(residuals, g: jax.Array):
+    token_ids, table_like = residuals
+    d_table = shard_map(
+        functools.partial(_row_sharded_scatter_local, table_like.shape[1] // _fsdp_group_size(), table_like.dtype),
+        mesh=get_abstract_mesh(),
+        in_specs=(P(_BATCH_AXES, None), P(_BATCH_AXES, None, None)),
+        out_specs=P(_FSDP_AXES, None),
+    )(reshard(token_ids, P(_BATCH_AXES, None)), reshard(g, P(_BATCH_AXES, None, None)))
+    return d_table, np.zeros(token_ids.shape, dtype=jax.dtypes.float0)
+
+
+_row_sharded_embedding_gather.defvjp(_row_sharded_embedding_gather_fwd, _row_sharded_embedding_gather_bwd)
+
+
+def _replicated_autodiff_gather(table: jax.Array, token_ids: Int[Array, "B S"]) -> Float[Array, "B S D"]:
+    return _embedding_gather_autodiff(reshard(table, P(None, None)), token_ids)
+
+
+def _table2_gather(cfg: "GrugModelConfig"):
+    """Lookup for the tables stored like the second one (``embed2_fsdp``, ``embed2_grad_fp32``)."""
+    if not cfg.embed2_fsdp:
+        return _embedding_gather if cfg.embed2_grad_fp32 else _embedding_gather_autodiff
+    return _row_sharded_embedding_gather if cfg.embed2_grad_fp32 else _replicated_autodiff_gather
 
 
 # Pair-combine multiplier and murmur3 finalizer constants for the (previous, current) bigram hash.
@@ -957,8 +1061,10 @@ class GrugModelConfig:
     """With ``bigram_gate``, a per-channel gate instead of a scalar: ``g_t = sigmoid(rms(e_t) * rms(b_t) @ A @ B + c)``
     with rank-r ``A`` (random) and ``B`` (zero), so each token keeps some bigram features and drops others."""
     embed2_fsdp: bool = False
-    """Store the second table (and so its optimizer / EMA state) row-sharded over the FSDP axes, all-gathering
-    a replicated copy for the lookup. Same math; for rungs where the replicated table's state doesn't fit."""
+    """Store the second table (and so its optimizer / EMA state) row-sharded over the FSDP axes, looked up in place
+    (``_row_sharded_embedding_gather``: ids and cotangents cross the network, never the table or its gradient;
+    ``embed2_grad_fp32=False`` still all-gathers a replicated copy). Same math; for rungs where the replicated
+    table or its gradient doesn't fit."""
     ngram_stat_rows: int = 0
     """Rows per n-gram order of a fixed-encoder *statistic* table, its own AttnRes source (0: off). Row h holds
     ``[sum of code(y), count]`` over every occurrence of an n-gram hashing to h followed by next token y, where
@@ -3315,6 +3421,76 @@ def _memory_address_local(q: jax.Array, keys: jax.Array, topk: int):
     return slots, weights.reshape(b, s, -1), counts, top1_score, top1_weight
 
 
+def _row_sharded_memory_bag_local(values: jax.Array, slots: jax.Array, weights: jax.Array) -> jax.Array:
+    b, s, r = slots.shape
+    rows, dim = values.shape
+    group = _fsdp_group_size()
+
+    def chunk_bag(args):
+        c_slots, c_w = (jax.lax.all_gather(a, _FSDP_AXES, tiled=True) for a in args)
+        local, valid = _row_shard_local_ids(rows, c_slots)
+        partial = jnp.einsum("cr,crd->cd", jnp.where(valid, c_w, 0.0), values[local].astype(jnp.float32))
+        return jax.lax.psum_scatter(partial, _FSDP_AXES, scatter_dimension=0, tiled=True)
+
+    chunks = tuple(_row_gather_chunks(a.reshape(b * s, r), group, r * dim) for a in (slots, weights))
+    return jax.lax.map(chunk_bag, chunks).reshape(b, s, dim).astype(values.dtype)
+
+
+def _row_sharded_memory_bag_bwd_local(values, slots, weights, g):
+    b, s, r = slots.shape
+    rows, dim = values.shape
+    group = _fsdp_group_size()
+
+    def chunk_grad(d_table, args):
+        c_slots, c_w, c_g = (jax.lax.all_gather(a, _FSDP_AXES, tiled=True) for a in args)
+        local, valid = _row_shard_local_ids(rows, c_slots)
+        g32 = c_g.astype(jnp.float32)
+        d_w = jnp.einsum("cd,crd->cr", g32, jnp.where(valid[..., None], values[local].astype(jnp.float32), 0.0))
+        d_w = jax.lax.psum_scatter(d_w, _FSDP_AXES, scatter_dimension=0, tiled=True)
+        d_rows = jnp.where(valid, c_w, 0.0)[..., None] * g32[:, None, :]
+        return d_table.at[local.reshape(-1)].add(d_rows.reshape(-1, dim)), d_w
+
+    chunks = tuple(_row_gather_chunks(a.reshape(b * s, *a.shape[2:]), group, r * dim) for a in (slots, weights, g))
+    d_table0 = jax.lax.pcast(jnp.zeros(values.shape, jnp.float32), _BATCH_AXES, to="varying")
+    d_table, d_w = jax.lax.scan(chunk_grad, d_table0, chunks)
+    return jax.lax.psum(d_table, _TABLE_REPLICA_AXES).astype(values.dtype), d_w.reshape(b, s, r)
+
+
+@jax.custom_vjp
+def _row_sharded_memory_bag(values: jax.Array, slots: Int[Array, "B S R"], weights: Float[Array, "B S R"]):
+    """``_memory_bag`` from a table row-sharded ``P(_FSDP_AXES, None)``, the way ``_row_sharded_embedding_gather``
+    looks up rows: slots, weights and cotangents cross the network, never the table or its gradient."""
+    return shard_map(
+        _row_sharded_memory_bag_local,
+        mesh=get_abstract_mesh(),
+        in_specs=(P(_FSDP_AXES, None), P(_BATCH_AXES, None, None), P(_BATCH_AXES, None, None)),
+        out_specs=P(_BATCH_AXES, None, None),
+    )(values, slots, weights)
+
+
+def _row_sharded_memory_bag_fwd(values, slots, weights):
+    return _row_sharded_memory_bag(values, slots, weights), (values, slots, weights)
+
+
+def _row_sharded_memory_bag_bwd(residuals, g):
+    values, slots, weights = residuals
+    d_values, d_weights = shard_map(
+        _row_sharded_memory_bag_bwd_local,
+        mesh=get_abstract_mesh(),
+        in_specs=(
+            P(_FSDP_AXES, None),
+            P(_BATCH_AXES, None, None),
+            P(_BATCH_AXES, None, None),
+            P(_BATCH_AXES, None, None),
+        ),
+        out_specs=(P(_FSDP_AXES, None), P(_BATCH_AXES, None, None)),
+    )(values, slots, weights, reshard(g, P(_BATCH_AXES, None, None)))
+    return d_values, np.zeros(slots.shape, dtype=jax.dtypes.float0), d_weights
+
+
+_row_sharded_memory_bag.defvjp(_row_sharded_memory_bag_fwd, _row_sharded_memory_bag_bwd)
+
+
 class ProductKeyMemory(eqx.Module):
     """Product-key memory+ sublayer (arXiv 1907.05242, 2412.09764); see ``GrugModelConfig.memory_layers``."""
 
@@ -3353,8 +3529,8 @@ class ProductKeyMemory(eqx.Module):
             in_specs=(P(_BATCH_AXES), P()),
             out_specs=(P(_BATCH_AXES, None, None), P(_BATCH_AXES, None, None), P(None), P(), P()),
         )(q, self.keys)
-        table = reshard(self.values, P(None, None)) if self.fsdp else self.values
-        bag = _memory_bag(table, slots, weights).astype(x.dtype)
+        memory_bag = _row_sharded_memory_bag if self.fsdp else _memory_bag
+        bag = memory_bag(self.values, slots, weights).astype(x.dtype)
         gate = jax.nn.silu(jnp.einsum("bsd,de->bse", x, self.w_gate.astype(x.dtype), out_sharding=_batch_spec()))
         out = jnp.einsum("bsd,de->bse", bag * gate, self.w_out.astype(x.dtype), out_sharding=_batch_spec())
         usage = jax.lax.stop_gradient(counts).astype(jnp.float32)
@@ -5240,8 +5416,8 @@ class Transformer(eqx.Module):
             if self.token_embed2 is not None:
                 assert self.embed2_norm is not None
                 ids2 = token_ids
-                gather2 = _embedding_gather if cfg.embed2_grad_fp32 else _embedding_gather_autodiff
-                table2 = reshard(self.token_embed2, P(None, None)) if cfg.embed2_fsdp else self.token_embed2
+                gather2 = _table2_gather(cfg)
+                table2 = self.token_embed2
                 if cfg.second_embed_bigram and cfg.embed2_hash_heads > 1:
                     doc_start = None if segment_ids is None else segment_ids[0]
                     rows_per_head = cfg.embed2_rows or cfg.vocab_size
@@ -5313,9 +5489,7 @@ class Transformer(eqx.Module):
                 assert self.embed3_norm is not None and cfg.second_embed_bigram and cfg.second_embed_mode == "source"
                 doc_start = None if segment_ids is None else segment_ids[0]
                 ids3 = _bigram_hash_ids(token_ids, doc_start, cfg.embed3_rows, 3)
-                table3 = reshard(self.token_embed3, P(None, None)) if cfg.embed2_fsdp else self.token_embed3
-                gather3 = _embedding_gather if cfg.embed2_grad_fp32 else _embedding_gather_autodiff
-                embed3 = self.embed3_norm(gather3(table3, ids3))
+                embed3 = self.embed3_norm(_table2_gather(cfg)(self.token_embed3, ids3))
                 if self.trigram_gate_w is not None and self.trigram_gate_b is not None:
                     embed3, gate3 = _content_gate(
                         hidden,
@@ -5333,9 +5507,7 @@ class Transformer(eqx.Module):
                 extra_sources = (*extra_sources, self._ngram_stat_source(hidden, token_ids, doc_start))
             ple_rows = None
             if self.token_embed_ple is not None:
-                gather_ple = _embedding_gather if cfg.embed2_grad_fp32 else _embedding_gather_autodiff
-                table_ple = reshard(self.token_embed_ple, P(None, None)) if cfg.embed2_fsdp else self.token_embed_ple
-                ple_rows = gather_ple(table_ple, token_ids)
+                ple_rows = _table2_gather(cfg)(self.token_embed_ple, token_ids)
             hidden, stacked_router_stats, final_gate_stats = self._attn_res_layers(
                 hidden,
                 token_ids,
