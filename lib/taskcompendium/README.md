@@ -41,7 +41,7 @@ flowchart LR
 | `verifier` | A private verifier kind and serialized JSON configuration. The built-in `exact_answer` verifier holds the expected answer and text-normalization rules. |
 | `schema_version` | Version of the serialized spec, checked when the record is loaded. |
 
-For example, a task asking “What is 7 + 5?” can have `answer_type=number` and a private expected answer of `12`. That answer type can be submitted as plain text or as `{"answer":"12"}`. A task asking for a function call has `answer_type=native_action`; its spec retains the source functions and message turns. The verifier and expected answer are never added to the model-visible instruction. Importers must make source output instructions neutral to the supported conventions, or reject rows they cannot safely rewrite. A raw-output requirement left in `instructions` would conflict with a JSON convention; `answer_type=text` alone cannot detect that conflict in prose.
+For example, a task asking “What is 7 + 5?” can have `answer_type=number` and a private expected answer of `12`. The plain, JSON, and `answer_call` conventions carry that answer as `12`, `{"answer":"12"}`, and a final `submit_answer({"answer":"12"})` call, respectively. Each extracts the string `12` for the same exact-answer verifier. A task asking for a function call has `answer_type=native_action`; its spec retains the source functions and message turns. The verifier and expected answer are never added to the model-visible instruction. Importers must make source output instructions neutral to the supported conventions, or reject rows they cannot safely rewrite. A raw-output requirement left in `instructions` would conflict with a JSON or function-call convention; `answer_type=text` alone cannot detect that conflict in prose.
 
 ## What is a lowering?
 
@@ -76,6 +76,7 @@ spec = TaskSpec(
 conventions = (
     SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
     SubmissionConvention(id="json", answer_format=AnswerFormat.JSON),
+    SubmissionConvention(id="answer-call", answer_format=AnswerFormat.ANSWER_CALL),
 )
 candidates = compatible_lowerings(spec, conventions, (HarborEnvironmentConfig(),))
 chosen = select_lowerings(candidates, SelectionPolicy.SAMPLE, rng_key=1234)[0]
@@ -114,6 +115,8 @@ launch = ChatLaunch(model="model-id", api_base="https://example.com/v1", api_key
 ```
 
 Harbor runs the agent in the direct-chat environment, which exposes no filesystem or shell tools. The custom verifier reads the final response and resolves the private verifier kind through an explicit map. The selected verifier validates its JSON configuration and receives the response, convention, and Harbor's verifier-side environment. The built-in exact-answer verifier extracts and compares the answer directly, without a temporary answer file. A wrong answer receives reward `0.0`; a malformed submission has no reward; a verifier infrastructure failure has no reward and is recorded separately in `taskcompendium-result.json`. The package requires Harbor's [custom-verifier task loading](https://github.com/marin-community/harbor/pull/155) and does not use `tests/test.sh`.
+
+With the `answer_call` convention, the chat agent advertises only `submit_answer(answer: string)` and records the assistant's final response. It never invokes the function. The convention extracts the call's `answer` argument and passes it to the task's ordinary verifier. A non-call response or a call to another function is an extraction error. The same final-action decoder handles native-action tasks; their verifier compares the recorded call's function name and argument dictionary with the private expected call.
 
 ### NeMo final actions
 

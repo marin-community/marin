@@ -35,7 +35,7 @@ class ReplayLaunch(BaseModel):
 
 
 class ActionReplayLaunch(BaseModel):
-    """A fixed native final action for exercising the Harbor trial path."""
+    """A fixed final assistant action for exercising the Harbor trial path."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -73,7 +73,7 @@ async def run_trial(
         convention = None  # Replay still runs so the verifier can record invalid private metadata.
     answer_format = convention.answer_format if convention is not None else None
     if isinstance(launch, ReplayLaunch):
-        if answer_format == AnswerFormat.FINAL_ACTION:
+        if answer_format in {AnswerFormat.ANSWER_CALL, AnswerFormat.FINAL_ACTION}:
             raise ValueError("Text replay requires a plain or JSON task")
         agent: dict[str, Any] = {
             "import_path": "taskcompendium.harbor.adapter:ReplayAgent",
@@ -81,7 +81,7 @@ async def run_trial(
         }
     elif isinstance(launch, ActionReplayLaunch):
         if answer_format in {AnswerFormat.PLAIN, AnswerFormat.JSON}:
-            raise ValueError("Action replay requires a final-action task")
+            raise ValueError("Action replay requires an action-submission task")
         agent = {
             "import_path": "taskcompendium.harbor.adapter:ActionReplayAgent",
             "kwargs": launch.model_dump(),
@@ -100,6 +100,8 @@ async def run_trial(
             kwargs["messages"] = [message.model_dump(mode="json") for message in request.messages]
             kwargs["tool_choice"] = request.tool_choice
             kwargs["parallel_tool_calls"] = request.parallel_tool_calls
+        elif answer_format == AnswerFormat.ANSWER_CALL:
+            agent_path = "taskcompendium.harbor.adapter:AnswerCallAgent"
         agent = {
             "import_path": agent_path,
             "model_name": launch.model,

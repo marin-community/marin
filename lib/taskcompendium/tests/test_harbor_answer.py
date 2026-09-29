@@ -8,6 +8,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from io import BytesIO
 from threading import Thread
 
 import pytest
@@ -26,6 +27,16 @@ from taskcompendium.lowering import (
 )
 from taskcompendium.models import AnswerType, Source, TaskRequirements, TaskSpec, VerifierKind, VerifierSpec
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
+
+
+def _answer_action(answer: str) -> dict:
+    return {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {"type": "function", "function": {"name": "submit_answer", "arguments": json.dumps({"answer": answer})}}
+        ],
+    }
 
 
 @dataclass
@@ -156,9 +167,65 @@ async def test_answer_task_rejects_action_replay_before_trial(tmp_path, specific
         tmp_path / "task",
     )
 
-    with pytest.raises(ValueError, match="Action replay requires a final-action task"):
+    with pytest.raises(ValueError, match="Action replay requires an action-submission task"):
         await run_trial(task, environment_config, ActionReplayLaunch(response={}), tmp_path / "trials", "run")
     assert not (tmp_path / "trials").exists()
+
+
+@pytest.mark.parametrize("answer_type", [AnswerType.TEXT, AnswerType.NUMBER])
+async def test_answer_call_grades_semantic_answers_through_harbor(tmp_path, specification, answer_type):
+    specification = specification.model_copy(update={"answer_type": answer_type})
+    convention = SubmissionConvention(id="answer-call", answer_format=AnswerFormat.ANSWER_CALL)
+    environment_config = HarborEnvironmentConfig()
+    task = lower_to_harbor(specification, convention, environment_config, tmp_path / "task")
+
+    correct = await run_trial(
+        task, environment_config, ActionReplayLaunch(response=_answer_action("12")), tmp_path / "trials", "correct"
+    )
+    wrong = await run_trial(
+        task, environment_config, ActionReplayLaunch(response=_answer_action("13")), tmp_path / "trials", "wrong"
+    )
+
+    assert correct.verifier_result.rewards == {"reward": 1.0}
+    assert wrong.verifier_result.rewards == {"reward": 0.0}
+    assert not (tmp_path / "trials/correct/agent/response.txt").exists()
+
+
+async def test_answer_call_does_not_dispatch_and_requires_its_submission_function(tmp_path, specification, monkeypatch):
+    convention = SubmissionConvention(id="answer-call", answer_format=AnswerFormat.ANSWER_CALL)
+    environment_config = HarborEnvironmentConfig()
+    task = lower_to_harbor(specification, convention, environment_config, tmp_path / "task")
+    requests = []
+
+    def respond(request, timeout):
+        requests.append(json.loads(request.data))
+        return BytesIO(json.dumps({"choices": [{"message": _answer_action("12")}]}).encode())
+
+    monkeypatch.setattr("taskcompendium.harbor.adapter.urllib.request.urlopen", respond)
+    result = await run_trial(
+        task,
+        environment_config,
+        ChatLaunch(model="model", api_base="https://example.invalid"),
+        tmp_path / "trials",
+        "run",
+    )
+
+    assert result.verifier_result.rewards == {"reward": 1.0}
+    assert len(requests) == 1
+    assert requests[0]["tools"][0]["function"]["name"] == "submit_answer"
+    assert requests[0]["tools"][0]["function"]["parameters"]["properties"]["answer"]["type"] == "string"
+    assert requests[0]["tool_choice"] == "required"
+    assert requests[0]["parallel_tool_calls"] is False
+    assert not (tmp_path / "trials/run/agent/response.txt").exists()
+
+    invalid = _answer_action("12")
+    invalid["tool_calls"][0]["function"]["name"] = "lookup"
+    invalid_result = await run_trial(
+        task, environment_config, ActionReplayLaunch(response=invalid), tmp_path / "trials", "invalid"
+    )
+    outcome = json.loads((tmp_path / "trials/invalid/verifier/taskcompendium-result.json").read_text())
+    assert invalid_result.verifier_result is None
+    assert outcome["status"] == "extraction_error"
 
 
 def test_direct_chat_rejects_unsatisfied_requirements(tmp_path, specification):

@@ -7,9 +7,10 @@ import json
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
+from taskcompendium.final_action import decode_action, parse_arguments
 from taskcompendium.grading import GradeResult, GradingAttempt, Outcome, Verifier
 from taskcompendium.models import FunctionCall, ToolCallComparatorConfig, VerifierKind, VerifierSpec
-from taskcompendium.predicted_action import compare, decode_action, parse_arguments
+from taskcompendium.predicted_action import compare
 from taskcompendium.submission import AnswerFormat
 
 

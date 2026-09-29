@@ -25,7 +25,7 @@ from taskcompendium.lowering import (
     read_specification,
     read_submission_convention,
 )
-from taskcompendium.submission import AnswerFormat
+from taskcompendium.submission import ANSWER_CALL_TOOL, AnswerFormat
 from taskcompendium.verifier_registry import grade_answer
 
 RESPONSE_FILE = "response.txt"
@@ -246,6 +246,29 @@ class NativeActionAgent(DirectChatAgent):
         _record_action(self.logs_dir, self.messages, response, context)
 
 
+class AnswerCallAgent(DirectChatAgent):
+    """Collect a final answer function call without dispatching it."""
+
+    @staticmethod
+    def name() -> str:
+        return "taskcompendium-answer-call"
+
+    def _answer_completion(self, instruction: str) -> dict[str, Any]:
+        messages = [{"role": "user", "content": instruction}]
+        body = {
+            "model": self.model_name,
+            "messages": messages,
+            "tools": [ANSWER_CALL_TOOL],
+            "tool_choice": "required",
+            "parallel_tool_calls": False,
+        }
+        return _chat_completion(self.api_base, self.api_key_env, self.request_timeout, body)
+
+    async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
+        response = await asyncio.to_thread(self._answer_completion, instruction)
+        _record_action(self.logs_dir, [{"role": "user", "content": instruction}], response, context)
+
+
 class SemanticVerifier(BaseVerifier):
     """Grade the submitted answer against the task's private reference."""
 
@@ -254,7 +277,7 @@ class SemanticVerifier(BaseVerifier):
             root = self.task.paths.task_dir
             specification = read_specification(root / SPECIFICATION_FILE)
             convention = read_submission_convention(root / SUBMISSION_CONVENTION_FILE)
-            action = convention.answer_format == AnswerFormat.FINAL_ACTION
+            action = convention.answer_format in {AnswerFormat.ANSWER_CALL, AnswerFormat.FINAL_ACTION}
             response_path = self.trial_paths.agent_dir / (ACTION_FILE if action else RESPONSE_FILE)
             response = response_path.read_text() if response_path.exists() else None
             result = grade_answer(specification, convention, response, self.environment)

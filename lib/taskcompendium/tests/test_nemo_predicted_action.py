@@ -11,11 +11,12 @@ from pathlib import Path
 
 import pytest
 
+from taskcompendium.final_action import decode_action
 from taskcompendium.harbor.runner import ActionReplayLaunch, ChatLaunch, ReplayLaunch, run_trial
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256, import_row
 from taskcompendium.lowering import HarborEnvironmentConfig, compatible_lowerings, lower_to_harbor, read_specification
 from taskcompendium.models import AnswerType, FunctionCall, ToolCallComparatorConfig
-from taskcompendium.predicted_action import compare, decode_action
+from taskcompendium.predicted_action import compare
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
 
 FIXTURES = Path(__file__).parent / "fixtures/nemo"

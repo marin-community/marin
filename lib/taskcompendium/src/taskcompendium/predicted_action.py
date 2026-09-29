@@ -1,53 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Compare final NeMo actions without dispatching the advertised functions."""
+"""Compare predicted function calls without dispatching them."""
 
-import json
-from dataclasses import dataclass
-from math import isfinite
 from typing import Any
 
+from taskcompendium.final_action import SubmittedAction, SubmittedMessage, parse_arguments
 from taskcompendium.models import FunctionCall, ToolCallComparatorConfig
-from taskcompendium.submission import _object_with_unique_fields
-
-
-@dataclass(frozen=True)
-class SubmittedCalls:
-    calls: tuple[FunctionCall, ...]
-
-
-@dataclass(frozen=True)
-class SubmittedMessage:
-    content: str
-
-
-SubmittedAction = SubmittedCalls | SubmittedMessage
-
-
-def decode_action(message: dict[str, Any]) -> SubmittedAction:
-    """Decode one native assistant message; malformed envelopes are submission errors."""
-    if message.get("role") != "assistant":
-        raise ValueError("Final action requires an assistant message")
-    raw_calls = message.get("tool_calls")
-    if raw_calls is not None:
-        if not isinstance(raw_calls, list):
-            raise ValueError("Final tool_calls must be a list")
-        calls = []
-        for call in raw_calls:
-            function = call.get("function") if isinstance(call, dict) and call.get("type") == "function" else None
-            if not isinstance(function, dict):
-                raise ValueError("Final action requires native function calls")
-            name, arguments = function.get("name"), function.get("arguments")
-            if not isinstance(name, str) or not name or not isinstance(arguments, str):
-                raise ValueError("Final function calls require a name and argument string")
-            calls.append(FunctionCall(name, arguments))
-        if calls:
-            return SubmittedCalls(tuple(calls))
-    content = message.get("content")
-    if not isinstance(content, str):
-        raise ValueError("Final action requires a message or function call")
-    return SubmittedMessage(content)
 
 
 def _arguments_match(expected: Any, actual: Any, config: ToolCallComparatorConfig) -> bool:
@@ -66,26 +25,6 @@ def _arguments_match(expected: Any, actual: Any, config: ToolCallComparatorConfi
     return expected == actual
 
 
-def parse_arguments(arguments: str) -> dict[str, Any]:
-    """Decode a native function's JSON object without accepting duplicate keys."""
-
-    def reject_constant(value: str) -> None:
-        raise ValueError(f"Non-finite JSON argument: {value}")
-
-    def parse_float(value: str) -> float:
-        number = float(value)
-        if not isfinite(number):
-            raise ValueError("Non-finite JSON argument")
-        return number
-
-    value = json.loads(
-        arguments, object_pairs_hook=_object_with_unique_fields, parse_constant=reject_constant, parse_float=parse_float
-    )
-    if not isinstance(value, dict):
-        raise ValueError("Function-call arguments must be a JSON object")
-    return value
-
-
 def _call_matches(expected: FunctionCall, actual: FunctionCall, config: ToolCallComparatorConfig) -> bool:
     if expected.name != actual.name:
         return False
@@ -93,7 +32,7 @@ def _call_matches(expected: FunctionCall, actual: FunctionCall, config: ToolCall
         expected_arguments = parse_arguments(expected.arguments)
         actual_arguments = parse_arguments(actual.arguments)
         return _arguments_match(expected_arguments, actual_arguments, config)
-    except (json.JSONDecodeError, ValueError):
+    except (ValueError, TypeError):
         return False
 
 
