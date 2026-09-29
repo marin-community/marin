@@ -934,18 +934,17 @@ def _accumulated_loss_and_grads(
     num_microbatches: int, params, batch, mp: jmp.Policy, z_loss, step, loop_active, router_tie_active
 ):
     """``_loss_and_grads`` over ``num_microbatches`` equal slices of ``batch``, one at a time: the loss, gradients
-    and float metrics are averaged, integer metrics (counts) summed. The first microbatch runs outside the scan so
-    its outputs give the accumulator's shapes and shardings."""
+    and float metrics are averaged, integer metrics (counts) summed. Every microbatch runs in one ``lax.scan``
+    body from a zero accumulator, so the forward and backward compile once and one microbatch's activations are
+    live at a time."""
     micro = reshape_batch_into_microbatches(batch, num_microbatches)
 
     def one(microbatch):
         return _loss_and_grads(params, microbatch, mp, z_loss, step, loop_active, router_tie_active=router_tie_active)
 
-    def add(total, new):
-        return jax.tree.map(jnp.add, total, new)
-
-    first = one(jax.tree.map(lambda x: x[0], micro))
-    total, _ = jax.lax.scan(lambda acc, mb: (add(acc, one(mb)), None), first, jax.tree.map(lambda x: x[1:], micro))
+    shapes = jax.eval_shape(one, jax.tree.map(lambda x: x[0], micro))
+    zeros = jax.tree.map(lambda s: jnp.zeros(s.shape, s.dtype, out_sharding=getattr(s.sharding, "spec", None)), shapes)
+    total, _ = jax.lax.scan(lambda acc, mb: (jax.tree.map(jnp.add, acc, one(mb)), None), zeros, micro)
     (loss, metrics), grads = total
 
     def mean(x):
