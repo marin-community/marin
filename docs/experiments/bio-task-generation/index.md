@@ -30,7 +30,7 @@ Recipes specify how to generate and verify concrete task instances. Focused reci
 
 For recipes intended to scale, establish one instance and then target [ten validated, meaningfully varied instances](task-authoring.md#initial-instance-target). Record shared study lineage and document exceptions for useful narrower recipes. This initial target does not cap later generation.
 
-The pipeline has five prompt roles: **discover → inspect → propose → build → challenge**. An independently controlled validation harness owns acceptance. Prompts, schemas, orchestration and validation rules will be version-controlled. See [authoring](task-authoring.md#prompt-and-run-versioning).
+For a selected repository, develop four prompts: **find units → author a task → solve independently → reflect on and validate the task**. Authoring has explicit proposal and construction phases. An LLM reviewer examines solver traces and executable evidence, then recommends acceptance, revision or rejection. Automated checks run between stages, and an independently controlled harness owns acceptance. See [prompt roles and worker contexts](task-authoring.md#prompt-and-run-versioning).
 
 Work should be public: documentation, code, prompts, task inputs, references, graders and validation evidence. Public reference solutions must remain outside solver-visible task inputs. Publication is subject to the source assets' redistribution terms; see [storage](storage.md).
 

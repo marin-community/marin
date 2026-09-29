@@ -128,14 +128,27 @@ Use bounded parallel workers and resumable candidate states when implementation 
 
 Version prompts, output schemas, orchestration and validation rules together. Keep shared [requirements](requirements.md) authoritative and reusable; separate instructions from task-specific structured inputs.
 
-| Prompt role | Output |
-| --- | --- |
-| Discover | Evidence-backed repository candidates matching search criteria |
-| Inspect | Grounded source records with runnable examples and limitations |
-| Propose | Scientific task specifications, variations and verification plans |
-| Build | Harbor package, input manifest, native reference and executable grader |
-| Challenge | Ambiguities, shortcuts and runnable incorrect submissions with expected grader outcomes |
+For a selected repository, use four prompt roles. Finding repositories remains an upstream [discovery activity](discovery.md#discovery-prompt).
+
+| Prompt role | Inputs | Outputs |
+| --- | --- | --- |
+| Find units | Repository and any supplied scientific focus or dataset inventory | Tutorials, functions, notebook sections, workflow stages and associated data, with source locations, revisions, dependencies and scientific uses |
+| Author a task | A unit or related group of units, surrounding source context and compatible data | A saved scientific proposal, followed by a Harbor package, input manifest, native reference and executable grader |
+| Solve independently | Only solver-visible instructions, inputs and tools | Submitted artifacts and a recorded execution trace |
+| Reflect on and validate the task | Task package, reference, grader, automated checks, solver submissions and traces | Evidence-backed task critique, proposed revisions and an accept/revise/reject recommendation |
+
+### Worker contexts and handoffs
+
+Start with one explorer per repository and an author for each candidate task. A unit is an inspection starting point: one tutorial may yield several tasks, and several functions may support one task. Let authors inspect adjacent code and combine related units. Discover datasets alongside units and record them in the [reusable input collection](discovery.md#reusable-input-collection); the author checks suitability and prepares inputs for its task.
+
+Initially, reuse the author's context across proposal, construction and repair. Save the proposal before building and record changes when construction exposes missing assumptions. The separate phase outputs make these jobs inspectable without requiring a separate LLM worker for each phase. Model choice and worker concurrency remain independent configuration decisions.
+
+Use a fresh solver context for each independent trial, isolated from the reference and grader internals. Existing agent instructions may supply most of the solve prompt, with the generated task providing the problem statement. A separate validation reviewer can combine adversarial inspection and trace analysis. Send its concrete findings to the author for repair, then repeat affected checks and trials. See [reflection on solver attempts](validation.md#reflection-on-solver-attempts).
+
+Automated Harbor execution, reference and grader checks are harness operations between these roles. The reviewer recommends a disposition; it cannot waive required evidence or edit the acceptance decision. LLM review during development does not introduce an LLM into the released reward.
+
+### Versioned artifacts
 
 For each run record the prompt revision, resolved prompt, structured inputs, source revisions/hashes, model configuration, orchestration/validation revisions, outputs and results. These enable auditing and reruns, not deterministic model generation. Exclude credentials from records.
 
-Develop prompts using the [pipeline development testbed](index.md#pipeline-development-testbed), including Scanpy, STAR–DESeq2 and author-familiar paper repositories. Revisit affected cases when the pipeline or prompts change, comparing task framing and verification before scaling. Independent trial solves use only solver-visible materials and remain separate from challenge inspection that exposes hidden answers. Prompt files and worker implementations are future work; these pages specify their roles and contracts.
+Develop prompts using the [pipeline development testbed](index.md#pipeline-development-testbed). Revisit affected cases when the pipeline or prompts change, comparing task framing and verification before scaling. The current [repository-to-proposal prompt](prompts/propose.md) covers source inspection and proposal generation. Separate unit discovery and extend task authoring to construction as the four prompts are developed; worker orchestration and the other prompt files remain to be implemented.

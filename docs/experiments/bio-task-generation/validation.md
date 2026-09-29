@@ -2,7 +2,7 @@
 
 [Planning overview](index.md) · [Task requirements](requirements.md)
 
-An independently controlled harness validates each candidate. An authoring or challenge model may identify problems, but its opinion cannot substitute for executable evidence or scientific review. Passing an oracle alone is insufficient: the oracle and grader can share the same error.
+An independently controlled harness validates each candidate using executable checks, independent trial solves and LLM review of task design and solver behavior. A model's recommendation must cite evidence and cannot substitute for required execution or scientific review. Passing an oracle alone is insufficient: the oracle and grader can share the same error.
 
 ## Required evidence
 
@@ -23,9 +23,27 @@ Run its artifacts through the executable grader, then inspect failures for incom
 
 These trials validate usability; collecting teacher traces for downstream training remains out of scope. Define the ongoing sampling policy before scaling, and retain human spot checks of scientific validity.
 
+## Reflection on solver attempts
+
+Give a validation reviewer the task instructions, inputs, reference, grader, automated results, and the independent solver's commands, intermediate outputs, errors, final submission and reward. Its job is to assess what the attempt reveals about the task. This review uses a separate context from the author and the blind solver; the reviewer may inspect hidden reference and grading artifacts.
+
+Require findings to cite concrete task artifacts or trace events. Examine whether:
+
+- The solver performed the intended scientific work or found a shortcut that bypassed it.
+- Instructions and inputs supported the required decisions, including points where the solver struggled.
+- The reference and grader preserve the scientific objective and handle reasonable alternative solutions.
+- The grader accepted a scientifically wrong result or rejected a valid one.
+- Changes to instructions, inputs, environment or grading would address an observed problem.
+
+The same reviewer can perform adversarial inspection and trace reflection. It may construct alternative valid answers and deliberately wrong submissions for execution through the grader. Preserve expected and observed outcomes; an unexecuted critique remains a hypothesis.
+
+Return an accept/revise/reject recommendation, supporting evidence, unresolved questions, and concrete repairs with the checks or trials to repeat. A successful solve alone does not establish task quality, and a failed solve alone does not establish a defect. Distinguish infrastructure failures, incomplete attempts, task ambiguity and scientific mistakes. One trace can expose a specific problem; use additional attempts when a proposed revision depends on whether behavior is systematic or solver-specific.
+
+Send findings back to the author, record the resulting task revision, and rerun affected checks and independent trials. The reviewer supplies development feedback; released rewards remain deterministic functions of artifacts and verifier code. Human scientific spot checks remain part of the review policy.
+
 ## Acceptance record
 
-Record exact task, input, environment, prompt and validator revisions; the scientific contract; resource measurements; native-reference results; repeatability checks; independent checks; incorrect-submission outcomes; trial findings where required; and redistribution eligibility. Link artifacts and unresolved concerns.
+Record exact task, input, environment, prompt and validator revisions; the scientific contract; resource measurements; native-reference results; repeatability checks; independent checks; incorrect-submission outcomes; trial traces and reviewer findings where required; repairs and subsequent validation results; and redistribution eligibility. Link artifacts and unresolved concerns.
 
 A released task needs passing executable evidence, resolved scientific ambiguities and publication eligibility. Keep other candidates explicitly pending or rejected. Do not count discovery, implementation or a package-loading check as a released task.
 
