@@ -149,9 +149,9 @@ def test_job_already_exists_without_handle():
 
 
 def test_submit_with_adopt_existing_false_default(client: Client):
-    """By default, adopt_existing=True and LocalClient doesn't enforce uniqueness."""
-    # LocalClient doesn't track job names, so calling submit twice with the same name
-    # creates two separate jobs (no exception)
+    """By default, adopt_existing=True and neither backend enforces name uniqueness."""
+    # Neither LocalClient nor RayClient tracks job names, so submitting the same name
+    # twice creates two separate jobs (no exception)
     h1 = client.submit(JobRequest(name="same-name", entrypoint=Entrypoint.from_callable(_noop)))
     h2 = client.submit(JobRequest(name="same-name", entrypoint=Entrypoint.from_callable(_noop)))
     # Both jobs should succeed independently
@@ -161,8 +161,8 @@ def test_submit_with_adopt_existing_false_default(client: Client):
 
 
 def test_submit_with_adopt_existing_true(client: Client):
-    """When adopt_existing=True, LocalClient still doesn't enforce uniqueness."""
-    # LocalClient doesn't track job names, so adopt_existing has no effect
+    """With adopt_existing=True the backends under test still do not enforce uniqueness."""
+    # Job names are not tracked by either backend, so adopt_existing has no effect
     h1 = client.submit(JobRequest(name="same-name", entrypoint=Entrypoint.from_callable(_noop)), adopt_existing=True)
     h2 = client.submit(JobRequest(name="same-name", entrypoint=Entrypoint.from_callable(_noop)), adopt_existing=True)
     # Both jobs should succeed independently

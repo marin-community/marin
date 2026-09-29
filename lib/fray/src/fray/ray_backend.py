@@ -12,10 +12,10 @@ driver's actors when the driver dies and a coordinator's worker group when the
 coordinator dies, matching Iris's cascading termination. Handles pickle to
 ``namespace/name-index`` and re-resolve through ``ray.get_actor`` in any
 process of the cluster. Inside tasks and actors ``current_client()`` finds this
-backend through ``FRAY_BACKEND=ray``: ``connect`` records that marker, plus any
-``runtime_env`` the caller passes (for example ``py_executable``), and every
-task and actor this client creates carries it in its own Ray runtime env, so
-workers started under a pinned interpreter see the same backend and environment.
+backend through ``FRAY_BACKEND=ray``: ``connect`` records that marker plus any
+``runtime_env`` the caller passes (for example ``py_executable``) on the client,
+and every task and actor the client creates carries it in its own Ray runtime
+env, so workers started under a pinned interpreter see the same backend.
 
 Import this module directly (``from fray.ray_backend import RayClient``); core
 fray modules never import it, so ``ray`` stays an optional dependency.
@@ -33,7 +33,7 @@ import uuid
 from collections.abc import Callable, Iterable
 from concurrent.futures import Future
 from dataclasses import dataclass
-from typing import Any, ClassVar
+from typing import Any, TextIO
 
 import humanfriendly
 import ray
@@ -228,7 +228,7 @@ class _LineSink:
 class _TeeStream(_LineSink):
     """A stdout/stderr replacement that records lines and forwards writes to the original stream."""
 
-    def __init__(self, stream: Any, lines: collections.deque[str]):
+    def __init__(self, stream: TextIO, lines: collections.deque[str]):
         super().__init__(lines)
         self._stream = stream
 
@@ -282,10 +282,9 @@ def _run_entrypoint(entrypoint: Entrypoint) -> None:
     if entrypoint.callable_entrypoint is not None:
         _run_callable(entrypoint.callable_entrypoint)
         return
-    if entrypoint.binary_entrypoint is not None:
-        _run_binary(entrypoint.binary_entrypoint)
-        return
-    raise ValueError("JobRequest entrypoint must have either callable_entrypoint or binary_entrypoint")
+    # submit() rejects an entrypoint with neither form before it reaches a worker.
+    assert entrypoint.binary_entrypoint is not None
+    _run_binary(entrypoint.binary_entrypoint)
 
 
 # max_retries is set per submission from JobRequest.max_retries_failure; the decorator default
@@ -435,11 +434,8 @@ class RayJobHandle:
 class _ActorHost:
     """Generic Ray actor that hosts one fray actor instance and serves its methods.
 
-    The constructor is attempted ``max_init_attempts`` times (Iris retries a
-    replica's initialisation ``max_task_retries`` times). A final failure is
-    kept (not raised) so ``ready()`` can re-raise it with the exact class;
-    raising from a Ray ``__init__`` would only surface as an ``ActorDiedError``
-    without the cause. The group kills such a member once its probe reports.
+    The constructor is attempted ``max_init_attempts`` times; a final failure
+    is reported through ``ready()`` and the group kills the member.
     """
 
     def __init__(
@@ -461,6 +457,8 @@ class _ActorHost:
         try:
             self._instance = self._construct(actor_class, args, kwargs, max_init_attempts)
         except BaseException as exc:
+            # Kept, not raised: raising from a Ray __init__ surfaces only as an
+            # ActorDiedError without the cause, while ready() can re-raise the exact class.
             self._init_error = exc
             return
         finally:
@@ -532,7 +530,7 @@ class RayActorHandle:
 
     def __init__(self, endpoint: str):
         self._endpoint = endpoint
-        self._actor: Any = None
+        self._actor: ray.actor.ActorHandle | None = None
         self._lock = threading.Lock()
 
     def __repr__(self) -> str:
@@ -633,15 +631,14 @@ class RayActorGroup:
     on Iris. ``wait_ready`` raises that constructor error only once the
     requested count can no longer be reached.
 
-    Pickles to ``(name, namespace, count, job_id)``; a receiving process
-    re-resolves members by name.
+    Pickles to ``(name, namespace, count)``; a receiving process re-resolves
+    members by name.
     """
 
-    def __init__(self, name: str, namespace: str, count: int, job_id: str):
+    def __init__(self, name: str, namespace: str, count: int):
         self.name = name
         self.namespace = namespace
         self.count = count
-        self._job_id = job_id
         self.handles = [RayActorHandle(f"{namespace}/{name}-{i}") for i in range(count)]
         self._ready: set[int] = set()
         self._yielded: set[int] = set()
@@ -650,10 +647,10 @@ class RayActorGroup:
         self._probes: dict[ray.ObjectRef, int] = {}
 
     def __getstate__(self) -> dict[str, Any]:
-        return {"name": self.name, "namespace": self.namespace, "count": self.count, "job_id": self._job_id}
+        return {"name": self.name, "namespace": self.namespace, "count": self.count}
 
     def __setstate__(self, state: dict[str, Any]) -> None:
-        self.__init__(state["name"], state["namespace"], state["count"], state["job_id"])  # type: ignore[misc]
+        self.__init__(state["name"], state["namespace"], state["count"])  # type: ignore[misc]
 
     def _member_name(self, index: int) -> str:
         return f"{self.name}-{index}"
@@ -754,15 +751,12 @@ class RayActorGroup:
         return self._take(self._ready - self._yielded)
 
     def is_done(self) -> bool:
-        """True once no member is registered any more (exhausted restarts, clean exit, killed, or failed init).
-
-        Membership comes from ``list_named_actors``: the owner's pinned creation
-        handle keeps ``ray.get_actor`` resolving a dead actor, but the registry
-        drops it as soon as it dies.
-        """
+        """True once no member is registered any more (exhausted restarts, clean exit, killed, or failed init)."""
         self._collect_ready(timeout=0)
         if len(self._dead) == self.count:
             return True
+        # The owner's pinned creation handle keeps ray.get_actor resolving a dead actor;
+        # the named-actor registry drops it as soon as it dies.
         registered = {
             entry["name"]
             for entry in ray.util.list_named_actors(all_namespaces=True)
@@ -807,16 +801,18 @@ class RayClient:
     # Applied to every actor and task this backend creates. A job-level runtime env set
     # at ``ray.init`` does not reach workers started for actors under a pinned
     # interpreter, and nested drivers must forward the backend marker themselves.
-    _worker_runtime_env: ClassVar[dict[str, Any]] = {"env_vars": {BACKEND_ENV: RAY_BACKEND}}
-
-    def __init__(self, namespace: str, owns_runtime: bool):
+    def __init__(self, namespace: str, owns_runtime: bool, worker_runtime_env: dict[str, Any] | None = None):
         self.namespace = namespace
         self._owns_runtime = owns_runtime
+        # Attached to every task and actor this client creates. Workers that attach()
+        # add only the backend marker; Ray hands them the job-level env (for example
+        # py_executable) that connect() recorded on the driver.
+        self._worker_runtime_env = worker_runtime_env or {"env_vars": {BACKEND_ENV: RAY_BACKEND}}
         self._jobs: list[RayJobHandle] = []
         # Creation handles by endpoint. Ray reaps an owned actor once its creation handle is
         # collected, so the client pins them until kill_actors(): an actor lives for the
         # client's lifetime, not for the lifetime of whichever handle the caller kept.
-        self._owned_actors: dict[str, Any] = {}
+        self._owned_actors: dict[str, ray.actor.ActorHandle] = {}
         self._closed = False
 
     @classmethod
@@ -868,8 +864,7 @@ class RayClient:
                 runtime_env=runtime_env,
                 **init_kwargs,
             )
-            cls._worker_runtime_env = runtime_env
-            client = cls(ray.get_runtime_context().namespace, owns_runtime=True)
+            client = cls(ray.get_runtime_context().namespace, owns_runtime=True, worker_runtime_env=runtime_env)
         os.environ[BACKEND_ENV] = RAY_BACKEND
         with cls._attach_lock:
             if cls._attached is None:
@@ -930,9 +925,9 @@ class RayClient:
             "max_retries": request.max_retries_failure,
             **ray_options(request.resources),
         }
-        runtime_env = {**type(self)._worker_runtime_env, **(ray_runtime_env(request.environment) or {})}
+        runtime_env = {**self._worker_runtime_env, **(ray_runtime_env(request.environment) or {})}
         runtime_env["env_vars"] = {
-            **type(self)._worker_runtime_env.get("env_vars", {}),
+            **self._worker_runtime_env.get("env_vars", {}),
             **runtime_env.get("env_vars", {}),
         }
         options["runtime_env"] = runtime_env
@@ -1015,20 +1010,21 @@ class RayClient:
         """
         options = {
             "namespace": self.namespace,
-            "runtime_env": type(self)._worker_runtime_env,
+            "runtime_env": self._worker_runtime_env,
             # Ray packs one-CPU actors onto the first node with room; a multi-node
             # cluster only helps if the group is spread across its nodes.
             "scheduling_strategy": "SPREAD",
             **ray_options(resources, actor_config),
         }
         max_init_attempts = 1 + (actor_config.max_task_retries or 0)
-        group = RayActorGroup(name, self.namespace, count, job_id=f"ray-actor-{name}-{uuid.uuid4().hex[:8]}")
-        created: list[Any] = []
+        group = RayActorGroup(name, self.namespace, count)
+        created: list[ray.actor.ActorHandle] = []
         try:
             for index in range(count):
                 member = group._member_name(index)
                 try:
-                    actor = _RemoteActorHost.options(name=member, **options).remote(
+                    # ray.remote() is typed as a union with the class itself; at runtime it is a handle.
+                    actor: ray.actor.ActorHandle = _RemoteActorHost.options(name=member, **options).remote(  # type: ignore[assignment]
                         f"{self.namespace}/{member}", index, name, actor_class, args, kwargs, max_init_attempts
                     )
                 except ActorAlreadyExistsError as exc:

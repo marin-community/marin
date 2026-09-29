@@ -44,9 +44,7 @@ def ray_client():
 @pytest.fixture(params=["local", "ray"])
 def client(request):
     if request.param == "local":
-        client = LocalClient(max_threads=4)
-        yield client
-        client.shutdown(wait=True)
+        yield request.getfixturevalue("local_client")
         return
 
     ray = pytest.importorskip("ray")

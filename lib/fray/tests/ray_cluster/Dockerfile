@@ -2,7 +2,9 @@
 # compiler, with writable mount points for the marin venv, the uv cache and the
 # scratch directory shared by every node. The venv itself is synced at head start
 # from the bind-mounted checkout (see head.sh), so the image never embeds the repo.
-FROM rayproject/ray:2.58.0-py312
+ARG RAY_VERSION=2.58.0
+FROM rayproject/ray:${RAY_VERSION}-py312
+ARG RAY_VERSION
 
 USER root
 RUN apt-get update \
@@ -16,4 +18,5 @@ ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
     UV_CACHE_DIR=/opt/uv-cache \
     UV_PYTHON=/home/ray/anaconda3/bin/python \
     UV_LINK_MODE=copy \
-    RAY_ENABLE_UV_RUN_RUNTIME_ENV=0
+    RAY_ENABLE_UV_RUN_RUNTIME_ENV=0 \
+    RAY_VERSION=${RAY_VERSION}
