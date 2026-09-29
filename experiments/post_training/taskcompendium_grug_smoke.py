@@ -117,7 +117,9 @@ def task_packages_step(version: str) -> ArtifactStep[Artifact]:
         run=remote(
             write_task_packages,
             resources=ResourceConfig.with_cpu(cpu=2, ram="8g", disk="8g"),
-            pip_packages=[TASKCOMPENDIUM_REQUIREMENT],
+            # Harbor's LiteLLM dependency can upgrade botocore without upgrading
+            # the aiobotocore version in Marin's locked CPU environment.
+            pip_packages=[TASKCOMPENDIUM_REQUIREMENT, "boto3==1.41.5", "botocore==1.41.5"],
         ),
         build_config=lambda ctx: TaskPackagesConfig(
             output_path=ctx.output_path, taskcompendium_commit=TASKCOMPENDIUM_COMMIT
