@@ -96,7 +96,7 @@ def _events(request: dict[str, Any]) -> tuple[TextMessage | AssistantToolCalls |
                 raise ValueError("unsupported source reasoning item")
             reasoning_without_visible_result = True
             continue  # Historical reasoning is omitted; its visible result must follow.
-        if item.get("type") == "function_call":
+        if item.get("type") == FUNCTION_CALL_TYPE:
             if not all(isinstance(item.get(key), str) and item[key] for key in ("call_id", "name", "arguments")):
                 raise ValueError("source function calls require call_id, name, and arguments")
             pending_calls.append(
