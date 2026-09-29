@@ -14,6 +14,7 @@ Options:
   --suite NAME       all, nonagentic, agentic, or terminal-bench. Default: all.
   --evalchemy NAME   Select one Evalchemy config basename; repeatable. Default: all.
   --harbor NAME      Select one Harbor config basename; repeatable. Default: all.
+  --version LABEL    Attach a submitter-controlled cohort label. Not policy attestation.
   --submit           Submit jobs. Without this flag every launch is a dry run.
   --wait             Wait for each submitted model before launching the next.
   --help             Show this help.
@@ -25,6 +26,7 @@ EOF
 
 submit=0
 suite=all
+version=
 models=()
 selected_evalchemy_names=()
 selected_harbor_names=()
@@ -48,6 +50,12 @@ while [ "$#" -gt 0 ]; do
     --suite)
       [ "$#" -ge 2 ] || die "--suite requires a value"
       suite=$2
+      shift 2
+      ;;
+    --version)
+      [ "$#" -ge 2 ] || die "--version requires a value"
+      [ -n "$2" ] || die "--version requires a non-empty value"
+      version=$2
       shift 2
       ;;
     --submit)
@@ -125,6 +133,9 @@ for model in "${models[@]}"; do
     --federated_cluster "$FEDERATED_CLUSTER"
     --priority "$PRIORITY"
   )
+  if [ -n "$version" ]; then
+    base_arguments+=(--version "$version")
+  fi
   if [ "$suite" = all ] || [ "$suite" = nonagentic ]; then
     arguments=("${base_arguments[@]}")
     for name in "${evalchemy_names[@]}"; do

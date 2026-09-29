@@ -12,6 +12,10 @@ policy. Policy conformance requires the independently trusted evidence and verif
 in [PR #9461](https://github.com/marin-community/marin/pull/9461) must consume that trusted decision
 before presenting a run as policy-conformant.
 
+Pass `--version LABEL` only when a submitter-controlled cohort label is useful. The launcher forwards
+the label to Marin unchanged. It remains provenance metadata and does not alter the conformance
+boundary above.
+
 From a clean checkout of the campaign's pinned Marin commit:
 
 ```bash
