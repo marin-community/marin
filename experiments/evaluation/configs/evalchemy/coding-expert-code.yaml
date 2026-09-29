@@ -1,0 +1,24 @@
+tasks: [HumanEvalPlus, MBPPPlus, CruxEval]
+task_options:
+  HumanEvalPlus:
+    num_fewshot: 0
+    task_alias: humanevalplus
+    generation: true
+    unsafe_code: true
+  MBPPPlus:
+    num_fewshot: 0
+    task_alias: mbppplus
+    generation: true
+    unsafe_code: true
+  CruxEval:
+    num_fewshot: 0
+    task_alias: cruxeval
+    generation: true
+apply_chat_template: true
+batch_size: 1
+seed: 42
+# URL-safe base64 JSON for {"enable_thinking": false}. Evalchemy forwards it to
+# vLLM as chat_template_kwargs, as required by the canonical evaluation policy.
+extra_model_args:
+  chat_template_kwargs: base64:eyJlbmFibGVfdGhpbmtpbmciOmZhbHNlfQ==
+runtime_extras: [humanevalplus, mbppplus, cruxeval]

@@ -1,0 +1,13 @@
+tasks: [IFBench]
+task_options:
+  IFBench:
+    num_fewshot: 0
+    task_alias: ifbench
+    generation: true
+apply_chat_template: true
+batch_size: 1
+seed: 42
+# URL-safe base64 JSON for {"enable_thinking": false}.
+extra_model_args:
+  chat_template_kwargs: base64:eyJlbmFibGVfdGhpbmtpbmciOmZhbHNlfQ==
+runtime_extras: [ifbench]

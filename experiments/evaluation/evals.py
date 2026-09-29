@@ -295,6 +295,8 @@ _STANDARD_EVALCHEMY_EVALS: tuple[str, ...] = (
     "mmlu-pro",
     "gpqa-diamond",
     "cruxeval",
+    "coding-expert-code",
+    "coding-expert-ifbench",
     "financebench",
     "ifeval",
     "ifbench",
