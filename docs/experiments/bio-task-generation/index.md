@@ -44,6 +44,10 @@ Revisit these examples when changing discovery, recipe extraction, instance gene
 | [Snakemake STAR–DESeq2 workflow](https://snakemake.github.io/snakemake-workflow-catalog/docs/workflows/snakemake-workflows/rna-seq-star-deseq2.html), with our [worked example](examples/star-deseq2.md) | Use rule boundaries and dependencies; preserve scientific decisions while composing stages and subsetting data |
 | Gonzalo Benegas's [papers](https://gonzalobenegas.github.io/), [Scholar profile](https://scholar.google.com/citations?user=tJbZmiUAAAAJ) and [repositories](https://github.com/gonzalobenegas) | Find useful tasks in paper-specific code with varying documentation and portability; obtain feedback from a researcher familiar with the original scientific intent |
 | [Tim O'Donnell's work](https://timodonnell.github.io/) | Add collaborator-familiar papers and software as further cases for reviewing scientific task framing; select specific examples as the pipeline develops |
+| [bedtools](https://bedtools.readthedocs.io/en/latest/) | Review genomic interval operations and their composition into scientific workflows |
+| [UCSC Genome Browser binaries](https://hgdownload.soe.ucsc.edu/admin/exe/), with their [source code](https://github.com/ucscGenomeBrowser/kent/tree/master/src/utils) | Review tasks built around standalone command-line utilities, including their input/output conventions |
+
+Gonzalo Benegas has substantial experience using bedtools and the UCSC Genome Browser binaries. Use that familiarity to guide manual review of their task framing and expected outputs.
 
 For a proposed pipeline change, compare the resulting question, recipe boundary, input adaptation, meaningful instance variation and deterministic grading contract on the affected cases. Check whether the framing preserves the scientific work and whether source-code limitations are being confused with lack of scientific value. Record concrete examples and unresolved questions for review. Author feedback informs this review; it does not serve as grading-time judgment.
 
