@@ -71,7 +71,7 @@ def snowball_recipe(
         settings,
         marin_commit=marin_commit,
         skyrl_commit=skyrl_commit,
-        extra_trainer_modes=REPLAY_MODES if campaign is Campaign.MISMATCH else (),
+        extra_trainer_modes=REPLAY_MODES if replay else (),
     )
     config = {
         "entrypoint": "standard",
@@ -216,8 +216,15 @@ def build_run(
 
 
 @click.command(help=__doc__)
-@click.option("--campaign", type=click.Choice(list(Campaign)), default=Campaign.MISMATCH, show_default=True)
-@click.option("--routing", type=click.Choice(list(Routing)), default=Routing.NATIVE, show_default=True)
+@click.option(
+    "--campaign",
+    type=click.Choice([mode.value for mode in Campaign]),
+    default=Campaign.MISMATCH.value,
+    show_default=True,
+)
+@click.option(
+    "--routing", type=click.Choice([mode.value for mode in Routing]), default=Routing.NATIVE.value, show_default=True
+)
 @click.option("--runtime-commit", required=True)
 @click.option("--cluster", type=click.Choice(("cw-us-east-02a", "cw-rno2a")), default=SNOWBALL_POLICY.cluster)
 @click.option("--data-uri", default=HELDOUT_DATA_URI, show_default=True)
@@ -228,7 +235,7 @@ def build_run(
 @click.option("--batch-size", type=click.IntRange(min=1), default=32, show_default=True)
 @click.option("--prompt-count", type=click.IntRange(min=1), default=16, show_default=True)
 @click.option("--samples-per-prompt", type=click.IntRange(min=1), default=2, show_default=True)
-@click.option("--steps", type=click.IntRange(min=3), default=10, show_default=True)
+@click.option("--steps", type=click.IntRange(min=2), default=2, show_default=True)
 @click.option("--request-window-tokens", type=click.IntRange(min=1), default=2048, show_default=True)
 @click.option("--response-tokens", type=click.IntRange(min=1), default=512, show_default=True)
 @click.option("--keep-fraction", type=click.FloatRange(min=0, max=1), default=0.5, show_default=True)
