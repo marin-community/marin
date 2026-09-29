@@ -33,7 +33,6 @@ from experiments.june_tpu_67b_a2b.moe.optimizer import GrugMoeMuonHConfig
 
 logger = logging.getLogger(__name__)
 RUN_ID = "grug-67b-sft-20260928-special-token-lr-marin-identity-1000"
-OUTPUT = f"gs://marin-us-central2/users/held/grug_sft/{RUN_ID}"
 BASE = (
     "gs://marin-us-central2/grug/"
     "moe_67b_a2b_d2560_ep1_rep1_ctx4_bs256_seq262144_ctxext_step156k_qk175_longctx_skew8-c06695/"
@@ -154,12 +153,12 @@ def _sft_components(
     return components, weights
 
 
-def data_config(steps: int, stores_manifest: str) -> tuple[LmDataConfig, int]:
+def data_config(steps: int, stores_manifest: str, *, mix_path: Path = MIX_PATH) -> tuple[LmDataConfig, int]:
     raw = json.loads(StoragePath(stores_manifest).read_text())
     if not isinstance(raw, dict):
         raise ValueError("SFT stores manifest must be an object")
     stores = {name: _store_info(name, record) for name, record in raw.items()}
-    plan = json.loads(MIX_PATH.read_text())
+    plan = json.loads(mix_path.read_text())
     if steps != plan["steps"]:
         raise ValueError(f"Step count must match the fixed {plan['steps']}-step allocation")
     if plan["batch_size"] != BATCH or plan["context_length"] != CONTEXT:
@@ -232,8 +231,9 @@ def data_config(steps: int, stores_manifest: str) -> tuple[LmDataConfig, int]:
     )
 
 
-def train(steps: int, stores_manifest: str) -> None:
-    data, steps = data_config(steps, stores_manifest)
+def train(steps: int, stores_manifest: str, *, mix_path: Path = MIX_PATH, run_id: str = RUN_ID) -> None:
+    data, steps = data_config(steps, stores_manifest, mix_path=mix_path)
+    output = f"gs://marin-us-central2/users/held/grug_sft/{run_id}"
     metadata = json.loads((StoragePath(BASE) / "metadata.json").read_text())
     assert metadata["step"] == START_STEP
     tokenizer = load_tokenizer(TOKENIZER)
@@ -251,13 +251,13 @@ def train(steps: int, stores_manifest: str) -> None:
         max_seq_len=CONTEXT,
     )
     trainer = TrainerConfig(
-        id=RUN_ID,
+        id=run_id,
         seed=0,
         train_batch_size=BATCH,
         per_device_parallelism=1,
         num_train_steps=START_STEP + steps,
         mp=jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16"),
-        tracker=WandbConfig(entity="marin-community", project="marin_moe_sft", name=RUN_ID, id=RUN_ID, resume="allow"),
+        tracker=WandbConfig(entity="marin-community", project="marin_moe_sft", name=run_id, id=run_id, resume="allow"),
         use_explicit_mesh_axes=True,
         mesh=MeshConfig(axes={"expert": 1, "context": CONTEXT_AXIS_SIZE}, compute_mapping={"batch": ["data", "expert"]}),
         require_accelerator=True,
@@ -265,8 +265,8 @@ def train(steps: int, stores_manifest: str) -> None:
         initialize_from=BASE,
         load_checkpoint=None,
         checkpointer=CheckpointerConfig(
-            base_path=str(StoragePath(OUTPUT) / "checkpoints"),
-            temporary_base_path=temporary_checkpoint_base_path(OUTPUT),
+            base_path=str(StoragePath(output) / "checkpoints"),
+            temporary_base_path=temporary_checkpoint_base_path(output),
             append_run_id_to_base_path=False,
             save_interval=timedelta(minutes=30),
             keep=None,
