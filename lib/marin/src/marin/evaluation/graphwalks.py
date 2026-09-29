@@ -46,6 +46,7 @@ _PREFIX_CHARS_PER_TOKEN = 8
 _MIN_OUTPUT_TOKENS = 4096
 _REASONING_RESERVE = 4096
 _OUTPUT_BUDGET_MULTIPLIER = 2
+_FINAL_ANSWER_PREFIX = "Final Answer:"
 _FINAL_ANSWER = re.compile(r"\[.*\]")
 
 
@@ -106,7 +107,7 @@ class GraphWalksGrade:
 def extract_answer(response: str) -> tuple[list[str], bool]:
     """Extract the last-line answer and report whether parsing failed."""
     line = response.split("\n")[-1]
-    if "Final Answer:" not in line:
+    if _FINAL_ANSWER_PREFIX not in line:
         return [], True
     match = _FINAL_ANSWER.search(line)
     if match is None:
@@ -299,7 +300,7 @@ class GraphWalksExecutor:
                 break
             row = dataset[index]
             prompt = row["prompt"]
-            answer_text = "Final Answer: [" + ", ".join(row["answer_nodes"]) + "]"
+            answer_text = _FINAL_ANSWER_PREFIX + " [" + ", ".join(row["answer_nodes"]) + "]"
             answer_tokens = len(tokenizer.encode(answer_text, add_special_tokens=False))
             required_output_tokens = _OUTPUT_BUDGET_MULTIPLIER * max(
                 _MIN_OUTPUT_TOKENS, answer_tokens + _REASONING_RESERVE
