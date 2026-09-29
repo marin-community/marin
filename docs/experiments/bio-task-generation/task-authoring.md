@@ -133,7 +133,7 @@ For a selected repository, use four prompt roles. Finding repositories remains a
 | Prompt role | Inputs | Outputs |
 | --- | --- | --- |
 | Find units | Repository and any supplied scientific focus or dataset inventory | Tutorials, functions, notebook sections, workflow stages and associated data, with source locations, revisions, dependencies and scientific uses |
-| Author a task | A unit or related group of units, surrounding source context and compatible data | A saved scientific proposal, followed by a Harbor package, input manifest, native reference and executable grader |
+| [Author a task](prompts/author-task.md) | A unit or related group of units, surrounding source context and compatible data | A saved scientific proposal, followed by a Harbor package, input manifest, native reference and executable grader |
 | Solve independently | Only solver-visible instructions, inputs and tools | Submitted artifacts and a recorded execution trace |
 | Reflect on and validate the task | Task package, reference, grader, automated checks, solver submissions and traces | Evidence-backed task critique, proposed revisions and an accept/revise/reject recommendation |
 
@@ -151,4 +151,4 @@ Automated Harbor execution, reference and grader checks are harness operations b
 
 For each run record the prompt revision, resolved prompt, structured inputs, source revisions/hashes, model configuration, orchestration/validation revisions, outputs and results. These enable auditing and reruns, not deterministic model generation. Exclude credentials from records.
 
-Develop prompts using the [pipeline development testbed](index.md#pipeline-development-testbed). Revisit affected cases when the pipeline or prompts change, comparing task framing and verification before scaling. The current [repository-to-proposal prompt](prompts/propose.md) covers source inspection and proposal generation. Separate unit discovery and extend task authoring to construction as the four prompts are developed; worker orchestration and the other prompt files remain to be implemented.
+Develop prompts using the [pipeline development testbed](index.md#pipeline-development-testbed). Revisit affected cases when the pipeline or prompts change, comparing task framing and verification before scaling. The [task-authoring prompt](prompts/author-task.md) consumes discovered units and covers proposal, construction, author checks, handoff and repair from review feedback. Separate unit-discovery and reflection prompts and worker orchestration remain to be implemented; independent solving may reuse the existing agent instructions. The authoring prompt has not yet been trialed on the testbed.
