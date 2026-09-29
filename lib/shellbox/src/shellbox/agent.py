@@ -57,6 +57,7 @@ SHELLSIM_BASH_TOOL = {
 BASH_OUTPUT_LIMIT_BYTES = 128 * 1024
 HOSTED_VLLM_MODEL_PREFIX = "hosted_vllm/"
 HTTP_ERROR_BODY_LIMIT = 4096
+UNSUPPORTED_TOOL_ERROR = "unsupported_tool"
 
 
 def _served_model_name(model: str) -> str:
@@ -169,11 +170,18 @@ class BashAgent(BaseAgent):
                     return
                 for call in calls:
                     name = call["function"]["name"]
-                    arguments = json.loads(call["function"]["arguments"])
                     if name == "Bash":
+                        arguments = json.loads(call["function"]["arguments"])
                         result = _shell_result(await _bash_action(shell, arguments))
                     else:
-                        raise ValueError(f"Unsupported tool: {name}")
+                        self.logger.warning("Model called unsupported tool %r; requesting Bash instead", name)
+                        result = json.dumps(
+                            {
+                                "error": UNSUPPORTED_TOOL_ERROR,
+                                "message": f"Tool {name!r} is not available. Use the Bash tool.",
+                                "available_tools": ["Bash"],
+                            }
+                        )
                     messages.append(
                         {
                             "role": "tool",

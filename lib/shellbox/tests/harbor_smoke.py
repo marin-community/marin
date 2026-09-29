@@ -24,8 +24,27 @@ class ModelHandler(BaseHTTPRequestHandler):
         assert request["max_tokens"] == 123
         assert [tool["function"]["name"] for tool in request["tools"]] == ["Bash"]
         assert request["chat_template_kwargs"] == {"enable_thinking": False}
-        completed = sum(message["role"] == "tool" for message in request["messages"])
-        if completed >= len(self.bash_commands):
+        tool_messages = [message for message in request["messages"] if message["role"] == "tool"]
+        unsupported = [
+            message for message in tool_messages if json.loads(message["content"]).get("error") == "unsupported_tool"
+        ]
+        completed = len(tool_messages) - len(unsupported)
+        if not tool_messages:
+            message = {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_unsupported",
+                        "type": "function",
+                        "function": {
+                            "name": "WriteFile",
+                            "arguments": json.dumps({"path": "/workspace/answer.txt", "content": "wrong tool"}),
+                        },
+                    }
+                ],
+            }
+        elif completed >= len(self.bash_commands):
             message = {"role": "assistant", "content": "Done."}
         else:
             message = {
@@ -105,7 +124,15 @@ async def main(
             "assistant",
             "tool",
             "assistant",
+            "tool",
+            "assistant",
         ]
+        error = json.loads(metadata["all_messages"][3]["content"])
+        assert error == {
+            "error": "unsupported_tool",
+            "message": "Tool 'WriteFile' is not available. Use the Bash tool.",
+            "available_tools": ["Bash"],
+        }
         print(f"Harbor smoke passed: reward={mean}")
     finally:
         server.shutdown()
