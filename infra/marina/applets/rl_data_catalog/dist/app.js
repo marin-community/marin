@@ -12,11 +12,25 @@ const date = (value) => value ? new Date(value).toLocaleDateString("en-US", {mon
 function node(tag, text, className) { const element = document.createElement(tag); if (text !== undefined) element.textContent = text; if (className) element.className = className; return element; }
 function link(text, url) { const element = node("a", text); if (url && /^https:\/\//.test(url)) element.href = url; element.target = "_blank"; element.rel = "noopener"; return element; }
 function chip(text, className) { return node("span", text || "Unclassified", `chip ${className || ""}`); }
+function matchesDifficulty(row) {
+  const selection = $("difficulty").value;
+  if (selection === "all") return true;
+  if (selection === "measured") return Boolean(row.difficulty_summary);
+  if (selection === "unmeasured") return !row.difficulty_summary;
+  const model = row.difficulty_summary?.models.find(model => model.size === "large");
+  if (!model?.verified) return false;
+  const percent = 100 * model.solved / model.verified;
+  const [lower, upper] = selection.split("-").map(Number);
+  return (lower === 0 ? percent >= 0 : percent > lower) && percent <= upper;
+}
 function filtered() {
   const search = $("search").value.trim().toLowerCase();
   const rows = state.sources.filter(row =>
     (state.origin === "all" || row.origin === state.origin) &&
     ($("excluded").checked || row.status !== "Excluded") &&
+    ($("show-bad").checked || row.quality !== "bad") &&
+    ($("quality").value === "all" || ($("quality").value === "unknown" ? !row.quality : row.quality === $("quality").value)) &&
+    matchesDifficulty(row) &&
     ($("type").value === "all" || ($("type").value === "unknown" ? !row.type : row.type === $("type").value)) &&
     ($("turns").value === "all" || row.turns === $("turns").value) &&
     ($("environment").value === "all" || row.environment === $("environment").value) &&
@@ -76,7 +90,7 @@ function render() {
   }
   $("rows").replaceChildren(fragment);$("empty").hidden=rows.length > 0 || state.sources.length === 0;
   const excluded = state.sources.filter(row=>row.status === "Excluded").length;
-  $("result-count").textContent=`${number.format(rows.length)} of ${number.format(state.sources.length)} entries · ${excluded} excluded sources${$("excluded").checked ? " included" : " hidden"}`;
+  $("result-count").textContent=`${number.format(rows.length)} of ${number.format(state.sources.length)} entries · ${excluded} excluded sources${$("excluded").checked ? " included" : " hidden"} · bad quality ${$("show-bad").checked ? "included" : "hidden"}`;
   const errors=state.refreshes.filter(item=>item.error);
   $("metric-status").replaceChildren(node("span",state.refreshing ? "Checking…" : state.error || errors.length ? "Needs attention" : state.refreshes.length === 2 ? "Up to date" : "Awaiting sync"),node("span",undefined,"live-dot"));
   const checked=state.refreshes.map(item=>item.checked_at).filter(Boolean).sort()[0];
@@ -105,9 +119,11 @@ async function refresh(force=false) {
   }catch(error){showError(error);}finally{state.refreshing=false;$("refresh").disabled=false;render();}
 }
 function showError(error){state.error=true;$("sync-banner").className="sync-banner warning";$("sync-banner").textContent=`${error.message}. Saved sources remain available; retry with Refresh sources.`;$("metric-status").textContent="Needs attention";}
-for(const id of ["type","turns","environment","benchmark","excluded"]) $(id).addEventListener("change",render);$("search").addEventListener("input",render);
+for(const id of ["type","turns","environment","benchmark","difficulty","excluded"]) $(id).addEventListener("change",render);$("search").addEventListener("input",render);
+$("quality").addEventListener("change",()=>{if($("quality").value === "bad")$("show-bad").checked=true;render();});
+$("show-bad").addEventListener("change",()=>{if(!$("show-bad").checked && $("quality").value === "bad")$("quality").value="all";render();});
 for(const button of document.querySelectorAll(".tab"))button.addEventListener("click",()=>{state.origin=button.dataset.origin;for(const other of document.querySelectorAll(".tab"))other.classList.toggle("selected",other===button);render();});
-$("reset").addEventListener("click",()=>{for(const id of ["type","turns","environment","benchmark"])$(id).value="all";$("search").value="";$("excluded").checked=false;state.origin="all";for(const button of document.querySelectorAll(".tab"))button.classList.toggle("selected",button.dataset.origin==="all");render();});
+$("reset").addEventListener("click",()=>{for(const id of ["type","turns","environment","benchmark","quality","difficulty"])$(id).value="all";$("search").value="";$("excluded").checked=false;$("show-bad").checked=false;state.origin="all";for(const button of document.querySelectorAll(".tab"))button.classList.toggle("selected",button.dataset.origin==="all");render();});
 $("refresh").addEventListener("click",()=>refresh(true));$("close-details").addEventListener("click",()=>$("details").close());
 document.addEventListener("keydown",event=>{if(event.key==="/" && !["INPUT","SELECT","TEXTAREA"].includes(document.activeElement.tagName) && !$("details").open){event.preventDefault();$("search").focus();}});
 $("export").addEventListener("click",()=>{const quote=value=>`"${String(value ?? "").replaceAll('"','""')}"`;const fields=[...columns,["canonical_url","Canonical source URL"],["url","Source URL"],["provenance_url","Provenance URL"],["revision","Revision SHA"],["name","Registry ID"],["component_selector","Record dataset selector"],["component_file_sha256","Counted file SHA-256"],["count_basis","Count basis"],["count_precision","Count precision"],["count_url","Count evidence URL"],["gym_alias","Gym alias"],["gym_entrypoint","Gym entrypoint"],["gym_url","Gym registration URL"],["family_basis","Family basis"],["family_url","Family evidence URL"],["classification_basis","Classification basis"]];const csv=[fields.map(([,title])=>quote(title)).join(","),...filtered().map(row=>fields.map(([key])=>quote(row[key])).join(","))].join("\r\n");const url=URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8"}));const a=node("a");a.href=url;a.download="rl-data-atlas.csv";a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);});
