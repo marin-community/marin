@@ -21,6 +21,7 @@ config:
     auth.github_organizations: "Open-Athena:188075292"
     browser.allowed_origins: https://marina.oa.dev
     github.profile: github
+    github.trigger_allowed_user_ids: "306337490"
     slack.effort: agent-default
     slack.profile: slack
   marin-loom:remoteMcps:
