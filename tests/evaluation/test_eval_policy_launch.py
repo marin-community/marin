@@ -4,16 +4,19 @@
 """Published launch recipes materialize the benchmark settings they claim."""
 
 from contextlib import nullcontext
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
 import yaml
 from click.testing import CliRunner
 from iris.rpc import job_pb2
-from marin.evaluation.eval_policy import SEPTEMBER_16_VERSION, SEPTEMBER_24_VERSION
+from marin.evaluation.eval_policy import EVALCHEMY_COMMIT, SEPTEMBER_16_VERSION, SEPTEMBER_24_VERSION
+from marin.evaluation.evalchemy.runner import EvalchemyExecutor
 from marin.evaluation.hardware import Platform
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.runner import LaunchProvenance
+from marin.external_dependencies import EVALCHEMY
 
 from eval_policy.launch import _evalchemy_config, _harbor_config, launch_policy
 from experiments.evaluation.cli import cli
@@ -83,7 +86,17 @@ def test_verified_launch_rejects_changed_source_before_contacting_iris(tmp_path,
     )
 
     batch = build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="test"), "test")
-    assert batch.evaluations[0].identity.eval_ref.name == "math500"
+    evaluation = batch.evaluations[0]
+    assert evaluation.identity.eval_ref.name == "math500"
+    assert isinstance(evaluation.executor, EvalchemyExecutor)
+    assert f"@{EVALCHEMY_COMMIT}" in evaluation.executor.config.runtime.requirement
+    assert evaluation.identity.eval_runtime == evaluation.executor.config.runtime.requirement
+
+    ad_hoc = build_evaluation_batch(
+        replace(spec, version=None), LaunchProvenance(git_sha="abc", launch_host="test"), "test"
+    ).evaluations[0]
+    assert isinstance(ad_hoc.executor, EvalchemyExecutor)
+    assert f"@{EVALCHEMY.commit}" in ad_hoc.executor.config.runtime.requirement
 
     changed = yaml.safe_load(path.read_text())
     changed["batch_size"] = 8

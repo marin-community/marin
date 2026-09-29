@@ -3,6 +3,7 @@
 
 import json
 import os
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -28,6 +29,7 @@ from marin.evaluation.harbor.runner import (
 )
 from marin.evaluation.records import BenchmarkMetadataRef, BenchmarkMetricRef, MetricKind, RunStatus
 from marin.evaluation.runner import EvaluationError
+from marin.external_dependencies import HARBOR
 from marin.inference.iris import InferenceBackendState, RemoteInferenceSession
 from marin.inference.types import OpenAIEndpoint, RunningModel
 from rigging.filesystem.conditional_object import ConditionalWriteError, VersionedBytes
@@ -425,6 +427,50 @@ def test_managed_harbor_pauses_and_resumes_after_inference_recovers(tmp_path, mo
         "total": 4.0,
         "attempted": 4.0,
     }
+
+
+def test_historical_harbor_descriptor_uses_locked_dependencies(monkeypatch):
+    commit = "21e0ea6a0cc1a0b617aebd86988ea93e1795f84a"
+    project = f"config/external/harbor/pins/{commit}"
+    monkeypatch.setattr(driver_config, "HARBOR", replace(HARBOR, runtime_requirements=("future==1",)))
+
+    descriptor = driver_config.harbor_runtime_descriptor(commit, project)
+
+    assert "gcsfs==2026.7.0" in descriptor
+    assert "future==1" not in descriptor
+    with pytest.raises(ValueError, match="pins"):
+        driver_config.harbor_runtime_descriptor("0" * 40, project)
+
+
+def test_harbor_driver_runs_from_the_preflight_lock(tmp_path, monkeypatch):
+    project = "config/external/harbor/pins/21e0ea6a0cc1a0b617aebd86988ea93e1795f84a"
+    commands: list[list[str]] = []
+
+    def capture(command, _driver_env, _backend_state):
+        commands.append(command)
+
+    monkeypatch.setattr(driver_config, "_stream_driver", capture)
+    driver_config.run_harbor_driver(
+        replace(_validated_config(), runtime_project=project),
+        HarborRuntimeOverlay(
+            job_name="locked-driver",
+            jobs_dir=str(tmp_path / "jobs"),
+            dataset_path=None,
+            endpoint_url="https://iris.example/capability/v1",
+            served_model="model",
+            task_limit=1,
+            model_agent_kwargs={},
+            verifier_env={},
+            archive_root=str(tmp_path / "archive"),
+            archive_dataset="dataset",
+        ),
+        {},
+        lambda: InferenceBackendState.READY,
+    )
+
+    (command,) = commands
+    assert command[command.index("--project") + 1] == str(Path(__file__).parents[2] / project)
+    assert "--frozen" in command
 
 
 def test_harbor_driver_terminates_when_dependency_becomes_unavailable(tmp_path, monkeypatch):
