@@ -74,12 +74,12 @@ def submission_compatible(specification: TaskSpec, convention: SubmissionConvent
     if not convention.supports(specification.answer_type):
         return False
     if convention.answer_format == AnswerFormat.FINAL_ACTION:
-        return bool(specification.tools.functions)
-    return (
-        not specification.tools.functions
-        and specification.tools.tool_choice is None
-        and specification.tools.parallel_tool_calls is None
-    )
+        return bool(specification.tools.functions) and specification.tools.tool_choice != "none"
+    if convention.answer_format == AnswerFormat.ANSWER_CALL:
+        return specification.tools.tool_choice != "none" and all(
+            function.name != ANSWER_CALL_NAME for function in specification.tools.functions
+        )
+    return specification.tools.tool_choice != "required"
 
 
 def submission_instruction(convention: SubmissionConvention) -> str:
@@ -145,17 +145,20 @@ def chat_request(specification: TaskSpec, convention: SubmissionConvention) -> d
     if instruction:
         messages.append({"role": "user", "content": instruction})
     request: dict[str, Any] = {"messages": messages}
+    tools: list[dict[str, object]] = [
+        {"type": "function", "function": function.model_dump(exclude_none=True)}
+        for function in specification.tools.functions
+    ]
     if convention.answer_format == AnswerFormat.ANSWER_CALL:
-        request.update(tools=[answer_call_tool()], tool_choice="required", parallel_tool_calls=False)
-    elif convention.answer_format == AnswerFormat.FINAL_ACTION:
-        request["tools"] = [
-            {"type": "function", "function": function.model_dump(exclude_none=True)}
-            for function in specification.tools.functions
-        ]
-        if specification.tools.tool_choice is not None:
-            request["tool_choice"] = specification.tools.tool_choice
-        if specification.tools.parallel_tool_calls is not None:
-            request["parallel_tool_calls"] = specification.tools.parallel_tool_calls
+        tools.append(answer_call_tool())
+        if not specification.tools.functions:
+            request.update(tool_choice="required", parallel_tool_calls=False)
+    if tools:
+        request["tools"] = tools
+    if specification.tools.tool_choice is not None:
+        request["tool_choice"] = specification.tools.tool_choice
+    if specification.tools.parallel_tool_calls is not None:
+        request["parallel_tool_calls"] = specification.tools.parallel_tool_calls
     return request
 
 

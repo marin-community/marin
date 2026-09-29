@@ -29,9 +29,11 @@ from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     ConversationTrace,
+    FunctionDefinition,
     Source,
     TaskRequirements,
     TaskSpec,
+    TaskTools,
     TextMessage,
     VerifierKind,
     VerifierSpec,
@@ -291,6 +293,86 @@ async def test_answer_call_does_not_dispatch_and_requires_its_submission_functio
     outcome = json.loads((tmp_path / "trials/invalid/verifier/taskcompendium-result.json").read_text())
     assert invalid_result.verifier_result is None
     assert outcome["status"] == "extraction_error"
+
+
+@pytest.mark.parametrize(
+    "answer_format,tool_choice",
+    [
+        (AnswerFormat.PLAIN, None),
+        (AnswerFormat.PLAIN, "auto"),
+        (AnswerFormat.PLAIN, "none"),
+        (AnswerFormat.JSON, "auto"),
+        (AnswerFormat.ANSWER_CALL, None),
+        (AnswerFormat.ANSWER_CALL, "auto"),
+        (AnswerFormat.ANSWER_CALL, "required"),
+    ],
+)
+async def test_answer_submission_preserves_advertised_tools_and_policy(
+    tmp_path, specification, chat_endpoint, answer_format, tool_choice
+):
+    specification = specification.model_copy(
+        update={
+            "tools": TaskTools(
+                functions=(FunctionDefinition(name="lookup", parameters={"type": "object"}),),
+                tool_choice=tool_choice,
+                parallel_tool_calls=True,
+            )
+        }
+    )
+    convention = SubmissionConvention(id=answer_format.value, answer_format=answer_format)
+    task = lower_to_harbor(specification, convention, HarborEnvironmentConfig(), tmp_path / "task")
+    response = (
+        _answer_action("12")
+        if answer_format == AnswerFormat.ANSWER_CALL
+        else {"role": "assistant", "content": '{"answer":"12"}' if answer_format == AnswerFormat.JSON else "12"}
+    )
+    chat_endpoint.body = json.dumps({"choices": [{"message": response}]}).encode()
+
+    result = await run_trial(
+        task,
+        HarborEnvironmentConfig(),
+        ChatLaunch(model="model", api_base=chat_endpoint.url),
+        tmp_path / "trials",
+        "run",
+    )
+
+    assert result.exception_info is None, result.exception_info
+    assert result.verifier_result.rewards == {"reward": 1.0}
+    request = chat_endpoint.requests[0]
+    assert request["tools"][0] == {"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}
+    assert [tool["function"]["name"] for tool in request["tools"]] == (
+        ["lookup", "submit_answer"] if answer_format == AnswerFormat.ANSWER_CALL else ["lookup"]
+    )
+    assert request.get("tool_choice") == tool_choice
+    assert request["parallel_tool_calls"] is True
+
+
+@pytest.mark.parametrize(
+    "answer_format,tool_choice,function_name",
+    [
+        (AnswerFormat.PLAIN, "required", "lookup"),
+        (AnswerFormat.JSON, "required", "lookup"),
+        (AnswerFormat.ANSWER_CALL, "none", "lookup"),
+        (AnswerFormat.ANSWER_CALL, "auto", "submit_answer"),
+    ],
+)
+def test_lowering_rejects_submission_policy_conflicts(
+    tmp_path, specification, answer_format, tool_choice, function_name
+):
+    specification = specification.model_copy(
+        update={
+            "tools": TaskTools(
+                functions=(FunctionDefinition(name=function_name, parameters={"type": "object"}),),
+                tool_choice=tool_choice,
+            )
+        }
+    )
+    convention = SubmissionConvention(id=answer_format.value, answer_format=answer_format)
+
+    assert compatible_lowerings(specification, (convention,), (HarborEnvironmentConfig(),)) == ()
+    with pytest.raises(ValueError, match="cannot carry"):
+        lower_to_harbor(specification, convention, HarborEnvironmentConfig(), tmp_path / "task")
+    assert not (tmp_path / "task").exists()
 
 
 def test_direct_chat_rejects_unsatisfied_requirements(tmp_path, specification):
