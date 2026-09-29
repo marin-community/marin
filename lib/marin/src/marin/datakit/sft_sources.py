@@ -16,6 +16,7 @@ from marin.datakit.download.glm53_compaction import glm53_compaction_chat_normal
 from marin.datakit.download.glm53_format_following import glm53_format_following_chat_normalize_steps
 from marin.datakit.download.glm_kernelgym_rollouts import glm_kernelgym_rollouts_chat_normalize_steps
 from marin.datakit.download.gpt_oss_rollouts import gpt_oss_rollouts_chat_normalize_steps
+from marin.datakit.download.identity_data import identity_data_chat_normalize_steps
 from marin.datakit.download.massive import massive_chat_normalize_steps
 from marin.datakit.download.nemotron_sft_v3 import nemotron_sft_v3_chat_normalize_steps
 from marin.datakit.download.nemotron_terminal import nemotron_terminal_chat_normalize_steps
@@ -30,6 +31,7 @@ from marin.datakit.download.swe_rebench_openhands import swe_rebench_openhands_c
 from marin.datakit.download.swe_zero_12m import swe_zero_12m_chat_normalize_steps
 from marin.datakit.download.synthetic1 import synthetic1_chat_normalize_steps
 from marin.datakit.download.synthetic_misconceptions import synthetic_misconceptions_chat_normalize_steps
+from marin.datakit.download.ultrachat_persona import ultrachat_persona_chat_normalize_steps
 from marin.datakit.normalize import normalize_step
 from marin.datakit.sources import all_sources
 from marin.execution.step_spec import StepSpec
@@ -66,6 +68,10 @@ _EXCLUDED_CHAT_SOURCES = frozenset(
         # needed to recover it and the served tool definitions.
         "penfever-traces/qwen35-122b-131k-opencode/nemotron-gym-agent-workplace-v2",
         "penfever-traces/qwen35-122b-131k-opencode/selfinstruct-naive-sandboxes-2-verified",
+        # These traces teach the assistant to identify as Nemotron 3 Super.
+        "penfever-traces/minimax-m27-131k/nemotron-gym-identity-following-v2",
+        "penfever-traces/qwen35-122b-131k-opencode/nemotron-gym-identity-following-v2",
+        "penfever-traces/qwen35-122b-32k/nemotron-gym-identity-following-v2",
     }
 )
 _ChatSourceRow = tuple[str, Callable[[], tuple[StepSpec, ...]]]
@@ -168,6 +174,7 @@ def all_sft_sources() -> dict[str, DatakitChatSource]:
         ("davinci-dev/env-native", davinci_dev_env_native_chat_normalize_steps),
         ("glm-5.2-kernelgym-rollouts", glm_kernelgym_rollouts_chat_normalize_steps),
         ("gpt-oss-rollouts", gpt_oss_rollouts_chat_normalize_steps),
+        ("identity-data", identity_data_chat_normalize_steps),
         ("massive_function_calling", massive_chat_normalize_steps),
         ("nemotron-terminal", nemotron_terminal_chat_normalize_steps),
         ("numinamath-1.5", numinamath_v1_5_chat_normalize_steps),
@@ -178,6 +185,7 @@ def all_sft_sources() -> dict[str, DatakitChatSource]:
         ("swe-zero-12m", swe_zero_12m_chat_normalize_steps),
         ("synthetic-1", synthetic1_chat_normalize_steps),
         ("synthetic-misconceptions-conversations", synthetic_misconceptions_chat_normalize_steps),
+        ("ultrachat-persona-conversations", ultrachat_persona_chat_normalize_steps),
     ]
     rows.extend(
         (name, lambda source_name=name: penfever_steps()[source_name])
@@ -209,6 +217,8 @@ def all_sft_sources() -> dict[str, DatakitChatSource]:
     token_counts["agenttrove-glm53-compactions"] = 0.25
     token_counts["wildchat-glm53-format-completions"] = 0.01
     token_counts["synthetic-misconceptions-conversations"] = 0.002
+    token_counts["identity-data"] = 0.061711380
+    token_counts["ultrachat-persona-conversations"] = 0.324455701
     return {
         name: DatakitChatSource(
             name=name,
