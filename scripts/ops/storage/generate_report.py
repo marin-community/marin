@@ -24,7 +24,7 @@ then publishes the result locally.
                      (``--gist public|secret|none``) and/or post a summary with
                      the biggest increases/decreases to Discord (``--discord``).
 
-Prereqs (local / CI runner):
+Prereqs:
     - ``gh`` authenticated as the gist owner (for ``--gist``)
     - ``gcloud`` with GCS read access to fetch ``report.md`` back
     - The named cluster's controller is reachable (same tunnel machinery as

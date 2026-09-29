@@ -23,7 +23,7 @@ scan_fs (Iris) ─> dedup (Zephyr) ─> render_report (DuckDB) ─> gist + Disco
 # Full run, publish a public gist (default)
 uv run scripts/ops/storage/generate_report.py
 
-# What the weekly automation runs (secret gist + Discord summary)
+# Secret gist plus a Discord summary
 uv run scripts/ops/storage/generate_report.py --gist secret --discord internal-discuss
 
 # Reuse prior stages (cheap iteration): skip scan / dedup / report as needed
@@ -31,8 +31,8 @@ uv run scripts/ops/storage/generate_report.py --skip-scan --skip-dedup --skip-re
 ```
 
 Key flags: `--gist {public,secret,none}`, `--discord <channel>`, `--workers N`,
-`--history-dir`, `--run-id` (defaults to the UTC date; keeps weekly Iris job
-names unique), `--change-threshold-gib`, `--dry-run`.
+`--history-dir`, `--run-id` (defaults to the UTC date; keeps Iris job names
+unique across runs), `--change-threshold-gib`, `--dry-run`.
 
 **Week-over-week diff.** Each run archives a compact per-`(bucket, dir_prefix)`
 snapshot (prefixes ≥ 1 GiB, ~1 MiB) to `--history-dir`. The next run flags
