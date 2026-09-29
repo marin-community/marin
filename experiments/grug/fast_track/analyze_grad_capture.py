@@ -31,6 +31,7 @@ import dataclasses
 import json
 import logging
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 import click
@@ -76,12 +77,24 @@ def _ridge(matrix: np.ndarray) -> np.ndarray:
     return matrix + RIDGE * np.trace(matrix) / matrix.shape[0] * np.eye(matrix.shape[0])
 
 
+def _row_gram(x: np.ndarray, y: np.ndarray | None = None) -> np.ndarray:
+    """``sum_t x_t y_t^T`` over ``[T, m, n]`` stacks, as one matmul (``y`` defaults to ``x``)."""
+    y = x if y is None else y
+    t, m, n = x.shape
+    return x.transpose(1, 0, 2).reshape(m, t * n) @ y.transpose(1, 0, 2).reshape(m, t * n).T
+
+
+def _col_gram(x: np.ndarray, y: np.ndarray | None = None) -> np.ndarray:
+    """``sum_t x_t^T y_t`` over ``[T, m, n]`` stacks, as one matmul (``y`` defaults to ``x``)."""
+    y = x if y is None else y
+    t, m, n = x.shape
+    return x.reshape(t * m, n).T @ y.reshape(t * m, n)
+
+
 def shampoo_factors(grads: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """``E[G G^T] / n`` and ``E[G^T G] / m`` over ``grads`` ``[T, m, n]``."""
     _, m, n = grads.shape
-    return np.einsum("tij,tkj->ik", grads, grads) / (len(grads) * n), np.einsum("tji,tjk->ik", grads, grads) / (
-        len(grads) * m
-    )
+    return _row_gram(grads) / (len(grads) * n), _col_gram(grads) / (len(grads) * m)
 
 
 def kl_factors(grads: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -91,9 +104,9 @@ def kl_factors(grads: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     a, b = shampoo_factors(grads)
     for _ in range(KL_ITERATIONS):
         b_inv = np.linalg.inv(_ridge(b))
-        a = np.einsum("tij,jk,tlk->il", grads, b_inv, grads) / (len(grads) * n)
+        a = _row_gram(grads @ b_inv, grads) / (len(grads) * n)
         a_inv = np.linalg.inv(_ridge(a))
-        b = np.einsum("tji,jk,tkl->il", grads, a_inv, grads) / (len(grads) * m)
+        b = _col_gram(grads, a_inv @ grads) / (len(grads) * m)
     scale = m / np.trace(a)
     return a * scale, b / scale
 
@@ -116,8 +129,8 @@ def spectrum_stats(matrix: np.ndarray) -> dict:
 def _residual_anisotropy(whitened: np.ndarray) -> float:
     """log10(largest / median eigenvalue) of the residual row covariance, averaged with the column one."""
     _, m, n = whitened.shape
-    left = np.einsum("tij,tkj->ik", whitened, whitened) / (len(whitened) * n)
-    right = np.einsum("tji,tjk->ik", whitened, whitened) / (len(whitened) * m)
+    left = _row_gram(whitened) / (len(whitened) * n)
+    right = _col_gram(whitened) / (len(whitened) * m)
     out = []
     for c in (left, right):
         values = np.linalg.eigvalsh(c)
@@ -135,9 +148,9 @@ def whitening_test(grads: np.ndarray, rng: np.random.Generator) -> dict:
     gaussian = np.stack([a_half @ rng.standard_normal(g.shape) @ b_half for g in held])
     return {
         "none": _residual_anisotropy(held),
-        "shampoo": _residual_anisotropy(np.einsum("ij,tjk,kl->til", _sym_power(sa, -0.5), held, _sym_power(sb, -0.5))),
-        "kl": _residual_anisotropy(np.einsum("ij,tjk,kl->til", a_is, held, b_is)),
-        "gaussian": _residual_anisotropy(np.einsum("ij,tjk,kl->til", a_is, gaussian, b_is)),
+        "shampoo": _residual_anisotropy(_sym_power(sa, -0.5) @ held @ _sym_power(sb, -0.5)),
+        "kl": _residual_anisotropy(a_is @ held @ b_is),
+        "gaussian": _residual_anisotropy(a_is @ gaussian @ b_is),
     }
 
 
@@ -154,7 +167,7 @@ def snr_by_eigenrank(grads: np.ndarray, a: np.ndarray) -> list[float]:
     (bin 0: the largest eigenvalues). SNR = |mean|^2 / (variance / T), i.e. how far the window mean stands above
     the noise it would show by chance."""
     vectors = np.linalg.eigh(a)[1][:, ::-1]
-    projected = np.einsum("im,tin->tmn", vectors, grads)
+    projected = vectors.T @ grads
     mean = projected.mean(0)
     signal = (mean**2).sum(-1)
     noise = ((projected - mean) ** 2).sum((0, 2)) / (len(grads) - 1) / len(grads)
@@ -284,7 +297,9 @@ def analyze(root: str, sites: tuple[str, ...] | None = None) -> dict:
         for i, name in enumerate(names):
             grads = np.stack([s[f"grad/{name}"] for s in steps])
             applied = np.stack([s[f"update/{name}"] for s in steps])
+            started = time.time()
             site = analyze_site(grads, applied, steps[0].get(f"param/{name}"), seed=i)
+            logger.info("window %d site %s: %.1fs", window.start, name, time.time() - started)
             a, b = site.pop("factors")
             if name in previous_factors:
                 pa, pb = previous_factors[name]
