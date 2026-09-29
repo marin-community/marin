@@ -34,6 +34,32 @@ from .verifier_policy import migrate_verifier_policy
 logger = logging.getLogger(__name__)
 
 
+def difficulty_summary(report: dict[str, Any]) -> dict[str, Any]:
+    """Return measured solve counts for the catalog's visual comparison."""
+    fields = (
+        "size",
+        "model",
+        "model_revision",
+        "provider",
+        "solved",
+        "verified",
+        "unverified",
+        "attempted",
+        "solve_rate",
+        "wilson_95",
+    )
+    models = [{key: model.get(key) for key in fields} for model in report["models"]]
+    for followup in report.get("protocol_followups", []):
+        if followup["state"] == "complete":
+            models.append(
+                {
+                    **{key: followup.get(key) for key in fields},
+                    "size": "hosted" if followup.get("kind") == "alternate_checkpoint" else "followup",
+                }
+            )
+    return {"models": models, "estimated_at": report["estimated_at"], "sampling": report["sampling"]}
+
+
 def source_with_review(record: dict[str, Any]) -> dict[str, Any]:
     row = dict(record["payload"])
     row.update(
@@ -71,6 +97,9 @@ def source_with_review(record: dict[str, Any]) -> dict[str, Any]:
     if row["verifier_issues"]:
         row["quality"] = "bad" if record["quality"] == "bad" else "some_issues"
         row["difficulty"] = None
+    row["difficulty_summary"] = None
+    if row["quality"] == "good" and row["difficulty"] and record.get("difficulty_report"):
+        row["difficulty_summary"] = difficulty_summary(json.loads(record["difficulty_report"]))
     return row
 
 
@@ -259,7 +288,7 @@ def create_api(services: AppletServices) -> FastAPI:
                 for row in connection.execute(
                     text(
                         """
-                        SELECT s.*, COALESCE((
+                        SELECT s.*, a.content AS difficulty_report, COALESCE((
                             SELECT jsonb_agg(jsonb_build_object(
                                 'issue_url', i.issue_url, 'review_id', i.review_id,
                                 'status', i.status, 'created_at', i.created_at
@@ -267,7 +296,9 @@ def create_api(services: AppletServices) -> FastAPI:
                             FROM catalog_verifier_issues i
                             WHERE i.source_id = s.id AND i.status = 'open'
                         ), '[]'::jsonb) AS verifier_issues
-                        FROM catalog_sources s WHERE active ORDER BY origin, id
+                        FROM catalog_sources s LEFT JOIN review_artifacts a
+                        ON a.review_id = s.review_id AND a.path = 'difficulty.json'
+                        WHERE s.active ORDER BY s.origin, s.id
                     """
                     )
                 ).mappings()

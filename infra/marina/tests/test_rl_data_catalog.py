@@ -178,6 +178,42 @@ def test_changed_source_preserves_historical_review_but_invalidates_current_rati
     assert row["difficulty"] == (None if changed_field else "32/32")
 
 
+@pytest.mark.parametrize("quality,revision", [("good", "data1"), ("some_issues", "data1"), ("good", "data2")])
+def test_difficulty_comparison_uses_saved_counts_and_hides_ineligible_measurements(quality, revision) -> None:
+    report = {
+        "estimated_at": "2026-09-29",
+        "sampling": {"task_count": 32, "method": "uniform"},
+        "models": [{"size": "large", "model": "model-a", "solved": 17, "verified": 32, "solve_rate": 17 / 32}],
+        "protocol_followups": [
+            {"state": "complete", "kind": "alternate_checkpoint", "model": "model-b", "solved": 20, "verified": 32},
+            {"state": "pending", "model": "unfinished-model"},
+        ],
+    }
+    row = source_with_review(
+        {
+            "payload": {"id": "MarinSkyRL:math", "dataset_revision": revision, "verifier_revision": "code1"},
+            "quality": quality,
+            "difficulty": "Legacy summary: Large 30/32",
+            "difficulty_report": json.dumps(report),
+            "traces": None,
+            "review_id": "review1",
+            "review_date": "2026-09-28",
+            "review_source_revision": "data1",
+            "review_verifier_revision": "code1",
+            "verifier_issues": [],
+        }
+    )
+    if quality != "good" or revision != "data1":
+        assert row["difficulty_summary"] is None
+        return
+    models = row["difficulty_summary"]["models"]
+    assert [(model["size"], model["model"], model["solved"], model["verified"]) for model in models] == [
+        ("large", "model-a", 17, 32),
+        ("hosted", "model-b", 20, 32),
+    ]
+    assert models[0]["solve_rate"] == 17 / 32
+
+
 @pytest.mark.parametrize("original_quality", ["good", "bad"])
 def test_confirmed_verifier_defect_survives_publication_and_refresh(
     catalog_connection: Connection, original_quality: str

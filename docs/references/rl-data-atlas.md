@@ -209,6 +209,17 @@ and drawn differently. Three judges assess each attempt; their opinions are not
 additional solver attempts. Historical dataset releases and rollout settings remain
 separate from current measurements.
 
+The catalog's Difficulty column shows each measured model's solve rate as a bar
+with solved/verified counts. Longer bars mean more tasks solved. Small and Large
+are the two models tested on the same task sample. Sort uses Large's rate;
+unmeasured sources sort last. Completed hosted runs appear as additional bars.
+Click the bars to open the source's Difficulty section.
+Each model has collapsible run settings and task attempts, including saved model
+requests, responses, and native verifier results and logs. These saved artifacts
+load when their sections open. Missing artifacts are identified explicitly.
+Changed data/verifier revisions or unresolved verifier defects prevent a current
+difficulty comparison.
+
 Generation-setting follow-ups show their solve rates and changed settings beside
 the original pair, with links to both reports and traces. The output budget
 includes thinking tokens. When a model exhausts it before submitting a final
