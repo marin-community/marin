@@ -162,6 +162,24 @@ async function artifactPage(record) {
         return content;
       }, true));
     }
+    if (record.artifacts.some(item => item.path === "difficulty/context.json")) {
+      const context = await jsonResponse(artifactUrl("difficulty/context.json"));
+      container.append(fold("Reviewer solve baseline & historical evidence", () => {
+        const content = node("div", undefined, "review-card-content");
+        const baseline = context.reviewer_rollout_baseline;
+        content.append(node("p", `Quality-review solver: ${baseline.solved}/${baseline.verified} solved · ${baseline.attempted} attempted · ${baseline.unverified} unverified.`, "formatted-prose"));
+        content.append(node("p", `Reviewer model: ${baseline.configured_model_reviewers.map(model => model.label).join(", ")}`, "review-byline"));
+        content.append(textSection("Quality sample limitations", baseline.limitations, true));
+        const historical = context.historical_reference;
+        const reference = node("a", "Historical difficulty study · Marin issue #8942");
+        reference.href = "https://github.com/marin-community/marin/issues/8942";
+        content.append(reference, node("p", historical.applicability, "formatted-prose"));
+        content.append(textSection("Historical comparison limitations", historical.limitations));
+        content.append(artifactLink("difficulty/context.json", "Browse reviewer task outcomes & provenance"));
+        if (record.artifacts.some(item => item.path === historical.artifact_path)) content.append(node("p"), artifactLink(historical.artifact_path, "Browse preserved historical evidence"));
+        return content;
+      }, true));
+    }
     const difficultyArtifact = record.artifacts.find(item => item.path === "difficulty.json");
     if (difficultyArtifact) {
       const report = await jsonResponse(artifactUrl("difficulty.json"));
@@ -190,6 +208,7 @@ async function artifactPage(record) {
             if (alternateCheckpoint) {
               section.append(textSection("Model & generation changes", {checkpoint_change: followup.checkpoint_change, generation_parameters: followup.generation_parameters}, true));
               section.append(textSection("Verifier judge configuration", followup.verifier_configuration_change));
+              if (followup.execution_implementation_applicability) section.append(textSection("Execution implementation applicability", followup.execution_implementation_applicability));
               section.append(textSection("Comparison limitations", followup.limitations, true));
             } else section.append(textSection("Generation settings", {original_reasoning_effort: followup.original_reasoning_effort, changed_parameter: followup.changed_parameter}, true));
             if (record.artifacts.some(item => item.path === followup.report_path)) section.append(artifactLink(followup.report_path, "Browse follow-up task outcomes & traces"));

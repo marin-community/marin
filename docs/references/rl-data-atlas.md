@@ -147,11 +147,35 @@ show paired small/large model solve rates; its report includes task counts,
 sampling scope, checkpoint revisions, and uncertainty. These curated columns are
 stored separately and survive refreshes. Changed source data or verifier revisions
 hide stale Quality and Difficulty values while retaining the historical review link.
+Nemotron component identities and exact counts survive repository metadata changes
+when the selected blend file still matches the complete-file audit's SHA-256.
+The audit is bundled in `server/nemotron_counts.py` under the applet directory.
+Reusing a historical review at a later repository revision requires separate
+evidence that its data bytes, component selection, and verifier still apply.
+The review page links that evidence and preserves the actual judgment date and
+executed revision; the catalog still reports the latest repository revision date.
+
+For sources rated Good, the page shows the quality solver's initial solve
+count and the saved [issue #8942](https://github.com/marin-community/marin/issues/8942)
+evidence above the paired small/large difficulty estimate. The quality sample can be smaller
+and drawn differently. Three judges assess each attempt; their opinions are not
+additional solver attempts. Historical dataset releases and rollout settings remain
+separate from current measurements.
+
 Generation-setting follow-ups show their solve rates and changed settings beside
 the original pair, with links to both reports and traces. The output budget
 includes thinking tokens. When a model exhausts it before submitting a final
 answer, the report records that failure so the solve rate can be interpreted for
 the stated generation setting.
+Hosted model follow-ups also record changed checkpoints, generation settings,
+and configured LLM verifier judges. They do not isolate the effect of reasoning
+effort. Providers may expose a model identifier without an immutable checkpoint
+revision. Changes to quality-review code alter the recorded `make_review.py`
+file hash even when difficulty execution is unchanged. A saved
+`publication-execution-implementation-attestation.json` compares the parsed
+Python definitions used by the difficulty task loader, worker launcher, and
+MarinSkyRL code identity check, including their referenced definitions and imports.
+The original and executed script's whole-file hashes remain recorded.
 
 The review tooling, example configuration, and JSON schema are checked in under
 `experiments/rl_data_reviews/`. Copy `review-config.example.json` to a local file,
