@@ -191,6 +191,9 @@ def validate_environment_config(specification: TaskSpec, environment_config: Har
     if requirements.seed_sha256 != environment_config.seed_sha256:
         raise ValueError("Stateful binding seed differs from task seed")
     validate_provider_surface(environment_config)
+    if any(resource.visibility == ResourceVisibility.AGENT for resource in specification.resources):
+        if not provider_class(environment_config).SUPPORTS_AGENT_FILES:
+            raise ValueError("Stateful provider cannot expose agent-visible files")
 
 
 def read_specification(path: Path) -> TaskSpec:

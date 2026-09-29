@@ -14,7 +14,7 @@ import pytest
 from harbor.models.task.task import Task
 
 from taskcompendium.grading import exact_answer
-from taskcompendium.harbor.runner import ChatLaunch, ReplayLaunch, run_trial
+from taskcompendium.harbor.runner import AgentStrategy, ChatLaunch, ReplayLaunch, run_trial
 from taskcompendium.lowering import (
     DIRECT_CHAT_ENVIRONMENT,
     HarborEnvironmentConfig,
@@ -162,6 +162,44 @@ def test_direct_chat_rejects_agent_resource_before_export(tmp_path, specificatio
             tmp_path / "task",
         )
     assert not (tmp_path / "task").exists()
+
+
+async def test_harbor_rechecks_exported_private_resource_before_launch(tmp_path, specification):
+    specification = specification.model_copy(
+        update={"resources": (TaskResource(path="reference.txt", visibility=ResourceVisibility.VERIFIER, content="12"),)}
+    )
+    binding = HarborEnvironmentConfig()
+    task = lower_to_harbor(
+        specification,
+        SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        binding,
+        tmp_path / "task",
+    )
+    (task / "private_resources/reference.txt").write_text("tampered")
+
+    with pytest.raises(ValueError, match="digest mismatch"):
+        await run_trial(task, binding, ReplayLaunch(response="12"), tmp_path / "trials", "run")
+    assert not (tmp_path / "trials").exists()
+
+
+async def test_harbor_rejects_launch_strategy_that_cannot_use_binding(tmp_path, specification, chat_endpoint):
+    binding = HarborEnvironmentConfig()
+    task = lower_to_harbor(
+        specification,
+        SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        binding,
+        tmp_path / "task",
+    )
+
+    with pytest.raises(ValueError, match="strategy differs"):
+        await run_trial(
+            task,
+            binding,
+            ChatLaunch(model="fixture-model", api_base=chat_endpoint.url, strategy=AgentStrategy.STATEFUL_TOOLS),
+            tmp_path / "trials",
+            "run",
+        )
+    assert chat_endpoint.authorizations == []
 
 
 async def test_direct_chat_harbor_trial_records_private_metadata_failure(tmp_path, specification):

@@ -3,13 +3,14 @@
 
 """Resolve a launch separately from a task-owned Harbor environment configuration."""
 
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
 from harbor.models.trial.config import TrialConfig
 from harbor.models.trial.result import TrialResult
 from harbor.trial.trial import Trial
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from taskcompendium.lowering import (
     DIRECT_CHAT_ENVIRONMENT,
@@ -30,6 +31,11 @@ from taskcompendium.submission import AnswerFormat
 DEFAULT_CHAT_TIMEOUT = 120
 
 
+class AgentStrategy(StrEnum):
+    DIRECT_CHAT = "direct_chat"
+    STATEFUL_TOOLS = "stateful_tools"
+
+
 class ReplayLaunch(BaseModel):
     """A fixed response for exercising the Harbor trial path."""
 
@@ -43,16 +49,17 @@ class ChatLaunch(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    model: str
-    api_base: str
-    api_key_env: str | None = None
-    request_timeout: float = DEFAULT_CHAT_TIMEOUT
-    max_turns: int = 16
-    trial_timeout: float | None = None
+    model: str = Field(min_length=1)
+    api_base: str = Field(min_length=1)
+    api_key_env: str | None = Field(default=None, min_length=1)
+    strategy: AgentStrategy = AgentStrategy.DIRECT_CHAT
+    request_timeout: float = Field(default=DEFAULT_CHAT_TIMEOUT, gt=0, allow_inf_nan=False)
+    max_turns: int = Field(default=16, gt=0)
+    trial_timeout: float | None = Field(default=None, gt=0, allow_inf_nan=False)
 
     @property
     def agent_kwargs(self) -> dict[str, Any]:
-        values = self.model_dump(exclude={"model", "trial_timeout"})
+        values = self.model_dump(exclude={"model", "trial_timeout", "strategy"})
         if "max_turns" in values:
             values.pop("max_turns")
         return values
@@ -88,6 +95,9 @@ async def run_trial(
             "kwargs": launch.model_dump(),
         }
     else:
+        expected_strategy = AgentStrategy.STATEFUL_TOOLS if stateful else AgentStrategy.DIRECT_CHAT
+        if launch.strategy != expected_strategy:
+            raise ValueError("Agent strategy differs from Harbor environment binding")
         agent_path = "taskcompendium.harbor.adapter:DirectChatAgent"
         kwargs = launch.agent_kwargs
         if stateful:
