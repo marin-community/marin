@@ -246,8 +246,9 @@ def test_attn_res_mla_inkling_matches_straight_line_reference(
 
 
 @pytest.mark.parametrize("num_layers", [6, 8])
-def test_boundary_operator_matches_straight_line_reference(mesh, fp32_kda_kernel, num_layers):
-    cfg = _config(dense=False, num_layers=num_layers, num_blocks=8)
+@pytest.mark.parametrize("layer_backward", list(AttnResLayerBackward))
+def test_boundary_operator_matches_straight_line_reference(mesh, fp32_kda_kernel, num_layers, layer_backward):
+    cfg = _config(dense=False, num_layers=num_layers, num_blocks=8, layer_backward=layer_backward)
     cfg = dataclasses.replace(cfg, boundary_alpha=1.0)
     _assert_matches_reference(cfg, mesh)
 
