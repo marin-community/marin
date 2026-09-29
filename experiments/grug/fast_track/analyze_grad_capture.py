@@ -17,10 +17,13 @@ polar factor of ``M`` alone. Each claim behind OKLS gets a measurement, per capt
   OKLS finds even a one-step-stale preconditioner harmful.
 - ``snr``: in the row factor's eigenbasis, is the gradient's persistent (mean) component in the high-variance
   directions, which whitening shrinks, or in the low-variance ones it amplifies?
+- ``overshoot``: how far each applied update went along its own line (``overshoot``).
 - ``directions``: momentum is rebuilt from the captured gradients (MuonH's Nesterov 0.95, after a warm-up) and
   turned into the Muon, OKLS, one-sided, and Shampoo directions. Each is scored by its first-order gain on the
   *next* steps' gradients (fresh batches, so only persistent signal counts) at unit Frobenius and unit spectral
   norm, plus its stable rank. The captured applied update validates the momentum rebuild (``cos_applied_muon``).
+  The next steps' gradients are taken after the run already stepped along (roughly) the Muon direction, so the gain
+  measures overshoot along that direction as much as direction quality; compare stable ranks and cosines, not gains.
 - ``weights``: the weight's stable and effective rank at each window start.
 
 Usage: ``python -m experiments.grug.fast_track.analyze_grad_capture --root <run>/grad_capture --out metrics.json``.
@@ -237,6 +240,22 @@ def direction_scores(grads: np.ndarray, applied: np.ndarray) -> dict:
     return out
 
 
+def overshoot(grads: np.ndarray, applied: np.ndarray) -> dict:
+    """How far each applied update ``U_t`` went along its own line: ``r_t = <g_{t+1}, U_t> / <g_t, U_t>``. On a
+    quadratic, r = 1 for a step too small to feel curvature, 0 at the line-search optimum, -1 at twice it (the edge
+    of stability), below -1 past that. Batch noise enters both terms, so medians over the window are reported."""
+    flat_g = grads.reshape(len(grads), -1)
+    flat_u = applied.reshape(len(applied), -1)
+    now = (flat_g[:-1] * flat_u[:-1]).sum(1)
+    after = (flat_g[1:] * flat_u[:-1]).sum(1)
+    ratio = after / np.where(np.abs(now) > 1e-30, now, np.nan)
+    return {
+        "median_ratio": float(np.nanmedian(ratio)),
+        "frac_overshoot": float(np.nanmean(ratio < 0)),
+        "frac_descent": float(np.mean(now < 0)),
+    }
+
+
 def autocorrelation(grads: np.ndarray, lags: int = 8) -> list[float]:
     flat = grads.reshape(len(grads), -1)
     flat = flat / np.maximum(np.linalg.norm(flat, axis=1, keepdims=True), 1e-30)
@@ -266,6 +285,7 @@ def analyze_site(grads: np.ndarray, applied: np.ndarray, param: np.ndarray | Non
         "snr_row": snr_by_eigenrank(grads, a),
         "autocorrelation": autocorrelation(grads),
         "directions": direction_scores(grads, applied),
+        "overshoot": overshoot(grads, applied),
         "grad_stable_rank": float(np.mean([_stable_rank(g) for g in grads[::8]])),
         "factors": (a, b),
     }

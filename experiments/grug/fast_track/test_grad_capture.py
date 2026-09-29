@@ -171,3 +171,17 @@ def test_accumulated_gradients_average_the_microbatches():
     got = jax.tree.leaves(jax.device_get(grads))
     for g, e in zip(got, jax.tree.leaves(expected), strict=True):
         np.testing.assert_allclose(g, e, rtol=1e-4, atol=1e-7)
+
+
+def test_overshoot_ratio_reads_the_step_size_on_a_quadratic():
+    """Gradient descent on 0.5 * h * x^2 with step eta: r = 1 - eta * h (0 at the optimum, -1 at twice it)."""
+    for eta_h, expected in ((0.5, 0.5), (1.0, 0.0), (2.0, -1.0)):
+        x, grads, applied = np.ones((1, 3, 2)), [], []
+        for _ in range(6):
+            g = x.copy()  # h = 1
+            grads.append(g[0])
+            applied.append(-eta_h * g[0])
+            x = x - eta_h * g
+        result = a.overshoot(np.stack(grads), np.stack(applied))
+        assert abs(result["median_ratio"] - expected) < 1e-9
+        assert result["frac_overshoot"] == (1.0 if expected < 0 else 0.0)
