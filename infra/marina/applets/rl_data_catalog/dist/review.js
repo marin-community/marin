@@ -274,7 +274,9 @@ async function artifactPage(record) {
     const date = reviews.map(review => review.reviewed_at).filter(Boolean).sort().at(-1) || "Unknown";
     const referenceCommit = reviews.map(review => review.attributes?.inspected_marinskyrl_commit).find(Boolean);
     const codeProvenance = provenance?.marinskyrl_commit ? `MarinSkyRL execution commit ${provenance.marinskyrl_commit}` : referenceCommit ? `MarinSkyRL reference commit ${referenceCommit} · Reused evidence and current inspection` : "MarinSkyRL commit not recorded in imported review";
-    document.getElementById("provenance").textContent = `Reviewed ${date} · ${codeProvenance}`;
+    const verifierAttestation = supplemental.find(review => review.attributes?.review_pool_role === "verifier_revision_attestation");
+    const reviewedCode = verifierAttestation ? ` · Current verifier inspected at ${verifierAttestation.attributes.inspected_marinskyrl_commit}` : "";
+    document.getElementById("provenance").textContent = `Reviewed ${date} · ${codeProvenance}${reviewedCode}`;
     const container = document.getElementById("reviews");
     if (record.verifier_issues.length) container.append(fold("Confirmed verifier defects remain unresolved", () => {
       const content = node("div", undefined, "review-card-content");

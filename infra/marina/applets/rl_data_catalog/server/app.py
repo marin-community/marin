@@ -447,7 +447,8 @@ def create_api(services: AppletServices) -> FastAPI:
                             SELECT id, collection FROM catalog_reviews
                             WHERE source_id = :source AND id <> :id AND EXISTS (
                                 SELECT 1 FROM jsonb_array_elements(collection->'reviews') r
-                                WHERE r->'attributes'->>'review_pool_role' = 'verifier_defect'
+                                WHERE r->'attributes'->>'review_pool_role'
+                                    IN ('verifier_defect', 'verifier_revision_attestation')
                             ) ORDER BY updated_at, id
                         """
                         ),
