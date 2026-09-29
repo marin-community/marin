@@ -11,4 +11,4 @@ required-environments = ["sys_platform == 'linux'"]
 
 [tool.uv.sources]
 # The isolated lock selects an immutable runtime revision.
-marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", rev = "55185730c82a8f99e1af142c99569f33ac29ca89" }
+marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", rev = "018f7f8475a4e34a05bf48156e79f5a5a5df3c80" }
