@@ -45,6 +45,5 @@ class TaskTroveVerifier(Verifier):
 
 
 def tasktrove_verifier(contract: McqSpec) -> VerifierSpec:
-    """Construct a TaskTrove verifier descriptor from a parsed MCQ contract."""
     verifier = TaskTroveVerifier(expected=contract.expected.strip().upper(), options=contract.options)
     return VerifierSpec(kind=VerifierKind.TASKTROVE, parameters_json=verifier.model_dump_json())
