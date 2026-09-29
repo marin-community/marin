@@ -8,8 +8,10 @@ on:
     - cron: '*/5 * * * *'
   workflow_dispatch:
 
+# The job's own GITHUB_TOKEN only checks out the repo. Comments and reactions use a marin-belay GitHub App token:
+# the main issue is locked to collaborators, and the Actions bot cannot comment on a locked issue.
 permissions:
-  issues: write
+  contents: read
 
 concurrency:
   group: belay-intake
@@ -21,9 +23,17 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v5
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.BELAY_APP_CLIENT_ID }}
+          private-key: ${{ secrets.BELAY_APP_PRIVATE_KEY }}
+          repositories: ${{ github.event.repository.name }}
+          permission-issues: write
       - name: Transfer approved intake comments
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
           # Numeric GitHub user ids of the marin-devs team (ids never change or get reused; logins can be renamed and
           # re-claimed). Changing who can approve goes through a reviewed PR. `gh api users/<login> --jq .id` finds an id.
           #   42926649 ClassicLarry, 9633 dlwh, 9847335 Helw150, 15233 hammer, 607207 rjpower,

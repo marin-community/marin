@@ -27,7 +27,8 @@ from dataclasses import dataclass
 API = "https://api.github.com"
 APPROVE_REACTION = "+1"
 TRANSFERRED_REACTION = "rocket"
-TRANSFER_BOT = "github-actions[bot]"
+# The bot identity of the marin-belay GitHub App, whose token the workflow uses.
+TRANSFER_BOT = "marin-belay[bot]"
 _MARKER_TEMPLATE = "<!-- belay-intake:{} -->"
 _MARKER_RE = re.compile(re.escape(_MARKER_TEMPLATE).replace(r"\{\}", r"(\d+)") + r"\s*\Z")
 # A zero-width space after "@" keeps copied text from pinging users or teams; one inside "<!--" keeps quoted text
