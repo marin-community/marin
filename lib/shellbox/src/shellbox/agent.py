@@ -129,11 +129,13 @@ class BashAgent(BaseAgent):
                     return
                 for call in calls:
                     name = call["function"]["name"]
-                    arguments = json.loads(call["function"]["arguments"])
                     if name == "Bash":
+                        arguments = json.loads(call["function"]["arguments"])
                         result = _shell_result(await _bash_action(shell, arguments))
                     else:
-                        raise ValueError(f"Unsupported tool: {name}")
+                        result = json.dumps(
+                            {"error": {"type": "unsupported_tool", "name": name, "available_tools": ["Bash"]}}
+                        )
                     messages.append(
                         {
                             "role": "tool",

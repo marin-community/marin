@@ -13,7 +13,7 @@ import pytest
 def test_shellsim_harbor_trial(tmp_path: Path) -> None:
     pytest.importorskip("harbor")
     pytest.importorskip("shellsim")
-    smoke = importlib.import_module("harbor_smoke")
+    smoke = importlib.import_module("lib.shellbox.tests.harbor_smoke")
 
     asyncio.run(
         smoke.main(
