@@ -16,6 +16,7 @@ from levanter.utils.jax_utils import leaf_key_paths
 from experiments.grug.fast_track.adamh import scale_by_adamh
 from experiments.grug.fast_track.grugmuon_stacked import _grug_scale_with_muon, _target_named_sharding
 from experiments.grug.fast_track.okls import OKLS_MATMUL_DTYPES, scale_with_grug_okls
+from experiments.grug.fast_track.stiefel import scale_with_stiefel_muon
 
 
 def _match_named_update_sharding() -> optax.GradientTransformation:
@@ -433,6 +434,8 @@ def _sinkhorn_hyperball(momentum: float, iters: int, nesterov: bool, learning_ra
 
 
 # Leaves the trainer writes as data statistics (never trained): the fixed-encoder n-gram table and its code.
+LATENT_PROJ_UPDATES = ("muonh", "frozen", "stiefel")
+_LATENT_PROJ = re.compile(r"(?:^|\.)w_latent_(down|up)$")
 _FROZEN_LEAVES = re.compile(r"(?:^|\.)(ngram_stat_(table|code)|latent_select_mask|embed2_sign_table)$")
 # The groups built by ``muonh_transform_at`` (the ones ``muonh_retraction`` applies to).
 _MUONH_GROUPS = frozenset({"muonh", "kda_beta", "muonh_attn", "muonh_routed", "muonh_router", "upper_qk"})
@@ -1100,6 +1103,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     okls_weight_decay: float = 0.0303
     """Paper-mode AdamC decoupled weight decay."""
     okls_root_every: int = 1
+    latent_proj_update: str = "muonh"
+    """How the LatentMoE projections (``w_latent_down`` / ``w_latent_up``) train: ``muonh`` (like every matrix),
+    ``frozen`` (kept at init), or ``stiefel`` (Skewon, ``stiefel.py``: stays at its scaled semi-orthogonal init
+    point; needs the model's ``latent_orthogonal_init``)."""
     """Recompute the OKLS inverse roots every this many steps (stored in between)."""
     lm_head_group: str = "adamh"
     """LR group of ``output_proj``: ``adamh``, ``muonh`` or ``sinkhornh`` (Sinkhorn-balanced momentum + hyperball)."""
@@ -1417,6 +1424,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 ),
                 # The n-gram statistic table and its code are data statistics written by the trainer, not trained.
                 "frozen": optax.set_to_zero(),
+                "stiefel": scale_with_stiefel_muon(
+                    momentum=self.momentum, nesterov=self.nesterov, learning_rate=learning_rate
+                ),
                 "ple": plain_adam_at(adam_lr * self.ple_lr_mult),
                 "value_embed": plain_adam_at(adam_lr * self.value_embed_lr_mult),
                 "memory": plain_adam_at(adam_lr * self.memory_lr_mult),
@@ -1465,6 +1475,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
         return optax.inject_hyperparams(optimizer)(**schedules)
 
     def __post_init__(self):
+        if self.latent_proj_update not in LATENT_PROJ_UPDATES:
+            raise ValueError(f"latent_proj_update must be one of {LATENT_PROJ_UPDATES}, got {self.latent_proj_update!r}")
         if self.lm_head_group not in ("adamh", "muonh", "sinkhornh"):
             raise ValueError(f"lm_head_group must be adamh, muonh or sinkhornh, got {self.lm_head_group!r}")
         if self.kda_beta_mlp_group not in ("kda_beta", "adam"):
@@ -1505,6 +1517,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             path_lower = path_str.lower()
             if _FROZEN_LEAVES.search(path_lower):
                 return "frozen"
+            if self.latent_proj_update != "muonh" and _LATENT_PROJ.search(path_lower):
+                return "frozen" if self.latent_proj_update == "frozen" else "stiefel"
             kda_leaf = _kda_leaf(path_lower)
             if kda_leaf == _KDA_BETA_LEAF:
                 return "kda_beta"

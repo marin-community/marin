@@ -550,6 +550,9 @@ class GrugModelConfig:
     attn_res: bool = False
     attn_res_num_blocks: int = 8
     attn_res_layer_backward: AttnResLayerBackward = AttnResLayerBackward.RECOMPUTE
+    latent_orthogonal_init: bool = False
+    """Initialize the LatentMoE projections semi-orthogonal (``_latent_proj_init``); pairs with the optimizer's
+    ``latent_proj_update`` of ``frozen`` or ``stiefel``."""
     attn_res_remat_attention: bool = False
     """Rematerialize the attention branch inside each AttnRes layer's backward, so its residuals (incl.
     the ``[B, H, S, W]`` Inkling bias) are never alive during the MLP backward. Costs one extra
@@ -2744,11 +2747,11 @@ class MoEMLP(eqx.Module):
             w_latent_down=(
                 None
                 if latent is None or (selects and not cfg.latent_select_plus_proj)
-                else reshard(_init_weight(k_down, (d, latent), cfg.initializer_std), P(_FSDP_AXES, "model"))
+                else reshard(_latent_proj_init(cfg, k_down, (d, latent)), P(_FSDP_AXES, "model"))
             ),
             latent_norm=None if latent is None else _learned_rms_norm(cfg, latent, cfg.layer_norm_eps),
             w_latent_up=(
-                reshard(_init_weight(k_up, (out_width, d), cfg.initializer_std), P("model", _FSDP_AXES))
+                reshard(_latent_proj_init(cfg, k_up, (out_width, d)), P("model", _FSDP_AXES))
                 if cfg.has_latent_up
                 else None
             ),
@@ -6708,6 +6711,19 @@ def _token_window(
 
 def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> Float[Array, "..."]:
     return std * random.truncated_normal(key, -3, 3, shape)
+
+
+def _latent_proj_init(cfg: "GrugModelConfig", key: PRNGKeyArray, shape: tuple[int, int]) -> Float[Array, "..."]:
+    """A LatentMoE projection: truncated normal, or with ``latent_orthogonal_init`` semi-orthogonal (orthonormal
+    columns, or rows when wide) with every singular value ``std * sqrt(max(shape))``, which matches the normal
+    init's Frobenius norm."""
+    std = cfg.initializer_std
+    if not cfg.latent_orthogonal_init:
+        return _init_weight(key, shape, std)
+    tall = random.normal(key, (max(shape), min(shape)), jnp.float32)
+    q, r = jnp.linalg.qr(tall)
+    q = q * jnp.sign(jnp.diagonal(r))  # Haar-uniform: fix QR's sign ambiguity
+    return std * float(np.sqrt(max(shape))) * (q if shape[0] >= shape[1] else q.T)
 
 
 def debug_mesh_and_token_pspec(num_devices: int) -> tuple[jax.sharding.AbstractMesh, P]:
