@@ -176,7 +176,7 @@ def test_numeric_answer_uses_explicit_tolerance(specification, response, reward)
     assert (result.status, result.reward) == ("graded", reward)
 
 
-async def test_direct_chat_harbor_trial_records_private_metadata_failure(tmp_path, specification):
+async def test_direct_chat_rejects_invalid_private_metadata_before_launch(tmp_path, specification):
     environment_config = HarborEnvironmentConfig()
     task = lower_to_harbor(
         specification,
@@ -186,12 +186,10 @@ async def test_direct_chat_harbor_trial_records_private_metadata_failure(tmp_pat
     )
     (task / "submission_convention.json").write_text("{invalid")
 
-    result = await run_replay_trial(task, {"role": "assistant", "content": "12"}, tmp_path / "trials", "run")
+    with pytest.raises(ValueError):
+        await run_replay_trial(task, {"role": "assistant", "content": "12"}, tmp_path / "trials", "run")
 
-    outcome = json.loads((tmp_path / "trials/run/verifier/taskcompendium-result.json").read_text())
-    assert outcome["status"] == "infra_error"
-    assert outcome["reward"] is None
-    assert result.verifier_result is None
+    assert not (tmp_path / "trials").exists()
 
 
 async def test_text_convention_rejects_tool_call_submission(tmp_path, specification):
