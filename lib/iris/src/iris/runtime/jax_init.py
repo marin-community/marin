@@ -39,6 +39,7 @@ logger = logging.getLogger(__name__)
 
 _COMPILATION_CACHE_SUBDIR = "compilation-cache"
 _XLA_AUTOTUNE_CACHE_SUBDIR = "xla/per-fusion-autotune"
+_SINGLE_PROCESS_AUTOTUNE_SUBDIR = "single-process"
 _XLA_AUTOTUNE_CACHE_DIR_FLAG = "--xla_gpu_per_fusion_autotune_cache_dir"
 # Object-store home for the per-build FineStore file set.
 _XLA_AUTOTUNE_REMOTE_PREFIX = "xla-per-fusion-autotune"
@@ -172,11 +173,15 @@ def _enable_xla_autotune_cache() -> None:
     # A multigpu task runs one Python process per GPU on the same node-local mount. XLA moves
     # temporary entries into the cache as it autotunes, so concurrent writers in one directory can
     # race and leave another process with NOT_FOUND for its temporary file. Isolate the writers;
-    # repeating autotuning per process is cheaper than losing the distributed job.
+    # repeating autotuning per process is cheaper than losing the distributed job. A single-process
+    # task gets its own leaf too: the uploader walks its directory recursively every sync, and the
+    # shared parent holds every earlier multigpu job's process directories on this node.
     autotune_dir = f"{SCRATCH_CACHE_PATH}/{_XLA_AUTOTUNE_CACHE_SUBDIR}"
     process_index = os.environ.get(IRIS_MULTIGPU_PROCESS_INDEX_ENV)
     if process_index is not None:
         autotune_dir = f"{autotune_dir}/process-{process_index}"
+    else:
+        autotune_dir = f"{autotune_dir}/{_SINGLE_PROCESS_AUTOTUNE_SUBDIR}"
     try:
         os.makedirs(autotune_dir, exist_ok=True)
     except OSError as exc:

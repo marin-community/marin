@@ -377,7 +377,7 @@ def test_remote_cache_points_xla_autotune_at_the_node_mount(tmp_path) -> None:
         with patch("iris.runtime.jax_init.marin_prefix", return_value="s3://marin-eu/marin/"):
             configure_jax_compilation_cache()
 
-        autotune_dir = f"{scratch_cache_dir}/xla/per-fusion-autotune"
+        autotune_dir = f"{scratch_cache_dir}/xla/per-fusion-autotune/single-process"
         assert f"--xla_gpu_per_fusion_autotune_cache_dir={autotune_dir}" in os.environ["XLA_FLAGS"].split()
         # The pre-existing flag survives; XLA_FLAGS is additive, not replaced.
         assert "--xla_gpu_enable_command_buffer=" in os.environ["XLA_FLAGS"].split()
@@ -434,7 +434,7 @@ def test_launch_provenance_mirrors_the_autotune_cache_to_object_storage(tmp_path
         ):
             configure_jax_compilation_cache()
 
-    autotune_dir = f"{scratch_cache_dir}/xla/per-fusion-autotune"
+    autotune_dir = f"{scratch_cache_dir}/xla/per-fusion-autotune/single-process"
     assert calls == [(jax_init_module._XLA_AUTOTUNE_REMOTE_PREFIX, autotune_dir)]
 
 
@@ -453,7 +453,7 @@ def test_non_primary_task_fetches_without_uploading_autotune_cache(tmp_path) -> 
         ):
             configure_jax_compilation_cache()
 
-    autotune_dir = f"{scratch_cache_dir}/xla/per-fusion-autotune"
+    autotune_dir = f"{scratch_cache_dir}/xla/per-fusion-autotune/single-process"
     assert fetches == [(jax_init_module._XLA_AUTOTUNE_REMOTE_PREFIX, autotune_dir)]
     assert uploads == []
 
@@ -529,7 +529,7 @@ def test_explicit_remote_cache_dir_still_gets_the_xla_guard(tmp_path) -> None:
         # has already parsed them depends on what ran earlier in the process. The
         # invariant is that XLA is never handed a URL.
         assert "://" not in options.executable_build_options.debug_options.xla_gpu_per_fusion_autotune_cache_dir
-        autotune_dir = f"{scratch_cache_dir}/xla/per-fusion-autotune"
+        autotune_dir = f"{scratch_cache_dir}/xla/per-fusion-autotune/single-process"
         assert f"--xla_gpu_per_fusion_autotune_cache_dir={autotune_dir}" in os.environ["XLA_FLAGS"]
 
 
