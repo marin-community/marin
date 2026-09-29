@@ -13,7 +13,7 @@ final-state contract without importing the old grader.
 
 import json
 
-from tasktrove_verify.spec import ScriptSpec
+from verifyit.spec import ScriptSpec
 
 from experiments.post_training.tasktrove.converters.converted_task import (
     ConvertedTask,
@@ -34,8 +34,8 @@ CHECKER_PY = (
 """Score a final calendar state against one task's expected events.
 
 Reads the expected events from ``expected_events.json`` beside this script (under
-``$TASKTROVE_TESTS_DIR``), the agent's calendar from ``$TASKTROVE_WORKSPACE/answer.txt``, and
-reports the reward through ``$TASKTROVE_LOGS_DIR/reward.json``. Self-contained: it does not import
+``$VERIFYIT_TESTS_DIR``), the agent's calendar from ``$VERIFYIT_WORKSPACE/answer.txt``, and
+reports the reward through ``$VERIFYIT_LOGS_DIR/reward.json``. Self-contained: it does not import
 the original dataset's grader.
 """
 
@@ -176,9 +176,9 @@ def _extract_json(raw: str) -> object:
 
 
 def main() -> int:
-    tests_dir = Path(os.environ["TASKTROVE_TESTS_DIR"])
-    workspace = Path(os.environ["TASKTROVE_WORKSPACE"])
-    logs_dir = Path(os.environ["TASKTROVE_LOGS_DIR"])
+    tests_dir = Path(os.environ["VERIFYIT_TESTS_DIR"])
+    workspace = Path(os.environ["VERIFYIT_WORKSPACE"])
+    logs_dir = Path(os.environ["VERIFYIT_LOGS_DIR"])
     expected = json.loads((tests_dir / "'''
     + DATA_NAME
     + """").read_text())

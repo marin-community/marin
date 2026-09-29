@@ -157,6 +157,8 @@ def test_publish_writes_survivors_and_rejection_ledger(tmp_path):
     assert set(_rows(tmp_path / "release" / "rl")) == {"good.tar.gz"}
     assert _rows(tmp_path / "release" / "sft") == {}
     manifest = json.loads((tmp_path / "release" / "manifest.json").read_text())
+    assert manifest["verify_tool_repository"] == "https://github.com/marin-community/verifyit"
+    assert manifest["verify_tool_ref"] == "ref"
     assert manifest["clean_tasks"] == 1 and manifest["input_tasks"] == 4
     assert manifest["by_status"] == {"converted": 1, "duplicate": 1, "verified:gold_leak": 1, "null_grader": 1}
     assert manifest["by_check"] == {"gold_leak": 1}

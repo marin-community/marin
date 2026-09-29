@@ -18,7 +18,9 @@ Stages:
 - ``release`` writes the task Parquet, rejection ledger, manifest, and report.
 """
 
+import json
 from dataclasses import dataclass
+from importlib.metadata import distribution
 
 import click
 from fray.types import ResourceConfig
@@ -42,7 +44,7 @@ from experiments.post_training.tasktrove.task_templates import build_template_in
 from experiments.post_training.tasktrove.verify import filter_tasks
 
 STAGES = ("raw", "summaries", "templates", "converted", "filtered", "routing", "routed", "release")
-PIPELINE_VERSION = "2026.09.18.3"
+PIPELINE_VERSION = "2026.09.29.1"
 RAW_VERSION = "2026.09.09"
 """Pinned download version; bump only when ``TASKTROVE_REVISION`` changes, so reruns reuse the download."""
 
@@ -69,7 +71,18 @@ def launch_commit() -> str:
     return provenance.base_commit
 
 
-def build_workflow(tool_ref: str) -> TaskTroveWorkflow:
+def verifier_commit() -> str:
+    """Return the installed verifyit Git revision used by local grading and task images."""
+    direct_url = distribution("verifyit").read_text("direct_url.json")
+    if direct_url is None:
+        raise click.ClickException("TaskTrove releases require verifyit installed from its pinned Git dependency")
+    provenance = json.loads(direct_url)
+    if provenance.get("url") != "https://github.com/marin-community/verifyit.git":
+        raise click.ClickException("TaskTrove releases require the marin-community/verifyit Git dependency")
+    return provenance["vcs_info"]["commit_id"]
+
+
+def build_workflow(git_revision: str, tool_ref: str) -> TaskTroveWorkflow:
     coordinator = ResourceConfig.with_cpu(cpu=4, ram="16g")
     raw = hf_download(
         "raw/tasktrove", hf_id=TASKTROVE_HF_ID, revision=TASKTROVE_REVISION, version=RAW_VERSION, urls_glob=(TASKS_GLOB,)
@@ -108,7 +121,7 @@ def build_workflow(tool_ref: str) -> TaskTroveWorkflow:
     )
     routing = routing_step(
         input_path=DEFAULT_INPUT,
-        git_revision=tool_ref,
+        git_revision=git_revision,
         sample_size=DEFAULT_SAMPLE_SIZE,
         sample_seed=DEFAULT_SAMPLE_SEED,
     )
@@ -137,7 +150,7 @@ def build_workflow(tool_ref: str) -> TaskTroveWorkflow:
 @click.option("--run", "do_run", is_flag=True, help="Build the selected stage; the default prints its plan.")
 @click.option("--max-concurrent", type=int, default=8, show_default=True)
 def main(stage: str, do_run: bool, max_concurrent: int) -> None:
-    target = getattr(build_workflow(launch_commit()), stage)
+    target = getattr(build_workflow(launch_commit(), verifier_commit()), stage)
     if do_run:
         run(target, max_concurrent=max_concurrent)
     else:

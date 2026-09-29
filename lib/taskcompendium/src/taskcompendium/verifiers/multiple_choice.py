@@ -6,9 +6,9 @@
 from typing import Self
 
 from pydantic import model_validator
-from tasktrove_verify.grade import InvalidTask
-from tasktrove_verify.modes.grade_mcq import grade_mcq_candidate
-from tasktrove_verify.spec import McqSpec
+from verifyit.grade import InvalidTask
+from verifyit.modes.grade_mcq import grade_mcq_candidate
+from verifyit.spec import McqSpec
 
 from taskcompendium.grading import GradeResult, GradingAttempt, Outcome, Verifier
 from taskcompendium.models import VerifierKind, VerifierSpec

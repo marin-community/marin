@@ -459,7 +459,7 @@ def test_run_skyrl_succeeds_without_hf_export(monkeypatch: pytest.MonkeyPatch) -
 
 def test_tasktrove_data_source_resolves_exact_file_and_verifier(tmp_path: Path) -> None:
     release = ArtifactStep.adopt("tasktrove/clean", "2026.09.10", str(tmp_path))
-    (tmp_path / "manifest.json").write_text(json.dumps({"verify_tool_ref": "tasktrove-verify@abc123"}))
+    (tmp_path / "manifest.json").write_text(json.dumps({"verify_tool_ref": "verifyit@abc123"}))
     source = TaskTroveDataSource(
         release,
         TaskTroveSelection(
@@ -482,7 +482,7 @@ def test_tasktrove_data_source_resolves_exact_file_and_verifier(tmp_path: Path) 
 
     assert resolved.uri == str(tmp_path / "tasks/part-00000.parquet")
     assert resolved.relative_path == "part-00000.parquet"
-    assert resolved.verifier_ref == "tasktrove-verify@abc123"
+    assert resolved.verifier_ref == "verifyit@abc123"
     assert resolved.selection.sources == ("source-a", "source-b")
     assert resolved.selection.tags == ("bash", "terminal")
     assert resolved.kind == "tasktrove_parquet"

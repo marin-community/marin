@@ -11,19 +11,20 @@ Each retained task contains:
 
 - `instruction.md` and `task.toml`;
 - `environment/Dockerfile` with the pinned verifier installed;
-- `tests/test.sh`, which invokes `tasktrove-verify`;
+- `tests/test.sh`, which invokes `verifyit`;
 - `tests/verifier.toml`, which declares one grader mode; and
 - mode-specific hidden data under `tests/`.
 
-`task_format.py` defines this layout. [`tasktrove-verify`](../../../lib/tasktrove-verify/README.md)
+`task_format.py` defines this layout. [`verifyit`](https://github.com/marin-community/verifyit)
 defines and executes the grader contract.
 
 ## Run
 
 The release version and TaskTrove revision are constants in `pipeline.py`. The verifier commit
-comes from Marin launch provenance. Commit and push converter and verifier changes before starting
-a release; the pipeline rejects a dirty launch because task Dockerfiles fetch that commit from
-GitHub.
+comes from the installed `verifyit` Git dependency, pinned in `pyproject.toml` and `uv.lock`.
+Commit and push converter changes before starting a release; the pipeline rejects a dirty Marin
+launch. Publish verifier changes in the standalone repository and update the dependency pin
+before starting a release.
 
 ```bash
 # Print the pinned build plan.
@@ -38,7 +39,7 @@ uv run python -m experiments.post_training.tasktrove.pipeline --stage templates 
 
 Update `PIPELINE_VERSION` for a new conversion release. Update `TASKTROVE_REVISION` and
 `RAW_VERSION` together when the input revision changes. The generated Dockerfiles and release
-manifest record the clean launch commit used to build the pipeline.
+manifest record the standalone verifier commit; MCQA routing records the Marin launch commit.
 
 ## Pipeline
 
@@ -66,7 +67,7 @@ columns before reading the packed task payloads.
 | `family` | broad conversion family assigned by `source_verdicts.json` |
 | `template_id` | normalized source template identity |
 | `converter` | converter that produced the task |
-| `mode` | declared `tasktrove-verify` grader mode |
+| `mode` | declared `verifyit` grader mode |
 | `dockerfile_id` | normalized environment/Dockerfile identity |
 | `language` | task language when the converter can determine it |
 | `tags` | list of selection labels preserved or added during conversion |
@@ -156,13 +157,26 @@ states a numeric error tolerance.
 ## Validate and inspect
 
 ```bash
-uv run pytest experiments/post_training/tasktrove/tests lib/tasktrove-verify/tests
+uv run pytest experiments/post_training/tasktrove/tests
 ./infra/pre-commit.py --changed-files --fix
 
 # Export one Parquet row as a Harbor task directory.
 uv run python -m experiments.post_training.tasktrove.publish export \
   s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.18.2/tasks <task-path> --dest /tmp/tasktrove-task
 ```
+
+The verifier suite and its test commands live in the
+[verifyit repository](https://github.com/marin-community/verifyit#install-and-use).
+Docker audits copy a local verifier checkout into the task image:
+
+```bash
+uv run python -m experiments.post_training.tasktrove.docker_audit \
+  --source laion__nemotron-gym-knowledge-mcqa-v2 \
+  --verifier-path /path/to/verifyit --out /tmp/tasktrove-audit
+```
+
+The empty workspace must score zero; a shipped oracle solution must score one. These local audits
+use the checkout's current contents, while release builds install the pinned Git dependency.
 
 ## Route MCQA tasks
 
