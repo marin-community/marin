@@ -184,8 +184,8 @@ function difficultyRun(model, identityPath, record) {
           task.append(node("h3", "Native verifier result"), pretty(verification), textSection("Attempt metadata", {task_id: outcome.task_id, row_index: outcome.row_index, verifier_executed: outcome.verifier_executed, done: outcome.done, turns: outcome.turns}));
           const execution = prefix && `${prefix}${outcome.execution_path}/`;
           const evidence = execution ? record.artifacts.filter(item => item.path.startsWith(execution)) : [];
-          const modelFiles = evidence.filter(item => /solver\/turn-\d+\/(request|response)\.json$/.test(item.path) || /agent\/trajectory\.json$/.test(item.path));
-          const verifierFiles = evidence.filter(item => /\/(verifier-trace\.jsonl|verifier\.(stdout|stderr)|harbor-result\.json)$/.test(item.path));
+          const modelFiles = evidence.filter(item => /solver\/turn-\d+\/(request|response)\.json$/.test(item.path) || /agent\/(trajectory\.json|episode-\d+\/debug\.json)$/.test(item.path));
+          const verifierFiles = evidence.filter(item => /\/(verifier-trace\.jsonl|verifier\.(stdout|stderr)|harbor-result\.json)$/.test(item.path) || /\/verifier\/test-(stdout|stderr)\.txt$/.test(item.path));
           for (const item of modelFiles) task.append(savedEvidence(`Model ${item.path.includes("request.json") ? "request" : "response"} · ${item.path.split("/").slice(-2).join(" / ")}`, item.path));
           for (const item of verifierFiles) task.append(savedEvidence(`${outcome.verification_followup ? "Original execution verifier output" : "Actual verifier output"} · ${item.path.split("/").at(-1)}`, item.path));
           if (outcome.verification_followup) {
