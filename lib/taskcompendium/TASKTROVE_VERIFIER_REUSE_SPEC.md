@@ -1,10 +1,10 @@
 # Reuse TaskTrove verifiers in TaskCompendium
 
 Status: MCQ reuse is implemented in [#9216](https://github.com/marin-community/marin/pull/9216);
-executable modes remain proposed. TaskCompendium retains the TaskTrove
-`tests/verifier.toml` and uses `tasktrove-verify` to score an extracted MCQ
-candidate. This proposal extends that reuse to modes that need private files
-or an isolated verifier runtime.
+executable modes remain proposed. TaskCompendium parses the TaskTrove
+`tests/verifier.toml`, stores its validated MCQ answer and option count, and
+uses `tasktrove-verify` to score an extracted candidate. This proposal extends
+that reuse to modes that need private files or an isolated verifier runtime.
 
 ## Existing contract
 
@@ -28,15 +28,17 @@ The input adaptation must be explicit.
 
 TaskCompendium owns source import, `TaskSpec`, submission conventions, answer
 extraction, and target lowering. `tasktrove-verify` owns TaskTrove mode
-validation and scoring. Add one `tasktrove` verifier kind to the TaskCompendium
-registry. Its private configuration retains the source `verifier.toml` content.
-The task bundle records the `tasktrove-verify` version used to grade it. It may name verifier-only resources
-and a runtime image when the mode executes code. Do not add a TaskCompendium
-kind for each TaskTrove mode or dataset.
+validation and scoring. Use one `tasktrove` verifier kind in the TaskCompendium
+registry. For MCQ, its private configuration stores the validated expected
+letter and option count; the source URI, revision, and row identify the
+original archive. Executable modes may require the full `verifier.toml`,
+verifier-only resources, and a runtime image. A reproducible task bundle must
+also pin the `tasktrove-verify` version used to grade it. Do not add a
+TaskCompendium kind for each TaskTrove mode or dataset.
 
-The importer validates the original TOML and retains its mode fields. It
-rejects a source task if its instructions, answer, private files, or runtime
-cannot be represented faithfully. A `TaskSpec` can use a plain or JSON
+The importer validates the original TOML and retains the fields needed by its
+adapter. It rejects a source task if its instructions, answer, private files,
+or runtime cannot be represented faithfully. A `TaskSpec` can use a plain or JSON
 submission convention only when the selected mode has a defined adaptation
 from the convention's extracted answer to that mode's grader input.
 
@@ -94,8 +96,8 @@ graded zero.
 ## Implementation sequence
 
 1. #9216 extracts the MCQ candidate scorer in `tasktrove-verify`, uses it from
-   both its file-based mode and the TaskCompendium adapter, and retains the
-   source contract under one `tasktrove` registry kind.
+   both its file-based mode and the TaskCompendium adapter, and stores the
+   validated MCQ fields under one `tasktrove` registry kind.
 2. Add private resource packaging, pinned verifier runtimes, and a workspace
    snapshot path for executable modes. Exercise a TaskTrove `script` task and
    confirm that private files, process output, and grader mutations cannot
