@@ -271,6 +271,12 @@ def test_taskcompendium_change_selects_isolated_suite(tmp_path: Path) -> None:
     assert "taskcompendium-unit" in full_selection.suites
 
 
+def _verifier_members(verifier: str) -> str:
+    if verifier == "tasktrove-verify":
+        return '"lib/levanter", "lib/haliax", "lib/tasktrove-verify"'
+    return '"lib/levanter", "lib/haliax"'
+
+
 def _tpu_lock(
     *,
     jax_version: str = "0.11.1",
@@ -285,17 +291,12 @@ def _tpu_lock(
         if verifier == "tasktrove-verify"
         else ('git = "https://github.com/marin-community/verifyit?rev=abc123"')
     )
-    members = (
-        f'"lib/levanter", "lib/haliax", "lib/{verifier}"'
-        if verifier == "tasktrove-verify"
-        else ('"lib/levanter", "lib/haliax"')
-    )
     marker = f', marker = "{tpu_marker}"' if tpu_marker else ""
     return f"""\
     version = 1
     requires-python = ">=3.12"
     [manifest]
-    members = [{members}]
+    members = [{_verifier_members(verifier)}]
     [[package]]
     name = "marin-root"
     version = "0.1.0"
@@ -344,24 +345,19 @@ def _tpu_manifest(verifier: str = "tasktrove-verify") -> str:
         if verifier == "tasktrove-verify"
         else ('{ git = "https://github.com/marin-community/verifyit", rev = "abc123" }')
     )
-    members = (
-        f'"lib/levanter", "lib/haliax", "lib/{verifier}"'
-        if verifier == "tasktrove-verify"
-        else ('"lib/levanter", "lib/haliax"')
-    )
     return f"""\
     [project]
     name = "marin-root"
     requires-python = ">=3.12"
     dependencies = ["{verifier}"]
     [tool.uv.workspace]
-    members = [{members}]
+    members = [{_verifier_members(verifier)}]
     [tool.uv.sources]
     {verifier} = {source}
     """
 
 
-def _committed_tpu_workspace(tmp_path: Path) -> str:
+def _commit_base_tpu_workspace(tmp_path: Path) -> str:
     write(tmp_path, "uv.lock", _tpu_lock())
     write(tmp_path, "pyproject.toml", _tpu_manifest())
     write(tmp_path, "lib/levanter/tests/test_model.py", "def test_model():\n    assert True\n")
@@ -377,7 +373,7 @@ def _committed_tpu_workspace(tmp_path: Path) -> str:
 
 
 def test_verifier_extraction_keeps_cpu_coverage_without_tpu(tmp_path: Path) -> None:
-    base = _committed_tpu_workspace(tmp_path)
+    base = _commit_base_tpu_workspace(tmp_path)
     write(tmp_path, "uv.lock", _tpu_lock(verifier="verifyit"))
     write(tmp_path, "pyproject.toml", _tpu_manifest("verifyit"))
 
@@ -400,7 +396,7 @@ def test_verifier_extraction_keeps_cpu_coverage_without_tpu(tmp_path: Path) -> N
     ],
 )
 def test_reachable_dependency_changes_select_tpu(tmp_path: Path, lock_change: dict[str, str]) -> None:
-    base = _committed_tpu_workspace(tmp_path)
+    base = _commit_base_tpu_workspace(tmp_path)
     write(tmp_path, "uv.lock", _tpu_lock(**lock_change))
 
     selection = select_changed_tests(["uv.lock"], tmp_path, base_ref=base)
@@ -410,7 +406,7 @@ def test_reachable_dependency_changes_select_tpu(tmp_path: Path, lock_change: di
 
 @pytest.mark.parametrize("missing", [True, False])
 def test_unavailable_or_invalid_dependency_graph_selects_tpu(tmp_path: Path, missing: bool) -> None:
-    base = _committed_tpu_workspace(tmp_path)
+    base = _commit_base_tpu_workspace(tmp_path)
     if missing:
         (tmp_path / "uv.lock").unlink()
     else:
