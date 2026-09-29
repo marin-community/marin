@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Read a pinned TaskTrove Clean task archive without extracting it.
+"""Read a TaskTrove Clean task archive without extracting it.
 
 Each task is a gzip-compressed tarball containing ``task.toml`` with a
 ``[metadata]`` source identity, ``instruction.md``, and ``tests/verifier.toml``;
@@ -12,46 +12,27 @@ members as bytes and checks their paths, count, and total size before import.
 import io
 import tarfile
 import tomllib
-from dataclasses import dataclass
 
-from taskcompendium.models import Source
+from taskcompendium.importers.tasktrove.models import TaskArchive
 
-IMPORTER_REVISION = "taskcompendium-tasktrove-v0.2"
 TASK_MANIFEST = "task.toml"
 METADATA_TABLE = "metadata"
 MAX_ARCHIVE_BYTES = 32 * 1024 * 1024
 MAX_ARCHIVE_MEMBERS = 1_024
 
 
-@dataclass(frozen=True)
-class TaskArchive:
-    """A bounded, release-pinned TaskTrove archive."""
-
-    tasktrove_source: str
-    tasktrove_path: str
-    release_uri: str
-    release_revision: str
-    files: dict[str, bytes]
-
-    @property
-    def source(self) -> Source:
-        return Source(
-            dataset=self.release_uri,
-            revision=self.release_revision,
-            row=f"{self.tasktrove_source}:{self.tasktrove_path}",
-            importer_revision=IMPORTER_REVISION,
-        )
-
-
 def read_archive(
     data: bytes,
-    tasktrove_source: str,
-    tasktrove_path: str,
+    upstream_subset: str,
+    archive_path: str,
     release_uri: str,
     release_revision: str,
 ) -> TaskArchive:
-    """Read regular archive members without extracting them to the host filesystem."""
-    if not all((tasktrove_source, tasktrove_path, release_uri, release_revision)) or len(data) > MAX_ARCHIVE_BYTES:
+    """Read an archive, checking its subset and path against its manifest.
+
+    The caller supplies release provenance; the archive cannot verify it.
+    """
+    if not all((upstream_subset, archive_path, release_uri, release_revision)) or len(data) > MAX_ARCHIVE_BYTES:
         raise ValueError("Task archive has an invalid identity or exceeds the input limit")
     files: dict[str, bytes] = {}
     size = 0
@@ -76,8 +57,8 @@ def read_archive(
         metadata = tomllib.loads(files[TASK_MANIFEST].decode())[METADATA_TABLE]
         if not isinstance(metadata, dict):
             raise ValueError("Task archive metadata is not a table")
-        if metadata.get("tasktrove_source") != tasktrove_source or metadata.get("tasktrove_path") != tasktrove_path:
+        if metadata.get("tasktrove_source") != upstream_subset or metadata.get("tasktrove_path") != archive_path:
             raise ValueError("Task archive does not match its declared source identity")
     except (KeyError, UnicodeDecodeError, tomllib.TOMLDecodeError, ValueError) as error:
         raise ValueError(f"Invalid TaskTrove archive metadata: {error}") from error
-    return TaskArchive(tasktrove_source, tasktrove_path, release_uri, release_revision, files)
+    return TaskArchive(upstream_subset, archive_path, release_uri, release_revision, files)

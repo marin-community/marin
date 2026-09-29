@@ -9,9 +9,10 @@ import tomllib
 
 from tasktrove_verify.spec import McqSpec, parse_spec
 
-from taskcompendium.importers.tasktrove import METADATA_TABLE, TASK_MANIFEST, TaskArchive
+from taskcompendium.importers.tasktrove.convert import METADATA_TABLE, TASK_MANIFEST
+from taskcompendium.importers.tasktrove.models import TaskArchive
 from taskcompendium.models import AnswerType, TaskRequirements, TaskSpec
-from taskcompendium.verifiers.tasktrove_mcqa import tasktrove_mcqa
+from taskcompendium.verifiers.tasktrove_mcqa import tasktrove_mcqa_verifier
 
 FAMILY = "qa-short-answer"
 CONVERTER = "nemotron_mcqa"
@@ -29,6 +30,7 @@ _FORMAT_PREFIX = (
 
 
 def _clean_instructions(instructions: str, options: int) -> str:
+    """Replace a recognized answer-file template with a one-letter request."""
     if not instructions.startswith(_PREFIX):
         raise ValueError("Unsupported MCQA instruction template")
     prompt = instructions.removeprefix(_PREFIX)
@@ -64,7 +66,7 @@ def import_task(archive: TaskArchive) -> TaskSpec:
     return TaskSpec(
         id=f"tasktrove-{hashlib.sha256(identity.encode()).hexdigest()}",
         instructions=instructions,
-        verifier=tasktrove_mcqa(contract.expected, contract.options),
+        verifier=tasktrove_mcqa_verifier(contract.expected, contract.options),
         source=archive.source,
         requirements=TaskRequirements(),
         answer_type=AnswerType.TEXT,
