@@ -168,6 +168,40 @@ DEVICE_FLOPS: dict[str, dict[str, float]] = {
     "gb10": {
         "bf16": 100e12,
     },
+    # AMD Instinct GPUs
+    # AMD datasheets publish dense peaks alongside the structured-sparsity figures; these
+    # are the dense peaks, with the matrix figure for fp32/fp64.
+    # source: https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/data-sheets/amd-instinct-mi300x-data-sheet.pdf
+    "mi300x": {
+        "fp64": 163.4e12,
+        "fp32": 163.4e12,
+        "tf32": 653.7e12,
+        "fp16": 1307.4e12,
+        "bf16": 1307.4e12,
+        "fp8": 2614.9e12,
+        "int8": 2614.9e12,
+    },
+    # MI325X has the MI300X compute (304 CUs at 2100 MHz) with 256GB of HBM3E
+    # source: https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/product-briefs/instinct-mi325x-datasheet.pdf
+    "mi325x": {
+        "fp64": 163.4e12,
+        "fp32": 163.4e12,
+        "tf32": 653.7e12,
+        "fp16": 1307.4e12,
+        "bf16": 1307.4e12,
+        "fp8": 2614.9e12,
+        "int8": 2614.9e12,
+    },
+    # fp8 is the OCP-FP8 figure.
+    # source: https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/product-briefs/amd-instinct-mi350x-gpu-brochure.pdf
+    "mi350x": {
+        "fp64": 72.1e12,
+        "fp32": 144.2e12,
+        "fp16": 2.3096e15,
+        "bf16": 2.3096e15,
+        "fp8": 4.614e15,
+        "int8": 4.614e15,
+    },
     # "auto" uses H100 flops for when user doesn't care about specific GPU type
     "auto": {
         "fp64": 67e12,
@@ -309,6 +343,13 @@ def jax_device_kind_to_fray_device_type(kind: str) -> str:
         return "b200"
     if "gb10" in kind:
         return "gb10"
+    # AMD Instinct
+    if "mi300x" in kind:
+        return "mi300x"
+    if "mi325x" in kind:
+        return "mi325x"
+    if "mi350x" in kind:
+        return "mi350x"
 
     return kind
 
