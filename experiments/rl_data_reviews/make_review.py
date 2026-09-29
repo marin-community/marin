@@ -310,7 +310,7 @@ def opinion_schema() -> dict:
     }
 
 
-def judgment(model: dict, system: str, payload: dict, directory: Path, limit: int) -> dict:
+def judgment(model: dict, system: str, payload: dict, directory: Path, limit: int, api_key: str | None) -> dict:
     serialized = json_text(payload)
     if len(serialized.encode()) > limit:
         raise ValueError("Judge/coalescer input exceeds --max-evidence-bytes; nothing was silently truncated")
@@ -337,8 +337,6 @@ def judgment(model: dict, system: str, payload: dict, directory: Path, limit: in
     wire_schema = copy.deepcopy(response_schema)
     if system == COALESCE_PROMPT:
         wire_schema["properties"]["syntheses"]["items"]["properties"]["derived_from_review_ids"].pop("uniqueItems")
-    key_env = model.get("api_key_env")
-    api_key = os.environ[key_env] if key_env else None
     result = model_completion(
         model,
         [{"role": "system", "content": system}, {"role": "user", "content": serialized}],
@@ -456,11 +454,13 @@ def evidence_segments(task: Task, outcome: dict, entries: list[dict], budget: in
     return result
 
 
-def task_judgment(model: dict, task: Task, outcome: dict, entries: list[dict], stage: Path, limit: int) -> dict:
+def task_judgment(
+    model: dict, task: Task, outcome: dict, entries: list[dict], stage: Path, limit: int, api_key: str | None
+) -> dict:
     """Give each judge complete evidence in isolated segments, then its own consolidation."""
     payload = {"task": asdict(task), "native_outcome": outcome, "evidence": entries}
     if len(json_text(payload).encode()) <= REVIEW_SEGMENT_BYTES:
-        return judgment(model, JUDGE_PROMPT, payload, stage, limit)
+        return judgment(model, JUDGE_PROMPT, payload, stage, limit, api_key)
     segments = evidence_segments(task, outcome, entries, REVIEW_SEGMENT_BYTES)
     write_json(
         stage / "segments.json",
@@ -471,7 +471,7 @@ def task_judgment(model: dict, task: Task, outcome: dict, entries: list[dict], s
         },
     )
     opinions = [
-        judgment(model, SEGMENT_PROMPT, segment, stage / "segments" / f"{index:03d}", limit)
+        judgment(model, SEGMENT_PROMPT, segment, stage / "segments" / f"{index:03d}", limit, api_key)
         for index, segment in enumerate(segments)
     ]
     return judgment(
@@ -485,6 +485,7 @@ def task_judgment(model: dict, task: Task, outcome: dict, entries: list[dict], s
         },
         stage,
         limit,
+        api_key,
     )
 
 
@@ -663,7 +664,15 @@ class PanelReviews:
 
 
 def independent_reviews(
-    sample: TaskSample, config: dict, output: Path, snapshot_id: str, seed: int, limit: int, identity: dict, schema: dict
+    sample: TaskSample,
+    config: dict,
+    output: Path,
+    snapshot_id: str,
+    seed: int,
+    limit: int,
+    identity: dict,
+    schema: dict,
+    api_key: str | None,
 ) -> PanelReviews:
     tasks, source_counts = sample.tasks, sample.source_counts
     n = len(tasks)
@@ -773,7 +782,7 @@ def independent_reviews(
         entries = text_bundle(execution, output, limit)
         for judge in range(PANEL_SIZE):
             stage = task_root / "judges" / str(judge + 1)
-            opinion = task_judgment(model, task, result, entries, stage, limit)
+            opinion = task_judgment(model, task, result, entries, stage, limit, api_key)
             review = review_record(
                 task_id + f"/judge/{judge + 1}",
                 task_id,
@@ -812,7 +821,9 @@ def independent_reviews(
     return PanelReviews(bundle, source_populations, task_sources, task_coverages)
 
 
-def coalesce_reviews(panel: PanelReviews, model: dict, output: Path, limit: int, schema: dict) -> None:
+def coalesce_reviews(
+    panel: PanelReviews, model: dict, output: Path, limit: int, schema: dict, api_key: str | None
+) -> None:
     bundle = panel.collection
     source_populations, task_sources, task_coverages = panel.source_populations, panel.task_sources, panel.task_coverages
     stage = output / "coalescer"
@@ -842,6 +853,7 @@ def coalesce_reviews(panel: PanelReviews, model: dict, output: Path, limit: int,
         },
         stage,
         limit,
+        api_key,
     )
     expected = {subject["id"] for subject in bundle["subjects"]}
     if {item["subject_id"] for item in merged["syntheses"]} != expected or len(merged["syntheses"]) != len(expected):
@@ -891,6 +903,8 @@ def make_review(config_path: Path, n: int, seed: int, output: Path, resume: bool
     base = config_path.parent
     native = config["runtime"]
     model = config["model"]
+    key_env = model.get("api_key_env")
+    api_key = os.environ[key_env] if key_env else None
     sample = sampled_tasks(config, base, n, seed)
     tasks, population = sample.tasks, sample.population_count
     identity = {
@@ -944,9 +958,9 @@ def make_review(config_path: Path, n: int, seed: int, output: Path, resume: bool
             result = json.loads(final_path.read_text())
             validate_collection(result, output, schema)
             return result
-        panel = independent_reviews(sample, config, output, snapshot_id, seed, limit, identity, schema)
+        panel = independent_reviews(sample, config, output, snapshot_id, seed, limit, identity, schema, api_key)
         bundle = panel.collection
-        coalesce_reviews(panel, model, output, limit, schema)
+        coalesce_reviews(panel, model, output, limit, schema, api_key)
         validate_collection(bundle, output, schema)
         write_json(final_path, bundle)
         write_json(

@@ -17,10 +17,8 @@ from skyrl_gym.verification import RolloutEvidence, VerificationResult
 from skyrl_train.trajectory_runners.skyrl_gym_contracts import fold_verification_results, verification_from_env_step
 
 
-def run_task(data: dict, root: Path) -> dict:
+def run_task(data: dict, root: Path, api_key: str | None) -> dict:
     task, config = data["task"], data["config"]
-    key_env = data["model"].get("api_key_env")
-    api_key = os.environ[key_env] if key_env else None
     extras = copy.deepcopy(task["extras"])
     extras["max_turns"] = config["max_turns"]
     env = skyrl_gym.make(
@@ -113,7 +111,10 @@ def main() -> None:
     args.output.mkdir(parents=True, exist_ok=True)
     with native_calls() as called:
         try:
-            result = run_task(json.loads(args.input.read_text()), args.output)
+            data = json.loads(args.input.read_text())
+            key_env = data["model"].get("api_key_env")
+            api_key = os.environ[key_env] if key_env else None
+            result = run_task(data, args.output, api_key)
         except Exception as error:
             trace = args.output / "verifier-trace.jsonl"
             verifier_executed = trace.is_file() and any(
