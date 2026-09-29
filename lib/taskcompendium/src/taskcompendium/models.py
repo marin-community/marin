@@ -28,6 +28,7 @@ class VerifierKind(StrEnum):
 
     EXACT_ANSWER = "exact_answer"
     PREDICTED_ACTION = "predicted_action"
+    NUMERIC_ANSWER = "numeric_answer"
     MCQ_ANSWER = "mcq_answer"
 
 

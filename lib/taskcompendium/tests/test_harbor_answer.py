@@ -14,7 +14,7 @@ from threading import Thread
 import pytest
 from harbor.models.task.task import Task
 
-from taskcompendium.grading import exact_answer
+from taskcompendium.grading import exact_answer, numeric_answer
 from taskcompendium.harbor.runner import ChatLaunch, run_trial
 from taskcompendium.lowering import (
     DIRECT_CHAT_ENVIRONMENT,
@@ -36,6 +36,7 @@ from taskcompendium.models import (
     VerifierSpec,
 )
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
+from taskcompendium.verifier_registry import grade_answer
 
 from .harbor_replay import run_replay_trial
 
@@ -94,7 +95,7 @@ def specification() -> TaskSpec:
         context=ConversationInput(events=(TextMessage(role="user", content="What is 7 + 5?"),)),
         requirements=TaskRequirements(),
         answer_type=AnswerType.NUMBER,
-        verifier=exact_answer("12"),
+        verifier=numeric_answer(12.0, tolerance_abs=0.0, tolerance_rel=0.0),
         source=Source(dataset="hand-authored", revision="2026-09-16", row="arithmetic-7-plus-5", importer_revision="1"),
     )
 
@@ -103,7 +104,9 @@ def specification() -> TaskSpec:
     "answer_format,response,reward,status",
     [
         (AnswerFormat.PLAIN, "12", 1.0, "graded"),
+        (AnswerFormat.PLAIN, "12.0", 1.0, "graded"),
         (AnswerFormat.PLAIN, "13", 0.0, "graded"),
+        (AnswerFormat.PLAIN, "not a number", 0.0, "graded"),
         (AnswerFormat.PLAIN, r"\boxed{12}", 0.0, "graded"),
         (AnswerFormat.JSON, '{"answer":"12"}', 1.0, "graded"),
         (AnswerFormat.JSON, '{"answer":"13"}', 0.0, "graded"),
@@ -132,7 +135,9 @@ async def test_direct_chat_harbor_trial_distinguishes_answer_outcomes(
 
 
 async def test_direct_chat_exact_comparison_uses_pinned_normalization(tmp_path, specification):
-    specification = specification.model_copy(update={"verifier": exact_answer("Straße Park")})
+    specification = specification.model_copy(
+        update={"verifier": exact_answer("Straße Park"), "answer_type": AnswerType.TEXT}
+    )
     environment_config = HarborEnvironmentConfig()
     task = lower_to_harbor(
         specification,
@@ -144,6 +149,21 @@ async def test_direct_chat_exact_comparison_uses_pinned_normalization(tmp_path, 
     result = await run_replay_trial(task, {"role": "assistant", "content": "STRASSE   PARK"}, tmp_path / "trials", "run")
 
     assert result.verifier_result.rewards == {"reward": 1.0}
+
+
+@pytest.mark.parametrize(
+    "response,reward",
+    [("12.05", 1.0), ("12.2", 0.0)],
+)
+def test_numeric_answer_uses_explicit_tolerance(specification, response, reward):
+    specification = specification.model_copy(
+        update={"verifier": numeric_answer(12.0, tolerance_abs=0.1, tolerance_rel=0.0)}
+    )
+    convention = SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN)
+
+    result = grade_answer(specification, convention, response, object())
+
+    assert (result.status, result.reward) == ("graded", reward)
 
 
 async def test_direct_chat_harbor_trial_records_private_metadata_failure(tmp_path, specification):
@@ -204,19 +224,27 @@ async def test_chat_records_incompatible_tool_call_for_convention_extraction(tmp
     assert json.loads((tmp_path / "trials/run/agent/submission.json").read_text()) == message
 
 
-@pytest.mark.parametrize("answer_type", [AnswerType.TEXT, AnswerType.NUMBER])
-async def test_answer_call_grades_semantic_answers_through_harbor(tmp_path, specification, answer_type):
-    specification = specification.model_copy(update={"answer_type": answer_type})
+@pytest.mark.parametrize(
+    "answer_type,verifier,response",
+    [
+        (AnswerType.TEXT, exact_answer("12"), "12"),
+        (AnswerType.NUMBER, numeric_answer(12.0, tolerance_abs=0.0, tolerance_rel=0.0), "12.0"),
+    ],
+)
+async def test_answer_call_grades_semantic_answers_through_harbor(
+    tmp_path, specification, answer_type, verifier, response
+):
+    specification = specification.model_copy(update={"answer_type": answer_type, "verifier": verifier})
     convention = SubmissionConvention(id="answer-call", answer_format=AnswerFormat.ANSWER_CALL)
     environment_config = HarborEnvironmentConfig()
     task = lower_to_harbor(specification, convention, environment_config, tmp_path / "task")
 
-    correct = await run_replay_trial(task, _answer_action("12"), tmp_path / "trials", "correct")
+    correct = await run_replay_trial(task, _answer_action(response), tmp_path / "trials", "correct")
     wrong = await run_replay_trial(task, _answer_action("13"), tmp_path / "trials", "wrong")
 
     assert correct.verifier_result.rewards == {"reward": 1.0}
     assert wrong.verifier_result.rewards == {"reward": 0.0}
-    assert json.loads((tmp_path / "trials/correct/agent/submission.json").read_text()) == _answer_action("12")
+    assert json.loads((tmp_path / "trials/correct/agent/submission.json").read_text()) == _answer_action(response)
 
 
 async def test_answer_call_does_not_dispatch_and_requires_its_submission_function(tmp_path, specification, monkeypatch):
