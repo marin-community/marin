@@ -6,7 +6,7 @@
 from dataclasses import dataclass
 from enum import StrEnum
 from math import isfinite
-from typing import Annotated, Any, Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
@@ -90,7 +90,7 @@ class FunctionDefinition(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     name: str
-    parameters: dict[str, Any]
+    parameters: dict[str, JsonValue]
     description: str | None = None
     strict: bool | None = None
 
