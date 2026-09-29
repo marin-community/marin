@@ -470,10 +470,12 @@ class EvalRunRecord(BaseModel):
     created_at: str
     user: str
     version: str | None = None
-    """A human version label for the launch (``--version``), e.g. ``2026.07.20`` or ``rl-fix-sweep``.
-    Every record in a group shares it. The dashboard groups a model's runs by version so the headline
-    matrix shows the latest labelled cohort rather than mixing evals across model states; ``None`` for
-    an unlabelled launch."""
+    """A submitter-controlled cohort label for the launch (``--version``).
+
+    Every record in a group shares it. The dashboard may use the label to group runs, but it is
+    provenance metadata rather than evidence of evaluation-policy conformance. A trusted verifier
+    must assign conformance independently. ``None`` denotes an unlabelled launch.
+    """
     description: str | None = None
     """A free-text note on why the launch was run (``--description``), e.g. ``Trying out a new sweep
     after fixing RL``. Shared by every record in a group and surfaced on the launch in the dashboard."""

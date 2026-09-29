@@ -5,6 +5,13 @@ configs, Harbor configs, the co-hosted judge config, model-specific Harbor polic
 and launch commands. The launcher reads the Harbor and Evalchemy revisions from Marin's external
 dependency declarations and checks the Harbor lockfile before submission.
 
+The launcher leaves `EvalRunRecord.version` unset. Its checked-in inputs, config digests, and durable
+records support reproduction and review; they do not attest that a run conforms to an accepted eval
+policy. Policy conformance requires the independently trusted evidence and verifier described in
+[issue #9458](https://github.com/marin-community/marin/issues/9458). The preflight and comparison work
+in [PR #9461](https://github.com/marin-community/marin/pull/9461) must consume that trusted decision
+before presenting a run as policy-conformant.
+
 From a clean checkout of the campaign's pinned Marin commit:
 
 ```bash

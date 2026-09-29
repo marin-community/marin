@@ -192,7 +192,10 @@ def cli() -> None:
     "--version",
     "version",
     default=None,
-    help="Human version label for this launch, e.g. '2026.07.20' or 'rl-fix-sweep'.",
+    help=(
+        "Submitter-controlled cohort label, e.g. '2026.07.20' or 'rl-fix-sweep'. "
+        "This is provenance metadata, not an eval-policy conformance claim."
+    ),
 )
 @click.option("--description", default=None, help="Free-text note on why this launch was run.")
 @click.option(
