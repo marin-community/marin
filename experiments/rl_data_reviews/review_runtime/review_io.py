@@ -8,7 +8,6 @@ import datetime
 import enum
 import hashlib
 import json
-import os
 import shutil
 import sys
 import traceback
@@ -80,15 +79,16 @@ def digest(path: Path) -> str:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def model_completion(model: dict, messages: list[dict], directory: Path, parameters: dict) -> dict:
+def model_completion(
+    model: dict, messages: list[dict], directory: Path, parameters: dict, *, api_key: str | None
+) -> dict:
     """Persist a fresh request and its full response without authentication headers."""
     directory.mkdir(parents=True, exist_ok=True)
     payload = {**parameters, "model": model["name"], "messages": messages, "stream": False, "n": 1}
     write_json(directory / "request.json", payload)
     headers = {"Content-Type": "application/json"}
-    key_env = model.get("api_key_env")
-    if key_env is not None:
-        headers["Authorization"] = "Bearer " + os.environ[key_env]
+    if api_key is not None:
+        headers["Authorization"] = "Bearer " + api_key
     request = urllib.request.Request(
         model["base_url"].rstrip("/") + "/chat/completions",
         data=json_text(payload).encode(),

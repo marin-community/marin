@@ -36,6 +36,7 @@ json.dump(result, sys.stdout)
 
 
 def quality(collection):
+    """Return the source rating, or None for a supplemental small-model review."""
     source_ids = {s["id"] for s in collection["subjects"] if s["level"] == "source"}
     source_syntheses = [r for r in collection["reviews"] if r["method"] == "synthesis" and r["subject_id"] in source_ids]
     if len(source_syntheses) != 1:

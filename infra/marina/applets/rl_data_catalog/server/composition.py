@@ -12,6 +12,9 @@ from .nemotron_counts import NEMOTRON_COUNTS
 from .nemotron_records import record_source
 
 NEMOTRON = "nvidia/Nemotron-RL-Ultra-Training-Blends"
+NEMOTRON_ENV = "nemotron_ultra"
+HH_RLHF = "Anthropic/hh-rlhf"
+KTO_MIX = "trl-lib/kto-mix-14k"
 
 
 def canonical_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -160,7 +163,7 @@ def component_rows(parent: dict[str, Any], info: dict[str, Any]) -> list[dict[st
     """Expand mixed selections once, retaining their canonical source and provenance."""
     if parent["dataset_id"] == NEMOTRON:
         return nemotron_components(parent, info)
-    if parent["dataset_id"] not in {"Anthropic/hh-rlhf", "trl-lib/kto-mix-14k"}:
+    if parent["dataset_id"] not in {HH_RLHF, KTO_MIX}:
         return [parent]
     counts = info["components"]
     if sum(counts.values()) != parent["task_count"]:
@@ -168,7 +171,7 @@ def component_rows(parent: dict[str, Any], info: dict[str, Any]) -> list[dict[st
     rows = []
     for name, count in counts.items():
         row = child_row(parent, name, count)
-        hh = parent["dataset_id"] == "Anthropic/hh-rlhf"
+        hh = parent["dataset_id"] == HH_RLHF
         row.update(
             display_name=f"{parent['dataset_id']} · {name}" if hh else f"{name} · KTO",
             url=(

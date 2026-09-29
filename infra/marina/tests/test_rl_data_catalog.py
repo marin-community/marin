@@ -507,7 +507,7 @@ def test_aime_benchmark_and_audited_family_survive_refresh_without_hf_tag() -> N
         }
     ]
 
-    def upstream(request: httpx.Request) -> httpx.Response:
+    def upstream(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
             json={

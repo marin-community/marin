@@ -174,7 +174,7 @@ class TaskSample:
 
 
 def sampled_tasks(config: dict, base: Path, n: int, seed: int) -> TaskSample:
-    """Reservoir-sample a local source without retaining every prepared row."""
+    """Return a seeded uniform task sample and counts for its source populations."""
     rng = random.Random(seed)
     selected = []
     total = 0
@@ -224,7 +224,7 @@ def evidence(path: Path, root: Path) -> dict:
 
 
 def text_bundle(directory: Path, root: Path, limit: int) -> list[dict]:
-    """Include complete UTF-8 evidence; explicitly identify binary artifacts."""
+    """Return evidence entries with text or an explicit reason it was not inspected."""
     result = []
     size = 0
     index_path = directory / "native-code-index.json"
@@ -337,6 +337,8 @@ def judgment(model: dict, system: str, payload: dict, directory: Path, limit: in
     wire_schema = copy.deepcopy(response_schema)
     if system == COALESCE_PROMPT:
         wire_schema["properties"]["syntheses"]["items"]["properties"]["derived_from_review_ids"].pop("uniqueItems")
+    key_env = model.get("api_key_env")
+    api_key = os.environ[key_env] if key_env else None
     result = model_completion(
         model,
         [{"role": "system", "content": system}, {"role": "user", "content": serialized}],
@@ -349,6 +351,7 @@ def judgment(model: dict, system: str, payload: dict, directory: Path, limit: in
                 "json_schema": {"name": "quality_review", "strict": True, "schema": wire_schema},
             },
         },
+        api_key=api_key,
     )
     if result["choices"][0]["finish_reason"] == "length":
         raise ValueError("Judge/coalescer output was truncated; raw response saved, stage remains incomplete")

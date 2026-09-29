@@ -7,6 +7,7 @@ import argparse
 import contextlib
 import copy
 import json
+import os
 from pathlib import Path
 
 import skyrl_gym
@@ -18,6 +19,8 @@ from skyrl_train.trajectory_runners.skyrl_gym_contracts import fold_verification
 
 def run_task(data: dict, root: Path) -> dict:
     task, config = data["task"], data["config"]
+    key_env = data["model"].get("api_key_env")
+    api_key = os.environ[key_env] if key_env else None
     extras = copy.deepcopy(task["extras"])
     extras["max_turns"] = config["max_turns"]
     env = skyrl_gym.make(
@@ -49,7 +52,11 @@ def run_task(data: dict, root: Path) -> dict:
             options.pop("max_completion_tokens", None)
         for turn in range(config["max_turns"]):
             reply = model_completion(
-                data["model"], messages, root / "solver" / f"turn-{turn:03d}", {**options, **data["model"]["parameters"]}
+                data["model"],
+                messages,
+                root / "solver" / f"turn-{turn:03d}",
+                {**options, **data["model"]["parameters"]},
+                api_key=api_key,
             )
             choice = reply["choices"][0]
             assistant = choice["message"]

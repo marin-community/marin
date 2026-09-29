@@ -12,7 +12,7 @@ from typing import Any
 
 import httpx
 
-from .composition import canonical_rows, component_rows
+from .composition import HH_RLHF, KTO_MIX, NEMOTRON_ENV, canonical_rows, component_rows
 from .source_annotations import (
     BENCHMARK_DATASETS,
     CARD_COUNT_DATASETS,
@@ -179,14 +179,14 @@ def dataset_metadata(client: httpx.Client, dataset_id: str) -> dict[str, Any]:
         except httpx.HTTPError as error:
             info["count_metadata_error"] = str(error)
     info["card_url"] = f"https://huggingface.co/datasets/{dataset_id}/blob/{info['sha']}/README.md"
-    if dataset_id == "Anthropic/hh-rlhf":
+    if dataset_id == HH_RLHF:
         mirror = get_json(client, "https://huggingface.co/api/datasets/tasksource/hh-rlhf")
         info["components"] = {
             entry["config_name"]: next(split["num_examples"] for split in entry["splits"] if split["name"] == "train")
             for entry in mirror["cardData"]["dataset_info"]
         }
         info["composition_url"] = f"https://huggingface.co/datasets/tasksource/hh-rlhf/blob/{mirror['sha']}/README.md"
-    elif dataset_id == "trl-lib/kto-mix-14k":
+    elif dataset_id == KTO_MIX:
         stats = get_json(
             client,
             "https://datasets-server.huggingface.co/statistics",
@@ -252,7 +252,7 @@ def count_metadata(source: dict[str, Any], info: dict[str, Any]) -> TaskCount:
     url = info.get("card_url", "")
     pattern = None
     basis = ""
-    if source["env_id"] == "nemotron_ultra":
+    if source["env_id"] == NEMOTRON_ENV:
         blend = name.removeprefix("nemotron_ultra_")
         pattern = rf"^\|\s*{re.escape(blend)}\s*\|\s*([\d,]+)\s*\|"
         basis = f"Dataset card, Dataset Quantification: {blend} samples"
@@ -286,7 +286,8 @@ def count_metadata(source: dict[str, Any], info: dict[str, Any]) -> TaskCount:
         return TaskCount(
             count,
             "HF viewer: all train configurations; partial files use estimated_num_rows. "
-            "Repository-wide count; SkyRL does not select a configuration. Card audit on 2026-09-28 reports ~6M.",
+            "Repository-wide count; each SkyRL run selects a configuration explicitly. "
+            "Card audit on 2026-09-28 reports ~6M.",
             "estimated" if estimated else "exact",
             f"https://datasets-server.huggingface.co/size?dataset={source['dataset_id']}",
         )
@@ -344,7 +345,7 @@ def annotate_source(row: dict[str, Any]) -> None:
     dataset_id = row["dataset_id"]
     row["url"] = f"https://huggingface.co/datasets/{dataset_id}"
     selector = ""
-    if row["environment"] == "nemotron_ultra":
+    if row["environment"] == NEMOTRON_ENV:
         selector = row["name"].removeprefix("nemotron_ultra_")
         row["notes"] = (
             "Blend includes verifiable, alignment, and agentic tasks. Counts are published in the dataset card."
@@ -484,7 +485,7 @@ def skyrl_snapshot(
             type="Alignment" if env == "preference" else "Agentic" if env in AGENTIC_ENVS else "RLVR",
             turns=(
                 "Mixed"
-                if env in {"nemotron_ultra", "preference"}
+                if env in {NEMOTRON_ENV, "preference"}
                 else "Multi-turn" if env in MULTI_TURN_ENVS else "Single-turn"
             ),
             classification_basis=(
@@ -501,7 +502,7 @@ def skyrl_snapshot(
             count_metadata_error=info.get("count_metadata_error"),
         )
         set_count_metadata(row, source, info, previous_by_id.get(row["id"]))
-        if env == "nemotron_ultra":
+        if env == NEMOTRON_ENV:
             row["type"] = None
             row["notes"] = (
                 "Blend includes verifiable, alignment, and agentic tasks. Counts are published in the dataset card."
