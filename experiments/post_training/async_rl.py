@@ -1,10 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Launch fully asynchronous RL on the curriculum pool.
+"""Launch Megatron RL on the curriculum pool with a rolling rollout buffer.
 
-The launcher trains the 67B-A2B Snowball policy with MarinSkyRL's fully asynchronous loop, using the
-curriculum-RL pool, policy and evaluation. It writes every setting it decides into the rendered
+The launcher trains the 67B-A2B Snowball policy using the curriculum-RL pool and evaluation.
+It writes every setting it decides into the rendered
 config, including values that MarinSkyRL's base config or the curriculum template already hold.
 Presets bundle the loop settings, and ``--set`` changes one key; a run's address carries a hash of
 its ``--set`` changes.
@@ -39,7 +39,6 @@ from marin.execution.lazy import ArtifactStep
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import (
-    _TRAINING_STRATEGY,
     IRIS_HUB_CLUSTER_CONFIG,
     ArtifactDataSource,
     ArtifactHfModel,
@@ -133,9 +132,7 @@ class TrainingRecipe:
     # vLLM engine settings the model needs beyond the ones the launcher writes itself.
     engine_init_kwargs: Mapping[str, object]
 
-    @property
-    def strategy(self) -> str:
-        return _TRAINING_STRATEGY
+    strategy: str = "megatron"
 
 
 # Snowball 67B-A2B on the 40-GPU topology: four policy nodes with the reference colocated,
@@ -191,8 +188,7 @@ class AsyncPreset:
     # How many updates old a group may be when the trainer consumes it; 0 admits only groups
     # sampled by the current weights.
     max_staleness_steps: int
-    # Groups generating at once across the engines: at least one update's prompts, or the trainer
-    # refuses to start.
+    # Groups generating at once across the engines.
     generation_workers: int
     # Prompt-plus-response budget one request may occupy in the engine, in tokens.
     request_window_tokens: int
@@ -226,8 +222,7 @@ SMOKE_PRESET = replace(
     max_new_tokens=1024,
     evals="gsm8k-smoke",
 )
-# Every consumed group was sampled by the current weights; workers sit at the trainer's floor of
-# one update's prompts.
+# Every consumed group was sampled by the current weights.
 ON_POLICY = replace(DEFAULT, label="on_policy", max_staleness_steps=0, generation_workers=PROMPTS_PER_UPDATE)
 PRESETS: Mapping[str, AsyncPreset] = MappingProxyType(
     {preset.label: preset for preset in (SMOKE_PRESET, DEFAULT, ON_POLICY)}
@@ -441,7 +436,7 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
         "max_num_seqs": 1024,
         # Tokens one engine scheduling step may prefill or decode.
         "max_num_batched_tokens": 8192,
-        # Share each prompt's prefill across its four answers; the cache is cleared at each pause.
+        # Share each prompt's prefill across its four answers.
         "enable_prefix_caching": True,
         # Split long prefills across scheduling steps so decodes keep flowing.
         "enable_chunked_prefill": True,

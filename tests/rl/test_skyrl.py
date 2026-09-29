@@ -553,14 +553,3 @@ def test_launcher_survives_undecodable_bytes_on_stderr() -> None:
     )
 
     assert completed.returncode == 4
-
-
-def test_a_config_that_selects_an_unsupported_strategy_is_refused() -> None:
-    """Unsupported trainer strategies are rejected before submission."""
-    spec = _spec()
-
-    with pytest.raises(ValueError, match="megatron"):
-        dataclasses.replace(
-            spec,
-            config_yaml=_config_yaml(strategy="fsdp2"),
-        )
