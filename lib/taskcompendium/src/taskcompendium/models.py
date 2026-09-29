@@ -10,7 +10,9 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
-SCHEMA_VERSION = "0.9"
+from taskcompendium.resources import SHA256_PATTERN, TaskResource, validate_resource_paths
+
+SCHEMA_VERSION = "0.10"
 
 
 class AnswerType(StrEnum):
@@ -27,6 +29,7 @@ class VerifierKind(StrEnum):
     """The registered grader used to check a submission."""
 
     EXACT_ANSWER = "exact_answer"
+    STATE_MATCH = "state_match"
     PREDICTED_ACTION = "predicted_action"
     NUMERIC_ANSWER = "numeric_answer"
     MCQ_ANSWER = "mcq_answer"
@@ -225,8 +228,11 @@ class ConversationTrace(BaseModel):
         return self
 
 
+FINAL_TOOL_CHOICES = frozenset({"auto", "none", "required"})
+
+
 class FinalTools(BaseModel):
-    """Functions and call policy advertised at the task's decision point."""
+    """Terminal functions and call policy advertised at the decision point."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -238,37 +244,50 @@ class FinalTools(BaseModel):
     def validate_tools(self) -> "FinalTools":
         if len({function.name for function in self.functions}) != len(self.functions):
             raise ValueError("Advertised function names must be unique")
-        if self.tool_choice is not None and self.tool_choice not in {"auto", "none", "required"}:
+        if self.tool_choice is not None and self.tool_choice not in FINAL_TOOL_CHOICES:
             raise ValueError("Unsupported native tool choice")
         return self
 
 
-class EnvironmentRequirements(BaseModel):
-    """Environment functionality required to run the task.
+class ProviderRequirement(BaseModel):
+    """One seeded action interface required by the task."""
 
-    ``capabilities`` contains generic operations such as ``filesystem`` or
-    ``shell``. ``action_interfaces`` contains named stateful tool surfaces such
-    as ``workplace:v1``.
-    """
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    action_interface: str
+    seed_sha256: str
+
+    @model_validator(mode="after")
+    def validate_provider(self) -> "ProviderRequirement":
+        if not self.action_interface:
+            raise ValueError("Provider requirements need an action interface")
+        if not SHA256_PATTERN.fullmatch(self.seed_sha256):
+            raise ValueError("An immutable provider seed requires a lowercase SHA256 digest")
+        return self
+
+
+class EnvironmentRequirements(BaseModel):
+    """General workspace operations, separate from callable tool interfaces."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     capabilities: tuple[str, ...] = ()
-    action_interfaces: tuple[str, ...] = ()
 
 
 class TaskSpec(BaseModel):
-    """The private definition of one deterministic answer task."""
+    """The private task definition, including workspace and tool requirements."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     id: str
     context: ConversationInput
     environment_requirements: EnvironmentRequirements
+    tool_providers: dict[str, ProviderRequirement] = Field(default_factory=dict)
     final_tools: FinalTools = Field(default_factory=FinalTools)
     answer_type: AnswerType
     verifier: VerifierSpec
     source: Source
+    resources: tuple[TaskResource, ...] = ()
     schema_version: str = SCHEMA_VERSION
 
     @model_validator(mode="after")
@@ -277,6 +296,9 @@ class TaskSpec(BaseModel):
             raise ValueError(f"Unsupported TaskSpec schema: {self.schema_version}")
         if not self.id:
             raise ValueError("A task id is required")
+        if any(not name for name in self.tool_providers):
+            raise ValueError("Provider requirement names must be nonempty")
+        validate_resource_paths(self.resources)
         if self.answer_type == AnswerType.NATIVE_ACTION and not self.final_tools.functions:
             raise ValueError("Native-action tasks require advertised functions")
         return self

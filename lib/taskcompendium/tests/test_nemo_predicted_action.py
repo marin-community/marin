@@ -59,13 +59,13 @@ def test_pinned_nemo_row_keeps_expected_action_private(tmp_path):
     assert set(saved_specification["context"]) == {"events"}
     assert saved_specification["answer_type"] == "native_action"
     assert saved_specification["final_tools"]["functions"]
-    assert saved_specification["environment_requirements"] == {"capabilities": [], "action_interfaces": []}
-    assert saved_specification["schema_version"] == "0.9"
+    assert saved_specification["environment_requirements"] == {"capabilities": []}
+    assert saved_specification["tool_providers"] == {}
     public = (task / "instruction.md").read_text() + (task / "submission_convention.json").read_text()
     assert row["expected_action"]["arguments"] not in public
     assert "Okay, let me figure out how to handle this user's query" not in public
     assert "authenticate_user" in {function.name for function in specification.final_tools.functions}
-    assert not (task / "tests").exists()
+    assert row["expected_action"]["arguments"] not in (task / "tests/test.sh").read_text()
     with pytest.raises(ValueError, match="pinned canonical hash"):
         import_row(row, "0" * 64)
 

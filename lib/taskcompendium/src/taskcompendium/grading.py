@@ -6,6 +6,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 from tasktrove_verify.grade import InvalidTask, numeric_tolerance
@@ -14,7 +15,10 @@ from tasktrove_verify.modes.grade_math import grade_numeric_candidate
 from tasktrove_verify.spec import ExactSpec, NumericSpec
 
 from taskcompendium.models import ConversationEvent, VerifierKind, VerifierSpec
-from taskcompendium.submission import SubmissionConvention, extract_answer
+from taskcompendium.submission import AnswerFormat, SubmissionConvention, extract_answer
+
+PROVIDER_STATE_PREFIX = "provider:"
+RUNTIME_STATE_TARGET = "runtime"
 
 
 class Outcome(StrEnum):
@@ -37,6 +41,11 @@ class GradingAttempt:
     convention: SubmissionConvention
     conversation: tuple[ConversationEvent, ...]
     environment: object
+
+
+@runtime_checkable
+class StateGrader(Protocol):
+    def grade_state(self, state_target: str, expected_state_json: str) -> float: ...
 
 
 class Verifier(BaseModel, ABC):
@@ -105,6 +114,38 @@ class NumericAnswerVerifier(Verifier):
             expected=self.expected, tolerance_abs=self.tolerance_abs, tolerance_rel=self.tolerance_rel
         )
         return GradeResult(Outcome.GRADED, grade_numeric_candidate(contract, value).reward)
+
+
+class StateMatchVerifier(Verifier):
+    """Compare authoritative target state with independently constructed gold state."""
+
+    state_target: str
+    expected_state_json: str
+
+    @field_validator("state_target")
+    @classmethod
+    def validate_state_target(cls, value: str) -> str:
+        if value != RUNTIME_STATE_TARGET and (
+            not value.startswith(PROVIDER_STATE_PREFIX) or not value.removeprefix(PROVIDER_STATE_PREFIX)
+        ):
+            raise ValueError("State target must be runtime or provider:<name>")
+        return value
+
+    def grade(self, attempt: GradingAttempt) -> GradeResult:
+        if attempt.convention.answer_format != AnswerFormat.STATE:
+            raise ValueError("State grading requires a state submission convention")
+        if not isinstance(attempt.environment, StateGrader):
+            raise TypeError("State verifier requires a state grader")
+        return GradeResult(
+            Outcome.GRADED,
+            float(attempt.environment.grade_state(self.state_target, self.expected_state_json)),
+        )
+
+
+def state_match(expected_state_json: str, state_target: str) -> VerifierSpec:
+    """Construct a private state grader descriptor."""
+    verifier = StateMatchVerifier(state_target=state_target, expected_state_json=expected_state_json)
+    return VerifierSpec(kind=VerifierKind.STATE_MATCH, parameters_json=verifier.model_dump_json())
 
 
 def exact_answer(expected: str, ignore_case: bool = True, collapse_whitespace: bool = True) -> VerifierSpec:
