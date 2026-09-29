@@ -208,7 +208,7 @@ def build_run(
             memory=SNOWBALL_RECIPE.host_memory,
             disk="2TB",
             priority="interactive",
-            max_retries=1,
+            max_retries=0,
             target_cluster=cluster,
             parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
             coordinator_timeout_hours=24,
