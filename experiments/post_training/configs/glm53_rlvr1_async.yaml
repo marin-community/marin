@@ -1,10 +1,12 @@
 # RLVR1 SkyRL config adapted from targeted-sft/rl-config-v125-sep21-async-16k/async.yaml.
-entrypoint: gym_worker_pool
+entrypoint: standard
 context_budget:
   request_window_tokens: 65536
-  max_new_tokens_per_turn: 32768
+  max_new_tokens_per_turn: 16384
   max_turns: 999999
-  generated_budget_fraction: 0.5
+  generated_budget_fraction: 0.25
+  overlong_cache_fraction: 0.5
+  overlong_penalty_scale: 0.0
 trainer:
   strategy: megatron
   seed: 42
@@ -29,7 +31,7 @@ trainer:
     tis_imp_ratio_cap: 2.0
     tito_full: true
   epochs: 2
-  max_steps: 128
+  max_steps: 16
   train_batch_size: 512
   policy_mini_batch_size: 512
   update_epochs_per_batch: 1
@@ -38,11 +40,11 @@ trainer:
   micro_train_batch_size_per_gpu: 1
   use_sample_packing: true
   eval_before_train: true
-  eval_interval: 4
+  eval_interval: 2
   ckpt_interval: 4
   max_ckpts_to_keep: 5
-  resume_mode: from_path
-  resume_path: s3://marin-us-east-02a/tmp/ttl=14d/skyrl/marin/users/benfeuer/checkpoints/glm53-rlvr1-async/2026.09.29.17/checkpoints/global_step_4
+  resume_mode: none
+  resume_path: null
   logger: wandb
   project_name: snowball-ultra-rlvr
   policy:
@@ -87,7 +89,7 @@ trainer:
     ref_num_nodes: 10
     ref_num_gpus_per_node: 8
     policy_strict_spread_pg: true
-  run_name: datakit-rlvr1-resume4-graders-fixed-65k-eagle3-20260929-v9
+  run_name: datakit-rlvr1-16k-loop1-length0-20260929
   hf_hub_repo_id: null
   debug_mode: light
   restore_dataloader_state: true
@@ -100,7 +102,7 @@ trainer:
     # 128 groups × 16 responses exceed the engines' 768 sequence slots.
     max_in_flight: 128
     # Expiring checkpoint prefix: checkpoints store URIs instead of copying route payloads.
-    object_store_root: s3://marin-us-east-02a/tmp/ttl=14d/skyrl/marin/users/benfeuer/rollout-payloads/datakit-rlvr1-2026.09.29.18-full
+    object_store_root: s3://marin-us-east-02a/tmp/ttl=14d/skyrl/marin/users/benfeuer/rollout-payloads/datakit-rlvr1-16k-2026.09.29.19
 generator:
   # Frozen EAGLE-3 recipe from Echo wiki 541; no online draft training.
   speculative_decoding:

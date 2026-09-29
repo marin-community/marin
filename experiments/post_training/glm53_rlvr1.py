@@ -35,17 +35,26 @@ DATA_ROOT = (
     "20260920-9e7a35d6c979/ordinary-only-v2-agentic57t-compatible/rlvr1"
 )
 CONFIG_PATH = Path(__file__).parent / "configs" / "glm53_rlvr1_async.yaml"
+SWEEP_CONFIG_DIR = CONFIG_PATH.parent / "glm53_rlvr1_sweep"
+SWEEP_ARMS = tuple(path.stem for path in sorted(SWEEP_CONFIG_DIR.glob("*.yaml")))
 MODEL_VERSION = "2026.09.21"
 DATA_VERSION = "2026.09.23"
 RL_NAME = user_owned_name("checkpoints/glm53-rlvr1-async")
 
 
-def build_rl_step(tokenizer_revision: str, smoke: bool) -> ArtifactStep[SkyRLRun]:
+def build_rl_step(tokenizer_revision: str, smoke: bool, sweep_arm: str | None = None) -> ArtifactStep[SkyRLRun]:
     model = ArtifactStep.adopt(
         "checkpoints/grug-datakit-sft-sep21-hf", MODEL_VERSION, MODEL_EXPORT, kind=LevanterCheckpoint
     )
     data = ArtifactStep.adopt("documents/glm53-rlvr1", DATA_VERSION, DATA_ROOT, kind=Artifact)
-    config_path = CONFIG_PATH.with_name("glm53_rlvr1_smoke.yaml") if smoke else CONFIG_PATH
+    if smoke and sweep_arm is not None:
+        raise ValueError("The smoke and sweep configurations cannot be selected together")
+    if sweep_arm is not None:
+        config_path = SWEEP_CONFIG_DIR / f"{sweep_arm}.yaml"
+    elif smoke:
+        config_path = CONFIG_PATH.with_name("glm53_rlvr1_smoke.yaml")
+    else:
+        config_path = CONFIG_PATH
     config_text = config_path.read_text()
     config = yaml.safe_load(config_text)
     tokenizer_cache_key = hashlib.sha256(f"{MODEL_REPO}@{tokenizer_revision}".encode()).hexdigest()
@@ -78,7 +87,12 @@ def build_rl_step(tokenizer_revision: str, smoke: bool) -> ArtifactStep[SkyRLRun
     inference_nodes, remainder = divmod(inference_gpu_count, role_plan.policy_num_gpus_per_node)
     if remainder:
         raise ValueError("The inference GPU allocation must fill complete nodes")
-    name = user_owned_name("checkpoints/glm53-rlvr1-async-smoke") if smoke else RL_NAME
+    if sweep_arm is not None:
+        name = user_owned_name(f"checkpoints/glm53-rlvr1-sweep-{sweep_arm}")
+    elif smoke:
+        name = user_owned_name("checkpoints/glm53-rlvr1-async-smoke")
+    else:
+        name = RL_NAME
     return skyrl_step(
         SkyRLSpec(
             name=name,
@@ -121,9 +135,10 @@ def build_rl_step(tokenizer_revision: str, smoke: bool) -> ArtifactStep[SkyRLRun
 @click.command(help=__doc__)
 @click.option("--tokenizer-revision", required=True, help="Published SFT model commit SHA on Hugging Face.")
 @click.option("--smoke", is_flag=True, help="Run one optimizer step with the production geometry and a 64-prompt batch.")
+@click.option("--sweep-arm", type=click.Choice(SWEEP_ARMS), help="Run one frozen loop/length penalty sweep arm.")
 @rl_build_options
-def main(tokenizer_revision: str, smoke: bool) -> ArtifactStep[SkyRLRun]:
-    return build_rl_step(tokenizer_revision, smoke)
+def main(tokenizer_revision: str, smoke: bool, sweep_arm: str | None) -> ArtifactStep[SkyRLRun]:
+    return build_rl_step(tokenizer_revision, smoke, sweep_arm)
 
 
 if __name__ == "__main__":

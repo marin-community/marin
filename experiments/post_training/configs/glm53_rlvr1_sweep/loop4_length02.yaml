@@ -6,7 +6,7 @@ context_budget:
   max_turns: 999999
   generated_budget_fraction: 0.25
   overlong_cache_fraction: 0.5
-  overlong_penalty_scale: 0.0
+  overlong_penalty_scale: 0.2
 trainer:
   strategy: megatron
   seed: 42
@@ -31,19 +31,20 @@ trainer:
     tis_imp_ratio_cap: 2.0
     tito_full: true
   epochs: 2
-  max_steps: 1
-  train_batch_size: 64
-  policy_mini_batch_size: 64
+  max_steps: 16
+  train_batch_size: 512
+  policy_mini_batch_size: 512
   update_epochs_per_batch: 1
   eval_batch_size: 100
   micro_forward_batch_size_per_gpu: 1
   micro_train_batch_size_per_gpu: 1
   use_sample_packing: true
   eval_before_train: true
-  eval_interval: 1
-  ckpt_interval: 1
+  eval_interval: 2
+  ckpt_interval: 4
   max_ckpts_to_keep: 5
   resume_mode: none
+  resume_path: null
   logger: wandb
   project_name: snowball-ultra-rlvr
   policy:
@@ -88,18 +89,20 @@ trainer:
     ref_num_nodes: 10
     ref_num_gpus_per_node: 8
     policy_strict_spread_pg: true
-  run_name: datakit-rlvr1-16k-sweep-smoke-20260929
+  run_name: datakit-rlvr1-sweep-loop4_length02-20260929
   hf_hub_repo_id: null
   debug_mode: light
   restore_dataloader_state: true
   hf_save_interval: -1
   rollout_buffer:
+    resume_policy: regenerate
     max_staleness_steps: 2
     # Preserve the previous trainer's commit-order admission policy.
     batch_policy: rolling
-    max_in_flight: 64
+    # 128 groups × 16 responses exceed the engines' 768 sequence slots.
+    max_in_flight: 128
     # Expiring checkpoint prefix: checkpoints store URIs instead of copying route payloads.
-    object_store_root: s3://marin-us-east-02a/tmp/ttl=14d/skyrl/marin/users/benfeuer/rollout-payloads/datakit-rlvr1-16k-smoke-2026.09.29.19
+    object_store_root: s3://marin-us-east-02a/tmp/ttl=14d/skyrl/marin/users/benfeuer/rollout-payloads/datakit-rlvr1-sweep-loop4_length02-2026.09.29.19
 generator:
   # Frozen EAGLE-3 recipe from Echo wiki 541; no online draft training.
   speculative_decoding:
@@ -114,8 +117,8 @@ generator:
       max_period_tokens: 256
       tail_tokens: 2048
       minimum_occurrences: 8
-      advantage_penalty_per_token: 1.0
-      max_advantage_penalty: 32768.0
+      advantage_penalty_per_token: 4.0
+      max_advantage_penalty: 131072.0
   trajectory_retention:
     phases: [train, eval]
     sample_count_per_step: 100
