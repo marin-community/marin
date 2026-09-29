@@ -16,9 +16,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
-from taskcompendium.grading import PROVIDER_STATE_PREFIX
 from taskcompendium.models import SCHEMA_VERSION, AnswerType, TaskSpec, VerifierKind
 from taskcompendium.provider_sources import (
     PROVIDER_SOURCES_DIR,
@@ -40,6 +39,7 @@ from taskcompendium.resources import (
 from taskcompendium.submission import (
     ANSWER_CALL_NAME,
     AnswerFormat,
+    ProviderState,
     SubmissionConvention,
     render_instruction,
     submission_compatible,
@@ -204,7 +204,7 @@ def is_compatible_lowering(
 ) -> bool:
     """Whether the convention and selected providers can run this task together."""
     try:
-        validate_environment_candidate(specification, environment_config, trusted_provider_sources)
+        validate_environment_candidate(specification, convention, environment_config, trusted_provider_sources)
         validate_submission_tools(specification, convention, environment_config)
     except ValueError:
         return False
@@ -234,10 +234,12 @@ def select_lowerings(
     raise ValueError(f"Unknown selection policy: {policy}")
 
 
-def _required_state_provider(specification: TaskSpec, environment_config: HarborEnvironmentConfig) -> str | None:
+def _required_state_provider(
+    specification: TaskSpec, convention: SubmissionConvention, environment_config: HarborEnvironmentConfig
+) -> str | None:
     """Validate semantic requirements and return the provider graded for a state task."""
-    if (specification.answer_type == AnswerType.STATE) != (specification.verifier.kind == VerifierKind.STATE_MATCH):
-        raise ValueError("State result requires state verifier")
+    if specification.answer_type == AnswerType.STATE and specification.verifier.kind != VerifierKind.STRUCTURED_EXACT:
+        raise ValueError("State result requires a structured exact verifier")
     bindings = environment_config.tool_providers
     requirements = specification.environment_requirements
     if requirements.capabilities:
@@ -260,27 +262,21 @@ def _required_state_provider(specification: TaskSpec, environment_config: Harbor
             raise ValueError(f"Tool binding interface differs from task requirement: {name}")
         if binding.seed_sha256 != requirement.seed_sha256:
             raise ValueError(f"Tool binding seed differs from task requirement: {name}")
-    if specification.answer_type == AnswerType.STATE:
-        verifier_parameters = json.loads(specification.verifier.parameters_json)
-        if not isinstance(verifier_parameters, dict):
-            raise ValueError("State verifier parameters must be an object")
-        state_target = verifier_parameters.get("state_target")
-        if not isinstance(state_target, str) or not state_target.startswith(PROVIDER_STATE_PREFIX):
-            raise ValueError("Host chat state target must name a provider")
-        provider_name = state_target.removeprefix(PROVIDER_STATE_PREFIX)
-        if provider_name not in selected:
-            raise ValueError("State target names a missing provider")
-        return provider_name
+    if isinstance(convention, ProviderState):
+        if convention.provider not in selected:
+            raise ValueError("State convention names a missing provider")
+        return convention.provider
     return None
 
 
 def validate_environment_candidate(
     specification: TaskSpec,
+    convention: SubmissionConvention,
     environment_config: HarborEnvironmentConfig,
     trusted_provider_sources: dict[str, Path] | None,
 ) -> None:
     """Check a candidate's requirements and local Git checkouts before export."""
-    state_provider = _required_state_provider(specification, environment_config)
+    state_provider = _required_state_provider(specification, convention, environment_config)
     for name, binding in environment_config.tool_providers.items():
         if parse_git_provider(binding.provider) is not None:
             if trusted_provider_sources is None or name not in trusted_provider_sources:
@@ -288,23 +284,24 @@ def validate_environment_candidate(
             validate_git_provider_checkout(binding.provider, trusted_provider_sources[name])
             continue
         validate_provider_surface(binding)
-        if name == state_provider and not callable(getattr(provider_class(binding), "grade_state", None)):
-            raise ValueError("State task requires provider state grading")
+        if name == state_provider and not callable(getattr(provider_class(binding), "canonical_state", None)):
+            raise ValueError("State task requires canonical provider state")
 
 
 def validate_environment_config(
     specification: TaskSpec,
+    convention: SubmissionConvention,
     environment_config: HarborEnvironmentConfig,
     *,
     provider_sources: dict[str, Path] | None = None,
 ) -> None:
     """Check all selected provider implementations against their pinned surfaces."""
-    state_provider = _required_state_provider(specification, environment_config)
+    state_provider = _required_state_provider(specification, convention, environment_config)
     for name, binding in environment_config.tool_providers.items():
         source = provider_sources[name] if provider_sources is not None and name in provider_sources else None
         validate_provider_surface(binding, source)
-        if name == state_provider and not callable(getattr(provider_class(binding, source), "grade_state", None)):
-            raise ValueError("State task requires provider state grading")
+        if name == state_provider and not callable(getattr(provider_class(binding, source), "canonical_state", None)):
+            raise ValueError("State task requires canonical provider state")
 
 
 def validate_submission_tools(
@@ -335,7 +332,7 @@ def read_environment_config(path: Path) -> HarborEnvironmentConfig:
 
 
 def read_submission_convention(path: Path) -> SubmissionConvention:
-    return SubmissionConvention.model_validate_json(path.read_text())
+    return TypeAdapter(SubmissionConvention).validate_json(path.read_text())
 
 
 def validate_exported_resources(specification: TaskSpec, task_dir: Path) -> None:
@@ -394,7 +391,7 @@ def lower_to_harbor(
         if parse_git_provider(binding.provider) is not None
     }
     if not git_bindings:
-        validate_environment_config(specification, environment_config)
+        validate_environment_config(specification, convention, environment_config)
     compatibility = submission_compatible(specification, convention)
     if not compatibility.compatible:
         raise ValueError(f"Submission convention is incompatible: {'; '.join(compatibility.reasons)}")
@@ -414,7 +411,7 @@ def lower_to_harbor(
             stage_git_provider(binding.provider, trusted_provider_sources[name], source)
             staged_sources[name] = source
         if git_bindings:
-            validate_environment_config(specification, environment_config, provider_sources=staged_sources)
+            validate_environment_config(specification, convention, environment_config, provider_sources=staged_sources)
         _write_harbor_task(specification, convention, environment_config, destination, instruction, trusted_resolver)
     except Exception:
         shutil.rmtree(destination)

@@ -4,17 +4,20 @@
 """Submission conventions for semantic answer tasks."""
 
 import json
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
+from math import isfinite
+from typing import Annotated, Any, Literal, Protocol, Self, runtime_checkable
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 from taskcompendium.models import (
     AnswerType,
     AssistantToolCalls,
     ConversationEvent,
     ConversationInput,
+    ConversationTrace,
     TaskSpec,
     TextMessage,
     format_conversation,
@@ -51,16 +54,58 @@ class AnswerFormat(StrEnum):
     FINAL_ACTION = "final_action"
 
 
-class SubmissionConvention(BaseModel):
+class SubmissionFailurePolicy(StrEnum):
+    """Reward assigned when an agent ends with an invalid submission."""
+
+    ZERO_REWARD = "zero_reward"
+
+
+@dataclass(frozen=True)
+class GradingAttempt:
+    """The complete conversation and authoritative trial environment."""
+
+    conversation: ConversationTrace
+    environment: object
+
+
+@dataclass(frozen=True)
+class TextSubmission:
+    value: str
+
+
+@dataclass(frozen=True)
+class ActionSubmission:
+    message: TextMessage | AssistantToolCalls
+
+
+@dataclass(frozen=True)
+class StateSubmission:
+    value: JsonValue
+
+
+type Submission = TextSubmission | ActionSubmission | StateSubmission
+
+
+class SubmissionFailure(ValueError):
+    """The agent ended the interaction without a valid submission."""
+
+
+@runtime_checkable
+class StateReadable(Protocol):
+    async def provider_state(self, provider: str) -> JsonValue: ...
+
+
+class Convention(BaseModel, ABC):
     """How a result is requested, delivered, and extracted."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     id: str
     answer_format: AnswerFormat
+    submission_failure_policy: SubmissionFailurePolicy = SubmissionFailurePolicy.ZERO_REWARD
 
     @model_validator(mode="after")
-    def validate_convention(self) -> "SubmissionConvention":
+    def validate_convention(self) -> Self:
         if not self.id:
             raise ValueError("A submission convention id is required")
         return self
@@ -72,6 +117,108 @@ class SubmissionConvention(BaseModel):
         if self.answer_format == AnswerFormat.FINAL_ACTION:
             return answer_type == AnswerType.NATIVE_ACTION
         return answer_type in (AnswerType.TEXT, AnswerType.NUMBER)
+
+    @abstractmethod
+    async def extract(self, attempt: GradingAttempt) -> Submission:
+        """Read the agent's submission without access to expected values."""
+
+
+class PlainText(Convention):
+    answer_format: Literal[AnswerFormat.PLAIN] = AnswerFormat.PLAIN
+
+    async def extract(self, attempt: GradingAttempt) -> TextSubmission:
+        return TextSubmission(_text_answer(attempt.conversation.events[-1]))
+
+
+class JsonAnswer(Convention):
+    answer_format: Literal[AnswerFormat.JSON] = AnswerFormat.JSON
+
+    async def extract(self, attempt: GradingAttempt) -> TextSubmission:
+        try:
+            value = json.loads(_text_answer(attempt.conversation.events[-1]))
+        except json.JSONDecodeError as error:
+            raise SubmissionFailure("JSON submission is malformed") from error
+        if (
+            not isinstance(value, dict)
+            or not isinstance(value.get(ANSWER_FIELD), str)
+            or not value[ANSWER_FIELD].strip()
+        ):
+            raise SubmissionFailure("JSON submission requires a nonempty string answer")
+        return TextSubmission(value[ANSWER_FIELD])
+
+
+class AnswerCall(Convention):
+    answer_format: Literal[AnswerFormat.ANSWER_CALL] = AnswerFormat.ANSWER_CALL
+
+    async def extract(self, attempt: GradingAttempt) -> TextSubmission:
+        response = attempt.conversation.events[-1]
+        if (
+            not isinstance(response, AssistantToolCalls)
+            or len(response.calls) != 1
+            or response.calls[0].name != ANSWER_CALL_NAME
+        ):
+            raise SubmissionFailure(f"Answer call requires one {ANSWER_CALL_NAME} function call")
+        arguments = response.calls[0].arguments
+        if (
+            set(arguments) != {ANSWER_FIELD}
+            or not isinstance(arguments[ANSWER_FIELD], str)
+            or not arguments[ANSWER_FIELD].strip()
+        ):
+            raise SubmissionFailure("Answer call requires a nonempty string answer")
+        return TextSubmission(arguments[ANSWER_FIELD])
+
+
+class FinalAction(Convention):
+    answer_format: Literal[AnswerFormat.FINAL_ACTION] = AnswerFormat.FINAL_ACTION
+
+    async def extract(self, attempt: GradingAttempt) -> ActionSubmission:
+        final = attempt.conversation.events[-1]
+        if not isinstance(final, (TextMessage, AssistantToolCalls)):
+            raise SubmissionFailure("Final action requires an assistant message")
+        return ActionSubmission(final)
+
+
+class ProviderState(Convention):
+    answer_format: Literal[AnswerFormat.STATE] = AnswerFormat.STATE
+    provider: str = Field(min_length=1)
+
+    async def extract(self, attempt: GradingAttempt) -> StateSubmission:
+        final = attempt.conversation.events[-1]
+        if not isinstance(final, (TextMessage, AssistantToolCalls)):
+            raise SubmissionFailure("State submission requires a final assistant message")
+        if not isinstance(attempt.environment, StateReadable):
+            raise TypeError("Environment does not expose provider state")
+        state = await attempt.environment.provider_state(self.provider)
+        _validate_json_state(state)
+        return StateSubmission(json.loads(json.dumps(state, allow_nan=False)))
+
+
+SubmissionConvention = Annotated[
+    PlainText | JsonAnswer | AnswerCall | FinalAction | ProviderState, Field(discriminator="answer_format")
+]
+
+
+def _text_answer(response: ConversationEvent) -> str:
+    if not isinstance(response, TextMessage) or response.role != "assistant" or not response.content.strip():
+        raise SubmissionFailure("Text submission requires nonempty assistant content without tool calls")
+    return response.content
+
+
+def _validate_json_state(value: object) -> None:
+    """Reject lossy JSON coercions at the authoritative state boundary."""
+    if value is None or type(value) in (bool, int, str):
+        return
+    if type(value) is float and isfinite(value):
+        return
+    if type(value) is list:
+        for item in value:
+            _validate_json_state(item)
+        return
+    if type(value) is dict and all(type(key) is str for key in value):
+        for item in value.values():
+            _validate_json_state(item)
+        return
+    raise TypeError("Provider state is not JSON compatible")
 
 
 @dataclass(frozen=True)
@@ -202,36 +349,3 @@ def chat_request(specification: TaskSpec, convention: SubmissionConvention) -> d
     if specification.final_tools.parallel_tool_calls is not None:
         request["parallel_tool_calls"] = specification.final_tools.parallel_tool_calls
     return request
-
-
-def extract_answer(response: ConversationEvent, convention: SubmissionConvention) -> str:
-    """Extract semantic answer content from a typed assistant turn."""
-    if convention.answer_format == AnswerFormat.ANSWER_CALL:
-        if (
-            not isinstance(response, AssistantToolCalls)
-            or len(response.calls) != 1
-            or response.calls[0].name != ANSWER_CALL_NAME
-        ):
-            raise ValueError(f"Answer call requires one {ANSWER_CALL_NAME} function call")
-        arguments = response.calls[0].arguments
-        if (
-            set(arguments) != {ANSWER_FIELD}
-            or not isinstance(arguments[ANSWER_FIELD], str)
-            or not arguments[ANSWER_FIELD].strip()
-        ):
-            raise ValueError("Answer call requires a nonempty string answer")
-        return arguments[ANSWER_FIELD]
-    if not isinstance(response, TextMessage) or response.role != "assistant" or not response.content.strip():
-        raise ValueError("Text submission requires nonempty assistant content without tool calls")
-    if convention.answer_format == AnswerFormat.PLAIN:
-        return response.content
-    if convention.answer_format == AnswerFormat.JSON:
-        value = json.loads(response.content)
-        if (
-            not isinstance(value, dict)
-            or not isinstance(value.get(ANSWER_FIELD), str)
-            or not value[ANSWER_FIELD].strip()
-        ):
-            raise ValueError("JSON submission requires a nonempty string answer")
-        return value[ANSWER_FIELD]
-    raise ValueError(f"Unsupported answer format: {convention.answer_format}")

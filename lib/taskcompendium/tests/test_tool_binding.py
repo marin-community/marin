@@ -15,7 +15,7 @@ from types import ModuleType
 
 import pytest
 
-from taskcompendium.grading import exact_answer, state_match
+from taskcompendium.grading import exact_answer, structured_exact
 from taskcompendium.harbor.runner import ChatLaunch, run_trial
 from taskcompendium.lowering import HarborEnvironmentConfig, ToolBinding, compatible_lowerings, lower_to_harbor
 from taskcompendium.models import (
@@ -31,7 +31,7 @@ from taskcompendium.models import (
 )
 from taskcompendium.provider_sources import SOURCE_MANIFEST, validate_staged_git_provider
 from taskcompendium.resources import ResourceVisibility, TaskResource
-from taskcompendium.submission import AnswerFormat, SubmissionConvention
+from taskcompendium.submission import AnswerCall, PlainText, ProviderState
 
 
 def _digest(value: object) -> str:
@@ -158,7 +158,7 @@ async def test_git_provider_exports_verified_source_snapshot_and_runs_offline(tm
     _, second = _external_services(tmp_path, monkeypatch)
     specification = _specification()
     environment_config = HarborEnvironmentConfig(tool_providers={"a": binding, "b": second})
-    convention = SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN)
+    convention = PlainText(id="plain")
 
     assert compatible_lowerings(
         specification,
@@ -235,7 +235,7 @@ def test_git_provider_rejects_changed_source_before_export_or_launch(tmp_path, m
     with pytest.raises(ValueError, match="must be clean"):
         lower_to_harbor(
             _specification(),
-            SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+            PlainText(id="plain"),
             HarborEnvironmentConfig(tool_providers={"a": binding, "b": second}),
             tmp_path / "task",
             trusted_provider_sources={"a": checkout},
@@ -247,7 +247,7 @@ def test_external_services_export_as_one_chat_task(tmp_path, monkeypatch):
     bindings = _external_services(tmp_path, monkeypatch)
     environment_config = HarborEnvironmentConfig(tool_providers=dict(zip(("a", "b"), bindings, strict=True)))
     specification = _specification()
-    convention = SubmissionConvention(id="answer-call", answer_format=AnswerFormat.ANSWER_CALL)
+    convention = AnswerCall(id="answer-call")
 
     assert compatible_lowerings(specification, (convention,), (environment_config,))
     task_dir = lower_to_harbor(specification, convention, environment_config, tmp_path / "task")
@@ -265,14 +265,14 @@ def test_provider_tool_collisions_reject_export(tmp_path, monkeypatch):
 
     terminal_collision = _external_services(tmp_path, monkeypatch, names=("lookup", "submit_answer"))
     environment_config = HarborEnvironmentConfig(tool_providers=dict(zip(("a", "b"), terminal_collision, strict=True)))
-    convention = SubmissionConvention(id="answer-call", answer_format=AnswerFormat.ANSWER_CALL)
+    convention = AnswerCall(id="answer-call")
     with pytest.raises(ValueError, match="Submission function names collide"):
         lower_to_harbor(_specification(), convention, environment_config, tmp_path / "task")
 
     plain_specification = _specification().model_copy(
         update={"final_tools": FinalTools(functions=(FunctionDefinition(name="lookup", parameters={"type": "object"}),))}
     )
-    plain = SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN)
+    plain = PlainText(id="plain")
     with pytest.raises(ValueError, match="Submission function names collide"):
         lower_to_harbor(plain_specification, plain, environment_config, tmp_path / "plain-task")
 
@@ -285,7 +285,7 @@ def test_provider_requirement_mismatch_rejects_export_before_task_files(tmp_path
     bindings = _external_services(tmp_path, monkeypatch)
     wrong = bindings[1].model_copy(update=changed)
     environment_config = HarborEnvironmentConfig(tool_providers={"a": bindings[0], "b": wrong})
-    convention = SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN)
+    convention = PlainText(id="plain")
     with pytest.raises(ValueError, match=error):
         lower_to_harbor(_specification(), convention, environment_config, tmp_path / "task")
     assert not (tmp_path / "task").exists()
@@ -295,29 +295,29 @@ def test_state_grader_cannot_target_an_unbound_service(tmp_path, monkeypatch):
     bindings = _external_services(tmp_path, monkeypatch)
     environment_config = HarborEnvironmentConfig(tool_providers=dict(zip(("a", "b"), bindings, strict=True)))
     specification = _specification().model_copy(
-        update={"answer_type": AnswerType.STATE, "verifier": state_match("{}", "provider:missing")}
+        update={"answer_type": AnswerType.STATE, "verifier": structured_exact({})}
     )
-    convention = SubmissionConvention(id="state", answer_format=AnswerFormat.STATE)
-    with pytest.raises(ValueError, match="State target names a missing provider"):
+    convention = ProviderState(id="state", provider="missing")
+    with pytest.raises(ValueError, match="State convention names a missing provider"):
         lower_to_harbor(specification, convention, environment_config, tmp_path / "task")
 
 
-def test_host_chat_cannot_grade_workspace_runtime_state(tmp_path, monkeypatch):
+def test_state_provider_must_expose_canonical_snapshot(tmp_path, monkeypatch):
     bindings = _external_services(tmp_path, monkeypatch)
     environment_config = HarborEnvironmentConfig(tool_providers=dict(zip(("a", "b"), bindings, strict=True)))
     specification = _specification().model_copy(
-        update={"answer_type": AnswerType.STATE, "verifier": state_match("{}", "runtime")}
+        update={"answer_type": AnswerType.STATE, "verifier": structured_exact({})}
     )
-    convention = SubmissionConvention(id="state", answer_format=AnswerFormat.STATE)
+    convention = ProviderState(id="state", provider="b")
 
-    with pytest.raises(ValueError, match="Host chat state target"):
+    with pytest.raises(ValueError, match="canonical provider state"):
         lower_to_harbor(specification, convention, environment_config, tmp_path / "task")
 
 
 def test_host_chat_rejects_workspace_requirements_with_tool_providers(tmp_path, monkeypatch):
     bindings = _external_services(tmp_path, monkeypatch)
     environment_config = HarborEnvironmentConfig(tool_providers={"a": bindings[0], "b": bindings[1]})
-    convention = SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN)
+    convention = PlainText(id="plain")
 
     with pytest.raises(ValueError, match="workspace capability"):
         lower_to_harbor(

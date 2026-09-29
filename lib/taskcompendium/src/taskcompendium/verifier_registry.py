@@ -11,20 +11,25 @@ from pydantic import ValidationError
 from taskcompendium.grading import (
     ExactAnswerVerifier,
     GradeResult,
-    GradingAttempt,
     NumericAnswerVerifier,
-    StateMatchVerifier,
+    Outcome,
+    StructuredExactVerifier,
     Verifier,
 )
 from taskcompendium.models import ConversationTrace, TaskSpec, VerifierKind, VerifierSpec
-from taskcompendium.submission import SubmissionConvention
+from taskcompendium.submission import (
+    GradingAttempt,
+    SubmissionConvention,
+    SubmissionFailure,
+    SubmissionFailurePolicy,
+)
 from taskcompendium.verifiers.multiple_choice import MultipleChoiceVerifier
 from taskcompendium.verifiers.predicted_action import PredictedActionVerifier
 
 VERIFIERS: Mapping[VerifierKind, type[Verifier]] = MappingProxyType(
     {
         VerifierKind.EXACT_ANSWER: ExactAnswerVerifier,
-        VerifierKind.STATE_MATCH: StateMatchVerifier,
+        VerifierKind.STRUCTURED_EXACT: StructuredExactVerifier,
         VerifierKind.PREDICTED_ACTION: PredictedActionVerifier,
         VerifierKind.NUMERIC_ANSWER: NumericAnswerVerifier,
         VerifierKind.MCQ_ANSWER: MultipleChoiceVerifier,
@@ -46,8 +51,16 @@ def validate_verifier(specification: VerifierSpec) -> None:
     resolve_verifier(specification)
 
 
-def grade_answer(
+async def grade_answer(
     specification: TaskSpec, convention: SubmissionConvention, conversation: ConversationTrace, environment: object
 ) -> GradeResult:
+    """Extract once, then grade the submitted value against a private verifier."""
+    attempt = GradingAttempt(conversation, environment)
+    try:
+        submission = await convention.extract(attempt)
+    except SubmissionFailure as error:
+        if convention.submission_failure_policy == SubmissionFailurePolicy.ZERO_REWARD:
+            return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
+        raise ValueError(f"Unsupported submission-failure policy: {convention.submission_failure_policy}") from error
     verifier = resolve_verifier(specification.verifier)
-    return verifier.grade(GradingAttempt(convention, conversation.events, environment))
+    return await verifier.grade(submission, specification=specification.verifier, attempt=attempt)
