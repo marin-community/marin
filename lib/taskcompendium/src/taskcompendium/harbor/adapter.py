@@ -87,7 +87,7 @@ def _chat_completion(api_base: str, api_key: str | None, request_timeout: float,
 
 
 class NoToolEnvironment(BaseEnvironment):
-    """A Harbor environment with no agent filesystem or execution tools."""
+    """Run standalone direct-chat Harbor trials without agent filesystem or tools."""
 
     @staticmethod
     def type() -> str:
