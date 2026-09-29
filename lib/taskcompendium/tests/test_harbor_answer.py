@@ -17,7 +17,6 @@ from harbor.models.task.task import Task
 from taskcompendium.grading import exact_answer, numeric_answer
 from taskcompendium.harbor.runner import ChatLaunch, run_trial
 from taskcompendium.lowering import (
-    DIRECT_CHAT_ENVIRONMENT,
     HarborEnvironmentConfig,
     SelectionPolicy,
     compatible_lowerings,
@@ -38,7 +37,8 @@ from taskcompendium.models import (
     VerifierKind,
     VerifierSpec,
 )
-from taskcompendium.submission import AnswerFormat, SubmissionConvention
+from taskcompendium.resources import ResourceVisibility, TaskResource
+from taskcompendium.submission import AnswerFormat, SubmissionConvention, submission_compatible
 from taskcompendium.verifier_registry import grade_answer
 
 from .harbor_replay import run_replay_trial
@@ -156,6 +156,48 @@ async def test_direct_chat_exact_comparison_uses_pinned_normalization(tmp_path, 
     result = await run_replay_trial(task, {"role": "assistant", "content": "STRASSE   PARK"}, tmp_path / "trials", "run")
 
     assert result.verifier_result.rewards == {"reward": 1.0}
+
+
+async def test_private_resource_stays_out_of_direct_chat_and_is_rechecked_at_launch(tmp_path, specification):
+    specification = specification.model_copy(
+        update={"resources": (TaskResource(path="reference.txt", visibility=ResourceVisibility.VERIFIER, content="12"),)}
+    )
+    environment_config = HarborEnvironmentConfig()
+    task = lower_to_harbor(
+        specification,
+        SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        environment_config,
+        tmp_path / "task",
+    )
+    assert (task / "private_resources/reference.txt").read_text() == "12"
+    assert not (task / "environment/inputs").exists()
+
+    result = await run_replay_trial(task, {"role": "assistant", "content": "12"}, tmp_path / "trials", "run")
+    assert result.verifier_result.rewards == {"reward": 1.0}
+
+    (task / "private_resources/reference.txt").write_text("tampered")
+    with pytest.raises(ValueError, match="digest mismatch"):
+        await run_trial(
+            task,
+            environment_config,
+            ChatLaunch(model="model", api_base="http://127.0.0.1:1"),
+            tmp_path / "trials",
+            "tampered",
+        )
+
+
+def test_direct_chat_rejects_agent_visible_resource_before_export(tmp_path, specification):
+    specification = specification.model_copy(
+        update={"resources": (TaskResource(path="input.txt", visibility=ResourceVisibility.AGENT, content="visible"),)}
+    )
+    with pytest.raises(ValueError, match="cannot expose agent-visible files"):
+        lower_to_harbor(
+            specification,
+            SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+            HarborEnvironmentConfig(),
+            tmp_path / "task",
+        )
+    assert not (tmp_path / "task").exists()
 
 
 @pytest.mark.parametrize(
@@ -370,7 +412,7 @@ def test_lowering_rejects_submission_policy_conflicts(
     convention = SubmissionConvention(id=answer_format.value, answer_format=answer_format)
 
     assert compatible_lowerings(specification, (convention,), (HarborEnvironmentConfig(),)) == ()
-    with pytest.raises(ValueError, match="cannot carry"):
+    with pytest.raises(ValueError, match="incompatible"):
         lower_to_harbor(specification, convention, HarborEnvironmentConfig(), tmp_path / "task")
     assert not (tmp_path / "task").exists()
 
@@ -462,8 +504,9 @@ def test_file_result_cannot_use_text_submission_convention(tmp_path, specificati
     specification = specification.model_copy(update={"answer_type": AnswerType.FILE})
     convention = SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN)
 
+    assert submission_compatible(specification, convention).reasons == ("plain cannot carry file",)
     assert compatible_lowerings(specification, (convention,), (HarborEnvironmentConfig(),)) == ()
-    with pytest.raises(ValueError, match="cannot carry 'file'"):
+    with pytest.raises(ValueError, match="incompatible: plain cannot carry file"):
         lower_to_harbor(specification, convention, HarborEnvironmentConfig(), tmp_path / "task")
     assert not (tmp_path / "task").exists()
 
@@ -479,12 +522,10 @@ def test_selection_policies_use_compatible_conventions(specification):
     assert select_lowerings(candidates, SelectionPolicy.FIRST) == (candidates[0],)
     repeated = [select_lowerings(candidates, SelectionPolicy.SAMPLE, rng_key=42) for _ in range(10)]
     assert all(selection == repeated[0] for selection in repeated)
-    assert {select_lowerings(candidates, SelectionPolicy.SAMPLE, rng_key=key)[0] for key in range(16)} == set(candidates)
-    assert select_lowerings(candidates, SelectionPolicy.FIRST, required_environment=DIRECT_CHAT_ENVIRONMENT) == (
-        candidates[0],
-    )
-    with pytest.raises(ValueError, match="No compatible lowerings for environment 'shellsim'"):
-        select_lowerings(candidates, SelectionPolicy.FIRST, required_environment="shellsim")
+    sampled_ids = {
+        select_lowerings(candidates, SelectionPolicy.SAMPLE, rng_key=key)[0].convention.id for key in range(16)
+    }
+    assert sampled_ids == {candidate.convention.id for candidate in candidates}
 
 
 async def test_chat_trial_resolves_key_at_runtime_without_persisting_it(

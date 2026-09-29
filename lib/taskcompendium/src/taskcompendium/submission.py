@@ -4,6 +4,7 @@
 """Submission conventions for semantic answer tasks."""
 
 import json
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
@@ -45,6 +46,7 @@ class AnswerFormat(StrEnum):
 
     PLAIN = "plain"
     JSON = "json"
+    STATE = "state"
     ANSWER_CALL = "answer_call"
     FINAL_ACTION = "final_action"
 
@@ -65,21 +67,56 @@ class SubmissionConvention(BaseModel):
 
     def supports(self, answer_type: AnswerType) -> bool:
         """Whether this convention can carry the semantic result."""
+        if self.answer_format == AnswerFormat.STATE:
+            return answer_type == AnswerType.STATE
         if self.answer_format == AnswerFormat.FINAL_ACTION:
             return answer_type == AnswerType.NATIVE_ACTION
         return answer_type in (AnswerType.TEXT, AnswerType.NUMBER)
 
 
-def submission_compatible(specification: TaskSpec, convention: SubmissionConvention) -> bool:
+@dataclass(frozen=True)
+class SubmissionCompatibility:
+    """Whether a convention preserves the task's result contract, with reasons when it does not."""
+
+    reasons: tuple[str, ...]
+
+    @property
+    def compatible(self) -> bool:
+        return not self.reasons
+
+
+def submission_compatible(specification: TaskSpec, convention: SubmissionConvention) -> SubmissionCompatibility:
+    """Explain which parts of the task a submission convention cannot carry."""
     if not convention.supports(specification.answer_type):
-        return False
-    if convention.answer_format == AnswerFormat.FINAL_ACTION:
-        return bool(specification.final_tools.functions) and specification.final_tools.tool_choice != "none"
-    if convention.answer_format == AnswerFormat.ANSWER_CALL:
-        return specification.final_tools.tool_choice != "none" and all(
-            function.name != ANSWER_CALL_NAME for function in specification.final_tools.functions
+        return SubmissionCompatibility(
+            (f"{convention.answer_format.value} cannot carry {specification.answer_type.value}",)
         )
-    return specification.final_tools.tool_choice != "required"
+    if convention.answer_format == AnswerFormat.FINAL_ACTION:
+        reasons = []
+        if not specification.final_tools.functions:
+            reasons.append("final action requires at least one final tool")
+        if specification.final_tools.tool_choice == "none":
+            reasons.append("final action conflicts with tool_choice=none")
+        return SubmissionCompatibility(tuple(reasons))
+    if convention.answer_format == AnswerFormat.ANSWER_CALL:
+        reasons = []
+        if specification.final_tools.tool_choice == "none":
+            reasons.append("answer call conflicts with tool_choice=none")
+        if any(function.name == ANSWER_CALL_NAME for function in specification.final_tools.functions):
+            reasons.append("final tool name collides with submit_answer")
+        return SubmissionCompatibility(tuple(reasons))
+    if convention.answer_format == AnswerFormat.STATE:
+        reasons = []
+        if specification.final_tools.functions:
+            reasons.append("state submission does not carry final tools")
+        if specification.final_tools.tool_choice is not None:
+            reasons.append("state submission does not carry final tool choice")
+        if specification.final_tools.parallel_tool_calls is not None:
+            reasons.append("state submission does not carry final tool parallel policy")
+        return SubmissionCompatibility(tuple(reasons))
+    if specification.final_tools.tool_choice == "required":
+        return SubmissionCompatibility(("text submission conflicts with tool_choice=required",))
+    return SubmissionCompatibility(())
 
 
 def submission_instruction(convention: SubmissionConvention) -> str:
@@ -88,6 +125,11 @@ def submission_instruction(convention: SubmissionConvention) -> str:
         return "Give your answer as plain text."
     if convention.answer_format == AnswerFormat.JSON:
         return f'Give your answer as a JSON object with an "{ANSWER_FIELD}" field.'
+    if convention.answer_format == AnswerFormat.STATE:
+        return (
+            "Use the available tools to complete the task. "
+            "Your final message ends the interaction; the result is graded from the environment state."
+        )
     if convention.answer_format == AnswerFormat.ANSWER_CALL:
         return f'Call {ANSWER_CALL_NAME} with your final answer as the "{ANSWER_FIELD}" string.'
     if convention.answer_format == AnswerFormat.FINAL_ACTION:
@@ -98,10 +140,9 @@ def submission_instruction(convention: SubmissionConvention) -> str:
 def render_instruction(specification: TaskSpec, convention: SubmissionConvention) -> str:
     """Return Harbor instruction text for the selected convention."""
     context = specification.context
-    if not submission_compatible(specification, convention):
-        raise ValueError(
-            f"Submission convention {convention.id!r} cannot carry {specification.answer_type.value!r} in this context"
-        )
+    compatibility = submission_compatible(specification, convention)
+    if not compatibility.compatible:
+        raise ValueError(f"Submission convention {convention.id!r} is incompatible: {'; '.join(compatibility.reasons)}")
     if convention.answer_format == AnswerFormat.FINAL_ACTION:
         return format_conversation(context.events)
     return f"{format_conversation(context.events)}\n\n{submission_instruction(convention)}\n"
@@ -138,8 +179,9 @@ def conversation_messages(context: ConversationInput) -> list[dict[str, Any]]:
 
 def chat_request(specification: TaskSpec, convention: SubmissionConvention) -> dict[str, Any]:
     """Prepare the conversation and tools for the selected submission convention."""
-    if not submission_compatible(specification, convention):
-        raise ValueError("Submission convention is incompatible with the task")
+    compatibility = submission_compatible(specification, convention)
+    if not compatibility.compatible:
+        raise ValueError(f"Submission convention is incompatible: {'; '.join(compatibility.reasons)}")
     messages = conversation_messages(specification.context)
     instruction = submission_instruction(convention)
     if instruction:

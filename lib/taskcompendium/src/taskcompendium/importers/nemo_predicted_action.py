@@ -10,6 +10,7 @@ from typing import Any
 from pydantic import Json, JsonValue, TypeAdapter
 
 from taskcompendium.models import (
+    FINAL_TOOL_CHOICES,
     AnswerType,
     AssistantToolCalls,
     ConversationInput,
@@ -162,7 +163,7 @@ def import_row(row: dict[str, Any], expected_sha256: str) -> tuple[TaskSpec, Sub
     events = _events(request)
     tool_choice = request.get("tool_choice")
     parallel_tool_calls = request.get("parallel_tool_calls")
-    if tool_choice is not None and (not isinstance(tool_choice, str) or tool_choice not in {"auto", "none", "required"}):
+    if tool_choice is not None and (not isinstance(tool_choice, str) or tool_choice not in FINAL_TOOL_CHOICES):
         raise ValueError("unsupported source tool_choice")
     if parallel_tool_calls is not None and not isinstance(parallel_tool_calls, bool):
         raise ValueError("source parallel_tool_calls must be a boolean")
