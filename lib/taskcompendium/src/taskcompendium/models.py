@@ -18,7 +18,6 @@ class AnswerType(StrEnum):
     TEXT = "text"
     NUMBER = "number"
     FILE = "file"
-    WORKSPACE_STATE = "workspace_state"
     STATE = "state"
     NATIVE_ACTION = "native_action"
 

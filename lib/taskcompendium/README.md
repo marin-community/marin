@@ -36,7 +36,7 @@ flowchart LR
 | `instructions` | The source problem presented to the model. A submission convention may append an answer instruction. |
 | `source` | Dataset, revision, row, and importer revision used to reproduce the spec. |
 | `requirements` | Capabilities or named action interfaces the execution environment must provide. |
-| `answer_type` | The semantic result: `text`, `number`, `file`, `workspace_state`, or `native_action`. It does not prescribe a wrapper such as JSON. |
+| `answer_type` | The semantic result: `text`, `number`, `file`, `state`, or `native_action`. It does not prescribe a wrapper such as JSON. |
 | `verifier` | A private verifier kind and serialized JSON configuration. The built-in `exact_answer` verifier holds the expected answer and text-normalization rules. |
 | `schema_version` | Version of the serialized spec, checked when the record is loaded. |
 
