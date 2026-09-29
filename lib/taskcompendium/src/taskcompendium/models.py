@@ -24,7 +24,7 @@ class VerifierKind(StrEnum):
     """The registered grader used to check a submission."""
 
     EXACT_ANSWER = "exact_answer"
-    TASKTROVE = "tasktrove"
+    MCQ_ANSWER = "mcq_answer"
 
 
 class Source(BaseModel):
