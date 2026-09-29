@@ -7,6 +7,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from taskcompendium.resources import SHA256_PATTERN, TaskResource, validate_resource_paths
+
 SCHEMA_VERSION = "0.5"
 
 
@@ -68,6 +70,13 @@ class TaskRequirements(BaseModel):
 
     capabilities: tuple[str, ...] = ()
     action_interfaces: tuple[str, ...] = ()
+    seed_sha256: str | None = None
+
+    @model_validator(mode="after")
+    def validate_seed(self) -> "TaskRequirements":
+        if self.seed_sha256 is not None and not SHA256_PATTERN.fullmatch(self.seed_sha256):
+            raise ValueError("An immutable seed requires a lowercase SHA256 digest")
+        return self
 
 
 class TaskSpec(BaseModel):
@@ -81,6 +90,7 @@ class TaskSpec(BaseModel):
     source: Source
     requirements: TaskRequirements
     answer_type: AnswerType
+    resources: tuple[TaskResource, ...] = ()
     schema_version: str = SCHEMA_VERSION
 
     @model_validator(mode="after")
@@ -89,4 +99,5 @@ class TaskSpec(BaseModel):
             raise ValueError(f"Unsupported TaskSpec schema: {self.schema_version}")
         if not self.id or not self.instructions.strip():
             raise ValueError("A task id and instructions are required")
+        validate_resource_paths(self.resources)
         return self
