@@ -11,7 +11,7 @@ Build the data stage::
 
     uv run python -m experiments.post_training.coding_expert_data --run
 
-Run ``--stage baseline`` before RL, then ``--stage smoke`` for one optimizer update.
+Run ``coding_expert_baseline`` before RL. Then run ``--stage smoke`` for one optimizer update.
 Use ``--stage pilot`` only after the smoke has a finite loss and writes an HF export.
 """
 
@@ -31,7 +31,7 @@ from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, cast
 
 import click
@@ -56,6 +56,7 @@ from marin.rl.skyrl import (
     SkyRLRuntimeProfile,
     SkyRLSpec,
     SkyRLTopology,
+    artifact_data_staging_path,
     skyrl_step,
 )
 from rigging.filesystem.storage_path import StoragePath
@@ -72,7 +73,7 @@ PARENT_MODEL = "open-athena/Grug-67B-A2B-GLM53-RLVR-SFT-2026.09.23"
 PARENT_REVISION = "227263f32121ac79ba96de6136b86221e58b05db"
 DATASET = "open-r1/verifiable-coding-problems-python_decontaminated-tested-shuffled"
 DATASET_REVISION = "98191eb6eefd276b7ebb4eb8d25c4a167cc65605"
-SKYRL_RUNTIME_COMMIT = "fbfa158d4caf7003d5fe64d58f4faf5c600ec156"
+SKYRL_RUNTIME_COMMIT = "7994f0ec60f7a6ec7f208e9e6c0f29a446957421"
 SHELLBOX_COMMIT = "c96bf413031fdde2fea1cfd30b4133b44c959a8c"
 SHELLBOX_REQUIREMENT = (
     "marin-shellbox[shellsim] @ "
@@ -126,6 +127,7 @@ class CodeDataConfig:
     max_prompt_tokens: int = MAX_PROMPT_TOKENS
     max_test_cases: int = MAX_TEST_CASES
     max_case_bytes: int = MAX_CASE_BYTES
+    marinskyrl_commit: str = SKYRL_RUNTIME_COMMIT
     shellbox_commit: str = SHELLBOX_COMMIT
     shellsim_version: str = SHELLSIM_VERSION
     seed: int = SEED
@@ -369,7 +371,11 @@ def _preflight_gold_solution(row: Mapping[str, Any]) -> tuple[bool, str]:
 
 def prepare_code_data(config: CodeDataConfig) -> None:
     """Build private Harbor tasks and a pinned Shellbox runtime bundle."""
-    if config.shellbox_commit != SHELLBOX_COMMIT or config.shellsim_version != SHELLSIM_VERSION:
+    if (
+        config.marinskyrl_commit != SKYRL_RUNTIME_COMMIT
+        or config.shellbox_commit != SHELLBOX_COMMIT
+        or config.shellsim_version != SHELLSIM_VERSION
+    ):
         raise ValueError("data builder runtime pins do not match the experiment")
     source = cast(Dataset, load_dataset(config.dataset, split="train", revision=config.dataset_revision))
     tokenizer = cast(Any, AutoTokenizer.from_pretrained(config.tokenizer, revision=config.tokenizer_revision))
@@ -451,7 +457,7 @@ def prepare_code_data(config: CodeDataConfig) -> None:
         "schema_version": 2,
         "source": {"dataset": config.dataset, "revision": config.dataset_revision, "rows": len(source)},
         "runtime": {
-            "marinskyrl_commit": SKYRL_RUNTIME_COMMIT,
+            "marinskyrl_commit": config.marinskyrl_commit,
             "shellbox_commit": config.shellbox_commit,
             "shellsim_version": config.shellsim_version,
             "environment": "coding_expert_runtime:CodingExpertShellSimEnvironment",
@@ -524,7 +530,7 @@ def data_step(version: str) -> ArtifactStep[Artifact]:
     )
 
 
-def rl_config_yaml(scale: Scale) -> str:
+def rl_config_yaml(scale: Scale, runtime_packages_path: str) -> str:
     """Return the Shellbox terminal-bench recipe for one scale."""
     return f"""\
 entrypoint: terminal_bench
@@ -636,12 +642,12 @@ data:
 
 extra_env:
   PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
-  PYTHONPATH: /tmp/marinskyrl/data/{EXPERIMENT_NAME}/{RUNTIME_PACKAGES_DIRECTORY}
+  PYTHONPATH: {runtime_packages_path}
 """
 
 
-def parent_evaluation_model(name: str, location: str, revision: str | None) -> ModelConfig:
-    """Serve a pinned or resolved Snowball checkpoint for code evaluation."""
+def evaluation_model(name: str, location: str, revision: str | None) -> ModelConfig:
+    """Serve a pinned or resolved Snowball checkpoint for evaluation."""
     return ModelConfig(
         name=name,
         location=location,
@@ -666,36 +672,34 @@ def parent_evaluation_model(name: str, location: str, revision: str | None) -> M
     )
 
 
-def baseline_step(version: str) -> ArtifactStep[EvaluationResult]:
+def _baseline_evaluation_step(version: str, evals: str) -> ArtifactStep[EvaluationResult]:
     return eval_step(
-        parent_evaluation_model(f"{EXPERIMENT_NAME}-parent", PARENT_MODEL, PARENT_REVISION),
-        CODE_EVALS,
+        evaluation_model(f"{EXPERIMENT_NAME}-parent", PARENT_MODEL, PARENT_REVISION),
+        evals,
         version=version,
         accelerator="H100x8",
         submission_cluster=CLUSTER,
         federated_cluster=CLUSTER,
     )
+
+
+def baseline_step(version: str) -> ArtifactStep[EvaluationResult]:
+    return _baseline_evaluation_step(version, CODE_EVALS)
 
 
 def baseline_collateral_step(version: str) -> ArtifactStep[EvaluationResult]:
     """Evaluate parent math and instruction-following retention."""
-    return eval_step(
-        parent_evaluation_model(f"{EXPERIMENT_NAME}-parent", PARENT_MODEL, PARENT_REVISION),
-        COLLATERAL_EVALS,
-        version=version,
-        accelerator="H100x8",
-        submission_cluster=CLUSTER,
-        federated_cluster=CLUSTER,
-    )
+    return _baseline_evaluation_step(version, COLLATERAL_EVALS)
 
 
 def rl_step(data: ArtifactStep[Artifact], scale: Scale, version: str) -> ArtifactStep[SkyRLRun]:
     """Build one coding RL run from the pinned parent and data artifact."""
+    runtime_packages_path = str(PurePosixPath(artifact_data_staging_path(data)) / RUNTIME_PACKAGES_DIRECTORY)
     return skyrl_step(
         SkyRLSpec(
             name=user_owned_name(f"checkpoints/{EXPERIMENT_NAME}-{scale.name}"),
             version=version,
-            config_yaml=rl_config_yaml(scale),
+            config_yaml=rl_config_yaml(scale, runtime_packages_path),
             runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON, commit=SKYRL_RUNTIME_COMMIT),
             model=PinnedHfModel(
                 repository=PARENT_MODEL,
@@ -734,10 +738,10 @@ def rl_step(data: ArtifactStep[Artifact], scale: Scale, version: str) -> Artifac
     )
 
 
-def candidate_evaluation_step(
-    trained: ArtifactStep[SkyRLRun], scale: Scale, version: str
+def _candidate_evaluation_step(
+    trained: ArtifactStep[SkyRLRun], scale: Scale, version: str, evals: str
 ) -> ArtifactStep[EvaluationResult]:
-    model = parent_evaluation_model(
+    model = evaluation_model(
         f"{EXPERIMENT_NAME}-{scale.name}",
         SKYRL_POLICY_LOCATION,
         None,
@@ -745,39 +749,32 @@ def candidate_evaluation_step(
     return skyrl_eval_step(
         trained,
         model,
-        CODE_EVALS,
+        evals,
         version=version,
         accelerator="H100x8",
         submission_cluster=CLUSTER,
         federated_cluster=CLUSTER,
     )
+
+
+def candidate_evaluation_step(
+    trained: ArtifactStep[SkyRLRun], scale: Scale, version: str
+) -> ArtifactStep[EvaluationResult]:
+    return _candidate_evaluation_step(trained, scale, version, CODE_EVALS)
 
 
 def candidate_collateral_evaluation_step(
     trained: ArtifactStep[SkyRLRun], scale: Scale, version: str
 ) -> ArtifactStep[EvaluationResult]:
     """Evaluate candidate math and instruction-following retention."""
-    model = parent_evaluation_model(
-        f"{EXPERIMENT_NAME}-{scale.name}",
-        SKYRL_POLICY_LOCATION,
-        None,
-    )
-    return skyrl_eval_step(
-        trained,
-        model,
-        COLLATERAL_EVALS,
-        version=version,
-        accelerator="H100x8",
-        submission_cluster=CLUSTER,
-        federated_cluster=CLUSTER,
-    )
+    return _candidate_evaluation_step(trained, scale, version, COLLATERAL_EVALS)
 
 
 @click.command(help=__doc__)
 @click.option(
     "--stage",
-    type=click.Choice(("data", "baseline", "smoke", "pilot", "train", "candidate-evaluation", "full")),
-    default="data",
+    type=click.Choice(("smoke", "pilot", "train", "candidate-evaluation", "full")),
+    default="smoke",
     show_default=True,
 )
 @click.option("--scale", type=click.Choice(tuple(SCALES)), default="pilot", show_default=True)
@@ -786,11 +783,6 @@ def main(stage: str, scale: str) -> ArtifactStep | dict[str, ArtifactStep]:
     data_version = resolve_version(f"documents/{EXPERIMENT_NAME}", None)
     version = resolve_version(EXPERIMENT_NAME, None)
     data = data_step(data_version)
-    if stage == "data":
-        return data
-    if stage == "baseline":
-        return baseline_step(version)
-
     selected_scale = SCALES[stage] if stage in SCALES else SCALES[scale]
     trained = rl_step(data, selected_scale, version)
     if stage in SCALES:

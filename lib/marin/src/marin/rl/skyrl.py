@@ -257,6 +257,11 @@ def _artifact_local_path(category: str, step: ArtifactStep) -> str:
     return str(_MARINSKYRL_STAGING_ROOT / category / PurePosixPath(step.name).name)
 
 
+def artifact_data_staging_path(step: ArtifactStep) -> str:
+    """Return the node-local root for a staged data artifact."""
+    return _artifact_local_path("data", step)
+
+
 def _validate_relative_file_path(name: str, value: str) -> None:
     path = PurePosixPath(value)
     if not path.parts or path.is_absolute() or ".." in path.parts:
@@ -341,7 +346,7 @@ class ArtifactDataSource:
         return ResolvedDirectoryDataSource(
             uri=artifact_path,
             identity=artifact_identity(self.step),
-            local_path=_artifact_local_path("data", self.step),
+            local_path=artifact_data_staging_path(self.step),
             relative_path=self.relative_path,
         )
 
@@ -374,7 +379,7 @@ class TaskTroveDataSource:
         return ResolvedTaskTroveDataSource(
             uri=prefix_join(artifact_path, self.relative_path),
             identity=f"{artifact_identity(self.step)}/{self.relative_path}",
-            local_path=_artifact_local_path("data", self.step),
+            local_path=artifact_data_staging_path(self.step),
             relative_path=PurePosixPath(self.relative_path).name,
             verifier_ref=verifier_ref,
             selection=self.selection,
