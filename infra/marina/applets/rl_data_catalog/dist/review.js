@@ -157,7 +157,8 @@ function difficultyRun(model, identityPath, record) {
           checkpoint_revision: identity.config.model.revision || "Not exposed by provider",
           provider: identity.config.model.provider || "Local model service",
           generation_parameters: identity.config.model.parameters,
-          total_context_window: identity.config.model.context_window || identity.context_window || "Not recorded",
+          total_context_window: identity.config.model.context_budget?.context_window || identity.config.model.context_window || identity.context_window || "Not recorded",
+          context_budget: identity.config.model.context_budget || "Not recorded",
           ...(identity.harbor ? {harbor_execution: identity.harbor, worker_timeout: identity.config.runtime.worker_timeout} : {request_timeout: identity.config.model.timeout}),
           agent_timeout: identity.config.runtime.agent_timeout,
           maximum_turns: identity.config.runtime.max_turns,
@@ -182,7 +183,7 @@ function difficultyRun(model, identityPath, record) {
         const result = verification.status === "verified" ? `score ${verification.score}` : `${verification.status} · unverified`;
         tasks.append(fold(`Task ${outcome.task_id} · ${result}`, () => {
           const task = node("div");
-          task.append(node("h3", "Native verifier result"), pretty(verification), textSection("Attempt metadata", {task_id: outcome.task_id, row_index: outcome.row_index, verifier_executed: outcome.verifier_executed, done: outcome.done, turns: outcome.turns}));
+          task.append(node("h3", "Native verifier result"), pretty(verification), textSection("Attempt metadata", {task_id: outcome.task_id, row_index: outcome.row_index, verifier_executed: outcome.verifier_executed, done: outcome.done, attempt_complete: outcome.attempt_complete, stop_reason: outcome.stop_reason, turns: outcome.turns}));
           const execution = prefix && `${prefix}${outcome.execution_path}/`;
           const evidence = execution ? record.artifacts.filter(item => item.path.startsWith(execution)) : [];
           const modelFiles = evidence.filter(item => /solver\/turn-\d+\/(request|response)\.json$/.test(item.path) || /agent\/(trajectory\.json|episode-\d+\/debug\.json)$/.test(item.path));
