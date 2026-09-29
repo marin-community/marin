@@ -28,6 +28,8 @@ def _archive(
     root,
     *,
     corrupt_token=False,
+    corrupt_prompt=False,
+    with_replacement_mask=True,
     with_routes=False,
     partial_route_mask=False,
     cache_mode="off",
@@ -54,7 +56,9 @@ def _archive(
                 sample_id=sample,
                 prompt_id=prompt,
                 prompt_token_ids=[1, position // 2 + 2],
-                trainer_prompt_ids=[1, position // 2 + 2],
+                trainer_prompt_ids=(
+                    [99, position // 2 + 2] if corrupt_prompt and position == 0 else [1, position // 2 + 2]
+                ),
                 vllm_output_ids=response,
                 trainer_input_ids=[response[0], 99] if corrupt_token and position == 0 else response,
                 response_mask=[True, True],
@@ -118,7 +122,7 @@ def _archive(
                     expert_choices=observed.tobytes() if observed is not None else None,
                     expert_choices_shape=list(observed.shape) if observed is not None else None,
                     expert_choices_dtype=str(observed.dtype) if observed is not None else None,
-                    replacement_mask=replaced.tobytes() if observed is not None else None,
+                    replacement_mask=replaced.tobytes() if observed is not None and with_replacement_mask else None,
                 )
             )
     manifest = ManifestRow(
@@ -185,17 +189,26 @@ def test_report_recovers_same_weight_modes_paired_intervals_and_drift(tmp_path):
     assert "prefix_cache_effect_at_0" in both["comparisons"]
 
 
-def test_report_stops_numerical_analysis_after_token_mutation(tmp_path):
-    root = tmp_path / "archive"
-    _archive(root, corrupt_token=True)
+@pytest.mark.parametrize("corrupt_field", ["response", "prompt"])
+@pytest.mark.parametrize("probe_hash", ["frozen", "independent"])
+def test_report_stops_numerical_analysis_after_token_mutation(tmp_path, corrupt_field, probe_hash):
+    root, valid = tmp_path / "archive", tmp_path / "valid"
+    _archive(
+        root, corrupt_token=corrupt_field == "response", corrupt_prompt=corrupt_field == "prompt", probe_hash=probe_hash
+    )
+    _archive(valid)
     report = analyze_archive(str(root), bootstrap_draws=20)
     assert report["token_identity"]["fraction"] < 1
     assert report["comparisons"] == {}
+    for left, right in ((root, valid), (valid, root)):
+        with pytest.raises(ValueError, match="trainer and sampler token identity"):
+            compare_archives(str(left), str(right), bootstrap_draws=20)
 
 
-def test_report_route_agreement_excludes_missing_routes_and_tracks_replacements(tmp_path):
+@pytest.mark.parametrize("with_replacement_mask", [True, False])
+def test_report_route_agreement_excludes_missing_routes_and_tracks_replacements(tmp_path, with_replacement_mask):
     root = tmp_path / "archive"
-    _archive(root, with_routes=True)
+    _archive(root, with_routes=True, with_replacement_mask=with_replacement_mask)
     report = analyze_archive(str(root), bootstrap_draws=20)
     native = report["route_diagnostics"]["trainer@0:native"]["metrics"]
     replay = report["route_diagnostics"]["trainer@0:router_replay"]["metrics"]
@@ -203,7 +216,7 @@ def test_report_route_agreement_excludes_missing_routes_and_tracks_replacements(
     assert native["set_agreement"] == 0.5
     assert replay["set_agreement"] == 1.0
     assert filtered["set_agreement"] == 0.75
-    assert filtered["replacement_fraction"] == 0.25
+    assert filtered["replacement_fraction"] == (0.25 if with_replacement_mask else {"nonfinite": "nan"})
     assert "set_agreement" in report["route_diagnostics"]["trainer@0:native"]["layers"]["0"]["ci95"]
 
     masked_root = tmp_path / "partially-masked"

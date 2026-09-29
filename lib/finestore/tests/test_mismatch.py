@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 
 import pyarrow as pa
+import pytest
 from finestore.mismatch import (
     LAYERS_TABLE,
     MANIFEST_TABLE,
@@ -42,6 +43,8 @@ def test_mismatch_archive_round_trip_retains_tokens_routes_float32_scores_and_co
         routed_experts_dtype="uint8",
         route_valid_mask=[[True], [False]],
     )
+    with pytest.raises(ValueError, match="route validity must match"):
+        ProbeRow.model_validate(probe.model_dump() | {"routed_experts": b"\x00\x03", "routed_experts_shape": [1, 1, 2]})
     score = ScoreRow(
         probe_hash="hash",
         sample_id="sample-0",

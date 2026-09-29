@@ -215,16 +215,23 @@ def _route_diagnostics(probes: list[ProbeRow], scores: dict[str, dict[str, Score
             continue
         selected = []
         replaced = []
+        replacement_available = all(sample_scores[row.sample_id].replacement_mask is not None for row in probes)
         for probe, routes in zip(probes, captured, strict=True):
             score = sample_scores[probe.sample_id]
             if score.expert_choices_shape != list(routes.shape):
                 raise ValueError(f"route observation shape differs from capture for {name}/{probe.sample_id}")
             choices = np.frombuffer(score.expert_choices, dtype=score.expert_choices_dtype).reshape(routes.shape)
-            change = np.frombuffer(score.replacement_mask, dtype=np.bool_).reshape(routes.shape)
+            change = (
+                np.zeros(routes.shape, dtype=np.bool_)
+                if score.replacement_mask is None
+                else np.frombuffer(score.replacement_mask, dtype=np.bool_).reshape(routes.shape)
+            )
             selected.append(choices)
             replaced.append(change)
 
-        def calculate(indices, *, selected=selected, replaced=replaced, name=name):
+        def calculate(
+            indices, *, selected=selected, replaced=replaced, name=name, replacement_available=replacement_available
+        ):
             token_count = valid_count = set_match = slot_match = any_disagreement = replacements = 0
             differing_layer_total = 0
             layer_valid = np.zeros(captured[0].shape[1], dtype=np.int64)
@@ -261,7 +268,9 @@ def _route_diagnostics(probes: list[ProbeRow], scores: dict[str, dict[str, Score
                 "exact_slot_agreement": slot_match / denominator if denominator else math.nan,
                 "any_layer_disagreement": any_disagreement / valid_count if valid_count else math.nan,
                 "mean_differing_layers": differing_layer_total / valid_count if valid_count else math.nan,
-                "replacement_fraction": replacements / (denominator * topk) if denominator else math.nan,
+                "replacement_fraction": (
+                    replacements / (denominator * topk) if denominator and replacement_available else math.nan
+                ),
                 "valid_tokens": float(valid_count),
                 "loss_tokens": float(token_count),
             }
@@ -270,7 +279,7 @@ def _route_diagnostics(probes: list[ProbeRow], scores: dict[str, dict[str, Score
                 metrics[f"layer_{layer}/set_agreement"] = float(layer_set[layer] / count) if count else math.nan
                 metrics[f"layer_{layer}/exact_slot_agreement"] = float(layer_slot[layer] / count) if count else math.nan
                 metrics[f"layer_{layer}/replacement_fraction"] = (
-                    float(layer_replaced[layer] / (count * topk)) if count else math.nan
+                    float(layer_replaced[layer] / (count * topk)) if count and replacement_available else math.nan
                 )
             return metrics
 
@@ -514,6 +523,12 @@ def compare_archives(
     """Compare matched prompt groups from two runs with the same starting policy."""
     left = load_archive(left_uri)
     right = load_archive(right_uri)
+    for archive in (left, right):
+        if any(
+            row.prompt_token_ids != row.trainer_prompt_ids or row.vllm_output_ids != row.trainer_input_ids
+            for row in archive.probes
+        ):
+            raise ValueError("configuration A/B requires exact trainer and sampler token identity in both archives")
     left_clip_low, left_clip_high = _clip_thresholds(left.manifest)
     right_clip_low, right_clip_high = _clip_thresholds(right.manifest)
     if left.manifest.starting_weights_hash != right.manifest.starting_weights_hash:
