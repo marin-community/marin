@@ -3137,8 +3137,8 @@
     {
       "id": 46,
       "type": "timeseries",
-      "title": "TIS correction skips",
-      "description": "training_metric_value for tis/batch_skipped_no_logprobs and tis/skipped_fraction: whether a batch's TIS correction fell back to the standard policy loss because rollout_logprobs were missing. Logged by the trainer when trainer.algorithm.use_tis is on. Empty without trainer.training_metrics.",
+      "title": "Mean correction weight",
+      "description": "Mean off-policy correction weight over eligible tokens, including zero weights for masked tokens. The driver computes policy/correction/weight_mean after the old-policy forward and teacher-valid masking. Exported when trainer.training_metrics is enabled; absent when no correction is configured.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -3218,7 +3218,7 @@
               },
               {
                 "key": "view",
-                "value": "tis_skips"
+                "value": "correction_weights"
               }
             ]
           },
@@ -5459,7 +5459,7 @@
       "id": 59,
       "type": "timeseries",
       "title": "Correction activity",
-      "description": "training_metric_value for policy/offpolicy_mask/*, policy/m2_mask/*, policy/ppo_clip_ratio and policy/tis/imp_ratio_capped_fraction: token-masking and clipping activity from the off-policy, M2 and TIS corrections. Logged by the policy worker after each optimizer step. Empty without trainer.training_metrics.",
+      "description": "Fractions of eligible tokens masked or truncated by the configured off-policy correction, and the policy loss clipping fraction. The driver emits policy/correction/{masked_fraction,truncated_fraction}; policy/ppo_clip_ratio comes from the learner. Exported when trainer.training_metrics is enabled. Correction series are absent when no correction is configured.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
