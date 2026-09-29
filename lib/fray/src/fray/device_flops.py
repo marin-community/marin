@@ -28,9 +28,9 @@ DEVICE_FLOPS: dict[str, dict[str, float]] = {
         "fp8": 3.958e15 / 2,
         "int8": 3.958e15 / 2,
     },
-    # From an earlier revision of the H100 datasheet. The current revision lists only the
-    # SXM and NVL variants.
-    # source: https://web.archive.org/web/20230601005316/https://resources.nvidia.com/en-us-tensor-core/nvidia-tensor-core-gpu-datasheet
+    # PCIe column of the 2022 H100 datasheet. The current revision lists only the SXM and
+    # NVL variants.
+    # source: https://web.archive.org/web/20221220065836/https://nvdam.widen.net/content/vuzumiozpb/original/h100-datasheet-2287922.pdf
     "h100-pcie": {
         "fp64": 51e12,
         "fp32": 51e12,
