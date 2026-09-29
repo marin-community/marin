@@ -177,12 +177,25 @@ def _request(example: _Example, session: RemoteInferenceSession) -> _Result:
             if not isinstance(content, str):
                 raise ValueError("chat response content is not text")
             return _Result(example=example, output=content, error=None)
+        except requests.HTTPError as exc:
+            response = exc.response
+            if response is not None and response.status_code == 400:
+                logger.warning(
+                    "GraphWalks example %d rejected: HTTP 400, prompt_tokens=%d, max_tokens=%d: %.500s",
+                    example.index,
+                    example.prompt_tokens,
+                    example.output_tokens,
+                    response.text,
+                )
+                return _Result(example=example, output=None, error="http_400")
+            if attempt + 1 == _MAX_REQUEST_ATTEMPTS:
+                return _Result(example=example, output=None, error=type(exc).__name__)
+            session.wait_until_ready()
+            time.sleep(2**attempt)
         except requests.RequestException as exc:
             if attempt + 1 == _MAX_REQUEST_ATTEMPTS:
                 return _Result(example=example, output=None, error=type(exc).__name__)
             session.wait_until_ready()
-            if isinstance(exc, requests.HTTPError):
-                time.sleep(2**attempt)
         except (ValueError, KeyError, IndexError) as exc:
             return _Result(example=example, output=None, error=type(exc).__name__)
     raise AssertionError("unreachable")
