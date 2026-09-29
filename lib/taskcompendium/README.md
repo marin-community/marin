@@ -4,7 +4,7 @@
 
 Training and evaluation tasks arrive with different prompt formats, answer rules, tools, and graders. TaskCompendium separates the problem a model must solve from the way a framework runs and grades it. A caller can choose among compatible presentations of a task while keeping its reference answer private. Additional Harbor environment configurations can use the same task definition.
 
-The current implementation supports direct-chat text and number answers and a stateful Workplace tool task. Both export Harbor tasks and grade through private verifiers. File and workspace-state result types remain outside these lowerings.
+The current implementation supports direct-chat text and number answers and a stateful Workplace tool task. Both export Harbor tasks and grade through private verifiers. File and native-action result types remain outside these lowerings.
 
 ## What does it contain?
 
@@ -36,7 +36,7 @@ flowchart LR
 | `instructions` | The source problem presented to the model. A submission convention may append an answer instruction. |
 | `source` | Dataset, revision, row, and importer revision used to reproduce the spec. |
 | `requirements` | Capabilities or named action interfaces the execution environment must provide. |
-| `answer_type` | The semantic result: `text`, `number`, `file`, `workspace_state`, or `state`. It does not prescribe a wrapper such as JSON. |
+| `answer_type` | The semantic result: `text`, `number`, `file`, `state`, or `native_action`. It does not prescribe a wrapper such as JSON. |
 | `verifier` | A private verifier kind and serialized JSON configuration. The built-in `exact_answer` verifier holds the expected answer and text-normalization rules. |
 | `resources` | Private file inputs with normalized paths and agent, verifier, or oracle visibility. |
 | `schema_version` | Version of the serialized spec, checked when the record is loaded. |
