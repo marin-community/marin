@@ -87,20 +87,25 @@ def _events(request: dict[str, Any]) -> tuple[TextMessage | AssistantToolCalls |
         raise ValueError("source input must be a list")
     events: list[TextMessage | AssistantToolCalls | ToolResult] = []
     pending_calls: list[ConversationToolCall] = []
+    reasoning_without_visible_result = False
     for item in items:
         if not isinstance(item, dict):
             raise ValueError("unsupported source input item")
         if item.get("type") == "reasoning":
             if item.get("encrypted_content") is not None or not isinstance(item.get("summary"), list):
                 raise ValueError("unsupported source reasoning item")
-            continue  # API reasoning summaries are not conversation messages.
+            reasoning_without_visible_result = True
+            continue  # Historical reasoning is omitted; its visible result must follow.
         if item.get("type") == "function_call":
             if not all(isinstance(item.get(key), str) and item[key] for key in ("call_id", "name", "arguments")):
                 raise ValueError("source function calls require call_id, name, and arguments")
             pending_calls.append(
                 ConversationToolCall(call_id=item["call_id"], name=item["name"], arguments=item["arguments"])
             )
+            reasoning_without_visible_result = False
             continue
+        if reasoning_without_visible_result and (item.get("type") != "message" or item.get("role") != "assistant"):
+            raise ValueError("source reasoning has no visible assistant result")
         if pending_calls:
             events.append(AssistantToolCalls(calls=tuple(pending_calls)))
             pending_calls = []
@@ -122,6 +127,9 @@ def _events(request: dict[str, Any]) -> tuple[TextMessage | AssistantToolCalls |
         if not isinstance(content, str) or not content.strip():
             raise ValueError("source messages require text")
         events.append(TextMessage(role=item["role"], content=content))
+        reasoning_without_visible_result = False
+    if reasoning_without_visible_result:
+        raise ValueError("source reasoning has no visible assistant result")
     if pending_calls:
         events.append(AssistantToolCalls(calls=tuple(pending_calls)))
     if not events:

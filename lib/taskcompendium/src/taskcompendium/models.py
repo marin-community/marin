@@ -19,7 +19,7 @@ class AnswerType(StrEnum):
     TEXT = "text"
     NUMBER = "number"
     FILE = "file"
-    WORKSPACE_STATE = "workspace_state"
+    STATE = "state"
     NATIVE_ACTION = "native_action"
 
 
@@ -156,7 +156,7 @@ def format_conversation(events: tuple[ConversationEvent, ...]) -> str:
 
 
 class ConversationInput(BaseModel):
-    """The model-visible conversation prefix and advertised functions."""
+    """Model-visible messages and calls, without provider reasoning state."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 

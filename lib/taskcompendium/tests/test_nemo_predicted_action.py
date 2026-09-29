@@ -47,6 +47,7 @@ def test_pinned_nemo_row_keeps_expected_action_private(tmp_path):
     task = lower_to_harbor(specification, convention, HarborEnvironmentConfig(), tmp_path / "task")
     public = (task / "instruction.md").read_text() + (task / "submission_convention.json").read_text()
     assert row["expected_action"]["arguments"] not in public
+    assert "Okay, let me figure out how to handle this user's query" not in public
     assert "authenticate_user" in {function.name for function in request.functions}
     assert not (task / "tests").exists()
     with pytest.raises(ValueError, match="pinned canonical hash"):
@@ -80,6 +81,17 @@ def test_predicted_action_rejects_source_request_settings_it_cannot_preserve():
     row["responses_create_params"]["instructions"] = "Additional system instruction"
 
     with pytest.raises(ValueError, match="unsupported source request settings"):
+        import_row(row, canonical_sha256(row))
+
+
+@pytest.mark.parametrize("before_final_user", [False, True])
+def test_predicted_action_rejects_reasoning_without_visible_result(before_final_user):
+    row = json.loads((FIXTURES / "predicted-action.json").read_text())
+    reasoning = row["responses_create_params"]["input"][2]
+    position = -1 if before_final_user else len(row["responses_create_params"]["input"])
+    row["responses_create_params"]["input"].insert(position, reasoning)
+
+    with pytest.raises(ValueError, match="reasoning has no visible assistant result"):
         import_row(row, canonical_sha256(row))
 
 
