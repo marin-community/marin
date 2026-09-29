@@ -37,10 +37,10 @@ flowchart LR
 | `source` | Dataset, revision, row, and importer revision used to reproduce the spec. |
 | `requirements` | Capabilities or named action interfaces the execution environment must provide. |
 | `answer_type` | The semantic result: `text`, `number`, `file`, `workspace_state`, or `native_action`. It does not prescribe a wrapper such as JSON. |
-| `verifier` | A private verifier kind and serialized JSON configuration. The built-in `exact_answer` verifier holds the expected answer and text-normalization rules. |
+| `verifier` | A private verifier kind and serialized JSON configuration. `exact_answer` uses text-normalization rules; `numeric_answer` uses explicit absolute and relative tolerances. The answer type does not choose the verifier. |
 | `schema_version` | Version of the serialized spec, checked when the record is loaded. |
 
-For example, a task asking “What is 7 + 5?” can have `answer_type=number` and a private expected answer of `12`. That answer type can be submitted as plain text or as `{"answer":"12"}`. The verifier and expected answer are never added to the model-visible instruction. Importers must make source output instructions neutral to the supported conventions, or reject rows they cannot safely rewrite. A raw-output requirement left in `instructions` would conflict with a JSON convention; `answer_type=text` alone cannot detect that conflict in prose.
+For example, a task asking “What is 7 + 5?” can have `answer_type=number` and a private expected answer of `12` with explicit numeric tolerances. That answer type can be submitted as plain text or as `{"answer":"12"}`. The verifier and expected answer are never added to the model-visible instruction. Importers must make source output instructions neutral to the supported conventions, or reject rows they cannot safely rewrite. A raw-output requirement left in `instructions` would conflict with a JSON convention; `answer_type=text` alone cannot detect that conflict in prose.
 
 The TaskTrove MCQA importer reads archives from a cleaned release. See the [published TaskTrove Clean dataset](https://huggingface.co/datasets/open-athena/task-trove). Its caller passes the archive bytes, upstream subset, archive path, and release provenance to `read_archive`. The reader checks the subset and path against the archive manifest; the release URI and revision are caller-supplied provenance. The importer checks the source answer-line template before replacing it with a one-letter instruction. Its text answer works with plain and JSON submission conventions. The private `tasktrove` verifier stores the validated expected letter and option count, then grades the extracted letter through the shared `tasktrove-verify` MCQ scorer. This slice supports only its MCQ mode; executable TaskTrove modes still need private resources and an isolated verifier runtime.
 
@@ -62,14 +62,14 @@ from taskcompendium.lowering import (
     lower_to_harbor,
     select_lowerings,
 )
-from taskcompendium.grading import exact_answer
+from taskcompendium.grading import numeric_answer
 from taskcompendium.models import AnswerType, Source, TaskRequirements, TaskSpec
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
 
 spec = TaskSpec(
     id="arithmetic-7-plus-5",
     instructions="What is 7 + 5?",
-    verifier=exact_answer("12"),
+    verifier=numeric_answer(12.0, tolerance_abs=0.0, tolerance_rel=0.0),
     source=Source(dataset="hand-authored", revision="2026-09-16", row="arithmetic-7-plus-5", importer_revision="1"),
     requirements=TaskRequirements(),
     answer_type=AnswerType.NUMBER,

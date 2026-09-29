@@ -13,7 +13,7 @@ from threading import Thread
 import pytest
 from harbor.models.task.task import Task
 
-from taskcompendium.grading import exact_answer
+from taskcompendium.grading import exact_answer, numeric_answer
 from taskcompendium.harbor.runner import ChatLaunch, ReplayLaunch, run_trial
 from taskcompendium.lowering import (
     DIRECT_CHAT_ENVIRONMENT,
@@ -26,6 +26,7 @@ from taskcompendium.lowering import (
 )
 from taskcompendium.models import AnswerType, Source, TaskRequirements, TaskSpec, VerifierKind, VerifierSpec
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
+from taskcompendium.verifier_registry import grade_answer
 
 
 @dataclass
@@ -69,7 +70,7 @@ def specification() -> TaskSpec:
     return TaskSpec(
         id="arithmetic-7-plus-5",
         instructions="What is 7 + 5?",
-        verifier=exact_answer("12"),
+        verifier=numeric_answer(12.0, tolerance_abs=0.0, tolerance_rel=0.0),
         source=Source(dataset="hand-authored", revision="2026-09-16", row="arithmetic-7-plus-5", importer_revision="1"),
         requirements=TaskRequirements(),
         answer_type=AnswerType.NUMBER,
@@ -80,7 +81,9 @@ def specification() -> TaskSpec:
     "answer_format,response,reward,status",
     [
         (AnswerFormat.PLAIN, "12", 1.0, "graded"),
+        (AnswerFormat.PLAIN, "12.0", 1.0, "graded"),
         (AnswerFormat.PLAIN, "13", 0.0, "graded"),
+        (AnswerFormat.PLAIN, "not a number", 0.0, "graded"),
         (AnswerFormat.PLAIN, r"\boxed{12}", 0.0, "graded"),
         (AnswerFormat.JSON, '{"answer":"12"}', 1.0, "graded"),
         (AnswerFormat.JSON, '{"answer":"13"}', 0.0, "graded"),
@@ -109,7 +112,9 @@ async def test_direct_chat_harbor_trial_distinguishes_answer_outcomes(
 
 
 async def test_direct_chat_exact_comparison_uses_pinned_normalization(tmp_path, specification):
-    specification = specification.model_copy(update={"verifier": exact_answer("Straße Park")})
+    specification = specification.model_copy(
+        update={"verifier": exact_answer("Straße Park"), "answer_type": AnswerType.TEXT}
+    )
     environment_config = HarborEnvironmentConfig()
     task = lower_to_harbor(
         specification,
@@ -127,6 +132,21 @@ async def test_direct_chat_exact_comparison_uses_pinned_normalization(tmp_path, 
     )
 
     assert result.verifier_result.rewards == {"reward": 1.0}
+
+
+@pytest.mark.parametrize(
+    "response,reward",
+    [("12.05", 1.0), ("12.2", 0.0)],
+)
+def test_numeric_answer_uses_explicit_tolerance(specification, response, reward):
+    specification = specification.model_copy(
+        update={"verifier": numeric_answer(12.0, tolerance_abs=0.1, tolerance_rel=0.0)}
+    )
+    convention = SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN)
+
+    result = grade_answer(specification, convention, response, object())
+
+    assert (result.status, result.reward) == ("graded", reward)
 
 
 async def test_direct_chat_harbor_trial_records_private_metadata_failure(tmp_path, specification):
