@@ -577,7 +577,12 @@ class DeploymentConfig:
                 "GitHub federation", federation.name, federation.profile, federation_names, profile_names
             )
         if self.prune_deployment and not (
-            self.settings or self.remote_mcps or self.profiles or self.workloads or self.github_federations
+            self.settings
+            or self.approved_users
+            or self.remote_mcps
+            or self.profiles
+            or self.workloads
+            or self.github_federations
         ):
             raise ValueError("pruneDeployment requires a non-empty runtime policy")
 

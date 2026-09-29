@@ -270,7 +270,14 @@ def test_deployment_manifest_preserves_unicode_profile_instructions() -> None:
 
 def test_deployment_manifest_grants_a_bound_github_identity() -> None:
     user = ApprovedUserConfig.parse({"username": "ci", "githubLogin": "ci", "githubUserId": 306337490})
-    config = replace(deployment_config(), approved_users=(user,))
+    config = replace(
+        deployment_config(),
+        approved_users=(user,),
+        remote_mcps=(),
+        profiles=(),
+        workloads=(),
+        github_federations=(),
+    )
     manifest = json.loads(_deployment_manifest(config, [], []))
     assert manifest["users"] == [{"username": "ci", "github_login": "ci", "github_user_id": 306337490}]
 
