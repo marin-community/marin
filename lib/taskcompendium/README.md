@@ -6,6 +6,10 @@ Training and evaluation tasks arrive with different prompt formats, answer rules
 
 The current implementation is a small direct-chat slice. It accepts a final text or number answer, exports a Harbor task, and grades the answer through a private verifier registry. The task model also names file, workspace-state, and native-action results, but this slice has no Harbor environment configuration or submission convention for those result types.
 
+The proposed [script verifier contract](SCRIPT_VERIFIER_SPEC.md) describes how a
+task can pin and run a private grader script in an isolated verifier runtime.
+Script grading is not implemented in this slice.
+
 ## What does it contain?
 
 - **Task specs** describe the source problem, the required capabilities, the kind of result, and how to verify it.
