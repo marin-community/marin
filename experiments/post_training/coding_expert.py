@@ -290,7 +290,7 @@ def _task_instruction(problem: str) -> str:
 
 
 def _task_toml(problem_id: str, source: str) -> str:
-    return f'''\
+    return f"""\
 version = "1.0"
 
 [metadata]
@@ -309,7 +309,7 @@ MARIN_CODING_EXPERT_VERIFY = "1"
 [environment]
 allow_internet = false
 workdir = "/workspace"
-'''
+"""
 
 
 def _write_task(root: Path, row: Mapping[str, Any]) -> None:
@@ -540,7 +540,6 @@ context_budget:
 terminal_bench:
   harbor:
     name: oracle
-    max_turns: 8
     store_all_messages: true
     extra_body:
       chat_template_kwargs:

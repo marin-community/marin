@@ -25,24 +25,20 @@ def test_partition_keeps_related_problems_in_one_split() -> None:
         "development": 2,
         "train": 4,
     }
-    split_by_id = {
-        problem.problem_id: split for split, selected in splits.items() for problem in selected
-    }
+    split_by_id = {problem.problem_id: split for split, selected in splits.items() for problem in selected}
     assert split_by_id["a"] == split_by_id["b"]
     assert split_by_id["c"] == split_by_id["d"]
 
 
 def test_partition_is_stable_under_input_order() -> None:
-    problems = [
-        CodeProblem(str(index), None, normalized_prompt_fingerprint(f"problem {index}")) for index in range(12)
-    ]
+    problems = [CodeProblem(str(index), None, normalized_prompt_fingerprint(f"problem {index}")) for index in range(12)]
 
     forward = partition_problems(problems, {"final": 2, "development": 2, "train": 4}, seed=17)
     reverse = partition_problems(reversed(problems), {"final": 2, "development": 2, "train": 4}, seed=17)
 
-    assert {
-        split: {problem.problem_id for problem in selected} for split, selected in forward.items()
-    } == {split: {problem.problem_id for problem in selected} for split, selected in reverse.items()}
+    assert {split: {problem.problem_id for problem in selected} for split, selected in forward.items()} == {
+        split: {problem.problem_id for problem in selected} for split, selected in reverse.items()
+    }
 
 
 def test_verifier_accepts_correct_code_and_bounds_nonterminating_code() -> None:
