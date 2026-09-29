@@ -102,7 +102,7 @@ class GraphWalksGrade:
 
 
 def extract_answer(response: str) -> tuple[list[str], bool]:
-    """Apply the GraphWalks last-line parser from the dataset card."""
+    """Extract the last-line answer and report whether parsing failed."""
     line = response.split("\n")[-1]
     if "Final Answer:" not in line:
         return [], True
@@ -252,7 +252,7 @@ class GraphWalksExecutor:
         self,
         session: RemoteInferenceSession,
         output_dir: str,
-        env_vars: Mapping[str, str],
+        _env_vars: Mapping[str, str],
         *,
         judge: RemoteInferenceSession | None = None,
     ) -> EvaluationOutcome:
