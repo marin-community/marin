@@ -126,7 +126,6 @@ def snowball_recipe(
             "vllm_attention_backend": "FLASH_ATTN",
             "run_engines_locally": True,
             "weight_sync_backend": "nccl",
-            "batched": False,
             "gpu_memory_utilization": 0.75,
             "enable_prefix_caching": settings.cache_mode != "off",
             "require_exact_chat_transport": True,
