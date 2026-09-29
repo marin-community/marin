@@ -12,7 +12,8 @@ Build the data stage::
     uv run python -m experiments.post_training.coding_expert_data --run
 
 Run ``coding_expert_baseline`` before RL. Then run ``--stage smoke`` for one optimizer update.
-Use ``--stage pilot`` only after the smoke has a finite loss and writes an HF export.
+Use ``--stage reload-smoke --scale smoke`` to reload its export. Run ``--stage pilot`` only after
+both steps succeed.
 """
 
 from __future__ import annotations
@@ -739,7 +740,7 @@ def rl_step(data: ArtifactStep[Artifact], scale: Scale, version: str) -> Artifac
 
 
 def _candidate_evaluation_step(
-    trained: ArtifactStep[SkyRLRun], scale: Scale, version: str, evals: str
+    trained: ArtifactStep[SkyRLRun], scale: Scale, version: str, evals: str, *, limit: int | None = None
 ) -> ArtifactStep[EvaluationResult]:
     model = evaluation_model(
         f"{EXPERIMENT_NAME}-{scale.name}",
@@ -751,6 +752,7 @@ def _candidate_evaluation_step(
         model,
         evals,
         version=version,
+        limit=limit,
         accelerator="H100x8",
         submission_cluster=CLUSTER,
         federated_cluster=CLUSTER,
@@ -770,10 +772,15 @@ def candidate_collateral_evaluation_step(
     return _candidate_evaluation_step(trained, scale, version, COLLATERAL_EVALS)
 
 
+def candidate_reload_step(trained: ArtifactStep[SkyRLRun], scale: Scale, version: str) -> ArtifactStep[EvaluationResult]:
+    """Reload an exported policy in vLLM and run one bounded request."""
+    return _candidate_evaluation_step(trained, scale, version, "mmlu-smoke", limit=1)
+
+
 @click.command(help=__doc__)
 @click.option(
     "--stage",
-    type=click.Choice(("smoke", "pilot", "train", "candidate-evaluation", "full")),
+    type=click.Choice(("smoke", "pilot", "train", "reload-smoke", "candidate-evaluation", "full")),
     default="smoke",
     show_default=True,
 )
@@ -787,6 +794,8 @@ def main(stage: str, scale: str) -> ArtifactStep | dict[str, ArtifactStep]:
     trained = rl_step(data, selected_scale, version)
     if stage in SCALES:
         return trained
+    if stage == "reload-smoke":
+        return candidate_reload_step(trained, selected_scale, version)
     evaluation = candidate_evaluation_step(trained, selected_scale, version)
     collateral = candidate_collateral_evaluation_step(trained, selected_scale, version)
     if stage == "candidate-evaluation":
