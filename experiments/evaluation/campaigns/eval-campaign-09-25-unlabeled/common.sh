@@ -430,7 +430,7 @@ assert openthoughts["n_attempts"] == 3
 swebench = yaml.safe_load((harbor / "swebench-verified.yaml").read_text())
 assert swebench["n_attempts"] == 1
 assert swebench["agents"][0]["name"] == "mini-swe-agent"
-assert swebench["agents"][0]["kwargs"] == {"version": "2.1.0"}
+assert swebench["agents"][0]["kwargs"]["version"] == "2.1.0"
 assert swebench["datasets"] == [
     {
         "name": "swebench-verified",
@@ -438,6 +438,16 @@ assert swebench["datasets"] == [
         "registry_url": f"https://raw.githubusercontent.com/marin-community/harbor/{os.environ['CAMPAIGN_SHA_HARBOR']}/registry.json",
     }
 ]
+for name in (
+    "swebench-verified",
+    "ot-tblite-recovery",
+    "ds-1000-local",
+    "bfclparity-pi",
+    "tau3-pi",
+    "sotopia-hard",
+):
+    document = yaml.safe_load((harbor / f"{name}.yaml").read_text())
+    assert document["agents"][0]["kwargs"]["model_info"]["max_input_tokens"] == 32768
 
 registry_prefix = f"https://raw.githubusercontent.com/marin-community/harbor/{os.environ['CAMPAIGN_SHA_HARBOR']}/"
 for path in harbor.glob("*.yaml"):

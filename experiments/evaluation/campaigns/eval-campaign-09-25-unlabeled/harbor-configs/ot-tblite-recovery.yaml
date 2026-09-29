@@ -33,6 +33,9 @@ agents:
 - name: terminus-2
   override_setup_timeout_sec: 360
   override_timeout_sec: 1800
+  kwargs:
+    model_info:
+      max_input_tokens: 32768
 datasets:
 - name: openthoughts-tblite
   version: '2.0'

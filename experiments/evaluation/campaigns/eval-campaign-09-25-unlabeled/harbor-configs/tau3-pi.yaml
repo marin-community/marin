@@ -33,6 +33,9 @@ agents:
 - name: acp:pi-acp@0.0.33
   override_setup_timeout_sec: 360
   override_timeout_sec: 1800
+  kwargs:
+    model_info:
+      max_input_tokens: 32768
 user_agent:
   import_path: tau3_bench.acp_relay.harbor_agent:Tau3HarborACPRelay
   mcp_servers:

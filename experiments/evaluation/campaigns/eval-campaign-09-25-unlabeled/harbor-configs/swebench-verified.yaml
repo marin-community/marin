@@ -35,6 +35,8 @@ agents:
   override_timeout_sec: 1800
   kwargs:
     version: 2.1.0
+    model_info:
+      max_input_tokens: 32768
 datasets:
 - name: swebench-verified
   version: '1.0'

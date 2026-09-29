@@ -29,6 +29,8 @@ agents:
   override_setup_timeout_sec: 360
   override_timeout_sec: 1800
   kwargs:
+    model_info:
+      max_input_tokens: 32768
     partner_model: openai/openai/gpt-oss-120b
     partner_api_base: https://api.together.xyz/v1
     evaluator_model: openai/openai/gpt-oss-120b
