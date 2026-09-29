@@ -14,6 +14,7 @@ import requests
 from google.auth.credentials import AnonymousCredentials
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Connection
+from sqlalchemy.exc import DBAPIError
 
 from infra.marina.applets.rl_data_catalog.audit_nemotron import audit_blend
 from infra.marina.applets.rl_data_catalog.server import composition, hf_auth
@@ -167,6 +168,7 @@ def test_changed_source_preserves_historical_review_but_invalidates_current_rati
             "review_date": "2026-09-28",
             "review_source_revision": "data1",
             "review_verifier_revision": "code1",
+            "verifier_issues": [],
         }
     )
     assert row["review_id"] == "review1"
@@ -174,6 +176,124 @@ def test_changed_source_preserves_historical_review_but_invalidates_current_rati
     assert row["review_stale"] == bool(changed_field)
     assert row["quality"] == (None if changed_field else "good")
     assert row["difficulty"] == (None if changed_field else "32/32")
+
+
+@pytest.mark.parametrize("original_quality", ["good", "bad"])
+def test_confirmed_verifier_defect_survives_publication_and_refresh(
+    catalog_connection: Connection, original_quality: str
+) -> None:
+    connection = catalog_connection
+    payload = {"id": "MarinSkyRL:math", "dataset_revision": "data1", "verifier_revision": "code1"}
+    save_snapshot(connection, Snapshot("MarinSkyRL", "code1", "2026-09-29", [payload]))
+    connection.execute(
+        text("UPDATE catalog_sources SET quality = :quality, difficulty = '32/32' WHERE id = :id"),
+        {"quality": original_quality, "id": payload["id"]},
+    )
+    connection.execute(
+        text(
+            """
+            INSERT INTO catalog_reviews (id, source_id, collection, updated_at)
+            VALUES ('defect-review', :id, '{}'::jsonb, NOW())
+        """
+        ),
+        {"id": payload["id"]},
+    )
+    connection.execute(
+        text(
+            """
+            INSERT INTO catalog_verifier_issues
+                (source_id, issue_url, review_id, status, created_at, updated_at)
+            VALUES (:id, 'https://github.com/example/issues/1', 'defect-review', 'open', NOW(), NOW())
+        """
+        ),
+        {"id": payload["id"]},
+    )
+    expected = "bad" if original_quality == "bad" else "some_issues"
+    record = dict(connection.execute(text("SELECT * FROM catalog_sources")).mappings().one())
+    assert (record["quality"], record["difficulty"]) == (expected, None)
+
+    # A publisher cannot restore a green rating or difficulty while the defect is open.
+    connection.execute(
+        text("UPDATE catalog_sources SET quality = :quality, difficulty = '32/32'"),
+        {"quality": "good"},
+    )
+    changed = {**payload, "dataset_revision": "data2", "verifier_revision": "code2"}
+    save_snapshot(connection, Snapshot("MarinSkyRL", "code2", "2026-09-30", [changed]))
+    record = dict(connection.execute(text("SELECT * FROM catalog_sources")).mappings().one())
+    assert (record["quality"], record["difficulty"]) == (expected, None)
+    record.update(
+        review_id="historical-review",
+        review_source_revision="data1",
+        review_verifier_revision="code1",
+        verifier_issues=[{"issue_url": "https://github.com/example/issues/1", "status": "open"}],
+    )
+    displayed = source_with_review(record)
+    assert displayed["review_stale"]
+    assert displayed["quality"] == expected
+    assert displayed["difficulty"] is None
+
+
+def test_verifier_defect_requires_a_validated_current_review_before_green_restoration(
+    catalog_connection: Connection,
+) -> None:
+    connection = catalog_connection
+    source_id = "MarinSkyRL:math"
+    issue_url = "https://github.com/example/issues/1"
+    payload = {"id": source_id, "dataset_revision": "data2", "verifier_revision": "code2"}
+    save_snapshot(connection, Snapshot("MarinSkyRL", "code2", "2026-09-29", [payload]))
+    connection.execute(
+        text(
+            """
+            INSERT INTO catalog_reviews (id, source_id, collection, updated_at)
+            VALUES ('defect-review', :id, '{}'::jsonb, '2026-09-28'),
+                ('new-review', :id, '{}'::jsonb, '2026-09-29')
+        """
+        ),
+        {"id": source_id},
+    )
+    connection.execute(
+        text(
+            """
+            INSERT INTO catalog_verifier_issues
+                (source_id, issue_url, review_id, status, created_at, updated_at)
+            VALUES (:id, :issue, 'defect-review', 'open', '2026-09-28', '2026-09-28')
+        """
+        ),
+        {"id": source_id, "issue": issue_url},
+    )
+    resolve = text("UPDATE catalog_verifier_issues SET status = 'resolved', resolution_review_id = 'new-review'")
+    with pytest.raises(DBAPIError, match="fresh native review"), connection.begin_nested():
+        connection.execute(resolve)
+    collection = {
+        "reviews": [
+            {
+                "method": "runtime_execution",
+                "tests_executed": True,
+                "attributes": {"verification": {"status": "verified"}},
+            },
+            {
+                "attributes": {
+                    "resolved_verifier_issues": [
+                        {
+                            "issue_url": issue_url,
+                            "verifier_revision": "code2",
+                            "dataset_revision": "data2",
+                            "fix_validated": True,
+                        }
+                    ]
+                }
+            },
+        ]
+    }
+    connection.execute(
+        text("UPDATE catalog_reviews SET collection = CAST(:collection AS JSONB) WHERE id = 'new-review'"),
+        {"collection": json.dumps(collection)},
+    )
+    connection.execute(resolve)
+    connection.execute(text("UPDATE catalog_sources SET quality = 'good', difficulty = '32/32'"))
+    row = connection.execute(text("SELECT quality, difficulty FROM catalog_sources")).one()
+    assert tuple(row) == ("good", "32/32")
+    assert connection.execute(text("SELECT status FROM catalog_verifier_issues")).scalar_one() == "resolved"
 
 
 def test_hf_viewer_metadata_supplies_missing_card_count_without_download() -> None:

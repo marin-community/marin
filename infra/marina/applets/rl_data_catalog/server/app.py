@@ -29,6 +29,7 @@ from .catalog import (
     tasktrove_snapshot,
 )
 from .hf_auth import HFCredentialError, HuggingFaceAuth, runtime_hf_token
+from .verifier_policy import migrate_verifier_policy
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,10 @@ def source_with_review(record: dict[str, Any]) -> dict[str, Any]:
     if row["review_stale"]:
         row["quality"] = None
         row["difficulty"] = None
+    row["verifier_issues"] = record["verifier_issues"]
+    if row["verifier_issues"]:
+        row["quality"] = "bad" if record["quality"] == "bad" else "some_issues"
+        row["difficulty"] = None
     return row
 
 
@@ -81,6 +86,7 @@ def migrate(connection: Connection) -> None:
     """
         )
     )
+
     for definition in (
         "review_date TIMESTAMPTZ",
         "review_id TEXT",
@@ -124,6 +130,7 @@ def migrate(connection: Connection) -> None:
         text("UPDATE catalog_sources SET payload = payload || CAST(:classification AS JSONB) WHERE origin = :origin"),
         {"classification": json.dumps(TASKTROVE_CLASSIFICATION), "origin": TASKTROVE_ORIGIN},
     )
+    migrate_verifier_policy(connection)
     rows = [
         dict(payload)
         for payload in connection.execute(
@@ -250,7 +257,19 @@ def create_api(services: AppletServices) -> FastAPI:
             rows = [
                 source_with_review(dict(row))
                 for row in connection.execute(
-                    text("SELECT * FROM catalog_sources WHERE active ORDER BY origin, id")
+                    text(
+                        """
+                        SELECT s.*, COALESCE((
+                            SELECT jsonb_agg(jsonb_build_object(
+                                'issue_url', i.issue_url, 'review_id', i.review_id,
+                                'status', i.status, 'created_at', i.created_at
+                            ) ORDER BY i.created_at)
+                            FROM catalog_verifier_issues i
+                            WHERE i.source_id = s.id AND i.status = 'open'
+                        ), '[]'::jsonb) AS verifier_issues
+                        FROM catalog_sources s WHERE active ORDER BY origin, id
+                    """
+                    )
                 ).mappings()
             ]
             refreshes = [
@@ -274,10 +293,53 @@ def create_api(services: AppletServices) -> FastAPI:
                     {"id": review_id},
                 ).mappings()
             ]
+            supplemental = []
+            verifier_issues = []
+            review_pool = []
+            if record is not None:
+                review_pool = [
+                    dict(row)
+                    for row in connection.execute(
+                        text(
+                            "SELECT id, updated_at, jsonb_array_length(collection->'reviews') AS review_count "
+                            "FROM catalog_reviews WHERE source_id = :source AND id <> :id "
+                            "ORDER BY updated_at DESC, id"
+                        ),
+                        {"source": record["source_id"], "id": review_id},
+                    ).mappings()
+                ]
+                verifier_issues = [
+                    dict(row)
+                    for row in connection.execute(
+                        text(
+                            "SELECT issue_url, review_id, status FROM catalog_verifier_issues "
+                            "WHERE source_id = :source AND status = 'open' ORDER BY issue_url"
+                        ),
+                        {"source": record["source_id"]},
+                    ).mappings()
+                ]
+                supplemental = [
+                    dict(row)
+                    for row in connection.execute(
+                        text(
+                            """
+                            SELECT id, collection FROM catalog_reviews
+                            WHERE source_id = :source AND id <> :id AND EXISTS (
+                                SELECT 1 FROM jsonb_array_elements(collection->'reviews') r
+                                WHERE r->'attributes'->>'review_pool_role' = 'verifier_defect'
+                            ) ORDER BY updated_at, id
+                        """
+                        ),
+                        {"source": record["source_id"], "id": review_id},
+                    ).mappings()
+                ]
         if record is None:
             raise HTTPException(404, "Review not found")
         result = {str(key): value for key, value in record.items()}
         result["artifacts"] = artifacts
+        result["supplemental_reviews"] = supplemental
+        result["verifier_issues"] = verifier_issues
+        result["review_pool"] = review_pool
         return result
 
     @api.get("/reviews/{review_id}/artifacts/{path:path}")

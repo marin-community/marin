@@ -70,7 +70,7 @@ function findingView(finding) {
   item.append(paragraph);
   return item;
 }
-const methodNames = {runtime_execution: "Task attempt & verifier", model_judgment: "Independent judge", synthesis: "Combined review", static_audit: "Imported audit", human_review: "Human review"};
+const methodNames = {runtime_execution: "Task attempt & verifier", model_judgment: "Independent judge", synthesis: "Combined review", static_inspection: "Code / evidence inspection", static_audit: "Imported audit", human_review: "Human review"};
 function reviewCard(review, subjects) {
   const subject = subjects.find(item => item.id === review.subject_id);
   const scope = subject?.level === "source" ? "Source" : "Task";
@@ -100,7 +100,7 @@ function reviewCard(review, subjects) {
     content.append(textSection("Review details & identifiers", {
       reviewed_at: review.reviewed_at, reviewer: review.reviewer, subject: subject || review.subject_id,
       method: methodNames[review.method] || label(review.method), review_id: review.id,
-      contributing_reviews: review.derived_from_review_ids, tags: review.tags,
+      contributing_reviews: review.derived_from_review_ids, tags: review.tags, attributes: review.attributes,
     }));
     return content;
   }, review.method === "synthesis" && subject?.level === "source", "review-card");
@@ -139,11 +139,24 @@ async function artifactPage(record) {
     if (artifactPath) { await artifactPage(record); return; }
     document.getElementById("title").textContent = record.source_id;
     document.title = `${record.source_id} · Quality review`;
+    const supplemental = record.supplemental_reviews.flatMap(item => item.collection.reviews);
+    const reviews = [...collection.reviews, ...supplemental];
+    const subjects = [...collection.subjects, ...record.supplemental_reviews.flatMap(item => item.collection.subjects)];
     const provenance = collection.execution_provenance;
-    const date = collection.reviews.map(review => review.reviewed_at).filter(Boolean).sort().at(-1) || "Unknown";
+    const date = reviews.map(review => review.reviewed_at).filter(Boolean).sort().at(-1) || "Unknown";
     document.getElementById("provenance").textContent = `Reviewed ${date} · MarinSkyRL commit ${provenance?.marinskyrl_commit || "Not recorded in imported review"}`;
     const container = document.getElementById("reviews");
-    const issues = collection.reviews.flatMap(review => review.findings.filter(finding => finding.kind === "issue").map(finding => ({review, finding})));
+    if (record.verifier_issues.length) container.append(fold("Confirmed verifier defects remain unresolved", () => {
+      const content = node("div", undefined, "review-card-content");
+      content.append(node("p", "The source is capped at Some issues while these defects remain open. Saved difficulty reports below are historical measurements and do not establish a current difficulty estimate.", "formatted-prose issue-highlight"));
+      for (const issue of record.verifier_issues) {
+        const anchor = node("a", "Open verifier issue ↗");
+        anchor.href = issue.issue_url; anchor.target = "_blank"; anchor.rel = "noopener";
+        content.append(node("p"), anchor);
+      }
+      return content;
+    }, true, "review-card technical-issues"));
+    const issues = reviews.flatMap(review => review.findings.filter(finding => finding.kind === "issue").map(finding => ({review, finding})));
     if (issues.length) container.append(fold(`Reported technical issues (${issues.length})`, () => {
       const content = node("div", undefined, "review-card-content");
       content.append(node("p", "Reports from separate judges can describe the same defect. Open the individual reviews below for context.", "review-byline"));
@@ -219,11 +232,29 @@ async function artifactPage(record) {
         content.append(textSection("Limitations", report.limitations, true), artifactLink("difficulty.json", "Browse task outcomes & estimate details")); return content;
       }, true, "review-card"));
     }
-    const ordered = [...collection.reviews].sort((a, b) => Number(b.method === "synthesis" && collection.subjects.find(s => s.id === b.subject_id)?.level === "source") - Number(a.method === "synthesis" && collection.subjects.find(s => s.id === a.subject_id)?.level === "source"));
-    ordered.forEach(review => container.append(reviewCard(review, collection.subjects)));
+    const ordered = [...reviews].sort((a, b) => Number(b.method === "synthesis" && subjects.find(s => s.id === b.subject_id)?.level === "source") - Number(a.method === "synthesis" && subjects.find(s => s.id === a.subject_id)?.level === "source"));
+    ordered.forEach(review => container.append(reviewCard(review, subjects)));
     container.append(fold(`All saved evidence (${record.artifacts.length})`, () => {
       const list = node("ul", undefined, "evidence-list");
       record.artifacts.forEach(item => { const row = node("li"); row.append(artifactLink(item.path)); list.append(row); }); return list;
+    }));
+    if (record.supplemental_reviews.length) container.append(fold("Supplemental review collections", () => {
+      const list = node("ul", undefined, "evidence-list");
+      for (const item of record.supplemental_reviews) {
+        const row = node("li"), anchor = node("a", "Download verifier defect review");
+        anchor.href = `api/reviews/${encodeURIComponent(item.id)}`;
+        row.append(anchor); list.append(row);
+      }
+      return list;
+    }));
+    if (record.review_pool.length) container.append(fold(`Source review pool (${record.review_pool.length} other collections)`, () => {
+      const list = node("ul", undefined, "evidence-list");
+      for (const item of record.review_pool) {
+        const row = node("li"), anchor = node("a", `${item.review_count} reviews · ${item.updated_at}`);
+        anchor.href = `review.html?id=${encodeURIComponent(item.id)}`;
+        row.append(anchor); list.append(row);
+      }
+      return list;
     }));
     document.getElementById("download").addEventListener("click", () => download(collection, `${reviewId}.json`));
   } catch (error) { document.getElementById("title").textContent = error.message; }

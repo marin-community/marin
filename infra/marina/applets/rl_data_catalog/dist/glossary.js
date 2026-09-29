@@ -2,6 +2,7 @@
 (() => {
   const terms = [
     ["Quality", "The source's summary rating, based on sampled task runs and review findings: Good, Some issues, Bad, or Unrated."],
+    ["Confirmed verifier defect", "A reproduced scoring, task-import, or judge-output defect recorded in the review pool with a GitHub issue. It caps the source at Some issues until a validated fix and a new source review clear it; an existing Bad rating stays Bad. Earlier reviews and difficulty traces remain historical evidence. Only Good sources qualify for new difficulty checks."],
     ["Task attempt / verifier", "The model tries a task; the source's own verifier scores its answer or actions. A score of 1 means the verifier accepted it."],
     ["Independent judge", "A fresh review session that sees the task and execution evidence, without seeing the other judges' opinions. Judges can share the same model's biases."],
     ["Synthesis", "A final review combining the task outcomes and judge opinions, while retaining their disagreements."],

@@ -141,6 +141,42 @@ include explicit card designations such as AIME 1983–2024, APPS, and GPQA as w
 as HF's official benchmark tag. A false flag means no designation was found.
 Quality links to a sample-based review: green Good, yellow Some issues, red Bad,
 or gray Unreviewed/Unrated. Review date records the latest actual judgment time.
+Good means the sampled review found no qualifying defects; it does not prove
+the verifier correct for every task. Confirmation requires actual native inputs
+and a reproducible mismatch between expected and observed behavior, such as
+rejecting valid tasks, grading correct answers incorrectly, or supplying judge
+examples that violate the parser contract. Suspicions alone do not confirm a
+defect. A subsequently reproduced verifier,
+task-import, or judge-output defect must receive a GitHub issue and an
+evidence-backed supplemental review in the source's review pool. Record the
+defect in `catalog_verifier_issues` and demote Good to Some issues. Preserve Bad
+ratings, previous judgments, execution traces, and difficulty reports.
+
+An open confirmed defect prevents publishers and refreshes from restoring Good
+or displaying a current difficulty estimate. Difficulty collection selects only
+Good sources. Clearing the defect requires a validated fix and a new source
+review on the applicable dataset and verifier revisions; closing a GitHub issue
+or merging a fix alone is insufficient. In that source's `catalog_verifier_issues`
+row, set `status` to `resolved` and set `resolution_review_id` to the new
+`catalog_reviews.id`, which identifies a whole review collection rather than an
+individual judgment. All open confirmed defects must be resolved before Good
+can return. Then publish the new source rating.
+
+The resolution collection must include a verified native runtime observation
+and a review with `attributes.resolved_verifier_issues` entries recording
+`issue_url`, the current `dataset_revision` and `verifier_revision`, and
+`fix_validated: true`. Link the actual validation evidence in that review.
+The runtime observation uses `method: runtime_execution`, `tests_executed: true`,
+and `attributes.verification.status: verified`, produced by actual native
+execution rather than a manually assigned score. Validate the repaired behavior
+against the saved failing inputs and appropriate incorrect-answer controls.
+The historical finding remains in the review pool.
+
+Demotion sets `catalog_sources.difficulty` to null. Existing `difficulty.json`
+reports and traces remain in `review_artifacts`; the review page labels them as
+historical while a defect is open. Collect and publish a current difficulty
+estimate only after the source qualifies as Good again.
+
 The review page shows native outcomes, three independent model judgments per task,
 task/source syntheses, the MarinSkyRL commit, and linked evidence. Difficulty can
 show paired small/large model solve rates; its report includes task counts,
