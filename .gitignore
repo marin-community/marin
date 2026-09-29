@@ -251,3 +251,6 @@ scr/*
 
 # Stamped into built artifacts by lib/iris/hatch_build.py; never tracked.
 lib/iris/src/iris/_build_info.py
+# Generated effective configurations for repository-owned evaluation campaigns.
+experiments/evaluation/campaigns/.launch-staging/
+experiments/evaluation/campaigns/.launch-snapshots/
