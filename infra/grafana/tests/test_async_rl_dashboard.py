@@ -942,6 +942,8 @@ def test_position_panel_keeps_ratio_families_and_positions_separate(store):
 def test_correction_panels_read_weights_and_distinct_fractions(store):
     weights = query(store, "Mean correction weight")
     assert [row["value"] for row in weights] == [0.75, 1.5]
+    axis = PANELS["Mean correction weight"]["fieldConfig"]["defaults"]
+    assert all(axis.get("min", float("-inf")) <= row["value"] <= axis.get("max", float("inf")) for row in weights)
     rows = query(store, "Correction activity")
     assert [row["value"] for row in rows if "correction/truncated_fraction" in row["series"]] == [0.12, 0.24]
     assert [row["value"] for row in rows if "correction/masked_fraction" in row["series"]] == [0.05, 0.1]
