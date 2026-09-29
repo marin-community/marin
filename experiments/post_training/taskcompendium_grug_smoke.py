@@ -51,6 +51,7 @@ TASKCOMPENDIUM_REQUIREMENT = (
 )
 CLUSTER = "cw-us-east-02a"
 GPUS_PER_NODE = 8
+NUM_NODES = 2
 SEED = 17
 TASK_COUNT = 8
 MAX_STEPS = 1
@@ -58,9 +59,9 @@ MAX_TURNS = 3
 
 ROLE_PLAN = SkyRLRolePlan(
     colocate_all=True,
-    policy_num_nodes=1,
+    policy_num_nodes=NUM_NODES,
     policy_num_gpus_per_node=GPUS_PER_NODE,
-    num_inference_engines=1,
+    num_inference_engines=NUM_NODES,
     inference_engine_tensor_parallel_size=1,
     inference_engine_pipeline_parallel_size=1,
     inference_engine_data_parallel_size=GPUS_PER_NODE,
@@ -183,14 +184,14 @@ trainer:
       max_grad_norm: 1.0
     megatron_config:
       tensor_model_parallel_size: 1
-      pipeline_model_parallel_size: 1
+      pipeline_model_parallel_size: {NUM_NODES}
       context_parallel_size: 1
       expert_model_parallel_size: {GPUS_PER_NODE}
       expert_tensor_parallel_size: 1
   ref:
     megatron_config:
       tensor_model_parallel_size: 1
-      pipeline_model_parallel_size: 1
+      pipeline_model_parallel_size: {NUM_NODES}
       context_parallel_size: 1
       expert_model_parallel_size: {GPUS_PER_NODE}
       expert_tensor_parallel_size: 1
@@ -236,7 +237,9 @@ def smoke_step(packages: ArtifactStep[Artifact], runtime_commit: str, version: s
             ),
             train_data=(ArtifactDataSource(packages),),
             validation_data=(),
-            topology=SkyRLTopology(num_nodes=1, gpus_per_node=GPUS_PER_NODE, gpu_variant="H100", role_plan=ROLE_PLAN),
+            topology=SkyRLTopology(
+                num_nodes=NUM_NODES, gpus_per_node=GPUS_PER_NODE, gpu_variant="H100", role_plan=ROLE_PLAN
+            ),
             retention=SkyRLRetentionPolicy(resume_checkpoint_count=1, temporary_storage_ttl_days=1),
             seed=SEED,
         ),
