@@ -151,6 +151,17 @@ async function artifactPage(record) {
       return content;
     }, true, "review-card technical-issues"));
     container.append(fold("Execution provenance & review applicability", () => pretty({execution_provenance: provenance, source_mappings: collection.source_mappings, created_at: collection.created_at})));
+    const datasetProofs = record.artifacts.filter(item => /^publication\/dataset-revision-attestation-[a-f0-9]{40}\.json$/.test(item.path));
+    for (const artifact of datasetProofs) {
+      const proof = await jsonResponse(artifactUrl(artifact.path));
+      container.append(fold("Dataset content equivalence", () => {
+        const content = node("div", undefined, "review-card-content");
+        content.append(node("p", `The ${proof.file_path} data file is byte-identical at the reviewed revision ${proof.executed_revision} and repository revision ${proof.current_revision}. The ${proof.component_selector} selection retains ${proof.population_count.toLocaleString()} tasks.`, "formatted-prose"));
+        content.append(node("p", "These historical judgments describe the same task data. No new model judgments were run; the original review date and execution revision remain above. Verifier code applicability is checked separately.", "formatted-prose"));
+        content.append(node("p", `Data SHA-256: ${proof.file_sha256}`, "review-byline"), artifactLink(artifact.path, "Browse content-equivalence proof"));
+        return content;
+      }, true));
+    }
     const difficultyArtifact = record.artifacts.find(item => item.path === "difficulty.json");
     if (difficultyArtifact) {
       const report = await jsonResponse(artifactUrl("difficulty.json"));
