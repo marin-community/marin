@@ -5,9 +5,11 @@
 
 import base64
 import hashlib
+import io
 import json
 import shutil
 import subprocess
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -137,7 +139,7 @@ def test_script_runtime_rejects_unscored_reward(tmp_path, monkeypatch):
     assert result.reward is None
 
 
-async def test_workspace_capture_is_independent_and_rejects_links(tmp_path):
+async def test_workspace_capture_is_independent_and_rejects_links(tmp_path, monkeypatch):
     agent_workspace = tmp_path / "agent-workspace"
     agent_workspace.mkdir()
     (agent_workspace / "state.txt").write_text("final agent state")
@@ -149,9 +151,15 @@ async def test_workspace_capture_is_independent_and_rejects_links(tmp_path):
             assert command == "cat /proc/self/mountinfo"
             return ExecResult(stdout="1 0 0:1 / /app rw - ext4 /dev/root rw\n", return_code=0)
 
-        async def download_dir(self, source, target):
-            assert source == "/app"
-            shutil.copytree(agent_workspace, target, dirs_exist_ok=True, symlinks=True)
+        async def _run_docker_compose_command(self, command, timeout_sec):
+            assert command == ["ps", "-q", "main"]
+            return ExecResult(stdout="a" * 64, return_code=0)
+
+    def copy_workspace(container_id, target):
+        assert container_id == "a" * 64
+        shutil.copytree(agent_workspace, target, symlinks=True)
+
+    monkeypatch.setattr(workspace, "_bounded_docker_copy", copy_workspace)
 
     copied = await capture_workspace(Environment(), tmp_path / "snapshot")
     (copied / "state.txt").write_text("grader mutation")
@@ -177,3 +185,19 @@ def test_workspace_snapshot_bounds_empty_directories_and_depth(tmp_path, monkeyp
     (root / "empty-0" / "nested").mkdir()
     with pytest.raises(UnsafeWorkspaceError, match="depth limit"):
         workspace.validate_workspace_snapshot(root)
+
+
+def test_workspace_archive_rejects_oversized_file_before_writing(tmp_path, monkeypatch):
+    payload = io.BytesIO()
+    with tarfile.open(fileobj=payload, mode="w") as archive:
+        member = tarfile.TarInfo("large.txt")
+        member.size = 3
+        archive.addfile(member, io.BytesIO(b"abc"))
+    payload.seek(0)
+    monkeypatch.setattr(workspace, "MAX_WORKSPACE_BYTES", 2)
+
+    with tarfile.open(fileobj=payload, mode="r|") as archive:
+        with pytest.raises(UnsafeWorkspaceError, match="size limit"):
+            workspace._extract_workspace_archive(archive, tmp_path / "snapshot")
+
+    assert not (tmp_path / "snapshot/large.txt").exists()

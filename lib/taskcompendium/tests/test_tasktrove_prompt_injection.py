@@ -16,6 +16,7 @@ from tasktrove_verify.spec import ScriptSpec, parse_spec
 from taskcompendium.importers.tasktrove.convert import read_archive
 from taskcompendium.importers.tasktrove.prompt_injection import import_task
 from taskcompendium.models import AnswerType, VerifierKind
+from taskcompendium.submission import AnswerFormat, SubmissionConvention, render_instruction
 from taskcompendium.verifiers.script import ScriptVerifier, materialize_private_resources
 
 FIXTURE = Path(__file__).parent / "fixtures/tasktrove/prompt-injection.tar.gz"
@@ -48,7 +49,12 @@ def test_imported_prompt_injection_uses_direct_submission_and_pinned_private_fil
     assert specification.source.row == f"{SOURCE}:t.tar.gz"
     assert "/app/answer.txt" not in specification.instructions
     assert "terminal agent" not in specification.instructions
-    assert "Return a single JSON object" in specification.instructions
+    assert "Your answer is the JSON text of that action" in specification.instructions
+    assert "Emit ONLY" not in specification.instructions
+    json_instruction = render_instruction(
+        specification, SubmissionConvention(id="json", answer_format=AnswerFormat.JSON)
+    )
+    assert 'Give your answer as a JSON object with an "answer" field.' in json_instruction
     assert staged["source_checker.py"].read_bytes() == archive.files["tests/prompt_injection_checker.py"]
     assert staged["injected_call.json"].read_bytes() == archive.files["tests/injected_call.json"]
 
