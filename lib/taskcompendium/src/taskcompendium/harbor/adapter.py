@@ -71,12 +71,10 @@ def _record_action(
     _record_submission(logs_dir, messages, action, action, ACTION_FILE, json.dumps(action), context)
 
 
-def _chat_completion(
-    api_base: str, api_key_env: str | None, request_timeout: float, body: dict[str, Any]
-) -> dict[str, Any]:
+def _chat_completion(api_base: str, api_key: str | None, request_timeout: float, body: dict[str, Any]) -> dict[str, Any]:
     headers = {"Content-Type": "application/json"}
-    if api_key_env is not None:
-        headers["Authorization"] = f"Bearer {os.environ[api_key_env]}"
+    if api_key is not None:
+        headers["Authorization"] = f"Bearer {api_key}"
     request = urllib.request.Request(
         f"{api_base}{CHAT_COMPLETIONS_PATH}", data=json.dumps(body).encode(), headers=headers, method="POST"
     )
@@ -194,7 +192,7 @@ class DirectChatAgent(BaseAgent):
         if self.model_name is None:
             raise ValueError("Direct chat requires a model name")
         self.api_base = api_base.rstrip("/")
-        self.api_key_env = api_key_env
+        self.api_key = os.environ[api_key_env] if api_key_env is not None else None
         self.request_timeout = request_timeout
         self.events = events
         self.submission_instruction = submission_instruction
@@ -237,7 +235,7 @@ class DirectChatAgent(BaseAgent):
 
     def _completion(self) -> str:
         body = {"model": self.model_name, "messages": self._chat_messages()}
-        message = _chat_completion(self.api_base, self.api_key_env, self.request_timeout, body)
+        message = _chat_completion(self.api_base, self.api_key, self.request_timeout, body)
         if message.get("tool_calls") or not isinstance(message.get("content"), str):
             raise ValueError("Direct chat requires a textual final answer")
         return message["content"]
@@ -280,7 +278,7 @@ class NativeActionAgent(DirectChatAgent):
             body["tool_choice"] = self.tool_choice
         if self.parallel_tool_calls is not None:
             body["parallel_tool_calls"] = self.parallel_tool_calls
-        return _chat_completion(self.api_base, self.api_key_env, self.request_timeout, body)
+        return _chat_completion(self.api_base, self.api_key, self.request_timeout, body)
 
     # Harbor passes instruction by keyword; the source messages are the native-action prompt.
     async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
@@ -304,7 +302,7 @@ class AnswerCallAgent(DirectChatAgent):
             "tool_choice": "required",
             "parallel_tool_calls": False,
         }
-        return _chat_completion(self.api_base, self.api_key_env, self.request_timeout, body)
+        return _chat_completion(self.api_base, self.api_key, self.request_timeout, body)
 
     async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
         response = await asyncio.to_thread(self._answer_completion)
