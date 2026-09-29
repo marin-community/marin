@@ -123,7 +123,6 @@ def probe_recipe(
             "model_dtype": "bfloat16",
             "run_engines_locally": True,
             "weight_sync_backend": "nccl",
-            "batched": False,
             "gpu_memory_utilization": 0.35,
             "enable_prefix_caching": settings.cache_mode != "off",
             "require_exact_chat_transport": True,
