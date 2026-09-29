@@ -16,7 +16,8 @@ FlopDtype = Literal["bf16", "fp16", "fp32", "fp64", "tf32", "int8", "int4", "fp8
 # Peak FLOPS per device type. Keys are lowercase device identifiers.
 DEVICE_FLOPS: dict[str, dict[str, float]] = {
     # NVIDIA GPUs
-    # source: https://resources.nvidia.com/en-us-tensor-core/nvidia-tensor-core-gpu-datasheet
+    # H100 SXM column of the datasheet.
+    # source: https://resources.nvidia.com/en-us-gpu-resources/h100-datasheet-24306
     # nvidia publishes spec sheet with a 2x sparsity factor
     "h100": {
         "fp64": 67e12,
@@ -27,6 +28,9 @@ DEVICE_FLOPS: dict[str, dict[str, float]] = {
         "fp8": 3.958e15 / 2,
         "int8": 3.958e15 / 2,
     },
+    # PCIe column of the 2022 H100 datasheet. The current revision lists only the SXM and
+    # NVL variants.
+    # source: https://web.archive.org/web/20221220065836/https://nvdam.widen.net/content/vuzumiozpb/original/h100-datasheet-2287922.pdf
     "h100-pcie": {
         "fp64": 51e12,
         "fp32": 51e12,
@@ -145,7 +149,7 @@ DEVICE_FLOPS: dict[str, dict[str, float]] = {
         "int8": 130e12,
         "int4": 260e12,
     },
-    # source: https://images.nvidia.com/content/Solutions/data-center/vgpu-L4-background-image-background-image/l4-datasheet.pdf
+    # source: https://resources.nvidia.com/en-us-gpu-resources/l4-tensor-datasheet
     "l4": {
         "fp32": 30.3e12,
         "tf32": 120e12,
