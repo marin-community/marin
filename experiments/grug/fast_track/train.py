@@ -57,6 +57,7 @@ from experiments.grug.checkpointing import (
 )
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.fast_track.byte_targets import token_byte_table
+from experiments.grug.fast_track.grad_capture import CaptureWriter, capture_matrices, capture_steps
 from experiments.grug.fast_track.host_stall import HostStallSampler
 from experiments.grug.fast_track.model import (
     FINAL_HIDDEN_KEY,
@@ -245,6 +246,11 @@ class GrugTrainerConfig:
     routing_dump_steps: tuple[int, ...] = ()
     routing_dump_batches: int = 8
     routing_dump_path: str | None = None
+    # Optimizer diagnostics (``grad_capture.py``): for ``grad_capture_len`` steps from each start, write the raw
+    # gradient and applied update of the captured matrices to ``<grad_capture_path>/grad_capture_step<N>.npz``.
+    grad_capture_starts: tuple[int, ...] = ()
+    grad_capture_len: int = 48
+    grad_capture_path: str | None = None
 
     # Grug builds its own compact (replica_dcn, data, expert, model) mesh instead of using
     # the Trainer's logical axis mapping; `data` absorbs whatever these two leave free.
@@ -931,6 +937,25 @@ def _compute_diagnostic_watch_stats(
     )
 
 
+def _make_grad_capture_step(mp: jmp.Policy, *, z_loss_weight: float):
+    """``capture(params, batch, pending_qb_betas, step, ...)`` recomputes the train step's gradient on the same batch
+    and returns the captured matrices' gradients and current values (see ``grad_capture.py``)."""
+    z_loss = z_loss_weight if z_loss_weight > 0 else None
+
+    @functools.partial(jax.jit, static_argnames=("loop_active", "router_tie_active"))
+    def capture(params: Transformer, batch, pending_qb_betas, step, loop_active, router_tie_active):
+        params = _apply_qb_betas(params, pending_qb_betas)
+        (_, _), grads = _loss_and_grads(
+            params, batch, mp, z_loss, step, loop_active, router_tie_active=router_tie_active
+        )
+        return capture_matrices(grads), capture_matrices(params)
+
+    return capture
+
+
+_captured_params = jax.jit(capture_matrices)
+
+
 def _make_diagnostic_watch_step(mp: jmp.Policy, *, z_loss_weight: float, watch_config: WatchConfig):
     watch_targets = (
         tuple(t.strip() for t in watch_config.watch_targets.split(","))
@@ -1537,6 +1562,13 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 dump_routing(state)
             # A resumed run skips the dumps it already passed.
             pending_dumps = {step for step in pending_dumps if step > int(state.step)}
+        grad_capture_due = capture_steps(config.trainer.grad_capture_starts, config.trainer.grad_capture_len)
+        grad_capture_step = capture_writer = None
+        if grad_capture_due:
+            if config.trainer.grad_capture_path is None:
+                raise ValueError("grad_capture_starts needs grad_capture_path")
+            grad_capture_step = _make_grad_capture_step(trainer.mp, z_loss_weight=config.trainer.z_loss_weight)
+            capture_writer = CaptureWriter(config.trainer.grad_capture_path)
         batch_source = train_loader.iter_from_step(int(state.step))
         iterator = LoadingTimeTrackerIterator(batch_source)
 
@@ -1668,12 +1700,35 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     loop_active = None if grow_step is None else int(state.step) >= grow_step
                     # The router tie release likewise switches programs once (plus a host-side param rewrite below).
                     router_tie_active = _router_ties_active(config.model, current_step)
+                    captured_before = None
+                    if grad_capture_step is not None and current_step in grad_capture_due:
+                        # Before the step: the train step donates the state.
+                        captured_before = jax.device_get(
+                            grad_capture_step(
+                                state.params,
+                                batch,
+                                state.pending_qb_betas,
+                                state.step,
+                                loop_active=loop_active,
+                                router_tie_active=router_tie_active,
+                            )
+                        )
                     state, metrics, inline_watch_stats = train_step(
                         state, batch, loop_active=loop_active, router_tie_active=router_tie_active
                     )
                     if inline_watch_stats is not None and watch_due:
                         watch_stats = inline_watch_stats
                     step = int(state.step) - 1
+                    if captured_before is not None:
+                        captured_grads, params_before = captured_before
+                        params_after = jax.device_get(_captured_params(state.params))
+                        if jax.process_index() == 0:
+                            capture_writer.submit(
+                                current_step,
+                                captured_grads,
+                                {name: params_after[name] - params_before[name] for name in params_before},
+                                params_before if current_step - 1 not in grad_capture_due else None,
+                            )
 
                     jax.block_until_ready(metrics["train/loss"])
                     ready_time = time.perf_counter()
@@ -1777,6 +1832,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             if dump_routing is not None and pending_dumps:
                 # Steps past the end of the run dump the final weights.
                 dump_routing(state)
+            if capture_writer is not None:
+                capture_writer.close()
             blends: list[tuple[str, Callable[[str], float]]] = [
                 (f"eval_blend{a:g}", lambda _path, a=a: a) for a in config.trainer.ema_blend_sweep
             ]

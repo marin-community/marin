@@ -403,6 +403,8 @@ def build_h100_ladder_run(
     routing_dump_steps: tuple[int, ...] = (),
     routing_dump_batches: int = 8,
     router_tie_specs: tuple[str, ...] = (),
+    grad_capture_starts: tuple[int, ...] = (),
+    grad_capture_len: int = 48,
 ) -> ArtifactStep[ThroughputResult]:
     """Build one H100 scaling-ladder rung.
 
@@ -416,7 +418,8 @@ def build_h100_ladder_run(
     ``single_process`` runs one JAX process owning every GPU of the task, which its peer-writing kernels need.
     ``routing_dump_steps`` writes expert-routing count dumps to ``<output>/routing/`` (see
     ``GrugTrainerConfig.routing_dump_steps``). ``router_tie_specs`` are appended to the model's
-    ``router_embed_tie`` after ``model_settings``.
+    ``router_embed_tie`` after ``model_settings``. ``grad_capture_starts`` writes optimizer-diagnostic captures
+    (``grad_capture.py``) for ``grad_capture_len`` steps from each start to ``<output>/grad_capture/``.
     """
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
@@ -503,6 +506,8 @@ def build_h100_ladder_run(
         ngram_stat_prefill_batches=ngram_stat_prefill_batches,
         routing_dump_steps=routing_dump_steps,
         routing_dump_batches=routing_dump_batches,
+        grad_capture_starts=grad_capture_starts,
+        grad_capture_len=grad_capture_len,
     )
     train_resources = ResourceConfig.with_gpu(
         "H100",
@@ -586,6 +591,7 @@ def build_h100_ladder_run(
                 trainer=trainer,
                 hlo_dump_path=prefix_join(ctx.output_path, "train_step.hlo.txt") if dump_hlo else None,
                 routing_dump_path=prefix_join(ctx.output_path, "routing") if routing_dump_steps else None,
+                grad_capture_path=prefix_join(ctx.output_path, "grad_capture") if grad_capture_starts else None,
             ),
             eval=(
                 None
@@ -798,6 +804,13 @@ def _job_env_args(job_env: tuple[str, ...]) -> list[str]:
     "fixed held-out batches to <output>/routing/routing_step<N>.npz (0: at init; past the end: the final step).",
 )
 @click.option(
+    "--grad-capture-starts",
+    default="",
+    help="Comma-separated steps starting optimizer-diagnostic capture windows (gradients and applied updates of "
+    "selected matrices, see grad_capture.py) written to <output>/grad_capture/.",
+)
+@click.option("--grad-capture-len", default=48, show_default=True, help="Steps per --grad-capture-starts window.")
+@click.option(
     "--routing-dump-batches",
     type=click.IntRange(min=1),
     default=8,
@@ -878,6 +891,8 @@ def main(
     single_process: bool,
     routing_dump_steps: str,
     routing_dump_batches: int,
+    grad_capture_starts: str,
+    grad_capture_len: int,
     router_tie_class: tuple[str, ...],
     model_set: tuple[str, ...],
     opt_set: tuple[str, ...],
@@ -921,6 +936,8 @@ def main(
         single_process=single_process,
         routing_dump_steps=tuple(int(step) for step in routing_dump_steps.split(",") if step),
         routing_dump_batches=routing_dump_batches,
+        grad_capture_starts=tuple(int(step) for step in grad_capture_starts.split(",") if step),
+        grad_capture_len=grad_capture_len,
         router_tie_specs=router_tie_specs,
     )
 
