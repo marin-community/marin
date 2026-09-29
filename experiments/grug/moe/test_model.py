@@ -13,8 +13,9 @@ from experiments.grug.moe.model import GrugModelConfig, Transformer
 
 
 def test_fast_cross_entropy_backward_preserves_model_loss_and_gradients():
+    # More than 128 vocabulary entries exercise the streaming custom VJP.
     config = GrugModelConfig(
-        vocab_size=32,
+        vocab_size=129,
         hidden_dim=16,
         intermediate_dim=32,
         shared_expert_intermediate_dim=16,
