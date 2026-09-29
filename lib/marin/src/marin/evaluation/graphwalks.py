@@ -37,7 +37,7 @@ GRAPHWALKS_REVISION = "be6cc6ecf9b4d495b07d1ff53d2a16598e90fed7"
 GRAPHWALKS_TASK = "graphwalks"
 _MAX_CONCURRENT_REQUESTS = 8
 _REQUEST_TIMEOUT = 1800
-_MAX_REQUEST_ATTEMPTS = 3
+_MAX_REQUEST_ATTEMPTS = 5
 _MIN_COMPLETION_RATE = 0.9
 # Allow for small differences between local tokenizer formatting and the vLLM chat template.
 _CONTEXT_MARGIN = 64
@@ -158,26 +158,33 @@ def _benchmark(n_benchmark: int, n_attempted: int) -> BenchmarkMetadataRef:
     )
 
 
-def _request(example: _Example, endpoint_url: str, model: str, api_key: str | None) -> _Result:
+def _request(example: _Example, session: RemoteInferenceSession) -> _Result:
+    endpoint = session.model.endpoint
     body = {
-        "model": model,
+        "model": endpoint.model,
         "messages": [{"role": "user", "content": example.prompt}],
         "max_tokens": example.output_tokens,
         "temperature": 0,
     }
-    headers = {"Authorization": f"Bearer {api_key}"} if api_key else None
+    headers = {"Authorization": f"Bearer {endpoint.api_key}"} if endpoint.api_key else None
     for attempt in range(_MAX_REQUEST_ATTEMPTS):
         try:
-            response = requests.post(endpoint_url, json=body, headers=headers, timeout=_REQUEST_TIMEOUT)
+            response = requests.post(
+                endpoint.url("chat/completions"), json=body, headers=headers, timeout=_REQUEST_TIMEOUT
+            )
             response.raise_for_status()
             content = response.json()["choices"][0]["message"]["content"]
             if not isinstance(content, str):
                 raise ValueError("chat response content is not text")
             return _Result(example=example, output=content, error=None)
-        except (requests.RequestException, ValueError, KeyError, IndexError) as exc:
+        except requests.RequestException as exc:
             if attempt + 1 == _MAX_REQUEST_ATTEMPTS:
                 return _Result(example=example, output=None, error=type(exc).__name__)
-            time.sleep(2**attempt)
+            session.wait_until_ready()
+            if isinstance(exc, requests.HTTPError):
+                time.sleep(2**attempt)
+        except (ValueError, KeyError, IndexError) as exc:
+            return _Result(example=example, output=None, error=type(exc).__name__)
     raise AssertionError("unreachable")
 
 
@@ -357,16 +364,7 @@ class GraphWalksExecutor:
                 content_type="application/json",
             )
             with ThreadPoolExecutor(max_workers=_MAX_CONCURRENT_REQUESTS) as pool:
-                futures = {
-                    pool.submit(
-                        _request,
-                        example,
-                        session.model.endpoint.url("chat/completions"),
-                        session.model.endpoint.model,
-                        session.model.endpoint.api_key,
-                    ): example
-                    for example in selection.examples
-                }
+                futures = {pool.submit(_request, example, session): example for example in selection.examples}
                 for future in as_completed(futures):
                     result = future.result()
                     if result.error is not None:

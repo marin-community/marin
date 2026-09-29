@@ -4,6 +4,7 @@
 """GraphWalks' published scoring contract and durable evaluation output."""
 
 import datasets
+import pytest
 import requests
 import transformers
 from finestore.eval import sample_from_archive_row
@@ -31,7 +32,8 @@ def test_graphwalks_requires_answer_on_last_line():
     assert grade.scores["exact_match"] == 0.0
 
 
-def test_graphwalks_records_scored_sample_and_context_coverage(tmp_path, monkeypatch):
+@pytest.mark.parametrize("drop_connection", [False, True])
+def test_graphwalks_records_scored_sample_and_context_coverage(tmp_path, monkeypatch, drop_connection):
     class Tokenizer:
         def encode(self, text, *, add_special_tokens):
             return list(text)
@@ -64,13 +66,27 @@ def test_graphwalks_records_scored_sample_and_context_coverage(tmp_path, monkeyp
     ]
     monkeypatch.setattr(datasets, "load_dataset", lambda *args, **kwargs: rows)
     monkeypatch.setattr(transformers.AutoTokenizer, "from_pretrained", lambda *args, **kwargs: Tokenizer())
-    monkeypatch.setattr(requests, "post", lambda *args, **kwargs: Response())
 
     class Session:
         model = RunningModel(endpoint=OpenAIEndpoint(base_url="http://localhost/v1", model="test"), tokenizer="test")
 
+        def __init__(self):
+            self.ready = not drop_connection
+
+        def wait_until_ready(self):
+            self.ready = True
+
+    session = Session()
+
+    def post(*args, **kwargs):
+        if not session.ready:
+            raise requests.ConnectionError("serving endpoint preempted")
+        return Response()
+
+    monkeypatch.setattr(requests, "post", post)
+
     root = str(tmp_path / "run")
-    outcome = GraphWalksExecutor(max_model_len=5000)(Session(), root, {})
+    outcome = GraphWalksExecutor(max_model_len=5000)(session, root, {})
 
     assert outcome.coverage["graphwalks"].n_benchmark == 2
     assert outcome.coverage["graphwalks"].n_attempted == 1
