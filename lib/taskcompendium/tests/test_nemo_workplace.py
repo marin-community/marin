@@ -13,7 +13,7 @@ from threading import Lock, Thread
 
 import pytest
 
-from taskcompendium.harbor.runner import ChatLaunch, run_trial
+from taskcompendium.harbor.runner import AgentStrategy, ChatLaunch, run_trial
 from taskcompendium.importers.nemo_workplace import DATASET_REVISION, ROW_SHA256, import_row
 from taskcompendium.lowering import lower_to_harbor
 from taskcompendium.providers.nemo_workplace.provider import (
@@ -175,7 +175,12 @@ async def test_workplace_harbor_scripted_endpoint_recovers_after_tool_error(tmp_
         result = await run_trial(
             task_dir,
             binding,
-            ChatLaunch(model="fixture", api_base=f"http://127.0.0.1:{server.server_port}/v1", max_turns=4),
+            ChatLaunch(
+                model="fixture",
+                api_base=f"http://127.0.0.1:{server.server_port}/v1",
+                strategy=AgentStrategy.STATEFUL_TOOLS,
+                max_turns=4,
+            ),
             tmp_path / "trials",
             "workplace",
         )
@@ -193,6 +198,21 @@ async def test_workplace_harbor_scripted_endpoint_recovers_after_tool_error(tmp_
     assert requests[2]["messages"][-1]["tool_call_id"] == "call-good"
     assert "successfully" in requests[2]["messages"][-1]["content"]
     assert "ground_truth" not in json.dumps(requests)
+    metadata = result.agent_result.metadata
+    assert len(metadata["tool_definitions"]) == 27
+    assert [action["call_id"] for action in metadata["tools"]] == ["call-bad", "call-good"]
+    assert [action["observation"] for action in metadata["tools"]] == [
+        requests[1]["messages"][-1]["content"],
+        requests[2]["messages"][-1]["content"],
+    ]
+    assert [message["role"] for message in metadata["all_messages"]] == [
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+        "tool",
+        "assistant",
+    ]
 
 
 async def test_workplace_harbor_trials_are_fresh_and_concurrent(tmp_path):
@@ -251,7 +271,12 @@ async def test_workplace_harbor_trials_are_fresh_and_concurrent(tmp_path):
     thread.start()
 
     async def trial(model: str):
-        launch = ChatLaunch(model=model, api_base=f"http://127.0.0.1:{server.server_port}/v1", max_turns=3)
+        launch = ChatLaunch(
+            model=model,
+            api_base=f"http://127.0.0.1:{server.server_port}/v1",
+            strategy=AgentStrategy.STATEFUL_TOOLS,
+            max_turns=3,
+        )
         return await run_trial(task_dir, binding, launch, tmp_path / "trials", model)
 
     try:
