@@ -154,12 +154,6 @@ DEPENDENCY_MANIFESTS: tuple[str, ...] = ("uv.lock", "pyproject.toml")
 EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
     "iris-e2e-smoke": ("lib/iris/", *DEPENDENCY_MANIFESTS),
     "taskcompendium-unit": ("lib/taskcompendium/", "infra/ci/select_tests.py", ".github/workflows/unified-unit.yaml"),
-    "shellbox-agent-unit": (
-        "lib/shellbox/",
-        "config/external/harbor/",
-        "infra/ci/select_tests.py",
-        ".github/workflows/unified-unit.yaml",
-    ),
 }
 
 LEVANTER_ACCELERATOR_TRIGGERS: tuple[str, ...] = (

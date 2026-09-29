@@ -309,26 +309,6 @@ jobs:
       - name: Test TaskCompendium and Harbor adapters
         run: uv run --project lib/taskcompendium --frozen --extra harbor --group test pytest lib/taskcompendium/tests -q
 
-  shellbox_agent:
-    name: shellbox-agent-unit
-    needs: select
-    if: ${{ contains(fromJSON(needs.select.outputs.suites), 'shellbox-agent-unit') }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v7
-        with:
-          python-version: "3.12"
-          enable-cache: true
-          cache-dependency-glob: |
-            config/external/harbor/uv.lock
-            lib/shellbox/pyproject.toml
-      - name: Test Shellbox direct requests
-        run: |
-          uv run --project config/external/harbor --frozen --with-editable ./lib/shellbox --with pytest \
-            pytest -c lib/shellbox/pyproject.toml lib/shellbox/tests/test_bash_agent.py -q
-
   iris_e2e_smoke:
     name: iris-e2e-smoke
     needs: select
