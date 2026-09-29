@@ -34,6 +34,7 @@ function filtered() {
     ($("type").value === "all" || ($("type").value === "unknown" ? !row.type : row.type === $("type").value)) &&
     ($("turns").value === "all" || row.turns === $("turns").value) &&
     ($("environment").value === "all" || row.environment === $("environment").value) &&
+    ($("family").value === "all" || ($("family").value === "unknown" ? !row.family : row.family === $("family").value)) &&
     ($("benchmark").value === "all" || String(row.is_benchmark) === $("benchmark").value) &&
     (!search || [row.display_name,row.canonical_source,row.component_name,row.name,row.gym_alias,row.family,row.dataset_id,row.environment,row.notes,row.origin,row.verification].join(" ").toLowerCase().includes(search))
   );
@@ -108,7 +109,16 @@ function details(row) {
   if(row.gym_url) $("detail-links").append(link("Gym registration ↗",row.gym_url));
   $("details").showModal();
 }
-async function load() { const response=await fetch("api/sources",{cache:"no-store"});if(!response.ok)throw new Error(`Catalog read failed (${response.status})`);const data=await response.json();state.sources=data.sources;state.refreshes=data.refreshes;const selected=$("environment").value;const options=[node("option","All environments")];options[0].value="all";for(const name of [...new Set(state.sources.map(row=>row.environment).filter(Boolean))].sort()){const option=node("option",name);option.value=name;options.push(option);}$("environment").replaceChildren(...options);$("environment").value=options.some(option=>option.value===selected)?selected:"all";render(); }
+async function load() { const response=await fetch("api/sources",{cache:"no-store"});if(!response.ok)throw new Error(`Catalog read failed (${response.status})`);const data=await response.json();state.sources=data.sources;state.refreshes=data.refreshes;for(const [field,title] of [["environment","environments"],["family","families"]]) {
+    const selected=$(field).value;
+    const options=[node("option",`All ${title}`)];options[0].value="all";
+    for(const name of [...new Set(state.sources.map(row=>row[field]).filter(Boolean))].sort()) {
+      const option=node("option",name);option.value=name;options.push(option);
+    }
+    if(field === "family" && state.sources.some(row=>!row.family)) {const option=node("option","Unknown / unclassified");option.value="unknown";options.push(option);}
+    $(field).replaceChildren(...options);$(field).value=options.some(option=>option.value===selected)?selected:"all";
+  }
+  render(); }
 async function refresh(force=false) {
   if(state.refreshing)return;state.refreshing=true;state.error=false;$("refresh").disabled=true;render();$("sync-banner").className="sync-banner";$("sync-banner").textContent="Checking the latest upstream revisions. Saved sources remain available while the catalog refreshes…";
   try {
@@ -119,11 +129,11 @@ async function refresh(force=false) {
   }catch(error){showError(error);}finally{state.refreshing=false;$("refresh").disabled=false;render();}
 }
 function showError(error){state.error=true;$("sync-banner").className="sync-banner warning";$("sync-banner").textContent=`${error.message}. Saved sources remain available; retry with Refresh sources.`;$("metric-status").textContent="Needs attention";}
-for(const id of ["type","turns","environment","benchmark","difficulty","excluded"]) $(id).addEventListener("change",render);$("search").addEventListener("input",render);
+for(const id of ["type","turns","environment","family","benchmark","difficulty","excluded"]) $(id).addEventListener("change",render);$("search").addEventListener("input",render);
 $("quality").addEventListener("change",()=>{if($("quality").value === "bad")$("show-bad").checked=true;render();});
 $("show-bad").addEventListener("change",()=>{if(!$("show-bad").checked && $("quality").value === "bad")$("quality").value="all";render();});
 for(const button of document.querySelectorAll(".tab"))button.addEventListener("click",()=>{state.origin=button.dataset.origin;for(const other of document.querySelectorAll(".tab"))other.classList.toggle("selected",other===button);render();});
-$("reset").addEventListener("click",()=>{for(const id of ["type","turns","environment","benchmark","quality","difficulty"])$(id).value="all";$("search").value="";$("excluded").checked=false;$("show-bad").checked=false;state.origin="all";for(const button of document.querySelectorAll(".tab"))button.classList.toggle("selected",button.dataset.origin==="all");render();});
+$("reset").addEventListener("click",()=>{for(const id of ["type","turns","environment","family","benchmark","quality","difficulty"])$(id).value="all";$("search").value="";$("excluded").checked=false;$("show-bad").checked=false;state.origin="all";for(const button of document.querySelectorAll(".tab"))button.classList.toggle("selected",button.dataset.origin==="all");render();});
 $("refresh").addEventListener("click",()=>refresh(true));$("close-details").addEventListener("click",()=>$("details").close());
 document.addEventListener("keydown",event=>{if(event.key==="/" && !["INPUT","SELECT","TEXTAREA"].includes(document.activeElement.tagName) && !$("details").open){event.preventDefault();$("search").focus();}});
 $("export").addEventListener("click",()=>{const quote=value=>`"${String(value ?? "").replaceAll('"','""')}"`;const fields=[...columns,["canonical_url","Canonical source URL"],["url","Source URL"],["provenance_url","Provenance URL"],["revision","Revision SHA"],["name","Registry ID"],["component_selector","Record dataset selector"],["component_file_sha256","Counted file SHA-256"],["count_basis","Count basis"],["count_precision","Count precision"],["count_url","Count evidence URL"],["gym_alias","Gym alias"],["gym_entrypoint","Gym entrypoint"],["gym_url","Gym registration URL"],["family_basis","Family basis"],["family_url","Family evidence URL"],["classification_basis","Classification basis"]];const csv=[fields.map(([,title])=>quote(title)).join(","),...filtered().map(row=>fields.map(([key])=>quote(row[key])).join(","))].join("\r\n");const url=URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8"}));const a=node("a");a.href=url;a.download="rl-data-atlas.csv";a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);});
