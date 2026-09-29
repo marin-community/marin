@@ -130,12 +130,12 @@ def test_resolved_root_selects_region_local_bucket(monkeypatch):
     assert config.resolved_root() == "gs://marin-us-east5"
 
 
-def test_resolved_root_constructs_default_for_unmapped_region(monkeypatch):
-    """A detected-but-unmapped region constructs gs://marin-{region}."""
+def test_resolved_root_rejects_unmapped_region(monkeypatch):
+    """A detected region without a configured bucket fails before writing."""
     monkeypatch.delenv("MARIN_PREFIX", raising=False)
-    monkeypatch.setattr(fs, "region_from_metadata", lambda: "antarctica-south1")
-    config = DataConfig(region_buckets={"us-east5": BucketSpec("marin-us-east5", StoreType.GCS)})
-    assert config.resolved_root() == "gs://marin-antarctica-south1"
+    monkeypatch.setattr(fs, "region_from_metadata", lambda: "us-west2")
+    with pytest.raises(ValueError, match=r"us-west2.*MARIN_PREFIX"):
+        marin_prefix()
 
 
 def test_resolved_root_local_fallback(monkeypatch):
@@ -155,7 +155,7 @@ def test_marin_temp_bucket_routes_coreweave_to_bucket_root():
     :func:`s3_data_buckets`), so it gets a managed ``tmp/ttl=Nd/`` prefix, and the
     ``marin/`` data subdir is stripped.
     """
-    cfg = DataConfig(region_buckets={}, scheme="s3", ttl_days=(1, 3, 7))
+    cfg = DataConfig(region_buckets={}, scheme="s3", root="s3://marin-us-east-02a/marin", ttl_days=(1, 3, 7))
     with use_data_config(cfg):
         path = marin_temp_bucket(3, "store/x", source_prefix="s3://marin-us-east-02a/marin")
     assert path == "s3://marin-us-east-02a/tmp/ttl=3d/store/x"
@@ -163,7 +163,7 @@ def test_marin_temp_bucket_routes_coreweave_to_bucket_root():
 
 def test_marin_temp_bucket_routes_r2_to_bucket_root():
     """An R2 source prefix yields a TTL temp path at the R2 bucket root (unchanged)."""
-    cfg = DataConfig(region_buckets={}, scheme="s3", ttl_days=(1, 3, 7))
+    cfg = DataConfig(region_buckets={}, scheme="s3", root="s3://marin-na/marin", ttl_days=(1, 3, 7))
     with use_data_config(cfg):
         path = marin_temp_bucket(1, source_prefix="s3://marin-na/marin")
     assert path == "s3://marin-na/tmp/ttl=1d"
