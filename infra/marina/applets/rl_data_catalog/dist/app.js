@@ -1,5 +1,6 @@
 /* Copyright The Marin Authors. SPDX-License-Identifier: Apache-2.0 */
 const $ = (id) => document.getElementById(id);
+const isPublicView = window.location.hostname === "public.applets.marina.oa.dev";
 const state = { sources: [], refreshes: [], origin: "all", sort: "display_name", direction: 1, refreshing: false, error: false };
 const columns = [
   ["display_name", "Source name"], ["origin", "Catalog"], ["canonical_source", "Canonical source"], ["environment", "Environment"],
@@ -94,7 +95,7 @@ function render() {
   const excluded = state.sources.filter(row=>row.status === "Excluded").length;
   $("result-count").textContent=`${number.format(rows.length)} of ${number.format(state.sources.length)} entries · ${excluded} excluded sources${$("excluded").checked ? " included" : " hidden"} · bad quality ${$("show-bad").checked ? "included" : "hidden"}`;
   const errors=state.refreshes.filter(item=>item.error);
-  $("metric-status").replaceChildren(node("span",state.refreshing ? "Checking…" : state.error || errors.length ? "Needs attention" : state.refreshes.length === 2 ? "Up to date" : "Awaiting sync"),node("span",undefined,"live-dot"));
+  $("metric-status").replaceChildren(node("span",isPublicView ? "Saved snapshot" : state.refreshing ? "Checking…" : state.error || errors.length ? "Needs attention" : state.refreshes.length === 2 ? "Up to date" : "Awaiting sync"),node("span",undefined,"live-dot"));
   const checked=state.refreshes.map(item=>item.checked_at).filter(Boolean).sort()[0];
   $("checked-at").textContent=checked ? `Last checked ${new Date(checked).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})} · ${date(checked)}` : "No successful sync yet";
 }
@@ -129,13 +130,15 @@ async function refresh(force=false) {
     else {const errors=state.refreshes.filter(item=>item.error);if(errors.length){$("sync-banner").classList.add("warning");$("sync-banner").textContent=errors.map(item=>`${item.origin}: ${item.error}. Keeping the last successful snapshot.`).join(" ");}else {$("sync-banner").textContent=state.refreshes.map(item=>`${item.origin} ${item.revision.slice(0,8)}`).join("  ·  ")+"  ·  Latest repository revisions checked. Metadata only; no task archives downloaded.";}}
   }catch(error){showError(error);}finally{state.refreshing=false;$("refresh").disabled=false;render();}
 }
-function showError(error){state.error=true;$("sync-banner").className="sync-banner warning";$("sync-banner").textContent=`${error.message}. Saved sources remain available; retry with Refresh sources.`;$("metric-status").textContent="Needs attention";}
+function showError(error){state.error=true;$("sync-banner").className="sync-banner warning";$("sync-banner").textContent=isPublicView ? `${error.message}. Reload this page to retry.` : `${error.message}. Saved sources remain available; retry with Refresh sources.`;$("metric-status").textContent="Needs attention";}
 for(const id of ["type","turns","environment","family","benchmark","difficulty","excluded"]) $(id).addEventListener("change",render);$("search").addEventListener("input",render);
 $("quality").addEventListener("change",()=>{if($("quality").value === "bad")$("show-bad").checked=true;render();});
 $("show-bad").addEventListener("change",()=>{if(!$("show-bad").checked && $("quality").value === "bad")$("quality").value="all";render();});
 for(const button of document.querySelectorAll(".tab"))button.addEventListener("click",()=>{state.origin=button.dataset.origin;for(const other of document.querySelectorAll(".tab"))other.classList.toggle("selected",other===button);render();});
 $("reset").addEventListener("click",()=>{for(const id of ["type","turns","environment","family","benchmark","quality","difficulty"])$(id).value="all";$("search").value="";$("excluded").checked=false;$("show-bad").checked=false;state.origin="all";for(const button of document.querySelectorAll(".tab"))button.classList.toggle("selected",button.dataset.origin==="all");render();});
-$("refresh").addEventListener("click",()=>refresh(true));$("close-details").addEventListener("click",()=>$("details").close());
+$("refresh").hidden=isPublicView;
+if(!isPublicView)$("refresh").addEventListener("click",()=>refresh(true));
+$("close-details").addEventListener("click",()=>$("details").close());
 document.addEventListener("keydown",event=>{if(event.key==="/" && !["INPUT","SELECT","TEXTAREA"].includes(document.activeElement.tagName) && !$("details").open){event.preventDefault();$("search").focus();}});
 $("export").addEventListener("click",()=>{const quote=value=>`"${String(value ?? "").replaceAll('"','""')}"`;const fields=[...columns,["canonical_url","Canonical source URL"],["url","Source URL"],["provenance_url","Provenance URL"],["revision","Revision SHA"],["name","Registry ID"],["component_selector","Record dataset selector"],["component_file_sha256","Counted file SHA-256"],["count_basis","Count basis"],["count_precision","Count precision"],["count_url","Count evidence URL"],["gym_alias","Gym alias"],["gym_entrypoint","Gym entrypoint"],["gym_url","Gym registration URL"],["family_basis","Family basis"],["family_url","Family evidence URL"],["classification_basis","Classification basis"]];const csv=[fields.map(([,title])=>quote(title)).join(","),...filtered().map(row=>fields.map(([key])=>quote(row[key])).join(","))].join("\r\n");const url=URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8"}));const a=node("a");a.href=url;a.download="rl-data-atlas.csv";a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);});
-(async()=>{try{await load();await refresh();}catch(error){showError(error);}})();
+(async()=>{try{await load();if(isPublicView){$("sync-banner").textContent="Showing the latest saved catalog. The last upstream check is shown above.";}else await refresh();}catch(error){showError(error);}})();

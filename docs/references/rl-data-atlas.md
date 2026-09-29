@@ -1,7 +1,7 @@
 # RL Data Atlas
 
-[Open RL Data Atlas](https://applets.marina.oa.dev/a/fb11c931-5861-4878-8bb5-a964d652b45f/)
-to browse the latest MarinSkyRL sources and the Task Trove release manifest. The applet requires Marina authentication.
+[Open RL Data Atlas](https://public.applets.marina.oa.dev/a/fb11c931-5861-4878-8bb5-a964d652b45f/)
+to browse the latest saved [MarinSkyRL](https://github.com/marin-community/MarinSkyRL) sources and the [Task Trove release](https://huggingface.co/datasets/open-athena/task-trove) manifest without signing in.
 Task Trove packages converted datasets as tasks for the Harbor execution
 environment. The two catalogs are independent and can share original datasets.
 Its UUID is `fb11c931-5861-4878-8bb5-a964d652b45f`; the stable link always opens the current release.
@@ -289,9 +289,11 @@ configuration, and native code. The publisher validates the collection and
 uploads its cited evidence into the applet schema using Marina authentication.
 Imported Task Trove dashboard notes and task audits remain separate historical collections; this publisher creates new collections from actual task attempts.
 
-Opening the page checks the MarinSkyRL registry repository and Task Trove release
+Opening the [authenticated page](https://applets.marina.oa.dev/a/fb11c931-5861-4878-8bb5-a964d652b45f/) checks the MarinSkyRL registry repository and Task Trove release
 repository heads and always refreshes MarinSkyRL upstream dataset metadata, including
-when the MarinSkyRL head is unchanged. When the MarinSkyRL repository head
+when the MarinSkyRL head is unchanged. The public page reads the latest saved
+catalog and shows its last upstream check time; it does not refresh upstream sources.
+When the MarinSkyRL repository head
 changes, the applet reloads verifier commit history; **Refresh sources** also
 refetches metadata when heads have not changed. The applet downloads no task archives.
 Counts previously verified for a gated viewer are retained when access fails only
