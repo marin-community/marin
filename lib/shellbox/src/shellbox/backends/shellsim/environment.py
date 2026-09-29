@@ -3,11 +3,15 @@
 
 """Harbor adapter for ShellSim's built-in Unix-like environment."""
 
+import asyncio
+import shutil
+import tempfile
 from enum import StrEnum
 from pathlib import Path
 
 from harbor.environments.base import BaseEnvironment, ExecResult
 from harbor.environments.capabilities import EnvironmentCapabilities
+from upath import UPath
 
 from shellbox.backends.shellsim.machine import (
     DEFAULT_CPU_LIMIT,
@@ -26,6 +30,32 @@ from shellbox.machine import (
     ShellSession,
     ShellSimBuiltins,
 )
+
+_LOCAL_PROTOCOLS = ("", "file", "local")
+_COPY_CHUNK_BYTES = 1024 * 1024
+
+
+def _download_target(target: Path | UPath | str) -> Path | UPath:
+    path = target if isinstance(target, UPath) else UPath(str(target))
+    if path.protocol in _LOCAL_PROTOCOLS:
+        return Path(path.path)
+    return path
+
+
+def _copy_file_to_remote(source: Path, target: UPath) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with source.open("rb") as local_file, target.open("wb") as remote_file:
+        shutil.copyfileobj(local_file, remote_file, length=_COPY_CHUNK_BYTES)
+
+
+def _copy_dir_to_remote(source: Path, target: UPath) -> None:
+    target.mkdir(parents=True, exist_ok=True)
+    for entry in source.rglob("*"):
+        remote_entry = target / entry.relative_to(source).as_posix()
+        if entry.is_dir():
+            remote_entry.mkdir(parents=True, exist_ok=True)
+        else:
+            _copy_file_to_remote(entry, remote_entry)
 
 
 class TaskNetworkPolicy(StrEnum):
@@ -135,14 +165,27 @@ class ShellSimEnvironment(BaseEnvironment):
             raise RuntimeError("ShellSim environment is not running")
         await self.machine.upload(Path(source_dir), target_dir)
 
-    async def download_file(self, source_path: str, target_path: Path | str) -> None:
+    async def download_file(self, source_path: str, target_path: Path | UPath | str) -> None:
         if self.machine is None:
             raise RuntimeError("ShellSim environment is not running")
-        await self.machine.download(source_path, Path(target_path))
+        target = _download_target(target_path)
+        if isinstance(target, Path):
+            await self.machine.download(source_path, target)
+            return
+        with tempfile.TemporaryDirectory() as staging_dir:
+            staged = Path(staging_dir) / "download"
+            await self.machine.download(source_path, staged)
+            await asyncio.to_thread(_copy_file_to_remote, staged, target)
 
-    async def download_dir(self, source_dir: str, target_dir: Path | str) -> None:
+    async def download_dir(self, source_dir: str, target_dir: Path | UPath | str) -> None:
         if self.machine is None:
             raise RuntimeError("ShellSim environment is not running")
-        target = Path(target_dir)
-        target.mkdir(parents=True, exist_ok=True)
-        await self.machine.download(source_dir, target)
+        target = _download_target(target_dir)
+        if isinstance(target, Path):
+            target.mkdir(parents=True, exist_ok=True)
+            await self.machine.download(source_dir, target)
+            return
+        with tempfile.TemporaryDirectory() as staging_dir:
+            staged = Path(staging_dir)
+            await self.machine.download(source_dir, staged)
+            await asyncio.to_thread(_copy_dir_to_remote, staged, target)
