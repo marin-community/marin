@@ -32,18 +32,27 @@ _MLA_PROJECTIONS = ("w_q", "w_dkv", "w_uk", "w_uv", "w_o")
 CAPTURE_EXPERTS = (0, 1, 2, 3)
 
 
+def _take(value: jax.Array, index: int) -> jax.Array:
+    """Layer ``index`` of a stacked leaf, replicated. Replicating before any further indexing matters for the
+    expert banks: one expert cannot be sliced out of an expert-sharded axis."""
+    layer = value[index]
+    return reshard(layer, P(*(None,) * layer.ndim))
+
+
 def _mlp_sites(layer: int, stack, index: int) -> dict:
     mlp = stack.mlp
     sites = {
-        f"L{layer}.shared.w_up": stack.shared[0].w_up[index],
-        f"L{layer}.shared.w_down": stack.shared[0].w_down[index],
-        f"L{layer}.latent.w_down": mlp.w_latent_down[index],
-        f"L{layer}.latent.w_up": mlp.w_latent_up[index],
-        f"L{layer}.router": mlp.router[index],
+        f"L{layer}.shared.w_up": _take(stack.shared[0].w_up, index),
+        f"L{layer}.shared.w_down": _take(stack.shared[0].w_down, index),
+        f"L{layer}.latent.w_down": _take(mlp.w_latent_down, index),
+        f"L{layer}.latent.w_up": _take(mlp.w_latent_up, index),
+        f"L{layer}.router": _take(mlp.router, index),
     }
+    w_up = _take(mlp.expert_mlp.w_up, index)
+    w_down = _take(mlp.expert_mlp.w_down, index)
     for expert in CAPTURE_EXPERTS:
-        sites[f"L{layer}.expert{expert}.w_up"] = mlp.expert_mlp.w_up[index, expert]
-        sites[f"L{layer}.expert{expert}.w_down"] = mlp.expert_mlp.w_down[index, expert]
+        sites[f"L{layer}.expert{expert}.w_up"] = w_up[expert]
+        sites[f"L{layer}.expert{expert}.w_down"] = w_down[expert]
     return sites
 
 
@@ -54,12 +63,12 @@ def capture_matrices(tree) -> dict[str, jax.Array]:
     mla = tree.stacked_blocks.stacked
     sites: dict[str, jax.Array] = {}
     for layer, index in _KDA_STACK_INDICES.items():
-        sites.update({f"L{layer}.kda.{name}": getattr(kda.attn, name)[index] for name in _KDA_PROJECTIONS})
+        sites.update({f"L{layer}.kda.{name}": _take(getattr(kda.attn, name), index) for name in _KDA_PROJECTIONS})
     for layer, index in _MLA_STACK_INDICES.items():
-        sites.update({f"L{layer}.mla.{name}": getattr(mla.attn, name)[index] for name in _MLA_PROJECTIONS})
+        sites.update({f"L{layer}.mla.{name}": _take(getattr(mla.attn, name), index) for name in _MLA_PROJECTIONS})
     sites.update(_mlp_sites(0, kda, _KDA_STACK_INDICES[0]))
     sites.update(_mlp_sites(5, mla, _MLA_STACK_INDICES[5]))
-    return {name: reshard(value, P(*(None,) * value.ndim)) for name, value in sites.items()}
+    return sites
 
 
 def capture_steps(starts: tuple[int, ...], length: int) -> frozenset[int]:

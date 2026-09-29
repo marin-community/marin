@@ -3,6 +3,12 @@
 
 """Optimizer-diagnostic capture: sites map to the right layers, gradients match the train step's, files round-trip."""
 
+import os
+import subprocess
+import sys
+import textwrap
+from pathlib import Path
+
 import jax
 import jmp
 import numpy as np
@@ -10,6 +16,7 @@ import pytest
 from levanter.data.text.examples import GrugLmExample
 from levanter.grug.attention import AttentionMask
 
+import experiments.grug.fast_track.analyze_grad_capture as a
 import experiments.grug.fast_track.test_kda_local as t
 from experiments.grug.fast_track.grad_capture import capture_matrices, capture_steps, write_capture
 from experiments.grug.fast_track.train import _loss_and_grads, _make_grad_capture_step
@@ -67,3 +74,77 @@ def test_capture_windows_and_file_round_trip(tmp_path):
     assert int(loaded["step"]) == 10
     np.testing.assert_array_equal(loaded["update/a"], updates["a"])
     assert "param/a" in loaded and "grad/a" in loaded
+
+
+def _kronecker_stream(rng, steps, m, n, row_scale, col_scale, mean_scale=0.0):
+    """Gradients with covariance exactly B (x) A (diagonal factors) plus an optional persistent mean."""
+    mean = mean_scale * rng.standard_normal((m, n))
+    return np.stack(
+        [mean + (row_scale[:, None] * rng.standard_normal((m, n))) * col_scale[None, :] for _ in range(steps)]
+    )
+
+
+def test_kl_whitening_removes_kronecker_anisotropy():
+    rng = np.random.default_rng(0)
+    m, n = 24, 16
+    grads = _kronecker_stream(rng, 48, m, n, np.geomspace(0.1, 10, m), np.geomspace(0.3, 3, n))
+    w = a.whitening_test(grads, rng)
+    # Anisotropic before, and whitened down to the finite-sample spread of an exact Kronecker Gaussian.
+    assert w["none"] > 1.0
+    assert w["kl"] < 0.6 * w["none"]
+    assert abs(w["kl"] - w["gaussian"]) < 0.25
+    spectra = a.spectrum_stats(a.kl_factors(grads)[0])
+    assert spectra["log10_cond90"] > 1.0
+
+
+def test_direction_scores_rebuild_muon_and_see_persistent_signal():
+    rng = np.random.default_rng(1)
+    m, n = 20, 12
+    grads = _kronecker_stream(rng, 40, m, n, np.ones(m), np.ones(n), mean_scale=1.0)
+    # An applied update that is exactly -polar(Nesterov momentum), as MuonH applies (up to scale).
+    buffer, applied = np.zeros((m, n)), []
+    for g in grads:
+        buffer = a.MOMENTUM * buffer + g
+        applied.append(-0.01 * a._polar(g + a.MOMENTUM * buffer))
+    scores = a.direction_scores(grads, np.stack(applied))
+    assert scores["cos_applied_muon"] > 0.999
+    # A persistent mean makes every direction a descent direction on future batches.
+    assert all(scores[name]["gain_fro"] > 0 for name in ("sgd", "muon", "okls", "shampoo"))
+    # Muon's polar factor has a flat spectrum: stable rank min(m, n).
+    assert scores["muon"]["stable_rank"] > 0.99 * n
+
+
+_EP_SCRIPT = """
+import jax, numpy as np
+from jax.sharding import AxisType, Mesh
+import experiments.grug.fast_track.test_kda_local as t
+from experiments.grug.fast_track.grad_capture import capture_matrices
+from experiments.grug.fast_track.model import Transformer
+
+mesh = Mesh(np.array(jax.devices()[:4]).reshape(1, 1, 4, 1), ("replica_dcn", "data", "expert", "model"),
+            axis_types=(AxisType.Explicit,) * 4)
+with jax.set_mesh(mesh):
+    model = Transformer.init(t._config(mla=True), key=jax.random.PRNGKey(0))
+    sites = jax.device_get(jax.jit(capture_matrices)(model))
+kda = jax.device_get(model.kda_blocks.stacked)
+mla = jax.device_get(model.stacked_blocks.stacked)
+np.testing.assert_array_equal(sites["L5.expert2.w_up"], np.asarray(mla.mlp.expert_mlp.w_up)[1, 2])
+np.testing.assert_array_equal(sites["L0.expert1.w_down"], np.asarray(kda.mlp.expert_mlp.w_down)[0, 1])
+np.testing.assert_array_equal(sites["L3.mla.w_q"], np.asarray(mla.attn.w_q)[0])
+print("EP_OK")
+"""
+
+
+def test_capture_on_an_expert_sharded_mesh():
+    root = str(Path(__file__).resolve().parents[3])
+    env = dict(os.environ)
+    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
+    env["JAX_PLATFORMS"] = "cpu"
+    env["PYTHONPATH"] = os.pathsep.join(
+        [root, f"{root}/lib/levanter/src", f"{root}/lib/haliax/src", env.get("PYTHONPATH", "")]
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(_EP_SCRIPT)], env=env, cwd=root, capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr[-4000:]
+    assert "EP_OK" in result.stdout
