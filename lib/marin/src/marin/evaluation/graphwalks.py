@@ -74,7 +74,7 @@ class _TokenCounter(Protocol):
 
     def apply_chat_template(
         self, messages: list[dict[str, str]], *, tokenize: bool, add_generation_prompt: bool
-    ) -> list[int]: ...
+    ) -> list[int] | Mapping[str, list[int]]: ...
 
 
 class _GraphWalksRow(TypedDict):
@@ -156,6 +156,15 @@ def _benchmark(n_benchmark: int, n_attempted: int) -> BenchmarkMetadataRef:
         n_benchmark=n_benchmark,
         n_attempted=n_attempted,
     )
+
+
+def _chat_token_count(tokenizer: _TokenCounter, prompt: str) -> int:
+    tokens = tokenizer.apply_chat_template(
+        [{"role": "user", "content": prompt}], tokenize=True, add_generation_prompt=True
+    )
+    if isinstance(tokens, Mapping):
+        return len(tokens["input_ids"])
+    return len(tokens)
 
 
 def _request(example: _Example, session: RemoteInferenceSession) -> _Result:
@@ -301,19 +310,11 @@ class GraphWalksExecutor:
             # gap makes boundary changes from completing the prompt irrelevant to that decision.
             if row["prompt_chars"] > prompt_budget * _PREFIX_CHARS_PER_TOKEN:
                 prefix = prompt[: prompt_budget * _PREFIX_CHARS_PER_TOKEN]
-                prefix_tokens = len(
-                    tokenizer.apply_chat_template(
-                        [{"role": "user", "content": prefix}], tokenize=True, add_generation_prompt=True
-                    )
-                )
+                prefix_tokens = _chat_token_count(tokenizer, prefix)
                 if prefix_tokens > prompt_budget + _PREFIX_TOKEN_MARGIN:
                     skipped[row["problem_type"]] += 1
                     continue
-            prompt_tokens = len(
-                tokenizer.apply_chat_template(
-                    [{"role": "user", "content": prompt}], tokenize=True, add_generation_prompt=True
-                )
-            )
+            prompt_tokens = _chat_token_count(tokenizer, prompt)
             if prompt_tokens > prompt_budget:
                 skipped[row["problem_type"]] += 1
                 continue

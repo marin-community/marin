@@ -33,13 +33,17 @@ def test_graphwalks_requires_answer_on_last_line():
 
 
 @pytest.mark.parametrize("drop_connection", [False, True])
-def test_graphwalks_records_scored_sample_and_context_coverage(tmp_path, monkeypatch, drop_connection):
+@pytest.mark.parametrize("mapped_tokens", [False, True])
+def test_graphwalks_records_scored_sample_and_context_coverage(tmp_path, monkeypatch, drop_connection, mapped_tokens):
     class Tokenizer:
         def encode(self, text, *, add_special_tokens):
             return list(text)
 
         def apply_chat_template(self, messages, *, tokenize, add_generation_prompt):
-            return list(messages[0]["content"])
+            tokens = list(messages[0]["content"])
+            if mapped_tokens:
+                return {"input_ids": tokens, "attention_mask": [1] * len(tokens)}
+            return tokens
 
     class Response:
         def raise_for_status(self):
