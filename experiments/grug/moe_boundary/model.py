@@ -93,11 +93,7 @@ def _hf_config_attr(config: HfConfig, names: tuple[str, ...], default: Any = Non
 
 @dataclass(frozen=True)
 class GrugModelConfig:
-    """Hyperparameters for the grug MoE transformer.
-
-    Architecture choices (GatedNorm, XSA, QB routing) are hardcoded.
-    Only shape/size knobs live here. All layers are MoE.
-    """
+    """Model dimensions and behavior choices for the boundary MoE transformer."""
 
     vocab_size: int
     hidden_dim: int = 512
