@@ -55,7 +55,7 @@ def model_endpoint() -> Iterator[tuple[str, _EndpointState]]:
             self.end_headers()
             self.wfile.write(body)
 
-        def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+        def log_message(self, _format: str, *_args: object) -> None:
             pass
 
     with HTTPServer(("127.0.0.1", 0), Handler) as server:
