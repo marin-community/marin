@@ -102,12 +102,6 @@ at GitHub sign-in and a one-hour authorization lease. Loom revalidates the
 membership before the lease expires with a short-lived GitHub App installation
 token; it does not retain the user's OAuth token.
 
-`approvedUsers` declares GitHub accounts that need manual Loom approval. Each
-entry binds a login to its immutable GitHub user id and receives the normal
-`user` role. The grant permits Loom sign-in and GitHub issue triggers on repos
-where the App is installed. The deployment will not adopt an existing operator
-account; with `pruneDeployment: true`, removing an entry revokes its access.
-
 Only an active result renews access. Removal from the organization, a GitHub
 outage, a timeout, or a permission failure invalidates the user's browser and
 session credentials and closes sessions they own. Signed `@loom` requests use
@@ -118,6 +112,11 @@ authorization in **People & security**. Enabling organization authorization
 permanently latches this database into shared-deployment mode. Clearing the
 setting, removing users, or completing workloads never restores implicit
 loopback or machine-token administration.
+
+`github.trigger_allowed_user_ids` grants signed GitHub issue and PR triggers
+to the listed numeric GitHub identities. It does not bind those identities to
+Loom users or grant browser sign-in, so existing account roles are unchanged.
+Remove an ID from the setting to revoke this trigger grant.
 
 The `grafana-alerts` federation mapping authorizes the Google
 identity of the existing `marin-grafana` Cloud Run service account to select
