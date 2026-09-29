@@ -13,6 +13,7 @@ from pulumi.runtime import MockCallArgs, MockResourceArgs, Mocks
 
 from infra.loom.infrastructure import (
     ROOT,
+    ApprovedUserConfig,
     DeploymentConfig,
     GitHubFederationConfig,
     ProfileConfig,
@@ -265,6 +266,13 @@ def test_deployment_manifest_preserves_unicode_profile_instructions() -> None:
     manifest = _deployment_manifest(config, profiles, [])
     assert "🤖" in manifest
     assert json.loads(manifest)["profiles"][0]["profile"]["instructions"] == "Prefix comments with 🤖"
+
+
+def test_deployment_manifest_grants_a_bound_github_identity() -> None:
+    user = ApprovedUserConfig.parse({"username": "ci", "githubLogin": "ci", "githubUserId": 306337490})
+    config = replace(deployment_config(), approved_users=(user,))
+    manifest = json.loads(_deployment_manifest(config, [], []))
+    assert manifest["users"] == [{"username": "ci", "github_login": "ci", "github_user_id": 306337490}]
 
 
 def test_profile_instructions_reject_ambiguous_or_external_sources() -> None:

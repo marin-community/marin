@@ -17,6 +17,10 @@ config:
   marin-loom:bootDiskSnapshot: loom-pre-c4d-hyperdisk-20260816
   marin-loom:dotenvSecretVersion: "4"
   marin-loom:pruneDeployment: "true"
+  marin-loom:approvedUsers:
+    - username: marin-ci
+      githubLogin: marin-ci
+      githubUserId: 306337490
   marin-loom:settings:
     auth.github_organizations: "Open-Athena:188075292"
     browser.allowed_origins: https://marina.oa.dev

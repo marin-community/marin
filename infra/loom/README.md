@@ -102,6 +102,12 @@ at GitHub sign-in and a one-hour authorization lease. Loom revalidates the
 membership before the lease expires with a short-lived GitHub App installation
 token; it does not retain the user's OAuth token.
 
+`approvedUsers` declares GitHub accounts that need manual Loom approval. Each
+entry binds a login to its immutable GitHub user id and receives the normal
+`user` role. The grant permits Loom sign-in and GitHub issue triggers on repos
+where the App is installed. The deployment will not adopt an existing operator
+account; with `pruneDeployment: true`, removing an entry revokes its access.
+
 Only an active result renews access. Removal from the organization, a GitHub
 outage, a timeout, or a permission failure invalidates the user's browser and
 session credentials and closes sessions they own. Signed `@loom` requests use

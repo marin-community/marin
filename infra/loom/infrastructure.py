@@ -484,6 +484,33 @@ def _google_federation_mapping(
 
 
 @dataclass(frozen=True)
+class ApprovedUserConfig:
+    username: str
+    github_login: str
+    github_user_id: int
+
+    @classmethod
+    def parse(cls, value: dict[str, object]) -> ApprovedUserConfig:
+        username = value.get("username")
+        login = value.get("githubLogin")
+        user_id = value.get("githubUserId")
+        if not isinstance(username, str) or re.fullmatch(r"[A-Za-z0-9-]{1,39}", username) is None:
+            raise ValueError("approved user requires a valid username")
+        if not isinstance(login, str) or re.fullmatch(r"[A-Za-z0-9-]{1,39}", login) is None:
+            raise ValueError("approved user requires a valid GitHub login")
+        if type(user_id) is not int or user_id <= 0:
+            raise ValueError("approved user requires a positive GitHub user id")
+        return cls(username, login, user_id)
+
+    def manifest(self) -> dict[str, object]:
+        return {
+            "username": self.username,
+            "github_login": self.github_login,
+            "github_user_id": self.github_user_id,
+        }
+
+
+@dataclass(frozen=True)
 class DeploymentConfig:
     project: str
     region: str
@@ -505,6 +532,7 @@ class DeploymentConfig:
     dotenv_secret_version: int
     prune_deployment: bool = False
     settings: tuple[tuple[str, str | int | bool], ...] = ()
+    approved_users: tuple[ApprovedUserConfig, ...] = ()
     remote_mcps: tuple[RemoteMcpConfig, ...] = ()
     profiles: tuple[ProfileConfig, ...] = ()
     workloads: tuple[WorkloadIdentityConfig, ...] = ()
@@ -532,6 +560,13 @@ class DeploymentConfig:
                 raise ValueError(f"duplicate remote MCP identity {remote.identity!r}")
             remote_identities.add(remote.identity)
         profile_names = {profile.name for profile in self.profiles}
+        user_names: set[str] = set()
+        user_ids: set[int] = set()
+        for user in self.approved_users:
+            if user.username in user_names or user.github_user_id in user_ids:
+                raise ValueError(f"duplicate approved user {user.username!r}")
+            user_names.add(user.username)
+            user_ids.add(user.github_user_id)
         workload_names: set[str] = set()
         for workload in self.workloads:
             _validate_profile_reference("workload", workload.name, workload.profile, workload_names, profile_names)
@@ -576,6 +611,9 @@ class DeploymentConfig:
         raw_remote_mcps = config.get_object("remoteMcps") or []
         if not isinstance(raw_remote_mcps, list):
             raise ValueError("remoteMcps must be a list")
+        raw_approved_users = config.get_object("approvedUsers") or []
+        if not isinstance(raw_approved_users, list):
+            raise ValueError("approvedUsers must be a list")
         raw_workloads = config.get_object("workloads") or []
         if not isinstance(raw_workloads, list):
             raise ValueError("workloads must be a list")
@@ -592,6 +630,11 @@ class DeploymentConfig:
             if not isinstance(value, dict):
                 raise ValueError("each remote MCP must be an object")
             remote_mcps.append(RemoteMcpConfig.parse(value))
+        approved_users = []
+        for value in raw_approved_users:
+            if not isinstance(value, dict):
+                raise ValueError("each approved user must be an object")
+            approved_users.append(ApprovedUserConfig.parse(value))
         workloads = []
         for value in raw_workloads:
             if not isinstance(value, dict):
@@ -623,6 +666,7 @@ class DeploymentConfig:
             dotenv_secret_version=config.require_int("dotenvSecretVersion"),
             prune_deployment=config.get_bool("pruneDeployment") or False,
             settings=tuple(settings),
+            approved_users=tuple(approved_users),
             remote_mcps=tuple(remote_mcps),
             profiles=tuple(profiles),
             workloads=tuple(workloads),
@@ -835,6 +879,7 @@ def _deployment_manifest(
     return json.dumps(
         {
             "settings": dict(config.settings),
+            "users": [user.manifest() for user in config.approved_users],
             "remote_mcps": [remote.manifest() for remote in config.remote_mcps],
             "profiles": profiles,
             "federations": (
