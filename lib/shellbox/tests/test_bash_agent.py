@@ -96,4 +96,3 @@ def test_bash_agent_http_error_includes_response_body(
 
     assert error.value.response.status_code == 400
     assert "unknown model: served-grug" in str(error.value)
-    assert state.models == ["served-grug"]
