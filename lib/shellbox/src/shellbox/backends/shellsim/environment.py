@@ -3,11 +3,14 @@
 
 """Harbor adapter for ShellSim's built-in Unix-like environment."""
 
+import asyncio
+import tempfile
 from enum import StrEnum
 from pathlib import Path
 
 from harbor.environments.base import BaseEnvironment, ExecResult
 from harbor.environments.capabilities import EnvironmentCapabilities
+from upath import UPath
 
 from shellbox.backends.shellsim.machine import (
     DEFAULT_CPU_LIMIT,
@@ -31,6 +34,32 @@ from shellbox.machine import (
 class TaskNetworkPolicy(StrEnum):
     REQUIRE_OFFLINE_TASK = "require-offline-task"
     DENY = "deny"
+
+
+def _remote_target(path: Path | UPath | str) -> UPath | None:
+    target = path if isinstance(path, UPath) else UPath(path)
+    protocol = target.protocol
+    if isinstance(protocol, tuple):
+        protocol = protocol[0] if protocol else ""
+    if protocol in ("", "file", "local"):
+        return None
+    return target
+
+
+def _copy_file_to_remote(source: Path, target: UPath) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(source.read_bytes())
+
+
+def _copy_directory_to_remote(source: Path, target: UPath) -> None:
+    target.mkdir(parents=True, exist_ok=True)
+    for source_path in source.rglob("*"):
+        relative_path = source_path.relative_to(source).as_posix()
+        target_path = target / relative_path
+        if source_path.is_dir():
+            target_path.mkdir(parents=True, exist_ok=True)
+        else:
+            _copy_file_to_remote(source_path, target_path)
 
 
 class ShellSimEnvironment(BaseEnvironment):
@@ -135,14 +164,29 @@ class ShellSimEnvironment(BaseEnvironment):
             raise RuntimeError("ShellSim environment is not running")
         await self.machine.upload(Path(source_dir), target_dir)
 
-    async def download_file(self, source_path: str, target_path: Path | str) -> None:
+    async def download_file(self, source_path: str, target_path: Path | UPath | str) -> None:
         if self.machine is None:
             raise RuntimeError("ShellSim environment is not running")
-        await self.machine.download(source_path, Path(target_path))
+        remote_target = _remote_target(target_path)
+        if remote_target is None:
+            await self.machine.download(source_path, Path(target_path))
+            return
+        with tempfile.TemporaryDirectory(prefix="shellbox-download-") as temporary:
+            local_target = Path(temporary) / "file"
+            await self.machine.download(source_path, local_target)
+            await asyncio.to_thread(_copy_file_to_remote, local_target, remote_target)
 
-    async def download_dir(self, source_dir: str, target_dir: Path | str) -> None:
+    async def download_dir(self, source_dir: str, target_dir: Path | UPath | str) -> None:
         if self.machine is None:
             raise RuntimeError("ShellSim environment is not running")
+        remote_target = _remote_target(target_dir)
+        if remote_target is not None:
+            with tempfile.TemporaryDirectory(prefix="shellbox-download-") as temporary:
+                local_target = Path(temporary) / "directory"
+                local_target.mkdir()
+                await self.machine.download(source_dir, local_target)
+                await asyncio.to_thread(_copy_directory_to_remote, local_target, remote_target)
+            return
         target = Path(target_dir)
         target.mkdir(parents=True, exist_ok=True)
         await self.machine.download(source_dir, target)

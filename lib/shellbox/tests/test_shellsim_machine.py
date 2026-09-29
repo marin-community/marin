@@ -6,8 +6,10 @@
 import asyncio
 from pathlib import Path
 
+from shellbox.backends.shellsim.environment import ShellSimEnvironment
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Command, MachineSpec, ShellSimBuiltins, ShellStatus
+from upath import UPath
 
 
 def test_shell_state_and_one_shot_command() -> None:
@@ -49,6 +51,29 @@ def test_file_transfer_and_bounded_output(tmp_path: Path) -> None:
             target.mkdir()
             await machine.download("/workspace/imported", target)
             assert (target / "data.txt").read_text() == "payload"
+        finally:
+            await machine.close()
+
+    asyncio.run(check())
+
+
+def test_environment_downloads_to_remote_path(tmp_path: Path) -> None:
+    async def check() -> None:
+        machine = await ShellSimMachineFactory().create(MachineSpec(ShellSimBuiltins()))
+        environment = object.__new__(ShellSimEnvironment)
+        environment.machine = machine
+        remote_root = UPath(f"memory://shellbox-tests/{tmp_path.name}")
+        try:
+            source = tmp_path / "source"
+            source.mkdir()
+            (source / "data.txt").write_text("payload")
+            await machine.upload(source, "/workspace/export")
+
+            await environment.download_dir("/workspace/export", remote_root / "directory")
+            await environment.download_file("/workspace/export/data.txt", remote_root / "file.txt")
+
+            assert (remote_root / "directory/data.txt").read_text() == "payload"
+            assert (remote_root / "file.txt").read_text() == "payload"
         finally:
             await machine.close()
 
