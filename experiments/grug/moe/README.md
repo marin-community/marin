@@ -122,6 +122,13 @@ The Paloma macro numbers below were measured under the **previous defaults**:
 | 1.16e19  | d1024  | 11     | 128 | 16,080   | 8.43e9  | **3.0195**   | 219,720     | 11.72h  | [moe_may_compute_opt_d1024_ep1](https://wandb.ai/marin-community/marin_moe/runs/moe_may_compute_opt_d1024_ep1) |
 | 3.46e19  | d1280  | 13     | 256 | 14,325   | 1.50e10 | **2.8857**   | 171,912     | 25.68h  | [moe_may_compute_opt_d1280_ep1](https://wandb.ai/marin-community/marin_moe/runs/moe_may_compute_opt_d1280_ep1) |
 
+The d1280/batch-256 throughput is from the June run on JAX 0.9.2/libtpu
+0.0.39. A 64-step [baseline probe](https://wandb.ai/marin-community/marin_moe/runs/moe_baseline_probe_d1280_ep1)
+on JAX 0.11.1/libtpu 0.0.46 measured 160,924 tok/s median, 6.4% below the
+June run. Use a same-stack baseline when comparing throughput at this cell;
+the cause of the difference has not been isolated. Do not extrapolate this
+factor to other cells. See [#9529](https://github.com/marin-community/marin/issues/9529).
+
 Fitted scaling law on these 4 cells (`L_inf=1.6` pinned, α pinned to the v16
 exponent of 0.0941):
 
