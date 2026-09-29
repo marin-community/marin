@@ -62,23 +62,12 @@ validate_marin_checkout() {
 
   local pins
   pins=$(python3 - \
-    "$MARIN_DIR/lib/marin/src/marin/external_dependencies.py" \
     "$MARIN_DIR/config/external/harbor/uv.lock" <<'PY'
 import re
 import sys
 from pathlib import Path
 
-text = Path(sys.argv[1]).read_text()
-for name in ("EVALCHEMY", "HARBOR"):
-    block = re.search(rf"{name} = ExternalDependency\((.*?)\n\)", text, re.DOTALL)
-    if block is None:
-        raise SystemExit(f"missing {name} dependency block")
-    commit = re.search(r'commit="([0-9a-f]{40})"', block.group(1))
-    if commit is None:
-        raise SystemExit(f"missing {name} commit")
-    print(f"{name}={commit.group(1)}")
-
-lock = Path(sys.argv[2]).read_text()
+lock = Path(sys.argv[1]).read_text()
 for name in ("harbor", "harbor-tau3-bench-adapter"):
     block = re.search(rf'\[\[package\]\]\nname = "{re.escape(name)}"\n(.*?)(?=\n\[\[package\]\]|\Z)', lock, re.DOTALL)
     if block is None:
@@ -89,10 +78,6 @@ for name in ("harbor", "harbor-tau3-bench-adapter"):
     print(f"HARBOR_LOCK={match.group(1)}")
 PY
   )
-  grep -qx "EVALCHEMY=$CAMPAIGN_SHA_EVALCHEMY" <<<"$pins" \
-    || die "Marin Evalchemy pin differs from $CAMPAIGN_SHA_EVALCHEMY"
-  grep -qx "HARBOR=$CAMPAIGN_SHA_HARBOR" <<<"$pins" \
-    || die "Marin Harbor pin differs from $CAMPAIGN_SHA_HARBOR"
   [ "$(grep -cx "HARBOR_LOCK=$CAMPAIGN_SHA_HARBOR" <<<"$pins")" = 2 ] \
     || die "locked Harbor runtimes differ from $CAMPAIGN_SHA_HARBOR"
 

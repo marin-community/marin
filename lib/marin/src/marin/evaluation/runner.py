@@ -510,15 +510,11 @@ def _record_startup_failure(
 
 
 def _is_submitted_inference_startup_failure(exc: Exception) -> bool:
-    """Retry an endpoint that reached Iris but never became usable.
-
-    Job logs are eventually consistent across federated clusters, so their
-    contents cannot safely control retry behavior at the instant a child job
-    becomes terminal. Failures before a job is submitted have no handles and
-    remain non-retryable here.
-    """
-
-    return isinstance(exc, RemoteInferenceStartupError) and bool(exc.jobs)
+    """Return whether Iris accepted an endpoint job before startup failed."""
+    if not isinstance(exc, RemoteInferenceStartupError):
+        return False
+    # Job handles are stable at terminal transition; federated log contents may still be propagating.
+    return bool(exc.jobs)
 
 
 @contextlib.contextmanager

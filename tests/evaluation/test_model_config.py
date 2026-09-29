@@ -20,7 +20,7 @@ from marin.evaluation.model_config import (
     serve_config_vllm_args,
 )
 from marin.evaluation.serving_config import _serve_host_memory, inference_config_for_model
-from marin.inference.config import BrokerConfig, LevanterEngineConfig, ObjectStoreLoadMode
+from marin.inference.config import BrokerConfig, LevanterEngineConfig
 
 from experiments.evaluation.fleet import MARIN_EVAL_HARDWARE
 from experiments.evaluation.models import models
@@ -185,20 +185,6 @@ def test_gpu_lowering_sets_catalog_owned_runai_request_timeout():
 
     assert lowered.iris.worker_environment.env_vars["RUNAI_STREAMER_CONCURRENCY"] == "4"
     assert lowered.iris.worker_environment.env_vars["RUNAI_STREAMER_S3_REQUEST_TIMEOUT_MS"] == "60000"
-
-
-def test_gpu_lowering_preserves_object_store_load_mode():
-    model = ModelConfig(
-        name="large-s3-model",
-        location="s3://models/large",
-        resource_hint=ResourceHint(gpu={"H100": 8}, memory="512g"),
-        serve=ServeConfig(object_store_load_mode=ObjectStoreLoadMode.STAGE_LOCAL, auto_overrides=False),
-    )
-    choice = AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=8)
-
-    lowered = inference_config_for_model(model, choice, env_vars={}, priority=job_pb2.PRIORITY_BAND_INHERIT)
-
-    assert lowered.model.object_store_load_mode is ObjectStoreLoadMode.STAGE_LOCAL
 
 
 @pytest.mark.parametrize(

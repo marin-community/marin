@@ -5,13 +5,19 @@ import importlib.util
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from typing import NamedTuple
 
 import pytest
 
 
-def _load_sotopia_agent(
-    monkeypatch: pytest.MonkeyPatch,
-) -> tuple[type[object], type[object], type[Exception], type[Exception]]:
+class _SotopiaTestTypes(NamedTuple):
+    agent: type[object]
+    context: type[object]
+    verifier_error: type[Exception]
+    agent_exit_error: type[Exception]
+
+
+def _load_sotopia_agent(monkeypatch: pytest.MonkeyPatch) -> _SotopiaTestTypes:
     class NonZeroAgentExitCodeError(RuntimeError):
         def __init__(self, *, return_code: int) -> None:
             self.result = SimpleNamespace(return_code=return_code)
@@ -71,14 +77,14 @@ def _load_sotopia_agent(
         raise RuntimeError(f"Could not load SOTOPIA agent from {path}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module.SotopiaAgent, AgentContext, VerifierRuntimeError, NonZeroAgentExitCodeError
+    return _SotopiaTestTypes(module.SotopiaAgent, AgentContext, VerifierRuntimeError, NonZeroAgentExitCodeError)
 
 
 def test_agent_allows_missing_episode_summary_after_failed_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    sotopia_agent, context_type, _, _ = _load_sotopia_agent(monkeypatch)
-    context = context_type()
+    types = _load_sotopia_agent(monkeypatch)
+    context = types.context()
 
-    sotopia_agent(logs_dir=tmp_path).populate_context_post_run(context)
+    types.agent(logs_dir=tmp_path).populate_context_post_run(context)
 
     assert context.is_empty()
 
@@ -87,11 +93,11 @@ def test_agent_allows_missing_episode_summary_after_failed_run(tmp_path: Path, m
 async def test_agent_classifies_evaluator_runner_exit_as_verifier_infrastructure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    sotopia_agent, _, verifier_runtime_error, nonzero_agent_exit_error = _load_sotopia_agent(monkeypatch)
+    types = _load_sotopia_agent(monkeypatch)
 
     class FailedEvaluatorEnvironment:
         async def exec(self) -> None:
-            raise nonzero_agent_exit_error(return_code=75)
+            raise types.agent_exit_error(return_code=75)
 
-    with pytest.raises(verifier_runtime_error):
-        await sotopia_agent(logs_dir=tmp_path).run("", FailedEvaluatorEnvironment(), object())
+    with pytest.raises(types.verifier_error):
+        await types.agent(logs_dir=tmp_path).run("", FailedEvaluatorEnvironment(), object())

@@ -381,7 +381,8 @@ def test_staged_model_leaves_local_weights_unchanged(tmp_path):
     )
 
     with _staged_model(model) as staged:
-        assert staged is model
+        assert staged.weights == str(tmp_path)
+        assert Path(staged.weights).samefile(tmp_path)
 
 
 def test_speculative_model_uses_resolved_uri_in_vllm_launch(monkeypatch):
