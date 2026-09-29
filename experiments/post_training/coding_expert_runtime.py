@@ -14,20 +14,13 @@ from pathlib import Path
 
 import shellsim
 from coding_expert_verifier import SOLUTION_PATH, VerificationSummary, parse_cases
-from harbor.agents.factory import AgentFactory
 from harbor.environments.base import ExecResult
-from harbor.models.agent.name import AgentName
-from shellbox.agent import BashAgent
 from shellbox.backends.shellsim.environment import ShellSimEnvironment
 
 VERIFY_ENV = "MARIN_CODING_EXPERT_VERIFY"
 CASES_PATH = "/tests/cases.json"
 REWARD_PATH = "/logs/verifier/reward.txt"
 VERIFIER_TIMEOUT = 30
-
-# MarinSkyRL does not yet expose AgentConfig.import_path. This module is loaded
-# through EnvironmentConfig.import_path before Harbor creates the trial agent.
-AgentFactory._AGENT_MAP[AgentName.ORACLE] = BashAgent
 
 
 def _verify(solution_path: Path, cases_path: Path) -> VerificationSummary:

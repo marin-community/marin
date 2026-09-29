@@ -74,7 +74,7 @@ PARENT_MODEL = "open-athena/Grug-67B-A2B-GLM53-RLVR-SFT-2026.09.23"
 PARENT_REVISION = "227263f32121ac79ba96de6136b86221e58b05db"
 DATASET = "open-r1/verifiable-coding-problems-python_decontaminated-tested-shuffled"
 DATASET_REVISION = "98191eb6eefd276b7ebb4eb8d25c4a167cc65605"
-SKYRL_RUNTIME_COMMIT = "92fbe5126329c38659b54913424e64c39bbeab89"
+SKYRL_RUNTIME_COMMIT = "e26273f7968cf124cc667372b3147da5b6c7a0cf"
 SHELLBOX_COMMIT = "ee9e2b9f06a9da1c43dc3b3462460d933f81d32a"
 SHELLBOX_REQUIREMENT = (
     "marin-shellbox[shellsim] @ "
@@ -463,7 +463,7 @@ def prepare_code_data(config: CodeDataConfig) -> None:
             "shellsim_version": config.shellsim_version,
             "environment": "coding_expert_runtime:CodingExpertShellSimEnvironment",
             "agent": "shellbox.agent:BashAgent",
-            "agent_bridge": "coding_expert_runtime registers BashAgent as Harbor oracle",
+            "agent_selection": "Harbor AgentConfig.import_path",
             "verifier": "fresh ShellSim Python process per private case",
             "reward_mode": "binary",
         },
@@ -546,7 +546,7 @@ context_budget:
 
 terminal_bench:
   harbor:
-    name: oracle
+    agent_import_path: shellbox.agent:BashAgent
     store_all_messages: true
     extra_body:
       chat_template_kwargs:
