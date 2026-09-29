@@ -2082,6 +2082,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "pydantic" },
+    { name = "tasktrove-verify" },
 ]
 
 [package.optional-dependencies]
@@ -2100,6 +2101,7 @@ test = [
 requires-dist = [
     { name = "harbor", marker = "extra == 'harbor'", git = "https://github.com/marin-community/harbor.git?rev=ef1eaf207f41f84eb53d17f9c8bd84c073a9aba5" },
     { name = "pydantic", specifier = ">=2.0" },
+    { name = "tasktrove-verify", editable = "../tasktrove-verify" },
 ]
 provides-extras = ["harbor"]
 
@@ -2107,6 +2109,34 @@ provides-extras = ["harbor"]
 test = [
     { name = "pytest", specifier = ">=8.3" },
     { name = "pytest-asyncio" },
+    { name = "pytest-timeout" },
+]
+
+[[package]]
+name = "tasktrove-verify"
+version = "0.1.0"
+source = { editable = "../tasktrove-verify" }
+dependencies = [
+    { name = "tomlkit" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "jsonschema", marker = "extra == 'schema'", specifier = ">=4.20" },
+    { name = "math-verify", marker = "extra == 'answer'", specifier = ">=0.7" },
+    { name = "openai", marker = "extra == 'judge'", specifier = ">=1.40" },
+    { name = "pyyaml", marker = "extra == 'schema'", specifier = ">=6.0" },
+    { name = "reasoning-gym", marker = "extra == 'reasoning-gym'", specifier = ">=0.1" },
+    { name = "sympy", marker = "extra == 'answer'", specifier = ">=1.12" },
+    { name = "tasktrove-verify", extras = ["answer", "schema", "judge", "reasoning-gym"], marker = "extra == 'all'", editable = "../tasktrove-verify" },
+    { name = "tomlkit", specifier = ">=0.13" },
+]
+provides-extras = ["answer", "schema", "judge", "reasoning-gym", "all"]
+
+[package.metadata.requires-dev]
+test = [
+    { name = "pytest", specifier = ">=8.3.2" },
+    { name = "pytest-json-report", specifier = ">=1.5" },
     { name = "pytest-timeout" },
 ]
 
@@ -2207,6 +2237,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/be/ba/1f744cdc819428fc6b5084ec34d9b30660f6f9daaf70eead706e3203ec3c/toml-0.10.2.tar.gz", hash = "sha256:b3bda1d108d5dd99f4a20d24d9c348e91c4db7ab1b749200bded2f839ccbe68f", size = 22253, upload-time = "2020-11-01T01:40:22.204Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/44/6f/7120676b6d73228c96e17f1f794d8ab046fc910d781c8d151120c3f1569e/toml-0.10.2-py2.py3-none-any.whl", hash = "sha256:806143ae5bfb6a3c6e736a764057db0e6a0e05e338b5630894a5f779cabb4f9b", size = 16588, upload-time = "2020-11-01T01:40:20.672Z" },
+]
+
+[[package]]
+name = "tomlkit"
+version = "0.15.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/94/96/e07752635b98536177fa1f37671c8f3cdde2e724c6bcf6034b2cfb571565/tomlkit-0.15.1.tar.gz", hash = "sha256:e25bbf38843005246210a12982776f27f99cb9be67160e14434d0c0d21ee1e97", size = 180129, upload-time = "2026-07-17T01:48:04.562Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/13/bc/8c13eb66537dce1d2bd3a57132902f38d0e7f5bb46fa9f4daed9fe9d76ee/tomlkit-0.15.1-py3-none-any.whl", hash = "sha256:177a05aece5a8ca5266fd3c448abb47b8d352f09d477d3ca8332db4d89b24304", size = 49449, upload-time = "2026-07-17T01:48:05.728Z" },
 ]
 
 [[package]]

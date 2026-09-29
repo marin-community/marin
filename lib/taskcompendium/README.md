@@ -38,10 +38,12 @@ flowchart LR
 | `requirements` | Capabilities or named action interfaces the execution environment must provide. |
 | `answer_type` | The semantic result: `text`, `number`, `file`, `workspace_state`, or `native_action`. It does not prescribe a wrapper such as JSON. |
 | `native_action_request` | For a native-action task, the source conversation, advertised functions, tool choice, and parallel-call setting. Other answer types omit it. |
-| `verifier` | A private verifier kind and serialized JSON configuration. The built-in `exact_answer` verifier holds the expected answer and text-normalization rules. |
+| `verifier` | A private verifier kind and serialized JSON configuration. `exact_answer` checks text, `mcq_answer` checks a letter, and `predicted_action` checks a final function call. |
 | `schema_version` | Version of the serialized spec, checked when the record is loaded. |
 
 For example, a task asking “What is 7 + 5?” can have `answer_type=number` and a private expected answer of `12`. The plain, JSON, and `answer_call` conventions carry that answer as `12`, `{"answer":"12"}`, and a final `submit_answer({"answer":"12"})` call, respectively. Each extracts the string `12` for the same exact-answer verifier. A task asking for a function call has `answer_type=native_action`; its spec retains the source functions and message turns. The verifier and expected answer are never added to the model-visible instruction. Importers must make source output instructions neutral to the supported conventions, or reject rows they cannot safely rewrite. A raw-output requirement left in `instructions` would conflict with a JSON or function-call convention; `answer_type=text` alone cannot detect that conflict in prose.
+
+The TaskTrove MCQA importer reads archives from a cleaned release. See the [published TaskTrove Clean dataset](https://huggingface.co/datasets/open-athena/task-trove). Its caller passes the archive bytes, upstream subset, archive path, and release provenance to `read_archive`. The reader checks the subset and path against the archive manifest; the release URI and revision are caller-supplied provenance. The importer checks the source answer-line template before replacing it with a one-letter instruction. Its text answer works with plain and JSON submission conventions. The private `mcq_answer` verifier stores the expected letter and option count. Any author can use that verifier; it currently calls the shared `tasktrove-verify` MCQ scorer after extracting the submission. This importer supports only MCQ mode. Executable TaskTrove modes still need private resources and an isolated verifier runtime.
 
 ## What is a lowering?
 

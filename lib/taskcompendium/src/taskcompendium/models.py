@@ -10,7 +10,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-SCHEMA_VERSION = "0.5"
+SCHEMA_VERSION = "0.6"
 
 
 class AnswerType(StrEnum):
@@ -28,6 +28,7 @@ class VerifierKind(StrEnum):
 
     EXACT_ANSWER = "exact_answer"
     PREDICTED_ACTION = "predicted_action"
+    MCQ_ANSWER = "mcq_answer"
 
 
 class Source(BaseModel):
