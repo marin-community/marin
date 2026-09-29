@@ -57,9 +57,9 @@ function pretty(value, key = "") {
   return fields;
 }
 function textSection(title, value, open = false) { return fold(title, () => pretty(value), open); }
-function artifactLink(path, title = path) {
+function artifactLink(path, title = path, evidenceReviewId = reviewId) {
   const anchor = node("a", title);
-  anchor.href = `review.html?id=${encodeURIComponent(reviewId)}&artifact=${encodeURIComponent(path)}`;
+  anchor.href = `review.html?id=${encodeURIComponent(evidenceReviewId)}&artifact=${encodeURIComponent(path)}`;
   return anchor;
 }
 function findingView(finding) {
@@ -71,7 +71,7 @@ function findingView(finding) {
   return item;
 }
 const methodNames = {runtime_execution: "Task attempt & verifier", model_judgment: "Independent judge", synthesis: "Combined review", static_inspection: "Code / evidence inspection", static_audit: "Imported audit", human_review: "Human review"};
-function reviewCard(review, subjects, supersededIds) {
+function reviewCard(review, subjects, supersededIds, evidenceReviewId) {
   const subject = subjects.find(item => item.id === review.subject_id);
   const scope = subject?.level === "source" ? "Source" : "Task";
   const issues = review.findings.filter(item => item.kind === "issue");
@@ -92,7 +92,7 @@ function reviewCard(review, subjects, supersededIds) {
       const list = node("ul", undefined, "evidence-list");
       for (const evidence of review.evidence) {
         const row = node("li");
-        if (evidence.url.startsWith("file:")) row.append(artifactLink(evidence.snapshot_path));
+        if (evidence.url.startsWith("file:")) row.append(artifactLink(evidence.snapshot_path, evidence.snapshot_path, evidenceReviewId));
         else { const anchor = node("a", evidence.snapshot_path); anchor.href = evidence.url; anchor.target = "_blank"; anchor.rel = "noopener"; row.append(anchor); }
         list.append(row);
       }
@@ -268,6 +268,7 @@ async function artifactPage(record) {
     document.getElementById("title").textContent = record.source_id;
     document.title = `${record.source_id} · Quality and difficulty`;
     const supplemental = record.supplemental_reviews.flatMap(item => item.collection.reviews);
+    const supplementalCollections = new Map(record.supplemental_reviews.flatMap(item => item.collection.reviews.map(review => [review.id, item.id])));
     const reviews = [...collection.reviews, ...supplemental];
     const subjects = [...collection.subjects, ...record.supplemental_reviews.flatMap(item => item.collection.subjects)];
     const provenance = collection.execution_provenance;
@@ -353,7 +354,7 @@ async function artifactPage(record) {
     const supersededIds = new Set(reviews.map(review => review.supersedes_review_id).filter(Boolean));
     const sourceSynthesis = review => review.method === "synthesis" && subjects.find(subject => subject.id === review.subject_id)?.level === "source";
     const ordered = [...reviews].sort((a, b) => Number(supersededIds.has(a.id)) - Number(supersededIds.has(b.id)) || Number(sourceSynthesis(b)) - Number(sourceSynthesis(a)) || (b.reviewed_at || "").localeCompare(a.reviewed_at || ""));
-    ordered.forEach(review => container.append(reviewCard(review, subjects, supersededIds)));
+    ordered.forEach(review => container.append(reviewCard(review, subjects, supersededIds, supplementalCollections.get(review.id) || reviewId)));
     container.append(fold(`All saved evidence (${record.artifacts.length})`, () => {
       const list = node("ul", undefined, "evidence-list");
       record.artifacts.forEach(item => { const row = node("li"); row.append(artifactLink(item.path)); list.append(row); }); return list;
@@ -361,8 +362,8 @@ async function artifactPage(record) {
     if (record.supplemental_reviews.length) container.append(fold("Supplemental review collections", () => {
       const list = node("ul", undefined, "evidence-list");
       for (const item of record.supplemental_reviews) {
-        const row = node("li"), anchor = node("a", "Download verifier defect review");
-        anchor.href = `api/reviews/${encodeURIComponent(item.id)}`;
+        const row = node("li"), anchor = node("a", "Open supplemental review collection");
+        anchor.href = `review.html?id=${encodeURIComponent(item.id)}`;
         row.append(anchor); list.append(row);
       }
       return list;
