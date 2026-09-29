@@ -116,7 +116,7 @@ def task_packages_step(version: str) -> ArtifactStep[Artifact]:
         artifact_type=Artifact,
         run=remote(
             write_task_packages,
-            resources=ResourceConfig.with_cpu(cpu=2, ram="8g", disk="8g", target_cluster=CLUSTER),
+            resources=ResourceConfig.with_cpu(cpu=2, ram="8g", disk="8g"),
             pip_packages=[TASKCOMPENDIUM_REQUIREMENT],
         ),
         build_config=lambda ctx: TaskPackagesConfig(
