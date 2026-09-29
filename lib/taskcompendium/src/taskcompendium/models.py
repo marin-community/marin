@@ -24,6 +24,7 @@ class VerifierKind(StrEnum):
     """The registered grader used to check a submission."""
 
     EXACT_ANSWER = "exact_answer"
+    NUMERIC_ANSWER = "numeric_answer"
     MCQ_ANSWER = "mcq_answer"
 
 
