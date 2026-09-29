@@ -171,7 +171,7 @@ def test_marin_temp_bucket_routes_coreweave_to_bucket_root():
     :func:`s3_data_buckets`), so it gets a managed ``tmp/ttl=Nd/`` prefix, and the
     ``marin/`` data subdir is stripped.
     """
-    cfg = DataConfig(region_buckets={}, scheme="s3", root="s3://marin-us-east-02a/marin", ttl_days=(1, 3, 7))
+    cfg = DataConfig(region_buckets={}, scheme="s3", ttl_days=(1, 3, 7))
     with use_data_config(cfg):
         path = marin_temp_bucket(3, "store/x", source_prefix="s3://marin-us-east-02a/marin")
     assert path == "s3://marin-us-east-02a/tmp/ttl=3d/store/x"
@@ -191,7 +191,7 @@ def test_marin_temp_bucket_explicit_source_does_not_probe_ambient_prefix(monkeyp
 
 def test_marin_temp_bucket_routes_r2_to_bucket_root():
     """An R2 source prefix yields a TTL temp path at the R2 bucket root (unchanged)."""
-    cfg = DataConfig(region_buckets={}, scheme="s3", root="s3://marin-na/marin", ttl_days=(1, 3, 7))
+    cfg = DataConfig(region_buckets={}, scheme="s3", ttl_days=(1, 3, 7))
     with use_data_config(cfg):
         path = marin_temp_bucket(1, source_prefix="s3://marin-na/marin")
     assert path == "s3://marin-na/tmp/ttl=1d"
