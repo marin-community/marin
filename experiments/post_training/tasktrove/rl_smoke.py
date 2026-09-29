@@ -163,19 +163,6 @@ trainer:
     optimizer_config:
       lr: 2.0e-6
       max_grad_norm: 1.0
-    megatron_config:
-      tensor_model_parallel_size: 1
-      pipeline_model_parallel_size: 1
-      context_parallel_size: 1
-      expert_model_parallel_size: 1
-      expert_tensor_parallel_size: 1
-  ref:
-    megatron_config:
-      tensor_model_parallel_size: 1
-      pipeline_model_parallel_size: 1
-      context_parallel_size: 1
-      expert_model_parallel_size: 1
-      expert_tensor_parallel_size: 1
 generator:
   backend: vllm
   model_dtype: bfloat16

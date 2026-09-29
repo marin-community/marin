@@ -282,9 +282,9 @@ def apply_setting(config: dict, setting: Setting) -> None:
     """Set one dotted key in the assembled config; unknown keys require creation permission."""
     key, value, allows_new_key = setting
     if key == "entrypoint":
-        raise click.BadParameter("this launcher is the fully asynchronous loop; entrypoint cannot change")
+        raise click.BadParameter("this launcher uses the standard rollout buffer; entrypoint cannot change")
     if key == "trainer.placement.colocate_policy_ref":
-        raise click.BadParameter("SkyRL artifact runs always place the reference model with the policy")
+        raise click.BadParameter("this Snowball launcher places the reference model with the policy")
     if key in ROLE_PLAN_SETTINGS:
         raise click.BadParameter(f"{key!r} is fixed by the role plan; change SNOWBALL_RECIPE instead")
     if key == "trainer.resume_mode":
