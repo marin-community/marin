@@ -170,7 +170,8 @@ DEVICE_FLOPS: dict[str, dict[str, float]] = {
     },
     # AMD Instinct GPUs
     # AMD datasheets publish dense peaks alongside the structured-sparsity figures; these
-    # are the dense peaks, with the matrix figure for fp32/fp64.
+    # are the dense peaks. fp32 and fp64 are the datasheet's "FP32 matrix" and "FP64 matrix"
+    # rows, which the MI300X and MI325X datasheets both list at 163.4 TFLOPs.
     # source: https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/data-sheets/amd-instinct-mi300x-data-sheet.pdf
     "mi300x": {
         "fp64": 163.4e12,
