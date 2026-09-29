@@ -24,6 +24,14 @@ harbor = { git = "https://github.com/marin-community/harbor.git", rev = "ef1eaf2
 [tool.hatch.build.targets.wheel]
 packages = ["src/taskcompendium"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"src/taskcompendium/providers/nemo_workplace/vendor/csv_data/processed/analytics_data.csv" = "taskcompendium/providers/nemo_workplace/vendor/csv_data/processed/analytics_data.csv"
+"src/taskcompendium/providers/nemo_workplace/vendor/csv_data/processed/calendar_events.csv" = "taskcompendium/providers/nemo_workplace/vendor/csv_data/processed/calendar_events.csv"
+"src/taskcompendium/providers/nemo_workplace/vendor/csv_data/processed/customer_relationship_manager_data.csv" = "taskcompendium/providers/nemo_workplace/vendor/csv_data/processed/customer_relationship_manager_data.csv"
+"src/taskcompendium/providers/nemo_workplace/vendor/csv_data/processed/emails.csv" = "taskcompendium/providers/nemo_workplace/vendor/csv_data/processed/emails.csv"
+"src/taskcompendium/providers/nemo_workplace/vendor/csv_data/processed/project_tasks.csv" = "taskcompendium/providers/nemo_workplace/vendor/csv_data/processed/project_tasks.csv"
+"src/taskcompendium/providers/nemo_workplace/vendor/csv_data/raw/email_addresses.csv" = "taskcompendium/providers/nemo_workplace/vendor/csv_data/raw/email_addresses.csv"
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 timeout = 60

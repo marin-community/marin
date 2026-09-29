@@ -6,6 +6,8 @@
 import asyncio
 import hashlib
 import json
+import shutil
+import subprocess
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
 from pathlib import Path
@@ -74,6 +76,42 @@ def test_workplace_import_rejects_unpinned_row_and_changed_tools(monkeypatch):
     monkeypatch.setattr("taskcompendium.importers.nemo_workplace.ROW_SHA256", hashlib.sha256(changed).hexdigest())
     with pytest.raises(ValueError, match="pinned provider"):
         import_row(changed)
+
+
+def test_workplace_wheel_installs_every_pinned_seed_file(tmp_path):
+    """Build under the repository's CSV ignore rule, as a git dependency build does."""
+    package_root = Path(__file__).parents[1]
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    (checkout / ".gitignore").write_text("*.csv\n")
+    project = checkout / "taskcompendium"
+    project.mkdir()
+    shutil.copy2(package_root / "pyproject.toml", project / "pyproject.toml")
+    shutil.copytree(package_root / "src", project / "src", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+
+    wheel_dir = tmp_path / "wheels"
+    build = subprocess.run(
+        ["uv", "build", "--offline", "--project", str(project), "--wheel", "--out-dir", str(wheel_dir)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert build.returncode == 0, build.stderr
+    wheel = next(wheel_dir.glob("taskcompendium-*.whl"))
+    installed = tmp_path / "installed"
+    install = subprocess.run(
+        ["uv", "pip", "install", "--offline", "--no-deps", "--target", str(installed), str(wheel)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert install.returncode == 0, install.stderr
+
+    provenance = json.loads(PROVENANCE.read_text())
+    seed = installed / "taskcompendium/providers/nemo_workplace/vendor/csv_data"
+    assert {path.relative_to(seed).as_posix() for path in seed.rglob("*.csv")} == set(provenance["seed"]["files"])
+    for relative, record in provenance["seed"]["files"].items():
+        assert hashlib.sha256((seed / relative).read_bytes()).hexdigest() == record["raw_sha256"]
 
 
 async def test_workplace_success_wrong_and_noop_state():
