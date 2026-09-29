@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "RL data quality review collection (proposal)",
+  "title": "RL data quality review collection",
   "description": "Versioned review observations with explicit subjects, evidence, and separate tag assignments.",
   "type": "object",
   "properties": {
@@ -30,6 +30,7 @@
       }
     },
     "source_mappings": {
+      "description": "Imported reviews map their upstream subjects to Atlas sources here. Native reviews identify the Atlas source directly in each subject and leave this list empty.",
       "type": "array",
       "items": {
         "$ref": "#/$defs/sourceMapping"
