@@ -231,49 +231,60 @@ median is the stable estimate:
 README run: a 64-step boundary-off rerun of the d1280 cell
 ([moe_baseline_probe_d1280_ep1](https://wandb.ai/marin-community/marin_moe/runs/moe_baseline_probe_d1280_ep1),
 September 28, `launch_baseline_probe.py`) measured 160,924 tok/s median,
-vs 171,910 for the June README run. The June baseline ran jax 0.9.2 /
-libtpu 0.0.39; September runs use jax 0.11.1 / libtpu 0.0.46, and that
-stack is ~6.4% slower for this cell. Same-stack, the variant is at parity
-with the baseline (160,661 vs 160,924, −0.16%) and the effective speedup
-is 1.054. The d512–d1024 rows compare September variants to June baselines
-across the same stack boundary; there the variants beat the June baselines
-outright, so those speedups are not inflated by the drift.
+vs 171,910 for the June README run.
+
+**2026-09-29 correction:** the ~6.4% gap is not a jax-version regression
+— controlled jax 0.9.2 vs 0.11.1 probes on this cell differ by only
+0.07%. The June baseline ran different attention windows than every
+September run: June code used short/long windows of 1024/2048
+(`short = cfg.sliding_window // 2`), while the current code uses short
+2048 / long full-context plus the last-layer long rule — and both eras
+log `sliding_window=2048`, so the config match did not catch it (#9529).
+A same-stack June-window probe is queued to quantify the split.
 
 Matched-pair training curves (d1280): [W&B report — variant vs baseline](https://wandb.ai/marin-community/marin_moe/reports/moe_boundary-d1280-matched-pair:-variant-vs-baseline--VmlldzoxODAyMDY5MQ==).
 
 Reading:
 
+- **2026-09-29: the loss and speedup readouts below are confounded by an
+  attention-window semantics change.** The June baselines ran short/long
+  windows of 1024/2048; every September variant run used the current
+  semantics — short 2048, long full-context, plus the last-layer long
+  rule. Both eras log `sliding_window=2048`, so config matching did not
+  catch it. Corrected for window pattern, the variant arms ran ~10% more
+  real attention compute per token than the June baselines at every
+  cell, and via the baseline law the windows alone imply a larger loss
+  win than the variant measured (d512 −0.0179 vs −0.0007; d768 −0.0136
+  vs −0.0087; d1024 −0.0136 vs −0.0066; d1280 −0.0120 vs −0.0065), so the
+  operator's Δloss cannot be separated from the confound. A
+  matched-window rerun is required before any gate-grade conclusion; the
+  numbers below are retained as the record of what was measured. The one
+  unconfounded result is throughput parity of the operator itself
+  (same-stack same-window variant vs probe: 160,661 vs 160,924, −0.16%).
 - **The recipe, not the operator, caused the exploratory deficits.** Under
   the matched recipe every α=1.0 arm beats the baseline on loss at every
   scale (d512 −0.0007, d768 −0.0087, d1024 −0.0066, d1280 −0.0065) and the
   variant's loss curve is ahead of the baseline's at every eval point from
   step 2000 onward at d1280. α=1.0 stays the representative (α=0.707 loses
-  at d512).
+  at d512). *(Confounded — see the window note above; retained for the
+  record.)*
 - **Effective speedup passes at all four scales (1.005 / 1.050 / 1.061 /
   1.054).** With median-based throughput the earlier "d512 fails on
   throughput" reading was a tail-contamination artifact: the operator costs
   ~0% at every scale (+0.2%/−0.8%/+1.0% at d512–d1024, −0.16% same-stack at
-  d1280), not the −9.4% the last-200 averages suggested.
+  d1280), not the −9.4% the last-200 averages suggested. *(The speedup
+  ratios themselves are confounded by the window change — see above;
+  retained for the record.)*
 - **Gate 2 fails on the projection criterion only, and narrowly.** The
   d1280 speedup above uses the same-stack baseline throughput (see the
-  probe note above) — against the June README run it would read 0.987, but
-  that compares across a jax 0.9.2 → 0.11.1 stack boundary. The 4-point
-  refit `1.6 + 83.40·C^−0.0929` (α SE 0.0007) extrapolates to +0.0026 worse
-  at 1e21 and +0.0052 worse at 1e23 vs the baseline law
+  probe note above) — against the June README run it would read 0.987.
+  The 4-point refit `1.6 + 83.40·C^−0.0929` (α SE 0.0007) extrapolates to
+  +0.0026 worse at 1e21 and +0.0052 worse at 1e23 vs the baseline law
   `1.6 + 88.32·C^−0.0941`, despite the variant beating the baseline law at
   all four measured points (−0.0155/−0.0033/−0.0065/−0.0015). Cell
   residuals (±0.004) are the same order as the projection deltas, so the
-  extrapolation flip is not resolved by this data.
-- **d1280 stack drift (June → September).** The June README baseline
-  (171,910 tok/s, jax 0.9.2 / libtpu 0.0.39) is not comparable to
-  September runs: a same-stack 64-step boundary-off probe measured 160,924
-  tok/s (jax 0.11.1 / libtpu 0.0.46), a −6.4% stack regression specific to
-  this cell — the d1024 baseline crossed the same boundary with no
-  penalty, so the regression interacts with the d1280/batch-256 (HBM-edge)
-  config. The boundary operator itself costs ~0% at every scale: same-stack
-  variant vs baseline is 160,661 vs 160,924 (−0.16%). The variant's
-  restore OOM (131 MB free of 32.9 GB) reflects the same tight memory
-  budget both models share on the current stack.
+  extrapolation flip is not resolved by this data. *(Confounded — see the
+  window note above.)*
 - The pre-fix d512/d768 runs (no `_matched` suffix) are exploratory: they
   used the heuristic-derived optimizer batch (d768: 128 vs the cell's 64)
   and a 5% LR floor, so their comparisons against the baseline table are
@@ -290,9 +301,10 @@ Reading:
   come from the parent template's registered `grug_moe_muonh_v1`).
 - [`launch.py`](./launch.py) — `GrugMoeLaunchConfig` and trial wiring; copied
   from the parent.
-- [`launch_baseline_probe.py`](./launch_baseline_probe.py) — same-stack
-  boundary-off throughput probe for a baseline cell (used to separate the
-  June→September stack drift from operator cost at d1280).
+- [`launch_baseline_probe.py`](./launch_baseline_probe.py) — boundary-off
+  throughput probe for a baseline cell on the current stack and current
+  window semantics (used at d1280 to separate operator cost from the
+  June-window vs current-window gap, #9529).
 - [`launch_compute_opt.py`](./launch_compute_opt.py) — boundary-operator
   compute-optimal cells at the four May Recipe baseline points, with the
   legacy measurement conditions pinned (seq 4096, PKO on, long RoPE on,
