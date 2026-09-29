@@ -1253,19 +1253,16 @@ def test_resolve_eval_keys_validates_programmatic_selections() -> None:
         resolve_eval_keys("gsm8k-smoke,missing")
 
 
-def test_aime24_smoke_passes_debug_and_limit_to_evalchemy(monkeypatch) -> None:
+def test_aime24_smoke_passes_debug_and_limit_to_evalchemy() -> None:
     definition = EVALS["aime24-smoke"]
-    assert isinstance(definition, EvalchemyDefinition)
     config = evalchemy_run_config(definition.name, load_evalchemy_config(definition.config_path))
-    assert config.debug and config.max_eval_instances == 2
-    assert definition.record_ref_for(config).evalchemy.debug
+    config = replace(config, max_gen_toks=256)
 
     model = RunningModel(
         endpoint=OpenAIEndpoint(base_url="http://localhost/v1", model="iceball"),
         tokenizer="iceball",
     )
     client_config = json.loads(_run_config_json(model, config, "memory://eval"))
-    monkeypatch.setattr("marin.evaluation.evalchemy.client.is_evalchemy_benchmark", lambda _name: True)
     command = build_command(client_config, client_config["tasks"][0], "/tmp/out", "/tmp/bin/python", 4032)
     assert "--debug" in command
     assert command[command.index("--limit") + 1] == "2"

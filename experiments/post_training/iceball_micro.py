@@ -201,8 +201,6 @@ generator:
   enforce_eager: false
   run_engines_locally: true
   weight_sync_backend: nccl
-  async_engine: true
-  batched: true
   sampling_params:
     temperature: 1.0
     top_p: 1.0

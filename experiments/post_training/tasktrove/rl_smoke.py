@@ -184,8 +184,6 @@ generator:
   enforce_eager: false
   run_engines_locally: true
   weight_sync_backend: nccl
-  async_engine: true
-  batched: false
   enable_http_endpoint: true
   sampling_params:
     temperature: 1.0
@@ -197,9 +195,9 @@ data:
   val_data: []
 
 trajectory_runner:
-  process_pool:
-    num_coordinators: 2
-    cpus_per_coordinator: 4
+  rollout_workers:
+    num_workers: 2
+    cpus_per_worker: 4
 """
 
 

@@ -414,8 +414,7 @@ class SkyRLOutputPaths:
     terminal_manifest_uri: str
 
 
-# The runtime profile and trainer strategy must select the same installed backend.
-_MEGATRON_STRATEGY = "megatron"
+_TRAINING_STRATEGY = "megatron"
 
 _MISSING_CONFIG_VALUE = object()
 
@@ -451,7 +450,6 @@ def _role_plan_config_values(role_plan: SkyRLRolePlan) -> dict[str, object]:
         "trainer.train_batch_size": role_plan.train_batch_size,
         "trainer.policy_mini_batch_size": role_plan.policy_mini_batch_size,
         "trainer.micro_train_batch_size_per_gpu": role_plan.micro_train_batch_size_per_gpu,
-        "trainer.micro_forward_batch_size_per_gpu": role_plan.micro_train_batch_size_per_gpu,
         "generator.num_inference_engines": role_plan.num_inference_engines,
         "generator.inference_engine_tensor_parallel_size": role_plan.inference_engine_tensor_parallel_size,
         "generator.inference_engine_pipeline_parallel_size": role_plan.inference_engine_pipeline_parallel_size,
@@ -491,16 +489,6 @@ def _materialize_role_plan_config(config: dict[str, object], role_plan: SkyRLRol
         _set_config_value(config, dotted_key, value)
 
 
-def _validate_entrypoint_config(config: dict[str, object], role_plan: SkyRLRolePlan) -> None:
-    """Reject entrypoint-specific constraints that MarinSkyRL would otherwise discover at startup."""
-    entrypoint = _declared_config_value(config, "entrypoint")
-    if entrypoint == "fully_async" and role_plan.train_batch_size != role_plan.policy_mini_batch_size:
-        raise ValueError(
-            "SkyRL fully_async entrypoint requires train_batch_size == policy_mini_batch_size; "
-            f"got {role_plan.train_batch_size} and {role_plan.policy_mini_batch_size}"
-        )
-
-
 def _effective_strategy(config: dict[str, object]) -> str | None:
     """Return the trainer strategy, or None when the recipe leaves it to Hydra."""
     trainer = config.get("trainer")
@@ -509,9 +497,9 @@ def _effective_strategy(config: dict[str, object]) -> str | None:
 
 def _validate_runtime_strategy(config: dict[str, object]) -> None:
     strategy = _effective_strategy(config)
-    if strategy is not None and strategy != _MEGATRON_STRATEGY:
+    if strategy is not None and strategy != _TRAINING_STRATEGY:
         raise ValueError(
-            f"SkyRL installs the {_MEGATRON_STRATEGY!r} backend, "
+            f"SkyRL installs the {_TRAINING_STRATEGY!r} backend, "
             f"but config_yaml asks for trainer.strategy={strategy!r}"
         )
 
@@ -557,7 +545,6 @@ def _validate_skyrl_recipe(
     config = _parsed_config(config_yaml)
     _validate_runtime_strategy(config)
     _validate_role_plan_config(config, topology.role_plan)
-    _validate_entrypoint_config(config, topology.role_plan)
     _validate_skyrl_backend_constraints(config, topology)
 
 
@@ -747,7 +734,7 @@ def _launch_config_yaml(
         },
         "runtime": {
             "launcher_commit": spec.runtime.commit,
-            "profile": _MEGATRON_STRATEGY,
+            "profile": _TRAINING_STRATEGY,
             "entrypoint": "",
             "experiments_dir": "/app/experiments",
             "task_env": task_env,

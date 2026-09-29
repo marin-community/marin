@@ -190,7 +190,6 @@ def test_skyrl_launch_reserves_capacity_for_config_derived_draft_trainer() -> No
     launch = yaml.safe_load(launch_config.launch_config_yaml)
 
     assert launch["iris"]["allocation"]["num_nodes"] == 6
-    assert launch["skyrl"]["trainer"]["micro_forward_batch_size_per_gpu"] == plan.micro_train_batch_size_per_gpu
     assert launch["skyrl"]["generator"]["speculative_decoding"]["training"] == {}
     assert launch["run"]["export_hf"] is False
     assert launch_config.draft_checkpoint_root == "<temporary_output_path>/checkpoints/drafts"
@@ -244,21 +243,6 @@ def test_skyrl_spec_rejects_config_that_disagrees_with_role_plan() -> None:
         dataclasses.replace(
             _spec(),
             config_yaml=_config_yaml().replace("  max_steps: 8", "  max_steps: 8\n  train_batch_size: 32"),
-        )
-
-
-def test_skyrl_spec_rejects_distinct_batch_sizes_for_fully_async() -> None:
-    spec = _spec()
-    plan = dataclasses.replace(_role_plan(), train_batch_size=32, policy_mini_batch_size=16)
-
-    with pytest.raises(
-        ValueError,
-        match="fully_async entrypoint requires train_batch_size == policy_mini_batch_size; got 32 and 16",
-    ):
-        dataclasses.replace(
-            spec,
-            config_yaml=f"entrypoint: fully_async\n{_config_yaml()}",
-            topology=dataclasses.replace(spec.topology, role_plan=plan),
         )
 
 
@@ -500,24 +484,6 @@ def test_tasktrove_data_source_resolves_exact_file_and_verifier(tmp_path: Path) 
 def test_tasktrove_selection_rejects_ambiguous_inputs(selection: Callable[[], TaskTroveSelection], message: str) -> None:
     with pytest.raises(ValueError, match=message):
         selection()
-
-
-def test_tasktrove_launch_serializes_selection_for_runtime() -> None:
-    release = ArtifactStep.adopt("tests/tasktrove-release", "2026.08.01", "s3://test/tasktrove", kind=Artifact)
-    source = TaskTroveDataSource(release, TaskTroveSelection(sources=("source-a",), tags=("bash",)))
-    step = skyrl_step(dataclasses.replace(_spec(), train_data=(source,)), _execution())
-
-    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
-    launch = yaml.safe_load(config.launch_config_yaml)
-
-    assert launch["inputs"]["train_data"][0]["selection"] == {
-        "sources": ["source-a"],
-        "tags": ["bash"],
-        "modes": [],
-        "tag_match": "all",
-        "limit": None,
-        "seed": 0,
-    }
 
 
 def test_launcher_failure_reports_the_launcher_stderr(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -138,8 +138,6 @@ def draft_sft_plan(
             "enforce_eager": False,
             "run_engines_locally": True,
             "weight_sync_backend": "nccl",
-            "async_engine": True,
-            "batched": False,
             "engine_init_kwargs": {"async_scheduling": False},
             "speculative_decoding": {
                 "method": "eagle3",
