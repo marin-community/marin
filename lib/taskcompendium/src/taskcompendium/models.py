@@ -19,6 +19,7 @@ class AnswerType(StrEnum):
     NUMBER = "number"
     FILE = "file"
     WORKSPACE_STATE = "workspace_state"
+    STATE = "state"
     NATIVE_ACTION = "native_action"
 
 
@@ -26,6 +27,7 @@ class VerifierKind(StrEnum):
     """The registered grader used to check a submission."""
 
     EXACT_ANSWER = "exact_answer"
+    STATE_MATCH = "state_match"
 
 
 class Source(BaseModel):

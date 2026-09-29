@@ -9,7 +9,7 @@ from typing import Any
 from harbor.models.trial.config import TrialConfig
 from harbor.models.trial.result import TrialResult
 from harbor.trial.trial import Trial
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from taskcompendium.lowering import (
     DIRECT_CHAT_ENVIRONMENT,
@@ -23,6 +23,7 @@ from taskcompendium.lowering import (
     read_specification,
     read_submission_convention,
     validate_environment_config,
+    validate_exported_resources,
 )
 from taskcompendium.submission import AnswerFormat
 
@@ -67,10 +68,17 @@ async def run_trial(
     """Run a lowered task and return Harbor's trial result."""
     if environment_config != read_environment_config(task_dir / ENVIRONMENT_CONFIG_FILE):
         raise ValueError("Launch environment configuration differs from the exported task")
-    validate_environment_config(read_specification(task_dir / SPECIFICATION_FILE), environment_config)
-    convention = read_submission_convention(task_dir / SUBMISSION_CONVENTION_FILE)
+    specification = read_specification(task_dir / SPECIFICATION_FILE)
+    validate_environment_config(specification, environment_config)
+    validate_exported_resources(specification, task_dir)
+    try:
+        convention = read_submission_convention(task_dir / SUBMISSION_CONVENTION_FILE)
+    except (ValueError, ValidationError):
+        if not isinstance(launch, ReplayLaunch) or environment_config.environment != DIRECT_CHAT_ENVIRONMENT:
+            raise
+        convention = None  # The verifier records invalid private metadata as an ungraded outcome.
     stateful = environment_config.environment == STATEFUL_ENVIRONMENT
-    if stateful != (convention.answer_format == AnswerFormat.STATE):
+    if convention is not None and stateful != (convention.answer_format == AnswerFormat.STATE):
         raise ValueError("Submission convention differs from environment binding")
     if isinstance(launch, ReplayLaunch):
         if stateful:

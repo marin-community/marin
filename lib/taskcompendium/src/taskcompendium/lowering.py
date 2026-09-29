@@ -6,6 +6,7 @@
 import hashlib
 import importlib
 import json
+import stat
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
@@ -14,6 +15,15 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from taskcompendium.models import SCHEMA_VERSION, AnswerType, TaskSpec
+from taskcompendium.resources import (
+    MAX_RESOURCE_BYTES,
+    MAX_TOTAL_RESOURCE_BYTES,
+    ResourceResolver,
+    ResourceVisibility,
+    materialize_resources,
+    validate_resource_path,
+    validate_resources,
+)
 from taskcompendium.submission import SubmissionConvention, render_instruction
 from taskcompendium.verifier_registry import validate_verifier
 
@@ -86,7 +96,9 @@ def validate_provider_surface(config: HarborEnvironmentConfig) -> None:
         if getattr(provider, field) != expected:
             raise ValueError(f"Provider {field} differs from Harbor binding")
     definitions = provider.TOOL_DEFINITIONS
-    digest = hashlib.sha256(json.dumps(definitions, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    digest = hashlib.sha256(
+        json.dumps(definitions, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    ).hexdigest()
     if digest != config.tools_sha256:
         raise ValueError("Provider tool schemas differ from Harbor binding")
     names = tuple(definition["function"]["name"] for definition in definitions)
@@ -198,21 +210,79 @@ def read_submission_convention(path: Path) -> SubmissionConvention:
     return SubmissionConvention.model_validate_json(path.read_text())
 
 
+def validate_exported_resources(specification: TaskSpec, task_dir: Path) -> None:
+    """Recheck pinned payloads and path safety in the exported task before launch."""
+    total_bytes = 0
+    for resource in specification.resources:
+        root = (
+            task_dir / "environment" / "inputs"
+            if resource.visibility == ResourceVisibility.AGENT
+            else task_dir / "private_resources"
+        )
+        relative = validate_resource_path(resource.path)
+        if root.is_symlink() or root.parent.is_symlink():
+            raise ValueError(f"Exported resource root is a symlink: {root}")
+        current = root
+        for part in relative.parts:
+            current = current / part
+            if current.is_symlink():
+                raise ValueError(f"Exported resource symlink: {current}")
+        if not current.is_file():
+            raise ValueError(f"Missing exported resource: {resource.path}")
+        if current.stat().st_size > MAX_RESOURCE_BYTES:
+            raise ValueError("Exported resources exceed size limits")
+        payload = current.read_bytes()
+        total_bytes += len(payload)
+        if len(payload) > MAX_RESOURCE_BYTES or total_bytes > MAX_TOTAL_RESOURCE_BYTES:
+            raise ValueError("Exported resources exceed size limits")
+        if resource.reference is not None:
+            digest = resource.reference.sha256
+        else:
+            assert resource.content is not None
+            digest = hashlib.sha256(resource.content.encode()).hexdigest()
+        if hashlib.sha256(payload).hexdigest() != digest:
+            raise ValueError(f"Exported resource digest mismatch: {resource.path}")
+        if bool(current.stat().st_mode & stat.S_IXUSR) != resource.executable:
+            raise ValueError(f"Exported resource executable bit differs: {resource.path}")
+
+
 def lower_to_harbor(
     specification: TaskSpec,
     convention: SubmissionConvention,
     environment_config: HarborEnvironmentConfig,
     destination: Path,
+    *,
+    trusted_resolver: ResourceResolver | None = None,
 ) -> Path:
     """Write one custom-verifier task; launch agent selection remains separate."""
     validate_environment_config(specification, environment_config)
     validate_verifier(specification.verifier)
+    validate_resources(specification.resources, trusted_resolver=trusted_resolver)
+    if environment_config.environment == DIRECT_CHAT_ENVIRONMENT and any(
+        resource.visibility == ResourceVisibility.AGENT for resource in specification.resources
+    ):
+        raise ValueError("Direct chat cannot expose agent-visible files")
     instruction = render_instruction(specification, convention)
     destination.mkdir(parents=True, exist_ok=False)
     (destination / "environment").mkdir()
     (destination / "instruction.md").write_text(instruction)
-    (destination / "task.toml").write_text('version = "1.0"\n\n[environment]\nallow_internet = false\n')
+    (destination / "task.toml").write_text(
+        'version = "1.0"\n\n[environment]\nallow_internet = false\n\n[verifier]\nenvironment_mode = "shared"\n'
+    )
     (destination / SPECIFICATION_FILE).write_text(specification.model_dump_json(indent=2) + "\n")
     (destination / ENVIRONMENT_CONFIG_FILE).write_text(environment_config.model_dump_json(indent=2) + "\n")
     (destination / SUBMISSION_CONVENTION_FILE).write_text(convention.model_dump_json(indent=2) + "\n")
+    if specification.resources:
+        materialize_resources(
+            specification.resources,
+            destination / "environment" / "inputs",
+            visibility=ResourceVisibility.AGENT,
+            trusted_resolver=trusted_resolver,
+        )
+        materialize_resources(
+            specification.resources,
+            destination / "private_resources",
+            visibility=frozenset({ResourceVisibility.VERIFIER, ResourceVisibility.ORACLE}),
+            trusted_resolver=trusted_resolver,
+        )
     return destination
