@@ -1264,7 +1264,7 @@ secrets = [
 [[package]]
 name = "marinskyrl"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/MarinSkyRL.git?branch=main#72cc492d3ba03941715786f558d6be6ae1a52238" }
+source = { git = "https://github.com/marin-community/MarinSkyRL.git?branch=main#3b620d8b2bc2ac927d1e4b7004e2d456474e714a" }
 dependencies = [
     { name = "aiohttp" },
     { name = "boto3" },

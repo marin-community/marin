@@ -209,13 +209,10 @@ for applet pages on Marina's main host redirect there. The applet host returns
 a comma-separated set of user IDs allowed to update, roll back, or archive any
 applet; otherwise only the recorded owner may do so.
 
-`MARINA_APPLET_HOSTS` assigns named hosts to applet UUIDs, for example
-`zephyr.marina.oa.dev=6c2b0dc9-9a31-4777-82d4-e759c0292aa3`. Each host serves
+`MARINA_APPLET_HOSTS` can assign named hosts to applet UUIDs. Each host serves
 only its assigned applet behind the same authentication. Its root redirects
 to `/v/<current>/` on that host; assets, queries, and Python APIs remain pinned
 to that revision. Existing URLs on `MARINA_APPLET_ORIGIN` remain valid.
-Declare the host in the deployment's `APPLET_HOSTS` map to provision its DNS
-record and Cloud Run domain mapping.
 
 ## Deploying
 

@@ -9,7 +9,10 @@ inspectable (own record, own eval-child job and logs, own parquet), all sharing 
 scans those records into its Postgres query index.
 
 `marin.evaluation.runner` opens one candidate `remote_inference` session and optionally one shared
-hosted-judge session, then passes their Iris endpoint URLs to each executor. An evaluation failure is recorded and later evaluations continue. If inference fails,
+hosted-judge session. Evalchemy resolves the serving endpoint's direct address on its Iris cluster
+before each evaluation. Harbor keeps the minted capability URLs because its sandboxes reach the
+candidate and hosted judge from outside Iris. The orchestrator scrapes vLLM metrics through the
+direct address. An evaluation failure is recorded and later evaluations continue. If inference fails,
 the current and remaining evaluations are recorded as infrastructure failures. This directory holds
 the model and suite catalogs, Marin fleet policy, and CLI choices.
 
@@ -162,6 +165,14 @@ aggregate JSON and `--log_samples` JSONL directly as FineStore source artifacts.
 its native results and trajectories and writes flattened trajectory steps to the `steps` table; its
 ordinary job tree remains resume state. Load the normalized tables with
 pandas/duckdb, or read rows back with `EvalSample.model_validate`, to zoom into any run.
+
+Evalchemy transport failures retain their `failure_category` in the source artifact and an
+infrastructure-error marker in the normalized sample. Coverage excludes these items from `n_scored`,
+and metrics are recomputed from scored items. A run with infrastructure errors and less than 90%
+attempted-item coverage records `infra_failed`; pipeline steps do not cache it as a successful eval.
+
+For repeated Evalchemy samples, `samples.trial_id` is the string form of `sample_repeat`; a
+single-attempt sample leaves it empty. This keeps independent answers to the same question distinct.
 
 Evaldash treats these records as the source of truth. Its background ingestor scans every configured
 object-store prefix and upserts the `eval_runs` and `eval_metrics` tables implemented in
