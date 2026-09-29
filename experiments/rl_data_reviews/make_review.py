@@ -815,7 +815,7 @@ def independent_reviews(
             validate_collection(bundle, output, schema)
         write_json(output / "panel-reviews.partial.json", bundle)
         print(
-            f'Task {index + 1}/{n}: {task.source_id}/{task.id}; verifier={verification["status"]}; judges=3',
+            f'Task {index + 1}/{n}: {task.source_id}/{task.id}; verifier={verification["status"]}; judges={PANEL_SIZE}',
             flush=True,
         )
     return PanelReviews(bundle, source_populations, task_sources, task_coverages)

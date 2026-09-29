@@ -59,7 +59,7 @@ def difficulty_protocol_status(report: dict[str, Any]) -> tuple[str, str]:
     if any(protocol.get(key) != value for key, value in DIFFICULTY_LIMITS.items()):
         return "invalid", "The recorded context or output limits do not match the current protocol."
     models = report["models"]
-    if len(models) != 3 or {model.get("size") for model in models} != DIFFICULTY_MODELS.keys():
+    if len(models) != len(DIFFICULTY_MODELS) or {model.get("size") for model in models} != DIFFICULTY_MODELS.keys():
         return "invalid", "The current comparison requires one Small, Large and Hosted model."
     for model in models:
         if model.get("model") != DIFFICULTY_MODELS[model["size"]]:

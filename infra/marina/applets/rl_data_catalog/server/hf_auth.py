@@ -20,7 +20,7 @@ class HFCredentialError(RuntimeError):
 
 
 def runtime_hf_token() -> str:
-    """Read the explicitly configured secret using Marina's ambient Google identity."""
+    """Return the Hugging Face token from the configured runtime secret."""
     try:
         credentials, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
         with AuthorizedSession(credentials) as session:
