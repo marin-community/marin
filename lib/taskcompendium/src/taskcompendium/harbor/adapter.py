@@ -42,7 +42,7 @@ CHAT_COMPLETIONS_PATH = "/chat/completions"
 # Harbor normally downloads agent logs and task-produced artifacts from these paths.
 AGENT_LOGS_PATH = "/logs/agent"
 ARTIFACTS_LOGS_PATH = "/logs/artifacts"
-# Harbor clears verifier output and private verifier inputs before running a trial.
+# Harbor uses these paths for verifier output and private verifier inputs.
 VERIFIER_LOGS_PATH = "/logs/verifier"
 TESTS_PATH = "/tests"
 # Direct chat writes logs on the host, so these bookkeeping operations are no-ops.
