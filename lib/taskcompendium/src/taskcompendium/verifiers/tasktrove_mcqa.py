@@ -39,6 +39,5 @@ class TaskTroveMcqaVerifier(Verifier):
 
 
 def tasktrove_mcqa_verifier(expected: str, options: int) -> VerifierSpec:
-    """Construct a private TaskTrove MCQA verifier descriptor."""
     verifier = TaskTroveMcqaVerifier(expected=expected.strip().upper(), options=options)
     return VerifierSpec(kind=VerifierKind.TASKTROVE_MCQA, parameters_json=verifier.model_dump_json())
