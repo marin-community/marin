@@ -25,6 +25,7 @@ from taskcompendium.lowering import (
     select_lowerings,
 )
 from taskcompendium.models import AnswerType, Source, TaskRequirements, TaskSpec, VerifierKind, VerifierSpec
+from taskcompendium.resources import ResourceVisibility, TaskResource
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
 
 
@@ -127,6 +128,40 @@ async def test_direct_chat_exact_comparison_uses_pinned_normalization(tmp_path, 
     )
 
     assert result.verifier_result.rewards == {"reward": 1.0}
+
+
+async def test_direct_chat_private_resource_remains_verifier_only(tmp_path, specification):
+    specification = specification.model_copy(
+        update={"resources": (TaskResource(path="reference.txt", visibility=ResourceVisibility.VERIFIER, content="12"),)}
+    )
+    binding = HarborEnvironmentConfig()
+    task = lower_to_harbor(
+        specification,
+        SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        binding,
+        tmp_path / "task",
+    )
+
+    result = await run_trial(task, binding, ReplayLaunch(response="12"), tmp_path / "trials", "run")
+
+    assert result.verifier_result.rewards == {"reward": 1.0}
+    assert (task / "private_resources/reference.txt").read_text() == "12"
+    assert not (task / "environment/inputs").exists()
+
+
+def test_direct_chat_rejects_agent_resource_before_export(tmp_path, specification):
+    specification = specification.model_copy(
+        update={"resources": (TaskResource(path="input.txt", visibility=ResourceVisibility.AGENT, content="secret"),)}
+    )
+
+    with pytest.raises(ValueError, match="cannot expose agent-visible files"):
+        lower_to_harbor(
+            specification,
+            SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+            HarborEnvironmentConfig(),
+            tmp_path / "task",
+        )
+    assert not (tmp_path / "task").exists()
 
 
 async def test_direct_chat_harbor_trial_records_private_metadata_failure(tmp_path, specification):

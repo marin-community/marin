@@ -272,13 +272,14 @@ def lower_to_harbor(
     (destination / SPECIFICATION_FILE).write_text(specification.model_dump_json(indent=2) + "\n")
     (destination / ENVIRONMENT_CONFIG_FILE).write_text(environment_config.model_dump_json(indent=2) + "\n")
     (destination / SUBMISSION_CONVENTION_FILE).write_text(convention.model_dump_json(indent=2) + "\n")
-    if specification.resources:
+    if any(resource.visibility == ResourceVisibility.AGENT for resource in specification.resources):
         materialize_resources(
             specification.resources,
             destination / "environment" / "inputs",
             visibility=ResourceVisibility.AGENT,
             trusted_resolver=trusted_resolver,
         )
+    if any(resource.visibility != ResourceVisibility.AGENT for resource in specification.resources):
         materialize_resources(
             specification.resources,
             destination / "private_resources",
