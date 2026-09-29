@@ -32,7 +32,6 @@ from marin.evaluation.records import (
     EvalRef,
 )
 from marin.evaluation.runner import (
-    EndpointRoute,
     EvalExecutor,
     Evaluation,
     EvaluationBatch,
@@ -148,7 +147,6 @@ class _ResolvedDefinition:
     record_ref: EvalRef
     runtime_descriptor: str
     executor: EvalExecutor
-    endpoint_route: EndpointRoute
     secret_env: dict[str, SecretSpec]
 
 
@@ -181,7 +179,6 @@ def _resolve_definitions(
                         record_ref=definition.record_ref_for(config),
                         runtime_descriptor=config.runtime.requirement,
                         executor=EvalchemyExecutor(config),
-                        endpoint_route=EndpointRoute.DIRECT,
                         secret_env=dict(secret_env),
                     ),
                 )
@@ -203,7 +200,6 @@ def _resolve_definitions(
                         runtime_task_limit,
                         retry_unscored_harbor_trials,
                     ),
-                    endpoint_route=EndpointRoute.CAPABILITY,
                     secret_env=dict(definition.secret_env_for(config)),
                 ),
             )
@@ -293,7 +289,6 @@ def build_evaluation_batch(
                     eval_runtime=definition.runtime_descriptor,
                 ),
                 executor=definition.executor,
-                endpoint_route=definition.endpoint_route,
                 secret_env_keys=tuple(definition.secret_env),
             )
         )
