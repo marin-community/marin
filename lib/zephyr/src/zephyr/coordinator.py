@@ -4,6 +4,7 @@
 """Coordinator actor and pull protocol for Zephyr pipelines."""
 
 import enum
+import json
 import logging
 import re
 import sys
@@ -13,15 +14,18 @@ from collections import Counter, defaultdict, deque
 from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, suppress
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import quote
 
 import cloudpickle
+from connectrpc.errors import ConnectError
 from fray.actor import ActorGroup, ActorHandle, current_actor
 from fray.current_client import current_client
 from fray.local_backend import LocalClient
 from fray.types import ActorConfig, ResourceConfig
+from iris.client.client import get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from rigging import telemetry
 from rigging.filesystem.storage_path import StoragePath
@@ -29,16 +33,28 @@ from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timestamp,
 from starlette.types import ASGIApp
 
 from zephyr.dashboard.app import (
-    ROOT_PLAN_PREFIX,
     PipelinePlan,
     PlanNodeState,
     create_dashboard_application,
-    join_right_prefix,
-    stage_node_id,
 )
 from zephyr.dashboard.coordinator import CoordinatorDashboard
 from zephyr.memory_store import MemoryTableRegistration
-from zephyr.plan import Join, PhysicalOp, PhysicalPlan, PhysicalStage, Reduce, Scatter, SourceItem, StageType
+from zephyr.plan import (
+    ROOT_PLAN_PREFIX,
+    Join,
+    PhysicalOp,
+    PhysicalPlan,
+    PhysicalStage,
+    Reduce,
+    Scatter,
+    SourceItem,
+    StageType,
+    execution_stage_name,
+    execution_stages,
+    join_right_prefix,
+    join_stage_name,
+    stage_node_id,
+)
 from zephyr.shuffle import ListShard, MemChunk
 from zephyr.stage_io import (
     ShardTask,
@@ -49,7 +65,14 @@ from zephyr.stage_io import (
     _ensure_picklable_exception,
     _stage_throughput,
 )
-from zephyr.stats import StatsConfig, StatsWriter, ZephyrShuffleStat, ZephyrWorkerStatStatus, _push_iris_task_status
+from zephyr.stats import (
+    StatsConfig,
+    StatsWriter,
+    ZephyrExecutionStat,
+    ZephyrShuffleStat,
+    ZephyrWorkerStatStatus,
+    _push_iris_task_status,
+)
 from zephyr.worker_context import Aggregation, CounterEntry, CounterSnapshot, merge_counter_entries
 from zephyr.writers import ensure_parent_dir
 
@@ -61,6 +84,7 @@ MAX_STATUS_TEXT_LENGTH = 1000
 MAX_CONCURRENT_PIPELINES = 16
 MAX_CONCURRENT_RESULT_READS = 16
 ZEPHYR_PROGRESS_TIME_METRIC = "progress_time_seconds"
+ZEPHYR_HISTORY_ENDPOINT_NAME = "/system/zephyr-history"
 
 # Seconds between worker-job liveness probes. Each probe is a GetJobState RPC to
 # the Iris controller, and the coordinator loop ticks every 0.5s, so probing once
@@ -93,6 +117,17 @@ def _cleanup_execution(prefix: str, execution_id: str) -> None:
                 exec_dir.rmtree()
             except Exception as e:
                 logger.warning(f"Failed to cleanup chunks at {exec_dir}: {e}")
+
+
+def _resolve_execution_history_url() -> str | None:
+    """Resolve the optional execution-history app for the current Iris cluster."""
+    context = get_iris_ctx()
+    if context is None or context.client is None:
+        return None
+    try:
+        return context.client.resolve_endpoint(ZEPHYR_HISTORY_ENDPOINT_NAME).rstrip("/")
+    except (ConnectionError, ConnectError):
+        return None
 
 
 class WorkerState(enum.StrEnum):
@@ -364,6 +399,7 @@ class ZephyrCoordinator:
         self._max_shard_infra_failures = max_shard_infra_failures
         self._max_concurrent_pipelines = max_concurrent_pipelines
         self._stats_config = stats_config
+        self._execution_history_url = _resolve_execution_history_url()
         # Per-worker in-flight counter snapshots. Each snapshot carries a
         # monotonic generation so the coordinator can discard stale or
         # out-of-order heartbeats.
@@ -391,6 +427,7 @@ class ZephyrCoordinator:
         self._stats_writer = StatsWriter.connect(stats_config)
         job_info = get_job_info()
         self._job_id = str(job_info.job_id) if job_info is not None else ""
+        self._root_job_id = str(job_info.job_id.root_job) if job_info is not None else ""
         self._result_executor = ThreadPoolExecutor(
             max_workers=MAX_CONCURRENT_RESULT_READS, thread_name_prefix="zephyr-result"
         )
@@ -604,10 +641,21 @@ class ZephyrCoordinator:
                 if not run.done
             ]
 
-        detail_lines: list[str] = []
-        summary_lines: list[str] = []
+        detail_lines = []
+        summary_lines = []
+        if self._execution_history_url is not None:
+            applet_link = f"[Zephyr]({self._execution_history_url})"
+            detail_lines.append(applet_link)
+            summary_lines.append(applet_link)
+        if not snapshot:
+            detail_lines.append("idle")
+            summary_lines.append("idle")
         for execution_id, plan_stages, stage_index, completed, total, in_flight, queued in snapshot:
-            detail_lines.append(f"**{execution_id}**")
+            if self._execution_history_url is not None:
+                execution_url = f"{self._execution_history_url}/#/execution/{quote(execution_id, safe='')}"
+                detail_lines.append(f"**[{execution_id}]({execution_url})**")
+            else:
+                detail_lines.append(f"**{execution_id}**")
             for idx, stage in enumerate(plan_stages):
                 stage_desc = _get_stage_description(stage)
                 detail_lines.append(f"- **{stage_desc}**" if idx == stage_index else f"- {stage_desc}")
@@ -620,8 +668,8 @@ class ZephyrCoordinator:
                 f"**{current_desc}** ({stage_index + 1}/{len(plan_stages)}) - {completed}/{total} shards ({pct}%)"
             )
 
-        detail_md = "\n".join(detail_lines)[:MAX_STATUS_TEXT_LENGTH] or "idle"
-        summary_md = "  \n".join(summary_lines)[:MAX_STATUS_TEXT_LENGTH] or "idle"
+        detail_md = "\n".join(detail_lines)[:MAX_STATUS_TEXT_LENGTH]
+        summary_md = "  \n".join(summary_lines)[:MAX_STATUS_TEXT_LENGTH]
         return detail_md, summary_md
 
     def _report_task_stats(self) -> None:
@@ -1268,6 +1316,16 @@ class ZephyrCoordinator:
         result_path = _execution_result_path(self._chunk_prefix, execution_id)
         try:
             shards = _build_source_shards(plan.source_items)
+            self._stats_writer.emit_execution_stat(
+                ZephyrExecutionStat(
+                    execution_id=execution_id,
+                    root_job_id=self._root_job_id,
+                    coordinator_job_id=self._job_id,
+                    ts=datetime.now(UTC).replace(tzinfo=None),
+                    input_shards=len(shards),
+                    stages_json=json.dumps([asdict(stage) for stage in execution_stages(plan)]),
+                )
+            )
             if not shards:
                 self._persist_result(
                     result_path, ZephyrExecutionResult(results=[], counters={}, execution_id=execution_id)
@@ -1295,7 +1353,7 @@ class ZephyrCoordinator:
                         run,
                         stage,
                         shards,
-                        stage_label=f"stage{stage_idx}-{stage.stage_name(max_length=40)}",
+                        stage_label=execution_stage_name(stage, stage_idx),
                         stage_index_for_state=stage_idx,
                         aux_per_shard=aux_per_shard,
                         is_last_stage=(stage_idx == last_worker_stage_idx),
@@ -1499,7 +1557,7 @@ class ZephyrCoordinator:
                         run,
                         right_stage,
                         right_refs,
-                        stage_label=f"join-right-{parent_stage_idx}-{i}-stage{stage_idx}",
+                        stage_label=join_stage_name(parent_stage_idx, i, stage_idx),
                         stage_index_for_state=parent_stage_idx,
                     )
 
@@ -1649,6 +1707,8 @@ class ZephyrExecutionResult:
         counters: Aggregated counter values from the run, including built-in
             zephyr counters (e.g. ``zephyr/records_in``) and any user counters
             recorded via ``zephyr.counters.pipeline``.
+        execution_id: Identifier for the coordinator run, or empty when no
+            coordinator execution was needed.
     """
 
     results: list

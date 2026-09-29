@@ -133,6 +133,7 @@ _LM_EVAL_STRUCTURAL_KEYS = frozenset(
         "doc_hash",
         "prompt_hash",
         "target_hash",
+        "completion_responses",
     }
 )
 
@@ -930,7 +931,9 @@ def _add_lm_eval_rows(
             store.add_sample(
                 sample,
                 trial_id=trial_id,
-                extraction_filter=extraction_filter if isinstance(extraction_filter, str) else None,
+                extraction_filter=(
+                    extraction_filter if isinstance(extraction_filter, str) and sample.grading is None else None
+                ),
             )
             if coverage is not None:
                 coverage.add(sample)
