@@ -5,9 +5,9 @@
 
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-SCHEMA_VERSION = "0.4"
+SCHEMA_VERSION = "0.6"
 
 
 class AnswerType(StrEnum):
@@ -18,6 +18,13 @@ class AnswerType(StrEnum):
     FILE = "file"
     WORKSPACE_STATE = "workspace_state"
     NATIVE_ACTION = "native_action"
+
+
+class VerifierKind(StrEnum):
+    """The registered grader used to check a submission."""
+
+    EXACT_ANSWER = "exact_answer"
+    MCQ_ANSWER = "mcq_answer"
 
 
 class Source(BaseModel):
@@ -37,20 +44,17 @@ class Source(BaseModel):
         return self
 
 
-class ExactAnswer(BaseModel):
-    """An exact reference answer and its text-normalization rules."""
+class VerifierSpec(BaseModel):
+    """A private verifier selection and its pinned configuration.
+
+    ``kind`` selects a verifier class. ``parameters_json`` is its private
+    JSON-encoded configuration.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    expected: str
-    ignore_case: bool = True
-    ignore_whitespace: bool = True
-
-    @model_validator(mode="after")
-    def validate_expected(self) -> "ExactAnswer":
-        if not self.expected.strip():
-            raise ValueError("An exact answer is required")
-        return self
+    kind: VerifierKind
+    parameters_json: str = Field(repr=False)
 
 
 class TaskRequirements(BaseModel):
@@ -74,7 +78,7 @@ class TaskSpec(BaseModel):
 
     id: str
     instructions: str
-    verifier: ExactAnswer
+    verifier: VerifierSpec
     source: Source
     requirements: TaskRequirements
     answer_type: AnswerType

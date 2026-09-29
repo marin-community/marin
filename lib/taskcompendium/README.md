@@ -4,7 +4,7 @@
 
 Training and evaluation tasks arrive with different prompt formats, answer rules, tools, and graders. TaskCompendium separates the problem a model must solve from the way a framework runs and grades it. A caller can choose among compatible presentations of a task while keeping its reference answer private. Additional Harbor environment configurations can use the same task definition.
 
-The current implementation is a small direct-chat slice. It accepts a final text or number answer, exports a Harbor task, and grades the answer with a private exact-answer verifier. The task model also names file, workspace-state, and native-action results, but this slice has no Harbor environment configuration or submission convention for those result types.
+The current implementation is a small direct-chat slice. It accepts a final text or number answer, exports a Harbor task, and grades the answer through a private verifier registry. The task model also names file, workspace-state, and native-action results, but this slice has no Harbor environment configuration or submission convention for those result types.
 
 ## What does it contain?
 
@@ -37,10 +37,12 @@ flowchart LR
 | `source` | Dataset, revision, row, and importer revision used to reproduce the spec. |
 | `requirements` | Capabilities or named action interfaces the execution environment must provide. |
 | `answer_type` | The semantic result: `text`, `number`, `file`, `workspace_state`, or `native_action`. It does not prescribe a wrapper such as JSON. |
-| `verifier` | Private grading data. In this slice, `ExactAnswer` holds the expected answer and text-normalization rules. |
+| `verifier` | A private verifier kind and serialized JSON configuration. `exact_answer` holds text-normalization rules; `mcq_answer` holds an expected letter and option count. |
 | `schema_version` | Version of the serialized spec, checked when the record is loaded. |
 
 For example, a task asking “What is 7 + 5?” can have `answer_type=number` and a private expected answer of `12`. That answer type can be submitted as plain text or as `{"answer":"12"}`. The verifier and expected answer are never added to the model-visible instruction. Importers must make source output instructions neutral to the supported conventions, or reject rows they cannot safely rewrite. A raw-output requirement left in `instructions` would conflict with a JSON convention; `answer_type=text` alone cannot detect that conflict in prose.
+
+The TaskTrove MCQA importer reads archives from a cleaned release. See the [published TaskTrove Clean dataset](https://huggingface.co/datasets/open-athena/task-trove). Its caller passes the archive bytes, upstream subset, archive path, and release provenance to `read_archive`. The reader checks the subset and path against the archive manifest; the release URI and revision are caller-supplied provenance. The importer checks the source answer-line template before replacing it with a one-letter instruction. Its text answer works with plain and JSON submission conventions. The private `mcq_answer` verifier stores the expected letter and option count. Any author can use that verifier; it currently calls the shared `tasktrove-verify` MCQ scorer after extracting the submission. This importer supports only MCQ mode. Executable TaskTrove modes still need private resources and an isolated verifier runtime.
 
 ## What is a lowering?
 
@@ -60,13 +62,14 @@ from taskcompendium.lowering import (
     lower_to_harbor,
     select_lowerings,
 )
-from taskcompendium.models import AnswerType, ExactAnswer, Source, TaskRequirements, TaskSpec
+from taskcompendium.grading import exact_answer
+from taskcompendium.models import AnswerType, Source, TaskRequirements, TaskSpec
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
 
 spec = TaskSpec(
     id="arithmetic-7-plus-5",
     instructions="What is 7 + 5?",
-    verifier=ExactAnswer(expected="12"),
+    verifier=exact_answer("12"),
     source=Source(dataset="hand-authored", revision="2026-09-16", row="arithmetic-7-plus-5", importer_revision="1"),
     requirements=TaskRequirements(),
     answer_type=AnswerType.NUMBER,
@@ -111,7 +114,7 @@ from taskcompendium.harbor.runner import ChatLaunch
 launch = ChatLaunch(model="model-id", api_base="https://example.com/v1", api_key_env="MODEL_API_KEY")
 ```
 
-Harbor runs the agent in the direct-chat environment, which exposes no filesystem or shell tools. The custom verifier reads the final response, extracts it according to the selected convention, and compares it with the private reference. A wrong answer receives reward `0.0`; a malformed submission has no reward; a verifier infrastructure failure has no reward and is recorded separately in `taskcompendium-result.json`. The package requires Harbor's [custom-verifier task loading](https://github.com/marin-community/harbor/pull/155) and does not use `tests/test.sh`.
+Harbor runs the agent in the direct-chat environment, which exposes no filesystem or shell tools. The custom verifier reads the final response and resolves the private verifier kind through an explicit map. The selected verifier validates its JSON configuration and receives the response, convention, and Harbor's verifier-side environment. The built-in exact-answer verifier extracts and compares the answer directly, without a temporary answer file. A wrong answer receives reward `0.0`; a malformed submission has no reward; a verifier infrastructure failure has no reward and is recorded separately in `taskcompendium-result.json`. The package requires Harbor's [custom-verifier task loading](https://github.com/marin-community/harbor/pull/155) and does not use `tests/test.sh`.
 
 Run the package tests from the repository root:
 
