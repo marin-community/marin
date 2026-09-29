@@ -206,7 +206,7 @@ def component_rows(parent: dict[str, Any], info: dict[str, Any]) -> list[dict[st
 
 
 def counted_nemotron_components(parent: dict[str, Any], audit: dict[str, Any]) -> list[dict[str, Any]]:
-    """Use complete-file counts when the selected JSONL content matches the audit."""
+    """Return Nemotron component rows with audited task counts."""
     if audit["total"] != parent["task_count"]:
         raise ValueError("Nemotron record audit disagrees with selected blend total")
     blend = parent["name"].removeprefix("nemotron_ultra_")

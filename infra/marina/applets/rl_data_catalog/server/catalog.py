@@ -406,6 +406,12 @@ def datasets_metadata(client: httpx.Client, dataset_ids: set[str]) -> dict[str, 
         return dict(zip(names, pool.map(lambda name: dataset_metadata(client, name), names), strict=True))
 
 
+def source_components(row: dict[str, Any], info: dict[str, Any]) -> list[dict[str, Any]]:
+    annotate_source(row)
+    set_revision_date(row)
+    return component_rows(row, info)
+
+
 def refresh_dataset_metadata(client: httpx.Client, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows = canonical_rows(merge_gym_sources(rows))
     metadata = datasets_metadata(client, {row["dataset_id"] for row in rows})
@@ -429,9 +435,7 @@ def refresh_dataset_metadata(client: httpx.Client, rows: list[dict[str, Any]]) -
                 is_benchmark="benchmark:official" in info.get("tags", []),
                 count_metadata_error=info.get("count_metadata_error"),
             )
-        annotate_source(row)
-        set_revision_date(row)
-        refreshed.extend(component_rows(row, info))
+        refreshed.extend(source_components(row, info))
     return refreshed
 
 
@@ -520,9 +524,7 @@ def skyrl_snapshot(
         row["gym_alias"] = f"gym/{env}"
         row["gym_entrypoint"] = verifier["entrypoint"]
         row["gym_url"] = f"https://github.com/{SKYRL}/blob/{revision}/{GYM_PATH}"
-        annotate_source(row)
-        set_revision_date(row)
-        rows.extend(component_rows(row, info))
+        rows.extend(source_components(row, info))
     return Snapshot(SKYRL_ORIGIN, revision, head["commit"]["committer"]["date"], rows)
 
 

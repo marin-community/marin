@@ -457,7 +457,7 @@ def evidence_segments(task: Task, outcome: dict, entries: list[dict], budget: in
 def task_judgment(
     model: dict, task: Task, outcome: dict, entries: list[dict], stage: Path, limit: int, api_key: str | None
 ) -> dict:
-    """Give each judge complete evidence in isolated segments, then its own consolidation."""
+    """Return a task quality judgment grounded in the complete saved evidence."""
     payload = {"task": asdict(task), "native_outcome": outcome, "evidence": entries}
     if len(json_text(payload).encode()) <= REVIEW_SEGMENT_BYTES:
         return judgment(model, JUDGE_PROMPT, payload, stage, limit, api_key)
