@@ -241,7 +241,7 @@ def smoke_step(release: ArtifactStep) -> ArtifactStep[SkyRLRun]:
             cluster=CLUSTER,
             cluster_config=f"lib/iris/config/{CLUSTER}.yaml",
             cpu=16,
-            memory="512GB",
+            memory="128GB",
             disk="1TB",
             priority="interactive",
             max_retries=1,

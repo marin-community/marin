@@ -16,8 +16,8 @@ Plan or run::
     python -m experiments.post_training.async_rl --version 2026.09.18 --preset default \\
         --set trainer.rollout_buffer.max_staleness_steps=2 --run
 
-The default preset runs on 40 GPUs: 128 prompts per update with four answers each, 192 generation
-concurrent prompt groups, staleness 4, and an 8192-token request window with a
+The default preset runs on 40 GPUs: 128 prompts per update with four answers each,
+192 concurrent prompt groups, staleness 4, and an 8192-token request window with a
 4096-token response cap. To grow the batch, add prompts; more answers per prompt changes the group
 each advantage is computed over. The loop settings, telemetry gates and ``marin_tokenizer`` chat
 template need a MarinSkyRL revision that supports them. An older revision rejects the loop and
