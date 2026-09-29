@@ -39,30 +39,36 @@ HARBOR_DOWNLOAD_DIRS = frozenset({AGENT_LOGS_PATH, ARTIFACTS_LOGS_PATH})
 HARBOR_EMPTY_DIRS = HARBOR_DOWNLOAD_DIRS | {VERIFIER_LOGS_PATH, TESTS_PATH}
 
 
-def _record_answer(logs_dir: Path, messages: list[dict[str, Any]], answer: str, context: AgentContext) -> None:
+def _record_submission(
+    logs_dir: Path,
+    messages: list[dict[str, Any]],
+    assistant_final: object,
+    final_message: dict[str, Any],
+    filename: str,
+    payload: str,
+    context: AgentContext,
+) -> None:
     logs_dir.mkdir(parents=True, exist_ok=True)
-    (logs_dir / RESPONSE_FILE).write_text(answer)
+    (logs_dir / filename).write_text(payload)
     context.metadata = {
-        "assistant_final": answer,
+        "assistant_final": assistant_final,
         "turns": 1,
-        "all_messages": [*messages, {"role": "assistant", "content": answer}],
+        "all_messages": [*messages, final_message],
         "summarization_count": 0,
         "tools": [],
     }
+
+
+def _record_answer(logs_dir: Path, messages: list[dict[str, Any]], answer: str, context: AgentContext) -> None:
+    _record_submission(
+        logs_dir, messages, answer, {"role": "assistant", "content": answer}, RESPONSE_FILE, answer, context
+    )
 
 
 def _record_action(
     logs_dir: Path, messages: list[dict[str, Any]], action: dict[str, Any], context: AgentContext
 ) -> None:
-    logs_dir.mkdir(parents=True, exist_ok=True)
-    (logs_dir / ACTION_FILE).write_text(json.dumps(action))
-    context.metadata = {
-        "assistant_final": action,
-        "turns": 1,
-        "all_messages": [*messages, action],
-        "summarization_count": 0,
-        "tools": [],
-    }
+    _record_submission(logs_dir, messages, action, action, ACTION_FILE, json.dumps(action), context)
 
 
 def _chat_completion(
