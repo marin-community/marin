@@ -12,8 +12,9 @@ from harbor.environments.base import BaseEnvironment
 
 from taskcompendium.submission import WORKSPACE_ROOT
 
-MAX_WORKSPACE_FILES = 4096
+MAX_WORKSPACE_ENTRIES = 4096
 MAX_WORKSPACE_BYTES = 256 * 1024 * 1024
+MAX_WORKSPACE_DEPTH = 128
 MOUNT_ESCAPE = re.compile(r"\\([0-7]{3})")
 
 
@@ -30,19 +31,33 @@ def validate_workspace_snapshot(root: Path) -> None:
     if root.is_symlink() or not root.is_dir():
         raise UnsafeWorkspaceError("Workspace snapshot root is not a directory")
     device = root.stat().st_dev
-    count = 0
+    entries = 0
     size = 0
-    for current, directories, files in os.walk(root, followlinks=False):
-        for name in directories + files:
-            path = Path(current) / name
-            metadata = path.lstat()
-            if metadata.st_dev != device or not (stat.S_ISDIR(metadata.st_mode) or stat.S_ISREG(metadata.st_mode)):
-                raise UnsafeWorkspaceError(f"Unsafe workspace entry: {path.relative_to(root)}")
-            if stat.S_ISREG(metadata.st_mode):
-                count += 1
-                size += metadata.st_size
-                if count > MAX_WORKSPACE_FILES or size > MAX_WORKSPACE_BYTES:
-                    raise UnsafeWorkspaceError("Workspace snapshot exceeds file or size limit")
+    pending = [(root, 0)]
+    try:
+        while pending:
+            current, depth = pending.pop()
+            with os.scandir(current) as directory:
+                for entry in directory:
+                    path = Path(entry.path)
+                    metadata = path.lstat()
+                    if metadata.st_dev != device or not (
+                        stat.S_ISDIR(metadata.st_mode) or stat.S_ISREG(metadata.st_mode)
+                    ):
+                        raise UnsafeWorkspaceError(f"Unsafe workspace entry: {path.relative_to(root)}")
+                    entries += 1
+                    if entries > MAX_WORKSPACE_ENTRIES:
+                        raise UnsafeWorkspaceError("Workspace snapshot exceeds entry limit")
+                    if stat.S_ISDIR(metadata.st_mode):
+                        if depth >= MAX_WORKSPACE_DEPTH:
+                            raise UnsafeWorkspaceError("Workspace snapshot exceeds depth limit")
+                        pending.append((path, depth + 1))
+                    else:
+                        size += metadata.st_size
+                        if size > MAX_WORKSPACE_BYTES:
+                            raise UnsafeWorkspaceError("Workspace snapshot exceeds size limit")
+    except OSError as error:
+        raise UnsafeWorkspaceError("Cannot inspect workspace snapshot") from error
 
 
 async def capture_workspace(environment: BaseEnvironment, destination: Path) -> Path:

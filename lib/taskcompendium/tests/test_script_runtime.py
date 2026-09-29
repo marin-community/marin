@@ -14,7 +14,7 @@ import pytest
 from harbor.environments.base import ExecResult
 
 from taskcompendium.grading import Outcome
-from taskcompendium.harbor import script_runtime
+from taskcompendium.harbor import script_runtime, workspace
 from taskcompendium.harbor.script_runtime import ScriptSubmission
 from taskcompendium.harbor.workspace import UnsafeWorkspaceError, capture_workspace
 from taskcompendium.models import AnswerType
@@ -160,3 +160,20 @@ async def test_workspace_capture_is_independent_and_rejects_links(tmp_path):
     (agent_workspace / "outside").symlink_to(tmp_path)
     with pytest.raises(UnsafeWorkspaceError, match="Unsafe workspace entry"):
         await capture_workspace(Environment(), tmp_path / "unsafe-snapshot")
+
+
+def test_workspace_snapshot_bounds_empty_directories_and_depth(tmp_path, monkeypatch):
+    root = tmp_path / "workspace"
+    root.mkdir()
+    for index in range(3):
+        (root / f"empty-{index}").mkdir()
+    entry_limit = workspace.MAX_WORKSPACE_ENTRIES
+    monkeypatch.setattr(workspace, "MAX_WORKSPACE_ENTRIES", 2)
+    with pytest.raises(UnsafeWorkspaceError, match="entry limit"):
+        workspace.validate_workspace_snapshot(root)
+
+    monkeypatch.setattr(workspace, "MAX_WORKSPACE_ENTRIES", entry_limit)
+    monkeypatch.setattr(workspace, "MAX_WORKSPACE_DEPTH", 1)
+    (root / "empty-0" / "nested").mkdir()
+    with pytest.raises(UnsafeWorkspaceError, match="depth limit"):
+        workspace.validate_workspace_snapshot(root)

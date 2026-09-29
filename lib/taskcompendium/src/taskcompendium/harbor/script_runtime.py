@@ -15,6 +15,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from taskcompendium.grading import GradeResult, Outcome
+from taskcompendium.harbor.workspace import MAX_WORKSPACE_BYTES, validate_workspace_snapshot
 from taskcompendium.models import AnswerType
 from taskcompendium.submission import WORKSPACE_ROOT
 from taskcompendium.verifiers.script import (
@@ -31,7 +32,6 @@ SUBMISSION_FILE = "submission.json"
 RESULT_FILE = "result.json"
 MAX_SUBMISSION_BYTES = 1024 * 1024
 MAX_RESULT_BYTES = 64 * 1024
-MAX_WORKSPACE_BYTES = 1024 * 1024 * 1024
 MAX_RUNTIME_SECONDS = 900
 MEMORY_LIMIT = "512m"
 CPU_LIMIT = "1"
@@ -52,20 +52,19 @@ class ScriptSubmission:
 
 def _copy_workspace(source: Path, destination: Path) -> None:
     """Copy regular files without following agent-controlled symlinks."""
-    if source.is_symlink() or not source.is_dir():
-        raise ValueError("Workspace snapshot must be a directory")
+    validate_workspace_snapshot(source)
     destination.mkdir(mode=0o777)
     total_bytes = 0
-
-    def copy_directory(current_source: Path, current_destination: Path) -> None:
-        nonlocal total_bytes
+    pending = [(source, destination)]
+    while pending:
+        current_source, current_destination = pending.pop()
         for entry in current_source.iterdir():
             source_stat = entry.lstat()
             target = current_destination / entry.name
             if stat.S_ISDIR(source_stat.st_mode):
                 target.mkdir(mode=0o777)
                 target.chmod(0o777)
-                copy_directory(entry, target)
+                pending.append((entry, target))
             elif stat.S_ISREG(source_stat.st_mode):
                 total_bytes += source_stat.st_size
                 if total_bytes > MAX_WORKSPACE_BYTES:
@@ -79,9 +78,7 @@ def _copy_workspace(source: Path, destination: Path) -> None:
                 target.chmod(0o777 if executable else 0o666)
             else:
                 raise ValueError("Workspace snapshot contains a symlink or special file")
-
     destination.chmod(0o777)
-    copy_directory(source, destination)
 
 
 def _read_result(path: Path) -> GradeResult:
