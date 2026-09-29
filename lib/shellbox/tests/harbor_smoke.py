@@ -21,6 +21,7 @@ class ModelHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         assert [tool["function"]["name"] for tool in request["tools"]] == ["Bash"]
+        assert request["chat_template_kwargs"] == {"enable_thinking": False}
         completed = sum(message["role"] == "tool" for message in request["messages"])
         if completed >= len(self.bash_commands):
             message = {"role": "assistant", "content": "Done."}
@@ -78,7 +79,12 @@ async def main(
                     {
                         "import_path": "shellbox.agent:BashAgent",
                         "model_name": "openai/fake",
-                        "kwargs": {"base_url": f"http://127.0.0.1:{server.server_port}/v1"},
+                        "kwargs": {
+                            "api_base": f"http://127.0.0.1:{server.server_port}/v1",
+                            "key": "unused",
+                            "store_all_messages": True,
+                            "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
+                        },
                     }
                 ],
             }
@@ -88,6 +94,15 @@ async def main(
         assert summary["n_errored_trials"] == 0, result.model_dump_json(indent=2)
         mean = next(iter(summary["evals"].values()))["metrics"][0]["mean"]
         assert mean == 1.0, result.model_dump_json(indent=2)
+        metadata = result.model_dump(mode="json")["trial_results"][0]["agent_result"]["metadata"]
+        assert metadata["summarization_count"] == 0
+        assert [message["role"] for message in metadata["all_messages"]] == [
+            "system",
+            "user",
+            "assistant",
+            "tool",
+            "assistant",
+        ]
         print(f"Harbor smoke passed: reward={mean}")
     finally:
         server.shutdown()

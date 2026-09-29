@@ -4,6 +4,8 @@
 """Small external Harbor agent that routes Bash tool calls to the environment."""
 
 import json
+from collections.abc import Mapping
+from typing import Any
 
 import httpx
 from harbor.agents.base import BaseAgent, TurnCapExhaustedError
@@ -76,11 +78,29 @@ def _shell_result(update: ShellUpdate) -> str:
 class BashAgent(BaseAgent):
     """Call an OpenAI-compatible local endpoint from the Harbor process."""
 
-    def __init__(self, *args, base_url: str, api_key: str = "unused", max_turns: int = 20, **kwargs):
+    def __init__(
+        self,
+        *args,
+        base_url: str | None = None,
+        api_base: str | None = None,
+        api_key: str | None = None,
+        key: str | None = None,
+        max_turns: int = 20,
+        extra_body: Mapping[str, Any] | None = None,
+        store_all_messages: bool = True,
+        **kwargs,
+    ):
         super().__init__(*args, **kwargs)
-        self.base_url = base_url.rstrip("/")
-        self.api_key = api_key
+        if base_url is not None and api_base is not None and base_url.rstrip("/") != api_base.rstrip("/"):
+            raise ValueError("base_url and api_base must identify the same endpoint")
+        endpoint = base_url or api_base
+        if endpoint is None:
+            raise ValueError("BashAgent requires base_url or api_base")
+        self.base_url = endpoint.rstrip("/")
+        self.api_key = api_key or key or "unused"
         self.max_turns = max_turns
+        self.extra_body = dict(extra_body or {})
+        self.store_all_messages = store_all_messages
 
     @staticmethod
     def name() -> str:
@@ -106,12 +126,19 @@ class BashAgent(BaseAgent):
             {"role": "system", "content": "Solve the task using the Bash tool. Say when finished."},
             {"role": "user", "content": instruction},
         ]
+        self._update_context(context, messages)
         async with httpx.AsyncClient(timeout=120, trust_env=False) as client:
             for _ in range(self.max_turns):
+                request = {
+                    **self.extra_body,
+                    "model": model,
+                    "messages": messages,
+                    "tools": tools,
+                }
                 response = await client.post(
                     f"{self.base_url}/chat/completions",
                     headers={"Authorization": f"Bearer {self.api_key}"},
-                    json={"model": model, "messages": messages, "tools": tools},
+                    json=request,
                 )
                 response.raise_for_status()
                 body = response.json()
@@ -120,12 +147,9 @@ class BashAgent(BaseAgent):
                 context.n_output_tokens = (context.n_output_tokens or 0) + usage.get("completion_tokens", 0)
                 message = body["choices"][0]["message"]
                 messages.append(message)
+                self._update_context(context, messages)
                 calls = message.get("tool_calls") or []
                 if not calls:
-                    context.metadata = {
-                        "final_message": message.get("content", ""),
-                        "tool_calls": sum(m["role"] == "tool" for m in messages),
-                    }
                     return
                 for call in calls:
                     name = call["function"]["name"]
@@ -141,7 +165,21 @@ class BashAgent(BaseAgent):
                             "content": result,
                         }
                     )
+                    self._update_context(context, messages)
         raise TurnCapExhaustedError(f"BashAgent reached {self.max_turns} turns")
+
+    def _update_context(self, context: AgentContext, messages: list[dict]) -> None:
+        metadata: dict[str, Any] = {
+            "final_message": next(
+                (str(message.get("content") or "") for message in reversed(messages) if message["role"] == "assistant"),
+                "",
+            ),
+            "summarization_count": 0,
+            "tool_calls": sum(message["role"] == "tool" for message in messages),
+        }
+        if self.store_all_messages:
+            metadata["all_messages"] = list(messages)
+        context.metadata = metadata
 
 
 async def _bash_action(shell: ShellSession, arguments: dict) -> ShellUpdate:
