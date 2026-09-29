@@ -69,7 +69,6 @@ class StoreInfo(NamedTuple):
     tokenizer: str
     max_length: int
     packed_sequences: int
-    tokens: int
 
 
 def _store_info(name: str, record: object) -> StoreInfo:
@@ -79,13 +78,11 @@ def _store_info(name: str, record: object) -> StoreInfo:
     if not isinstance(sources, dict):
         raise ValueError(f"Store record for {name} has no source counts")
     try:
-        tokens = sum(int(counts["tokens"]) for counts in sources.values())
         return StoreInfo(
             cache_path=str(record["cache_path"]),
             tokenizer=str(record["tokenizer"]),
             max_length=int(record["max_length"]),
             packed_sequences=int(record["packed_sequences"]),
-            tokens=tokens,
         )
     except (KeyError, TypeError, ValueError) as error:
         raise ValueError(f"Malformed store record for {name}") from error
@@ -101,7 +98,11 @@ def _store_component(store: StoreInfo) -> DatasetComponent:
 
 
 def _sft_components(
-    stores: Mapping[str, StoreInfo], allocations: Mapping[str, int], *, sft_fraction: float
+    stores: Mapping[str, StoreInfo],
+    allocations: Mapping[str, int],
+    *,
+    sft_fraction: float,
+    pooled_sources: set[str] | None = None,
 ) -> tuple[dict[str, DatasetComponentBase], dict[str, float]]:
     missing = sorted(set(allocations) - set(stores))
     if missing:
@@ -124,12 +125,14 @@ def _sft_components(
             raise ValueError(f"{name} uses context length {store.max_length}, expected {CONTEXT}")
         if store.packed_sequences <= 0:
             raise ValueError(f"{name} has no packed training sequences")
-        if allocated_tokens > store.tokens:
-            raise ValueError(f"{name} allocates {allocated_tokens} tokens from a {store.tokens}-token store")
+        packed_capacity = store.packed_sequences * CONTEXT
+        if allocated_tokens > packed_capacity:
+            raise ValueError(f"{name} allocates {allocated_tokens} positions from a {packed_capacity}-position store")
 
         weight = sft_fraction * allocated_tokens / token_budget
         component = _store_component(store)
-        if weight < minimum_weight:
+        should_pool = name in pooled_sources if pooled_sources is not None else weight < minimum_weight
+        if should_pool:
             pooled[name] = component
             pooled_weight += weight
         else:
@@ -164,6 +167,9 @@ def data_config(steps: int, stores_manifest: str, *, mix_path: Path = MIX_PATH) 
     if plan["batch_size"] != BATCH or plan["context_length"] != CONTEXT:
         raise ValueError("SFT allocation was prepared for a different batch size or context length")
     allocations = {name: int(tokens) for name, tokens in plan["allocations_tokens"].items()}
+    pooled_sources = set(plan["pooled_sources"]) if "pooled_sources" in plan else None
+    if pooled_sources is not None and not pooled_sources <= allocations.keys():
+        raise ValueError("Pooled SFT sources must be included in the allocation")
     if any(tokens <= 0 for tokens in allocations.values()):
         raise ValueError("Every selected SFT source must have a positive token allocation")
     if sum(allocations.values()) != plan["sft_token_budget"]:
@@ -174,7 +180,7 @@ def data_config(steps: int, stores_manifest: str, *, mix_path: Path = MIX_PATH) 
     expected_sft_tokens = int(steps * BATCH * CONTEXT * sft_fraction)
     if plan["sft_token_budget"] != expected_sft_tokens:
         raise ValueError(f"SFT allocation has {plan['sft_token_budget']} tokens, expected {expected_sft_tokens}")
-    components, weights = _sft_components(stores, allocations, sft_fraction=sft_fraction)
+    components, weights = _sft_components(stores, allocations, sft_fraction=sft_fraction, pooled_sources=pooled_sources)
 
     replay = json.loads(Path(__file__).with_name("replay_skew8.json").read_text())
     replay_tail = {}
@@ -202,10 +208,19 @@ def data_config(steps: int, stores_manifest: str, *, mix_path: Path = MIX_PATH) 
     if replay_tail:
         components[PRETRAIN_COMPONENT_PREFIX + "pooled"] = ConcatDatasetComponent(children=replay_tail)
         weights[PRETRAIN_COMPONENT_PREFIX + "pooled"] = replay_tail_weight
+    if "block_counts" in plan:
+        block_counts = {name: int(count) for name, count in plan["block_counts"].items()}
+        if set(block_counts) != set(components) or any(count <= 0 for count in block_counts.values()):
+            raise ValueError("Block counts must cover every positive-weight mixture component")
+        if sum(block_counts.values()) != MIXTURE_BLOCK_SIZE:
+            raise ValueError("Block counts must sum to the mixture block size")
+        weights = {name: block_counts[name] / MIXTURE_BLOCK_SIZE for name in components}
     assert math.isclose(sum(weights.values()), 1.0)
-    assert math.isclose(
-        sum(v for k, v in weights.items() if k.startswith(PRETRAIN_COMPONENT_PREFIX)), 1.0 - sft_fraction
-    )
+    replay_weight = sum(v for k, v in weights.items() if k.startswith(PRETRAIN_COMPONENT_PREFIX))
+    if "block_counts" in plan:
+        assert abs(replay_weight - (1.0 - sft_fraction)) <= 1 / MIXTURE_BLOCK_SIZE
+    else:
+        assert math.isclose(replay_weight, 1.0 - sft_fraction)
     if any(int(weight * MIXTURE_BLOCK_SIZE) == 0 for weight in weights.values()):
         raise ValueError("Mixture contains a component that rounds to zero")
     logger.info(

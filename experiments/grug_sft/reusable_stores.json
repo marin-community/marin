@@ -1,0 +1,442 @@
+{
+  "agenttrove-glm53-compactions": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/agenttrove-glm53-compactions_c7462244",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/agenttrove-glm53-compactions_f1e18af4",
+    "tokens": 188537557
+  },
+  "glm-5.2-kernelgym-rollouts": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/glm-5.2-kernelgym-rollouts_51b93559",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/glm-5.2-kernelgym-rollouts_300052af",
+    "tokens": 16082348
+  },
+  "nemotron_sft_v3/agentic_v1/interactive_agent": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/agentic_v1/interactive_agent_b72f50fe",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/agentic_v1/interactive_agent_f81e6945",
+    "tokens": 90344730
+  },
+  "nemotron_sft_v3/agentic_v1/tool_calling": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/agentic_v1/tool_calling_3f26630b",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/agentic_v1/tool_calling_d78370d9",
+    "tokens": 737625081
+  },
+  "nemotron_sft_v3/agentic_v2/interactive_agent": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/agentic_v2/interactive_agent_95a880aa",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/agentic_v2/interactive_agent_5c9be1b4",
+    "tokens": 1354234222
+  },
+  "nemotron_sft_v3/agentic_v2/search": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/agentic_v2/search_c944a371",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/agentic_v2/search_63b3fdcb",
+    "tokens": 143480016
+  },
+  "nemotron_sft_v3/agentic_v2/tool_calling": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/agentic_v2/tool_calling_a4e4ab9a",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/agentic_v2/tool_calling_bac5bfd0",
+    "tokens": 41881674
+  },
+  "nemotron_sft_v3/arc_agi_v1/large_reasoning_and_tools": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/arc_agi_v1/large_reasoning_and_tools_5bb8841d",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/arc_agi_v1/large_reasoning_and_tools_ee70f4b8",
+    "tokens": 1712885051
+  },
+  "nemotron_sft_v3/arc_agi_v1/large_tools_no_reasoning": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/arc_agi_v1/large_tools_no_reasoning_b9671a8c",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/arc_agi_v1/large_tools_no_reasoning_7fedd730",
+    "tokens": 20293208
+  },
+  "nemotron_sft_v3/arc_agi_v1/small_tools_no_reasoning": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/arc_agi_v1/small_tools_no_reasoning_360e14d1",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/arc_agi_v1/small_tools_no_reasoning_c5ec1dcd",
+    "tokens": 2025923
+  },
+  "nemotron_sft_v3/competitive_programming_v2/exercism": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/competitive_programming_v2/exercism_f7490dc0",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/competitive_programming_v2/exercism_17f4d330",
+    "tokens": 156045216
+  },
+  "nemotron_sft_v3/competitive_programming_v2/text_to_sql": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/competitive_programming_v2/text_to_sql_a0933a45",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/competitive_programming_v2/text_to_sql_baacb0e0",
+    "tokens": 334121757
+  },
+  "nemotron_sft_v3/cuda_v1/train": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/cuda_v1/train_d4cbc179",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/cuda_v1/train_56826cc2",
+    "tokens": 21285717
+  },
+  "nemotron_sft_v3/finance_v1/train": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/finance_v1/train_66e28444",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/finance_v1/train_574aaa15",
+    "tokens": 9430845042
+  },
+  "nemotron_sft_v3/instruction_following_chat_v2/reasoning_off": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/instruction_following_chat_v2/reasoning_off_95751c31",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/instruction_following_chat_v2/reasoning_off_4810a716",
+    "tokens": 1371617196
+  },
+  "nemotron_sft_v3/instruction_following_chat_v2/reasoning_on": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/instruction_following_chat_v2/reasoning_on_2ac9cd2d",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/instruction_following_chat_v2/reasoning_on_4c19ffc3",
+    "tokens": 2360933725
+  },
+  "nemotron_sft_v3/instruction_following_chat_v3/instruction_following": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/instruction_following_chat_v3/instruction_following_a125537e",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/instruction_following_chat_v3/instruction_following_bb4ac770",
+    "tokens": 721726105
+  },
+  "nemotron_sft_v3/math_proofs_v1/lean": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/math_proofs_v1/lean_5a63e855",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/math_proofs_v1/lean_9e637b45",
+    "tokens": 9915510520
+  },
+  "nemotron_sft_v3/math_proofs_v2/train": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/math_proofs_v2/train_297e6726",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/math_proofs_v2/train_51bd71aa",
+    "tokens": 5196848645
+  },
+  "nemotron_sft_v3/math_v4/train": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/math_v4/train_23334dd4",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/math_v4/train_b98f2597",
+    "tokens": 6587456753
+  },
+  "nemotron_sft_v3/multilingual_v1/code_de": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/multilingual_v1/code_de_da6e37f7",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/multilingual_v1/code_de_ad464b42",
+    "tokens": 1711805655
+  },
+  "nemotron_sft_v3/multilingual_v1/code_es": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/multilingual_v1/code_es_81ad537d",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/multilingual_v1/code_es_896cecf9",
+    "tokens": 1680588999
+  },
+  "nemotron_sft_v3/multilingual_v1/code_fr": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/multilingual_v1/code_fr_5f9c35d0",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/multilingual_v1/code_fr_bdbe95ab",
+    "tokens": 1747907034
+  },
+  "nemotron_sft_v3/multilingual_v1/code_it": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/multilingual_v1/code_it_8d431a4c",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/multilingual_v1/code_it_7d325f24",
+    "tokens": 1828054555
+  },
+  "nemotron_sft_v3/multilingual_v1/code_zh": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/multilingual_v1/code_zh_23341bc5",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/multilingual_v1/code_zh_51ded204",
+    "tokens": 1941448441
+  },
+  "nemotron_sft_v3/multilingual_v1/math_de": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/multilingual_v1/math_de_01051de6",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/multilingual_v1/math_de_991200e2",
+    "tokens": 2462788745
+  },
+  "nemotron_sft_v3/multilingual_v1/math_es": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/multilingual_v1/math_es_16b7fa6f",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/multilingual_v1/math_es_0220c5fc",
+    "tokens": 1942946328
+  },
+  "nemotron_sft_v3/multilingual_v1/math_fr": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/multilingual_v1/math_fr_36cde02b",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/multilingual_v1/math_fr_27e3389c",
+    "tokens": 2196381081
+  },
+  "nemotron_sft_v3/multilingual_v1/math_ja": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/multilingual_v1/math_ja_2d5be457",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/multilingual_v1/math_ja_968d4c83",
+    "tokens": 1856858377
+  },
+  "nemotron_sft_v3/multilingual_v1/math_zh": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/multilingual_v1/math_zh_39934a49",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/multilingual_v1/math_zh_a7820177",
+    "tokens": 1668189501
+  },
+  "nemotron_sft_v3/multilingual_v1/stem_de": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/multilingual_v1/stem_de_211cced2",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/multilingual_v1/stem_de_b1813a5c",
+    "tokens": 727808812
+  },
+  "nemotron_sft_v3/multilingual_v1/stem_es": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/multilingual_v1/stem_es_c6982897",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/multilingual_v1/stem_es_5bea8895",
+    "tokens": 729671020
+  },
+  "nemotron_sft_v3/multilingual_v1/stem_fr": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/multilingual_v1/stem_fr_e66a8d44",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/multilingual_v1/stem_fr_d05f35a5",
+    "tokens": 737324391
+  },
+  "nemotron_sft_v3/multilingual_v1/stem_it": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/multilingual_v1/stem_it_03e71ab3",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/multilingual_v1/stem_it_fdd976b9",
+    "tokens": 742269241
+  },
+  "nemotron_sft_v3/multilingual_v1/stem_ja": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/multilingual_v1/stem_ja_31dd4e21",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/multilingual_v1/stem_ja_1bfedcc2",
+    "tokens": 711069489
+  },
+  "nemotron_sft_v3/multilingual_v1/stem_zh": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/multilingual_v1/stem_zh_fd1d0a94",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/multilingual_v1/stem_zh_6c5a1ff4",
+    "tokens": 703348874
+  },
+  "nemotron_sft_v3/multilingual_v2/math_hi": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/multilingual_v2/math_hi_073c843b",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/multilingual_v2/math_hi_7700dd0d",
+    "tokens": 286064954
+  },
+  "nemotron_sft_v3/multilingual_v2/math_ko": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/multilingual_v2/math_ko_a32819d1",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/multilingual_v2/math_ko_725d1627",
+    "tokens": 415028518
+  },
+  "nemotron_sft_v3/multilingual_v2/math_pt": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/multilingual_v2/math_pt_fbe4d238",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/multilingual_v2/math_pt_d55038ae",
+    "tokens": 344709576
+  },
+  "nemotron_sft_v3/multilingual_v2/stem_hi": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/multilingual_v2/stem_hi_6d422ce0",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/multilingual_v2/stem_hi_b5e945d3",
+    "tokens": 63027363
+  },
+  "nemotron_sft_v3/multilingual_v2/stem_ja": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/multilingual_v2/stem_ja_a0b79e43",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/multilingual_v2/stem_ja_4d9847cb",
+    "tokens": 15674932
+  },
+  "nemotron_sft_v3/multilingual_v2/stem_ko": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/multilingual_v2/stem_ko_dbfc2606",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/multilingual_v2/stem_ko_7bfcd228",
+    "tokens": 41430982
+  },
+  "nemotron_sft_v3/multilingual_v2/stem_pt": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/multilingual_v2/stem_pt_2127c903",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/multilingual_v2/stem_pt_05a097d7",
+    "tokens": 280376643
+  },
+  "nemotron_sft_v3/opencode_v1/agent_skills": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/opencode_v1/agent_skills_b491115d",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/opencode_v1/agent_skills_6fc7aa54",
+    "tokens": 1161088544
+  },
+  "nemotron_sft_v3/opencode_v1/bash_only_tool": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/opencode_v1/bash_only_tool_c212f875",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/opencode_v1/bash_only_tool_528382c5",
+    "tokens": 1369427891
+  },
+  "nemotron_sft_v3/opencode_v1/bash_only_tool_skills": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/opencode_v1/bash_only_tool_skills_d5a66049",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/opencode_v1/bash_only_tool_skills_73afaaac",
+    "tokens": 1254575003
+  },
+  "nemotron_sft_v3/opencode_v1/general": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/opencode_v1/general_e14f55d0",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/opencode_v1/general_1b1e0ee0",
+    "tokens": 1146536337
+  },
+  "nemotron_sft_v3/safety_v1/train": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/safety_v1/train_9175af00",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/safety_v1/train_03a1699f",
+    "tokens": 29529220
+  },
+  "nemotron_sft_v3/safety_v2/train": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/safety_v2/train_89506f41",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/safety_v2/train_c6fe2ee5",
+    "tokens": 104927031
+  },
+  "nemotron_sft_v3/science_v2/rqa": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/science_v2/rqa_f6e0b39a",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/science_v2/rqa_ee3e3e13",
+    "tokens": 96585137
+  },
+  "nemotron_sft_v3/science_v2/so": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/science_v2/so_d2991e7f",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/science_v2/so_51348eb2",
+    "tokens": 65203089
+  },
+  "nemotron_sft_v3/science_v2/syn_mcq": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/science_v2/syn_mcq_c34521ba",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/science_v2/syn_mcq_64e51934",
+    "tokens": 2716428
+  },
+  "nemotron_sft_v3/swe_v1/r2e_gym": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/swe_v1/r2e_gym_d4b2864c",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/swe_v1/r2e_gym_aa81da23",
+    "tokens": 2346331616
+  },
+  "nemotron_sft_v3/swe_v2/openhands_swe": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/nemotron_sft_v3/swe_v2/openhands_swe_7bd1266e",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/nemotron_sft_v3/swe_v2/openhands_swe_366bb612",
+    "tokens": 2119534682
+  },
+  "open_swe_traces/v1_1/openhands/qwen36_27b/scale_swe": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/open_swe_traces/v1_1/openhands/qwen36_27b/scale_swe_1fa22772",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/open_swe_traces/v1_1/openhands/qwen36_27b/scale_swe_652906de",
+    "tokens": 1985336125
+  },
+  "open_swe_traces/v1_1/openhands/qwen36_27b/swe_rebench_v2": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/open_swe_traces/v1_1/openhands/qwen36_27b/swe_rebench_v2_babc6c00",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/open_swe_traces/v1_1/openhands/qwen36_27b/swe_rebench_v2_7d41a87a",
+    "tokens": 1845476368
+  },
+  "open_swe_traces/v1_1/sweagent/qwen36_27b/scale_swe": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/open_swe_traces/v1_1/sweagent/qwen36_27b/scale_swe_5a682f03",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/open_swe_traces/v1_1/sweagent/qwen36_27b/scale_swe_17d96355",
+    "tokens": 2450594544
+  },
+  "open_swe_traces/v1_1/sweagent/qwen36_27b/swe_rebench_v2": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/open_swe_traces/v1_1/sweagent/qwen36_27b/swe_rebench_v2_643e7c6c",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/open_swe_traces/v1_1/sweagent/qwen36_27b/swe_rebench_v2_e5d12dd8",
+    "tokens": 2461787471
+  },
+  "open_swe_traces/v1_2/minisweagent/qwen38_27b/scale_swe": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/open_swe_traces/v1_2/minisweagent/qwen38_27b/scale_swe_c44d6612",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/open_swe_traces/v1_2/minisweagent/qwen38_27b/scale_swe_8a8522c8",
+    "tokens": 3306329880
+  },
+  "open_swe_traces/v1_2/minisweagent/qwen38_27b/swe_rebench_v2": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/open_swe_traces/v1_2/minisweagent/qwen38_27b/swe_rebench_v2_f35daad0",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/open_swe_traces/v1_2/minisweagent/qwen38_27b/swe_rebench_v2_47b35e40",
+    "tokens": 3761200521
+  },
+  "openthoughts4-code-glm-5.2-n4": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/openthoughts4-code-glm-5.2-n4_44da9a7c",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/openthoughts4-code-glm-5.2-n4_95d3b335",
+    "tokens": 3353670934
+  },
+  "penfever-traces/qwen35-122b-131k-opencode/code-contests-noblock": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/penfever-traces/qwen35-122b-131k-opencode/code-contests-noblock_3fdd3005",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/penfever-traces/qwen35-122b-131k-opencode/code-contests-noblock_745dcb88",
+    "tokens": 44463910
+  },
+  "penfever-traces/qwen35-122b-131k-opencode/exp_rpt_crosscodeeval-csharp-v4": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_crosscodeeval-csharp-v4_00e2cf77",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_crosscodeeval-csharp-v4_8a450c7d",
+    "tokens": 14228901
+  },
+  "penfever-traces/qwen35-122b-131k-opencode/exp_rpt_crosscodeeval-java": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_crosscodeeval-java_4f3ee19c",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_crosscodeeval-java_1b3e8768",
+    "tokens": 1599013
+  },
+  "penfever-traces/qwen35-122b-131k-opencode/exp_rpt_curriculum-easy": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_curriculum-easy_ce380de4",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_curriculum-easy_ccc4501b",
+    "tokens": 2554790
+  },
+  "penfever-traces/qwen35-122b-131k-opencode/exp_rpt_curriculum-hard": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_curriculum-hard_c275465b",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_curriculum-hard_9eb65db6",
+    "tokens": 185097
+  },
+  "penfever-traces/qwen35-122b-131k-opencode/exp_rpt_curriculum-medium": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_curriculum-medium_09c8a705",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_curriculum-medium_7410b431",
+    "tokens": 3100840
+  },
+  "penfever-traces/qwen35-122b-131k-opencode/exp_rpt_e2egit-large": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_e2egit-large_706a5c6b",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_e2egit-large_8d0a87cd",
+    "tokens": 17306906
+  },
+  "penfever-traces/qwen35-122b-131k-opencode/exp_rpt_e2egit-v2": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_e2egit-v2_55a79680",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_e2egit-v2_c3cd1ccf",
+    "tokens": 1723603
+  },
+  "penfever-traces/qwen35-122b-131k-opencode/exp_rpt_ghactions-v3": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_ghactions-v3_8b109195",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_ghactions-v3_380b9cb7",
+    "tokens": 62400079
+  },
+  "penfever-traces/qwen35-122b-131k-opencode/exp_rpt_issue": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_issue_0c0ef34e",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_issue_37fa3ab3",
+    "tokens": 1192573
+  },
+  "penfever-traces/qwen35-122b-131k-opencode/exp_rpt_nemotron-junit": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_nemotron-junit_b27ddb82",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_nemotron-junit_d38d8537",
+    "tokens": 947660
+  },
+  "penfever-traces/qwen35-122b-131k-opencode/exp_rpt_pymethods2test-large": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_pymethods2test-large_af28e981",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_pymethods2test-large_a108ccda",
+    "tokens": 40545891
+  },
+  "penfever-traces/qwen35-122b-131k-opencode/exp_rpt_pymethods2test-v3": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_pymethods2test-v3_f311f606",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_pymethods2test-v3_257c7241",
+    "tokens": 3845456
+  },
+  "penfever-traces/qwen35-122b-131k-opencode/exp_rpt_stack-pytest-large": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_stack-pytest-large_025ca628",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_stack-pytest-large_18b54d6f",
+    "tokens": 4860374
+  },
+  "penfever-traces/qwen35-122b-131k-opencode/exp_rpt_stack-pytest-v2": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_stack-pytest-v2_a2df8879",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_stack-pytest-v2_08bc7c82",
+    "tokens": 1761856
+  },
+  "penfever-traces/qwen35-122b-131k-opencode/exp_rpt_unitsyn-python-large": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_unitsyn-python-large_8b6c1bf4",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_unitsyn-python-large_6aeab873",
+    "tokens": 17473865
+  },
+  "penfever-traces/qwen35-122b-131k-opencode/exp_rpt_unitsyn-python-v3": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_unitsyn-python-v3_8a47b8bc",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/penfever-traces/qwen35-122b-131k-opencode/exp_rpt_unitsyn-python-v3_0fdc0305",
+    "tokens": 1050559
+  },
+  "penfever-traces/qwen35-122b-131k-opencode/inferredbugs-sandboxes-verifier": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/penfever-traces/qwen35-122b-131k-opencode/inferredbugs-sandboxes-verifier_d37a4b28",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/penfever-traces/qwen35-122b-131k-opencode/inferredbugs-sandboxes-verifier_d828a1ef",
+    "tokens": 9116056
+  },
+  "penfever-traces/qwen35-122b-131k-opencode/mix_h4_binary_easy": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/penfever-traces/qwen35-122b-131k-opencode/mix_h4_binary_easy_93fee8e6",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/penfever-traces/qwen35-122b-131k-opencode/mix_h4_binary_easy_0c0b0cd9",
+    "tokens": 7817765
+  },
+  "penfever-traces/qwen35-122b-131k-opencode/nemotron-gym-agent-calendar": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/penfever-traces/qwen35-122b-131k-opencode/nemotron-gym-agent-calendar_75b47e45",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/penfever-traces/qwen35-122b-131k-opencode/nemotron-gym-agent-calendar_df2a08d6",
+    "tokens": 33464451
+  },
+  "penfever-traces/qwen35-122b-131k-opencode/nemotron-gym-instruction-following-structured": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/penfever-traces/qwen35-122b-131k-opencode/nemotron-gym-instruction-following-structured_80c4dfeb",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/penfever-traces/qwen35-122b-131k-opencode/nemotron-gym-instruction-following-structured_f6e9257c",
+    "tokens": 88983029
+  },
+  "penfever-traces/qwen35-122b-131k-opencode/nemotron-gym-knowledge-web-search-mcqa": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/penfever-traces/qwen35-122b-131k-opencode/nemotron-gym-knowledge-web-search-mcqa_7527c8fc",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/penfever-traces/qwen35-122b-131k-opencode/nemotron-gym-knowledge-web-search-mcqa_13a17262",
+    "tokens": 22687578
+  },
+  "penfever-traces/qwen35-122b-131k-opencode/nemotron-gym-math-advanced-calculations-v3": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/penfever-traces/qwen35-122b-131k-opencode/nemotron-gym-math-advanced-calculations-v3_07de185c",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/penfever-traces/qwen35-122b-131k-opencode/nemotron-gym-math-advanced-calculations-v3_23e1ba9a",
+    "tokens": 42108623
+  },
+  "penfever-traces/qwen35-122b-131k-opencode/nl2bash-tasks-cleaned-oracle": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/penfever-traces/qwen35-122b-131k-opencode/nl2bash-tasks-cleaned-oracle_f0294085",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/penfever-traces/qwen35-122b-131k-opencode/nl2bash-tasks-cleaned-oracle_5d59025b",
+    "tokens": 4214928
+  },
+  "synthetic-misconceptions-conversations": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/synthetic-misconceptions-conversations_7f7ae1a4",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/synthetic-misconceptions-conversations_24b38388",
+    "tokens": 1704859
+  },
+  "ultrachat-persona-conversations": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/ultrachat-persona-conversations_336f12cd",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/ultrachat-persona-conversations_1059383a",
+    "tokens": 324455701
+  },
+  "wildchat-glm53-format-completions": {
+    "cache_path": "gs://marin-us-central2/datakit/store/sft/wildchat-glm53-format-completions_0935325a",
+    "tokenized_artifact": "gs://marin-us-central2/datakit/tokenize/sft/wildchat-glm53-format-completions_dc103410",
+    "tokens": 9506138
+  }
+}

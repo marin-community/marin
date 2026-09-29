@@ -17,6 +17,7 @@ import jax.numpy as jnp
 import jmp
 import levanter.callbacks as callbacks
 import levanter.tracker
+import numpy as np
 import optax
 from fray.cluster import ResourceConfig
 from haliax import Axis
@@ -148,6 +149,25 @@ def build_train_dataset(
         key=mix_key,
         block_size=data_config.mixture_block_size,
     )
+
+
+def verify_data_epochs(train_dataset: MixtureDataset[GrugLmExample], run_sequences: int, max_data_epochs: int) -> None:
+    """Check the exact planned source draws, including the final partial mixture block."""
+    if max_data_epochs < 1 or len(train_dataset.weight_stages) != 1:
+        raise ValueError("Epoch limits require a positive limit and a fixed mixture")
+
+    full_blocks, remainder = divmod(run_sequences, train_dataset.block_size)
+    per_block = train_dataset._counts_per_block_per_stage[0]
+    partial_counts = np.zeros(len(train_dataset.dataset_index), dtype=np.int64)
+    if remainder:
+        partial_ids = train_dataset._get_block(full_blocks)[:remainder] >> 16
+        partial_counts = np.bincount(partial_ids, minlength=len(train_dataset.dataset_index))
+    for index, name in enumerate(train_dataset.dataset_index):
+        planned = full_blocks * int(per_block[index]) + int(partial_counts[index])
+        available = len(train_dataset.datasets[name].as_sync_dataset())
+        if planned > max_data_epochs * available:
+            raise ValueError(f"{name}: planned {planned} sequences exceeds {available} per epoch")
+    logger.info("Verified every source stays within %d data epoch(s)", max_data_epochs)
 
 
 def _without_fa4_bounds(example: GrugLmExample) -> GrugLmExample:
@@ -607,18 +627,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             key=data_key,
         )
         if config.trainer.max_data_epochs is not None:
-            if config.trainer.max_data_epochs < 1 or len(train_dataset.weight_stages) != 1:
-                raise ValueError("Epoch limits require a positive limit and a fixed mixture")
             run_steps = trainer.num_train_steps - config.trainer.data_start_step
             run_sequences = batch_schedule.global_data_offset_by_step(run_steps)
-            blocks = (run_sequences + train_dataset.block_size - 1) // train_dataset.block_size
-            for name, count in zip(
-                train_dataset.dataset_index, train_dataset._counts_per_block_per_stage[0], strict=True
-            ):
-                available = len(train_dataset.datasets[name].as_sync_dataset())
-                if blocks * int(count) > config.trainer.max_data_epochs * available:
-                    raise ValueError(f"{name}: planned {blocks * int(count)} sequences exceeds {available} per epoch")
-            logger.info("Verified every source stays within %d data epoch(s)", config.trainer.max_data_epochs)
+            verify_data_epochs(train_dataset, run_sequences, config.trainer.max_data_epochs)
         if train_dataset.is_finite():
             available_steps = batch_schedule.find_step_containing_offset(len(train_dataset.as_sync_dataset()))
             end_step = min(trainer.num_train_steps, config.trainer.data_start_step + available_steps)
