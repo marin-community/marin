@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 import pytest
-from tasktrove_verify.grade import Status, main
+from tasktrove_verify.grade import InvalidTask, Status, main
 from tasktrove_verify.grade import grade as dispatch
 from tasktrove_verify.modes import grade_mcq
 from tasktrove_verify.spec import McqSpec
@@ -13,6 +13,25 @@ from tasktrove_verify.spec import McqSpec
 
 def _answer(workspace: Path, text: str) -> None:
     (workspace / "answer.txt").write_text(text)
+
+
+@pytest.mark.parametrize(
+    "candidate, expected_reward, detail",
+    [
+        (" c ", 1.0, {"extracted": "C", "expected": "C"}),
+        ("B", 0.0, {"extracted": "B", "expected": "C"}),
+        ("E", 0.0, {"reason": "out_of_range", "extracted": "E", "expected": "C"}),
+        ("", 0.0, {"reason": "no_answer_line", "expected": "C"}),
+    ],
+)
+def test_mcq_candidate_scores_extracted_option(candidate, expected_reward, detail):
+    result = grade_mcq.grade_mcq_candidate(McqSpec(expected=" C ", options=4), candidate)
+    assert (result.status, result.reward, result.detail) == (Status.SCORED, expected_reward, detail)
+
+
+def test_mcq_candidate_rejects_invalid_reference():
+    with pytest.raises(InvalidTask):
+        grade_mcq.grade_mcq_candidate(McqSpec(expected="E", options=4), "E")
 
 
 @pytest.mark.parametrize(

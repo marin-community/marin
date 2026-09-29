@@ -11,10 +11,10 @@ from pydantic import ValidationError
 from taskcompendium.grading import ExactAnswerVerifier, GradeResult, GradingAttempt, Verifier
 from taskcompendium.models import TaskSpec, VerifierKind, VerifierSpec
 from taskcompendium.submission import SubmissionConvention
-from taskcompendium.verifiers.tasktrove_mcqa import TaskTroveMcqaVerifier
+from taskcompendium.verifiers.tasktrove import TaskTroveVerifier
 
 VERIFIERS: Mapping[VerifierKind, type[Verifier]] = MappingProxyType(
-    {VerifierKind.EXACT_ANSWER: ExactAnswerVerifier, VerifierKind.TASKTROVE_MCQA: TaskTroveMcqaVerifier}
+    {VerifierKind.EXACT_ANSWER: ExactAnswerVerifier, VerifierKind.TASKTROVE: TaskTroveVerifier}
 )
 
 

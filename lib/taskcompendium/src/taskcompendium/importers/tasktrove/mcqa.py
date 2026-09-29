@@ -12,7 +12,7 @@ from tasktrove_verify.spec import McqSpec, parse_spec
 from taskcompendium.importers.tasktrove.convert import METADATA_TABLE, TASK_MANIFEST
 from taskcompendium.importers.tasktrove.models import TaskArchive
 from taskcompendium.models import AnswerType, TaskRequirements, TaskSpec
-from taskcompendium.verifiers.tasktrove_mcqa import tasktrove_mcqa_verifier
+from taskcompendium.verifiers.tasktrove import tasktrove_verifier
 
 FAMILY = "qa-short-answer"
 CONVERTER = "nemotron_mcqa"
@@ -53,7 +53,8 @@ def import_task(archive: TaskArchive) -> TaskSpec:
         metadata = tomllib.loads(archive.files[TASK_MANIFEST].decode())[METADATA_TABLE]
         if metadata.get("family") != FAMILY or metadata.get("converter") != CONVERTER:
             raise ValueError("Unsupported TaskTrove MCQA source")
-        contract = parse_spec(archive.files["tests/verifier.toml"].decode())
+        verifier_toml = archive.files["tests/verifier.toml"].decode()
+        contract = parse_spec(verifier_toml)
         if not isinstance(contract, McqSpec):
             raise ValueError("TaskTrove MCQA archive must declare an MCQ verifier")
         instructions = _clean_instructions(archive.files["instruction.md"].decode(), contract.options)
@@ -66,7 +67,7 @@ def import_task(archive: TaskArchive) -> TaskSpec:
     return TaskSpec(
         id=f"tasktrove-{hashlib.sha256(identity.encode()).hexdigest()}",
         instructions=instructions,
-        verifier=tasktrove_mcqa_verifier(contract.expected, contract.options),
+        verifier=tasktrove_verifier(verifier_toml),
         source=archive.source,
         requirements=TaskRequirements(),
         answer_type=AnswerType.TEXT,
