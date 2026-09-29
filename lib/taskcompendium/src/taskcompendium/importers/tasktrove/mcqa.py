@@ -11,7 +11,7 @@ from tasktrove_verify.spec import McqSpec, parse_spec
 
 from taskcompendium.importers.tasktrove.convert import METADATA_TABLE, TASK_MANIFEST
 from taskcompendium.importers.tasktrove.models import TaskArchive
-from taskcompendium.models import AnswerType, TaskRequirements, TaskSpec
+from taskcompendium.models import AnswerType, ConversationInput, TaskRequirements, TaskSpec, TextMessage
 from taskcompendium.verifiers.multiple_choice import multiple_choice_answer
 
 FAMILY = "qa-short-answer"
@@ -65,9 +65,9 @@ def import_task(archive: TaskArchive) -> TaskSpec:
     )
     return TaskSpec(
         id=f"tasktrove-{hashlib.sha256(identity.encode()).hexdigest()}",
-        instructions=instructions,
-        verifier=multiple_choice_answer(contract.expected, contract.options),
-        source=archive.source,
+        context=ConversationInput(events=(TextMessage(role="user", content=instructions),)),
         requirements=TaskRequirements(),
         answer_type=AnswerType.TEXT,
+        verifier=multiple_choice_answer(contract.expected, contract.options),
+        source=archive.source,
     )
