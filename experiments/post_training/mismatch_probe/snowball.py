@@ -27,8 +27,8 @@ from marin.rl.skyrl import (
 )
 from rigging.provenance import Provenance
 
-from experiments.post_training.async_rl import CHAT_TEMPLATE, GPUS_PER_NODE, SNOWBALL_RECIPE
-from experiments.post_training.curriculum_rl.launch import SNOWBALL_MODEL, SNOWBALL_POLICY
+from experiments.post_training.async_rl import GPUS_PER_NODE, SNOWBALL_RECIPE
+from experiments.post_training.curriculum_rl.launch import SNOWBALL_MODEL, SNOWBALL_POLICY, SNOWBALL_SFT_EXPORT_URI
 from experiments.post_training.mismatch_probe.launch import (
     PROBE_ENGINE_OPTIONS,
     PROBE_SAMPLING_PARAMS,
@@ -129,7 +129,10 @@ def snowball_recipe(
             "gpu_memory_utilization": 0.75,
             "enable_prefix_caching": settings.cache_mode != "off",
             "require_exact_chat_transport": True,
-            "chat_template": asdict(CHAT_TEMPLATE),
+            "chat_template": {
+                "source": "file",
+                "name_or_path": f"{SNOWBALL_SFT_EXPORT_URI.rstrip('/')}/chat_template.jinja",
+            },
             "engine_init_kwargs": {
                 **dict(SNOWBALL_RECIPE.engine_init_kwargs),
                 "enable_return_routed_experts": replay,
