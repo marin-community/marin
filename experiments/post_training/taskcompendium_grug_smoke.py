@@ -146,9 +146,10 @@ taskcompendium:
   timeout: 300
 
 trainer:
-  strategy: fsdp2
-  flash_attn: true
+  strategy: megatron
+  flash_attn: false
   use_sample_packing: false
+  gradient_checkpointing: true
   algorithm:
     advantage_estimator: grpo
     use_kl_loss: false
@@ -169,12 +170,19 @@ trainer:
     optimizer_config:
       lr: 1.0e-6
       max_grad_norm: 1.0
-    fsdp_config:
-      cpu_offload: false
-      reshard_after_forward: true
+    megatron_config:
+      tensor_model_parallel_size: 1
+      pipeline_model_parallel_size: 1
+      context_parallel_size: 1
       expert_model_parallel_size: {GPUS_PER_NODE}
-      use_grouped_mm: true
-      ep_comm_backend: torch
+      expert_tensor_parallel_size: 1
+  ref:
+    megatron_config:
+      tensor_model_parallel_size: 1
+      pipeline_model_parallel_size: 1
+      context_parallel_size: 1
+      expert_model_parallel_size: {GPUS_PER_NODE}
+      expert_tensor_parallel_size: 1
 
 generator:
   backend: vllm
@@ -185,10 +193,9 @@ generator:
   enforce_eager: false
   run_engines_locally: true
   weight_sync_backend: nccl
-  async_engine: true
-  batched: false
   enable_http_endpoint: true
   engine_init_kwargs:
+    moe_backend: triton
     enable_auto_tool_choice: true
     tool_call_parser: hermes
   sampling_params:
@@ -209,7 +216,7 @@ def smoke_step(packages: ArtifactStep[Artifact], runtime_commit: str, version: s
             name=name,
             version=version,
             config_yaml=rl_config_yaml(ROLE_PLAN),
-            runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.FSDP, commit=runtime_commit),
+            runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON, commit=runtime_commit),
             model=PinnedHfModel(
                 repository=MODEL,
                 revision=MODEL_REVISION,
