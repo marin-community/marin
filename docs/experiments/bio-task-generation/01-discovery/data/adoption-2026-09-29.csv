@@ -1,0 +1,96 @@
+name,repository_url,github_url,bioconda_max_package_downloads,bioconductor_download_score,github_stars,pypi_max_package_downloads_30d,pypi_packages,pypi_window_start,pypi_window_end
+BLAST+,https://github.com/ncbi/ncbi-cxx-toolkit-public,https://github.com/ncbi/ncbi-cxx-toolkit-public,3382435,,102,,,,
+SAMtools,https://github.com/samtools/samtools,https://github.com/samtools/samtools,9707033,,1964,,,,
+BWA,https://github.com/lh3/bwa,https://github.com/lh3/bwa,2285259,,1769,,,,
+Bowtie 2,https://github.com/BenLangmead/bowtie2,https://github.com/BenLangmead/bowtie2,3869511,,812,,,,
+DESeq2,https://git.bioconductor.org/packages/DESeq2,https://github.com/thelovelab/DESeq2,751452,31328,479,,,,
+STAR,https://github.com/alexdobin/STAR,https://github.com/alexdobin/STAR,1777223,,2257,,,,
+BEDTools,https://github.com/arq5x/bedtools2,https://github.com/arq5x/bedtools2,4074077,,1052,,,,
+GATK,https://github.com/broadinstitute/gatk,https://github.com/broadinstitute/gatk,1238705,,2003,,,,
+pysam,https://github.com/pysam-developers/pysam,https://github.com/pysam-developers/pysam,12282748,,911,1014605,pysam,2026-08-30,2026-09-28
+MAFFT,https://gitlab.com/sysimm/mafft,,1502496,,,,,,
+HMMER,https://github.com/EddyRivasLab/hmmer,https://github.com/EddyRivasLab/hmmer,2591956,,425,,,,
+Seurat,https://github.com/satijalab/seurat,https://github.com/satijalab/seurat,,,2805,,,,
+minimap2,https://github.com/lh3/minimap2,https://github.com/lh3/minimap2,1540079,,2251,,,,
+BCFtools,https://github.com/samtools/bcftools,https://github.com/samtools/bcftools,4661321,,896,,,,
+Picard,https://github.com/broadinstitute/picard,https://github.com/broadinstitute/picard,2982579,,1079,,,,
+Snakemake,https://github.com/snakemake/snakemake,https://github.com/snakemake/snakemake,2027238,,2881,153724,snakemake,2026-08-30,2026-09-28
+HTSlib,https://github.com/samtools/htslib,https://github.com/samtools/htslib,9118220,,953,,,,
+FastQC,https://github.com/s-andrews/FastQC,https://github.com/s-andrews/FastQC,1503503,,621,,,,
+Biopython,https://github.com/biopython/biopython,https://github.com/biopython/biopython,444273,,5215,3815234,biopython,2026-08-30,2026-09-28
+Nextflow,https://github.com/nextflow-io/nextflow,https://github.com/nextflow-io/nextflow,643483,,3495,,,,
+DIAMOND,https://github.com/bbuchfink/diamond,https://github.com/bbuchfink/diamond,3028204,,1324,,,,
+PLINK / PLINK 2,https://github.com/chrchang/plink-ng,https://github.com/chrchang/plink-ng,191219,,521,,,,
+Scanpy,https://github.com/scverse/scanpy,https://github.com/scverse/scanpy,149005,,2577,667672,scanpy,2026-08-30,2026-09-28
+MultiQC,https://github.com/MultiQC/MultiQC,https://github.com/MultiQC/MultiQC,927852,,1493,24301,multiqc,2026-08-30,2026-09-28
+edgeR,https://git.bioconductor.org/packages/edgeR,,732091,29733,,,,,
+limma,https://git.bioconductor.org/packages/limma,,924968,42915,,,,,
+SPAdes,https://github.com/ablab/spades,https://github.com/ablab/spades,920567,,961,,,,
+IQ-TREE,https://github.com/iqtree/iqtree3,https://github.com/iqtree/iqtree3,1140975,,166,,,,
+FastTree,https://github.com/morgannprice/fasttree,https://github.com/morgannprice/fasttree,1633787,,45,,,,
+RAxML,https://github.com/stamatak/standard-RAxML,https://github.com/stamatak/standard-RAxML,1549290,,351,,,,
+cutadapt,https://github.com/marcelm/cutadapt,https://github.com/marcelm/cutadapt,1583771,,587,38448,cutadapt,2026-08-30,2026-09-28
+Salmon,https://github.com/COMBINE-lab/salmon,https://github.com/COMBINE-lab/salmon,832906,,932,,,,
+kallisto,https://github.com/pachterlab/kallisto,https://github.com/pachterlab/kallisto,308370,,772,,,,
+StringTie,https://github.com/gpertea/stringtie,https://github.com/gpertea/stringtie,873646,,534,,,,
+fastp,https://github.com/OpenGene/fastp,https://github.com/OpenGene/fastp,819201,,2435,,,,
+SRA Toolkit,https://github.com/ncbi/sra-tools,https://github.com/ncbi/sra-tools,792214,,1368,,,,
+deepTools,https://github.com/deeptools/deepTools,https://github.com/deeptools/deepTools,1234197,,767,7403,deeptools,2026-08-30,2026-09-28
+VCFtools,https://github.com/vcftools/vcftools,https://github.com/vcftools/vcftools,769297,,565,,,,
+SnpEff,https://github.com/pcingola/SnpEff,https://github.com/pcingola/SnpEff,656246,,313,,,,
+Ensembl VEP,https://github.com/Ensembl/ensembl-vep,https://github.com/Ensembl/ensembl-vep,460056,,575,,,,
+MACS2 / MACS3,https://github.com/macs3-project/MACS,https://github.com/macs3-project/MACS,226316,,785,12286,macs2;macs3,2026-08-30,2026-09-28
+MMseqs2,https://github.com/soedinglab/MMseqs2,https://github.com/soedinglab/MMseqs2,672817,,2148,,,,
+MUSCLE,https://github.com/rcedgar/muscle,https://github.com/rcedgar/muscle,729183,,290,,,,
+Kraken 2,https://github.com/DerrickWood/kraken2,https://github.com/DerrickWood/kraken2,223847,,941,,,,
+BUSCO,https://gitlab.com/ezlab/busco,,455570,,,,,,
+UCSC Kent utilities,https://github.com/ucscGenomeBrowser/kent,https://github.com/ucscGenomeBrowser/kent,618051,,278,,,,
+GenomicRanges,https://git.bioconductor.org/packages/GenomicRanges,https://github.com/Bioconductor/GenomicRanges,1957521,54735,47,,,,
+Biostrings,https://git.bioconductor.org/packages/Biostrings,https://github.com/Bioconductor/Biostrings,1902417,55981,70,,,,
+pybedtools,https://github.com/daler/pybedtools,https://github.com/daler/pybedtools,1569302,,330,123860,pybedtools,2026-08-30,2026-09-28
+nf-core/tools,https://github.com/nf-core/tools,https://github.com/nf-core/tools,155524,,323,22894,nf-core,2026-08-30,2026-09-28
+LAST,https://gitlab.com/mcfrith/last,,3736648,,,,,,
+MEME Suite,https://meme-suite.org/meme/meme-software/5.5.9/meme-5.5.9.tar.gz,,3472737,,,,,,
+BBTools,https://github.com/bbushnell/BBTools,https://github.com/bbushnell/BBTools,1949531,,95,,,,
+Entrez Direct,https://ftp.ncbi.nlm.nih.gov/entrez/entrezdirect/versions/26.0.20260719/edirect.tar.gz,,1950018,,,,,,
+ViennaRNA,https://github.com/ViennaRNA/ViennaRNA,https://github.com/ViennaRNA/ViennaRNA,1487092,,436,60397,viennarna,2026-08-30,2026-09-28
+HyPhy,https://github.com/veg/hyphy,https://github.com/veg/hyphy,1314315,,271,,,,
+SEPP,https://github.com/smirarab/sepp,https://github.com/smirarab/sepp,1294936,,96,,,,
+HTSeq,https://github.com/htseq/htseq,https://github.com/htseq/htseq,1113088,,109,13602,htseq,2026-08-30,2026-09-28
+VSEARCH,https://github.com/torognes/vsearch,https://github.com/torognes/vsearch,995945,,762,,,,
+FreeBayes,https://github.com/freebayes/freebayes,https://github.com/freebayes/freebayes,929823,,880,,,,
+SeqKit,https://github.com/shenwei356/seqkit,https://github.com/shenwei356/seqkit,911309,,1596,,,,
+seqtk,https://github.com/lh3/seqtk,https://github.com/lh3/seqtk,862851,,1565,,,,
+SearchGUI,https://github.com/CompOmics/searchgui,https://github.com/CompOmics/searchgui,758919,,48,,,,
+PeptideShaker,https://github.com/CompOmics/peptide-shaker,https://github.com/CompOmics/peptide-shaker,1427146,,56,,,,
+Prokka,https://github.com/tseemann/prokka,https://github.com/tseemann/prokka,263543,,995,,,,
+QUAST,https://github.com/ablab/quast,https://github.com/ablab/quast,401704,,521,3423,quast,2026-08-30,2026-09-28
+CheckM,https://github.com/Ecogenomics/CheckM,https://github.com/Ecogenomics/CheckM,127670,,411,660,checkm-genome,2026-08-30,2026-09-28
+Mash,https://github.com/marbl/Mash,https://github.com/marbl/Mash,327700,,453,,,,
+sourmash,https://github.com/sourmash-bio/sourmash,https://github.com/sourmash-bio/sourmash,310321,,557,9608,sourmash,2026-08-30,2026-09-28
+BEDOPS,https://github.com/bedops/bedops,https://github.com/bedops/bedops,256797,,375,,,,
+BamTools,https://github.com/pezmaster31/bamtools,https://github.com/pezmaster31/bamtools,725131,,432,,,,
+pyBigWig,https://github.com/deeptools/pyBigWig,https://github.com/deeptools/pyBigWig,1074729,,251,158577,pybigwig,2026-08-30,2026-09-28
+pyfaidx,https://github.com/mdshw5/pyfaidx,https://github.com/mdshw5/pyfaidx,976993,,489,328711,pyfaidx,2026-08-30,2026-09-28
+cyvcf2,https://github.com/brentp/cyvcf2,https://github.com/brentp/cyvcf2,1199768,,450,133754,cyvcf2,2026-08-30,2026-09-28
+DendroPy,https://github.com/jeetsukumaran/DendroPy,https://github.com/jeetsukumaran/DendroPy,972166,,237,87310,dendropy,2026-08-30,2026-09-28
+fgsea,https://git.bioconductor.org/packages/fgsea,https://github.com/alserglab/fgsea,222156,28193,459,,,,
+clusterProfiler,https://git.bioconductor.org/packages/clusterProfiler,https://github.com/YuLab-SMU/clusterProfiler,202009,27991,1239,,,,
+GSVA,https://git.bioconductor.org/packages/GSVA,https://github.com/rcastelo/GSVA,96383,11755,249,,,,
+ggtree,https://git.bioconductor.org/packages/ggtree,https://github.com/YuLab-SMU/ggtree,230231,33070,935,,,,
+treeio,https://git.bioconductor.org/packages/treeio,https://github.com/YuLab-SMU/treeio,392644,30493,105,,,,
+ComplexHeatmap,https://git.bioconductor.org/packages/ComplexHeatmap,https://github.com/jokergoo/ComplexHeatmap,177953,22841,1557,,,,
+scater,https://git.bioconductor.org/packages/scater,,304978,11044,,,,,
+scuttle,https://git.bioconductor.org/packages/scuttle,,504671,12844,,,,,
+scran,https://git.bioconductor.org/packages/scran,https://github.com/MarioniLab/scran,328350,8655,48,,,,
+phyloseq,https://git.bioconductor.org/packages/phyloseq,https://github.com/joey711/phyloseq,305728,7797,652,,,,
+dada2,https://git.bioconductor.org/packages/dada2,https://github.com/benjjneb/dada2,722834,3655,558,,,,
+SingleR,https://git.bioconductor.org/packages/SingleR,https://github.com/SingleR-inc/SingleR,52024,6291,205,,,,
+sva,https://git.bioconductor.org/packages/sva,,133792,10633,,,,,
+tximport,https://git.bioconductor.org/packages/tximport,https://github.com/thelovelab/tximport,209963,5262,145,,,,
+GEOquery,https://git.bioconductor.org/packages/GEOquery,https://github.com/seandavi/GEOquery,105905,14795,118,,,,
+biomaRt,https://git.bioconductor.org/packages/biomaRt,https://github.com/Huber-group-EMBL/biomaRt,414010,24443,51,,,,
+rtracklayer,https://git.bioconductor.org/packages/rtracklayer,,634870,24920,,,,,
+GenomicFeatures,https://git.bioconductor.org/packages/GenomicFeatures,https://github.com/Bioconductor/GenomicFeatures,412368,18930,26,,,,
+VariantAnnotation,https://git.bioconductor.org/packages/VariantAnnotation,,225530,9757,,,,,
+ShortRead,https://git.bioconductor.org/packages/ShortRead,https://github.com/Bioconductor/ShortRead,749843,7516,8,,,,
