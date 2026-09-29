@@ -10,7 +10,6 @@ serve:
   tensor_parallel_size: 1
   data_parallel_size: 8
   max_model_len: 262144
-  reasoning_parser: grug
   auto_overrides: false
   vllm_extra_args:
   - --enable-expert-parallel
