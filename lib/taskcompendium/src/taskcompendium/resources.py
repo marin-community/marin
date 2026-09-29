@@ -159,8 +159,8 @@ def materialize_resources(
 ) -> None:
     """Install selected files after validating every task resource.
 
-    The destination is a caller-owned root. Existing files and symlinks below
-    that root are rejected rather than followed or overwritten.
+    The destination is a caller-owned root. Existing files and symlinks on
+    selected resource paths are rejected rather than followed or overwritten.
     """
     resolved = validate_resources(resources, trusted_resolver=trusted_resolver)
     allowed = frozenset({visibility}) if isinstance(visibility, ResourceVisibility) else visibility
