@@ -6,7 +6,7 @@ Training and evaluation tasks arrive with different prompt formats, answer rules
 
 The current implementation is a small direct-chat slice. It accepts a final text or number answer, exports a Harbor task, and grades the answer through a private verifier registry. The task model also names file, workspace-state, and native-action results, but this slice has no Harbor environment configuration or submission convention for those result types.
 
-The proposed [conversation input and answer constraints](CONVERSATION_AND_ANSWER_CONSTRAINTS.md) specify how future task specs preserve source message history and intrinsic output-format rules. Those fields are not implemented in this slice.
+The proposed [conversation input and delivery constraints](CONVERSATION_AND_DELIVERY_CONSTRAINTS.md) specify how future task specs preserve source message history and direct-output requirements. Content and format checks belong to verifiers. These fields are not implemented in this slice.
 
 ## What does it contain?
 

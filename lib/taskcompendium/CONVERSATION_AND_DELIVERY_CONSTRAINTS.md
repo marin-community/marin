@@ -1,12 +1,13 @@
-# Conversation input and answer constraints
+# Conversation input and delivery constraints
 
 **Status:** Proposed TaskCompendium schema extension. The current implementation
 uses one `instructions` string and does not implement this contract.
 
-`TaskSpec` needs to preserve the input a model actually receives and the
-intrinsic form of a valid answer. These are task semantics. A submission
-convention still chooses how an answer is delivered and extracted, and a target
-adapter still chooses the model API and execution environment.
+`TaskSpec` needs to preserve the input a model actually receives and any
+source requirement that its answer be delivered directly. A submission
+convention chooses how an answer is delivered and extracted when the task
+allows a choice. The verifier checks the answer's content and format. A target
+adapter chooses the model API and execution environment.
 
 This proposal covers one assistant decision after a fixed input history. It
 does not specify a reactive user, live tool execution, or a multi-step rollout.
@@ -15,14 +16,14 @@ The history produced during a rollout remains the harness's responsibility.
 ## TaskSpec shape
 
 Replace the single `instructions` string with `input`. Keep `answer_type` as the
-coarse result kind and add optional `answer_constraints`:
+coarse result kind and add a `delivery_requirement`:
 
 ```text
 TaskSpec
   id
   input: ConversationInput
   answer_type: text | number | file | workspace_state | native_action
-  answer_constraints: AnswerConstraints
+  delivery_requirement: any_compatible | direct_assistant_message
   requirements
   verifier                         # private
   source
@@ -34,19 +35,13 @@ ConversationInput
   next_action: unspecified | none | auto | required | named(name)
   call_cardinality: unspecified | single | multiple
 
-AnswerConstraints
-  delivery: any_compatible | direct_assistant_message
-  content: unconstrained | JsonSchemaConstraint
-
-JsonSchemaConstraint
-  dialect: explicit JSON Schema dialect URI
-  schema: JSON object
 ```
 
 The names are proposed API names. The required distinction is between the
-coarse answer type, the source conversation, and constraints on the answer's
-form. A plain arithmetic task has one user `TextMessage`, `answer_type=number`,
-and the default `AnswerConstraints(any_compatible, unconstrained)`.
+coarse answer type, the source conversation, the delivery requirement used by
+lowering, and the verifier's correctness rules. A plain arithmetic task has
+one user `TextMessage`, `answer_type=number`, and the default
+`delivery_requirement=any_compatible`.
 
 ## Conversation input
 
@@ -104,62 +99,57 @@ text answer. [Agentic pivot rows](https://huggingface.co/datasets/nvidia/Nemotro
 also contain prior function calls and results. Neither can be represented
 faithfully by concatenating their text into `instructions`.
 
-## Intrinsic answer constraints
+## Delivery and verification
 
 `answer_type` continues to describe what kind of result is requested. A
 submission convention first checks `supports(spec.answer_type)`. It then
-checks whether it preserves `spec.answer_constraints`. Neither check requires
-the spec to list permitted convention IDs.
+checks whether it preserves `spec.delivery_requirement`. Neither check
+requires the spec to list permitted convention IDs.
 
-`delivery=any_compatible` allows a convention to wrap and extract the answer
-if the extracted value still satisfies the content constraint. For example, a
-number may be delivered as plain text or in a JSON `answer` field.
-`delivery=direct_assistant_message` requires the answer itself to be the final
-assistant message content. A JSON `answer` wrapper, answer function call, or
-file submission is incompatible. This expresses a source requirement such as
+`any_compatible` allows a convention to wrap and extract the answer. For
+example, a number may be delivered as plain text or in a JSON `answer` field.
+`direct_assistant_message` requires the answer itself to be the final assistant
+message content. A JSON `answer` wrapper, answer function call, or file
+submission is incompatible. This expresses a source requirement such as
 “return only the C++ code” without binding the task to a named convention.
+Lowering must reject an incompatible convention before execution; grading a
+contradictory prompt after the fact would not repair the task.
 
-`content=unconstrained` adds no machine-readable format requirement. A
-`JsonSchemaConstraint` requires the answer content to be a JSON document that
-validates against its pinned schema and dialect. The constraint can apply to
-the extracted answer under `any_compatible`, or to the raw final assistant
-message under `direct_assistant_message`. It does not turn `answer_type=text`
-into a new result kind. Other intrinsic formats can add tagged constraint
-variants when a source requires them; this proposal defines JSON Schema only.
-Validation parses the entire answer as one JSON value, allowing surrounding
-whitespace but no prose or Markdown fences. Duplicate object keys are invalid.
-The first implementation accepts self-contained schemas: local fragment
-`$ref`s may resolve within the schema, and external references are rejected.
-An embedded `$schema` URI must agree with the declared dialect. Validation
-uses the declared dialect with no network access.
+The verifier owns content checks, including required formats. A JSON Schema
+grader parses the entire extracted answer as one JSON value and validates it
+against a pinned schema and dialect. It may be the whole verifier for a
+structured-output task or one check in a verifier that also grades content.
+The schema does not need a second top-level `TaskSpec` field. The model-visible
+input supplies the public schema; the verifier keeps the canonical schema used
+for grading. Importers must check that the two agree and reject known
+contradictions. The verifier's reference answers, hidden tests, and rubrics
+remain private.
 
-The model-visible input must communicate every intrinsic constraint. The
-canonical constraint in `TaskSpec` gives lowering and grading a machine-readable
-version of that rule. If a source prompt already supplies a schema, the
-importer stores the same schema in `answer_constraints` and does not append a
-second, conflicting schema. A known contradiction between source text and
-schema is an import rejection. The schema itself is public task material;
-reference answers, hidden tests, and grading rubrics remain in the verifier.
+For reproducible JSON Schema grading, the verifier config declares the dialect
+and contains a self-contained schema. Local fragment `$ref`s may resolve within
+it; external references are rejected. An embedded `$schema` URI must agree
+with the declared dialect. Validation uses no network access, rejects duplicate
+object keys, and does not strip prose or Markdown fences from the answer.
+These are verifier rules, not submission-convention compatibility rules.
 
-After a convention extracts a submission, the format constraint is checked
-before the source verifier. An answer that was extracted but violates the
-task's JSON Schema is a graded task failure, not an extraction failure. An
-unparseable convention envelope or a missing submission remains an extraction
-failure. Verifier-specific criteria may then grade the content, including
-partial credit where the verifier defines it.
+After a convention extracts a submission, the verifier checks its content. A
+schema-invalid answer is a graded task failure. An unparseable convention
+envelope or missing submission is an extraction failure. A verifier may define
+partial credit for other content criteria.
 
 For example, [structured-output rows](https://huggingface.co/datasets/nvidia/Nemotron-RL-instruction_following-structured_outputs/tree/4ed3d0e404c03dd47453217ce498c3511aa90a44)
 carry a separate `schema_str`; some place the schema in a second user message.
-A row that demands raw JSON has `answer_type=text`, a JSON Schema content
-constraint, and `delivery=direct_assistant_message`. A JSON `answer` wrapper
-must be excluded even though that convention supports text answers generally.
+A row that demands raw JSON has `answer_type=text` and
+`delivery_requirement=direct_assistant_message`. Its verifier checks the JSON
+schema. A JSON `answer` wrapper is excluded even though that convention
+supports text answers generally.
 
-| Task | Answer constraints | Compatible example | Excluded example |
-| --- | --- | --- | --- |
-| Arithmetic answer | `any_compatible`, unconstrained | Plain text or JSON `answer` field | A convention for workspace state |
-| Raw C++ response | `direct_assistant_message`, unconstrained | Final message containing code | JSON `answer` field or answer call |
-| Raw structured output | `direct_assistant_message`, JSON Schema | Final message containing one valid JSON document | JSON `answer` field or answer call |
-| Structured value with flexible delivery | `any_compatible`, JSON Schema | Plain JSON document or a convention that extracts that document | A convention that changes the extracted value |
+| Task | Delivery requirement | Compatible example | Excluded example | Content check |
+| --- | --- | --- | --- | --- |
+| Arithmetic answer | `any_compatible` | Plain text or JSON `answer` field | A convention for workspace state | Numeric verifier |
+| Raw C++ response | `direct_assistant_message` | Final message containing code | JSON `answer` field or answer call | Code verifier |
+| Raw structured output | `direct_assistant_message` | Final message containing a JSON document | JSON `answer` field or answer call | JSON Schema verifier |
+| Structured value with flexible delivery | `any_compatible` | Plain JSON document or a convention that extracts that document | A convention that changes the extracted value | JSON Schema verifier |
 
 ## Validation and migration
 
@@ -169,18 +159,20 @@ must be excluded even though that convention supports text answers generally.
 - Convert a current single-instruction task to one user `TextMessage` during
   the importer migration. Move source messages and advertised functions from
   native-action-specific request data into `ConversationInput`.
-- Validate the JSON Schema and its declared dialect at import time. Reject
-  unsupported dialects, non-object schemas, external references, ambiguous or
-  incomplete call/result histories, and known prompt/constraint contradictions.
+- Validate the verifier's JSON Schema and declared dialect at import time.
+  Reject unsupported dialects, non-object schemas, external references, and
+  disagreement with the public schema in the input. Reject ambiguous or
+  incomplete call/result histories.
 - Reject a lowering when it cannot preserve message roles, call/result
-  pairing, direct-output delivery, or the intrinsic format. Candidate
+  pairing, or direct-output delivery. Candidate
   enumeration and export must apply the same compatibility rule.
-- Include the ordered input and answer constraints in the canonical spec hash.
+- Include the ordered input, delivery requirement, and verifier configuration in
+  the canonical spec hash.
   A trace records the selected convention, target adapter, and source revision.
 
 An implementation is complete when a plain arithmetic task still has both
 plain and wrapped candidates; a raw-output text task excludes wrappers; a
-structured-output task preserves two separate user messages and rejects an
-invalid schema answer; and a pivot task retains prior calls and results without
-executing them during prefix construction. Hidden reference data must remain
-absent from all model-visible events.
+structured-output task preserves two separate user messages and its verifier
+rejects an invalid schema answer; and a pivot task retains prior calls and
+results without executing them during prefix construction. Hidden reference
+data must remain absent from all model-visible events.
