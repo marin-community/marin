@@ -134,4 +134,8 @@ Run the package tests from the repository root:
 
 ```bash
 uv run --project lib/taskcompendium --extra harbor --group test pytest lib/taskcompendium/tests -q
+
+# Type-check the package from its own project directory after installing its dependencies.
+cd lib/taskcompendium
+uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check
 ```

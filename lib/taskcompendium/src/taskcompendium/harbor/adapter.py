@@ -17,6 +17,7 @@ from harbor.environments.capabilities import EnvironmentCapabilities
 from harbor.models.agent.context import AgentContext
 from harbor.models.verifier.result import VerifierResult
 from harbor.verifier.base import BaseVerifier
+from upath import UPath
 
 from taskcompendium.grading import GradeResult, Outcome
 from taskcompendium.lowering import (
@@ -40,7 +41,7 @@ HARBOR_EMPTY_DIRS = HARBOR_DOWNLOAD_DIRS | {VERIFIER_LOGS_PATH, TESTS_PATH}
 
 
 def _record_submission(
-    logs_dir: Path,
+    logs_dir: Path | UPath,
     messages: list[dict[str, Any]],
     assistant_final: object,
     final_message: dict[str, Any],
@@ -59,14 +60,14 @@ def _record_submission(
     }
 
 
-def _record_answer(logs_dir: Path, messages: list[dict[str, Any]], answer: str, context: AgentContext) -> None:
+def _record_answer(logs_dir: Path | UPath, messages: list[dict[str, Any]], answer: str, context: AgentContext) -> None:
     _record_submission(
         logs_dir, messages, answer, {"role": "assistant", "content": answer}, RESPONSE_FILE, answer, context
     )
 
 
 def _record_action(
-    logs_dir: Path, messages: list[dict[str, Any]], action: dict[str, Any], context: AgentContext
+    logs_dir: Path | UPath, messages: list[dict[str, Any]], action: dict[str, Any], context: AgentContext
 ) -> None:
     _record_submission(logs_dir, messages, action, action, ACTION_FILE, json.dumps(action), context)
 
