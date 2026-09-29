@@ -21,21 +21,13 @@ from taskcompendium.lowering import (
     read_submission_convention,
     validate_environment_config,
 )
-from taskcompendium.submission import AnswerFormat, submission_instruction
+from taskcompendium.submission import chat_request, conversation_messages
 
 DEFAULT_CHAT_TIMEOUT = 120
 
 
 class ReplayLaunch(BaseModel):
-    """A fixed response for exercising the Harbor trial path."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    response: str
-
-
-class ActionReplayLaunch(BaseModel):
-    """A fixed final assistant action for exercising the Harbor trial path."""
+    """A fixed assistant message for exercising the Harbor trial path."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -56,7 +48,7 @@ class ChatLaunch(BaseModel):
 async def run_trial(
     task_dir: Path,
     environment_config: HarborEnvironmentConfig,
-    launch: ReplayLaunch | ActionReplayLaunch | ChatLaunch,
+    launch: ReplayLaunch | ChatLaunch,
     trials_dir: Path,
     trial_name: str,
 ) -> TrialResult:
@@ -65,45 +57,20 @@ async def run_trial(
         raise ValueError("Launch environment configuration differs from the exported task")
     specification = read_specification(task_dir / SPECIFICATION_FILE)
     validate_environment_config(specification, environment_config)
-    try:
-        convention = read_submission_convention(task_dir / SUBMISSION_CONVENTION_FILE)
-    except ValueError:
-        if isinstance(launch, ChatLaunch):
-            raise
-        convention = None  # Replay still runs so the verifier can record invalid private metadata.
-    answer_format = convention.answer_format if convention is not None else None
     if isinstance(launch, ReplayLaunch):
-        if answer_format in {AnswerFormat.ANSWER_CALL, AnswerFormat.FINAL_ACTION}:
-            raise ValueError("Text replay requires a plain or JSON task")
         agent: dict[str, Any] = {
             "import_path": "taskcompendium.harbor.adapter:ReplayAgent",
-            "kwargs": launch.model_dump(),
-        }
-    elif isinstance(launch, ActionReplayLaunch):
-        if answer_format in {AnswerFormat.PLAIN, AnswerFormat.JSON}:
-            raise ValueError("Action replay requires an action-submission task")
-        agent = {
-            "import_path": "taskcompendium.harbor.adapter:ActionReplayAgent",
-            "kwargs": launch.model_dump(),
+            "kwargs": {
+                **launch.model_dump(),
+                "messages": conversation_messages(specification.context),
+            },
         }
     else:
-        if convention is None:
-            raise ValueError("Chat launch requires a readable convention")
-        agent_path = "taskcompendium.harbor.adapter:DirectChatAgent"
-        kwargs = launch.model_dump(exclude={"model"})
-        kwargs["events"] = [event.model_dump(mode="json") for event in specification.context.events]
-        kwargs["submission_instruction"] = submission_instruction(convention)
-        if answer_format == AnswerFormat.FINAL_ACTION:
-            agent_path = "taskcompendium.harbor.adapter:NativeActionAgent"
-            kwargs["functions"] = [function.model_dump(mode="json") for function in specification.tools.functions]
-            kwargs["tool_choice"] = specification.tools.tool_choice
-            kwargs["parallel_tool_calls"] = specification.tools.parallel_tool_calls
-        elif answer_format == AnswerFormat.ANSWER_CALL:
-            agent_path = "taskcompendium.harbor.adapter:AnswerCallAgent"
+        convention = read_submission_convention(task_dir / SUBMISSION_CONVENTION_FILE)
         agent = {
-            "import_path": agent_path,
+            "import_path": "taskcompendium.harbor.adapter:ChatAgent",
             "model_name": launch.model,
-            "kwargs": kwargs,
+            "kwargs": {**launch.model_dump(exclude={"model"}), "request": chat_request(specification, convention)},
         }
     config = TrialConfig.model_validate(
         {

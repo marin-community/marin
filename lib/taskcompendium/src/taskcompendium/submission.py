@@ -5,11 +5,19 @@
 
 import json
 from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from taskcompendium.final_action import SubmittedCalls, decode_action, parse_arguments, unique_json_fields
-from taskcompendium.models import AnswerType, TaskSpec, format_conversation
+from taskcompendium.models import (
+    AnswerType,
+    AssistantToolCalls,
+    ConversationInput,
+    TaskSpec,
+    TextMessage,
+    format_conversation,
+)
 
 ANSWER_CALL_NAME = "submit_answer"
 ANSWER_FIELD = "answer"
@@ -97,6 +105,69 @@ def render_instruction(specification: TaskSpec, convention: SubmissionConvention
     if convention.answer_format == AnswerFormat.FINAL_ACTION:
         return format_conversation(context.events)
     return f"{format_conversation(context.events)}\n\n{submission_instruction(convention)}\n"
+
+
+def conversation_messages(context: ConversationInput) -> list[dict[str, Any]]:
+    """Convert the model-visible prefix to OpenAI-compatible chat messages."""
+    messages: list[dict[str, Any]] = []
+    for event in context.events:
+        if isinstance(event, TextMessage):
+            messages.append({"role": event.role, "content": event.content})
+        elif isinstance(event, AssistantToolCalls):
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": event.content,
+                    "tool_calls": [
+                        {
+                            "id": call.call_id,
+                            "type": "function",
+                            "function": {"name": call.name, "arguments": call.arguments},
+                        }
+                        for call in event.calls
+                    ],
+                }
+            )
+        else:
+            messages.append({"role": "tool", "tool_call_id": event.call_id, "content": event.content})
+    return messages
+
+
+def chat_request(specification: TaskSpec, convention: SubmissionConvention) -> dict[str, Any]:
+    """Prepare the conversation and tools for the selected submission convention."""
+    if not submission_compatible(specification, convention):
+        raise ValueError("Submission convention is incompatible with the task")
+    messages = conversation_messages(specification.context)
+    instruction = submission_instruction(convention)
+    if instruction:
+        messages.append({"role": "user", "content": instruction})
+    request: dict[str, Any] = {"messages": messages}
+    if convention.answer_format == AnswerFormat.ANSWER_CALL:
+        request.update(tools=[answer_call_tool()], tool_choice="required", parallel_tool_calls=False)
+    elif convention.answer_format == AnswerFormat.FINAL_ACTION:
+        request["tools"] = [
+            {"type": "function", "function": function.model_dump(exclude_none=True)}
+            for function in specification.tools.functions
+        ]
+        if specification.tools.tool_choice is not None:
+            request["tool_choice"] = specification.tools.tool_choice
+        if specification.tools.parallel_tool_calls is not None:
+            request["parallel_tool_calls"] = specification.tools.parallel_tool_calls
+    return request
+
+
+def extract_message_response(message_json: str | None, convention: SubmissionConvention) -> str:
+    """Extract verifier input from the recorded final assistant message."""
+    if message_json is None:
+        raise ValueError("Final assistant message is missing")
+    message = json.loads(message_json, object_pairs_hook=unique_json_fields)
+    if not isinstance(message, dict) or message.get("role") != "assistant":
+        raise ValueError("Submission requires an assistant message object")
+    if convention.answer_format in {AnswerFormat.ANSWER_CALL, AnswerFormat.FINAL_ACTION}:
+        return message_json
+    if message.get("tool_calls") or not isinstance(message.get("content"), str):
+        raise ValueError("Text submission requires textual content without tool calls")
+    return message["content"]
 
 
 def extract_answer(response: str | None, convention: SubmissionConvention) -> str:

@@ -144,7 +144,7 @@ async def test_imported_mcqa_runs_through_direct_chat_harbor(tmp_path):
     result = await run_trial(
         task,
         environment_config,
-        ReplayLaunch(response="C"),
+        ReplayLaunch(response={"role": "assistant", "content": "C"}),
         tmp_path / "trials",
         "mcqa",
     )

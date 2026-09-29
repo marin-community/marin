@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from taskcompendium.final_action import decode_action
-from taskcompendium.harbor.runner import ActionReplayLaunch, ChatLaunch, ReplayLaunch, run_trial
+from taskcompendium.harbor.runner import ChatLaunch, ReplayLaunch, run_trial
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256, import_row
 from taskcompendium.lowering import HarborEnvironmentConfig, compatible_lowerings, lower_to_harbor, read_specification
 from taskcompendium.models import AnswerType, FunctionCall, ToolCallComparatorConfig
@@ -190,7 +190,7 @@ async def test_predicted_action_harbor_replay_outcomes(tmp_path, response, rewar
     environment_config = HarborEnvironmentConfig()
     task = lower_to_harbor(specification, convention, environment_config, tmp_path / "task")
 
-    result = await run_trial(task, environment_config, ActionReplayLaunch(response=response), tmp_path / "trials", "run")
+    result = await run_trial(task, environment_config, ReplayLaunch(response=response), tmp_path / "trials", "run")
 
     outcome = json.loads((tmp_path / "trials/run/verifier/taskcompendium-result.json").read_text())
     assert (outcome["status"], outcome["reward"]) == (status, reward)
@@ -199,18 +199,7 @@ async def test_predicted_action_harbor_replay_outcomes(tmp_path, response, rewar
     else:
         assert result.exception_info is None, result.exception_info
         assert result.verifier_result.rewards == {"reward": reward}
-    assert not (tmp_path / "trials/run/agent/response.txt").exists()
-
-
-async def test_predicted_action_rejects_text_replay_before_trial(tmp_path):
-    row = json.loads((FIXTURES / "predicted-action.json").read_text())
-    specification, convention = import_row(row, canonical_sha256(row))
-    environment_config = HarborEnvironmentConfig()
-    task = lower_to_harbor(specification, convention, environment_config, tmp_path / "task")
-
-    with pytest.raises(ValueError, match="Text replay requires a plain or JSON task"):
-        await run_trial(task, environment_config, ReplayLaunch(response="text"), tmp_path / "trials", "run")
-    assert not (tmp_path / "trials").exists()
+    assert (tmp_path / "trials/run/agent/submission.json").exists()
 
 
 async def test_predicted_action_chat_requests_native_output_without_dispatch(tmp_path, monkeypatch):
