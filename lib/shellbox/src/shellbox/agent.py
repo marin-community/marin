@@ -55,6 +55,14 @@ SHELLSIM_BASH_TOOL = {
     },
 }
 BASH_OUTPUT_LIMIT_BYTES = 128 * 1024
+HOSTED_VLLM_MODEL_PREFIX = "hosted_vllm/"
+HTTP_ERROR_BODY_LIMIT = 4096
+
+
+def _served_model_name(model: str) -> str:
+    if model.startswith(HOSTED_VLLM_MODEL_PREFIX):
+        return model.removeprefix(HOSTED_VLLM_MODEL_PREFIX)
+    return model
 
 
 def _wait_seconds(arguments: dict) -> float:
@@ -87,6 +95,7 @@ class BashAgent(BaseAgent):
         key: str | None = None,
         max_turns: int = 20,
         extra_body: Mapping[str, Any] | None = None,
+        llm_call_kwargs: Mapping[str, Any] | None = None,
         store_all_messages: bool = True,
         **kwargs,
     ):
@@ -99,7 +108,7 @@ class BashAgent(BaseAgent):
         self.base_url = endpoint.rstrip("/")
         self.api_key = api_key or key or "unused"
         self.max_turns = max_turns
-        self.extra_body = dict(extra_body or {})
+        self.request_options = {**dict(llm_call_kwargs or {}), **dict(extra_body or {})}
         self.store_all_messages = store_all_messages
 
     @staticmethod
@@ -118,6 +127,7 @@ class BashAgent(BaseAgent):
         model = self.model_alias or self.model_name
         if model is None:
             raise ValueError("BashAgent requires model_name or model_alias")
+        model = _served_model_name(model)
         if not isinstance(environment, BashSessionProvider):
             raise TypeError("BashAgent requires an environment with persistent Bash sessions")
         shell = await environment.open_bash_session()
@@ -130,7 +140,7 @@ class BashAgent(BaseAgent):
         async with httpx.AsyncClient(timeout=120, trust_env=False) as client:
             for _ in range(self.max_turns):
                 request = {
-                    **self.extra_body,
+                    **self.request_options,
                     "model": model,
                     "messages": messages,
                     "tools": tools,
@@ -140,6 +150,12 @@ class BashAgent(BaseAgent):
                     headers={"Authorization": f"Bearer {self.api_key}"},
                     json=request,
                 )
+                if response.is_error:
+                    self.logger.error(
+                        "Model endpoint returned HTTP %d: %s",
+                        response.status_code,
+                        response.text[:HTTP_ERROR_BODY_LIMIT],
+                    )
                 response.raise_for_status()
                 body = response.json()
                 usage = body.get("usage", {})

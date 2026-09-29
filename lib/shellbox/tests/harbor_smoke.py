@@ -20,6 +20,8 @@ class ModelHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        assert request["model"] == "fake"
+        assert request["max_tokens"] == 123
         assert [tool["function"]["name"] for tool in request["tools"]] == ["Bash"]
         assert request["chat_template_kwargs"] == {"enable_thinking": False}
         completed = sum(message["role"] == "tool" for message in request["messages"])
@@ -78,11 +80,12 @@ async def main(
                 "agents": [
                     {
                         "import_path": "shellbox.agent:BashAgent",
-                        "model_name": "openai/fake",
+                        "model_name": "hosted_vllm/fake",
                         "kwargs": {
                             "api_base": f"http://127.0.0.1:{server.server_port}/v1",
                             "key": "unused",
                             "store_all_messages": True,
+                            "llm_call_kwargs": {"max_tokens": 123},
                             "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
                         },
                     }
