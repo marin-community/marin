@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Adapt TaskTrove's pinned verifier contract to TaskCompendium submissions."""
+"""Grade multiple-choice answers delivered through TaskCompendium conventions."""
 
 from typing import Self
 
@@ -15,12 +15,8 @@ from taskcompendium.models import VerifierKind, VerifierSpec
 from taskcompendium.submission import extract_answer
 
 
-class TaskTroveVerifier(Verifier):
-    """Use TaskTrove's MCQ scorer after TaskCompendium submission extraction.
-
-    This direct-answer slice supports the MCQ mode. Executable modes need
-    verifier-only resources and an isolated runtime before they can be added.
-    """
+class MultipleChoiceVerifier(Verifier):
+    """Grade one option letter after submission extraction."""
 
     expected: str
     options: int
@@ -30,7 +26,7 @@ class TaskTroveVerifier(Verifier):
         try:
             grade_mcq_candidate(McqSpec(expected=self.expected, options=self.options), self.expected)
         except InvalidTask as error:
-            raise ValueError(f"Invalid TaskTrove MCQ contract: {error}") from error
+            raise ValueError(f"Invalid MCQ verifier contract: {error}") from error
         return self
 
     def grade(self, attempt: GradingAttempt) -> GradeResult:
@@ -44,6 +40,7 @@ class TaskTroveVerifier(Verifier):
         return GradeResult(Outcome.GRADED, result.reward)
 
 
-def tasktrove_verifier(contract: McqSpec) -> VerifierSpec:
-    verifier = TaskTroveVerifier(expected=contract.expected.strip().upper(), options=contract.options)
-    return VerifierSpec(kind=VerifierKind.TASKTROVE, parameters_json=verifier.model_dump_json())
+def multiple_choice_answer(expected: str, options: int) -> VerifierSpec:
+    """Construct a verifier for one of the first ``options`` letters."""
+    verifier = MultipleChoiceVerifier(expected=expected.strip().upper(), options=options)
+    return VerifierSpec(kind=VerifierKind.MCQ_ANSWER, parameters_json=verifier.model_dump_json())

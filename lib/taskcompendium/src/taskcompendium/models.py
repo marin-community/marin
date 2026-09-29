@@ -25,7 +25,7 @@ class VerifierKind(StrEnum):
 
     EXACT_ANSWER = "exact_answer"
     NUMERIC_ANSWER = "numeric_answer"
-    TASKTROVE = "tasktrove"
+    MCQ_ANSWER = "mcq_answer"
 
 
 class Source(BaseModel):

@@ -19,7 +19,7 @@ from taskcompendium.harbor.runner import ReplayLaunch, run_trial
 from taskcompendium.importers.tasktrove.convert import MAX_ARCHIVE_MEMBERS, read_archive
 from taskcompendium.importers.tasktrove.mcqa import import_task
 from taskcompendium.lowering import HarborEnvironmentConfig, lower_to_harbor
-from taskcompendium.models import AnswerType
+from taskcompendium.models import AnswerType, VerifierKind
 from taskcompendium.submission import AnswerFormat, SubmissionConvention, render_instruction
 from taskcompendium.verifier_registry import grade_answer
 
@@ -39,7 +39,6 @@ def test_import_preserves_release_identity():
     assert specification.source.dataset == RELEASE_URI
     assert specification.source.revision == RELEASE_REVISION
     assert specification.source.row == f"{TASKTROVE_SOURCE}:{TASKTROVE_PATH}"
-    assert "/" not in specification.id
     later_release = import_task(_archive("2026.09.10.10"))
     assert later_release.id != specification.id
 
@@ -57,6 +56,7 @@ def test_import_removes_source_submission_instructions():
 
 def test_imported_mcqa_matches_source_grading(tmp_path):
     specification = import_task(_archive())
+    assert specification.verifier.kind is VerifierKind.MCQ_ANSWER
     assert json.loads(specification.verifier.parameters_json) == {"expected": "C", "options": 10}
     source_contract = McqSpec(expected="C", options=10, output=str(tmp_path / "source-answer.txt"))
     convention = SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN)

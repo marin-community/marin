@@ -12,7 +12,7 @@ from tasktrove_verify.spec import McqSpec, parse_spec
 from taskcompendium.importers.tasktrove.convert import METADATA_TABLE, TASK_MANIFEST
 from taskcompendium.importers.tasktrove.models import TaskArchive
 from taskcompendium.models import AnswerType, TaskRequirements, TaskSpec
-from taskcompendium.verifiers.tasktrove import tasktrove_verifier
+from taskcompendium.verifiers.multiple_choice import multiple_choice_answer
 
 FAMILY = "qa-short-answer"
 CONVERTER = "nemotron_mcqa"
@@ -48,7 +48,7 @@ def _clean_instructions(instructions: str, options: int) -> str:
 
 
 def import_task(archive: TaskArchive) -> TaskSpec:
-    """Import a cleaned Nemotron MCQA archive with its original verifier contract."""
+    """Import a cleaned MCQA archive as a text-answer task."""
     try:
         metadata = tomllib.loads(archive.files[TASK_MANIFEST].decode())[METADATA_TABLE]
         if metadata.get("family") != FAMILY or metadata.get("converter") != CONVERTER:
@@ -66,7 +66,7 @@ def import_task(archive: TaskArchive) -> TaskSpec:
     return TaskSpec(
         id=f"tasktrove-{hashlib.sha256(identity.encode()).hexdigest()}",
         instructions=instructions,
-        verifier=tasktrove_verifier(contract),
+        verifier=multiple_choice_answer(contract.expected, contract.options),
         source=archive.source,
         requirements=TaskRequirements(),
         answer_type=AnswerType.TEXT,
