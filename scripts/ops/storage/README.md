@@ -3,11 +3,17 @@
 Storage reporting for the `marin-*` GCS buckets and telemetry for CoreWeave
 object storage.
 
-## Weekly storage report
+## Storage report (on demand)
+
+> **The weekly automation is retired (2026-09).** The `marin-*` buckets are
+> scanned daily by [gcs.oa.dev](https://gcs.oa.dev) ([Open-Athena/marin-gcs-usage](https://github.com/Open-Athena/marin-gcs-usage)),
+> which posts a running monthly digest thread (weekly bullets in the opening
+> post, one reply per scan, owners per prefix) to Discord `#gcs-usage`. Use
+> the tooling below for a manual run or a cross-check.
 
 `generate_report.py` is a one-command orchestrator: it opens a tunnel to the
 Iris cluster, submits the compute as Iris jobs, then publishes from the laptop
-(or CI runner).
+(the same tooling ran from a GitHub Actions runner until 2026-09).
 
 ```
 scan_fs (Iris) ─> dedup (Zephyr) ─> render_report (DuckDB) ─> gist + Discord
@@ -39,11 +45,10 @@ snapshot.
 via `rigging.filesystem`), `render_report.py` (DuckDB
 rollup + diff + markdown), `generate_report.py` (orchestrate + publish).
 
-**Automation.** `.github/workflows/ops-storage-report.yaml` runs it weekly
-(Mondays 14:00 UTC) and on manual `workflow_dispatch`. There is no
-cluster-native cron — the schedule lives in GitHub Actions, which tunnels into
-the controller (SA + SSH key, like `marin-canary-ferry`) and runs
-`generate_report`. Discord posting uses the `internal-discuss` webhook (no bot).
+**Automation.** None. The `ops-storage-report` workflow that ran this weekly
+from GitHub Actions was deleted in 2026-09 (see above); run `generate_report.py`
+from a laptop with a reachable `marin` controller. Discord posting uses the
+channel webhook resolved by `scripts/ops/discord.py` (no bot).
 
 **Prereqs:** `gh` (for `--gist`), `gcloud` + ADC (fetch `report.md`), a
 reachable `marin` controller, and the channel webhook for `--discord`.

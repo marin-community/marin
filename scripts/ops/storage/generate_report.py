@@ -36,7 +36,6 @@ Usage:
     ./scripts/ops/storage/generate_report.py --workers 64
     ./scripts/ops/storage/generate_report.py --skip-scan          # reuse existing parquets
     ./scripts/ops/storage/generate_report.py --skip-scan --skip-dedup --skip-report  # just re-publish
-    # Weekly automation (see .github/workflows/ops-storage-report.yaml):
     ./scripts/ops/storage/generate_report.py --gist secret --discord internal-discuss
 """
 

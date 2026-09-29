@@ -1,8 +1,14 @@
 name: "Ops - Egress Report"
 
+# Daily cross-region egress digest, on demand only. The daily schedule was
+# switched off 2026-09-29: Iris task logs stopped landing under
+# gs://marin-us-central2/finelog/marin/log on 2026-09-03, so every scheduled
+# run since 2026-09-15 analysed no log lines and posted "No offenders today."
+# to #internal-discuss. Re-add the schedule once scripts/ops/cross_region.py
+# reads the current task-log location, and point it at a dedicated channel
+# (egress_report.py --channel, scripts/ops/discord.py CHANNELS).
+
 on:
-  schedule:
-    - cron: '0 14 * * *'
   workflow_dispatch: {}
 
 permissions:
