@@ -44,10 +44,11 @@ def _panel(store, **kwargs):
     return store.panel(metrics.panel_request(**kwargs), None, False)
 
 
-def test_api_defaults_to_the_current_verified_cohort():
-    assert evaldash_app._selection({}).cohort_version == "eval-policy-2026-09-24-verified"
-    assert evaldash_app._selection({"cohort": ""}).cohort_version == "eval-policy-2026-09-24-verified"
-    assert evaldash_app._selection({"cohort": "all"}).cohort_version is None
+def test_api_defaults_to_the_current_verified_cohort(client):
+    expected = "eval-policy-2026-09-24-verified"
+    assert client.get("/panel").json()["request"]["cohort_version"] == expected
+    assert client.get("/panel", params={"cohort": ""}).json()["request"]["cohort_version"] == expected
+    assert client.get("/panel", params={"cohort": "all"}).json()["request"]["cohort_version"] is None
 
 
 def test_memory_store_panel_takes_each_benchmark_from_its_newest_run(store):

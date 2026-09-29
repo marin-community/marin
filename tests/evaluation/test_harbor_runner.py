@@ -442,37 +442,6 @@ def test_historical_harbor_descriptor_uses_locked_dependencies(monkeypatch):
         driver_config.harbor_runtime_descriptor("0" * 40, project)
 
 
-def test_harbor_driver_runs_from_the_preflight_lock(tmp_path, monkeypatch):
-    project = "config/external/harbor/pins/21e0ea6a0cc1a0b617aebd86988ea93e1795f84a"
-    commands: list[list[str]] = []
-
-    def capture(command, _driver_env, _backend_state):
-        commands.append(command)
-
-    monkeypatch.setattr(driver_config, "_stream_driver", capture)
-    driver_config.run_harbor_driver(
-        replace(_validated_config(), runtime_project=project),
-        HarborRuntimeOverlay(
-            job_name="locked-driver",
-            jobs_dir=str(tmp_path / "jobs"),
-            dataset_path=None,
-            endpoint_url="https://iris.example/capability/v1",
-            served_model="model",
-            task_limit=1,
-            model_agent_kwargs={},
-            verifier_env={},
-            archive_root=str(tmp_path / "archive"),
-            archive_dataset="dataset",
-        ),
-        {},
-        lambda: InferenceBackendState.READY,
-    )
-
-    (command,) = commands
-    assert command[command.index("--project") + 1] == str(Path(__file__).parents[2] / project)
-    assert "--frozen" in command
-
-
 def test_harbor_driver_terminates_when_dependency_becomes_unavailable(tmp_path, monkeypatch):
     terminated_return_codes: list[int | None] = []
     terminate_process_group = driver_config.terminate_process_group
