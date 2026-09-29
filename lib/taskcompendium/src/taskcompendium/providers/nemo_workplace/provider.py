@@ -67,7 +67,7 @@ def state_snapshot(tool_env: dict[str, Any]) -> dict[str, Any]:
 
 
 def expected_state_json(gold: list[dict[str, str]]) -> str:
-    """Apply source actions to a separate fresh seed at import time."""
+    """Return the canonical state target for a source action sequence."""
     environment = get_tools()
     for action in gold:
         arguments = json.loads(action["arguments"])

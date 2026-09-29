@@ -17,6 +17,7 @@ from taskcompendium.providers.nemo_workplace.provider import (
     SEED_SHA256,
     TOOL_DEFINITIONS,
     TOOLS_SHA256,
+    _seed_digest,
     expected_state_json,
 )
 from taskcompendium.providers.nemo_workplace.tools import get_tools
@@ -78,6 +79,8 @@ def import_row(data: bytes) -> tuple[TaskSpec, SubmissionConvention, HarborEnvir
     """Import the raw row after checking its digest, source tools, and seed."""
     if hashlib.sha256(data).hexdigest() != ROW_SHA256:
         raise ValueError("Workplace row 0 does not match its pinned raw digest")
+    if _seed_digest() != SEED_SHA256:
+        raise ValueError("Workplace seed differs from its pinned digest")
     row = json.loads(data)
     if not isinstance(row, dict) or row.get("id") != 0:
         raise ValueError("Only Workplace source row 0 is supported")
@@ -127,5 +130,5 @@ def import_row(data: bytes) -> tuple[TaskSpec, SubmissionConvention, HarborEnvir
 
 
 def load_fixture() -> tuple[TaskSpec, SubmissionConvention, HarborEnvironmentConfig]:
-    """Load the packaged row 0 source fixture for examples and trials."""
+    """Return a runnable row 0 task from data included in the installed wheel."""
     return import_row(files("taskcompendium.importers").joinpath("data/workplace-0.json").read_bytes())

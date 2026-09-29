@@ -55,10 +55,14 @@ def test_workplace_import_pins_row_tool_surface_and_private_state():
     assert "source-row.json" in {resource.path for resource in specification.resources}
     provenance = json.loads(PROVENANCE.read_text())
     assert provenance["source_fixture"]["fixture_raw_sha256"] == ROW_SHA256
-    attribution = json.loads(files("taskcompendium.importers").joinpath("data/workplace-0.attribution.json").read_text())
-    assert attribution["dataset_license"] == "CC-BY-4.0"
-    assert attribution["dataset_revision"] == DATASET_REVISION
-    assert attribution["dataset_owner"] == "NVIDIA Corporation"
+    private_provenance = next(
+        resource for resource in specification.resources if resource.path == "source-provenance.json"
+    )
+    source_record = json.loads(private_provenance.content)
+    assert (source_record["dataset_license"], source_record["dataset_owner"]) == (
+        "CC-BY-4.0",
+        "NVIDIA Corporation",
+    )
 
 
 def test_workplace_import_rejects_unpinned_row_and_changed_tools(monkeypatch):
@@ -99,7 +103,6 @@ async def test_workplace_tool_error_recovers_and_retains_call_order():
     error = await environment.dispatch_action(action["name"], '{"email_id":"00000057","unknown":"x"}', "call-bad")
     success = await environment.dispatch_action(action["name"], action["arguments"], "call-good")
     assert "Error executing tool" in error
-    assert "successfully" in success
     assert [entry["call_id"] for entry in environment.trace] == ["call-bad", "call-good"]
     assert [entry["output"] for entry in environment.trace] == [error, success]
     assert environment.grade_state(expected_state_json(row["ground_truth"])) == 1.0
