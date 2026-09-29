@@ -94,8 +94,9 @@ DEVICE_FLOPS: dict[str, dict[str, float]] = {
         "bf16": 149.7e12,
     },
     # Source: https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/quadro-product-literature/proviz-print-nvidia-rtx-a6000-datasheet-us-nvidia-1454980-r9-web%20(1).pdf
+    # The datasheet marks only the 309.7 TFLOPS tensor figure as using sparsity.
     "a6000": {
-        "fp32": 38.7e12 / 2,
+        "fp32": 38.7e12,
         "tf32": 309.7e12 / 2,
         "fp16": 309.7e12 / 2,
         "bf16": 309.7e12 / 2,
@@ -150,13 +151,14 @@ DEVICE_FLOPS: dict[str, dict[str, float]] = {
         "int4": 260e12,
     },
     # source: https://resources.nvidia.com/en-us-gpu-resources/l4-tensor-datasheet
+    # nvidia publishes the tensor core figures with a 2x sparsity factor
     "l4": {
         "fp32": 30.3e12,
-        "tf32": 120e12,
-        "fp16": 242e12,
-        "bf16": 242e12,
-        "fp8": 485e12,
-        "int8": 485e12,
+        "tf32": 120e12 / 2,
+        "fp16": 242e12 / 2,
+        "bf16": 242e12 / 2,
+        "fp8": 485e12 / 2,
+        "int8": 485e12 / 2,
     },
     # source: https://www.nvidia.com/en-us/data-center/l40s/
     # nvidia publishes spec sheet with a 2x sparsity factor
