@@ -25,7 +25,7 @@ from harbor.models.agent.context import AgentContext
 from harbor.models.verifier.result import VerifierResult
 from harbor.verifier.base import BaseVerifier
 
-from taskcompendium.grading import PROVIDER_STATE_PREFIX, GradeResult, Outcome, StateMatchVerifier
+from taskcompendium.grading import GradeResult, Outcome
 from taskcompendium.harbor.protocol import assistant_message, chat_conversation
 from taskcompendium.lowering import (
     AGENT_RESOURCES_DIR,
@@ -40,9 +40,9 @@ from taskcompendium.lowering import (
     selected_tool_definitions,
     validate_provider_surface,
 )
-from taskcompendium.models import AssistantToolCalls, ConversationToolCall, ConversationTrace, VerifierKind
+from taskcompendium.models import AssistantToolCalls, ConversationToolCall, ConversationTrace
 from taskcompendium.provider_sources import PROVIDER_SOURCES_DIR, parse_git_provider
-from taskcompendium.verifier_registry import grade_answer, resolve_verifier
+from taskcompendium.verifier_registry import grade_answer
 
 SUBMISSION_FILE = "submission.json"
 CHAT_RESPONSE_FILE = "chat-response.json"
@@ -79,7 +79,7 @@ class ManagedToolProvider(Protocol):
 
 @runtime_checkable
 class SyncStateToolProvider(Protocol):
-    def grade_state(self, expected_state_json: str) -> float: ...
+    def canonical_state(self) -> Any: ...
 
 
 def _chat_completion(api_base: str, api_key: str | None, request_timeout: float, body: dict[str, Any]) -> dict[str, Any]:
@@ -241,17 +241,12 @@ class CompositeToolEnvironment(HostChatEnvironment):
             raise ValueError(f"Unknown provider tool: {name}")
         return await self.providers[owner].dispatch_action(name, arguments, call_id)
 
-    def grade_state(self, state_target: str, expected_state_json: str) -> float:
-        if not state_target.startswith(PROVIDER_STATE_PREFIX):
-            raise ValueError("Host chat state target must name a provider")
-        provider_name = state_target.removeprefix(PROVIDER_STATE_PREFIX)
+    async def provider_state(self, provider_name: str) -> Any:
+        """Read one provider's canonical state without passing private expectations."""
         provider = self.providers[provider_name]
         if not isinstance(provider, SyncStateToolProvider):
-            raise TypeError(f"Provider {provider_name!r} cannot grade state")
-        return float(provider.grade_state(expected_state_json))
-
-    async def grade_state_async(self, state_target: str, expected_state_json: str) -> float:
-        return self.grade_state(state_target, expected_state_json)
+            raise TypeError(f"Provider {provider_name!r} cannot expose state")
+        return provider.canonical_state()
 
 
 class ChatAgent(BaseAgent):
@@ -374,24 +369,13 @@ class SemanticVerifier(BaseVerifier):
             convention = read_submission_convention(root / SUBMISSION_CONVENTION_FILE)
             response_path = self.trial_paths.agent_dir / SUBMISSION_FILE
             conversation = ConversationTrace.model_validate_json(response_path.read_text())
-            if specification.verifier.kind == VerifierKind.STATE_MATCH and isinstance(
-                self.environment, CompositeToolEnvironment
-            ):
-                state_verifier = resolve_verifier(specification.verifier)
-                if not isinstance(state_verifier, StateMatchVerifier):
-                    raise TypeError("State verifier metadata differs from its kind")
-                reward = await self.environment.grade_state_async(
-                    state_verifier.state_target, state_verifier.expected_state_json
-                )
-                result = GradeResult(Outcome.GRADED, reward)
-            else:
-                result = grade_answer(specification, convention, conversation, self.environment)
+            result = await grade_answer(specification, convention, conversation, self.environment)
         except Exception as error:
             result = GradeResult(Outcome.INFRA_ERROR, None, f"{type(error).__name__}: {error}")
             self._write_result(result)
             raise RuntimeError(result.error) from error
         self._write_result(result)
-        if result.status != Outcome.GRADED or result.reward is None:
+        if result.status not in (Outcome.GRADED, Outcome.SUBMISSION_FAILURE) or result.reward is None:
             raise RuntimeError(result.error or result.status.value)
         return VerifierResult(rewards={"reward": result.reward})
 

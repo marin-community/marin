@@ -13,7 +13,7 @@ from harbor.models.task.config import EnvironmentConfig
 from harbor.models.trial.paths import TrialPaths
 from upath import UPath
 
-from taskcompendium.grading import exact_answer, state_match
+from taskcompendium.grading import exact_answer, structured_exact
 from taskcompendium.harbor.adapter import CompositeToolEnvironment, NoToolEnvironment
 from taskcompendium.harbor.runner import ChatLaunch, run_trial
 from taskcompendium.lowering import HarborEnvironmentConfig, ToolBinding, lower_to_harbor
@@ -31,7 +31,7 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
-from taskcompendium.submission import AnswerFormat, SubmissionConvention
+from taskcompendium.submission import AnswerCall, FinalAction, PlainText, ProviderState
 from taskcompendium.verifiers.predicted_action import predicted_action_verifier
 
 
@@ -71,8 +71,8 @@ class AlphaProvider:
         self.value += 1
         return json.dumps({"value": self.value})
 
-    def grade_state(self, expected_state_json: str) -> float:
-        return float(self.value == json.loads(expected_state_json))
+    def canonical_state(self) -> int:
+        return self.value
 
 
 class BetaProvider(AlphaProvider):
@@ -90,6 +90,13 @@ class BetaProvider(AlphaProvider):
 class ExpandedAlphaProvider(AlphaProvider):
     PROVIDER_REVISION = "alpha-2"
     TOOL_DEFINITIONS = (*AlphaProvider.TOOL_DEFINITIONS, _definition("unrelated"))
+
+
+class BrokenStateProvider(BetaProvider):
+    PROVIDER_REVISION = "beta-broken"
+
+    def canonical_state(self) -> int:
+        raise RuntimeError("state unavailable")
 
 
 class HarborBackedProvider(NoToolEnvironment):
@@ -146,7 +153,7 @@ def _binding(provider: type[AlphaProvider]) -> ToolBinding:
 
 def _specification(answer_type: AnswerType) -> TaskSpec:
     if answer_type == AnswerType.STATE:
-        verifier = state_match("1", "provider:beta")
+        verifier = structured_exact(1)
     elif answer_type == AnswerType.NATIVE_ACTION:
         verifier = predicted_action_verifier((FunctionCall(name="finish", arguments={"answer": "done"}),))
     else:
@@ -195,7 +202,7 @@ def test_harbor_environment_cannot_be_bound_as_tool_provider(tmp_path):
     with pytest.raises(ValueError, match="must not be a Harbor environment"):
         lower_to_harbor(
             _specification(AnswerType.TEXT),
-            SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+            PlainText(id="plain"),
             environment,
             tmp_path / "task",
         )
@@ -210,7 +217,7 @@ async def test_two_providers_dispatch_and_grade_named_state(tmp_path, monkeypatc
     binding = HarborEnvironmentConfig(tool_providers={"alpha": _binding(AlphaProvider), "beta": _binding(BetaProvider)})
     task = lower_to_harbor(
         _specification(AnswerType.STATE),
-        SubmissionConvention(id="state", answer_format=AnswerFormat.STATE),
+        ProviderState(id="state", provider="beta"),
         binding,
         tmp_path / "task",
     )
@@ -249,6 +256,53 @@ async def test_two_providers_dispatch_and_grade_named_state(tmp_path, monkeypatc
     ]
 
 
+@pytest.mark.parametrize("beta_calls,expected_reward", [(0, 0.0), (2, 0.0)])
+async def test_provider_state_noop_and_wrong_result_score_zero(tmp_path, monkeypatch, beta_calls, expected_reward):
+    binding = HarborEnvironmentConfig(tool_providers={"alpha": _binding(AlphaProvider), "beta": _binding(BetaProvider)})
+    task = lower_to_harbor(
+        _specification(AnswerType.STATE), ProviderState(id="state", provider="beta"), binding, tmp_path / "task"
+    )
+    calls = [_call("increment_beta", f"b{index}") for index in range(beta_calls)]
+    responses = iter(
+        ([{"role": "assistant", "content": None, "tool_calls": calls}] if calls else [])
+        + [{"role": "assistant", "content": "Done."}]
+    )
+
+    def respond(request, timeout):
+        return BytesIO(json.dumps({"choices": [{"message": next(responses)}]}).encode())
+
+    monkeypatch.setattr("taskcompendium.harbor.adapter.urllib.request.urlopen", respond)
+    result = await run_trial(
+        task, binding, ChatLaunch(model="model", api_base="https://example.invalid"), tmp_path / "trials", "run"
+    )
+
+    assert result.verifier_result.rewards == {"reward": expected_reward}
+    outcome = json.loads((tmp_path / "trials/run/verifier/taskcompendium-result.json").read_text())
+    assert outcome["status"] == "graded"
+
+
+async def test_unavailable_provider_state_remains_ungraded(tmp_path, monkeypatch):
+    binding = HarborEnvironmentConfig(
+        tool_providers={"alpha": _binding(AlphaProvider), "beta": _binding(BrokenStateProvider)}
+    )
+    task = lower_to_harbor(
+        _specification(AnswerType.STATE), ProviderState(id="state", provider="beta"), binding, tmp_path / "task"
+    )
+
+    def respond(request, timeout):
+        return BytesIO(json.dumps({"choices": [{"message": {"role": "assistant", "content": "Done."}}]}).encode())
+
+    monkeypatch.setattr("taskcompendium.harbor.adapter.urllib.request.urlopen", respond)
+    result = await run_trial(
+        task, binding, ChatLaunch(model="model", api_base="https://example.invalid"), tmp_path / "trials", "run"
+    )
+
+    assert result.verifier_result is None
+    outcome = json.loads((tmp_path / "trials/run/verifier/taskcompendium-result.json").read_text())
+    assert outcome["status"] == "infra_error"
+    assert outcome["reward"] is None
+
+
 async def test_added_provider_tool_does_not_change_bound_surface(tmp_path, monkeypatch):
     alpha = ToolBinding(
         action_interface=ExpandedAlphaProvider.ACTION_INTERFACE,
@@ -261,7 +315,7 @@ async def test_added_provider_tool_does_not_change_bound_surface(tmp_path, monke
     binding = HarborEnvironmentConfig(tool_providers={"alpha": alpha, "beta": _binding(BetaProvider)})
     task = lower_to_harbor(
         _specification(AnswerType.TEXT),
-        SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        PlainText(id="plain"),
         binding,
         tmp_path / "task",
     )
@@ -284,7 +338,7 @@ async def test_provider_call_can_precede_terminal_answer_call(tmp_path, monkeypa
     binding = HarborEnvironmentConfig(tool_providers={"alpha": _binding(AlphaProvider), "beta": _binding(BetaProvider)})
     task = lower_to_harbor(
         _specification(AnswerType.TEXT),
-        SubmissionConvention(id="answer-call", answer_format=AnswerFormat.ANSWER_CALL),
+        AnswerCall(id="answer-call"),
         binding,
         tmp_path / "task",
     )
@@ -324,7 +378,7 @@ async def test_provider_call_can_precede_source_final_action(tmp_path, monkeypat
     binding = HarborEnvironmentConfig(tool_providers={"alpha": _binding(AlphaProvider), "beta": _binding(BetaProvider)})
     task = lower_to_harbor(
         _specification(AnswerType.NATIVE_ACTION),
-        SubmissionConvention(id="final-action", answer_format=AnswerFormat.FINAL_ACTION),
+        FinalAction(id="final-action"),
         binding,
         tmp_path / "task",
     )

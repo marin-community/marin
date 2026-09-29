@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 from taskcompendium.resources import SHA256_PATTERN, TaskResource, validate_resource_paths
 
-SCHEMA_VERSION = "0.10"
+SCHEMA_VERSION = "0.11"
 
 
 class AnswerType(StrEnum):
@@ -29,7 +29,7 @@ class VerifierKind(StrEnum):
     """The registered grader used to check a submission."""
 
     EXACT_ANSWER = "exact_answer"
-    STATE_MATCH = "state_match"
+    STRUCTURED_EXACT = "structured_exact"
     PREDICTED_ACTION = "predicted_action"
     NUMERIC_ANSWER = "numeric_answer"
     MCQ_ANSWER = "mcq_answer"

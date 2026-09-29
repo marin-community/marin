@@ -15,7 +15,7 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
-from taskcompendium.submission import AnswerFormat, SubmissionConvention
+from taskcompendium.submission import PlainText
 from taskcompendium.verifier_registry import grade_answer
 from taskcompendium.verifiers.multiple_choice import multiple_choice_answer
 
@@ -24,7 +24,7 @@ from taskcompendium.verifiers.multiple_choice import multiple_choice_answer
     "response,reward",
     [("B", 1.0), ("C", 0.0), ("E", 0.0)],
 )
-def test_hand_authored_multiple_choice_answer(response, reward):
+async def test_hand_authored_multiple_choice_answer(response, reward):
     specification = TaskSpec(
         id="hand-authored-mcq",
         context=ConversationInput(events=(TextMessage(role="user", content="Choose A, B, C, or D."),)),
@@ -33,9 +33,9 @@ def test_hand_authored_multiple_choice_answer(response, reward):
         verifier=multiple_choice_answer("B", 4),
         source=Source(dataset="hand-authored", revision="1", row="mcq", importer_revision="1"),
     )
-    convention = SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN)
+    convention = PlainText(id="plain")
 
-    result = grade_answer(
+    result = await grade_answer(
         specification,
         convention,
         ConversationTrace(events=(*specification.context.events, TextMessage(role="assistant", content=response))),

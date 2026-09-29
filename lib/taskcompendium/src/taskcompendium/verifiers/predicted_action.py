@@ -8,7 +8,6 @@ from pydantic import JsonValue, field_validator, model_validator
 from taskcompendium.grading import GradeResult, GradingAttempt, Outcome, Verifier
 from taskcompendium.models import (
     AssistantMessage,
-    AssistantToolCalls,
     ConversationToolCall,
     FunctionCall,
     TextMessage,
@@ -16,7 +15,7 @@ from taskcompendium.models import (
     VerifierKind,
     VerifierSpec,
 )
-from taskcompendium.submission import AnswerFormat
+from taskcompendium.submission import ActionSubmission, Submission
 
 
 def _arguments_match(expected: JsonValue, actual: JsonValue, config: ToolCallComparatorConfig) -> bool:
@@ -96,13 +95,12 @@ class PredictedActionVerifier(Verifier):
         ToolCallComparatorConfig(self.numeric_tolerance)
         return self
 
-    def grade(self, attempt: GradingAttempt) -> GradeResult:
-        if attempt.convention.answer_format != AnswerFormat.FINAL_ACTION:
-            return GradeResult(Outcome.INFRA_ERROR, None, "Incompatible final-action convention")
-        actual = attempt.conversation[-1]
-        if not isinstance(actual, (TextMessage, AssistantToolCalls)):
-            return GradeResult(Outcome.INFRA_ERROR, None, "Missing final assistant message")
-        reward = compare(self.expected_calls, actual, ToolCallComparatorConfig(self.numeric_tolerance))
+    async def grade(
+        self, submission: Submission, *, specification: VerifierSpec, attempt: GradingAttempt
+    ) -> GradeResult:
+        if not isinstance(submission, ActionSubmission):
+            raise TypeError("Predicted-action verifier requires an action submission")
+        reward = compare(self.expected_calls, submission.message, ToolCallComparatorConfig(self.numeric_tolerance))
         return GradeResult(Outcome.GRADED, reward)
 
 

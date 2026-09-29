@@ -23,7 +23,7 @@ from taskcompendium.models import (
     FunctionCall,
     ToolCallComparatorConfig,
 )
-from taskcompendium.submission import AnswerFormat, SubmissionConvention
+from taskcompendium.submission import FinalAction
 from taskcompendium.verifier_registry import grade_answer
 from taskcompendium.verifiers.predicted_action import compare
 
@@ -75,7 +75,7 @@ def test_exported_nemo_verifier_grades_in_fresh_process(tmp_path):
     specification, convention = import_row(row, canonical_sha256(row))
     task = lower_to_harbor(specification, convention, HarborEnvironmentConfig(), tmp_path / "task")
     script = (
-        "import json, sys; from pathlib import Path; "
+        "import asyncio, json, sys; from pathlib import Path; "
         "from taskcompendium.verifier_registry import grade_answer; "
         "from taskcompendium.harbor.protocol import chat_conversation; "
         "from taskcompendium.submission import chat_request; "
@@ -85,7 +85,7 @@ def test_exported_nemo_verifier_grades_in_fresh_process(tmp_path):
         "convention = read_submission_convention(root / 'submission_convention.json'); "
         "conversation = chat_conversation([*chat_request(specification, convention)['messages'], "
         "json.loads(sys.argv[2])]); "
-        "result = grade_answer(specification, convention, conversation, object()); "
+        "result = asyncio.run(grade_answer(specification, convention, conversation, object())); "
         "print(json.dumps({'status': result.status, 'reward': result.reward}))"
     )
     response = json.dumps(_action(row["expected_action"]["name"], row["expected_action"]["arguments"]))
@@ -161,7 +161,7 @@ def test_predicted_action_rejects_crafted_message_target_on_private_read(tmp_pat
 def test_predicted_action_reuses_final_action_convention_without_changing_source_request(tmp_path):
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
     specification, _ = import_row(row, canonical_sha256(row))
-    convention = SubmissionConvention(id="generic-final-action", answer_format=AnswerFormat.FINAL_ACTION)
+    convention = FinalAction(id="generic-final-action")
     candidates = compatible_lowerings(specification, (convention,), (HarborEnvironmentConfig(),))
 
     assert len(candidates) == 1
@@ -234,7 +234,7 @@ async def test_predicted_action_chat_requests_native_output_without_dispatch(tmp
         {"type": "function_call_output", "call_id": "call-profile", "output": '{"verified":false}'},
     ]
     specification, _ = import_row(row, canonical_sha256(row))
-    convention = SubmissionConvention(id="generic-final-action", answer_format=AnswerFormat.FINAL_ACTION)
+    convention = FinalAction(id="generic-final-action")
     environment_config = HarborEnvironmentConfig()
     task = lower_to_harbor(specification, convention, environment_config, tmp_path / "task")
     requests = []
@@ -322,7 +322,7 @@ def test_predicted_action_requires_exact_strings_and_explicit_numeric_tolerance(
     assert compare(expected_number, nearby_number, ToolCallComparatorConfig(numeric_tolerance=0.01)) == 1.0
 
 
-def test_predicted_action_grades_typed_evidence_from_any_harness():
+async def test_predicted_action_grades_typed_evidence_from_any_harness():
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
     specification, convention = import_row(row, canonical_sha256(row))
     final = AssistantToolCalls(
@@ -336,7 +336,7 @@ def test_predicted_action_grades_typed_evidence_from_any_harness():
     )
     conversation = ConversationTrace(events=(*specification.context.events, final))
 
-    result = grade_answer(specification, convention, conversation, object())
+    result = await grade_answer(specification, convention, conversation, object())
 
     assert (result.status, result.reward) == ("graded", 1.0)
 
