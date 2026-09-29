@@ -26,6 +26,7 @@ REPOSITORY_OWNER = "marin-community"
 REPOSITORY_NAME = "loom"
 REPOSITORY_BRANCH = "main"
 REPOSITORY_URL = f"https://github.com/{REPOSITORY_OWNER}/{REPOSITORY_NAME}.git"
+GITHUB_LOGIN_PATTERN = re.compile(r"[A-Za-z0-9-]{1,39}")
 ARTIFACT_REPOSITORY_ID = "loom"
 ARTIFACT_IMAGE_NAME = "loom"
 DOTENV_SECRET_ID = "LOOM_DOTENV"
@@ -494,9 +495,9 @@ class ApprovedUserConfig:
         username = value.get("username")
         login = value.get("githubLogin")
         user_id = value.get("githubUserId")
-        if not isinstance(username, str) or re.fullmatch(r"[A-Za-z0-9-]{1,39}", username) is None:
+        if not isinstance(username, str) or GITHUB_LOGIN_PATTERN.fullmatch(username) is None:
             raise ValueError("approved user requires a valid username")
-        if not isinstance(login, str) or re.fullmatch(r"[A-Za-z0-9-]{1,39}", login) is None:
+        if not isinstance(login, str) or GITHUB_LOGIN_PATTERN.fullmatch(login) is None:
             raise ValueError("approved user requires a valid GitHub login")
         if type(user_id) is not int or user_id <= 0:
             raise ValueError("approved user requires a positive GitHub user id")
