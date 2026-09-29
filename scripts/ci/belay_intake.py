@@ -10,7 +10,7 @@ ids, not logins: ids never change or get reused, while a login freed by a rename
 
 An approved comment is copied (quoted, attributed, with @-mentions and marker syntax neutralized) into the main issue,
 ending in a hidden marker, and the intake comment gets a rocket reaction. Only markers in comments posted by the
-workflow's own bot count, so quoted text cannot mark other comments as transferred. A comment is copied once; a later
+workflow's own account count, so quoted text cannot mark other comments as transferred. A comment is copied once; a later
 run adds a missing rocket if an earlier run posted the copy but stopped before reacting. The agent that runs the Belay
 loop reads only the main issue, so only approved text reaches it.
 """
@@ -27,8 +27,8 @@ from dataclasses import dataclass
 API = "https://api.github.com"
 APPROVE_REACTION = "+1"
 TRANSFERRED_REACTION = "rocket"
-# The bot identity of the marin-belay GitHub App, whose token the workflow uses.
-TRANSFER_BOT = "marin-belay[bot]"
+# The account whose token the workflow uses; only its comments can carry transfer markers.
+TRANSFER_BOT = "marin-belay-bot"
 _MARKER_TEMPLATE = "<!-- belay-intake:{} -->"
 _MARKER_RE = re.compile(re.escape(_MARKER_TEMPLATE).replace(r"\{\}", r"(\d+)") + r"\s*\Z")
 # A zero-width space after "@" keeps copied text from pinging users or teams; one inside "<!--" keeps quoted text
