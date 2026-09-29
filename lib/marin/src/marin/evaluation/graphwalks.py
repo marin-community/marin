@@ -205,8 +205,6 @@ def _request(example: _Example, session: RemoteInferenceSession) -> _Result:
             if attempt + 1 == _MAX_REQUEST_ATTEMPTS:
                 return _Result(example=example, output=None, error=type(exc).__name__)
             session.wait_until_ready()
-        except (ValueError, KeyError, IndexError) as exc:
-            return _Result(example=example, output=None, error=type(exc).__name__)
     raise AssertionError("unreachable")
 
 
@@ -421,6 +419,17 @@ class GraphWalksExecutor:
             }
         )
         stderr = statistics.stdev(totals["f1"]) / math.sqrt(n_scored) if n_scored > 1 else 0.0
+        logger.info(
+            "GraphWalks result: F1=%.6f benchmark=%d attempted=%d scored=%d "
+            "skipped_context=%d skipped_output_cap=%d errors=%s",
+            source_metrics["f1"],
+            selection.n_benchmark,
+            n_attempted,
+            n_scored,
+            sum(selection.skipped_context.values()),
+            sum(selection.skipped_output_cap.values()),
+            dict(errors),
+        )
         return EvaluationOutcome(
             metrics={GRAPHWALKS_TASK: source_metrics},
             canonical_metrics={GRAPHWALKS_TASK: {**source_metrics, "f1_stderr": stderr}},
