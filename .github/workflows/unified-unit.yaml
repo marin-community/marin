@@ -327,8 +327,6 @@ jobs:
       - name: Test Shellbox direct requests
         run: |
           uv run --project config/external/harbor --frozen --with-editable ./lib/shellbox --with pytest \
-            python -c 'import harbor; import shellbox.agent'
-          uv run --project config/external/harbor --frozen --with-editable ./lib/shellbox --with pytest \
             pytest -c lib/shellbox/pyproject.toml lib/shellbox/tests/test_bash_agent.py -q
 
   iris_e2e_smoke:

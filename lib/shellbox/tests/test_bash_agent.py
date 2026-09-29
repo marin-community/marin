@@ -14,9 +14,6 @@ from typing import cast
 
 import httpx
 import pytest
-
-pytest.importorskip("harbor")
-
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 from shellbox.agent import BashAgent
