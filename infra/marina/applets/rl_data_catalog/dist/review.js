@@ -164,6 +164,7 @@ function difficultyRun(model, identityPath, record) {
           native_execution: identity.marinskyrl,
           task_sample_sha256: identity.tasks_sha256,
         }), artifactLink(identityPath, "Recorded run manifest ↗"));
+        if (identity.record_kind === "reconstructed_execution_settings") settings.prepend(node("p", identity.note, "difficulty-evidence-status"));
       }).catch(error => settings.replaceChildren(node("p", error.message, "issue-highlight")));
     }
     const prefix = identityPath?.slice(0, -"run.json".length);
