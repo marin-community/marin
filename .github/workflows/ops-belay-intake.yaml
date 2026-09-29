@@ -1,0 +1,37 @@
+name: "Ops - Belay Intake"
+
+# Copies Marin Belay suggestions approved on the intake issue (#9514) into the main Belay issue (#9451).
+# Logic lives in scripts/ci/belay_intake.py.
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+concurrency:
+  group: belay-intake
+  cancel-in-progress: false
+
+jobs:
+  transfer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - name: Transfer approved intake comments
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Numeric GitHub user ids of the marin-devs team (ids never change or get reused; logins can be renamed and
+          # re-claimed). Changing who can approve goes through a reviewed PR. `gh api users/<login> --jq .id` finds an id.
+          #   42926649 ClassicLarry, 9633 dlwh, 9847335 Helw150, 15233 hammer, 607207 rjpower,
+          #   1419010 ravwojdyla, 1545121 karansag, 1596570 yonromai, 1707358 atqamar, 8000756 muchanem
+          BELAY_APPROVER_IDS: >-
+            42926649,9633,9847335,15233,607207,1419010,1545121,1596570,1707358,8000756
+        run: >-
+          python3 scripts/ci/belay_intake.py
+          --intake-issue 9514
+          --target-issue 9451
+          --approver-ids "$BELAY_APPROVER_IDS"
