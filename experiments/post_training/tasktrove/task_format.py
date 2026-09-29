@@ -26,7 +26,8 @@ set -euo pipefail
 exec verifyit {TESTS_MOUNT}/verifier.toml
 """
 
-VERIFY_TOOL_URL = "git+https://github.com/marin-community/verifyit@{ref}"
+VERIFY_TOOL_REPOSITORY = "https://github.com/marin-community/verifyit"
+VERIFY_TOOL_URL = f"git+{VERIFY_TOOL_REPOSITORY}@{{ref}}"
 TOOL_PYTHON = ">=3.11"
 UV_IMAGE = "ghcr.io/astral-sh/uv:0.8"
 INSTALL_MARKER = "# --- verifyit ---"

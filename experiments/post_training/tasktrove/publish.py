@@ -54,6 +54,7 @@ from experiments.post_training.tasktrove.dataset import (
     load_source_verdicts,
 )
 from experiments.post_training.tasktrove.mcqa_routing import Route
+from experiments.post_training.tasktrove.task_format import VERIFY_TOOL_REPOSITORY
 from experiments.post_training.tasktrove.taskbinary import DOCKERFILE, read_task_binary
 from experiments.post_training.tasktrove.verify import VERIFIED_STATUS
 
@@ -119,7 +120,6 @@ configs:
 """
 
 _TASKTROVE_CODE_URL = "https://github.com/marin-community/marin/tree/main/experiments/post_training/tasktrove"
-_VERIFIER_CODE_URL = "https://github.com/marin-community/verifyit"
 
 
 class HuggingFaceApi(Protocol):
@@ -268,7 +268,7 @@ def build_manifest(filtered: pa.Table, tool_ref: str, dockerfiles: dict[str, str
     return {
         "tasktrove": {"hf_id": TASKTROVE_HF_ID, "revision": TASKTROVE_REVISION},
         "verify_tool_ref": tool_ref,
-        "verify_tool_repository": _VERIFIER_CODE_URL,
+        "verify_tool_repository": VERIFY_TOOL_REPOSITORY,
         "input_tasks": filtered.num_rows,
         "clean_tasks": by_status[ConvertStatus.CONVERTED],
         "by_status": dict(by_status.most_common()),
@@ -315,6 +315,7 @@ def _copy_to_local(source: StoragePath, destination: Path) -> None:
 def render_huggingface_card(manifest: dict, report: str, repo_id: str) -> str:
     """Render the dataset card from release provenance and its generated report."""
     source = manifest["tasktrove"]
+    verifier_commit_url = f"{manifest['verify_tool_repository']}/commit/{manifest['verify_tool_ref']}"
     report_body = report.removeprefix("# TaskTrove release\n").lstrip().replace("\n## ", "\n### ")
     return (
         _DATASET_CARD_HEADER
@@ -324,8 +325,8 @@ def render_huggingface_card(manifest: dict, report: str, repo_id: str) -> str:
 TaskTrove Clean is a normalized release of
 [`{source['hf_id']}`](https://huggingface.co/datasets/{source['hf_id']}) at revision
 `{source['revision']}`. It contains {manifest['clean_tasks']:,} retained Harbor tasks from
-{manifest['input_tasks']:,} input rows. The graders were built from Marin commit
-`{manifest['verify_tool_ref']}`.
+{manifest['input_tasks']:,} input rows. The graders were built from
+[verifyit commit `{manifest['verify_tool_ref']}`]({verifier_commit_url}).
 
 ## How it was made
 
@@ -335,7 +336,7 @@ The [conversion pipeline]({_TASKTROVE_CODE_URL}) applies these stages:
 2. Keep sources with recoverable task contracts and record every source decision.
 3. Convert each retained row to the common Harbor layout and replace its source grader with a
    typed `tests/verifier.toml` contract executed by
-   [`verifyit`]({_VERIFIER_CODE_URL}).
+   [`verifyit`]({manifest['verify_tool_repository']}).
 4. Deduplicate exact instructions within each source.
 5. Reject tasks with a malformed contract, missing verifier files, legacy grader dependencies,
    exposed solutions or long gold answers, or an invalid mode-specific shape.

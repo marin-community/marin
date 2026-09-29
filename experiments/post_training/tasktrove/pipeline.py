@@ -40,6 +40,7 @@ from experiments.post_training.tasktrove.mcqa_routing_pipeline import (
     routing_step,
 )
 from experiments.post_training.tasktrove.publish import publish_release
+from experiments.post_training.tasktrove.task_format import VERIFY_TOOL_REPOSITORY
 from experiments.post_training.tasktrove.task_templates import build_template_index, summarize_templates
 from experiments.post_training.tasktrove.verify import filter_tasks
 
@@ -77,7 +78,7 @@ def verifier_commit() -> str:
     if direct_url is None:
         raise click.ClickException("TaskTrove releases require verifyit installed from its pinned Git dependency")
     provenance = json.loads(direct_url)
-    if provenance.get("url") != "https://github.com/marin-community/verifyit.git":
+    if provenance.get("url") != f"{VERIFY_TOOL_REPOSITORY}.git":
         raise click.ClickException("TaskTrove releases require the marin-community/verifyit Git dependency")
     return provenance["vcs_info"]["commit_id"]
 

@@ -249,6 +249,7 @@ def test_huggingface_publish_uploads_tasks_and_audit_metadata(tmp_path):
     assert set(api.files) == {"README.md", "data/part-00000.parquet", "ledger.parquet", "manifest.json"}
     assert api.files["data/part-00000.parquet"] == (tmp_path / "release/tasks/part-00000.parquet").read_bytes()
     card = api.files["README.md"].decode()
+    assert "[verifyit commit `ref`](https://github.com/marin-community/verifyit/commit/ref)" in card
     assert "license: apache-2.0" in card
     assert "path: data/*.parquet" in card
     assert "## How it was made" in card
