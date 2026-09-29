@@ -85,13 +85,16 @@ def baseline_recipe(hidden_dim: int) -> tuple[GrugModelConfig, GrugMoeMuonHConfi
     beta2 by sqrt(2)). Tokens are the cell's actual trained tokens
     (batch * steps * seq_len), and the schedule decays to zero like the
     documented baseline (``min_lr_ratio = 0``), not to the heuristic's 5%
-    floor. This reproduces the recorded baseline recipes exactly: it matches
-    the ``larry_reference_d512/d768.json`` optimizer values to all printed
-    digits.
+    floor. This matches the ``larry_reference_d512/d768.json`` optimizer
+    values to all printed digits.
     """
     budget, batch_size, steps = _BASELINE_CELLS[hidden_dim]
     heuristic = MoeHeuristic(min_lr_ratio=0.0)
     model = heuristic.build_model_config(hidden_dim, seq_len=_SEQ)
+    if hidden_dim == 1280:
+        # The fast backward improved this v4-32 cell by 3.25% in issue #9529;
+        # the smaller cells have not been measured.
+        model = dataclasses.replace(model, cross_entropy_implementation="xla_fast_bwd")
     tokens = batch_size * steps * _SEQ
     optimizer = heuristic.build_optimizer_config(batch_size, tokens, hidden_dim, seq_len=_SEQ)
     return model, optimizer, (budget, batch_size, steps)

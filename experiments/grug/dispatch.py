@@ -27,7 +27,7 @@ INHERIT_PRIORITY = priority_band_value("inherit")
 # JAX_PLATFORMS is excluded: the dispatcher runs CPU-only and its value must
 # not leak onto accelerator tasks.
 _FORWARDED_ENV_PREFIXES = ("XLA_", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_", "MALLOC_")
-_FORWARDED_ENV_NAMES = ("LD_PRELOAD",)
+_FORWARDED_ENV_NAMES = ("LD_PRELOAD", "LEVANTER_CE_XLA_FAST_BWD")
 _FORWARDED_ENV_EXCLUDE = ("JAX_PLATFORMS",)
 
 

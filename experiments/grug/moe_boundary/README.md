@@ -231,13 +231,22 @@ median is the stable estimate:
 README run: a 64-step boundary-off rerun of the d1280 cell
 ([moe_baseline_probe_d1280_ep1](https://wandb.ai/marin-community/marin_moe/runs/moe_baseline_probe_d1280_ep1),
 September 28, `launch_baseline_probe.py`) measured 160,924 tok/s median,
-vs 171,910 for the June README run. The June baseline ran jax 0.9.2 /
-libtpu 0.0.39; September runs use jax 0.11.1 / libtpu 0.0.46, and that
-stack is ~6.4% slower for this cell. Same-stack, the variant is at parity
+vs 171,910 for the June README run. The two runs used different JAX versions
+and attention windows. A same-source JAX comparison found only a 0.07%
+throughput difference, so the version change does not explain the gap.
+Same-stack, the variant is at parity
 with the baseline (160,661 vs 160,924, −0.16%) and the effective speedup
 is 1.054. The d512–d1024 rows compare September variants to June baselines
 across the same stack boundary; there the variants beat the June baselines
-outright, so those speedups are not inflated by the drift.
+outright, so those speedups are not inflated by this d1280 gap.
+
+The current d1280 recipe uses the fast XLA cross-entropy backward. In paired
+64-step current-window probes on v4-32, median throughput over steps 10–62
+rose from [160,931 tok/s](https://wandb.ai/marin-community/marin_moe/runs/moe_baseline_probe_d1280_ep1_issue9529_jax0111_f)
+to [166,161 tok/s](https://wandb.ai/marin-community/marin_moe/runs/moe_baseline_probe_d1280_ep1_issue9529_fast_ce_n)
+(+3.25%). The forward loss is unchanged by this kernel choice; gradients
+can differ in rounding. These probes did not evaluate the boundary operator
+or run validation. The historical table above used the older backward.
 
 Matched-pair training curves (d1280): [W&B report — variant vs baseline](https://wandb.ai/marin-community/marin_moe/reports/moe_boundary-d1280-matched-pair:-variant-vs-baseline--VmlldzoxODAyMDY5MQ==).
 
@@ -257,20 +266,23 @@ Reading:
 - **Gate 2 fails on the projection criterion only, and narrowly.** The
   d1280 speedup above uses the same-stack baseline throughput (see the
   probe note above) — against the June README run it would read 0.987, but
-  that compares across a jax 0.9.2 → 0.11.1 stack boundary. The 4-point
+  that compares across different code and JAX versions. The 4-point
   refit `1.6 + 83.40·C^−0.0929` (α SE 0.0007) extrapolates to +0.0026 worse
   at 1e21 and +0.0052 worse at 1e23 vs the baseline law
   `1.6 + 88.32·C^−0.0941`, despite the variant beating the baseline law at
   all four measured points (−0.0155/−0.0033/−0.0065/−0.0015). Cell
   residuals (±0.004) are the same order as the projection deltas, so the
   extrapolation flip is not resolved by this data.
-- **d1280 stack drift (June → September).** The June README baseline
-  (171,910 tok/s, jax 0.9.2 / libtpu 0.0.39) is not comparable to
-  September runs: a same-stack 64-step boundary-off probe measured 160,924
-  tok/s (jax 0.11.1 / libtpu 0.0.46), a −6.4% stack regression specific to
-  this cell — the d1024 baseline crossed the same boundary with no
-  penalty, so the regression interacts with the d1280/batch-256 (HBM-edge)
-  config. The boundary operator itself costs ~0% at every scale: same-stack
+- **d1280 throughput gap (June → September).** The June README baseline
+  (171,910 tok/s) used 1024/2048-token short/long attention windows; the
+  September probe (160,924 tok/s) used 2048/full-context windows. Restoring
+  the June windows on the September stack gave
+  [163,720 tok/s](https://wandb.ai/marin-community/marin_moe/runs/moe_baseline_probe_d1280_ep1_issue9529_may_attn_g)
+  (+1.73%), but changes model semantics. The same-source JAX version comparison
+  measured 161,039 vs 160,931 tok/s, only 0.07% apart. The fast cross-entropy
+  backward recovers another 3.25% under the current windows, but the combined
+  effect with June windows has not been measured. The boundary operator itself
+  costs ~0% at every scale: same-stack
   variant vs baseline is 160,661 vs 160,924 (−0.16%). The variant's
   restore OOM (131 MB free of 32.9 GB) reflects the same tight memory
   budget both models share on the current stack.
@@ -292,7 +304,7 @@ Reading:
   from the parent.
 - [`launch_baseline_probe.py`](./launch_baseline_probe.py) — same-stack
   boundary-off throughput probe for a baseline cell (used to separate the
-  June→September stack drift from operator cost at d1280).
+  June→September throughput gap from operator cost at d1280).
 - [`launch_compute_opt.py`](./launch_compute_opt.py) — boundary-operator
   compute-optimal cells at the four May Recipe baseline points, with the
   legacy measurement conditions pinned (seq 4096, PKO on, long RoPE on,

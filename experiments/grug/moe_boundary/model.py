@@ -124,6 +124,7 @@ class GrugModelConfig:
     embedding entirely (Q and K go into attention un-rotated). Short layers
     still apply half-RoPE. Set to False to keep RoPE on long layers."""
     attention_implementation: GrugAttentionImplementation | None = None
+    cross_entropy_implementation: str | None = None
     moe_implementation: MoeImplementation | None = None
     capacity_factor: float = 1.0
     remat_mode: RematMode = "recompute_all"
@@ -811,6 +812,7 @@ class Transformer(eqx.Module):
             reduction=reduction,
             logsumexp_weight=logsumexp_weight,
             dtype=loss_dtype,
+            implementation=self.config.cross_entropy_implementation,
         )
         # No load-balancing loss; router z-loss only.
         num_moe_layers = router_metrics["router_z_loss_per_layer"].shape[0]
