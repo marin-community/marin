@@ -551,6 +551,10 @@ class GrugModelConfig:
     attn_res_num_blocks: int = 8
     boundary_alpha: float | None = None
     """Operator-1 boundary injection across prelude, core, and coda (None: disabled)."""
+    boundary_coda_warmup_steps: int = 0
+    """Linearly introduce the coda transform over these training steps; evaluation uses full strength."""
+    boundary_preserve_bigram: bool = False
+    """Keep the bigram as a separate AttnRes source while preserving each boundary's total vector."""
     attn_res_layer_backward: AttnResLayerBackward = AttnResLayerBackward.RECOMPUTE
     attn_res_remat_attention: bool = False
     """Rematerialize the attention branch inside each AttnRes layer's backward, so its residuals (incl.
@@ -1177,6 +1181,15 @@ class GrugModelConfig:
                 raise ValueError("boundary_alpha requires AttnRes, one pass, and at least three layers")
             if self.boundary_alpha <= 0:
                 raise ValueError("boundary_alpha must be positive")
+        if self.boundary_coda_warmup_steps < 0:
+            raise ValueError("boundary_coda_warmup_steps must be nonnegative")
+        if self.boundary_coda_warmup_steps or self.boundary_preserve_bigram:
+            if self.boundary_alpha is None:
+                raise ValueError("boundary ablations require boundary_alpha")
+        if self.boundary_preserve_bigram and not (
+            self.second_embed and self.second_embed_bigram and self.second_embed_mode == "source"
+        ):
+            raise ValueError("boundary_preserve_bigram requires a bigram AttnRes source")
         if self.attn_res_key_rank is not None:
             if not self.attn_res or not 0 < self.attn_res_key_rank < self.hidden_dim:
                 raise ValueError("attn_res_key_rank needs attn_res and 0 < attn_res_key_rank < hidden_dim")
@@ -5430,6 +5443,7 @@ class Transformer(eqx.Module):
         route_key: jax.Array | None = None,
         return_routing: bool = False,
         router_tie_active: bool | None = None,
+        boundary_coda_blend: jax.Array | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         """``loop_active`` (static, with ``loop_grow_step``) selects one pass (False) or all ``loop_passes``
         (True); None runs all passes. ``route_key`` (training only) seeds ``moe_gumbel_tau``.
@@ -5620,6 +5634,7 @@ class Transformer(eqx.Module):
                 route_key,
                 input_embed2,
                 ple_rows,
+                boundary_coda_blend,
             )
         else:
             if cfg.nitp_weight > 0:
@@ -5700,6 +5715,7 @@ class Transformer(eqx.Module):
         route_key: jax.Array | None = None,
         input_embed2: jax.Array | None = None,
         ple_rows: jax.Array | None = None,
+        boundary_coda_blend: jax.Array | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array], dict[str, jax.Array]]:
         """Block AttnRes over the layers, unrolled so each gate reads only its valid sources.
 
@@ -5830,6 +5846,29 @@ class Transformer(eqx.Module):
                     core_output = _stream_sum((*blocks, partial))
                     blocks, block_logits = (), ()
                     partial = (rms_norm(core_output, eps) + cfg.boundary_alpha * prelude_output).astype(partial.dtype)
+                    if boundary_coda_blend is not None:
+                        partial = ((1.0 - boundary_coda_blend) * core_output + boundary_coda_blend * partial).astype(
+                            partial.dtype
+                        )
+                    core_stats = jax.lax.stop_gradient(core_output.astype(jnp.float32))
+                    prelude_stats = jax.lax.stop_gradient(prelude_output.astype(jnp.float32))
+                    core_rms = jnp.sqrt(jnp.mean(core_stats**2, axis=-1))
+                    prelude_rms = jnp.sqrt(jnp.mean(prelude_stats**2, axis=-1))
+                    layer_logs["attn_res_boundary_core_rms"] = jnp.mean(core_rms)
+                    layer_logs["attn_res_boundary_prelude_rms"] = jnp.mean(prelude_rms)
+                    layer_logs["attn_res_boundary_cosine"] = jnp.mean(
+                        jnp.mean(core_stats * prelude_stats, axis=-1) / jnp.maximum(core_rms * prelude_rms, eps)
+                    )
+                    layer_logs["attn_res_boundary_coda_blend"] = (
+                        jnp.array(1.0, jnp.float32) if boundary_coda_blend is None else boundary_coda_blend
+                    )
+                if cfg.boundary_preserve_bigram and i in (prelude_len, core_end):
+                    assert partial is not None
+                    bigram = extra_sources[0]
+                    blocks = (bigram,)
+                    block_logits = (_attn_res_source_logits(bigram, queries[2 * eff :], eps, cfg.attn_res_head_norm),)
+                    # Split the boundary vector without duplicating the bigram's contribution.
+                    partial = (partial - bigram).astype(partial.dtype)
                 if cfg.attn_res_full or (eff % seg_size == 0 and eff // seg_size < block_cap):
                     assert partial is not None
                     blocks = (*blocks, partial)
@@ -6175,12 +6214,18 @@ class Transformer(eqx.Module):
         byte_table: Int[Array, "V N"] | None = None,
         byte_aux_weight: jax.Array | None = None,
         router_tie_active: bool | None = None,
+        boundary_coda_blend: jax.Array | None = None,
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
         """``aux_loss_weight`` scales the early auxiliary LM loss (``aux_lm_layer``); it is skipped at 0.
         ``train_terms`` adds the training-only objectives (MTP, AttnRes z-loss); evals leave it off so they
         score the plain next-token loss."""
         hidden, router_metrics = self(
-            token_ids, mask=mask, loop_active=loop_active, route_key=route_key, router_tie_active=router_tie_active
+            token_ids,
+            mask=mask,
+            loop_active=loop_active,
+            route_key=route_key,
+            router_tie_active=router_tie_active,
+            boundary_coda_blend=boundary_coda_blend,
         )
         aux_hidden = router_metrics.pop(_AUX_HIDDEN, None)
         nitp_target = router_metrics.pop(_NITP_TARGET, None)

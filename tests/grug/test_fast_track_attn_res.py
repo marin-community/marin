@@ -30,7 +30,7 @@ from experiments.grug.fast_track.model import (
     LocalMixer,
     Transformer,
 )
-from experiments.grug.fast_track.train import _make_train_step, initial_state
+from experiments.grug.fast_track.train import _loss_and_grads, _make_train_step, initial_state
 from experiments.grug.moe.kda import chunk_kda
 
 _HIDDEN = 64
@@ -132,7 +132,7 @@ def _sliced_layers(model: Transformer) -> list:
     return [by_index[i] for i in range(model.config.num_layers)]
 
 
-def _reference_hidden(model: Transformer, tokens: jax.Array) -> jax.Array:
+def _reference_hidden(model: Transformer, tokens: jax.Array, boundary_coda_blend: jax.Array | None = None) -> jax.Array:
     """Straight-line Block AttnRes: plain autodiff, full source list, no custom VJP or precomputed logits."""
     cfg = model.config
     eps = cfg.layer_norm_eps
@@ -140,7 +140,24 @@ def _reference_hidden(model: Transformer, tokens: jax.Array) -> jax.Array:
     embedded = jax.sharding.reshard(model.token_embed[tokens], P(("replica_dcn", "data", "expert"), None, None))
     hidden = model.embed_gated_norm(model.embed_norm(embedded))
     seg_size = max(1, cfg.num_layers // cfg.attn_res_num_blocks)
-    blocks: list[jax.Array] = []
+    bigram = None
+    if model.token_embed2 is not None:
+        assert model.embed2_norm is not None
+        ids = model_module._bigram_hash_ids(tokens, None, cfg.embed2_rows, cfg.embed2_ngram)
+        bigram = model.embed2_norm(
+            jax.sharding.reshard(model.token_embed2[ids], P(("replica_dcn", "data", "expert"), None, None))
+        )
+        if cfg.bigram_gate:
+            assert model.bigram_gate_w is not None and model.bigram_gate_b is not None
+            bigram, _ = model_module._content_gate(
+                hidden,
+                bigram,
+                model.bigram_gate_w,
+                model.bigram_gate_b,
+                model.bigram_gate_a_lr,
+                model.bigram_gate_b_lr,
+            )
+    blocks: list[jax.Array] = [] if bigram is None else [bigram]
     partial: jax.Array | None = hidden
     prelude_output = None
     prelude_len = cfg.num_layers // 3
@@ -149,17 +166,21 @@ def _reference_hidden(model: Transformer, tokens: jax.Array) -> jax.Array:
         if cfg.boundary_alpha is not None and i == prelude_len:
             assert partial is not None
             prelude_output = sum(source.astype(jnp.float32) for source in [*blocks, partial]).astype(hidden.dtype)
-            blocks = []
-            partial = (cfg.boundary_alpha * prelude_output).astype(hidden.dtype)
+            summary = (cfg.boundary_alpha * prelude_output).astype(hidden.dtype)
+            blocks = [bigram] if cfg.boundary_preserve_bigram else []
+            partial = summary - bigram if cfg.boundary_preserve_bigram else summary
         if cfg.boundary_alpha is not None and i == core_end:
             assert partial is not None and prelude_output is not None
             core_output = sum(source.astype(jnp.float32) for source in [*blocks, partial]).astype(hidden.dtype)
-            blocks = []
-            partial = (
+            summary = (
                 core_output.astype(jnp.float32)
                 * jax.lax.rsqrt(jnp.mean(core_output.astype(jnp.float32) ** 2, axis=-1, keepdims=True) + eps)
                 + cfg.boundary_alpha * prelude_output
             ).astype(hidden.dtype)
+            if boundary_coda_blend is not None:
+                summary = ((1 - boundary_coda_blend) * core_output + boundary_coda_blend * summary).astype(hidden.dtype)
+            blocks = [bigram] if cfg.boundary_preserve_bigram else []
+            partial = summary - bigram if cfg.boundary_preserve_bigram else summary
         if i % seg_size == 0 and i // seg_size < cfg.attn_res_num_blocks:
             assert partial is not None
             blocks.append(partial)
@@ -175,7 +196,9 @@ def _reference_hidden(model: Transformer, tokens: jax.Array) -> jax.Array:
     return model.final_gated_norm(model.final_norm(hidden))
 
 
-def _assert_matches_reference(cfg: GrugModelConfig, mesh: Mesh) -> None:
+def _assert_matches_reference(
+    cfg: GrugModelConfig, mesh: Mesh, boundary_coda_blend: jax.Array | None = None
+) -> Transformer:
     """Loss and every gradient of the model match the straight-line reference, and the AttnRes queries,
     Inkling weights and KDA mixer weights all receive gradient."""
     with jax.set_mesh(mesh):
@@ -184,10 +207,10 @@ def _assert_matches_reference(cfg: GrugModelConfig, mesh: Mesh) -> None:
         cotangent = jax.random.normal(jax.random.key(3), (_BATCH, _SEQ, cfg.hidden_dim), jnp.float32)
 
         def model_loss(m):
-            return jnp.sum(m(tokens)[0].astype(jnp.float32) * cotangent)
+            return jnp.sum(m(tokens, boundary_coda_blend=boundary_coda_blend)[0].astype(jnp.float32) * cotangent)
 
         def reference_loss(m):
-            return jnp.sum(_reference_hidden(m, tokens).astype(jnp.float32) * cotangent)
+            return jnp.sum(_reference_hidden(m, tokens, boundary_coda_blend).astype(jnp.float32) * cotangent)
 
         loss, grads = eqx.filter_jit(eqx.filter_value_and_grad(model_loss))(model)
         ref_loss, ref_grads = eqx.filter_jit(eqx.filter_value_and_grad(reference_loss))(model)
@@ -211,6 +234,7 @@ def _assert_matches_reference(cfg: GrugModelConfig, mesh: Mesh) -> None:
             leaf = name.rsplit(".", 1)[-1]
             grad_max[leaf] = max(grad_max.get(leaf, 0.0), float(jnp.max(jnp.abs(grad))))
     assert grad_max and all(value > 0 for value in grad_max.values()), grad_max
+    return grads
 
 
 @pytest.mark.parametrize("local_mixer", list(LocalMixer))
@@ -276,6 +300,73 @@ def test_boundary_operator_keeps_bigram_source_trainable(mesh, fp32_kda_kernel):
     assert np.isfinite(value)
     assert grads.token_embed2 is not None
     assert float(jnp.max(jnp.abs(grads.token_embed2))) > 0
+
+
+@pytest.mark.parametrize("layer_backward", list(AttnResLayerBackward))
+@pytest.mark.parametrize(
+    "blend,preserve_bigram,gated_bigram",
+    [
+        (0.0, False, True),
+        (0.5, False, True),
+        (1.0, False, True),
+        (None, True, True),
+        (None, True, False),
+        (0.5, True, True),
+    ],
+    ids=["warm_start", "warm_middle", "warm_end", "preserve_gated", "preserve_ungated", "combined"],
+)
+def test_boundary_initialization_ablations_match_reference(
+    mesh, fp32_kda_kernel, layer_backward, blend, preserve_bigram, gated_bigram
+):
+    cfg = dataclasses.replace(
+        _config(dense=False, num_layers=6, num_blocks=8, layer_backward=layer_backward),
+        boundary_alpha=1.0,
+        boundary_preserve_bigram=preserve_bigram,
+        second_embed=True,
+        second_embed_bigram=True,
+        embed2_rows=256,
+        bigram_gate=gated_bigram,
+        bigram_gate_rank=4 if gated_bigram else 0,
+    )
+    grads = _assert_matches_reference(cfg, mesh, None if blend is None else jnp.asarray(blend))
+    layers = _sliced_layers(grads)
+    for index in [2, 4]:
+        magnitude = float(jnp.max(jnp.abs(layers[index].attn_res_query_attn)))
+        # Preserving the source restores a routing choice at the first core/coda attention gate.
+        if preserve_bigram:
+            assert magnitude > 0
+        else:
+            assert magnitude == 0
+
+
+def test_boundary_coda_warmup_uses_current_step_and_full_operator_for_evaluation(mesh, fp32_kda_kernel):
+    cfg = dataclasses.replace(
+        _config(dense=True, num_layers=6, num_blocks=8), boundary_alpha=1.0, boundary_coda_warmup_steps=10
+    )
+    mp = jmp.get_policy("params=float32,compute=float32,output=float32")
+    with jax.set_mesh(mesh):
+        model = _randomize_queries(Transformer.init(cfg, key=jax.random.key(0)), jax.random.key(1))
+        tokens = jax.random.randint(jax.random.key(2), (_BATCH, _SEQ), 0, cfg.vocab_size)
+        batch = GrugLmExample(tokens=tokens, loss_weight=jnp.ones(tokens.shape), attn_mask=AttentionMask.causal())
+
+        def scheduled_loss(m, step):
+            return _loss_and_grads(m, batch, mp, None, step=step)
+
+        def explicit_loss(m, blend):
+            return m.next_token_loss(tokens, batch.loss_weight, boundary_coda_blend=blend)
+
+        scheduled = eqx.filter_jit(scheduled_loss)
+        explicit = eqx.filter_jit(eqx.filter_value_and_grad(explicit_loss))
+        observed = []
+        for step, blend in [(0, 0.0), (5, 0.5), (10, 1.0), (20, 1.0), (None, None)]:
+            (value, _), grads = scheduled(model, None if step is None else jnp.asarray(step))
+            expected, expected_grads = explicit(model, None if blend is None else jnp.asarray(blend))
+            np.testing.assert_allclose(value, expected, rtol=1e-6, atol=1e-6)
+            for grad, expected_grad in zip(jax.tree.leaves(grads), jax.tree.leaves(expected_grads), strict=True):
+                np.testing.assert_allclose(grad, expected_grad, rtol=1e-5, atol=1e-6)
+            observed.append(float(value))
+        assert abs(observed[0] - observed[2]) > 1e-5
+        np.testing.assert_allclose(observed[2:], observed[2], rtol=1e-6, atol=1e-6)
 
 
 def test_kma_optimizer_groups(mesh):

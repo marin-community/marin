@@ -889,6 +889,9 @@ def _loss_and_grads(
     aux_weight = None if step is None else _aux_loss_weight(params.config, step)
     route_key = None
     cfg = params.config
+    boundary_coda_blend = None
+    if step is not None and cfg.boundary_coda_warmup_steps:
+        boundary_coda_blend = jnp.minimum(step.astype(jnp.float32) / cfg.boundary_coda_warmup_steps, 1.0)
     mtp_subsample = cfg.mtp_mode != MtpMode.OFF and cfg.mtp_position_frac < 1.0
     if step is not None and (cfg.moe_gumbel_tau > 0 or cfg.erc_loss_weight > 0 or mtp_subsample):
         route_key = jax.random.fold_in(jax.random.PRNGKey(ROUTE_NOISE_SEED), step)
@@ -910,6 +913,7 @@ def _loss_and_grads(
             byte_table=byte_table,
             byte_aux_weight=byte_weight,
             router_tie_active=router_tie_active,
+            boundary_coda_blend=boundary_coda_blend,
         )
 
     return jax.value_and_grad(loss_fn, has_aux=True)(params)
