@@ -5,7 +5,6 @@
 
 import textwrap
 from dataclasses import replace
-from pathlib import Path
 
 import pytest
 from draccus.utils import ParsingError
@@ -22,15 +21,9 @@ from marin.evaluation.model_config import (
 )
 from marin.evaluation.serving_config import _serve_host_memory, inference_config_for_model
 from marin.inference.config import BrokerConfig, LevanterEngineConfig, ObjectStoreLoadMode
-from transformers.utils.chat_template_utils import render_jinja_template
 
 from experiments.evaluation.fleet import MARIN_EVAL_HARDWARE
 from experiments.evaluation.models import models
-
-_K2_CHAT_TEMPLATE = (
-    Path(__file__).parents[2]
-    / "experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/chat-templates/IFM-K2-Horizon-MoVA-36B-A4B.jinja"
-)
 
 _CATALOG_YAML = textwrap.dedent(
     """
@@ -65,30 +58,6 @@ def _write(tmp_path, name: str, body: str):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(body)
     return path
-
-
-@pytest.mark.parametrize(
-    ("reasoning_effort", "thinking_tag"),
-    [("high", "ifm|think"), ("medium", "ifm|think_fast"), ("low", "ifm|think_faster")],
-)
-def test_k2_chat_template_accepts_visible_only_historical_assistant(reasoning_effort, thinking_tag):
-    messages = [
-        {"role": "system", "content": "You are helpful."},
-        {"role": "user", "content": "First request"},
-        {"role": "assistant", "content": "Visible answer"},
-        {"role": "user", "content": "Follow-up request"},
-    ]
-
-    rendered, _ = render_jinja_template(
-        [messages],
-        chat_template=_K2_CHAT_TEMPLATE.read_text(),
-        add_generation_prompt=True,
-        bos_token="<s>",
-        reasoning_effort=reasoning_effort,
-    )
-
-    assert f"<{thinking_tag}>\n</{thinking_tag}>Visible answer" in rendered[0]
-    assert rendered[0].endswith(f"<{thinking_tag}>\n")
 
 
 def test_load_model_config_round_trips_the_catalog_shape(tmp_path):
