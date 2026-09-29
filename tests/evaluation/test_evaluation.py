@@ -778,12 +778,13 @@ def test_evalchemy_executor_classifies_missing_native_archive(tmp_path, monkeypa
     assert exc_info.value.jobs == {"eval": "/eval/completed"}
 
 
-def test_aggregate_coverage_keeps_the_full_benchmark_extent():
+@pytest.mark.parametrize("count_metric", ["total_examples", "scored_count"])
+def test_aggregate_coverage_keeps_the_full_benchmark_extent(count_metric: str):
     coverage = {
         "custom": TaskCoverage(n_benchmark=100, n_attempted=10, n_scored=0, errors={"ungraded": 10}),
     }
 
-    reconciled = _coverage_with_aggregate_counts(coverage, {"custom": {"total_examples": 10.0}})
+    reconciled = _coverage_with_aggregate_counts(coverage, {"custom": {count_metric: 10.0}})
 
     assert reconciled["custom"] == TaskCoverage(n_benchmark=100, n_attempted=10, n_scored=10)
 
