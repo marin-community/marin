@@ -159,6 +159,8 @@ function difficultyRun(model, identityPath, record) {
           generation_parameters: identity.config.model.parameters,
           total_context_window: identity.config.model.context_budget?.context_window || identity.config.model.context_window || identity.context_window || "Not recorded",
           context_budget: identity.config.model.context_budget || "Not recorded",
+          serving_configuration: model.serving_configuration || "Not recorded",
+          generation_outcomes: model.generation_qc || "Not recorded",
           ...(identity.harbor ? {harbor_execution: identity.harbor, worker_timeout: identity.config.runtime.worker_timeout} : {request_timeout: identity.config.model.timeout}),
           agent_timeout: identity.config.runtime.agent_timeout,
           maximum_turns: identity.config.runtime.max_turns,
