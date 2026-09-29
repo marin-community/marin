@@ -3,6 +3,8 @@
 
 """Private task resources and their safe materialization."""
 
+import base64
+import binascii
 import hashlib
 import os
 import re
@@ -51,13 +53,16 @@ class TaskResource(BaseModel):
     visibility: ResourceVisibility
     executable: bool = False
     content: str | None = None
+    content_base64: str | None = None
     reference: ResourceReference | None = None
 
     @model_validator(mode="after")
     def validate_resource(self) -> "TaskResource":
         validate_resource_path(self.path)
-        if (self.content is None) == (self.reference is None):
-            raise ValueError("A resource requires exactly one of content or reference")
+        if sum(value is not None for value in (self.content, self.content_base64, self.reference)) != 1:
+            raise ValueError("A resource requires exactly one inline content form or reference")
+        if self.content_base64 is not None:
+            decode_base64_content(self.content_base64)
         return self
 
 
@@ -72,6 +77,17 @@ class ResolvedResource:
 
 
 ResourceResolver = Callable[[ResourceReference], bytes]
+
+
+def decode_base64_content(value: str) -> bytes:
+    """Decode the canonical JSON representation of inline binary content."""
+    try:
+        payload = base64.b64decode(value, validate=True)
+    except (ValueError, binascii.Error) as error:
+        raise ValueError("Invalid base64 resource content") from error
+    if base64.b64encode(payload).decode("ascii") != value:
+        raise ValueError("Base64 resource content must be canonical")
+    return payload
 
 
 def validate_resource_path(path: str) -> PurePosixPath:
@@ -115,6 +131,8 @@ def validate_resources(
     for resource in resources:
         if resource.content is not None:
             payload = resource.content.encode("utf-8")
+        elif resource.content_base64 is not None:
+            payload = decode_base64_content(resource.content_base64)
         else:
             if trusted_resolver is None or resource.reference is None:
                 raise ValueError(f"Resource {resource.path!r} requires a trusted resolver")

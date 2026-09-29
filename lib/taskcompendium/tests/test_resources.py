@@ -3,6 +3,7 @@
 
 """Resource exposure and integrity across the task export boundary."""
 
+import base64
 import hashlib
 import stat
 
@@ -30,6 +31,19 @@ def test_materialize_resources_exposes_only_selected_files(tmp_path):
     assert script.read_text() == "echo ready\n"
     assert script.stat().st_mode & stat.S_IXUSR
     assert not (destination / "expected.json").exists()
+
+
+def test_materialize_inline_binary_resource_preserves_exact_bytes(tmp_path):
+    payload = b"\x00\xff\x80\n"
+    resource = TaskResource(
+        path="inputs/blob.bin",
+        visibility=ResourceVisibility.AGENT,
+        content_base64=base64.b64encode(payload).decode("ascii"),
+    )
+
+    materialize_resources((resource,), tmp_path / "agent", visibility=ResourceVisibility.AGENT)
+
+    assert (tmp_path / "agent/inputs/blob.bin").read_bytes() == payload
 
 
 def test_materialize_resources_validates_private_reference_before_writing_agent_files(tmp_path):

@@ -3,6 +3,7 @@
 
 """A pinned answer task through Harbor's custom-verifier trial lifecycle."""
 
+import base64
 import json
 import subprocess
 import sys
@@ -147,6 +148,33 @@ async def test_direct_chat_private_resource_remains_verifier_only(tmp_path, spec
     assert result.verifier_result.rewards == {"reward": 1.0}
     assert (task / "private_resources/reference.txt").read_text() == "12"
     assert not (task / "environment/inputs").exists()
+
+
+async def test_direct_chat_private_binary_resource_survives_export_and_launch(tmp_path, specification):
+    payload = b"\x00\xff\x80\n"
+    specification = specification.model_copy(
+        update={
+            "resources": (
+                TaskResource(
+                    path="reference.bin",
+                    visibility=ResourceVisibility.VERIFIER,
+                    content_base64=base64.b64encode(payload).decode("ascii"),
+                ),
+            )
+        }
+    )
+    binding = HarborEnvironmentConfig()
+    task = lower_to_harbor(
+        specification,
+        SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        binding,
+        tmp_path / "task",
+    )
+
+    result = await run_trial(task, binding, ReplayLaunch(response="12"), tmp_path / "trials", "run")
+
+    assert result.verifier_result.rewards == {"reward": 1.0}
+    assert (task / "private_resources/reference.bin").read_bytes() == payload
 
 
 def test_direct_chat_rejects_agent_resource_before_export(tmp_path, specification):

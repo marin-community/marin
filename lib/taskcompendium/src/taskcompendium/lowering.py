@@ -21,6 +21,7 @@ from taskcompendium.resources import (
     MAX_TOTAL_RESOURCE_BYTES,
     ResourceResolver,
     ResourceVisibility,
+    decode_base64_content,
     materialize_resources,
     validate_resource_path,
     validate_resources,
@@ -246,8 +247,12 @@ def validate_exported_resources(specification: TaskSpec, task_dir: Path) -> None
         if resource.reference is not None:
             digest = resource.reference.sha256
         else:
-            assert resource.content is not None
-            digest = hashlib.sha256(resource.content.encode()).hexdigest()
+            if resource.content is not None:
+                source_content = resource.content.encode()
+            else:
+                assert resource.content_base64 is not None
+                source_content = decode_base64_content(resource.content_base64)
+            digest = hashlib.sha256(source_content).hexdigest()
         if hashlib.sha256(payload).hexdigest() != digest:
             raise ValueError(f"Exported resource digest mismatch: {resource.path}")
         if bool(current.stat().st_mode & stat.S_IXUSR) != resource.executable:
