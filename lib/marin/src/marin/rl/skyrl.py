@@ -6,12 +6,13 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import tempfile
 import uuid
 from collections import deque
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import PurePosixPath
 from typing import Literal, cast
@@ -60,7 +61,11 @@ class SkyRLRuntime:
     """Identity-bearing SkyRL revision and locked dependency profile."""
 
     profile: SkyRLRuntimeProfile
-    commit: str = field(init=False, default=MARIN_SKYRL.commit)
+    commit: str = MARIN_SKYRL.commit
+
+    def __post_init__(self) -> None:
+        if not re.fullmatch(r"[0-9a-f]{40}", self.commit):
+            raise ValueError("SkyRL runtime requires an immutable commit")
 
 
 @dataclass(frozen=True)
@@ -291,6 +296,37 @@ class ArtifactHfModel:
 
 
 @dataclass(frozen=True)
+class PinnedHfModel:
+    """An immutable Hugging Face policy and tokenizer snapshot."""
+
+    repository: str
+    revision: str
+    tokenizer_repository: str
+    tokenizer_revision: str
+
+    def __post_init__(self) -> None:
+        for repository in (self.repository, self.tokenizer_repository):
+            if repository.count("/") != 1 or "://" in repository:
+                raise ValueError("Pinned Hugging Face model requires an org/repository ID")
+        for revision in (self.revision, self.tokenizer_revision):
+            if not re.fullmatch(r"[0-9a-f]{40}", revision):
+                raise ValueError("Pinned Hugging Face model requires immutable revisions")
+
+    def deps(self) -> tuple[()]:
+        return ()
+
+    def resolve(self, ctx: StepContext) -> ResolvedModelLocator:
+        del ctx
+        return ResolvedModelLocator(
+            uri=self.repository,
+            identity=self.revision,
+            local_path=self.repository,
+            tokenizer_uri=self.tokenizer_repository,
+            tokenizer_revision=self.tokenizer_revision,
+        )
+
+
+@dataclass(frozen=True)
 class ArtifactDataSource:
     """An immutable data directory produced by another Marin artifact step."""
 
@@ -356,7 +392,7 @@ class SkyRLSpec:
     version: str
     config_yaml: str
     runtime: SkyRLRuntime
-    model: ArtifactHfModel
+    model: ArtifactHfModel | PinnedHfModel
     train_data: tuple[SkyRLDataSource, ...]
     validation_data: tuple[SkyRLDataSource, ...]
     topology: SkyRLTopology
@@ -882,7 +918,7 @@ def skyrl_step(
             output=output,
             export_hf=export_hf,
             draft_checkpoint_root=draft_checkpoint_root,
-            launcher_requirement=MARIN_SKYRL.requirement(),
+            launcher_requirement=(f"{MARIN_SKYRL.distribution} @ git+{MARIN_SKYRL.repository}@{spec.runtime.commit}"),
         )
 
     return ArtifactStep(
