@@ -15,9 +15,10 @@ function chip(text, className) { return node("span", text || "Unclassified", `ch
 function matchesDifficulty(row) {
   const selection = $("difficulty").value;
   if (selection === "all") return true;
-  if (selection === "measured") return Boolean(row.difficulty_summary);
-  if (selection === "unmeasured") return !row.difficulty_summary;
-  const model = row.difficulty_summary?.models.find(model => model.size === "large");
+  if (selection === "measured") return row.difficulty_summary?.status === "current";
+  if (selection === "historical") return row.difficulty_summary?.status === "historical";
+  if (selection === "unmeasured") return row.difficulty_summary?.status !== "current";
+  const model = AtlasDifficulty.currentLarge(row.difficulty_summary);
   if (!model?.verified) return false;
   const percent = 100 * model.solved / model.verified;
   const [lower, upper] = selection.split("-").map(Number);
@@ -39,7 +40,7 @@ function filtered() {
     (!search || [row.display_name,row.canonical_source,row.component_name,row.name,row.gym_alias,row.family,row.dataset_id,row.environment,row.notes,row.origin,row.verification].join(" ").toLowerCase().includes(search))
   );
   return rows.sort((a,b) => {
-    const value = row => state.sort === "difficulty" ? row.difficulty_summary?.models.find(model => model.size === "large")?.solve_rate : row[state.sort];
+    const value = row => state.sort === "difficulty" ? AtlasDifficulty.currentLarge(row.difficulty_summary)?.solve_rate : row[state.sort];
     const x=value(a), y=value(b);
     if (x === null || x === undefined || x === "") return y === null || y === undefined || y === "" ? a.id.localeCompare(b.id) : 1;
     if (y === null || y === undefined || y === "") return -1;
@@ -73,7 +74,7 @@ function render() {
         if (row.difficulty_summary) {
           const anchor=node("a",undefined,"difficulty-link");anchor.href=`review.html?id=${encodeURIComponent(row.review_id)}#difficulty`;
           anchor.setAttribute("aria-label",`Difficulty attempts and verifier results for ${row.display_name}`);
-          anchor.append(AtlasDifficulty.comparison(row.difficulty_summary.models));td.append(anchor);
+          anchor.append(AtlasDifficulty.comparison(row.difficulty_summary.models, row.difficulty_summary));td.append(anchor);
         } else {td.textContent=row.verifier_issues.length ? "Withheld · verifier issues" : row.review_stale ? "Needs re-review" : "Not measured";td.className="muted";}
       }
       else if (key === "quality") {const labels={good:"Good",some_issues:"Some issues",bad:"Bad"};const badge=chip(labels[value] || (row.review_stale ? "Needs re-review" : row.review_id ? "Unrated" : "Unreviewed"), `quality-${value || "unknown"}`);badge.title=row.verifier_issues.length ? "Confirmed verifier defect remains unresolved. Open the source's review pool and GitHub issue." : row.review_stale ? "Source data or verifier changed since this review. Open the historical report." : "Sample-based review conclusion; open the report for coverage and limitations.";if(row.review_id){const anchor=node("a");anchor.href=`review.html?id=${encodeURIComponent(row.review_id)}`;anchor.append(badge);td.append(anchor);}else td.append(badge);}
@@ -102,7 +103,7 @@ function details(row) {
   $("detail-notes").textContent=row.notes;
   const fields=[["Canonical source",row.canonical_source],["Canonical task count",row.canonical_task_count],["Component",row.component_name],["Component proportion",row.component_ratio],["Record dataset selector",row.component_selector],["Counted file SHA-256",row.component_file_sha256],["Registry ID",row.registry_name || row.name],["Task count",row.task_count === null ? row.kind === "Dataset" ? "Not published" : "No fixed count" : (row.count_precision === "estimated" ? "≈ " : "") + number.format(row.task_count)],["Count precision",row.count_precision],["Count basis",row.count_basis],["Input task count",row.input_count],["Interaction",row.turns],["Type",row.type||"Mixed / unclassified"],["Classification",row.classification_basis],["Benchmark",row.is_benchmark ? "True" : "False"],["Benchmark basis",row.benchmark_basis],["Family",row.family],["Family basis",row.family_basis],["Environment",row.environment],["Gym alias",row.gym_alias],["Gym entrypoint",row.gym_entrypoint],["Registry split selector",row.split],["Verification",row.verification],["Languages",row.languages],["License",row.license],["Last revision",row.revised_at],["Revision basis",row.revision_basis],["Registry date",row.registry_revised_at],["Verifier date",row.verifier_revised_at],["Verifier commit",row.verifier_revision],["Metadata error",row.metadata_error],["Count metadata error",row.count_metadata_error],["Registry / release SHA",row.revision],["Dataset date",row.dataset_revised_at],["Dataset SHA",row.dataset_revision],["Quality",row.quality||"Not curated"],["Traces",row.traces ?? "Not curated"],["Upstream link",row.upstream_link_basis]];
   $("detail-fields").replaceChildren();for(const [title,value] of fields) {if(value === undefined || value === null || value === "" || Array.isArray(value) && !value.length)continue;const dl=node("dl",undefined,"field");dl.append(node("dt",title),node("dd",Array.isArray(value) ? value.join(", ") : String(value)));$("detail-fields").append(dl);}
-  if(row.difficulty_summary){const chart=AtlasDifficulty.comparison(row.difficulty_summary.models);$("detail-fields").append(chart);}
+  if(row.difficulty_summary){const chart=AtlasDifficulty.comparison(row.difficulty_summary.models, row.difficulty_summary);$("detail-fields").append(chart);}
   $("detail-links").replaceChildren(link("Open source ↗",row.url),link("Pinned catalog ↗",row.provenance_url));if(row.upstream_url) $("detail-links").append(link("Original source ID ↗",row.upstream_url));if(row.verifier_url) $("detail-links").append(link("Verifier code ↗",row.verifier_url));if(row.count_url) $("detail-links").append(link("Count evidence ↗",row.count_url));if(row.family_url) $("detail-links").append(link("Family evidence ↗",row.family_url));
   if(row.review_id){const anchor=node("a","Read quality review ↗");anchor.href=`review.html?id=${encodeURIComponent(row.review_id)}`;$("detail-links").append(anchor);}
   if(row.difficulty_summary){const anchor=node("a","Read difficulty attempts & verifier results ↗");anchor.href=`review.html?id=${encodeURIComponent(row.review_id)}#difficulty`;$("detail-links").append(anchor);}

@@ -140,7 +140,7 @@ function savedEvidence(title, path) {
   });
 }
 function difficultyRun(model, identityPath, record) {
-  const section = fold(`${label(model.size)} · ${model.model}`, () => {
+  const section = fold(`${model.measurement_status === "current" ? "Current" : model.measurement_status === "invalid" ? "Protocol mismatch" : "Historical"} · ${AtlasDifficulty.modelLabel(model)}`, () => {
     const content = node("div", undefined, "review-card-content difficulty-settings");
     content.append(AtlasDifficulty.comparison([model]));
     const interval = model.wilson_95 ? `${(100 * model.wilson_95[0]).toFixed(1)}–${(100 * model.wilson_95[1]).toFixed(1)}%` : "Not recorded";
@@ -157,6 +157,7 @@ function difficultyRun(model, identityPath, record) {
           checkpoint_revision: identity.config.model.revision || "Not exposed by provider",
           provider: identity.config.model.provider || "Local model service",
           generation_parameters: identity.config.model.parameters,
+          total_context_window: identity.config.model.context_window || identity.context_window || "Not recorded",
           ...(identity.harbor ? {harbor_execution: identity.harbor, worker_timeout: identity.config.runtime.worker_timeout} : {request_timeout: identity.config.model.timeout}),
           agent_timeout: identity.config.runtime.agent_timeout,
           maximum_turns: identity.config.runtime.max_turns,
@@ -204,6 +205,37 @@ function difficultyRun(model, identityPath, record) {
     return content;
   }, false, "review-card");
   return section;
+}
+function difficultyReport(report, display, record, reportPath) {
+  return fold(`${display.status === "current" ? "Current" : display.status === "invalid" ? "Invalid protocol" : "Historical"} difficulty · model solve rates and saved attempts`, () => {
+    const content = node("div", undefined, "review-card-content");
+    content.append(node("p", `${report.sampling.task_count} shared tasks · ${report.sampling.method} · split ${report.split}`, "formatted-prose"), AtlasDifficulty.comparison(display.models, display));
+    content.append(node("p", "Longer bars mean more tasks solved. Open a model to inspect its exact settings, attempts, and native verifier outputs. Unverified attempts are excluded from the solve rate.", "review-byline"));
+    for (const rawModel of report.models) {
+      const model = {...rawModel, measurement_status: display.status};
+      const identityPath = report.protocol?.run_identities?.find(item => item.size === model.size)?.run_identity_path || `difficulty/${model.size}/run.json`;
+      content.append(difficultyRun(model, identityPath, record));
+    }
+    for (const followup of report.protocol_followups || []) {
+      content.append(fold(`${followup.kind === "alternate_checkpoint" ? "Hosted comparison" : "Additional settings comparison"} · ${label(followup.state)}`, () => {
+        const section = node("div", undefined, "review-card-content");
+        section.append(node("p", "Separate run on the original task sample. Its checkpoint and any LLM verifier settings can differ from the paired models.", "formatted-prose"));
+        section.append(textSection("Recorded model and setting changes", {model: followup.model, provider: followup.provider, model_revision: followup.model_revision, checkpoint_change: followup.checkpoint_change, generation_parameters: followup.generation_parameters, verifier_configuration_change: followup.verifier_configuration_change}, true));
+        section.append(textSection("Comparison limitations", followup.limitations));
+        if (followup.state === "complete" && record.artifacts.some(item => item.path === followup.report_path)) {
+          const run = node("div", "Loading saved attempts…");section.append(run);
+          jsonResponse(artifactUrl(followup.report_path)).then(data => {
+            const identityPath = followup.report_path.replace(/difficulty\.json$/, "run.json");
+            run.replaceChildren(difficultyRun({...followup, model: data.model?.name || followup.model, measurement_status: "historical", size: followup.kind === "alternate_checkpoint" ? "hosted" : "followup", task_outcomes: data.outcomes}, identityPath, record));
+          }).catch(error => run.replaceChildren(node("p", error.message, "issue-highlight")));
+        } else section.append(node("p", "This comparison has no complete published attempts yet.", "difficulty-evidence-status"));
+        if (record.artifacts.some(item => item.path === followup.original_report_path)) section.append(artifactLink(followup.original_report_path, "Preserved original report ↗"));
+        return section;
+      }, false, "review-card"));
+    }
+    content.append(textSection("Sampling and scope", {sampling: report.sampling, population_count: report.population_count, source_revision: report.source_revision, estimated_at: report.estimated_at}), textSection("Limitations", report.limitations, true), artifactLink(reportPath, "Full difficulty report ↗"));
+    return content;
+    }, true, "review-card");
 }
 function download(value, name) {
   const url = URL.createObjectURL(new Blob([JSON.stringify(value, null, 2)], {type: "application/json"}));
@@ -291,37 +323,28 @@ async function artifactPage(record) {
     const difficultyArtifact = record.artifacts.find(item => item.path === "difficulty.json");
     if (difficultyArtifact) {
       const report = await jsonResponse(artifactUrl("difficulty.json"));
-      const difficulty = fold("Difficulty · model solve rates and saved attempts", () => {
-        const content = node("div", undefined, "review-card-content");
-        content.append(node("p", `${report.sampling.task_count} shared tasks · ${report.sampling.method} · split ${report.split}`, "formatted-prose"), AtlasDifficulty.comparison(report.models));
-        content.append(node("p", "Longer bars mean more tasks solved. Open a model to inspect its exact settings, attempts, and native verifier outputs. Unverified attempts are excluded from the solve rate.", "review-byline"));
-        for (const model of report.models) {
-          const identityPath = report.protocol?.run_identities?.find(item => item.size === model.size)?.run_identity_path || `difficulty/${model.size}/run.json`;
-          content.append(difficultyRun(model, identityPath, record));
-        }
-        for (const followup of report.protocol_followups || []) {
-          content.append(fold(`${followup.kind === "alternate_checkpoint" ? "Hosted comparison" : "Additional settings comparison"} · ${label(followup.state)}`, () => {
-            const section = node("div", undefined, "review-card-content");
-            section.append(node("p", "Separate run on the original task sample. Its checkpoint and any LLM verifier settings can differ from the paired models.", "formatted-prose"));
-            section.append(textSection("Recorded model and setting changes", {model: followup.model, provider: followup.provider, model_revision: followup.model_revision, checkpoint_change: followup.checkpoint_change, generation_parameters: followup.generation_parameters, verifier_configuration_change: followup.verifier_configuration_change}, true));
-            section.append(textSection("Comparison limitations", followup.limitations));
-            if (followup.state === "complete" && record.artifacts.some(item => item.path === followup.report_path)) {
-              const run = node("div", "Loading saved attempts…");section.append(run);
-              jsonResponse(artifactUrl(followup.report_path)).then(data => {
-                const identityPath = followup.report_path.replace(/difficulty\.json$/, "run.json");
-                run.replaceChildren(difficultyRun({...followup, size: followup.kind === "alternate_checkpoint" ? "hosted" : "followup", task_outcomes: data.outcomes}, identityPath, record));
-              }).catch(error => run.replaceChildren(node("p", error.message, "issue-highlight")));
-            } else section.append(node("p", "This comparison has no complete published attempts yet.", "difficulty-evidence-status"));
-            if (record.artifacts.some(item => item.path === followup.original_report_path)) section.append(artifactLink(followup.original_report_path, "Preserved original report ↗"));
-            return section;
-          }, false, "review-card"));
-        }
-        content.append(textSection("Sampling and scope", {sampling: report.sampling, population_count: report.population_count, source_revision: report.source_revision, estimated_at: report.estimated_at}), textSection("Limitations", report.limitations, true), artifactLink("difficulty.json", "Full difficulty report ↗"));
-        return content;
-      }, true, "review-card");
+      const display = await jsonResponse(`api/reviews/${encodeURIComponent(reviewId)}/difficulty`);
+      if (record.verifier_issues.length) {
+        display.status = "historical";
+        display.status_note = "An unresolved verifier defect prevents a current difficulty estimate.";
+        for (const model of display.models) model.measurement_status = "historical";
+      }
+      const difficulty = difficultyReport(report, display, record, "difficulty.json");
       difficulty.id = "difficulty";container.append(difficulty);
       if (location.hash === "#difficulty") requestAnimationFrame(() => difficulty.scrollIntoView());
     }
+    const historicalReports = record.artifacts.filter(item => /^difficulty\/history\/[^/]+\.json$/.test(item.path));
+    if (historicalReports.length) container.append(fold(`Earlier difficulty reports (${historicalReports.length})`, () => {
+      const content = node("div");
+      for (const item of historicalReports) content.append(fold(`Saved report · ${item.path.split("/").at(-1)}`, () => {
+        const run = node("div", "Loading historical model evidence…");
+        Promise.all([jsonResponse(artifactUrl(item.path)), jsonResponse(`api/reviews/${encodeURIComponent(reviewId)}/difficulty?path=${encodeURIComponent(item.path)}`)]).then(([report, display]) => {
+          run.replaceChildren(difficultyReport(report, display, record, item.path));
+        }).catch(error => run.replaceChildren(node("p", error.message, "issue-highlight")));
+        return run;
+      }));
+      return content;
+    }));
     const supersededIds = new Set(reviews.map(review => review.supersedes_review_id).filter(Boolean));
     const sourceSynthesis = review => review.method === "synthesis" && subjects.find(subject => subject.id === review.subject_id)?.level === "source";
     const ordered = [...reviews].sort((a, b) => Number(supersededIds.has(a.id)) - Number(supersededIds.has(b.id)) || Number(sourceSynthesis(b)) - Number(sourceSynthesis(a)) || (b.reviewed_at || "").localeCompare(a.reviewed_at || ""));

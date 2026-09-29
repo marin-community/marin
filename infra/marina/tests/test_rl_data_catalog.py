@@ -186,6 +186,12 @@ def test_difficulty_comparison_uses_saved_counts_and_hides_ineligible_measuremen
         "models": [{"size": "large", "model": "model-a", "solved": 17, "verified": 32, "solve_rate": 17 / 32}],
         "protocol_followups": [
             {"state": "complete", "kind": "alternate_checkpoint", "model": "model-b", "solved": 20, "verified": 32},
+            {
+                "state": "complete",
+                "changed_parameter": {"chat_template_kwargs": {"reasoning_effort": "low"}},
+                "solved": 7,
+                "verified": 32,
+            },
             {"state": "pending", "model": "unfinished-model"},
         ],
     }
@@ -207,11 +213,115 @@ def test_difficulty_comparison_uses_saved_counts_and_hides_ineligible_measuremen
         assert row["difficulty_summary"] is None
         return
     models = row["difficulty_summary"]["models"]
+    assert row["difficulty_summary"]["status"] == "historical"
+    assert all(model["measurement_status"] == "historical" for model in models)
     assert [(model["size"], model["model"], model["solved"], model["verified"]) for model in models] == [
         ("large", "model-a", 17, 32),
         ("hosted", "model-b", 20, 32),
+        ("followup", None, 7, 32),
     ]
     assert models[0]["solve_rate"] == 17 / 32
+    assert models[2]["display_name"] == "Generation setting follow-up"
+    assert "Legacy summary: Large 30/32" not in row["difficulty"]
+
+
+@pytest.mark.parametrize(
+    "change,expected_status",
+    [
+        (None, "current"),
+        ("awq_as_large", "invalid"),
+        ("9b_as_small", "invalid"),
+        ("old_output_budget", "invalid"),
+        ("unbounded_context", "invalid"),
+        ("unbounded_input", "invalid"),
+        ("large_thinking_disabled", "invalid"),
+        ("hosted_max_effort", "invalid"),
+        ("inherited_sampling_defaults", "invalid"),
+    ],
+)
+def test_current_difficulty_does_not_accept_legacy_model_roles_or_unmatched_budgets(change, expected_status) -> None:
+    parameters = {
+        "temperature": 0.7,
+        "top_p": 0.95,
+        "top_k": 20,
+        "min_p": 0,
+        "repetition_penalty": 1,
+        "presence_penalty": 0,
+        "frequency_penalty": 0,
+        "max_tokens": 16384,
+    }
+    report = {
+        "estimated_at": "2026-09-29",
+        "sampling": {"task_count": 32, "method": "uniform"},
+        "protocol": {
+            "id": "atlas-difficulty-v2-65k16k",
+            "context_window": 65536,
+            "max_input_tokens": 49152,
+            "max_output_tokens": 16384,
+        },
+        "models": [
+            {
+                "size": "small",
+                "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+                "solved": 11,
+                "verified": 32,
+                "generation_parameters": dict(parameters),
+            },
+            {
+                "size": "large",
+                "model": "Qwen/Qwen3.5-122B-A10B",
+                "solved": 17,
+                "verified": 32,
+                "generation_parameters": {
+                    **parameters,
+                    "chat_template_kwargs": {"enable_thinking": True},
+                },
+            },
+            {
+                "size": "hosted",
+                "model": "zai-org/GLM-5.3",
+                "solved": 21,
+                "verified": 32,
+                "generation_parameters": {
+                    **parameters,
+                    "reasoning_effort": "low",
+                },
+            },
+        ],
+    }
+    if change == "awq_as_large":
+        report["models"][1]["model"] = "cyankiwi/GLM-5.3-AWQ-INT4"
+    elif change == "9b_as_small":
+        report["models"][0]["model"] = "Qwen/Qwen3.5-9B"
+    elif change == "old_output_budget":
+        report["models"][1]["generation_parameters"]["max_tokens"] = 8192
+    elif change == "unbounded_context":
+        report["protocol"]["context_window"] = 131072
+    elif change == "unbounded_input":
+        report["protocol"]["max_input_tokens"] = 65536
+    elif change == "large_thinking_disabled":
+        report["models"][1]["generation_parameters"]["chat_template_kwargs"]["enable_thinking"] = False
+    elif change == "hosted_max_effort":
+        report["models"][2]["generation_parameters"]["reasoning_effort"] = "max"
+    elif change == "inherited_sampling_defaults":
+        report["models"][0]["generation_parameters"].pop("repetition_penalty")
+    row = source_with_review(
+        {
+            "payload": {"id": "MarinSkyRL:math", "dataset_revision": "data1", "verifier_revision": "code1"},
+            "quality": "good",
+            "difficulty": "Small / Large / Hosted comparison",
+            "difficulty_report": json.dumps(report),
+            "traces": None,
+            "review_id": "review1",
+            "review_date": "2026-09-29",
+            "review_source_revision": "data1",
+            "review_verifier_revision": "code1",
+            "verifier_issues": [],
+        }
+    )
+    assert row["difficulty_summary"]["status"] == expected_status
+    assert {model["measurement_status"] for model in row["difficulty_summary"]["models"]} == {expected_status}
+    assert [model["solved"] for model in row["difficulty_summary"]["models"]] == [11, 17, 21]
 
 
 @pytest.mark.parametrize("original_quality", ["good", "bad"])

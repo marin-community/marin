@@ -32,6 +32,49 @@ from .hf_auth import HFCredentialError, HuggingFaceAuth, runtime_hf_token
 from .verifier_policy import migrate_verifier_policy
 
 logger = logging.getLogger(__name__)
+DIFFICULTY_PROTOCOL = "atlas-difficulty-v2-65k16k"
+DIFFICULTY_MODELS = {
+    "small": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+    "large": "Qwen/Qwen3.5-122B-A10B",
+    "hosted": "zai-org/GLM-5.3",
+}
+DIFFICULTY_LIMITS = {"context_window": 65536, "max_input_tokens": 49152, "max_output_tokens": 16384}
+DIFFICULTY_GENERATION = {
+    "temperature": 0.7,
+    "top_p": 0.95,
+    "top_k": 20,
+    "min_p": 0,
+    "repetition_penalty": 1,
+    "presence_penalty": 0,
+    "frequency_penalty": 0,
+    "max_tokens": 16384,
+}
+
+
+def difficulty_protocol_status(report: dict[str, Any]) -> tuple[str, str]:
+    """Distinguish matched current measurements from retained historical runs."""
+    protocol = report.get("protocol") or {}
+    if protocol.get("id") != DIFFICULTY_PROTOCOL:
+        return "historical", "Earlier model identities or generation budgets; retained as historical evidence."
+    if any(protocol.get(key) != value for key, value in DIFFICULTY_LIMITS.items()):
+        return "invalid", "The recorded context or output limits do not match the current protocol."
+    models = report["models"]
+    if len(models) != 3 or {model.get("size") for model in models} != DIFFICULTY_MODELS.keys():
+        return "invalid", "The current comparison requires one Small, Large and Hosted model."
+    for model in models:
+        if model.get("model") != DIFFICULTY_MODELS[model["size"]]:
+            return "invalid", "A model identity does not match its designated comparison role."
+        parameters = model.get("generation_parameters") or {}
+        if any(parameters.get(key) != value for key, value in DIFFICULTY_GENERATION.items()):
+            return "invalid", "A model's generation parameters do not match the current protocol."
+        if (
+            model["size"] == "large"
+            and (parameters.get("chat_template_kwargs") or {}).get("enable_thinking") is not True
+        ):
+            return "invalid", "The Large model's recorded configuration does not enable thinking."
+        if model["size"] == "hosted" and parameters.get("reasoning_effort") != "low":
+            return "invalid", "The Hosted model's recorded configuration does not use Low reasoning effort."
+    return "current", "Matched Small, Large and Hosted models at 65,536 context and 16,384 output tokens."
 
 
 def difficulty_summary(report: dict[str, Any]) -> dict[str, Any]:
@@ -47,17 +90,35 @@ def difficulty_summary(report: dict[str, Any]) -> dict[str, Any]:
         "attempted",
         "solve_rate",
         "wilson_95",
+        "generation_parameters",
     )
+    status, note = difficulty_protocol_status(report)
     models = [{key: model.get(key) for key in fields} for model in report["models"]]
+    for model in models:
+        model["measurement_status"] = status
     for followup in report.get("protocol_followups", []):
         if followup["state"] == "complete":
             models.append(
                 {
                     **{key: followup.get(key) for key in fields},
                     "size": "hosted" if followup.get("kind") == "alternate_checkpoint" else "followup",
+                    "measurement_status": "historical",
+                    "followup_id": followup.get("id"),
+                    "display_name": (
+                        "Generation setting follow-up"
+                        if followup.get("changed_parameter")
+                        else "Native verifier recheck"
+                    ),
                 }
             )
-    return {"models": models, "estimated_at": report["estimated_at"], "sampling": report["sampling"]}
+    return {
+        "models": models,
+        "estimated_at": report["estimated_at"],
+        "sampling": report["sampling"],
+        "status": status,
+        "status_note": note,
+        "protocol": report.get("protocol"),
+    }
 
 
 def source_with_review(record: dict[str, Any]) -> dict[str, Any]:
@@ -100,6 +161,13 @@ def source_with_review(record: dict[str, Any]) -> dict[str, Any]:
     row["difficulty_summary"] = None
     if row["quality"] == "good" and row["difficulty"] and record.get("difficulty_report"):
         row["difficulty_summary"] = difficulty_summary(json.loads(record["difficulty_report"]))
+        summary = row["difficulty_summary"]
+        counts = "; ".join(
+            f"{model['model'] or model.get('display_name') or 'Native verifier recheck'} "
+            f"{model['solved']}/{model['verified']} solved"
+            for model in summary["models"]
+        )
+        row["difficulty"] = f"{summary['status'].title()}: {counts}"
     return row
 
 
@@ -308,6 +376,28 @@ def create_api(services: AppletServices) -> FastAPI:
                 for row in connection.execute(text("SELECT * FROM catalog_refreshes ORDER BY origin")).mappings()
             ]
         return {"sources": rows, "refreshes": refreshes}
+
+    @api.get("/reviews/{review_id}/difficulty")
+    def review_difficulty(review_id: str, path: str = "difficulty.json") -> dict[str, Any]:
+        with engine.connect() as connection:
+            content = connection.execute(
+                text("SELECT content FROM review_artifacts WHERE review_id = :id AND path = :path"),
+                {"id": review_id, "path": path},
+            ).scalar_one_or_none()
+        if content is None:
+            raise HTTPException(404, "Difficulty report not found")
+        report = json.loads(content)
+        if not isinstance(report, dict) or "models" not in report:
+            raise HTTPException(400, "Artifact is not a model comparison report")
+        summary = difficulty_summary(report)
+        if path != "difficulty.json":
+            summary["status"] = "historical"
+            summary["status_note"] = (
+                "An archived report; original model identities, settings and evidence are preserved."
+            )
+            for model in summary["models"]:
+                model["measurement_status"] = "historical"
+        return summary
 
     @api.get("/reviews/{review_id}")
     def review(review_id: str) -> dict[str, Any]:

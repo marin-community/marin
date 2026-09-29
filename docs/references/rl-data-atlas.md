@@ -189,8 +189,8 @@ historical while a defect is open. Collect and publish a current difficulty
 estimate only after the source qualifies as Good again.
 
 The review page shows native outcomes, three independent model judgments per task,
-task/source syntheses, the MarinSkyRL commit, and linked evidence. Difficulty can
-show paired small/large model solve rates; its report includes task counts,
+task/source syntheses, the MarinSkyRL commit, and linked evidence. Difficulty shows
+model solve rates; its report includes task counts,
 sampling scope, checkpoint revisions, and uncertainty. These curated columns are
 stored separately and survive refreshes. Changed source data or verifier revisions
 hide stale Quality and Difficulty values while retaining the historical review link.
@@ -204,15 +204,36 @@ executed revision; the catalog still reports the latest repository revision date
 
 For sources rated Good, the page shows the quality solver's initial solve
 count and the saved [issue #8942](https://github.com/marin-community/marin/issues/8942)
-evidence above the paired small/large difficulty estimate. The quality sample can be smaller
+evidence above the difficulty comparison. The quality sample can be smaller
 and drawn differently. Three judges assess each attempt; their opinions are not
 additional solver attempts. Historical dataset releases and rollout settings remain
 separate from current measurements.
 
 The catalog's Difficulty column shows each measured model's solve rate as a bar
-with solved/verified counts. Longer bars mean more tasks solved. Small and Large
-are the two models tested on the same task sample. Sort uses Large's rate;
-unmeasured sources sort last. Completed hosted runs appear as additional bars.
+with solved/verified counts. Longer bars mean more tasks solved. Current comparisons
+use the same task sample for three fixed models:
+
+| Role | Model | Reasoning setting |
+| --- | --- | --- |
+| Small | Qwen/Qwen3-Coder-30B-A3B-Instruct | Non-thinking checkpoint |
+| Large | Qwen/Qwen3.5-122B-A10B | Thinking enabled |
+| Hosted | zai-org/GLM-5.3 on Together | Low reasoning effort |
+
+The `atlas-difficulty-v2-65k16k` protocol gives each model 65,536 total context
+tokens, at most 49,152 input tokens, and at most 16,384 output tokens including
+reasoning. All three use temperature 0.7, top-p 0.95, top-k 20, min-p 0,
+repetition penalty 1, and presence and frequency penalties 0. These explicit
+settings prevent checkpoint generation defaults from changing the comparison.
+Models retain their native reasoning controls; the shared token budget does not
+make those controls equivalent. Nemotron's learned verifiers use Hosted GLM-5.3
+with Low reasoning effort across all three arms. Their native output budgets
+and saved critic requests and responses appear with the run evidence.
+
+Earlier comparisons display their actual model names and Historical status.
+Historical GLM AWQ runs are separate from the current Large Qwen model, and
+historical Qwen3.5-9B runs are separate from the current Small model. Filters and
+sorting use only current Qwen3.5-122B-A10B solve rates; sources without a current
+measurement sort last. Archived reports retain their original settings and traces.
 Click the bars to open the source's Difficulty section.
 Each model has collapsible run settings and task attempts, including saved model
 requests, responses, and native verifier results and logs. These saved artifacts
@@ -221,7 +242,7 @@ Changed data/verifier revisions or unresolved verifier defects prevent a current
 difficulty comparison.
 
 Generation-setting follow-ups show their solve rates and changed settings beside
-the original pair, with links to both reports and traces. The output budget
+their earlier comparisons, with links to both reports and traces. The output budget
 includes thinking tokens. When a model exhausts it before submitting a final
 answer, the report records that failure so the solve rate can be interpreted for
 the stated generation setting.
