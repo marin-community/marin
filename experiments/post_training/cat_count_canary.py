@@ -217,7 +217,7 @@ def training_config(
             "micro_forward_batch_size_per_gpu": 1,
             "eval_batch_size": len(train_ns) + len(HELDOUT_NS),
             "eval_interval": 1 if preset == "dry" else 10,
-            "hf_save_interval": -1,
+            "hf_save_interval": max_steps,
             "resume_mode": "latest",
             "max_ckpts_to_keep": 1,
             "seed": seed,
