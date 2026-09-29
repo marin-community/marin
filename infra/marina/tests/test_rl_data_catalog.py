@@ -417,6 +417,8 @@ def test_refresh_reads_card_counts_for_selected_population_and_canonical_names(
     ]
 
     def upstream(request: httpx.Request) -> httpx.Response:
+        if request.url.path == f"/api/datasets/{dataset_id}/tree/hf2":
+            return httpx.Response(200, json=[])
         if request.url.path == f"/api/datasets/{dataset_id}":
             return httpx.Response(
                 200,
@@ -762,6 +764,13 @@ def test_complete_record_audit_splits_swe_and_math_and_invalidates_changed_revis
     assert all(row["count_precision"] == "exact" for row in children)
     assert all(row["component_file_sha256"] == audit["sha256"] for row in children)
     parent["dataset_revision"] = "changed"
+    info["file_sha256"] = {"rlvr1.jsonl": audit["sha256"]}
+    unchanged = component_rows(parent, info)
+    assert [(row["id"], row["task_count"], row["turns"]) for row in unchanged] == [
+        (row["id"], row["task_count"], row["turns"]) for row in children
+    ]
+    assert all(row["dataset_revision"] == "changed" for row in unchanged)
+    info["file_sha256"]["rlvr1.jsonl"] = "changed-file-content"
     stale = component_rows(parent, info)
     assert len(stale) == 1
     assert stale[0]["count_precision"] == "estimated"

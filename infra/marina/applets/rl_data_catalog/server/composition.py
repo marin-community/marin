@@ -104,8 +104,12 @@ def child_row(parent: dict[str, Any], name: str, count: int | None) -> dict[str,
 
 def nemotron_components(parent: dict[str, Any], info: dict[str, Any]) -> list[dict[str, Any]]:
     blend = parent["name"].removeprefix("nemotron_ultra_")
-    if parent.get("dataset_revision") == NEMOTRON_COUNTS["revision"] and blend in NEMOTRON_COUNTS["blends"]:
-        return counted_nemotron_components(parent, NEMOTRON_COUNTS["blends"][blend])
+    audit = NEMOTRON_COUNTS["blends"].get(blend)
+    if audit and (
+        parent.get("dataset_revision") == NEMOTRON_COUNTS["revision"]
+        or info.get("file_sha256", {}).get(f"{blend}.jsonl") == audit["sha256"]
+    ):
+        return counted_nemotron_components(parent, audit)
     if info.get("metadata_error"):
         return [parent]
     section = re.search(rf"^### {re.escape(blend)}\s*\n(.*?)(?=^##|\Z)", info["card_text"], re.MULTILINE | re.DOTALL)
@@ -202,7 +206,7 @@ def component_rows(parent: dict[str, Any], info: dict[str, Any]) -> list[dict[st
 
 
 def counted_nemotron_components(parent: dict[str, Any], audit: dict[str, Any]) -> list[dict[str, Any]]:
-    """Use counts from every record of exactly the selected upstream revision."""
+    """Use complete-file counts when the selected JSONL content matches the audit."""
     if audit["total"] != parent["task_count"]:
         raise ValueError("Nemotron record audit disagrees with selected blend total")
     blend = parent["name"].removeprefix("nemotron_ultra_")

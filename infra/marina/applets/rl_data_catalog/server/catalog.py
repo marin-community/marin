@@ -12,7 +12,7 @@ from typing import Any
 
 import httpx
 
-from .composition import HH_RLHF, KTO_MIX, NEMOTRON_ENV, canonical_rows, component_rows
+from .composition import HH_RLHF, KTO_MIX, NEMOTRON, NEMOTRON_ENV, canonical_rows, component_rows
 from .source_annotations import (
     BENCHMARK_DATASETS,
     CARD_COUNT_DATASETS,
@@ -164,6 +164,9 @@ def dataset_metadata(client: httpx.Client, dataset_id: str) -> dict[str, Any]:
     except httpx.HTTPError as error:
         # Metadata availability must not discard a source registered by SkyRL.
         return {"metadata_error": str(error)}
+    if dataset_id == NEMOTRON:
+        files = get_json(client, f"https://huggingface.co/api/datasets/{dataset_id}/tree/{info['sha']}")
+        info["file_sha256"] = {entry["path"]: entry["lfs"]["oid"] for entry in files if entry.get("lfs")}
     if not info.get("cardData", {}).get("dataset_info"):
         try:
             size = get_json(client, "https://datasets-server.huggingface.co/size", dataset=dataset_id)
