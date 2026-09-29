@@ -188,8 +188,8 @@ class AsyncPreset:
     # How many updates old a group may be when the trainer consumes it; 0 admits only groups
     # sampled by the current weights.
     max_staleness_steps: int
-    # Groups generating at once across the engines.
-    generation_workers: int
+    # Maximum prompt groups admitted to the rollout buffer at once.
+    max_in_flight_groups: int
     # Prompt-plus-response budget one request may occupy in the engine, in tokens.
     request_window_tokens: int
     # Longest response the policy may generate, in tokens; it also caps the in-run evaluation.
@@ -207,7 +207,7 @@ DEFAULT = AsyncPreset(
     max_steps=100,
     eval_interval=10,
     max_staleness_steps=4,
-    generation_workers=192,
+    max_in_flight_groups=192,
     request_window_tokens=8192,
     max_new_tokens=4096,
     evals="math500,gsm8k-0shot",
@@ -223,7 +223,7 @@ SMOKE_PRESET = replace(
     evals="gsm8k-smoke",
 )
 # Every consumed group was sampled by the current weights.
-ON_POLICY = replace(DEFAULT, label="on_policy", max_staleness_steps=0, generation_workers=PROMPTS_PER_UPDATE)
+ON_POLICY = replace(DEFAULT, label="on_policy", max_staleness_steps=0, max_in_flight_groups=PROMPTS_PER_UPDATE)
 PRESETS: Mapping[str, AsyncPreset] = MappingProxyType(
     {preset.label: preset for preset in (SMOKE_PRESET, DEFAULT, ON_POLICY)}
 )
@@ -406,7 +406,7 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
         },
         "rollout_buffer": {
             "max_staleness_steps": preset.max_staleness_steps,
-            "max_in_flight": preset.generation_workers,
+            "max_in_flight": preset.max_in_flight_groups,
             "batch_policy": "rolling",
         },
     }
