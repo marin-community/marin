@@ -7,8 +7,7 @@ Training and evaluation tasks arrive with different prompt formats, answer rules
 The current implementation is a small direct-chat slice. It accepts a final text or number answer, exports a Harbor task, and grades the answer through a private verifier registry. The task model also names file, workspace-state, and native-action results, but this slice has no Harbor environment configuration or submission convention for those result types.
 
 The [script verifier proposal](SCRIPT_VERIFIER_SPEC.md) describes private
-resources and isolated grading for executable tasks. It uses TaskTrove scripts
-as the first import target while keeping verifier kinds source-independent.
+resources and isolated grading for executable tasks.
 
 ## What does it contain?
 
