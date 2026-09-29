@@ -25,7 +25,7 @@ from taskcompendium.lowering import (
     read_specification,
     read_submission_convention,
 )
-from taskcompendium.submission import ANSWER_CALL_TOOL, AnswerFormat
+from taskcompendium.submission import AnswerFormat, answer_call_tool
 from taskcompendium.verifier_registry import grade_answer
 
 RESPONSE_FILE = "response.txt"
@@ -241,6 +241,7 @@ class NativeActionAgent(DirectChatAgent):
             body["parallel_tool_calls"] = self.parallel_tool_calls
         return _chat_completion(self.api_base, self.api_key_env, self.request_timeout, body)
 
+    # Harbor passes instruction by keyword; the source messages are the native-action prompt.
     async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
         response = await asyncio.to_thread(self._action_completion)
         _record_action(self.logs_dir, self.messages, response, context)
@@ -258,7 +259,7 @@ class AnswerCallAgent(DirectChatAgent):
         body = {
             "model": self.model_name,
             "messages": messages,
-            "tools": [ANSWER_CALL_TOOL],
+            "tools": [answer_call_tool()],
             "tool_choice": "required",
             "parallel_tool_calls": False,
         }

@@ -12,19 +12,24 @@ from taskcompendium.final_action import SubmittedCalls, decode_action, parse_arg
 from taskcompendium.models import AnswerType, TaskSpec, format_native_messages
 
 ANSWER_CALL_NAME = "submit_answer"
-ANSWER_CALL_TOOL = {
-    "type": "function",
-    "function": {
-        "name": ANSWER_CALL_NAME,
-        "description": "Submit the final answer to the task.",
-        "parameters": {
-            "type": "object",
-            "properties": {"answer": {"type": "string"}},
-            "required": ["answer"],
-            "additionalProperties": False,
+ANSWER_FIELD = "answer"
+
+
+def answer_call_tool() -> dict[str, object]:
+    """Return the function definition advertised by the answer-call convention."""
+    return {
+        "type": "function",
+        "function": {
+            "name": ANSWER_CALL_NAME,
+            "description": "Submit the final answer to the task.",
+            "parameters": {
+                "type": "object",
+                "properties": {ANSWER_FIELD: {"type": "string"}},
+                "required": [ANSWER_FIELD],
+                "additionalProperties": False,
+            },
         },
-    },
-}
+    }
 
 
 class AnswerFormat(StrEnum):
@@ -82,9 +87,9 @@ def render_instruction(specification: TaskSpec, convention: SubmissionConvention
     if convention.answer_format == AnswerFormat.PLAIN:
         suffix = "Give your answer as plain text."
     elif convention.answer_format == AnswerFormat.JSON:
-        suffix = 'Give your answer as a JSON object with an "answer" field.'
+        suffix = f'Give your answer as a JSON object with an "{ANSWER_FIELD}" field.'
     elif convention.answer_format == AnswerFormat.ANSWER_CALL:
-        suffix = f'Call {ANSWER_CALL_NAME} with your final answer as the "answer" string.'
+        suffix = f'Call {ANSWER_CALL_NAME} with your final answer as the "{ANSWER_FIELD}" string.'
     else:
         raise ValueError(f"Unsupported answer format: {convention.answer_format}")
     return f"{specification.instructions.rstrip()}\n\n{suffix}\n"
@@ -98,9 +103,13 @@ def extract_answer(response: str | None, convention: SubmissionConvention) -> st
         return response
     if convention.answer_format == AnswerFormat.JSON:
         value = json.loads(response, object_pairs_hook=unique_json_fields)
-        if not isinstance(value, dict) or not isinstance(value.get("answer"), str) or not value["answer"].strip():
+        if (
+            not isinstance(value, dict)
+            or not isinstance(value.get(ANSWER_FIELD), str)
+            or not value[ANSWER_FIELD].strip()
+        ):
             raise ValueError("JSON submission requires a nonempty string answer")
-        return value["answer"]
+        return value[ANSWER_FIELD]
     if convention.answer_format == AnswerFormat.ANSWER_CALL:
         message = json.loads(response, object_pairs_hook=unique_json_fields)
         if not isinstance(message, dict):
@@ -109,7 +118,11 @@ def extract_answer(response: str | None, convention: SubmissionConvention) -> st
         if not isinstance(action, SubmittedCalls) or len(action.calls) != 1 or action.calls[0].name != ANSWER_CALL_NAME:
             raise ValueError(f"Answer call requires one {ANSWER_CALL_NAME} function call")
         arguments = parse_arguments(action.calls[0].arguments)
-        if set(arguments) != {"answer"} or not isinstance(arguments["answer"], str) or not arguments["answer"].strip():
+        if (
+            set(arguments) != {ANSWER_FIELD}
+            or not isinstance(arguments[ANSWER_FIELD], str)
+            or not arguments[ANSWER_FIELD].strip()
+        ):
             raise ValueError("Answer call requires a nonempty string answer")
-        return arguments["answer"]
+        return arguments[ANSWER_FIELD]
     raise ValueError(f"Unsupported answer format: {convention.answer_format}")
