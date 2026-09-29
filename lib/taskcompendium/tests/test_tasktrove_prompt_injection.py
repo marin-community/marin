@@ -15,7 +15,7 @@ from tasktrove_verify.spec import ScriptSpec, parse_spec
 
 from taskcompendium.importers.tasktrove.convert import read_archive
 from taskcompendium.importers.tasktrove.prompt_injection import import_task
-from taskcompendium.models import AnswerType, VerifierKind
+from taskcompendium.models import AnswerType, TextMessage, VerifierKind
 from taskcompendium.submission import AnswerFormat, SubmissionConvention, render_instruction
 from taskcompendium.verifiers.script import ScriptVerifier, materialize_private_resources
 
@@ -47,10 +47,13 @@ def test_imported_prompt_injection_uses_direct_submission_and_pinned_private_fil
     assert specification.verifier.kind is VerifierKind.SCRIPT
     assert specification.source.dataset == RELEASE_URI
     assert specification.source.row == f"{SOURCE}:t.tar.gz"
-    assert "/app/answer.txt" not in specification.instructions
-    assert "terminal agent" not in specification.instructions
-    assert "Your answer is the JSON text of that action" in specification.instructions
-    assert "Emit ONLY" not in specification.instructions
+    event = specification.context.events[0]
+    assert isinstance(event, TextMessage)
+    instructions = event.content
+    assert "/app/answer.txt" not in instructions
+    assert "terminal agent" not in instructions
+    assert "Your answer is the JSON text of that action" in instructions
+    assert "Emit ONLY" not in instructions
     json_instruction = render_instruction(
         specification, SubmissionConvention(id="json", answer_format=AnswerFormat.JSON)
     )

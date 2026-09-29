@@ -43,3 +43,9 @@ extend = "../../pyproject.toml"
 
 [tool.ruff.lint.isort]
 known-first-party = ["taskcompendium"]
+
+[tool.pyrefly]
+disable-project-excludes-heuristics = true
+project-includes = ["src"]
+search-path = ["src"]
+python-interpreter = ".venv/bin/python"

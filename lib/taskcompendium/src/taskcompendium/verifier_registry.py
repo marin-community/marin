@@ -9,14 +9,16 @@ from types import MappingProxyType
 from pydantic import ValidationError
 
 from taskcompendium.grading import ExactAnswerVerifier, GradeResult, GradingAttempt, NumericAnswerVerifier, Verifier
-from taskcompendium.models import TaskSpec, VerifierKind, VerifierSpec
+from taskcompendium.models import ConversationTrace, TaskSpec, VerifierKind, VerifierSpec
 from taskcompendium.submission import SubmissionConvention
 from taskcompendium.verifiers.multiple_choice import MultipleChoiceVerifier
+from taskcompendium.verifiers.predicted_action import PredictedActionVerifier
 from taskcompendium.verifiers.script import ScriptVerifier
 
 VERIFIERS: Mapping[VerifierKind, type[Verifier]] = MappingProxyType(
     {
         VerifierKind.EXACT_ANSWER: ExactAnswerVerifier,
+        VerifierKind.PREDICTED_ACTION: PredictedActionVerifier,
         VerifierKind.NUMERIC_ANSWER: NumericAnswerVerifier,
         VerifierKind.MCQ_ANSWER: MultipleChoiceVerifier,
     }
@@ -43,9 +45,9 @@ def validate_verifier(specification: VerifierSpec) -> None:
 
 
 def grade_answer(
-    specification: TaskSpec, convention: SubmissionConvention, response: str | None, environment: object
+    specification: TaskSpec, convention: SubmissionConvention, conversation: ConversationTrace, environment: object
 ) -> GradeResult:
     verifier = resolve_verifier(specification.verifier)
     if isinstance(verifier, ScriptVerifier):
         raise ValueError("Script verifiers require an isolated Harbor verifier runtime")
-    return verifier.grade(GradingAttempt(convention, response, environment))
+    return verifier.grade(GradingAttempt(convention, conversation.events, environment))

@@ -16,7 +16,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from taskcompendium.models import SCHEMA_VERSION, AnswerType, TaskSpec
-from taskcompendium.submission import WORKSPACE_ROOT, SubmissionConvention, render_instruction
+from taskcompendium.submission import WORKSPACE_ROOT, SubmissionConvention, render_instruction, submission_compatible
 from taskcompendium.verifier_registry import resolve_verifier
 from taskcompendium.verifiers.script import (
     MAX_RESOURCE_BYTES,
@@ -81,7 +81,7 @@ def compatible_lowerings(
     return tuple(
         LoweringCandidate(convention, environment_config)
         for convention in convention_library
-        if convention.supports(specification.answer_type)
+        if submission_compatible(specification, convention)
         for environment_config in environment_configs
         if _is_compatible(specification, environment_config)
     )
@@ -130,7 +130,7 @@ def validate_environment_config(specification: TaskSpec, environment_config: Har
     if environment_config.environment == DIRECT_CHAT_ENVIRONMENT:
         if specification.requirements.capabilities or specification.requirements.action_interfaces:
             raise ValueError("Direct chat cannot satisfy capability or action-interface requirements")
-        if specification.answer_type not in (AnswerType.TEXT, AnswerType.NUMBER):
+        if specification.answer_type in (AnswerType.FILE, AnswerType.STATE, AnswerType.WORKSPACE_STATE):
             raise ValueError("Direct chat cannot capture a final workspace")
         return
     if specification.requirements.action_interfaces:

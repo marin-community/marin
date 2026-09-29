@@ -15,18 +15,22 @@ from tasktrove_verify.grade import grade as source_grade
 from tasktrove_verify.spec import McqSpec
 
 from taskcompendium.grading import Outcome
-from taskcompendium.harbor.runner import ReplayLaunch, run_trial
 from taskcompendium.importers.tasktrove.convert import MAX_ARCHIVE_MEMBERS, read_archive
 from taskcompendium.importers.tasktrove.mcqa import import_task
 from taskcompendium.lowering import HarborEnvironmentConfig, lower_to_harbor
-from taskcompendium.models import AnswerType, VerifierKind
+from taskcompendium.models import AnswerType, ConversationTrace, TextMessage, VerifierKind
 from taskcompendium.submission import AnswerFormat, SubmissionConvention, render_instruction
 from taskcompendium.verifier_registry import grade_answer
 
+from .harbor_replay import run_replay_trial
+
 FIXTURE = Path(__file__).parent / "fixtures/tasktrove/mcq-1961bdb52b5a.tar.gz"
 TASKTROVE_SOURCE = "laion__nemotron-gym-knowledge-mcqa-v2"
+
+
 TASKTROVE_PATH = "Nemotron-RL-knowledge-mcqa-1961bdb52b5a.tar.gz"
 RELEASE_URI = "s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.9"
+
 RELEASE_REVISION = "2026.09.10.9"
 
 
@@ -45,9 +49,10 @@ def test_import_preserves_release_identity():
 
 def test_import_removes_source_submission_instructions():
     specification = import_task(_archive())
-    assert "verifier" not in specification.instructions.lower()
-    assert "/app/answer.txt" not in specification.instructions
-    assert "theranostics clinical trials" in specification.instructions
+    prompt = specification.context.events[0].content
+    assert "verifier" not in prompt.lower()
+    assert "/app/answer.txt" not in prompt
+    assert "theranostics clinical trials" in prompt
     public = render_instruction(specification, SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN))
     assert "verifier" not in public.lower()
     assert specification.requirements.capabilities == ()
@@ -67,7 +72,12 @@ def test_imported_mcqa_matches_source_grading(tmp_path):
     ):
         (tmp_path / "source-answer.txt").write_text(source_response)
         assert source_grade(source_contract, tmp_path, tmp_path).reward == reward
-        result = grade_answer(specification, convention, response, object())
+        result = grade_answer(
+            specification,
+            convention,
+            ConversationTrace(events=(*specification.context.events, TextMessage(role="assistant", content=response))),
+            object(),
+        )
         assert (result.status, result.reward) == (Outcome.GRADED, reward)
 
 
@@ -75,9 +85,19 @@ def test_imported_mcqa_extracts_json_and_rejects_malformed_answers():
     specification = import_task(_archive())
     convention = SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN)
     json_result = grade_answer(
-        specification, SubmissionConvention(id="json", answer_format=AnswerFormat.JSON), '{"answer":"C"}', object()
+        specification,
+        SubmissionConvention(id="json", answer_format=AnswerFormat.JSON),
+        ConversationTrace(
+            events=(*specification.context.events, TextMessage(role="assistant", content='{"answer":"C"}'))
+        ),
+        object(),
     )
-    malformed = grade_answer(specification, convention, "Answer: C", object())
+    malformed = grade_answer(
+        specification,
+        convention,
+        ConversationTrace(events=(*specification.context.events, TextMessage(role="assistant", content="Answer: C"))),
+        object(),
+    )
     assert (json_result.status, json_result.reward) == (Outcome.GRADED, 1.0)
     assert (malformed.status, malformed.reward) == (Outcome.EXTRACTION_ERROR, None)
 
@@ -112,7 +132,7 @@ def test_import_accepts_plain_source_answer_line_template():
     specification = import_task(archive)
 
     assert specification.answer_type is AnswerType.TEXT
-    assert "Answer:" not in specification.instructions
+    assert "Answer:" not in specification.context.events[0].content
 
 
 def test_archive_rejects_caller_identity_that_disagrees_with_metadata():
@@ -140,13 +160,7 @@ async def test_imported_mcqa_runs_through_direct_chat_harbor(tmp_path):
         tmp_path / "task",
     )
 
-    result = await run_trial(
-        task,
-        environment_config,
-        ReplayLaunch(response="C"),
-        tmp_path / "trials",
-        "mcqa",
-    )
+    result = await run_replay_trial(task, {"role": "assistant", "content": "C"}, tmp_path / "trials", "mcqa")
 
     outcome = json.loads((tmp_path / "trials/mcqa/verifier/taskcompendium-result.json").read_text())
     assert result.exception_info is None, result.exception_info
@@ -163,10 +177,14 @@ def test_imported_mcqa_resolves_verifier_in_fresh_process(tmp_path):
     script = (
         "import json, sys; from pathlib import Path; "
         "from taskcompendium.verifier_registry import grade_answer; "
+        "from taskcompendium.models import ConversationTrace, TextMessage; "
         "from taskcompendium.lowering import read_submission_convention, read_specification; "
         "root = Path(sys.argv[1]); "
-        "result = grade_answer(read_specification(root / 'specification.json'), "
-        "read_submission_convention(root / 'submission_convention.json'), 'C', object()); "
+        "specification = read_specification(root / 'specification.json'); "
+        "result = grade_answer(specification, "
+        "read_submission_convention(root / 'submission_convention.json'), "
+        "ConversationTrace(events=(*specification.context.events, "
+        "TextMessage(role='assistant', content='C'))), object()); "
         "print(json.dumps({'status': result.status, 'reward': result.reward}))"
     )
 

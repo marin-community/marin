@@ -13,7 +13,7 @@ from tasktrove_verify.modes.grade_exact import grade_exact_candidate
 from tasktrove_verify.modes.grade_math import grade_numeric_candidate
 from tasktrove_verify.spec import ExactSpec, NumericSpec
 
-from taskcompendium.models import VerifierKind, VerifierSpec
+from taskcompendium.models import ConversationEvent, VerifierKind, VerifierSpec
 from taskcompendium.submission import SubmissionConvention, extract_answer
 
 
@@ -36,7 +36,7 @@ class GradingAttempt:
     """Submission evidence available to a verifier."""
 
     convention: SubmissionConvention
-    response: str | None
+    conversation: tuple[ConversationEvent, ...]
     environment: object
 
 
@@ -66,7 +66,7 @@ class ExactAnswerVerifier(Verifier):
 
     def grade(self, attempt: GradingAttempt) -> GradeResult:
         try:
-            candidate = extract_answer(attempt.response, attempt.convention)
+            candidate = extract_answer(attempt.conversation[-1], attempt.convention)
         except (ValueError, TypeError) as error:
             return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
         contract = ExactSpec(
@@ -95,7 +95,7 @@ class NumericAnswerVerifier(Verifier):
 
     def grade(self, attempt: GradingAttempt) -> GradeResult:
         try:
-            candidate = extract_answer(attempt.response, attempt.convention)
+            candidate = extract_answer(attempt.conversation[-1], attempt.convention)
         except (ValueError, TypeError) as error:
             return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
         try:

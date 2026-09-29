@@ -6,21 +6,53 @@
 import json
 from enum import StrEnum
 from pathlib import PurePosixPath
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
-from taskcompendium.models import AnswerType, TaskSpec
+from taskcompendium.models import (
+    AnswerType,
+    AssistantToolCalls,
+    ConversationEvent,
+    ConversationInput,
+    TaskSpec,
+    TextMessage,
+    format_conversation,
+)
+
+ANSWER_CALL_NAME = "submit_answer"
+ANSWER_FIELD = "answer"
+
+
+def answer_call_tool() -> dict[str, object]:
+    """Return the function definition advertised by the answer-call convention."""
+    return {
+        "type": "function",
+        "function": {
+            "name": ANSWER_CALL_NAME,
+            "description": "Submit the final answer to the task.",
+            "parameters": {
+                "type": "object",
+                "properties": {ANSWER_FIELD: {"type": "string"}},
+                "required": [ANSWER_FIELD],
+                "additionalProperties": False,
+            },
+        },
+    }
+
 
 WORKSPACE_ROOT = "/app"
 
 
 class AnswerFormat(StrEnum):
-    """A model-visible envelope for a submitted answer."""
+    """The envelope used to deliver a result."""
 
     PLAIN = "plain"
     JSON = "json"
     FILE = "file"
     WORKSPACE = "workspace"
+    ANSWER_CALL = "answer_call"
+    FINAL_ACTION = "final_action"
 
 
 class SubmissionConvention(BaseModel):
@@ -54,17 +86,114 @@ class SubmissionConvention(BaseModel):
         return self
 
     def supports(self, answer_type: AnswerType) -> bool:
-        if self.answer_format in (AnswerFormat.PLAIN, AnswerFormat.JSON):
-            return answer_type in (AnswerType.TEXT, AnswerType.NUMBER)
+        """Whether this convention can carry the semantic result."""
         if self.answer_format == AnswerFormat.FILE:
             return answer_type == AnswerType.FILE
         if self.answer_format == AnswerFormat.WORKSPACE:
             return answer_type == AnswerType.WORKSPACE_STATE
-        raise ValueError(f"Unsupported answer format: {self.answer_format}")
+        if self.answer_format == AnswerFormat.FINAL_ACTION:
+            return answer_type == AnswerType.NATIVE_ACTION
+        return answer_type in (AnswerType.TEXT, AnswerType.NUMBER)
+
+
+def submission_compatible(specification: TaskSpec, convention: SubmissionConvention) -> bool:
+    if not convention.supports(specification.answer_type):
+        return False
+    if convention.answer_format == AnswerFormat.FINAL_ACTION:
+        return bool(specification.tools.functions) and specification.tools.tool_choice != "none"
+    if convention.answer_format == AnswerFormat.ANSWER_CALL:
+        return specification.tools.tool_choice != "none" and all(
+            function.name != ANSWER_CALL_NAME for function in specification.tools.functions
+        )
+    return specification.tools.tool_choice != "required"
+
+
+def submission_instruction(convention: SubmissionConvention) -> str:
+    """Return the instruction added after a conversation prefix."""
+    if convention.answer_format == AnswerFormat.PLAIN:
+        return "Give your answer as plain text."
+    if convention.answer_format == AnswerFormat.JSON:
+        return f'Give your answer as a JSON object with an "{ANSWER_FIELD}" field.'
+    if convention.answer_format == AnswerFormat.ANSWER_CALL:
+        return f'Call {ANSWER_CALL_NAME} with your final answer as the "{ANSWER_FIELD}" string.'
+    if convention.answer_format == AnswerFormat.FILE:
+        return f"Write your final file to {WORKSPACE_ROOT}/{convention.output_path}."
+    if convention.answer_format == AnswerFormat.WORKSPACE:
+        return f"Complete the requested changes in {WORKSPACE_ROOT}."
+    if convention.answer_format == AnswerFormat.FINAL_ACTION:
+        return ""
+    raise ValueError(f"Unsupported answer format: {convention.answer_format}")
+
+
+def render_instruction(specification: TaskSpec, convention: SubmissionConvention) -> str:
+    """Return Harbor instruction text for the selected convention."""
+    context = specification.context
+    if not submission_compatible(specification, convention):
+        raise ValueError(
+            f"Submission convention {convention.id!r} cannot carry {specification.answer_type.value!r} in this context"
+        )
+    if convention.answer_format == AnswerFormat.FINAL_ACTION:
+        return format_conversation(context.events)
+    return f"{format_conversation(context.events)}\n\n{submission_instruction(convention)}\n"
+
+
+def conversation_messages(context: ConversationInput) -> list[dict[str, Any]]:
+    """Convert the model-visible prefix to OpenAI-compatible chat messages."""
+    messages: list[dict[str, Any]] = []
+    for event in context.events:
+        if isinstance(event, TextMessage):
+            messages.append({"role": event.role, "content": event.content})
+        elif isinstance(event, AssistantToolCalls):
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": event.content,
+                    "tool_calls": [
+                        {
+                            "id": call.call_id,
+                            "type": "function",
+                            "function": {
+                                "name": call.name,
+                                "arguments": json.dumps(call.arguments, separators=(",", ":"), ensure_ascii=False),
+                            },
+                        }
+                        for call in event.calls
+                    ],
+                }
+            )
+        else:
+            messages.append({"role": "tool", "tool_call_id": event.call_id, "content": event.content})
+    return messages
+
+
+def chat_request(specification: TaskSpec, convention: SubmissionConvention) -> dict[str, Any]:
+    """Prepare the conversation and tools for the selected submission convention."""
+    if not submission_compatible(specification, convention):
+        raise ValueError("Submission convention is incompatible with the task")
+    messages = conversation_messages(specification.context)
+    instruction = submission_instruction(convention)
+    if instruction:
+        messages.append({"role": "user", "content": instruction})
+    request: dict[str, Any] = {"messages": messages}
+    tools: list[dict[str, object]] = [
+        {"type": "function", "function": function.model_dump(exclude_none=True)}
+        for function in specification.tools.functions
+    ]
+    if convention.answer_format == AnswerFormat.ANSWER_CALL:
+        tools.append(answer_call_tool())
+        if not specification.tools.functions:
+            request.update(tool_choice="required", parallel_tool_calls=False)
+    if tools:
+        request["tools"] = tools
+    if specification.tools.tool_choice is not None:
+        request["tool_choice"] = specification.tools.tool_choice
+    if specification.tools.parallel_tool_calls is not None:
+        request["parallel_tool_calls"] = specification.tools.parallel_tool_calls
+    return request
 
 
 def _object_with_unique_fields(pairs: list[tuple[str, object]]) -> dict[str, object]:
-    """Build a JSON object while rejecting ambiguous duplicate fields."""
+    """Reject ambiguous duplicate fields in a JSON answer envelope."""
     result: dict[str, object] = {}
     for key, value in pairs:
         if key in result:
@@ -73,33 +202,34 @@ def _object_with_unique_fields(pairs: list[tuple[str, object]]) -> dict[str, obj
     return result
 
 
-def render_instruction(specification: TaskSpec, convention: SubmissionConvention) -> str:
-    """Return the public request with its submission instructions attached."""
-    if not convention.supports(specification.answer_type):
-        raise ValueError(f"Submission convention {convention.id!r} cannot carry {specification.answer_type.value!r}")
+def extract_answer(response: ConversationEvent, convention: SubmissionConvention) -> str:
+    """Extract semantic answer content from a typed assistant turn."""
+    if convention.answer_format == AnswerFormat.ANSWER_CALL:
+        if (
+            not isinstance(response, AssistantToolCalls)
+            or len(response.calls) != 1
+            or response.calls[0].name != ANSWER_CALL_NAME
+        ):
+            raise ValueError(f"Answer call requires one {ANSWER_CALL_NAME} function call")
+        arguments = response.calls[0].arguments
+        if (
+            set(arguments) != {ANSWER_FIELD}
+            or not isinstance(arguments[ANSWER_FIELD], str)
+            or not arguments[ANSWER_FIELD].strip()
+        ):
+            raise ValueError("Answer call requires a nonempty string answer")
+        return arguments[ANSWER_FIELD]
+    if not isinstance(response, TextMessage) or response.role != "assistant" or not response.content.strip():
+        raise ValueError("Text submission requires nonempty assistant content without tool calls")
     if convention.answer_format == AnswerFormat.PLAIN:
-        suffix = "Give your answer as plain text."
-    elif convention.answer_format == AnswerFormat.JSON:
-        suffix = 'Give your answer as a JSON object with an "answer" field.'
-    elif convention.answer_format == AnswerFormat.FILE:
-        suffix = f"Write your final file to {WORKSPACE_ROOT}/{convention.output_path}."
-    elif convention.answer_format == AnswerFormat.WORKSPACE:
-        suffix = f"Complete the requested changes in {WORKSPACE_ROOT}."
-    else:
-        raise ValueError(f"Unsupported answer format: {convention.answer_format}")
-    return f"{specification.instructions.rstrip()}\n\n{suffix}\n"
-
-
-def extract_answer(response: str | None, convention: SubmissionConvention) -> str:
-    """Decode the selected submission convention without guessing a format."""
-    if response is None or not response.strip():
-        raise ValueError("Final answer is empty")
-    if convention.answer_format == AnswerFormat.PLAIN:
-        return response
-    elif convention.answer_format == AnswerFormat.JSON:
-        value = json.loads(response, object_pairs_hook=_object_with_unique_fields)
-        if not isinstance(value, dict) or not isinstance(value.get("answer"), str) or not value["answer"].strip():
+        return response.content
+    if convention.answer_format == AnswerFormat.JSON:
+        value = json.loads(response.content, object_pairs_hook=_object_with_unique_fields)
+        if (
+            not isinstance(value, dict)
+            or not isinstance(value.get(ANSWER_FIELD), str)
+            or not value[ANSWER_FIELD].strip()
+        ):
             raise ValueError("JSON submission requires a nonempty string answer")
-        return value["answer"]
-    else:
-        raise ValueError(f"Unsupported answer format: {convention.answer_format}")
+        return value[ANSWER_FIELD]
+    raise ValueError(f"Unsupported answer format: {convention.answer_format}")

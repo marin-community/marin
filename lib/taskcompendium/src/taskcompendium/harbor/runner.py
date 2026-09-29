@@ -9,17 +9,20 @@ from typing import Any
 from harbor.models.trial.config import TrialConfig
 from harbor.models.trial.result import TrialResult
 from harbor.trial.trial import Trial
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from taskcompendium.lowering import (
     ENVIRONMENT_CONFIG_FILE,
     SPECIFICATION_FILE,
+    SUBMISSION_CONVENTION_FILE,
     WORKSPACE_DOCKER_ENVIRONMENT,
     HarborEnvironmentConfig,
     read_environment_config,
     read_specification,
+    read_submission_convention,
     validate_environment_config,
 )
+from taskcompendium.submission import chat_request
 
 DEFAULT_CHAT_TIMEOUT = 120
 
@@ -38,10 +41,10 @@ class ChatLaunch(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    model: str
-    api_base: str
-    api_key_env: str | None = None
-    request_timeout: float = DEFAULT_CHAT_TIMEOUT
+    model: str = Field(min_length=1)
+    api_base: str = Field(min_length=1)
+    api_key_env: str | None = Field(default=None, min_length=1)
+    request_timeout: float = Field(default=DEFAULT_CHAT_TIMEOUT, gt=0, allow_inf_nan=False)
 
 
 async def run_trial(
@@ -56,6 +59,8 @@ async def run_trial(
         raise ValueError("Launch environment configuration differs from the exported task")
     specification = read_specification(task_dir / SPECIFICATION_FILE)
     validate_environment_config(specification, environment_config)
+    convention = read_submission_convention(task_dir / SUBMISSION_CONVENTION_FILE)
+    request = chat_request(specification, convention)
     if environment_config.environment == WORKSPACE_DOCKER_ENVIRONMENT and isinstance(launch, ChatLaunch):
         raise ValueError("Direct chat launch cannot use a workspace Docker environment")
     if environment_config.environment != WORKSPACE_DOCKER_ENVIRONMENT and isinstance(launch, ReplayLaunch):
@@ -64,13 +69,13 @@ async def run_trial(
     if isinstance(launch, ReplayLaunch):
         agent: dict[str, Any] = {
             "import_path": "taskcompendium.harbor.adapter:ReplayAgent",
-            "kwargs": launch.model_dump(),
+            "kwargs": {**launch.model_dump(), "request": request},
         }
     else:
         agent = {
-            "import_path": "taskcompendium.harbor.adapter:DirectChatAgent",
+            "import_path": "taskcompendium.harbor.adapter:ChatAgent",
             "model_name": launch.model,
-            "kwargs": launch.model_dump(exclude={"model"}),
+            "kwargs": {**launch.model_dump(exclude={"model"}), "request": request},
         }
     config = TrialConfig.model_validate(
         {
