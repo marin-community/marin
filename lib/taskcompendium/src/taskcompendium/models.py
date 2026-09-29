@@ -8,9 +8,9 @@ from enum import StrEnum
 from math import isfinite
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
-SCHEMA_VERSION = "0.7"
+SCHEMA_VERSION = "0.8"
 
 
 class AnswerType(StrEnum):
@@ -62,10 +62,13 @@ class VerifierSpec(BaseModel):
     parameters_json: str = Field(repr=False)
 
 
-@dataclass(frozen=True)
-class FunctionCall:
-    name: str
-    arguments: str
+class FunctionCall(BaseModel):
+    """A protocol-independent function name and decoded argument object."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True, allow_inf_nan=False)
+
+    name: str = Field(min_length=1)
+    arguments: dict[str, JsonValue]
 
 
 @dataclass(frozen=True)
@@ -103,28 +106,28 @@ class TextMessage(BaseModel):
 
     @model_validator(mode="after")
     def validate_message(self) -> "TextMessage":
-        if self.role not in {"system", "developer", "user", "assistant"} or not self.content.strip():
-            raise ValueError("Conversation messages require a supported role and nonempty content")
+        if self.role not in {"system", "developer", "user", "assistant"}:
+            raise ValueError("Conversation messages require a supported role")
         return self
 
 
 class ConversationToolCall(BaseModel):
-    """One historical assistant function call in the conversation prefix."""
+    """A function call with its conversation identity and decoded arguments."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True, allow_inf_nan=False)
 
-    call_id: str
-    name: str
-    arguments: str
+    call_id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    arguments: dict[str, JsonValue]
 
 
 class AssistantToolCalls(BaseModel):
-    """A historical assistant message containing function calls."""
+    """An assistant message containing function calls."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     type: Literal["assistant_tool_calls"] = "assistant_tool_calls"
-    calls: tuple[ConversationToolCall, ...]
+    calls: tuple[ConversationToolCall, ...] = Field(min_length=1)
     content: str | None = None
 
 
@@ -136,6 +139,9 @@ class ToolResult(BaseModel):
     type: Literal["tool_result"] = "tool_result"
     call_id: str
     content: str
+
+
+type AssistantMessage = TextMessage | AssistantToolCalls
 
 
 ConversationEvent = Annotated[TextMessage | AssistantToolCalls | ToolResult, Field(discriminator="type")]
@@ -184,8 +190,38 @@ class ConversationInput(BaseModel):
                 pending.remove(event.call_id)
             elif pending:
                 raise ValueError("Historical calls require results before the next message")
+            elif isinstance(event, TextMessage) and not event.content.strip():
+                raise ValueError("Source conversation messages require nonempty content")
         if pending:
             raise ValueError("Historical calls require results before the final decision")
+        return self
+
+
+class ConversationTrace(BaseModel):
+    """Complete model-visible conversation ending in an assistant submission."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    events: tuple[ConversationEvent, ...]
+
+    @model_validator(mode="after")
+    def validate_trace(self) -> "ConversationTrace":
+        if len(self.events) < 2:
+            raise ValueError("Grading evidence requires a prefix and final assistant message")
+        ConversationInput(events=self.events[:-1])
+        final = self.events[-1]
+        if isinstance(final, ToolResult) or (isinstance(final, TextMessage) and final.role != "assistant"):
+            raise ValueError("Grading evidence requires a final assistant message")
+        if isinstance(final, AssistantToolCalls):
+            identifiers = [call.call_id for call in final.calls]
+            historical = {
+                call.call_id
+                for event in self.events[:-1]
+                if isinstance(event, AssistantToolCalls)
+                for call in event.calls
+            }
+            if len(set(identifiers)) != len(identifiers) or historical.intersection(identifiers):
+                raise ValueError("Conversation call identifiers must be unique")
         return self
 
 

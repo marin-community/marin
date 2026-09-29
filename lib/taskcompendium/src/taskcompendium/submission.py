@@ -9,10 +9,10 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
-from taskcompendium.final_action import SubmittedCalls, decode_action, parse_arguments, unique_json_fields
 from taskcompendium.models import (
     AnswerType,
     AssistantToolCalls,
+    ConversationEvent,
     ConversationInput,
     TaskSpec,
     TextMessage,
@@ -122,7 +122,10 @@ def conversation_messages(context: ConversationInput) -> list[dict[str, Any]]:
                         {
                             "id": call.call_id,
                             "type": "function",
-                            "function": {"name": call.name, "arguments": call.arguments},
+                            "function": {
+                                "name": call.name,
+                                "arguments": json.dumps(call.arguments, separators=(",", ":"), ensure_ascii=False),
+                            },
                         }
                         for call in event.calls
                     ],
@@ -156,43 +159,16 @@ def chat_request(specification: TaskSpec, convention: SubmissionConvention) -> d
     return request
 
 
-def extract_message_response(message_json: str | None, convention: SubmissionConvention) -> str:
-    """Extract verifier input from the recorded final assistant message."""
-    if message_json is None:
-        raise ValueError("Final assistant message is missing")
-    message = json.loads(message_json, object_pairs_hook=unique_json_fields)
-    if not isinstance(message, dict) or message.get("role") != "assistant":
-        raise ValueError("Submission requires an assistant message object")
-    if convention.answer_format in {AnswerFormat.ANSWER_CALL, AnswerFormat.FINAL_ACTION}:
-        return message_json
-    if message.get("tool_calls") or not isinstance(message.get("content"), str):
-        raise ValueError("Text submission requires textual content without tool calls")
-    return message["content"]
-
-
-def extract_answer(response: str | None, convention: SubmissionConvention) -> str:
-    """Decode the selected submission convention without guessing a format."""
-    if response is None or not response.strip():
-        raise ValueError("Final answer is empty")
-    if convention.answer_format == AnswerFormat.PLAIN:
-        return response
-    if convention.answer_format == AnswerFormat.JSON:
-        value = json.loads(response, object_pairs_hook=unique_json_fields)
-        if (
-            not isinstance(value, dict)
-            or not isinstance(value.get(ANSWER_FIELD), str)
-            or not value[ANSWER_FIELD].strip()
-        ):
-            raise ValueError("JSON submission requires a nonempty string answer")
-        return value[ANSWER_FIELD]
+def extract_answer(response: ConversationEvent, convention: SubmissionConvention) -> str:
+    """Extract semantic answer content from a typed assistant turn."""
     if convention.answer_format == AnswerFormat.ANSWER_CALL:
-        message = json.loads(response, object_pairs_hook=unique_json_fields)
-        if not isinstance(message, dict):
-            raise ValueError("Answer call requires an assistant message object")
-        action = decode_action(message)
-        if not isinstance(action, SubmittedCalls) or len(action.calls) != 1 or action.calls[0].name != ANSWER_CALL_NAME:
+        if (
+            not isinstance(response, AssistantToolCalls)
+            or len(response.calls) != 1
+            or response.calls[0].name != ANSWER_CALL_NAME
+        ):
             raise ValueError(f"Answer call requires one {ANSWER_CALL_NAME} function call")
-        arguments = parse_arguments(action.calls[0].arguments)
+        arguments = response.calls[0].arguments
         if (
             set(arguments) != {ANSWER_FIELD}
             or not isinstance(arguments[ANSWER_FIELD], str)
@@ -200,4 +176,17 @@ def extract_answer(response: str | None, convention: SubmissionConvention) -> st
         ):
             raise ValueError("Answer call requires a nonempty string answer")
         return arguments[ANSWER_FIELD]
+    if not isinstance(response, TextMessage) or response.role != "assistant" or not response.content.strip():
+        raise ValueError("Text submission requires nonempty assistant content without tool calls")
+    if convention.answer_format == AnswerFormat.PLAIN:
+        return response.content
+    if convention.answer_format == AnswerFormat.JSON:
+        value = json.loads(response.content)
+        if (
+            not isinstance(value, dict)
+            or not isinstance(value.get(ANSWER_FIELD), str)
+            or not value[ANSWER_FIELD].strip()
+        ):
+            raise ValueError("JSON submission requires a nonempty string answer")
+        return value[ANSWER_FIELD]
     raise ValueError(f"Unsupported answer format: {convention.answer_format}")

@@ -28,6 +28,7 @@ from taskcompendium.lowering import (
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
+    ConversationTrace,
     Source,
     TaskRequirements,
     TaskSpec,
@@ -46,7 +47,11 @@ def _answer_action(answer: str) -> dict:
         "role": "assistant",
         "content": None,
         "tool_calls": [
-            {"type": "function", "function": {"name": "submit_answer", "arguments": json.dumps({"answer": answer})}}
+            {
+                "id": "call-answer",
+                "type": "function",
+                "function": {"name": "submit_answer", "arguments": json.dumps({"answer": answer})},
+            }
         ],
     }
 
@@ -161,7 +166,12 @@ def test_numeric_answer_uses_explicit_tolerance(specification, response, reward)
     )
     convention = SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN)
 
-    result = grade_answer(specification, convention, response, object())
+    result = grade_answer(
+        specification,
+        convention,
+        ConversationTrace(events=(*specification.context.events, TextMessage(role="assistant", content=response))),
+        object(),
+    )
 
     assert (result.status, result.reward) == ("graded", reward)
 
@@ -198,7 +208,8 @@ async def test_text_convention_rejects_tool_call_submission(tmp_path, specificat
     outcome = json.loads((tmp_path / "trials/run/verifier/taskcompendium-result.json").read_text())
     assert result.verifier_result is None
     assert outcome["status"] == "extraction_error"
-    assert json.loads((tmp_path / "trials/run/agent/submission.json").read_text()) == message
+    trace = ConversationTrace.model_validate_json((tmp_path / "trials/run/agent/submission.json").read_text())
+    assert trace.events[-1].calls[0].arguments == {"answer": "12"}
 
 
 async def test_chat_records_incompatible_tool_call_for_convention_extraction(tmp_path, specification, chat_endpoint):
@@ -221,7 +232,8 @@ async def test_chat_records_incompatible_tool_call_for_convention_extraction(tmp
     outcome = json.loads((tmp_path / "trials/run/verifier/taskcompendium-result.json").read_text())
     assert result.verifier_result is None
     assert outcome["status"] == "extraction_error"
-    assert json.loads((tmp_path / "trials/run/agent/submission.json").read_text()) == message
+    trace = ConversationTrace.model_validate_json((tmp_path / "trials/run/agent/submission.json").read_text())
+    assert trace.events[-1].calls[0].arguments == {"answer": "12"}
 
 
 @pytest.mark.parametrize(
@@ -244,7 +256,8 @@ async def test_answer_call_grades_semantic_answers_through_harbor(
 
     assert correct.verifier_result.rewards == {"reward": 1.0}
     assert wrong.verifier_result.rewards == {"reward": 0.0}
-    assert json.loads((tmp_path / "trials/correct/agent/submission.json").read_text()) == _answer_action(response)
+    trace = ConversationTrace.model_validate_json((tmp_path / "trials/correct/agent/submission.json").read_text())
+    assert trace.events[-1].calls[0].arguments == {"answer": response}
 
 
 async def test_answer_call_does_not_dispatch_and_requires_its_submission_function(tmp_path, specification, monkeypatch):
@@ -330,10 +343,14 @@ def test_exported_specification_resolves_verifier_in_fresh_process(tmp_path, spe
     script = (
         "import json, sys; from pathlib import Path; "
         "from taskcompendium.verifier_registry import grade_answer; "
+        "from taskcompendium.models import ConversationTrace, TextMessage; "
         "from taskcompendium.lowering import read_submission_convention, read_specification; "
         "root = Path(sys.argv[1]); "
-        "result = grade_answer(read_specification(root / 'specification.json'), "
-        "read_submission_convention(root / 'submission_convention.json'), '12', object()); "
+        "specification = read_specification(root / 'specification.json'); "
+        "result = grade_answer(specification, "
+        "read_submission_convention(root / 'submission_convention.json'), "
+        "ConversationTrace(events=(*specification.context.events, "
+        "TextMessage(role='assistant', content='12'))), object()); "
         "print(json.dumps({'status': result.status, 'reward': result.reward}))"
     )
 

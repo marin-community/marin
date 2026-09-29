@@ -11,13 +11,21 @@ from pathlib import Path
 
 import pytest
 
-from taskcompendium.final_action import decode_action
+from taskcompendium.harbor.protocol import assistant_message
 from taskcompendium.harbor.runner import ChatLaunch, run_trial
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256, import_row
 from taskcompendium.lowering import HarborEnvironmentConfig, compatible_lowerings, lower_to_harbor, read_specification
-from taskcompendium.models import AnswerType, FunctionCall, ToolCallComparatorConfig
-from taskcompendium.predicted_action import compare
+from taskcompendium.models import (
+    AnswerType,
+    AssistantToolCalls,
+    ConversationToolCall,
+    ConversationTrace,
+    FunctionCall,
+    ToolCallComparatorConfig,
+)
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
+from taskcompendium.verifier_registry import grade_answer
+from taskcompendium.verifiers.predicted_action import compare
 
 from .harbor_replay import run_replay_trial
 
@@ -28,7 +36,7 @@ def _action(name: str, arguments: str) -> dict:
     return {
         "role": "assistant",
         "content": None,
-        "tool_calls": [{"type": "function", "function": {"name": name, "arguments": arguments}}],
+        "tool_calls": [{"id": "call-final", "type": "function", "function": {"name": name, "arguments": arguments}}],
     }
 
 
@@ -68,10 +76,15 @@ def test_exported_nemo_verifier_grades_in_fresh_process(tmp_path):
     script = (
         "import json, sys; from pathlib import Path; "
         "from taskcompendium.verifier_registry import grade_answer; "
+        "from taskcompendium.harbor.protocol import chat_conversation; "
+        "from taskcompendium.submission import chat_request; "
         "from taskcompendium.lowering import read_submission_convention, read_specification; "
         "root = Path(sys.argv[1]); "
-        "result = grade_answer(read_specification(root / 'specification.json'), "
-        "read_submission_convention(root / 'submission_convention.json'), sys.argv[2], object()); "
+        "specification = read_specification(root / 'specification.json'); "
+        "convention = read_submission_convention(root / 'submission_convention.json'); "
+        "conversation = chat_conversation([*chat_request(specification, convention)['messages'], "
+        "json.loads(sys.argv[2])]); "
+        "result = grade_answer(specification, convention, conversation, object()); "
         "print(json.dumps({'status': result.status, 'reward': result.reward}))"
     )
     response = json.dumps(_action(row["expected_action"]["name"], row["expected_action"]["arguments"]))
@@ -123,12 +136,12 @@ def test_predicted_action_rejects_source_settings_that_prevent_expected_calls():
         import_row(row, canonical_sha256(row))
 
 
-@pytest.mark.parametrize("arguments", ["[1]", '{"id":1,"id":2}', '{"id":NaN}', '{"id":1e309}'])
+@pytest.mark.parametrize("arguments", ["[1]", '{"id":NaN}', '{"id":1e309}'])
 def test_predicted_action_rejects_invalid_expected_arguments(arguments):
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
     row["expected_action"]["arguments"] = arguments
 
-    with pytest.raises(ValueError, match=r"JSON object|Duplicate JSON field|Non-finite JSON argument"):
+    with pytest.raises(ValueError, match=r"dictionary|finite"):
         import_row(row, canonical_sha256(row))
 
 
@@ -171,19 +184,23 @@ def test_predicted_action_reuses_final_action_convention_without_changing_source
                 "role": "assistant",
                 "tool_calls": [
                     {
+                        "id": "call-auth",
                         "type": "function",
                         "function": {
                             "name": "authenticate_user",
                             "arguments": '{"user_id":"GROOM2024","event_confirmation_code":"NIGHTCLUB2024"}',
                         },
                     },
-                    {"type": "function", "function": {"name": "get_event_details", "arguments": "{}"}},
+                    {
+                        "id": "call-details",
+                        "type": "function",
+                        "function": {"name": "get_event_details", "arguments": "{}"},
+                    },
                 ],
             },
             0.0,
             "graded",
         ),
-        ({"role": "assistant", "tool_calls": "not-a-list"}, None, "extraction_error"),
     ],
 )
 async def test_predicted_action_harbor_replay_outcomes(tmp_path, response, reward, status):
@@ -280,26 +297,75 @@ async def test_predicted_action_chat_requests_native_output_without_dispatch(tmp
 
 def test_predicted_action_requires_exact_call_count_and_argument_types():
     config = ToolCallComparatorConfig()
-    expected = (FunctionCall("lookup", '{"id":1}'),)
+    expected = (FunctionCall(name="lookup", arguments={"id": 1}),)
     extra = {
         "role": "assistant",
         "tool_calls": [
-            {"type": "function", "function": {"name": "lookup", "arguments": '{"id":1}'}},
-            {"type": "function", "function": {"name": "other", "arguments": "{}"}},
+            {"id": "call-lookup", "type": "function", "function": {"name": "lookup", "arguments": '{"id":1}'}},
+            {"id": "call-other", "type": "function", "function": {"name": "other", "arguments": "{}"}},
         ],
     }
-    assert compare(expected, decode_action(extra), config) == 0.0
-    assert compare(expected, decode_action(_action("lookup", '{"id":true}')), config) == 0.0
-    assert compare(expected, decode_action({"role": "assistant", "content": "different"}), config) == 0.0
-    assert compare(expected, decode_action(_action("lookup", "not-json")), config) == 0.0
+    assert compare(expected, assistant_message(extra), config) == 0.0
+    assert compare(expected, assistant_message(_action("lookup", '{"id":true}')), config) == 0.0
+    assert compare(expected, assistant_message({"role": "assistant", "content": "different"}), config) == 0.0
 
 
 def test_predicted_action_requires_exact_strings_and_explicit_numeric_tolerance():
-    expected_text = (FunctionCall("respond", '{"note":"refund approved"}'),)
-    wrong_text = decode_action(_action("respond", '{"note":"refund denied"}'))
+    expected_text = (FunctionCall(name="respond", arguments={"note": "refund approved"}),)
+    wrong_text = assistant_message(_action("respond", '{"note":"refund denied"}'))
     assert compare(expected_text, wrong_text, ToolCallComparatorConfig()) == 0.0
 
-    expected_number = (FunctionCall("set_value", '{"value":1.0}'),)
-    nearby_number = decode_action(_action("set_value", '{"value":1.005}'))
+    expected_number = (FunctionCall(name="set_value", arguments={"value": 1.0}),)
+    nearby_number = assistant_message(_action("set_value", '{"value":1.005}'))
     assert compare(expected_number, nearby_number, ToolCallComparatorConfig()) == 0.0
     assert compare(expected_number, nearby_number, ToolCallComparatorConfig(numeric_tolerance=0.01)) == 1.0
+
+
+def test_predicted_action_grades_typed_evidence_from_any_harness():
+    row = json.loads((FIXTURES / "predicted-action.json").read_text())
+    specification, convention = import_row(row, canonical_sha256(row))
+    final = AssistantToolCalls(
+        calls=(
+            ConversationToolCall(
+                call_id="another-harness-call",
+                name=row["expected_action"]["name"],
+                arguments=json.loads(row["expected_action"]["arguments"]),
+            ),
+        )
+    )
+    conversation = ConversationTrace(events=(*specification.context.events, final))
+
+    result = grade_answer(specification, convention, conversation, object())
+
+    assert (result.status, result.reward) == ("graded", 1.0)
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        {"role": "assistant", "tool_calls": "not-a-list"},
+        _action("authenticate_user", "not-json"),
+    ],
+)
+async def test_chat_protocol_failure_is_ungraded_and_retains_raw_response(tmp_path, monkeypatch, response):
+    row = json.loads((FIXTURES / "predicted-action.json").read_text())
+    specification, convention = import_row(row, canonical_sha256(row))
+    environment_config = HarborEnvironmentConfig()
+    task = lower_to_harbor(specification, convention, environment_config, tmp_path / "task")
+
+    def respond(request, timeout):
+        return BytesIO(json.dumps({"choices": [{"message": response}]}).encode())
+
+    monkeypatch.setattr("taskcompendium.harbor.adapter.urllib.request.urlopen", respond)
+    result = await run_trial(
+        task,
+        environment_config,
+        ChatLaunch(model="model", api_base="https://example.invalid"),
+        tmp_path / "trials",
+        "run",
+    )
+
+    assert result.exception_info is not None
+    assert result.verifier_result is None
+    assert json.loads((tmp_path / "trials/run/agent/chat-response.json").read_text()) == response
+    assert not (tmp_path / "trials/run/agent/submission.json").exists()

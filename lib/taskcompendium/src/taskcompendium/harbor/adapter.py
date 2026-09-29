@@ -3,11 +3,11 @@
 
 """Run exported answer tasks through Harbor's agent and verifier lifecycle.
 
-ChatAgent sends one prepared model request and saves the complete assistant
-message. Advertised function calls are submissions and are never executed.
+ChatAgent sends one prepared model request and saves typed conversation evidence.
+Advertised function calls are submissions and are never executed.
 NoToolEnvironment satisfies Harbor's lifecycle without exposing shell or file
 access to the agent. SemanticVerifier reads the private task specification and
-saved submission, extracts the answer using its convention, and grades it.
+saved conversation, extracts the answer using its convention, and grades it.
 Agent messages and grading outcomes are written to host-side trial logs.
 """
 
@@ -28,16 +28,18 @@ from harbor.verifier.base import BaseVerifier
 from upath import UPath
 
 from taskcompendium.grading import GradeResult, Outcome
+from taskcompendium.harbor.protocol import chat_conversation
 from taskcompendium.lowering import (
     SPECIFICATION_FILE,
     SUBMISSION_CONVENTION_FILE,
     read_specification,
     read_submission_convention,
 )
-from taskcompendium.submission import extract_message_response
+from taskcompendium.models import ConversationTrace
 from taskcompendium.verifier_registry import grade_answer
 
 SUBMISSION_FILE = "submission.json"
+CHAT_RESPONSE_FILE = "chat-response.json"
 CHAT_COMPLETIONS_PATH = "/chat/completions"
 # Harbor normally downloads agent logs and task-produced artifacts from these paths.
 AGENT_LOGS_PATH = "/logs/agent"
@@ -58,7 +60,7 @@ def _record_submission(
     context: AgentContext,
 ) -> None:
     logs_dir.mkdir(parents=True, exist_ok=True)
-    (logs_dir / SUBMISSION_FILE).write_text(json.dumps(response))
+    (logs_dir / CHAT_RESPONSE_FILE).write_text(json.dumps(response))
     context.metadata = {
         "assistant_final": response,
         "turns": 1,
@@ -66,6 +68,8 @@ def _record_submission(
         "summarization_count": 0,
         "tools": [],
     }
+    conversation = chat_conversation([*messages, response])
+    (logs_dir / SUBMISSION_FILE).write_text(conversation.model_dump_json())
 
 
 def _chat_completion(api_base: str, api_key: str | None, request_timeout: float, body: dict[str, Any]) -> dict[str, Any]:
@@ -180,13 +184,8 @@ class SemanticVerifier(BaseVerifier):
             specification = read_specification(root / SPECIFICATION_FILE)
             convention = read_submission_convention(root / SUBMISSION_CONVENTION_FILE)
             response_path = self.trial_paths.agent_dir / SUBMISSION_FILE
-            message = response_path.read_text() if response_path.exists() else None
-            try:
-                response = extract_message_response(message, convention)
-            except (ValueError, TypeError) as error:
-                result = GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
-            else:
-                result = grade_answer(specification, convention, response, self.environment)
+            conversation = ConversationTrace.model_validate_json(response_path.read_text())
+            result = grade_answer(specification, convention, conversation, self.environment)
         except Exception as error:
             result = GradeResult(Outcome.INFRA_ERROR, None, f"{type(error).__name__}: {error}")
             self._write_result(result)

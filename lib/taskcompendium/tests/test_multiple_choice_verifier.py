@@ -9,6 +9,7 @@ from taskcompendium.grading import Outcome
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
+    ConversationTrace,
     Source,
     TaskRequirements,
     TaskSpec,
@@ -34,6 +35,11 @@ def test_hand_authored_multiple_choice_answer(response, reward):
     )
     convention = SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN)
 
-    result = grade_answer(specification, convention, response, object())
+    result = grade_answer(
+        specification,
+        convention,
+        ConversationTrace(events=(*specification.context.events, TextMessage(role="assistant", content=response))),
+        object(),
+    )
 
     assert (result.status, result.reward) == (Outcome.GRADED, reward)
