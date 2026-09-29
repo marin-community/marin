@@ -53,8 +53,7 @@ def import_task(archive: TaskArchive) -> TaskSpec:
         metadata = tomllib.loads(archive.files[TASK_MANIFEST].decode())[METADATA_TABLE]
         if metadata.get("family") != FAMILY or metadata.get("converter") != CONVERTER:
             raise ValueError("Unsupported TaskTrove MCQA source")
-        verifier_toml = archive.files["tests/verifier.toml"].decode()
-        contract = parse_spec(verifier_toml)
+        contract = parse_spec(archive.files["tests/verifier.toml"].decode())
         if not isinstance(contract, McqSpec):
             raise ValueError("TaskTrove MCQA archive must declare an MCQ verifier")
         instructions = _clean_instructions(archive.files["instruction.md"].decode(), contract.options)
@@ -67,7 +66,7 @@ def import_task(archive: TaskArchive) -> TaskSpec:
     return TaskSpec(
         id=f"tasktrove-{hashlib.sha256(identity.encode()).hexdigest()}",
         instructions=instructions,
-        verifier=tasktrove_verifier(verifier_toml),
+        verifier=tasktrove_verifier(contract),
         source=archive.source,
         requirements=TaskRequirements(),
         answer_type=AnswerType.TEXT,
