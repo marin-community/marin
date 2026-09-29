@@ -45,14 +45,14 @@ def test_import_preserves_release_identity():
 
 def test_import_removes_source_submission_instructions():
     specification = import_task(_archive())
-    prompt = specification.context.input.events[0].content
+    prompt = specification.context.events[0].content
     assert "verifier" not in prompt.lower()
     assert "/app/answer.txt" not in prompt
     assert "theranostics clinical trials" in prompt
     public = render_instruction(specification, SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN))
     assert "verifier" not in public.lower()
-    assert specification.context.requirements.capabilities == ()
-    assert specification.context.answer_type is AnswerType.TEXT
+    assert specification.requirements.capabilities == ()
+    assert specification.answer_type is AnswerType.TEXT
 
 
 def test_imported_mcqa_matches_source_grading(tmp_path):
@@ -112,8 +112,8 @@ def test_import_accepts_plain_source_answer_line_template():
 
     specification = import_task(archive)
 
-    assert specification.context.answer_type is AnswerType.TEXT
-    assert "Answer:" not in specification.context.input.events[0].content
+    assert specification.answer_type is AnswerType.TEXT
+    assert "Answer:" not in specification.context.events[0].content
 
 
 def test_archive_rejects_caller_identity_that_disagrees_with_metadata():

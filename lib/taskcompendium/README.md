@@ -33,16 +33,19 @@ flowchart LR
 | Field | Meaning |
 | --- | --- |
 | `id` | Stable identity for this task. |
-| `context` | The ordered model input, answer type, and environment requirements. The input has text messages and may include historical assistant function calls and tool results, advertised functions, tool choice, and the parallel-call setting. |
+| `context` | The ordered model-visible conversation: text messages, historical assistant function calls, and tool results. |
+| `requirements` | Capabilities or action interfaces needed from the execution environment. |
+| `tools` | Functions advertised at the decision point, tool choice, and the parallel-call setting. These definitions do not bind functions to an implementation. |
+| `answer_type` | The semantic result: `text`, `number`, `file`, `state`, or `native_action`. |
 | `source` | Dataset, revision, row, and importer revision used to reproduce the spec. |
 | `verifier` | A private verifier kind and serialized JSON configuration. `exact_answer` checks text, `mcq_answer` checks a letter, and `predicted_action` checks a final function call. |
 | `schema_version` | Version of the serialized spec, checked when the record is loaded. |
 
-`context.input.events` is the model-visible conversation prefix. A text event retains its role and content. Historical assistant calls and tool results retain their call IDs and order; the adapter sends them as OpenAI-compatible chat messages without executing them again. `context.requirements` names capabilities or action interfaces that the execution environment must provide. `context.answer_type` is the semantic result: `text`, `number`, `file`, `state`, or `native_action`. It does not prescribe a wrapper such as JSON.
+`context.events` is the model-visible conversation prefix. A text event retains its role and content. Historical assistant calls and tool results retain their call IDs and order; the adapter sends them as OpenAI-compatible chat messages without executing them again. `answer_type` does not prescribe a wrapper such as JSON.
 
 `ConversationInput` is not a lossless Responses API transcript. It excludes provider reasoning items. The NeMo importer omits an unencrypted historical reasoning summary only when a visible assistant message or function call follows it. It rejects encrypted reasoning and reasoning left at the decision point. Exact provider continuation from reasoning state is outside this contract.
 
-For example, a task asking “What is 7 + 5?” can have `answer_type=number` and a private expected answer of `12`. The plain, JSON, and `answer_call` conventions carry that answer as `12`, `{"answer":"12"}`, and a final `submit_answer({"answer":"12"})` call, respectively. Each extracts the string `12` for the same exact-answer verifier. A task asking for a function call has `answer_type=native_action`; its context retains the source functions and conversation. The verifier and expected answer are never added to the model-visible input. Importers must make source output instructions neutral to the supported conventions, or reject rows they cannot safely rewrite. A raw-output requirement in a source message would conflict with a JSON or function-call convention; `answer_type=text` alone cannot detect that conflict in prose.
+For example, a task asking “What is 7 + 5?” can have `answer_type=number` and a private expected answer of `12`. The plain, JSON, and `answer_call` conventions carry that answer as `12`, `{"answer":"12"}`, and a final `submit_answer({"answer":"12"})` call, respectively. Each extracts the string `12` for the same exact-answer verifier. A task asking for a function call has `answer_type=native_action`; its context retains the conversation and its tools describe the source functions. The verifier and expected answer are never added to the model-visible input. Importers must make source output instructions neutral to the supported conventions, or reject rows they cannot safely rewrite. A raw-output requirement in a source message would conflict with a JSON or function-call convention; `answer_type=text` alone cannot detect that conflict in prose.
 
 The TaskTrove MCQA importer reads archives from a cleaned release. See the [published TaskTrove Clean dataset](https://huggingface.co/datasets/open-athena/task-trove). Its caller passes the archive bytes, upstream subset, archive path, and release provenance to `read_archive`. The reader checks the subset and path against the archive manifest; the release URI and revision are caller-supplied provenance. The importer checks the source answer-line template before replacing it with a one-letter instruction. Its text answer works with plain and JSON submission conventions. The private `mcq_answer` verifier stores the expected letter and option count. Any author can use that verifier; it currently calls the shared `tasktrove-verify` MCQ scorer after extracting the submission. This importer supports only MCQ mode. Executable TaskTrove modes still need private resources and an isolated verifier runtime.
 
@@ -50,7 +53,7 @@ The TaskTrove MCQA importer reads archives from a cleaned release. See the [publ
 
 A lowering is one runnable presentation of a spec for a target framework. It combines a compatible submission convention with a Harbor environment configuration, then writes the target's task files. The spec says *what* result is needed; the convention says *how* the model delivers it; the environment configuration says *which capabilities* the environment provides. Agent and model selection happens when the task is launched.
 
-`SubmissionConvention.supports(spec.context.answer_type)` checks the result kind. `compatible_lowerings` uses that check and the environment requirements; it does not read convention IDs from the spec. A convention that wraps a text or number answer cannot drop advertised functions or source tool-choice settings. The direct-chat environment configuration accepts only tasks with no required environment capabilities or action interfaces; a task requiring `shell` has no candidate in this slice. `select_lowerings` can keep all candidates, take the first, or sample one with an explicit RNG key. The order of the caller-supplied convention and environment configuration sequences determines the first candidate and the sample order. A training caller should record those ordered inputs, the selection policy and key, and the TaskCompendium code revision.
+`SubmissionConvention.supports(spec.answer_type)` checks the result kind. `compatible_lowerings` uses that check and the environment requirements; it does not read convention IDs from the spec. A convention that wraps a text or number answer cannot drop advertised functions or source tool-choice settings. The direct-chat environment configuration accepts only tasks with no required environment capabilities or action interfaces; a task requiring `shell` has no candidate in this slice. `select_lowerings` can keep all candidates, take the first, or sample one with an explicit RNG key. The order of the caller-supplied convention and environment configuration sequences determines the first candidate and the sample order. A training caller should record those ordered inputs, the selection policy and key, and the TaskCompendium code revision.
 
 An author can require a particular execution environment without changing the semantic `TaskSpec`. Pass `required_environment="shellsim"` to `select_lowerings`; it keeps only ShellSim candidates and raises if none are compatible. A `shell` capability requests an operation, while ShellSim names a concrete execution choice. This initial slice offers only direct chat, so a ShellSim request fails rather than falling back to chat. The selected environment configuration is recorded in the exported Harbor package.
 
@@ -65,16 +68,14 @@ from taskcompendium.lowering import (
     select_lowerings,
 )
 from taskcompendium.grading import exact_answer
-from taskcompendium.models import AnswerType, ConversationInput, Source, TaskContext, TaskRequirements, TaskSpec, TextMessage
+from taskcompendium.models import AnswerType, ConversationInput, Source, TaskRequirements, TaskSpec, TextMessage
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
 
 spec = TaskSpec(
     id="arithmetic-7-plus-5",
-    context=TaskContext(
-        input=ConversationInput(events=(TextMessage(role="user", content="What is 7 + 5?"),)),
-        requirements=TaskRequirements(),
-        answer_type=AnswerType.NUMBER,
-    ),
+    context=ConversationInput(events=(TextMessage(role="user", content="What is 7 + 5?"),)),
+    requirements=TaskRequirements(),
+    answer_type=AnswerType.NUMBER,
     verifier=exact_answer("12"),
     source=Source(dataset="hand-authored", revision="2026-09-16", row="arithmetic-7-plus-5", importer_revision="1"),
 )
@@ -125,7 +126,7 @@ With the `answer_call` convention, the chat agent advertises only `submit_answer
 
 ### NeMo final actions
 
-`taskcompendium.importers.nemo_predicted_action.import_row` accepts a NeMo predicted-function-call row and its pinned canonical SHA-256 digest. It produces a `TaskSpec` with `context.answer_type=native_action` and a final-action convention. The context carries the source conversation, advertised functions, tool choice, and parallel-call setting. The convention describes how Harbor captures the final action and can be reused across tasks. The expected function calls remain in the private `predicted_action` verifier. There is one stored conversation, with no second flattened prompt to keep in sync.
+`taskcompendium.importers.nemo_predicted_action.import_row` accepts a NeMo predicted-function-call row and its pinned canonical SHA-256 digest. It produces a `TaskSpec` with `answer_type=native_action` and a final-action convention. The context carries the source conversation; `tools` carries advertised functions, tool choice, and the parallel-call setting. The convention describes how Harbor captures the final action and can be reused across tasks. The expected function calls remain in the private `predicted_action` verifier. There is one stored conversation, with no second flattened prompt to keep in sync.
 
 For a chat launch, the Harbor adapter sends the source turns and function definitions to the model, records its final function call, and stops without dispatching the call. The verifier compares function names and JSON arguments. The importer rejects message targets because the source comparator gives any message full credit; it also rejects request settings it cannot carry. The pinned fixture records the NeMo Gym repository revision and blob SHA in `tests/fixtures/nemo/predicted-action.provenance.json`. Numeric tolerance is used only when explicitly set in the private verifier.
 

@@ -156,23 +156,16 @@ def format_conversation(events: tuple[ConversationEvent, ...]) -> str:
 
 
 class ConversationInput(BaseModel):
-    """Model-visible messages and calls, without provider reasoning state."""
+    """Model-visible conversation prefix, without provider reasoning state."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     events: tuple[ConversationEvent, ...]
-    functions: tuple[FunctionDefinition, ...] = ()
-    tool_choice: str | None = None
-    parallel_tool_calls: bool | None = None
 
     @model_validator(mode="after")
     def validate_input(self) -> "ConversationInput":
         if not self.events:
             raise ValueError("Conversation input requires events")
-        if len({function.name for function in self.functions}) != len(self.functions):
-            raise ValueError("Advertised function names must be unique")
-        if self.tool_choice is not None and self.tool_choice not in {"auto", "none", "required"}:
-            raise ValueError("Unsupported native tool choice")
         pending: set[str] = set()
         seen: set[str] = set()
         for event in self.events:
@@ -195,6 +188,24 @@ class ConversationInput(BaseModel):
         return self
 
 
+class TaskTools(BaseModel):
+    """Functions and call policy advertised at the task's decision point."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    functions: tuple[FunctionDefinition, ...] = ()
+    tool_choice: str | None = None
+    parallel_tool_calls: bool | None = None
+
+    @model_validator(mode="after")
+    def validate_tools(self) -> "TaskTools":
+        if len({function.name for function in self.functions}) != len(self.functions):
+            raise ValueError("Advertised function names must be unique")
+        if self.tool_choice is not None and self.tool_choice not in {"auto", "none", "required"}:
+            raise ValueError("Unsupported native tool choice")
+        return self
+
+
 class TaskRequirements(BaseModel):
     """Environment functionality required to run the task.
 
@@ -209,29 +220,16 @@ class TaskRequirements(BaseModel):
     action_interfaces: tuple[str, ...] = ()
 
 
-class TaskContext(BaseModel):
-    """Model input, result kind, and environment functionality for one task."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    input: ConversationInput
-    answer_type: AnswerType
-    requirements: TaskRequirements
-
-    @model_validator(mode="after")
-    def validate_context(self) -> "TaskContext":
-        if self.answer_type == AnswerType.NATIVE_ACTION and not self.input.functions:
-            raise ValueError("Native-action tasks require advertised functions")
-        return self
-
-
 class TaskSpec(BaseModel):
     """The private definition of one deterministic answer task."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     id: str
-    context: TaskContext
+    context: ConversationInput
+    requirements: TaskRequirements
+    tools: TaskTools = Field(default_factory=TaskTools)
+    answer_type: AnswerType
     verifier: VerifierSpec
     source: Source
     schema_version: str = SCHEMA_VERSION
@@ -242,4 +240,6 @@ class TaskSpec(BaseModel):
             raise ValueError(f"Unsupported TaskSpec schema: {self.schema_version}")
         if not self.id:
             raise ValueError("A task id is required")
+        if self.answer_type == AnswerType.NATIVE_ACTION and not self.tools.functions:
+            raise ValueError("Native-action tasks require advertised functions")
         return self

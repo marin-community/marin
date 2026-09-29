@@ -15,9 +15,9 @@ from taskcompendium.models import (
     FunctionCall,
     FunctionDefinition,
     Source,
-    TaskContext,
     TaskRequirements,
     TaskSpec,
+    TaskTools,
     TextMessage,
     ToolResult,
 )
@@ -170,16 +170,14 @@ def import_row(row: dict[str, Any], expected_sha256: str) -> tuple[TaskSpec, Sub
     source = Source(dataset=DATASET, revision=REVISION, row=expected_sha256, importer_revision=IMPORTER_REVISION)
     specification = TaskSpec(
         id=f"nemo-predicted-action-{expected_sha256}",
-        context=TaskContext(
-            input=ConversationInput(
-                functions=functions,
-                events=events,
-                tool_choice=tool_choice,
-                parallel_tool_calls=parallel_tool_calls,
-            ),
-            requirements=TaskRequirements(),
-            answer_type=AnswerType.NATIVE_ACTION,
+        context=ConversationInput(events=events),
+        requirements=TaskRequirements(),
+        tools=TaskTools(
+            functions=functions,
+            tool_choice=tool_choice,
+            parallel_tool_calls=parallel_tool_calls,
         ),
+        answer_type=AnswerType.NATIVE_ACTION,
         verifier=predicted_action_verifier(expected_calls),
         source=source,
     )

@@ -63,13 +63,14 @@ class SubmissionConvention(BaseModel):
 
 
 def submission_compatible(specification: TaskSpec, convention: SubmissionConvention) -> bool:
-    context = specification.context
-    if not convention.supports(context.answer_type):
+    if not convention.supports(specification.answer_type):
         return False
     if convention.answer_format == AnswerFormat.FINAL_ACTION:
-        return bool(context.input.functions)
+        return bool(specification.tools.functions)
     return (
-        not context.input.functions and context.input.tool_choice is None and context.input.parallel_tool_calls is None
+        not specification.tools.functions
+        and specification.tools.tool_choice is None
+        and specification.tools.parallel_tool_calls is None
     )
 
 
@@ -91,11 +92,11 @@ def render_instruction(specification: TaskSpec, convention: SubmissionConvention
     context = specification.context
     if not submission_compatible(specification, convention):
         raise ValueError(
-            f"Submission convention {convention.id!r} cannot carry {context.answer_type.value!r} in this context"
+            f"Submission convention {convention.id!r} cannot carry {specification.answer_type.value!r} in this context"
         )
     if convention.answer_format == AnswerFormat.FINAL_ACTION:
-        return format_conversation(context.input.events)
-    return f"{format_conversation(context.input.events)}\n\n{submission_instruction(convention)}\n"
+        return format_conversation(context.events)
+    return f"{format_conversation(context.events)}\n\n{submission_instruction(convention)}\n"
 
 
 def extract_answer(response: str | None, convention: SubmissionConvention) -> str:

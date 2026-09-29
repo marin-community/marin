@@ -10,7 +10,6 @@ from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     Source,
-    TaskContext,
     TaskRequirements,
     TaskSpec,
     TextMessage,
@@ -27,11 +26,9 @@ from taskcompendium.verifiers.multiple_choice import multiple_choice_answer
 def test_hand_authored_multiple_choice_answer(response, reward):
     specification = TaskSpec(
         id="hand-authored-mcq",
-        context=TaskContext(
-            input=ConversationInput(events=(TextMessage(role="user", content="Choose A, B, C, or D."),)),
-            requirements=TaskRequirements(),
-            answer_type=AnswerType.TEXT,
-        ),
+        context=ConversationInput(events=(TextMessage(role="user", content="Choose A, B, C, or D."),)),
+        requirements=TaskRequirements(),
+        answer_type=AnswerType.TEXT,
         verifier=multiple_choice_answer("B", 4),
         source=Source(dataset="hand-authored", revision="1", row="mcq", importer_revision="1"),
     )

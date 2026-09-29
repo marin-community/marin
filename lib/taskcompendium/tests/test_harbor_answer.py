@@ -29,7 +29,6 @@ from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     Source,
-    TaskContext,
     TaskRequirements,
     TaskSpec,
     TextMessage,
@@ -90,11 +89,9 @@ def chat_endpoint():
 def specification() -> TaskSpec:
     return TaskSpec(
         id="arithmetic-7-plus-5",
-        context=TaskContext(
-            input=ConversationInput(events=(TextMessage(role="user", content="What is 7 + 5?"),)),
-            requirements=TaskRequirements(),
-            answer_type=AnswerType.NUMBER,
-        ),
+        context=ConversationInput(events=(TextMessage(role="user", content="What is 7 + 5?"),)),
+        requirements=TaskRequirements(),
+        answer_type=AnswerType.NUMBER,
         verifier=exact_answer("12"),
         source=Source(dataset="hand-authored", revision="2026-09-16", row="arithmetic-7-plus-5", importer_revision="1"),
     )
@@ -244,13 +241,7 @@ async def test_answer_call_does_not_dispatch_and_requires_its_submission_functio
 
 
 def test_direct_chat_rejects_unsatisfied_requirements(tmp_path, specification):
-    specification = specification.model_copy(
-        update={
-            "context": specification.context.model_copy(
-                update={"requirements": TaskRequirements(capabilities=("filesystem",))}
-            )
-        }
-    )
+    specification = specification.model_copy(update={"requirements": TaskRequirements(capabilities=("filesystem",))})
 
     with pytest.raises(ValueError, match="cannot satisfy"):
         lower_to_harbor(
@@ -327,9 +318,7 @@ def test_old_verifier_schema_is_rejected_on_read(tmp_path, specification):
 
 
 def test_file_result_cannot_use_text_submission_convention(tmp_path, specification):
-    specification = specification.model_copy(
-        update={"context": specification.context.model_copy(update={"answer_type": AnswerType.FILE})}
-    )
+    specification = specification.model_copy(update={"answer_type": AnswerType.FILE})
     convention = SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN)
 
     assert compatible_lowerings(specification, (convention,), (HarborEnvironmentConfig(),)) == ()
@@ -382,17 +371,13 @@ async def test_chat_trial_resolves_key_at_runtime_without_persisting_it(
 
 
 async def test_chat_trial_preserves_conversation_roles(tmp_path, specification, chat_endpoint):
-    context = specification.context.model_copy(
-        update={
-            "input": ConversationInput(
-                events=(
-                    TextMessage(role="system", content="Answer arithmetic questions."),
-                    TextMessage(role="user", content="What is 2 + 2?"),
-                    TextMessage(role="assistant", content="4"),
-                    TextMessage(role="user", content="What is 7 + 5?"),
-                )
-            )
-        }
+    context = ConversationInput(
+        events=(
+            TextMessage(role="system", content="Answer arithmetic questions."),
+            TextMessage(role="user", content="What is 2 + 2?"),
+            TextMessage(role="assistant", content="4"),
+            TextMessage(role="user", content="What is 7 + 5?"),
+        )
     )
     specification = specification.model_copy(update={"context": context})
     environment_config = HarborEnvironmentConfig()

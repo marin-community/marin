@@ -91,14 +91,13 @@ async def run_trial(
             raise ValueError("Chat launch requires a readable convention")
         agent_path = "taskcompendium.harbor.adapter:DirectChatAgent"
         kwargs = launch.model_dump(exclude={"model"})
-        request = specification.context.input
-        kwargs["events"] = [event.model_dump(mode="json") for event in request.events]
+        kwargs["events"] = [event.model_dump(mode="json") for event in specification.context.events]
         kwargs["submission_instruction"] = submission_instruction(convention)
         if answer_format == AnswerFormat.FINAL_ACTION:
             agent_path = "taskcompendium.harbor.adapter:NativeActionAgent"
-            kwargs["functions"] = [function.model_dump(mode="json") for function in request.functions]
-            kwargs["tool_choice"] = request.tool_choice
-            kwargs["parallel_tool_calls"] = request.parallel_tool_calls
+            kwargs["functions"] = [function.model_dump(mode="json") for function in specification.tools.functions]
+            kwargs["tool_choice"] = specification.tools.tool_choice
+            kwargs["parallel_tool_calls"] = specification.tools.parallel_tool_calls
         elif answer_format == AnswerFormat.ANSWER_CALL:
             agent_path = "taskcompendium.harbor.adapter:AnswerCallAgent"
         agent = {
