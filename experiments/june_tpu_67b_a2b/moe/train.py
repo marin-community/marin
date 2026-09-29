@@ -51,6 +51,12 @@ from experiments.june_tpu_67b_a2b.moe.model import Block, GrugModelConfig, Trans
 # `.agents/skills/change-grug/`.
 
 logger = logging.getLogger(__name__)
+_NUMERIC_DIAGNOSTIC_KEYS = (
+    "train/grads_finite",
+    "train/updates_finite",
+    "train/params_finite",
+    "train/qb_betas_finite",
+)
 
 
 @dataclass(frozen=True)
@@ -62,9 +68,10 @@ class GrugTrainerConfig:
     log_every: int = 1
     ema_beta: float | None = None  # EMA coefficient for eval/checkpoint model; None disables EMA.
     z_loss_weight: float = 0.0  # Weight on logsumexp (z-loss) stabilization term.
+    diagnose_numerics: bool = False
 
-    # Grug builds its own compact (replica_dcn, data, expert, model) mesh instead of using
-    # the Trainer's logical axis mapping; `data` absorbs whatever these two leave free.
+    # Grug builds its own compact (replica_dcn, data, context, expert, model) mesh instead of using
+    # the Trainer's logical axis mapping; `data` absorbs whatever these leave free.
     # Defaults reproduce the historical layout: no expert parallelism and full replication
     # across slices (replica_axis_size=None -> jax.process_count()), i.e. parameters
     # replicated per slice and sharded only over the intra-slice `data` axis. For a model
@@ -143,7 +150,7 @@ def build_train_loader(
     mesh: Mesh,
 ) -> DataLoader[GrugLmExample]:
     # DataLoader uses this batch axis mapping to shard batches across the distributed mesh.
-    # `compact_grug_mesh` always carries (replica_dcn, data, expert, model); length-1 axes
+    # `compact_grug_mesh` always carries (replica_dcn, data, context, expert, model); length-1 axes
     # are kept so we can name "expert" unconditionally.
     return DataLoader(
         dataset,
@@ -173,7 +180,7 @@ def build_tagged_evaluator(
         max_examples_per_dataset = eval_cfg.max_eval_batches * eval_cfg.eval_batch_size
 
     tokenizer = data_config.the_tokenizer if eval_cfg.compute_bpb else None
-    # `compact_grug_mesh` always carries (replica_dcn, data, expert, model); length-1 axes
+    # `compact_grug_mesh` always carries (replica_dcn, data, context, expert, model); length-1 axes
     # are kept so we can name "expert" unconditionally.
     eval_axis_mapping = {"batch": _BATCH_AXES}
     eval_batch = Axis("batch", eval_cfg.eval_batch_size)
@@ -407,6 +414,7 @@ def _make_train_step(
     z_loss_weight: float,
     ema_beta: float | None,
     watch_config: WatchConfig | None = None,
+    diagnose_numerics: bool = False,
 ):
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
@@ -443,6 +451,16 @@ def _make_train_step(
         metrics = {"train/loss": loss, **summarized_metrics}
         updates, opt_state = optimizer.update(grads, state.opt_state, qb_params)
         params = optax.apply_updates(qb_params, updates)
+        if diagnose_numerics:
+            metrics.update(
+                {
+                    "train/supervised_tokens": jnp.sum(batch.loss_weight),
+                    "train/grads_finite": _tree_all_finite(grads),
+                    "train/updates_finite": _tree_all_finite(updates),
+                    "train/params_finite": _tree_all_finite(params),
+                    "train/qb_betas_finite": jnp.all(jnp.isfinite(metrics["qb_beta_per_layer"])),
+                }
+            )
 
         if ema_beta is None:
             ema_params = None
@@ -484,6 +502,26 @@ def _make_train_step(
     return train_step
 
 
+def _tree_all_finite(tree: object) -> jax.Array:
+    finite = jnp.array(True)
+    for leaf in jax.tree.leaves(tree):
+        if eqx.is_inexact_array(leaf):
+            finite = finite & jnp.all(jnp.isfinite(leaf))
+    return finite
+
+
+def _check_step_numerics(metrics: dict, step: int, diagnose_numerics: bool) -> None:
+    diagnostics = (
+        {key: float(metrics[key]) for key in (*_NUMERIC_DIAGNOSTIC_KEYS, "train/supervised_tokens")}
+        if diagnose_numerics
+        else {}
+    )
+    if not bool(jnp.isfinite(metrics["train/loss"])):
+        raise FloatingPointError(f"Non-finite Grug loss at step {step}: {diagnostics}")
+    if diagnose_numerics and not all(bool(metrics[key]) for key in _NUMERIC_DIAGNOSTIC_KEYS):
+        raise FloatingPointError(f"Non-finite Grug update at step {step}: {diagnostics}")
+
+
 def _run_grug_local(config: GrugRunConfig) -> None:
     """Entry point for the grug template training loop."""
     trainer = config.trainer.trainer
@@ -502,6 +540,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         z_loss_weight=config.trainer.z_loss_weight,
         ema_beta=config.trainer.ema_beta,
         watch_config=watch_config if watch_config.is_enabled else None,
+        diagnose_numerics=config.trainer.diagnose_numerics,
     )
 
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)
@@ -651,9 +690,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
                 jax.block_until_ready(metrics["train/loss"])
 
-                if jnp.isnan(metrics["train/loss"]):
-                    logger.error(f"NaN loss at step {int(state.step)}. Stopping training.")
-                    break
+                _check_step_numerics(metrics, int(state.step), config.trainer.diagnose_numerics)
                 duration = time.perf_counter() - step_start
                 hook_start = time.perf_counter()
                 with jax.profiler.TraceAnnotation("callbacks"):

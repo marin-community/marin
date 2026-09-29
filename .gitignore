@@ -224,6 +224,8 @@ gha-creds-*.json
 
 *.jsonl
 **/*.jsonl
+# Echo's judged search corpus is source, not a run artifact.
+!infra/marina/apps/echo/benchmarks/*.jsonl
 scr/*
 .weaver/
 
@@ -246,3 +248,6 @@ scr/*
 .obsidian
 .cw_env
 .localbin/
+
+# Stamped into built artifacts by lib/iris/hatch_build.py; never tracked.
+lib/iris/src/iris/_build_info.py

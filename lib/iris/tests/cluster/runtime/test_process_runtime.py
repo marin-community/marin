@@ -18,6 +18,7 @@ def _make_config(
     args: list[str],
     env: dict[str, str] | None = None,
     workdir_host_path: Path | None = None,
+    output_host_path: Path | None = None,
 ) -> ContainerConfig:
     return ContainerConfig(
         image="test:latest",
@@ -37,6 +38,7 @@ def _make_config(
         env=env or {},
         mounts=mounts,
         workdir_host_path=workdir_host_path,
+        output_host_path=output_host_path,
         task_id="test-task",
     )
 
@@ -157,4 +159,21 @@ def test_process_runtime_prefers_nested_mount_for_argument_remapping(tmp_path):
     assert parent.parent.parent == tmp_path
     assert parent.name == "other"
     assert nested.parent != parent.parent
+    handle.cleanup()
+
+
+def test_process_runtime_maps_output_directory_to_attempt_host_path(tmp_path):
+    output_dir = tmp_path / "attempt-output"
+    handle, lines = _run(
+        ProcessRuntime(cache_dir=tmp_path),
+        _make_config(
+            [MountSpec("task-outputs", "/iris/outputs", kind=MountKind.OUTPUT)],
+            args=["/iris/outputs/artifact.heap"],
+            env={"PATH_A": "/iris/outputs"},
+            output_host_path=output_dir,
+        ),
+    )
+
+    assert Path(lines[0]) == output_dir / "artifact.heap"
+    assert Path(lines[1]) == output_dir
     handle.cleanup()

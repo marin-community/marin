@@ -15,7 +15,9 @@ from datetime import date, datetime, timedelta
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from rigging.filesystem import StoragePath, atomic_rename, open_url
+from rigging.filesystem.atomic import atomic_rename
+from rigging.filesystem.factory import open_url
+from rigging.filesystem.storage_path import StoragePath
 
 from marin.execution.step_spec import StepSpec
 

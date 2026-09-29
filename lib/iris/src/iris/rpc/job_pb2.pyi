@@ -79,6 +79,7 @@ class PriorityBand(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
     PRIORITY_BAND_INHERIT: _ClassVar[PriorityBand]
     PRIORITY_BAND_PRODUCTION: _ClassVar[PriorityBand]
+    PRIORITY_BAND_SYSTEM: _ClassVar[PriorityBand]
     PRIORITY_BAND_INTERACTIVE: _ClassVar[PriorityBand]
     PRIORITY_BAND_BATCH: _ClassVar[PriorityBand]
 
@@ -137,6 +138,7 @@ EXISTING_JOB_POLICY_KEEP: ExistingJobPolicy
 EXISTING_JOB_POLICY_RECREATE: ExistingJobPolicy
 PRIORITY_BAND_INHERIT: PriorityBand
 PRIORITY_BAND_PRODUCTION: PriorityBand
+PRIORITY_BAND_SYSTEM: PriorityBand
 PRIORITY_BAND_INTERACTIVE: PriorityBand
 PRIORITY_BAND_BATCH: PriorityBand
 CONTAINER_PROFILE_UNSPECIFIED: ContainerProfile
@@ -205,10 +207,12 @@ class MemoryProfile(_message.Message):
     def __init__(self, format: _Optional[_Union[MemoryProfile.Format, str]] = ..., leaks: _Optional[bool] = ...) -> None: ...
 
 class ThreadsProfile(_message.Message):
-    __slots__ = ("locals",)
+    __slots__ = ("locals", "native")
     LOCALS_FIELD_NUMBER: _ClassVar[int]
+    NATIVE_FIELD_NUMBER: _ClassVar[int]
     locals: bool
-    def __init__(self, locals: _Optional[bool] = ...) -> None: ...
+    native: bool
+    def __init__(self, locals: _Optional[bool] = ..., native: _Optional[bool] = ...) -> None: ...
 
 class ProfileType(_message.Message):
     __slots__ = ("cpu", "memory", "threads")
@@ -351,8 +355,58 @@ class TaskStatus(_message.Message):
     status_message: str
     def __init__(self, task_id: _Optional[str] = ..., state: _Optional[_Union[TaskState, str]] = ..., worker_id: _Optional[str] = ..., worker_address: _Optional[str] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., started_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., finished_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., ports: _Optional[_Mapping[str, int]] = ..., resource_usage: _Optional[_Union[ResourceUsage, _Mapping]] = ..., build_metrics: _Optional[_Union[BuildMetrics, _Mapping]] = ..., current_attempt_id: _Optional[int] = ..., attempts: _Optional[_Iterable[_Union[TaskAttempt, _Mapping]]] = ..., pending_reason: _Optional[str] = ..., can_be_scheduled: _Optional[bool] = ..., container_id: _Optional[str] = ..., backend_id: _Optional[str] = ..., cluster: _Optional[str] = ..., submitted_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., status_message: _Optional[str] = ...) -> None: ...
 
+class TaskOutputSkippedEntry(_message.Message):
+    __slots__ = ("path", "reason")
+    PATH_FIELD_NUMBER: _ClassVar[int]
+    REASON_FIELD_NUMBER: _ClassVar[int]
+    path: str
+    reason: str
+    def __init__(self, path: _Optional[str] = ..., reason: _Optional[str] = ...) -> None: ...
+
+class TaskOutputArchive(_message.Message):
+    __slots__ = ("state", "uri", "size_bytes", "sha256", "error", "retention", "ttl_days", "skipped_count", "skipped_sample")
+    class State(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+        __slots__ = ()
+        TASK_OUTPUT_ARCHIVE_STATE_UNSPECIFIED: _ClassVar[TaskOutputArchive.State]
+        TASK_OUTPUT_ARCHIVE_STATE_EMPTY: _ClassVar[TaskOutputArchive.State]
+        TASK_OUTPUT_ARCHIVE_STATE_UPLOADED: _ClassVar[TaskOutputArchive.State]
+        TASK_OUTPUT_ARCHIVE_STATE_FAILED: _ClassVar[TaskOutputArchive.State]
+        TASK_OUTPUT_ARCHIVE_STATE_UNAVAILABLE: _ClassVar[TaskOutputArchive.State]
+    TASK_OUTPUT_ARCHIVE_STATE_UNSPECIFIED: TaskOutputArchive.State
+    TASK_OUTPUT_ARCHIVE_STATE_EMPTY: TaskOutputArchive.State
+    TASK_OUTPUT_ARCHIVE_STATE_UPLOADED: TaskOutputArchive.State
+    TASK_OUTPUT_ARCHIVE_STATE_FAILED: TaskOutputArchive.State
+    TASK_OUTPUT_ARCHIVE_STATE_UNAVAILABLE: TaskOutputArchive.State
+    class Retention(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+        __slots__ = ()
+        TASK_OUTPUT_ARCHIVE_RETENTION_UNSPECIFIED: _ClassVar[TaskOutputArchive.Retention]
+        TASK_OUTPUT_ARCHIVE_RETENTION_TTL: _ClassVar[TaskOutputArchive.Retention]
+        TASK_OUTPUT_ARCHIVE_RETENTION_LOCAL_CLUSTER: _ClassVar[TaskOutputArchive.Retention]
+    TASK_OUTPUT_ARCHIVE_RETENTION_UNSPECIFIED: TaskOutputArchive.Retention
+    TASK_OUTPUT_ARCHIVE_RETENTION_TTL: TaskOutputArchive.Retention
+    TASK_OUTPUT_ARCHIVE_RETENTION_LOCAL_CLUSTER: TaskOutputArchive.Retention
+    STATE_FIELD_NUMBER: _ClassVar[int]
+    URI_FIELD_NUMBER: _ClassVar[int]
+    SIZE_BYTES_FIELD_NUMBER: _ClassVar[int]
+    SHA256_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
+    RETENTION_FIELD_NUMBER: _ClassVar[int]
+    TTL_DAYS_FIELD_NUMBER: _ClassVar[int]
+    SKIPPED_COUNT_FIELD_NUMBER: _ClassVar[int]
+    SKIPPED_SAMPLE_FIELD_NUMBER: _ClassVar[int]
+    state: TaskOutputArchive.State
+    uri: str
+    size_bytes: int
+    sha256: str
+    error: str
+    retention: TaskOutputArchive.Retention
+    ttl_days: int
+    skipped_count: int
+    skipped_sample: _containers.RepeatedCompositeFieldContainer[TaskOutputSkippedEntry]
+    def __init__(self, state: _Optional[_Union[TaskOutputArchive.State, str]] = ..., uri: _Optional[str] = ..., size_bytes: _Optional[int] = ..., sha256: _Optional[str] = ..., error: _Optional[str] = ..., retention: _Optional[_Union[TaskOutputArchive.Retention, str]] = ..., ttl_days: _Optional[int] = ..., skipped_count: _Optional[int] = ..., skipped_sample: _Optional[_Iterable[_Union[TaskOutputSkippedEntry, _Mapping]]] = ...) -> None: ...
+
 class TaskAttempt(_message.Message):
-    __slots__ = ("attempt_id", "worker_id", "state", "exit_code", "error", "started_at", "finished_at", "is_worker_failure", "attempt_uid", "pod_name", "pod_uid", "node_name", "terminal_reason")
+    __slots__ = ("attempt_id", "worker_id", "state", "exit_code", "error", "started_at", "finished_at", "is_worker_failure", "attempt_uid", "pod_name", "pod_uid", "node_name", "terminal_reason", "output_archive")
     ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
     WORKER_ID_FIELD_NUMBER: _ClassVar[int]
     STATE_FIELD_NUMBER: _ClassVar[int]
@@ -366,6 +420,7 @@ class TaskAttempt(_message.Message):
     POD_UID_FIELD_NUMBER: _ClassVar[int]
     NODE_NAME_FIELD_NUMBER: _ClassVar[int]
     TERMINAL_REASON_FIELD_NUMBER: _ClassVar[int]
+    OUTPUT_ARCHIVE_FIELD_NUMBER: _ClassVar[int]
     attempt_id: int
     worker_id: str
     state: TaskState
@@ -379,7 +434,8 @@ class TaskAttempt(_message.Message):
     pod_uid: str
     node_name: str
     terminal_reason: str
-    def __init__(self, attempt_id: _Optional[int] = ..., worker_id: _Optional[str] = ..., state: _Optional[_Union[TaskState, str]] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., started_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., finished_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., is_worker_failure: _Optional[bool] = ..., attempt_uid: _Optional[str] = ..., pod_name: _Optional[str] = ..., pod_uid: _Optional[str] = ..., node_name: _Optional[str] = ..., terminal_reason: _Optional[str] = ...) -> None: ...
+    output_archive: TaskOutputArchive
+    def __init__(self, attempt_id: _Optional[int] = ..., worker_id: _Optional[str] = ..., state: _Optional[_Union[TaskState, str]] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., started_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., finished_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., is_worker_failure: _Optional[bool] = ..., attempt_uid: _Optional[str] = ..., pod_name: _Optional[str] = ..., pod_uid: _Optional[str] = ..., node_name: _Optional[str] = ..., terminal_reason: _Optional[str] = ..., output_archive: _Optional[_Union[TaskOutputArchive, _Mapping]] = ...) -> None: ...
 
 class ResourceUsage(_message.Message):
     __slots__ = ("memory_mb", "disk_mb", "cpu_millicores", "memory_peak_mb", "process_count")

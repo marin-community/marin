@@ -1,0 +1,18 @@
+schema_version: 1
+code: ml-add-then-remove
+lane: cruft
+title: Within-branch add-then-remove churn
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** One commit adds a column / flag / field, a later commit
+  in the same branch removes it. The intermediate state never deployed, so
+  the additive change is pure churn — readers have to mentally cancel two
+  migrations. Just remove the additive change.
+
+  **When allowed:** Never. Rebase the addition out.
+
+  **Bad example:**
+  ```
+  migrations/0047_worker_supports_reconcile_rpc.py   # adds column
+  migrations/0048_drop_worker_supports_reconcile_rpc.py   # drops what 0047 added
+  ```

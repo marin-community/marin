@@ -1,11 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Stage report for tokenize: per-source attribute parquet (``{id, input_ids}``).
+"""Stage report for tokenize: per-source attribute parquet (``{id, chunk_index, input_ids}``).
 
 Doc and token totals come from each source's per-split ``tokenize/*`` counters;
 the token-length histogram reads a bounded ``input_ids`` sample from the first
-few sources' shards and bins the list lengths into power-of-two buckets.
+few sources' shards and bins the list lengths into power-of-two buckets. The
+histogram bins rows, so a document that the tokenizer split across rows appears
+as its chunks. The totals above it count documents.
 """
 
 import os.path

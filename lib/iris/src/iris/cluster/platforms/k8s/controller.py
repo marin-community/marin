@@ -21,7 +21,7 @@ from contextlib import AbstractContextManager
 from rigging.filesystem.cluster_config import StoreType, store_config
 from rigging.filesystem.s3_compat import configure_fsspec_s3, fsspec_s3_conf, s3_credentials
 from rigging.secrets import ENV_SCHEME, as_secret_spec, resolve_secret_spec
-from rigging.timing import Deadline
+from rigging.timing import Deadline, Duration
 
 from iris.cluster.config import (
     ControllerVmConfig,
@@ -30,10 +30,17 @@ from iris.cluster.config import (
     assert_no_inlined_secrets,
     config_to_dict,
 )
-from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.inject_env import TASK_ENV_SECRET_NAME, collect_inject_env, projects_task_env_secret
 from iris.cluster.node_agent import SERVICE_NAME as _NODE_AGENT_NAME
-from iris.cluster.platforms.k8s.constants import COREWEAVE_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
+from iris.cluster.platforms.k8s.constants import (
+    COREWEAVE_INTERRUPTABLE_TOLERATION,
+    DEFAULT_TASK_CACHE_DIR,
+    NVIDIA_GPU_TOLERATION,
+)
+from iris.cluster.platforms.k8s.kueue_manifests import (
+    IRIS_WORKLOAD_PRIORITY_CLASSES,
+    build_workload_priority_class,
+)
 from iris.cluster.platforms.k8s.nodepool_manifests import nodepool_name
 from iris.cluster.platforms.k8s.rbac_manifests import cluster_role_name
 from iris.cluster.platforms.k8s.service import CloudK8sService, K8sService
@@ -225,8 +232,8 @@ def _build_controller_deployment(
             "metadata": {"labels": {"app": "iris-controller"}},
             "spec": {
                 "serviceAccountName": "iris-controller",
-                # Pin the controller above every user band so a user pod can never
-                # preempt it off the shared control node (see IRIS_PRIORITY_CLASSES).
+                # Keep the controller at SYSTEM so lower-band pods cannot preempt
+                # it off the shared control node (see IRIS_PRIORITY_CLASSES).
                 "priorityClassName": IRIS_PRIORITY_CLASS_SYSTEM,
                 "nodeSelector": node_selector,
                 # Tolerate the NVIDIA GPU taint (so the controller can run on
@@ -306,8 +313,22 @@ def _build_controller_deployment(
     }
 
 
-def _build_node_agent_daemonset(*, namespace: str, image: str) -> dict:
+def _build_node_agent_daemonset(
+    *,
+    namespace: str,
+    image: str,
+    cache_dir: str,
+    cache_max_age: Duration | None = None,
+) -> dict:
     """Run the Iris physical-node collector once on every Kubernetes node."""
+    volume_mounts = [
+        {"name": "config", "mountPath": "/etc/iris", "readOnly": True},
+        {"name": "task-cache", "mountPath": cache_dir},
+    ]
+    volumes = [
+        {"name": "config", "configMap": {"name": "iris-cluster-config"}},
+        {"name": "task-cache", "hostPath": {"path": cache_dir, "type": "DirectoryOrCreate"}},
+    ]
     return {
         "apiVersion": "apps/v1",
         "kind": "DaemonSet",
@@ -319,7 +340,14 @@ def _build_node_agent_daemonset(*, namespace: str, image: str) -> dict:
                 "rollingUpdate": {"maxUnavailable": _NODE_AGENT_MAX_UNAVAILABLE},
             },
             "template": {
-                "metadata": {"labels": {"app": _NODE_AGENT_NAME}},
+                "metadata": {
+                    "labels": {"app": _NODE_AGENT_NAME},
+                    "annotations": {
+                        "iris.marin.community/cache-max-age-ms": (
+                            str(cache_max_age.to_ms()) if cache_max_age is not None else "disabled"
+                        )
+                    },
+                },
                 "spec": {
                     "serviceAccountName": "iris-controller",
                     "priorityClassName": IRIS_PRIORITY_CLASS_SYSTEM,
@@ -353,10 +381,10 @@ def _build_node_agent_daemonset(*, namespace: str, image: str) -> dict:
                                 "requests": {"cpu": "50m", "memory": "64Mi"},
                                 "limits": {"cpu": "1", "memory": "512Mi"},
                             },
-                            "volumeMounts": [{"name": "config", "mountPath": "/etc/iris", "readOnly": True}],
+                            "volumeMounts": volume_mounts,
                         }
                     ],
-                    "volumes": [{"name": "config", "configMap": {"name": "iris-cluster-config"}}],
+                    "volumes": volumes,
                 },
             },
         },
@@ -434,10 +462,6 @@ class K8sControllerProvider:
     def iris_labels(self) -> Labels:
         return self._iris_labels
 
-    @property
-    def s3_enabled(self) -> bool:
-        return self._s3_enabled
-
     # -- ControllerProvider protocol methods -----------------------------------
 
     def discover_controller(self, controller_config: ControllerVmConfig) -> str:
@@ -507,14 +531,16 @@ class K8sControllerProvider:
 
         self.ensure_kueue_queues(config)
         self.ensure_priority_classes()
-        if config.finelog.config or LOG_SERVER_ENDPOINT_NAME in config.endpoints:
-            self._kubectl.apply_json(
-                _build_node_agent_daemonset(namespace=self._namespace, image=config.controller.image)
+        cache_dir = config.kubernetes_provider.cache_dir or DEFAULT_TASK_CACHE_DIR
+        self._kubectl.apply_json(
+            _build_node_agent_daemonset(
+                namespace=self._namespace,
+                image=config.controller.image,
+                cache_dir=cache_dir,
+                cache_max_age=config.kubernetes_provider.cache_max_age,
             )
-            logger.info("DaemonSet %s applied", _NODE_AGENT_NAME)
-        else:
-            self._kubectl.delete(K8sResource.DAEMONSETS, _NODE_AGENT_NAME)
-            logger.info("Node telemetry is unconfigured; DaemonSet %s is absent", _NODE_AGENT_NAME)
+        )
+        logger.info("DaemonSet %s applied", _NODE_AGENT_NAME)
         if local_state_hostpath:
             logger.info("controller local state uses node-local hostPath %s (no PVC)", state_mount_path)
         else:
@@ -649,7 +675,6 @@ class K8sControllerProvider:
         self,
         config: IrisClusterConfig,
         dry_run: bool = False,
-        label_prefix: str | None = None,
     ) -> list[str]:
         target_names = ["controller"]
         if dry_run:
@@ -717,11 +742,12 @@ class K8sControllerProvider:
     def verify_prerequisites(self, config: IrisClusterConfig) -> None:
         """Assert IaC-provisioned prerequisites exist before starting the controller.
 
-        Presence-only (not exact spec): the Namespace, iris-controller ServiceAccount,
-        namespace-qualified ClusterRole/ClusterRoleBinding, one NodePool per non-skipped
+        Checks the Namespace, iris-controller ServiceAccount, namespace-qualified
+        ClusterRole/ClusterRoleBinding, one NodePool per non-skipped
         scale group, the Kueue ClusterQueue and its referenced ResourceFlavors, and
-        (best-effort) the IngressClass. All of these are provisioned by `infra/pulumi`'s
-        Pulumi program (spec.md §4) — this method creates nothing. Raises
+        (best-effort) the IngressClass. All of these are
+        provisioned by `infra/pulumi`'s Pulumi program (spec.md §4) — this method creates
+        nothing. Raises
         PrerequisitesNotProvisionedError enumerating every missing object if any are absent.
         """
         missing: list[str] = []
@@ -800,16 +826,16 @@ class K8sControllerProvider:
         logger.info("LocalQueue %s applied (clusterQueue=%s)", name, cluster_queue)
 
     def ensure_priority_classes(self) -> None:
-        """Create or update the iris-{system,production,interactive,batch} PriorityClass objects.
+        """Create or update the Iris Pod and Kueue Workload priority classes.
 
         PriorityClass is cluster-scoped. Iris owns these names; any cluster
         running Iris gets them so pods are stamped without manual admin setup.
 
         Priority values (see IRIS_PRIORITY_CLASSES):
-          iris-system     10000  — control plane (controller, finelog, Kueue); never preempted by user work
-          iris-production  1000  — preempts interactive/batch; never preempted
+          iris-system     10000  — control plane, Iris, Finelog, and hero work
+          iris-production  1000  — admin production work; below system
           iris-interactive   10  — normal user work
-          iris-batch          0  — opportunistic; below interactive, above CoreWeave NHC
+          iris-batch          0  — opportunistic; can preempt CoreWeave NHC
         """
         for name, value, preemption_policy in IRIS_PRIORITY_CLASSES:
             manifest = build_priority_class_manifest(name, value, preemption_policy)
@@ -821,9 +847,12 @@ class K8sControllerProvider:
                 logger.info("Replacing immutable PriorityClass %s", name)
                 self._kubectl.delete(K8sResource.PRIORITY_CLASSES, name)
             self._kubectl.apply_json(manifest)
+        for priority_class in IRIS_WORKLOAD_PRIORITY_CLASSES:
+            self._kubectl.apply_json(build_workload_priority_class(priority_class.name, priority_class.value))
         logger.info(
-            "PriorityClasses applied: %s",
-            ", ".join(n for n, _, _ in IRIS_PRIORITY_CLASSES),
+            "PriorityClasses applied: %s; WorkloadPriorityClasses applied: %s",
+            ", ".join(name for name, _, _ in IRIS_PRIORITY_CLASSES),
+            ", ".join(priority_class.name for priority_class in IRIS_WORKLOAD_PRIORITY_CLASSES),
         )
 
     # -- Storage Detection ----------------------------------------------------

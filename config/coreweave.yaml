@@ -3,11 +3,12 @@ data:
   scheme: s3
   # S3-compatible storage for the CoreWeave clusters. `store` selects the backend
   # (endpoint/addressing/credentials); CoreWeave AI Object Storage buckets also
-  # carry their `signing_region`. Consumed by rigging temp-path routing and by
-  # infra/configure_buckets.py lifecycle rules.
+  # carry their `signing_region`. Consumed by rigging temp-path routing and the
+  # shared infra/buckets Pulumi project.
   region_buckets:
     na:          { bucket: marin-na,          store: r2 }
     us-east-02a: { bucket: marin-us-east-02a, store: coreweave, signing_region: US-EAST-02A }
+    us-east-08a: { bucket: hero-checkpoints, store: coreweave, signing_region: US-EAST-08A }
     us-west-04a: { bucket: marin-us-west-04a, store: coreweave, signing_region: US-WEST-04A }
   # How to reach each S3-compatible backend. `endpoint` is the account-level endpoint
   # reachable from outside the cluster; `*_env` name the environment variables that
@@ -24,5 +25,4 @@ data:
       endpoint_env: R2_S3_ENDPOINT
       key_id_env: R2_KEY_ID
       key_secret_env: R2_KEY_SECRET
-  temp: { path: tmp, ttl_days: [1, 2, 3, 7] }
   root: s3://marin-na/marin

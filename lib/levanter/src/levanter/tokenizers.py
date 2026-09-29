@@ -26,6 +26,7 @@ import tempfile
 import threading
 import time
 from enum import StrEnum
+from fnmatch import fnmatchcase
 from typing import Any, NamedTuple, Protocol, runtime_checkable
 
 import jinja2
@@ -34,7 +35,9 @@ import jinja2.sandbox
 from huggingface_hub import __version__ as _hf_hub_version
 from huggingface_hub import hf_hub_download, snapshot_download
 from huggingface_hub.utils import EntryNotFoundError, RepositoryNotFoundError
-from rigging.filesystem import fetch_file_atomic, filesystem, open_url
+from rigging.filesystem.atomic import fetch_file_atomic
+from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.factory import filesystem, open_url
 from tokenizers import Encoding as HfEncoding
 from tokenizers import Tokenizer as HfBaseTokenizer
 
@@ -718,7 +721,12 @@ class HfMarinTokenizer:
     def as_hf_tokenizer(self) -> Any:
         from transformers import AutoTokenizer  # noqa: PLC0415  # guarded: avoid eager torch
 
-        tokenizer = AutoTokenizer.from_pretrained(self._name_or_path, trust_remote_code=True)
+        if "://" in self._name_or_path:
+            # transformers only resolves Hub ids and local directories, so load the staged copy.
+            tokenizer = AutoTokenizer.from_pretrained(_stage_tokenizer(self._name_or_path), trust_remote_code=True)
+        else:
+            repo_id, _, revision = self._name_or_path.partition("@")
+            tokenizer = AutoTokenizer.from_pretrained(repo_id, revision=revision or None, trust_remote_code=True)
         if self._chat_template is not None and getattr(tokenizer, "chat_template", None) != self._chat_template:
             tokenizer.chat_template = self._chat_template
         return tokenizer
@@ -854,6 +862,15 @@ def _stage_from_mirror(name_or_path: str, local_dir: str) -> bool:
     return copied
 
 
+def _stage_from_url(name_or_path: str, local_dir: str) -> None:
+    """Stage tokenizer files from a checkpoint directory on object storage."""
+    fs, path = filesystem_for(name_or_path)
+    for entry in fs.ls(path, detail=False):
+        filename = os.path.basename(entry.rstrip("/"))
+        if any(fnmatchcase(filename, pattern) for pattern in _TOKENIZER_ALLOW_PATTERNS):
+            fs.get(entry, os.path.join(local_dir, filename))
+
+
 def _stage_from_hf(name_or_path: str, local_dir: str) -> None:
     """Download tokenizer files from HF Hub and populate the mirror.
 
@@ -865,7 +882,8 @@ def _stage_from_hf(name_or_path: str, local_dir: str) -> None:
     Raises ``RepositoryNotFoundError`` / ``OSError`` if the repo or
     network is unreachable (matches pre-mirror behaviour).
     """
-    snapshot_dir = snapshot_download(name_or_path, allow_patterns=_TOKENIZER_ALLOW_PATTERNS)
+    repo_id, _, revision = name_or_path.partition("@")
+    snapshot_dir = snapshot_download(repo_id, revision=revision or None, allow_patterns=_TOKENIZER_ALLOW_PATTERNS)
 
     mirror_base = f"mirror://{_MIRROR_TOKENIZER_PREFIX}/{name_or_path}/hf-hub-{_hf_hub_version}"
 
@@ -924,6 +942,12 @@ def _stage_tokenizer(name_or_path: str) -> str:
         # 1. Local cache hit (also the double-checked fast path for threads that
         #    waited on the lock while another thread staged this same ref).
         if _try_load_tokenizer_from_dir(local_dir):
+            return local_dir
+
+        if "://" in name_or_path:
+            _stage_from_url(name_or_path, local_dir)
+            if not _try_load_tokenizer_from_dir(local_dir):
+                raise FileNotFoundError(f"No usable tokenizer in {name_or_path}")
             return local_dir
 
         # 2. Mirror: copy whatever files are present, then try loading.

@@ -43,8 +43,8 @@ FEDERATION_RPCS: frozenset[str] = frozenset({"LaunchJob", "TerminateJob", "Feder
 # On-demand debug proxies a federation-peer identity may call, but only after the
 # handler confirms the target task belongs to a job that peer federated here (its
 # RECEIVED handle) — a peer must not profile/exec/inspect the receiving cluster's own
-# tasks or its controller. authorize_method admits these; the controller service's
-# _authorize_federated_debug_target enforces the per-target ownership.
+# tasks or its controller. authorize_method admits these; the attempt operation
+# validates ownership against the peer's received handoff.
 FEDERATION_SCOPED_RPCS: frozenset[str] = frozenset({"ProfileTask", "ExecInContainer", "GetProcessStatus"})
 
 

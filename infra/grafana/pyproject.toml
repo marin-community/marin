@@ -11,17 +11,19 @@ requires-python = ">=3.12,<3.14"
 # development releases; the automated compatibility PR locks the exact release. The
 # bridge needs only the pure-python client (LogClient.query -> pa.Table), not
 # the native server extension.
+# 0.2.53.dev0 for the list_namespaces API.
 dependencies = [
-    "marin-finelog >= 0.2.0",
+    "marin-finelog >= 0.2.53.dev0",
     "google-cloud-compute >= 1.19",
     "starlette >= 0.40",
+    "duckdb >= 1.4.3, < 2",
     "uvicorn >= 0.32",
     # RS256-signed JWTs for GitHub App auth (github_app.py). The [crypto] extra
     # pulls cryptography, already resolved transitively via google-auth.
     "pyjwt[crypto] >= 2.8",
     # marin-finelog pulls s3fs -> aiobotocore, which breaks at import under the
     # httpx 1.0 prereleases (no httpx.TimeoutException). Pin to the 0.28 stable
-    # line, matching infra/probes.
+    # line.
     "httpx >= 0.28.1, < 1",
     # Startup role migration for the production PostgreSQL-backed Grafana database.
     "psycopg[binary] >= 3.2",

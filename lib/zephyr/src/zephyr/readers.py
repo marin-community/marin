@@ -12,7 +12,7 @@ import logging
 import zipfile
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from typing import Literal
 
 import fsspec
@@ -22,15 +22,13 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import vortex
 import zstandard as zstd
-from rigging.filesystem import open_url, url_to_fs
+from rigging.filesystem.factory import open_url, url_to_fs
 
 from zephyr import counters
-from zephyr.expr import Expr, referenced_columns, to_pyarrow_expr
+from zephyr.expr import referenced_columns, to_pyarrow_expr
+from zephyr.input_file import DEFAULT_FILE_PATH_COLUMN, InputFileSpec
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_FILE_PATH_COLUMN = "__file_path"
-
 
 # ---------------------------------------------------------------------------
 # Shared Parquet row-group reader
@@ -67,7 +65,9 @@ def iter_parquet_row_groups(
         return
 
     pf = source
-    has_row_range = row_start is not None and row_end is not None
+    has_row_range = row_start is not None or row_end is not None
+    start = 0 if row_start is None else row_start
+    end = pf.metadata.num_rows if row_end is None else row_end
 
     cumulative_rows = 0
 
@@ -79,20 +79,18 @@ def iter_parquet_row_groups(
         cumulative_rows = rg_end
 
         if has_row_range:
-            assert row_start is not None and row_end is not None
-            if rg_end <= row_start:
+            if rg_end <= start:
                 continue
-            if rg_start >= row_end:
+            if rg_start >= end:
                 return
 
         table = pf.read_row_group(i, columns=columns)
 
         if has_row_range:
-            assert row_start is not None and row_end is not None
-            is_interior = rg_start >= row_start and rg_end <= row_end
+            is_interior = rg_start >= start and rg_end <= end
             if not is_interior:
-                local_start = max(0, row_start - rg_start)
-                local_end = min(rg_num_rows, row_end - rg_start)
+                local_start = max(0, start - rg_start)
+                local_end = min(rg_num_rows, end - rg_start)
                 table = table.slice(local_start, local_end - local_start)
 
         if len(table) > 0:
@@ -103,30 +101,6 @@ def iter_parquet_row_groups(
 _READ_BLOCK_SIZE = 16_000_000
 _READ_CACHE_TYPE = "background"
 _READ_MAX_BLOCKS = 2
-
-
-@dataclass
-class InputFileSpec:
-    """Specification for reading a file or portion of a file.
-
-    Pure read-spec: everything here is caller-supplied. Discovered metadata
-    (e.g. file size from a bulk listing) lives on ``FileEntry`` instead.
-
-    Attributes:
-        path: Path to the file
-        format: File format ("parquet", "jsonl", or "auto" to detect)
-        columns: List of columns to read
-        row_start: Optional start row for chunked reading
-        row_end: Optional end row for chunked reading
-        filter_expr: Optional filter expression to apply
-    """
-
-    path: str
-    format: Literal["parquet", "jsonl", "vortex", "auto"] = "auto"
-    columns: list[str] | None = None
-    row_start: int | None = None
-    row_end: int | None = None
-    filter_expr: Expr | None = None
 
 
 def _as_spec(source: str | InputFileSpec) -> InputFileSpec:
@@ -347,7 +321,7 @@ def load_parquet_batch(source: str | InputFileSpec) -> Iterator[pa.RecordBatch]:
 def load_parquet(source: str | InputFileSpec) -> Iterator[dict]:
     """Load Parquet file and yield records as dicts.
 
-    When given an InputFileSpec with row_start/row_end, reads only the exact rows
+    When given an InputFileSpec with row_start or row_end, reads only the exact rows
     in that range. Row groups are read efficiently (only overlapping groups are loaded),
     then rows are filtered to the precise range. When filter_expr is provided, the filter
     is pushed down to PyArrow for efficient filtering at read time.
@@ -408,11 +382,14 @@ def load_vortex(source: str | InputFileSpec) -> Iterator[dict]:
     dataset = vf.to_dataset()
 
     # Empty vortex files have no schema, so column projection would fail
-    if dataset.count_rows() == 0:
+    num_rows = dataset.count_rows()
+    if num_rows == 0:
         return
 
-    if spec.row_start is not None and spec.row_end is not None:
-        indices = pa.array(np.arange(spec.row_start, spec.row_end, dtype=np.uint64))
+    if spec.row_start is not None or spec.row_end is not None:
+        start = 0 if spec.row_start is None else spec.row_start
+        end = num_rows if spec.row_end is None else min(spec.row_end, num_rows)
+        indices = pa.array(np.arange(start, end, dtype=np.uint64))
         table = dataset.take(indices, columns=columns, filter=pa_filter)
     else:
         table = dataset.to_table(columns=columns, filter=pa_filter)
@@ -439,15 +416,41 @@ SUPPORTED_EXTENSIONS = tuple(
 )
 
 
+def _resolve_read_format(spec: InputFileSpec) -> Literal["parquet", "jsonl", "vortex"]:
+    """Return the reader format for *spec*.
+
+    An explicit ``format`` wins. ``Dataset.load_parquet`` and its siblings record
+    the caller's choice on the spec, so a source whose name lacks the matching
+    extension — Spark-style ``part-00000``, a ``.bin`` shard — still reads as the
+    requested format instead of being rejected or handed to the wrong reader.
+    ``auto`` infers the format from the path extension.
+
+    Raises:
+        ValueError: If ``format`` is ``auto`` and the extension is unsupported.
+    """
+    if spec.format != "auto":
+        return spec.format
+    if spec.path.endswith(".parquet"):
+        return "parquet"
+    if spec.path.endswith(".vortex"):
+        return "vortex"
+    if spec.path.endswith(SUPPORTED_EXTENSIONS):
+        return "jsonl"
+    raise ValueError(f"Unsupported extension: {spec.path}.")
+
+
 def load_file(
     source: str | InputFileSpec,
     include_file_paths: bool = False,
     file_path_column: str = DEFAULT_FILE_PATH_COLUMN,
 ) -> Iterator[dict]:
-    """Load records from file, auto-detecting JSONL, Parquet, or Vortex format.
+    """Load records from file as JSONL, Parquet, or Vortex.
+
+    The spec's ``format`` selects the reader; ``auto`` (the default for a bare
+    path) infers it from the file extension.
 
     Args:
-        source: Path to file or InputFileSpec containing the path, columns,
+        source: Path to file or InputFileSpec containing the path, format, columns,
             row range, and filter expression.
         include_file_paths: If True, inject the source file path into each record
             under file_path_column.
@@ -457,7 +460,7 @@ def load_file(
         Parsed records as dictionaries
 
     Raises:
-        ValueError: If file extension is not supported
+        ValueError: If the format is ``auto`` and the file extension is not supported.
         RuntimeError: If file_path_column already exists in a record.
 
     Example:
@@ -472,15 +475,14 @@ def load_file(
     spec = _as_spec(source)
     logger.info("Loading file: %s", spec.path)
 
-    if not spec.path.endswith(SUPPORTED_EXTENSIONS):
-        raise ValueError(f"Unsupported extension: {spec.path}.")
+    read_format = _resolve_read_format(spec)
 
     if include_file_paths and spec.columns is not None:
         spec = _strip_injected_file_path_column(spec, file_path_column)
 
-    if spec.path.endswith(".parquet"):
+    if read_format == "parquet":
         records = load_parquet(spec)
-    elif spec.path.endswith(".vortex"):
+    elif read_format == "vortex":
         records = load_vortex(spec)
     else:
         records = load_jsonl(spec)
@@ -505,10 +507,11 @@ def load_file_batch(
 
     Only Parquet files are supported. Raises ``RuntimeError`` for any other
     file type so callers get a clear error rather than silent dict conversion.
+    A spec with ``format="parquet"`` is honored whatever the extension.
 
     Args:
-        source: Path to Parquet file or InputFileSpec containing the path, columns,
-            row range, and filter expression.
+        source: Path to Parquet file or InputFileSpec containing the path, format,
+            columns, row range, and filter expression.
         include_file_paths: If True, append a string column named file_path_column
             containing the source file path to each batch.
         file_path_column: Name of the column to add when include_file_paths is True.
@@ -521,7 +524,10 @@ def load_file_batch(
             already exists in the batch schema.
     """
     spec = _as_spec(source)
-    if not spec.path.endswith(".parquet"):
+    # Inlined rather than routed through _resolve_read_format so an unsupported
+    # extension reports "not Parquet" instead of that helper's ValueError.
+    is_parquet = spec.format == "parquet" or (spec.format == "auto" and spec.path.endswith(".parquet"))
+    if not is_parquet:
         raise RuntimeError(f"load_file_batch only supports Parquet files, got: {spec.path}")
     if include_file_paths and spec.columns is not None:
         spec = _strip_injected_file_path_column(spec, file_path_column)

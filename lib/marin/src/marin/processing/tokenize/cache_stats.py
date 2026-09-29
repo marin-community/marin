@@ -22,7 +22,8 @@ from dataclasses import dataclass
 from pathlib import PurePath
 from typing import Literal
 
-from rigging.filesystem import StoragePath, url_to_fs
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import StoragePath
 
 SplitName = Literal["train", "validation"]
 _STATS_FILE_NAME = ".stats.json"

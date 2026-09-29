@@ -17,7 +17,7 @@ import jmp
 import numpy as np
 from haliax.partitioning import ResourceMapping, named_jit
 
-from rigging.filesystem import StoragePath, prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from levanter.data.dataset import AsyncDataset
 from levanter.data.loader import DataLoader

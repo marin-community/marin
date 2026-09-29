@@ -16,9 +16,9 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from enum import StrEnum, auto
 from itertools import groupby, islice
-from typing import Any, Protocol
+from typing import Any
 
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 
 from zephyr import counters
@@ -44,28 +44,15 @@ from zephyr.dataset import (
     resolve_glob,
 )
 from zephyr.expr import Expr, referenced_columns
-from zephyr.readers import InputFileSpec, compute_parquet_splits, load_file, load_file_batch
+from zephyr.input_file import InputFileSpec
+from zephyr.readers import compute_parquet_splits, load_file, load_file_batch
 from zephyr.shuffle import ScatterReader
 from zephyr.writers import write_binary_file, write_jsonl_file, write_parquet_file, write_vortex_file
 
 logger = logging.getLogger(__name__)
 
-
-# ---------------------------------------------------------------------------
-# Shard protocol
-# ---------------------------------------------------------------------------
-
-
-class Shard(Protocol):
-    """Protocol for a shard of data assigned to a single worker.
-
-    Implementations:
-    - ListShard: backed by iterable references (source data, non-scatter)
-    - ScatterReader: backed by scatter zstd-chunk files with byte-range sidecar
-    """
-
-    def __iter__(self) -> Iterator: ...
-    def get_iterators(self) -> Iterator[Iterator]: ...
+SOURCE_STAGE_TYPE = "SOURCE"
+ROOT_PLAN_PREFIX = "main"
 
 
 @dataclass
@@ -343,6 +330,153 @@ class PhysicalPlan:
         if not self.source_items:
             return 0
         return len({item.shard_idx for item in self.source_items})
+
+
+@dataclass
+class ExecutionStage:
+    stage_name: str
+    label: str
+    stage_type: str
+    has_reduce: bool
+    dependencies: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class PlanNode:
+    """Serializable physical-plan node without source values or callables."""
+
+    node_id: str
+    label: str
+    stage_type: str
+    output_shards: int
+    stage_index: int
+    parent_node_id: str
+    auxiliary: bool
+    operation_types: tuple[str, ...] = ()
+    stage_name: str = ""
+    has_reduce: bool = False
+    dependencies: tuple[str, ...] = ()
+
+
+def execution_stage_name(stage: PhysicalStage, index: int) -> str:
+    return f"stage{index}-{stage.stage_name(max_length=40)}"
+
+
+def join_stage_name(parent_index: int, operation_index: int, stage_index: int) -> str:
+    return f"join-right-{parent_index}-{operation_index}-stage{stage_index}"
+
+
+def _join_stage_name(parent_index: int, operation_index: int, _stage: PhysicalStage, stage_index: int) -> str:
+    return join_stage_name(parent_index, operation_index, stage_index)
+
+
+def _nested_join_stage_name(parent_name: str, operation_index: int, _stage: PhysicalStage, stage_index: int) -> str:
+    return f"{parent_name}-join-right-{operation_index}-stage{stage_index}"
+
+
+def source_node_id(prefix: str) -> str:
+    return f"{prefix}/source"
+
+
+def stage_node_id(prefix: str, stage_index: int) -> str:
+    return f"{prefix}/stage/{stage_index}"
+
+
+def join_right_prefix(parent_node_id: str, operation_index: int) -> str:
+    return f"{parent_node_id}/join/{operation_index}/right"
+
+
+def plan_nodes(plan: PhysicalPlan) -> tuple[PlanNode, ...]:
+    """Describe a physical plan without retaining source values or callables.
+
+    Arrows describe data flow, not concurrent scheduling. Join right-hand stages
+    feed the join separately from the preceding left-hand stage.
+    """
+    nodes: list[PlanNode] = []
+
+    def add_plan(
+        nested_plan: PhysicalPlan,
+        *,
+        prefix: str,
+        parent_node_id: str = "",
+        auxiliary: bool = False,
+        stage_names: Callable[[PhysicalStage, int], str] = execution_stage_name,
+    ) -> list[str]:
+        nodes.append(
+            PlanNode(
+                node_id=source_node_id(prefix),
+                label=f"Source ({nested_plan.num_shards} shards)",
+                stage_type=SOURCE_STAGE_TYPE,
+                output_shards=nested_plan.num_shards,
+                stage_index=-1,
+                parent_node_id=parent_node_id,
+                auxiliary=auxiliary,
+            )
+        )
+        current_shards = nested_plan.num_shards
+        previous: list[str] = []
+        for stage_index, stage in enumerate(nested_plan.stages):
+            node_id = stage_node_id(prefix, stage_index)
+            stage_name = stage_names(stage, stage_index)
+            dependencies = list(previous)
+            right_nodes: list[tuple[PhysicalPlan, str, int]] = []
+            for operation_index, operation in enumerate(stage.operations):
+                if not isinstance(operation, Join) or operation.right_plan is None:
+                    continue
+                right_prefix = join_right_prefix(node_id, operation_index)
+                right_nodes.append((operation.right_plan, right_prefix, operation_index))
+
+            output_shards = stage.output_shards or current_shards
+            for right_plan, right_prefix, operation_index in right_nodes:
+                if auxiliary:
+                    right_stage_names = functools.partial(_nested_join_stage_name, stage_name, operation_index)
+                else:
+                    right_stage_names = functools.partial(_join_stage_name, stage_index, operation_index)
+                dependencies.extend(
+                    add_plan(
+                        right_plan,
+                        prefix=right_prefix,
+                        parent_node_id=node_id,
+                        auxiliary=True,
+                        stage_names=right_stage_names,
+                    )
+                )
+            nodes.append(
+                PlanNode(
+                    node_id=node_id,
+                    label=stage.stage_name(),
+                    stage_type=stage.stage_type.value.upper(),
+                    operation_types=tuple(type(operation).__name__ for operation in stage.operations),
+                    output_shards=output_shards,
+                    stage_index=stage_index,
+                    parent_node_id=parent_node_id,
+                    auxiliary=auxiliary,
+                    stage_name=stage_name,
+                    has_reduce=any(isinstance(operation, Reduce) for operation in stage.operations),
+                    dependencies=tuple(dependencies),
+                )
+            )
+            current_shards = output_shards
+            previous = [stage_name]
+        return previous
+
+    add_plan(plan, prefix=ROOT_PLAN_PREFIX)
+    return tuple(nodes)
+
+
+def execution_stages(plan: PhysicalPlan) -> list[ExecutionStage]:
+    """Return executable stage metadata in dependency order."""
+    return [
+        ExecutionStage(
+            stage_name=node.stage_name,
+            label=node.label,
+            stage_type=node.stage_type.lower(),
+            has_reduce=node.has_reduce,
+            dependencies=list(node.dependencies),
+        )
+        for node in plan_nodes(plan)
+        if node.stage_name
+    ]
 
 
 @dataclass
@@ -805,15 +939,15 @@ def run_stage(
             return
 
         elif isinstance(op, Reduce):
-            # Build ScatterReader directly from per-mapper sidecars, then
-            # merge sorted chunks and reduce per key.
-            shard = ctx.shard
-            if not isinstance(shard, ScatterReader):
-                # Shard contains every mapper's scatter-data path — reducer
-                # reads all sidecars in parallel and filters for its target.
-                scatter_paths = list(shard)
-                shard = ScatterReader.from_sidecars(scatter_paths, ctx.shard_idx)
-            stream = _reduce_gen(shard, op.key_fn, op.reducer_fn, external_sort_dir)
+            # The shard holds every mapper's scatter-data path. The reducer
+            # reads all per-mapper sidecars in parallel, filters for its own
+            # target shard, then merges the sorted chunks and reduces per key.
+            reader = ScatterReader.from_sidecars(list(ctx.shard), ctx.shard_idx)
+            stage_counters = counters.current_stage()
+            stage_counters.set_counter(counters.SHUFFLE_INPUT_ROWS, reader.shard_payload_rows)
+            stage_counters.set_counter(counters.SHUFFLE_PAYLOAD_BYTES, reader.shard_payload_bytes)
+            stage_counters.set_counter(counters.SHUFFLE_NUM_SOURCES, reader.contributing_sidecars)
+            stream = _reduce_gen(reader, op.key_fn, op.reducer_fn, external_sort_dir)
             op_index += 1
 
         elif isinstance(op, Fold):

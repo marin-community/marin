@@ -15,8 +15,9 @@ its pipeline on its own dedicated Zephyr coordinator + worker fleet (vanilla
 the StepRunner walks at once.
 
 Most stages keep one step per source with its own output dir
-(`datakit/<stage>/<source>_<hash>/`). Global exact dedup, fuzzy dedup, the
-decontamination DF filter, and the store combine sources. Steps write their
+(`datakit/<stage>/<source>_<hash>/`). Global exact dedup, fuzzy candidate
+search, full-text verification, the decontamination DF filter, and the store
+combine sources. Steps write their
 main output under `outputs/main/` plus, where it makes sense, a small site/sample side output
 (`outputs/samples/`, `outputs/flagged_sample/`, …) that the per-stage HTML
 reports ([`reports/`](reports/)) read.
@@ -32,7 +33,7 @@ paths load without data recomputation. The framework lineage fields
 
 Datakit attribute Parquet files use a flat schema. The top-level `id` column
 is the join key. Each attribute is another top-level column, such as
-`contaminated`, `dup_doc`, or `is_cluster_canonical`. Attribute files do not
+`contaminated` or `dup_doc`. Attribute files do not
 use a nested `attributes` struct.
 
 Global exact deduplication is one shared step. It selects one canonical record
@@ -42,13 +43,42 @@ records. Only source shards with duplicates get an attribute file; a missing
 file means that the source shard has no exact duplicates. The step does not copy
 normalized text.
 
-The final store uses fuzzy canonical markers when they exist. It applies exact
-duplicate markers only to records without fuzzy markers, which covers records
-that MinHash skipped without conflicting with fuzzy canonical selection.
+Fuzzy dedup first writes every member of each non-singleton candidate cluster.
+The next three steps follow the `v11-c075-restored` run from
+[PR #8405](https://github.com/marin-community/marin/pull/8405):
 
-Global exact and fuzzy dedup outputs write `.source_manifest.json` at the output
-root. The file maps each `source_NNN` tag to its source key and its relative
-`outputs/source_NNN` attribute directory.
+1. `large_fuzzy_clusters` samples every 256th candidate row within each shard.
+   It estimates component sizes and records components with at least 100,000 members.
+2. `fuzzy_cluster_text` joins candidates to normalized text. Components estimated
+   above 100,000 members use MinHash over 5-word shingles, then an ID-hash split
+   into 16 subdivisions. Each document retains at most 64 Mi characters.
+   The 8192 reduce tasks write up to 8 groups each, sorted by cluster key and ID.
+3. `verify_fuzzy_clusters` processes longer documents first. It removes a member
+   when a retained representative contains at least 75% of the member's distinct
+   word 3-grams. Groups of at most 256 members use an exact scan. Larger groups
+   use 32 probes, a posting threshold of 512, and at most 32 candidates.
+   The output records the representative, containment, Jaccard similarity,
+   distinct novel words, and comparison count.
+
+Verification retains at most 8 Mi characters per document and uses a 256 Mi-character
+cluster buffer. These limits, the split policy, and the indexed search can change
+removal decisions. Equal-length processing ties follow input order. Indexed
+candidate ties follow NumPy's selection order, as in the reference run.
+
+`FuzzyClusterConfig` exposes the content parameters and task resources. All content
+parameters enter the StepSpec identities. The source inputs and candidate plan
+are explicit dependencies. The CLI wrappers call the same library functions.
+
+The final store removes exact and verified fuzzy duplicates. Its default
+`StoreConfig.fuzzy_exempt_sources` preserves fuzzy matches for the 16 registry
+sources listed in #8405, including DNA and selected synthetic corpora. Exact
+deduplication and decontamination still apply to those sources. The exemption
+list is recorded in the store artifact and included in its identity.
+
+Global exact, fuzzy candidate, and fuzzy verification outputs write
+`.source_manifest.json` at the output root. The file maps each `source_NNN`
+tag to its source key and its relative `outputs/source_NNN` attribute
+directory.
 
 A source-set change gives a new global exact-dedup output and a new store
 identity. It does not change the identity of tokenization, embedding, quality,
@@ -85,7 +115,10 @@ flowchart TD
     BLOOM["eval bloom (shared)<br/>datakit/bloom/_combined_fixed"]
     DF["eval n-gram DF (cross-source)<br/>datakit/decon_drop/_combined"]
     EXACT["global exact dedup by record ID<br/>datakit/global_exact_dedup"]
-    DEDUP["fuzzy dedup (cross-source)<br/>datakit/dedup"]
+    DEDUP["fuzzy candidate clusters (cross-source)<br/>datakit/dedup"]
+    PLAN["sample component sizes<br/>datakit/large_fuzzy_clusters"]
+    TEXT["group candidate text<br/>datakit/fuzzy_cluster_text"]
+    VERIFY["cluster containment verification<br/>datakit/verify_fuzzy_clusters"]
     STORE["store: shuffle attribute join, apply filters,<br/>group by (cluster_&lt;view&gt;, quality_bucket, subshard)<br/>datakit/store → cluster=C/quality=Q Levanter caches"]
 
     SRC --> EXACT
@@ -101,12 +134,16 @@ flowchart TD
     EMB --> SAMP --> KM --> ASG
     EMB --> ASG
     MH --> DEDUP
+    DEDUP --> PLAN --> TEXT
+    SRC --> TEXT
+    DEDUP --> TEXT
+    TEXT --> VERIFY
     TOK --> STORE
     ASG --> STORE
     QUAL --> STORE
     DECON --> STORE
     EXACT --> STORE
-    DEDUP --> STORE
+    VERIFY --> STORE
 
     subgraph reports["stage reports — one HTML page each, run when the stage finishes (dashed = reads counters + site/sample outputs)"]
         RN["datakit/report/normalize"]
@@ -124,15 +161,77 @@ flowchart TD
     ASG -.-> RD
     DECON -.-> RC
     DEDUP -.-> RU
+    VERIFY -.-> RU
     STORE -.-> RS
 ```
 
 ## Testbed samples
 
-Pre-built testbed samples live under `s3://marin-us-east-02a/marin/datakit/`
-(CoreWeave `us-east-02a`). Each is a tree of already-normalized sources named
-`sample_<tokens>_<hash>`. Pass the full S3 root as `--sample-prefix` (it is used
-verbatim — the bucket prefix is not prepended):
+Each testbed sample is a tree of already-normalized sources named
+`sample_<tokens>_<hash>`. Pass its full root as `--sample-prefix`; the bucket
+prefix is not prepended.
+
+`zephyr_benchmark.py` defaults to the Europe sample. The us-central1 copy is
+also available for benchmarks that run in us-central1:
+
+| `--sample-prefix` | Approx. size | Region |
+| --- | --- | --- |
+| `gs://marin-eu-west4/datakit/sample_100b_8ae7a94f` | ~100B tokens | GCP `europe-west4` (default) |
+| `gs://marin-us-central1/datakit/sample_100b_8ae7a94f` | ~100B tokens | GCP `us-central1` |
+
+### Create a regional sample
+
+`experiments.datakit.materialize_zephyr_benchmark_sample` creates a benchmark
+sample in the region where it will run. It either copies an existing normalized
+sample or rebuilds it from the source Hugging Face datasets. Neither mode is
+part of the A/B benchmark workflow.
+
+Copying preserves the normalized Parquet payloads and writes destination-local
+`NormalizedData` artifacts. Run the job in the destination region, keep
+concurrency bounded, and confirm transfer charges before a cross-region copy.
+Use a 24 GiB memory request with `--enable-extra-resources`. For a GCS-to-GCS
+copy, use GCP credentials that can read the source bucket. Do not use Storage
+Transfer Service.
+
+```bash
+uv run iris --cluster=marin job run --no-wait \
+  --region europe-west4 --memory=24G --disk=5G --cpu=4 --extra=cpu --enable-extra-resources \
+  --priority batch \
+  -- python -m experiments.datakit.materialize_zephyr_benchmark_sample \
+    --mode copy \
+    --source-prefix gs://marin-us-central1/datakit/sample_100b_8ae7a94f \
+    --destination-prefix gs://marin-eu-west4/datakit/sample_100b_8ae7a94f \
+    --max-concurrent 4
+```
+
+To copy from the legacy CoreWeave S3 sample instead, replace `--source-prefix`
+with `s3://marin-us-east-02a/marin/datakit/sample_100b_8ae7a94f` and add
+`-e CW_KEY_ID "$CW_KEY_ID" -e CW_KEY_SECRET "$CW_KEY_SECRET"` before `--`.
+
+Regeneration reads the source names from `--source-prefix`, then runs the source
+registry's Hugging Face download and normalization steps before sampling 100B
+tokens into the destination. It reads no source Parquet payloads. `--data-prefix`
+is the region-local root for raw and normalized intermediate artifacts. The
+source prefix must be readable for its artifact metadata; pass CoreWeave
+credentials when it is the legacy S3 sample. Regeneration can produce different
+bytes as source revisions or normalization code change.
+
+```bash
+uv run iris --cluster=marin job run --no-wait \
+  --region europe-west4 --memory=24G --disk=5G --cpu=4 --extra=cpu --enable-extra-resources \
+  --priority batch \
+  -e CW_KEY_ID "$CW_KEY_ID" -e CW_KEY_SECRET "$CW_KEY_SECRET" \
+  -- python -m experiments.datakit.materialize_zephyr_benchmark_sample \
+    --mode regenerate \
+    --source-prefix s3://marin-us-east-02a/marin/datakit/sample_100b_8ae7a94f \
+    --data-prefix gs://marin-eu-west4 \
+    --destination-prefix gs://marin-eu-west4/datakit/sample_100b_8ae7a94f \
+    --target-total-tokens-b 100 \
+    --max-concurrent 4
+```
+
+The original samples remain available under
+`s3://marin-us-east-02a/marin/datakit/` in CoreWeave `us-east-02a`:
 
 | `--sample-prefix` | Approx. size |
 | --- | --- |
@@ -145,7 +244,7 @@ verbatim — the bucket prefix is not prepended):
 List them with:
 
 ```bash
-aws s3 ls s3://marin-us-east-02a/marin/datakit/ | grep sample
+uv run fsutil ls s3://marin-us-east-02a/marin/datakit/
 ```
 
 ## Layout
@@ -153,6 +252,8 @@ aws s3 ls s3://marin-us-east-02a/marin/datakit/ | grep sample
 | Path | What it is |
 | --- | --- |
 | `reference_pipeline.py` | The DAG builder + CLI (`--mode full\|sample`, `--pool-*`, `--sources`, `--quality-model`) |
+| `zephyr_benchmark.py` | GCP-default A/B benchmark over a pre-normalized sample |
+| `materialize_zephyr_benchmark_sample.py` | One-time benchmark sample copy or regeneration tool |
 | `global_exact_dedup.py` | Sparse co-partitioned exact-duplicate attributes by normalized record ID |
 | `cluster/quality/fast_transformer/` | Quality classifier: per-source scoring step + training/calibration |
 | `cluster/domain/v0/` | Domain clustering: centroid sampling/training + per-source assignment |

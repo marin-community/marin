@@ -76,30 +76,49 @@ def _json_lines(name: str, text: str) -> list[str]:
         return text.splitlines()
 
 
+def record_lines(records: list[dict]) -> list[str]:
+    """Render records as a table with a column per key, truncating oversized cells."""
+    headers = list({key: None for row in records for key in row})
+    rows = [[cell(row.get(header)) for header in headers] for row in records]
+    return table_lines(headers, rows)
+
+
 def _json_table_lines(data: object) -> list[str]:
     """Render parsed JSON as an aligned table when it is tabular, else as indented JSON."""
     if isinstance(data, list) and data and all(isinstance(row, dict) for row in data):
-        headers = list({key: None for row in data for key in row})
-        rows = [[_cell(row.get(header)) for header in headers] for row in data]
-        return table_lines(headers, rows)
+        return record_lines(data)
     if isinstance(data, dict):
-        return table_lines(["key", "value"], [[key, _cell(value)] for key, value in data.items()])
+        return table_lines(["key", "value"], [[key, cell(value)] for key, value in data.items()])
     return json.dumps(data, indent=2, default=str).splitlines()
 
 
-def _cell(value: object) -> str:
+def cell(value: object) -> str:
+    """Render one value as a single table cell, truncating oversized text."""
     text = value if isinstance(value, str) else json.dumps(value, default=str)
     return text if len(text) <= _MAX_CELL else text[: _MAX_CELL - 3] + "..."
 
 
-def table_lines(headers: list[str], rows: list[list[str]]) -> list[str]:
-    """Render rows as a plain-text table with a header separator."""
-    widths = [
+def column_widths(headers: list[str], rows: list[list[str]]) -> list[int]:
+    """The width of each column when *rows* render under *headers*."""
+    return [
         max(len(header), *(len(row[i]) for row in rows)) if rows else len(header) for i, header in enumerate(headers)
     ]
-    lines = [_row(headers, widths), _row(["-" * width for width in widths], widths)]
-    lines.extend(_row(row, widths) for row in rows)
-    return lines
+
+
+def header_lines(headers: list[str], widths: list[int]) -> list[str]:
+    """The header row and its separator, padded to *widths*."""
+    return [row_line(headers, widths), row_line(["-" * width for width in widths], widths)]
+
+
+def row_line(cells: list[str], widths: list[int]) -> str:
+    """One table row padded to *widths*; a longer cell overflows its column."""
+    return "  ".join(text.ljust(width) for text, width in zip(cells, widths, strict=True)).rstrip()
+
+
+def table_lines(headers: list[str], rows: list[list[str]]) -> list[str]:
+    """Render rows as a plain-text table with a header separator."""
+    widths = column_widths(headers, rows)
+    return [*header_lines(headers, widths), *(row_line(row, widths) for row in rows)]
 
 
 def aligned_lines(rows: list[list[str]]) -> list[str]:
@@ -107,8 +126,4 @@ def aligned_lines(rows: list[list[str]]) -> list[str]:
     if not rows:
         return []
     widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]))]
-    return [_row(row, widths) for row in rows]
-
-
-def _row(cells: list[str], widths: list[int]) -> str:
-    return "  ".join(cell.ljust(width) for cell, width in zip(cells, widths, strict=True)).rstrip()
+    return [row_line(row, widths) for row in rows]

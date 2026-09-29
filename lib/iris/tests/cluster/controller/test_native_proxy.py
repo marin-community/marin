@@ -3,7 +3,9 @@
 
 import json
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import cast
 from urllib.parse import unquote
 
@@ -17,7 +19,7 @@ from iris.cluster.controller.auth import (
     NativeProxyAuthMode,
     create_controller_auth,
 )
-from iris.cluster.controller.endpoint_service import ProxyEndpointMapping, ProxyRegistrySnapshot
+from iris.cluster.controller.endpoints import ProxyEndpointMapping, ProxyRegistrySnapshot
 from iris.cluster.controller.native_proxy import PROXY_DECISION_PATH, NativeProxy
 from iris.cluster.controller.native_proxy_metrics import NativeProxyTelemetry, flush_native_proxy_metrics
 from iris.managed_thread import ThreadContainer
@@ -169,6 +171,65 @@ def test_native_listener_preserves_public_routes_and_streams_to_endpoint(
         assert received_bodies == [payload]
     finally:
         threads.stop()
+
+
+def test_native_proxy_preserves_responses_across_sequential_and_concurrent_requests(make_controller) -> None:
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            body = json.dumps({"path": self.path}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, _format: str, *_args) -> None:
+            pass
+
+    upstream = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=upstream.serve_forever, daemon=True)
+    thread.start()
+    try:
+        address = f"http://127.0.0.1:{upstream.server_port}"
+        controller = make_controller(host="127.0.0.1", port=0, endpoints={_ENDPOINT_NAME: address})
+        controller.start()
+
+        route_prefix = f"/proxy/{_ENCODED_NAME}"
+        sequential_paths = [f"/sequential/{index}" for index in range(4)]
+        concurrent_paths = [f"/concurrent/{index}" for index in range(16)]
+        with httpx.Client(base_url=controller.url, trust_env=False) as client:
+            responses = [client.get(f"{route_prefix}{path}") for path in sequential_paths]
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                burst = list(executor.map(client.get, (f"{route_prefix}{path}" for path in concurrent_paths)))
+
+        assert [(response.status_code, response.json()) for response in responses] == [
+            (200, {"path": path}) for path in sequential_paths
+        ]
+        assert [(response.status_code, response.json()) for response in burst] == [
+            (200, {"path": path}) for path in concurrent_paths
+        ]
+    finally:
+        upstream.shutdown()
+        upstream.server_close()
+        thread.join(timeout=5)
+
+
+def test_controller_begin_shutdown_rejects_endpoint_discovery(make_controller) -> None:
+    controller = make_controller(host="127.0.0.1", port=0)
+    controller.start()
+
+    with httpx.Client(base_url=controller.url, trust_env=False) as client:
+        assert client.post("/iris.cluster.EndpointService/ListEndpoints", json={}).status_code == 200
+
+        controller.begin_shutdown()
+
+        endpoint_response = client.post("/iris.cluster.EndpointService/ListEndpoints", json={})
+        health_response = client.get("/health")
+
+    assert endpoint_response.status_code == 503
+    assert endpoint_response.json()["code"] == "unavailable"
+    assert health_response.status_code == 503
+    assert health_response.json()["status"] == "unavailable"
 
 
 def test_native_rpc_metrics_aggregate_controllers_in_one_process(make_controller, tmp_path, telemetry_transport) -> None:

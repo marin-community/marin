@@ -29,8 +29,9 @@ name: cw-us-east-02a
 # External finelog log server (in-cluster k8s Deployment, namespace `iris`).
 # Resolves to k8s://finelog-cw-use02a.iris; see lib/finelog/config/cw-us-east-02a.yaml.
 # Without this the controller falls back to an in-process MemStore (logs lost on
-# restart). Deploy the server first: `uv run finelog deploy up cw-us-east-02a`. Forwarding
-# to the hub lives in that server's own `forwarding:` block.
+# restart). Deploy the server first with the `infra/finelog` Pulumi stack; see
+# `infra/finelog/README.md`. Forwarding to the hub lives in that server's own
+# `forwarding:` block.
 finelog:
   config: cw-us-east-02a
 
@@ -38,6 +39,9 @@ finelog:
 # egress (scripts/install_cw_network.py); there is no off-cluster user surface.
 dashboard_url: https://iris-cw-us-east-02a.oa.dev
 federation_public_parent: https://iris.oa.dev
+endpoints:
+  /system/zephyr-history:
+    uri: https://marina.oa.dev/zephyr/
 
 # Infrastructure-as-code provisioning (see infra/pulumi). Opaque to Iris.
 provisioning:
@@ -57,6 +61,10 @@ provisioning:
     rbac: { service_account: iris-controller }
     grafana_observer_rbac:
       usernames: [cwtoken-uhBSRqWXRtyV7WWciRtYr-readonly-ops-token]
+    loom_session_rbac:
+      usernames:
+        - cwtoken-uhBSRqWXRtyV7WWciRtYr-loom-token
+        - cwtoken-umHabiNiEWJbDFZqyTwbP-ops-loom-token
 
 platform:
   label_prefix: cw-use02a
@@ -105,24 +113,20 @@ auth:
       -----END PUBLIC KEY-----
   allowed_submitters:
     - "*@openathena.ai"
-    - infra-probes@hai-gcp-models.iam.gserviceaccount.com
+    - contractor@hai-gcp-models.iam.gserviceaccount.com
     - ravwojdyla@rav-openathena.iam.gserviceaccount.com
 
 kubernetes_provider:
   namespace: iris
   host_network: true                # Required for NCCL/IB multi-host traffic
   cache_dir: /mnt/local/iris-cache  # NVMe; default /cache hits the 15GB ramdisk on bare-metal nodes
+  cache_max_age:
+    seconds: 604800
   controller_address: http://iris-controller-svc.iris.svc.cluster.local:10000
   kueue:
     # Pulumi owns the cluster-scoped ClusterQueue and cw-tas ResourceFlavor;
     # Iris reconciles the namespaced LocalQueue bound to it at controller start.
     cluster_queue: iris-cq
-  # CoreWeave's node health checker runs preemptible (priority -1) GPU
-  # verification pods on idle nodes. Kueue TAS counts them as fixed node usage
-  # and cannot preempt non-Kueue pods, so gangs queue behind every NHC sweep;
-  # Iris evicts them itself when it has gang work.
-  preempt_namespaces: ["cw-hpc-verification"]
-
 controller:
   image: ghcr.io/marin-community/iris-controller:latest
   checkpoint_interval_seconds: 600
@@ -160,13 +164,17 @@ defaults:
     runtime: kubernetes
     default_task_image: ghcr.io/marin-community/iris-task:latest
 
+user_budget_defaults:
+  budget_limit: 10688
+  max_band: interactive
+
 scale_groups:
   cpu-genoa:
     num_vms: 1
     resources:
       cpu: 192       # cd-gp-a192-genoa: 192 vCPUs (96 physical Genoa 9454 cores)
       ram: 1536GB    # 1.5 TB on-node RAM (8 GB per vCPU)
-      disk: 7.68TB   # 7.68 TB local NVMe
+      disk: 6.98TiB   # 7.68 TB local NVMe (2x 3.84 TB)
       device_type: cpu
       capacity_type: on-demand
     worker:
@@ -186,7 +194,7 @@ scale_groups:
     resources:
       cpu: 128
       ram: 2048GB
-      disk: 1TB
+      disk: 27.94TiB  # 30.72 TB local NVMe (8x 3.84 TB)
       device_type: gpu
       device_variant: H100
       device_count: 8
@@ -206,23 +214,29 @@ scale_groups:
 # 42752 is 4 h100-8x nodes (32 GPUs) at full node resources.
 user_budgets:
   - user_ids:
-      - benjaminfeuer
       - betsy
-      - dlwh
       - eczech
-      - held
       - larry
       - marin
-      - muchanem
-      - mwittmann
-      - power
-      - rav
-      - romain
-      - wmoss
       - zack
     budget_limit: 42752
     max_band: PRIORITY_BAND_INTERACTIVE
-  # 171008 is 16 h100-8x nodes: half of this cluster's 32-node fleet.
-  - user_ids: [benjaminfeuer]
-    budget_limit: 171008
+  - user_ids:
+      - ben.feuer@openathena.ai
+      - benjaminfeuer
+      - david.hall@openathena.ai
+      - dlwh
+      - mark.muchane@openathena.ai
+      - muchanem
+      - matt.wittmann@openathena.ai
+      - mwittmann
+      - rafal.wojdyla@openathena.ai
+      - rav
+      - romain.yon@openathena.ai
+      - romain
+      - russell.power@openathena.ai
+      - power
+      - will.held@openathena.ai
+      - held
+    budget_limit: 0
     max_band: PRIORITY_BAND_INTERACTIVE

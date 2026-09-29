@@ -11,15 +11,23 @@ from enum import Enum
 # the cluster config does not override priority_class_names. Override via
 # kubernetes_provider.priority_classes.
 #
-# iris-system is the control plane band (controller, finelog, Kueue manager). It
-# is NOT a user band and is never mapped from a PriorityBand — user jobs cannot
-# request it. It sits above every user band so a user pod can never preempt the
-# control plane off the shared control node; PreemptLowerPriority lets it evict a
-# lower-priority pod to stay scheduled when that node is full.
+# iris-system is used by the control plane and the SYSTEM PriorityBand. It sits
+# above every other band so Iris, Finelog, and hero workloads can reclaim
+# capacity when the cluster is full.
 IRIS_PRIORITY_CLASS_SYSTEM = "iris-system"
 IRIS_PRIORITY_CLASS_PRODUCTION = "iris-production"
 IRIS_PRIORITY_CLASS_INTERACTIVE = "iris-interactive"
 IRIS_PRIORITY_CLASS_BATCH = "iris-batch"
+
+# Stable pod metadata shared by the Kubernetes backend and node agent. Labels
+# support API selection; the annotation retains the full task id because label
+# values are limited to 63 characters.
+IRIS_MANAGED_LABEL = "iris.managed"
+IRIS_RUNTIME_LABEL = "iris.runtime"
+IRIS_KUBERNETES_RUNTIME = "iris-kubernetes"
+IRIS_TASK_ID_ANNOTATION = "iris.task_id"
+IRIS_ATTEMPT_ID_LABEL = "iris.attempt_id"
+IRIS_TASK_CONTAINER_NAME = "task"
 
 # Canonical (name, value, preemptionPolicy) for every PriorityClass Iris owns.
 # Single source of truth: the controller applies all of them at startup and the
@@ -30,7 +38,7 @@ IRIS_PRIORITY_CLASSES: tuple[tuple[str, int, str], ...] = (
     (IRIS_PRIORITY_CLASS_SYSTEM, 10000, "PreemptLowerPriority"),
     (IRIS_PRIORITY_CLASS_PRODUCTION, 1000, "PreemptLowerPriority"),
     (IRIS_PRIORITY_CLASS_INTERACTIVE, 10, "PreemptLowerPriority"),
-    (IRIS_PRIORITY_CLASS_BATCH, 0, "Never"),
+    (IRIS_PRIORITY_CLASS_BATCH, 0, "PreemptLowerPriority"),
 )
 
 
@@ -62,8 +70,8 @@ class KubectlError(RuntimeError):
 class K8sResource(Enum):
     """Kubernetes resource type with API metadata.
 
-    Each member carries the information needed to construct API URL paths:
-    (api_group, api_version, is_namespaced, plural, kind).
+    Each member carries the metadata the dynamic client needs to address the
+    resource: (api_group, api_version, is_namespaced, plural, kind).
 
     Use the enum members instead of freeform strings when calling K8sService
     methods like get_json, list_json, delete, etc.
@@ -113,6 +121,13 @@ class K8sResource(Enum):
     # created by Iris.
     CLUSTER_QUEUES = ("kueue.x-k8s.io", "v1beta1", False, "clusterqueues", "ClusterQueue")
     RESOURCE_FLAVORS = ("kueue.x-k8s.io", "v1beta1", False, "resourceflavors", "ResourceFlavor")
+    WORKLOAD_PRIORITY_CLASSES = (
+        "kueue.x-k8s.io",
+        "v1beta1",
+        False,
+        "workloadpriorityclasses",
+        "WorkloadPriorityClass",
+    )
 
     def __init__(self, api_group: str, api_version: str, is_namespaced: bool, plural: str, kind: str) -> None:
         self.api_group = api_group
@@ -120,23 +135,6 @@ class K8sResource(Enum):
         self.is_namespaced = is_namespaced
         self.plural = plural
         self.kind = kind
-
-    def api_base(self) -> str:
-        """URL prefix for this resource type (e.g. '/api/v1' or '/apis/apps/v1')."""
-        if self.api_group:
-            return f"/apis/{self.api_group}/{self.api_version}"
-        return f"/api/{self.api_version}"
-
-    def collection_path(self, namespace: str | None = None) -> str:
-        """URL path for listing/creating resources."""
-        base = self.api_base()
-        if self.is_namespaced and namespace:
-            return f"{base}/namespaces/{namespace}/{self.plural}"
-        return f"{base}/{self.plural}"
-
-    def item_path(self, name: str, namespace: str | None = None) -> str:
-        """URL path for a specific resource by name."""
-        return f"{self.collection_path(namespace)}/{name}"
 
     @classmethod
     def from_kind(cls, kind: str) -> "K8sResource":
@@ -171,14 +169,6 @@ class ExecResult:
     returncode: int
     stdout: str
     stderr: str
-
-
-@dataclass(frozen=True)
-class PodResourceUsage:
-    """CPU and memory usage for a single pod."""
-
-    cpu_millicores: int
-    memory_bytes: int
 
 
 def parse_k8s_quantity(val: str) -> int:

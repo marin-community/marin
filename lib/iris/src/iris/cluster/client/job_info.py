@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from google.protobuf import json_format
 
 from iris.cluster.constraints import Constraint
+from iris.cluster.runtime.env import IRIS_ATTEMPT_UID_ENV, IRIS_WORKER_REGION_ENV
 from iris.cluster.types import JobName, TaskAttempt
 from iris.rpc import job_pb2
 
@@ -29,6 +30,7 @@ class JobInfo:
     task_id: JobName
     num_tasks: int = 1
     attempt_id: int = 0
+    attempt_uid: str | None = None
     worker_id: str | None = None
     bundle_id: str | None = None
 
@@ -54,11 +56,7 @@ class JobInfo:
     """Explicit job constraints for child job inheritance."""
 
     worker_region: str | None = None
-    """Region of the worker running this task.
-
-    Surfaced via the ``IRIS_WORKER_REGION`` env var so legacy clients (e.g. the
-    Marin executor's region-pinning path) can inspect where they are running.
-    Iris itself no longer auto-inherits this onto child jobs — see #5279."""
+    """Physical region of the worker running this task."""
 
     @property
     def task_attempt(self) -> TaskAttempt:
@@ -114,6 +112,7 @@ def get_job_info() -> JobInfo | None:
             task_id=task_id,
             num_tasks=int(os.environ.get("IRIS_NUM_TASKS", "1")),
             attempt_id=attempt_id,
+            attempt_uid=os.environ.get(IRIS_ATTEMPT_UID_ENV),
             worker_id=os.environ.get("IRIS_WORKER_ID"),
             controller_address=os.environ.get("IRIS_CONTROLLER_ADDRESS"),
             advertise_host=os.environ.get("IRIS_ADVERTISE_HOST", "127.0.0.1"),
@@ -124,7 +123,7 @@ def get_job_info() -> JobInfo | None:
             ports=_parse_ports_from_env(),
             env=job_env,
             constraints=constraints,
-            worker_region=os.environ.get("IRIS_WORKER_REGION"),
+            worker_region=os.environ.get(IRIS_WORKER_REGION_ENV),
         )
         _job_info.set(info)
         return info

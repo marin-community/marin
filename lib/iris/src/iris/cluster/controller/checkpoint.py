@@ -31,14 +31,18 @@ from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
-import fsspec.core
 import zstandard
-from rigging.filesystem import prefix_join
+from connectrpc.request import RequestContext
+from rigging.filesystem.factory import open_url, url_to_fs
+from rigging.filesystem.storage_path import prefix_join
 from rigging.timing import Duration, Timestamp
 
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.db import ControllerDB
+from iris.rpc import controller_pb2
+from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +83,32 @@ class CheckpointResult:
     job_count: int
     task_count: int
     worker_count: int
+
+
+class CheckpointRuntime(Protocol):
+    def begin_checkpoint(self) -> tuple[str, CheckpointResult]: ...
+
+
+@dataclass(frozen=True, slots=True)
+class CheckpointDependencies:
+    runtime: CheckpointRuntime
+
+
+def begin_checkpoint_request(
+    dependencies: CheckpointDependencies,
+    request: controller_pb2.Controller.BeginCheckpointRequest,
+    context: RequestContext,
+) -> controller_pb2.Controller.BeginCheckpointResponse:
+    del request, context
+    path, result = dependencies.runtime.begin_checkpoint()
+    response = controller_pb2.Controller.BeginCheckpointResponse(
+        checkpoint_path=path,
+        job_count=result.job_count,
+        task_count=result.task_count,
+        worker_count=result.worker_count,
+    )
+    response.created_at.CopyFrom(timestamp_to_proto(result.created_at))
+    return response
 
 
 @dataclass(frozen=True)
@@ -168,7 +198,7 @@ def probe_database_dir(db_dir: Path) -> DatabaseProbe:
 
 def _fsspec_copy(src: str, dst: str) -> None:
     """Copy a file using fsspec so either path can be remote (e.g. GCS)."""
-    with fsspec.core.open(src, "rb") as f_src, fsspec.core.open(dst, "wb") as f_dst:
+    with open_url(src, "rb") as f_src, open_url(dst, "wb") as f_dst:
         f_dst.write(f_src.read())
 
 
@@ -359,7 +389,7 @@ def _list_checkpoint_entries(remote_state_dir: str) -> list[str] | None:
     Returns None if the directory does not exist.
     """
     prefix = prefix_join(remote_state_dir, "controller-state")
-    fs, fs_path = fsspec.core.url_to_fs(prefix)
+    fs, fs_path = url_to_fs(prefix)
 
     if not fs.exists(fs_path):
         return None
@@ -424,7 +454,7 @@ def prune_old_checkpoints(
         return 0
 
     cutoff_ms = Timestamp.now().add_ms(-max_age.to_ms()).epoch_ms()
-    fs, _ = fsspec.core.url_to_fs(remote_state_dir)
+    fs, _ = url_to_fs(remote_state_dir)
     pruned = 0
     for entry in entries:
         epoch_ms = _entry_epoch_ms(entry)
@@ -455,7 +485,7 @@ def _sync_dir(source_dir: str, local_dir: Path) -> None:
         )
         return
 
-    fs, fs_path = fsspec.core.url_to_fs(source_dir)
+    fs, fs_path = url_to_fs(source_dir)
     if not fs.exists(fs_path):
         return
     for entry in fs.ls(fs_path, detail=False):

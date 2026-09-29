@@ -11,7 +11,7 @@ import pyarrow as pa
 import pyarrow.json as pa_json
 import pyarrow.parquet as pq
 import wandb
-from rigging.filesystem import StoragePath, rebase_file_path
+from rigging.filesystem.storage_path import StoragePath, rebase_file_path
 from zephyr import counters
 from zephyr.readers import SUPPORTED_EXTENSIONS, open_file
 from zephyr.writers import write_parquet_file

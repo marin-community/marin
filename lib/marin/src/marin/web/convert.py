@@ -10,11 +10,7 @@ from resiliparse.extract.html2text import extract_simplified_dom
 from resiliparse.parse.html import HTMLTree
 
 from marin.markdown import to_markdown
-from marin.schemas.web.convert import (
-    ExtractionConfig,
-    HtmlToMarkdownConfig,
-    ResiliparseConfig,
-)
+from marin.schemas.web.convert import HtmlToMarkdownConfig, ResiliparseConfig
 
 logger = logging.getLogger(__name__)
 
@@ -63,19 +59,13 @@ def extract_content_from_dom(
     return markdown.replace("\x00", "").strip()
 
 
-def convert_page_with_resiliparse(
+def convert_page(
     html: str,
     url: str | None = None,
     config: ResiliparseConfig = ResiliparseConfig(),
 ) -> ConvertedPage:
     """
-    Convert HTML to text[non-markdown] using Resiliparse.
-
-    Note: This method does not convert the content to markdown. Resiliparse does not have a markdown conversion method.
-    You can use the markdown conversion method from the `marin.markdown` module over HTMLTree
-    from `resiliparse.parse.html`.
-
-    But, then this method will be identical to the `convert_page_with_readability` method then.
+    Convert HTML to markdown: Resiliparse selects the main-content DOM, `marin.markdown` renders it.
 
     Parameters:
         html (str): HTML content to convert.
@@ -103,28 +93,3 @@ def convert_page_with_resiliparse(
         out["url"] = url
 
     return out
-
-
-def convert_page(
-    html: str,
-    url: str | None = None,
-    extract_method: str = "resiliparse",
-    config: ExtractionConfig = ResiliparseConfig(),
-) -> ConvertedPage:
-    """
-    Convert HTML to text/markdown using Resiliparse.
-
-    Parameters:
-        html (str): HTML content to convert.
-        url (str | None): URL of the page.
-        extract_method (str): Method to use for extraction. Only "resiliparse" is supported.
-        config (ExtractionConfig): Configuration for the extraction method.
-
-    Returns:
-        ConvertedPage: Title, content, and HTML of the page. The title may be None
-            when the page has no title.
-    """
-    if extract_method != "resiliparse":
-        raise ValueError(f"Only 'resiliparse' extraction method is supported, got: {extract_method}")
-
-    return convert_page_with_resiliparse(html, url, config)

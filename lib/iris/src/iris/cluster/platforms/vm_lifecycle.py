@@ -31,6 +31,7 @@ from rigging.timing import Deadline, Duration, ExponentialBackoff, Timer
 from iris.cluster.config import GcpVmConfig, IrisClusterConfig, ManualVmConfig, VmConfig
 from iris.cluster.inject_env import with_injected_task_env
 from iris.cluster.platforms.gcp.controller_bootstrap import (
+    CONTROLLER_CONTAINER_NAME,
     build_controller_bootstrap_script_from_config,
 )
 from iris.cluster.platforms.gcp.ssh import OS_LOGIN_METADATA
@@ -54,7 +55,6 @@ def _identity_resolve_image(image: str, zone: str | None = None) -> str:
 
 
 # Constants
-CONTROLLER_CONTAINER_NAME = "iris-controller"
 DEFAULT_CONTROLLER_PORT = 10000
 HEALTH_CHECK_TIMEOUT_SECONDS = 120
 RESTART_LOOP_THRESHOLD = 3
@@ -63,6 +63,10 @@ EARLY_TIMEOUT_SECONDS = 60
 # Backoff parameters for health check polling
 HEALTH_CHECK_BACKOFF_INITIAL = 2.0
 HEALTH_CHECK_BACKOFF_MAX = 10.0
+
+
+def controller_vm_name(label_prefix: str) -> str:
+    return f"iris-controller-{label_prefix}"
 
 
 @dataclass
@@ -294,7 +298,7 @@ def _build_controller_vm_config(
     label_prefix = config.platform.label_prefix or "iris"
     labels = Labels(label_prefix)
     vm_config = VmConfig()
-    vm_config.name = f"iris-controller-{label_prefix}"
+    vm_config.name = controller_vm_name(label_prefix)
     vm_config.labels[labels.iris_controller] = "true"
 
     which = config.controller.controller_kind()
@@ -310,6 +314,7 @@ def _build_controller_vm_config(
             machine_type=gcp_ctrl.machine_type or "n2-standard-4",
             boot_disk_size_gb=gcp_ctrl.boot_disk_size_gb or DEFAULT_CONTROLLER_BOOT_DISK_SIZE_GB,
             service_account=gcp_ctrl.service_account,
+            network_tags=(labels.iris_controller,),
         )
         for key, value in OS_LOGIN_METADATA.items():
             vm_config.metadata[key] = value

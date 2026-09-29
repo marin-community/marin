@@ -29,6 +29,7 @@ from iris.cluster.config import (
     SliceConfig,
     StorageConfig,
 )
+from iris.cluster.platforms.k8s.constants import DEFAULT_TASK_CACHE_DIR
 from iris.cluster.platforms.k8s.controller import (
     _CONTROLLER_CPU_REQUEST,
     _CONTROLLER_MEMORY_REQUEST,
@@ -63,6 +64,7 @@ from iris.cluster.platforms.types import (
     Labels,
 )
 from iris.cluster.types import AcceleratorType
+from rigging.timing import Duration
 
 
 class _ControllerDeploymentK8sService(InMemoryK8sService):
@@ -297,6 +299,40 @@ def test_start_controller_creates_controller_resources():
     # is provisioned so the reference resolves at admission.
     assert deploy_spec["template"]["spec"]["priorityClassName"] == "iris-system"
     assert k8s.get_json(K8sResource.PRIORITY_CLASSES, "iris-system") is not None
+    batch_priority_class = k8s.get_json(K8sResource.PRIORITY_CLASSES, "iris-batch")
+    assert batch_priority_class is not None
+    assert batch_priority_class["value"] == 0
+    assert batch_priority_class["preemptionPolicy"] == "PreemptLowerPriority"
+    assert {
+        name: k8s.get_json(K8sResource.WORKLOAD_PRIORITY_CLASSES, name)["value"]
+        for name in (
+            "iris-cpu-batch",
+            "iris-accelerator-batch",
+            "iris-coscheduled-batch",
+            "iris-cpu-interactive",
+            "iris-accelerator-interactive",
+            "iris-coscheduled-interactive",
+            "iris-cpu-production",
+            "iris-accelerator-production",
+            "iris-coscheduled-production",
+            "iris-cpu-system",
+            "iris-accelerator-system",
+            "iris-coscheduled-system",
+        )
+    } == {
+        "iris-cpu-batch": 0,
+        "iris-accelerator-batch": 1,
+        "iris-coscheduled-batch": 2,
+        "iris-cpu-interactive": 10,
+        "iris-accelerator-interactive": 11,
+        "iris-coscheduled-interactive": 12,
+        "iris-cpu-production": 1000,
+        "iris-accelerator-production": 1000,
+        "iris-coscheduled-production": 1000,
+        "iris-cpu-system": 10000,
+        "iris-accelerator-system": 10000,
+        "iris-coscheduled-system": 10000,
+    }
 
     agent_spec = node_agent["spec"]["template"]["spec"]
     assert agent_spec["hostNetwork"] is True
@@ -334,13 +370,40 @@ def test_start_controller_creates_controller_resources():
     provider.shutdown()
 
 
-def test_start_controller_leaves_node_agent_absent_without_external_finelog():
+def test_start_controller_mounts_task_cache_in_node_agent_when_reclaim_enabled():
+    provider, k8s = _make_provider()
+    cluster_config = _make_cluster_config(remote_state_dir="s3://test-bucket/bundles")
+    cluster_config.kubernetes_provider.cache_dir = "/mnt/local/iris-cache"
+    cluster_config.kubernetes_provider.cache_max_age = Duration.from_hours(24)
+    _seed_prerequisites(k8s, cluster_config)
+
+    provider.start_controller(cluster_config)
+
+    node_agent = k8s.get_json(K8sResource.DAEMONSETS, "iris-node-agent")
+    agent_spec = node_agent["spec"]["template"]["spec"]
+    assert node_agent["spec"]["template"]["metadata"]["annotations"] == {
+        "iris.marin.community/cache-max-age-ms": "86400000"
+    }
+    assert {"name": "task-cache", "mountPath": "/mnt/local/iris-cache"} in agent_spec["containers"][0]["volumeMounts"]
+    assert {
+        "name": "task-cache",
+        "hostPath": {"path": "/mnt/local/iris-cache", "type": "DirectoryOrCreate"},
+    } in agent_spec["volumes"]
+    provider.shutdown()
+
+
+def test_start_controller_runs_cache_recovery_agent_without_external_finelog():
     provider, k8s = _make_provider()
     cluster_config = _make_cluster_config()
     _seed_prerequisites(k8s, cluster_config)
     provider.start_controller(cluster_config)
 
-    assert k8s.get_json(K8sResource.DAEMONSETS, "iris-node-agent") is None
+    node_agent = k8s.get_json(K8sResource.DAEMONSETS, "iris-node-agent")
+    agent_spec = node_agent["spec"]["template"]["spec"]
+    assert node_agent["spec"]["template"]["metadata"]["annotations"] == {
+        "iris.marin.community/cache-max-age-ms": "disabled"
+    }
+    assert {"name": "task-cache", "mountPath": DEFAULT_TASK_CACHE_DIR} in agent_spec["containers"][0]["volumeMounts"]
     provider.shutdown()
 
 

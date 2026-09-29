@@ -29,8 +29,9 @@ from marin.experiment.cli import build_options
 from marin.experiment.data import mixture, tokenized
 from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize.tokenize import TokenizedCache
-from rigging.filesystem import prefix_join
+from rigging.filesystem.storage_path import prefix_join
 
+from experiments.grug.checkpointing import RESTORE_BARRIER_TIMEOUT
 from experiments.grug.moe_hero_fsdp.heuristic import build_hero_configs
 from experiments.grug.moe_hero_fsdp.model import GrugModelConfig, RematMode, SmallParamSharding
 from experiments.grug.moe_hero_fsdp.optimizer import GrugMoeMuonHConfig
@@ -56,6 +57,9 @@ HERO_CHECKPOINT_INTERVAL = timedelta(minutes=30)
 HERO_TRAIN_STEP_TIMEOUT = timedelta(minutes=15)
 # Evaluation, checkpointing, and other hooks use this process-wide deadline.
 HERO_PROCESS_STALL_TIMEOUT = timedelta(hours=1)
+# Twice the restore barrier, which keeps a barrier expiry ahead of this deadline: the barrier
+# names the ranks that never arrived, while this one only reports that nothing progressed.
+HERO_STARTUP_TIMEOUT = timedelta(seconds=2 * RESTORE_BARRIER_TIMEOUT)
 HERO_STALL_DIAGNOSTIC_TIMEOUT = timedelta(seconds=20)
 # Grad/param norm reductions run outside the scanned step, cost a visible slice of a short run's
 # wall clock, and can require a 117 GiB temporary buffer on this model. The hero default leaves
@@ -136,6 +140,7 @@ def _hero_run_config(
         progress_watchdog=ProgressWatchdogConfig(
             step_timeout=HERO_TRAIN_STEP_TIMEOUT,
             process_timeout=HERO_PROCESS_STALL_TIMEOUT,
+            startup_timeout=HERO_STARTUP_TIMEOUT,
             diagnostic_timeout=HERO_STALL_DIAGNOSTIC_TIMEOUT,
         ),
         use_explicit_mesh_axes=True,

@@ -29,7 +29,9 @@ from typing import Self, TypeVar, cast
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field
-from rigging.filesystem import StoragePath, marin_prefix, prefix_join, url_to_fs
+from rigging.filesystem.cluster_config import marin_prefix
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.provenance import Provenance, launch_provenance
 
 from marin.execution.fingerprint import describe_drift

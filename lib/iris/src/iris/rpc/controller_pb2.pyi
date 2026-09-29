@@ -162,6 +162,11 @@ class Controller(_message.Message):
         JOB_ID_FIELD_NUMBER: _ClassVar[int]
         job_id: str
         def __init__(self, job_id: _Optional[str] = ...) -> None: ...
+    class CompleteJobRequest(_message.Message):
+        __slots__ = ("job_id",)
+        JOB_ID_FIELD_NUMBER: _ClassVar[int]
+        job_id: str
+        def __init__(self, job_id: _Optional[str] = ...) -> None: ...
     class JobQuery(_message.Message):
         __slots__ = ("scope", "parent_job_id", "name_filter", "state_filter", "sort_field", "sort_direction", "offset", "limit", "job_id_prefix", "backend_id", "cluster")
         SCOPE_FIELD_NUMBER: _ClassVar[int]

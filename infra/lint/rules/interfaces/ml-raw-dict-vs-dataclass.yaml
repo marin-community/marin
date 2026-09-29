@@ -1,0 +1,18 @@
+schema_version: 1
+code: ml-raw-dict-vs-dataclass
+lane: interfaces
+title: Ad-hoc dict for a structured record
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** Prefer dataclass/NamedTuple over raw dicts. Dicts skip
+  schema validation, hide field names from the type checker, and make evolution
+  painful (rename → silent breakage).
+
+  **When allowed:** Truly heterogeneous payloads, JSON deserialization at the
+  boundary (then convert to a dataclass), or short-lived intermediate state.
+
+  **Bad example:**
+  ```python
+  record = {"id": row.id, "kind": row.kind, "ts": row.ts}
+  queue.append(record)   # define a @dataclass Record once and reuse.
+  ```

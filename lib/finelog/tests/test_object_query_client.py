@@ -1,0 +1,343 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+import json
+import threading
+from collections.abc import Callable
+from pathlib import Path
+
+import duckdb
+import finelog.client.object_query_client as object_query_client_mod
+import pyarrow as pa
+import pyarrow.parquet as pq
+import pytest
+from finelog.client import ObjectQueryClient
+from finelog.errors import QueryTimeoutError, StatsError
+
+
+def _write_catalog(
+    root: Path,
+    *,
+    active_version: int = 1,
+    l0_mode: str = "L0_MODE_OBJECT_STORE",
+    object_id_override: str | None = None,
+    include_logical_schema: bool = True,
+) -> Path:
+    namespace = "iris.worker"
+    table_root = root / "_finelog" / "tables" / namespace
+    canonical_object_id = f"_finelog/tables/{namespace}/objects/v1/l1/content/seg_L1_0000000000000000001.parquet"
+    object_id = object_id_override or canonical_object_id
+    object_path = root / canonical_object_id
+    object_path.parent.mkdir(parents=True)
+    pq.write_table(
+        pa.table(
+            {
+                "seq": [1, 2],
+                "worker_id": ["w-1", "w-2"],
+                "mem_bytes": [10, 20],
+                "cluster": [None, None],
+            }
+        ),
+        object_path,
+    )
+    retained_spec: dict[str, object] = {
+        "version": "1",
+        "operatingPolicy": {"l0Mode": l0_mode},
+    }
+    if include_logical_schema:
+        retained_spec["logicalSchema"] = {
+            "columns": [
+                {"name": "worker_id", "type": "COLUMN_TYPE_STRING"},
+                {"name": "mem_bytes", "type": "COLUMN_TYPE_INT64"},
+            ]
+        }
+    catalog = {
+        "formatVersion": "1",
+        "namespace": namespace,
+        "catalogGeneration": "7",
+        "activeTableSpecVersion": str(active_version),
+        "desiredTableSpecVersion": "0",
+        "maxQueryTimeMs": "600000",
+        "directQueryHighWater": "2",
+        "retainedTableSpecs": [retained_spec],
+        "versionSegments": [
+            {
+                "tableSpecVersion": str(active_version),
+                "liveSegments": [
+                    {
+                        "segmentId": object_path.name,
+                        "source": {"objectId": object_id},
+                        "level": 1,
+                        "rowCount": "2",
+                    }
+                ],
+            }
+        ],
+        "directQuerySegments": [
+            {
+                "segmentId": object_path.name,
+                "source": {"objectId": object_id},
+                "level": 1,
+                "minSeq": "1",
+                "maxSeq": "2",
+                "rowCount": "2",
+            }
+        ],
+    }
+    catalog_bytes = json.dumps(catalog, separators=(",", ":")).encode()
+    catalog_key = "catalogs/00000000000000000007-test.json"
+    catalog_id = f"_finelog/tables/{namespace}/{catalog_key}"
+    catalog_path = root / catalog_id
+    catalog_path.parent.mkdir(parents=True)
+    catalog_path.write_bytes(catalog_bytes)
+    head = {
+        "formatVersion": "1",
+        "namespace": namespace,
+        "catalogGeneration": "7",
+        "activeTableSpecVersion": str(active_version),
+        "catalog": {
+            "objectId": catalog_id,
+        },
+    }
+    (table_root / "HEAD.json").write_text(json.dumps(head))
+    return catalog_path
+
+
+def _upgrade_to_catalog_tree(root: Path, catalog_path: Path, *, replace_segment: bool = False) -> None:
+    namespace = "iris.worker"
+    catalog = json.loads(catalog_path.read_text())
+    catalog["formatVersion"] = "2"
+    checkpoint_id = f"_finelog/tables/{namespace}/catalogs/00000000000000000007-checkpoint.json"
+    checkpoint = {
+        "formatVersion": "2",
+        "namespace": namespace,
+        "catalogGeneration": "7",
+        "checkpoint": catalog,
+    }
+    checkpoint_path = root / checkpoint_id
+    checkpoint_bytes = json.dumps(checkpoint).encode()
+    checkpoint_path.write_bytes(checkpoint_bytes)
+
+    metadata = dict(catalog)
+    metadata["catalogGeneration"] = "8"
+    metadata["versionSegments"] = [{"tableSpecVersion": "1"}]
+    metadata["directQuerySegments"] = []
+    delta: dict[str, object] = {"metadata": metadata}
+    if replace_segment:
+        old_segment = catalog["versionSegments"][0]["liveSegments"][0]
+        old_segment_id = old_segment["segmentId"]
+        object_id = f"_finelog/tables/{namespace}/objects/v1/l1/content/" "seg_L1_0000000000000000003.parquet"
+        object_path = root / object_id
+        pq.write_table(
+            pa.table(
+                {
+                    "seq": [3],
+                    "worker_id": ["w-3"],
+                    "mem_bytes": [30],
+                    "cluster": [None],
+                }
+            ),
+            object_path,
+        )
+        replacement = {
+            "segmentId": object_path.name,
+            "source": {"objectId": object_id},
+            "level": 1,
+            "minSeq": "3",
+            "maxSeq": "3",
+            "rowCount": "1",
+        }
+        delta.update(
+            {
+                "segmentRemovals": [{"tableSpecVersion": "1", "segmentId": old_segment_id}],
+                "segmentAdditions": [
+                    {
+                        "key": {
+                            "tableSpecVersion": "1",
+                            "segmentId": replacement["segmentId"],
+                        },
+                        "segment": replacement,
+                    }
+                ],
+                "directQueryRemovals": [old_segment_id],
+                "directQueryAdditions": [replacement],
+            }
+        )
+    tip_id = f"_finelog/tables/{namespace}/catalogs/00000000000000000008-delta.json"
+    tip = {
+        "formatVersion": "2",
+        "namespace": namespace,
+        "catalogGeneration": "8",
+        "parent": {"objectId": checkpoint_id, "byteSize": str(len(checkpoint_bytes))},
+        "deltaDepth": 1,
+        "deltaBytesSinceCheckpoint": "100",
+        "delta": delta,
+    }
+    tip_bytes = json.dumps(tip).encode()
+    (root / tip_id).write_bytes(tip_bytes)
+    head = {
+        "formatVersion": "2",
+        "namespace": namespace,
+        "catalogGeneration": "8",
+        "activeTableSpecVersion": "1",
+        "catalog": {"objectId": tip_id, "byteSize": str(len(tip_bytes))},
+    }
+    (root / "_finelog" / "tables" / namespace / "HEAD.json").write_text(json.dumps(head))
+
+
+def test_object_query_reads_the_stable_catalog_projection(tmp_path: Path) -> None:
+    _write_catalog(tmp_path)
+    client = ObjectQueryClient(str(tmp_path))
+    pin = client.pin_catalog("iris.worker")
+
+    result = client.query(
+        'SELECT worker_id, mem_bytes FROM "iris.worker" ORDER BY seq',
+        namespaces=["iris.worker"],
+    )
+
+    assert result.to_pydict() == {
+        "worker_id": ["w-1", "w-2"],
+        "mem_bytes": [10, 20],
+    }
+    assert pin.high_water == 2
+
+
+def test_object_query_folds_catalog_tree_from_checkpoint_and_delta(tmp_path: Path) -> None:
+    catalog_path = _write_catalog(tmp_path)
+    _upgrade_to_catalog_tree(tmp_path, catalog_path)
+
+    client = ObjectQueryClient(str(tmp_path))
+    pin = client.pin_catalog("iris.worker")
+    result = client.query(
+        'SELECT worker_id FROM "iris.worker" ORDER BY seq',
+        namespaces=["iris.worker"],
+    )
+
+    assert pin.catalog_generation == 8
+    assert result.to_pydict() == {"worker_id": ["w-1", "w-2"]}
+
+
+def test_object_query_folds_segment_replacement_from_catalog_delta(tmp_path: Path) -> None:
+    catalog_path = _write_catalog(tmp_path)
+    _upgrade_to_catalog_tree(tmp_path, catalog_path, replace_segment=True)
+
+    client = ObjectQueryClient(str(tmp_path))
+    pin = client.pin_catalog("iris.worker")
+    result = client.query(
+        'SELECT worker_id FROM "iris.worker" ORDER BY seq',
+        namespaces=["iris.worker"],
+    )
+
+    assert len(pin.object_uris) == 1
+    assert result.to_pydict() == {"worker_id": ["w-3"]}
+
+
+def test_object_query_reads_catalog_written_before_sha_field_removal(tmp_path: Path) -> None:
+    catalog_path = _write_catalog(tmp_path)
+    catalog = json.loads(catalog_path.read_text())
+    catalog["directQuerySegments"][0]["source"]["sha256"] = "bGVnYWN5"
+    catalog_path.write_text(json.dumps(catalog))
+
+    pin = ObjectQueryClient(str(tmp_path)).pin_catalog("iris.worker")
+
+    assert len(pin.object_uris) == 1
+
+
+def test_object_query_rejects_malformed_catalog_json(tmp_path: Path) -> None:
+    catalog_path = _write_catalog(tmp_path)
+    catalog_path.write_bytes(b"{")
+
+    with pytest.raises(StatsError):
+        ObjectQueryClient(str(tmp_path)).query(
+            'SELECT * FROM "iris.worker"',
+            namespaces=["iris.worker"],
+        )
+
+
+def test_object_query_rejects_noncanonical_object_ids(tmp_path: Path) -> None:
+    _write_catalog(
+        tmp_path,
+        object_id_override="_finelog/tables/iris.worker/objects/v1/../escaped.parquet",
+    )
+
+    with pytest.raises(StatsError):
+        ObjectQueryClient(str(tmp_path)).pin_catalog("iris.worker")
+
+
+def test_object_query_stops_at_the_catalog_lifetime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _write_catalog(tmp_path)
+
+    class ImmediateTimer:
+        def __init__(self, _interval: float, callback: Callable[[], None]) -> None:
+            self._callback = callback
+
+        def start(self) -> None:
+            self._callback()
+
+        def cancel(self) -> None:
+            return None
+
+        def join(self) -> None:
+            return None
+
+    class BlockingConnection:
+        def __init__(self) -> None:
+            self.interrupted = threading.Event()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+        def register_filesystem(self, _filesystem) -> None:
+            pass
+
+        def execute(self, _sql: str):
+            return self
+
+        def fetch_arrow_table(self) -> pa.Table:
+            assert self.interrupted.is_set()
+            raise duckdb.InterruptException("interrupted")
+
+        def interrupt(self) -> None:
+            self.interrupted.set()
+
+    connection = BlockingConnection()
+    monkeypatch.setattr(duckdb, "connect", lambda: connection)
+    monkeypatch.setattr(object_query_client_mod.threading, "Timer", ImmediateTimer)
+
+    with pytest.raises(QueryTimeoutError):
+        ObjectQueryClient(str(tmp_path)).query(
+            'SELECT * FROM "iris.worker"',
+            namespaces=["iris.worker"],
+        )
+    assert connection.interrupted.is_set()
+
+
+@pytest.mark.parametrize(
+    ("active_version", "l0_mode"),
+    [
+        (0, "L0_MODE_OBJECT_STORE"),
+        (1, "L0_MODE_LEGACY_LOCAL"),
+    ],
+)
+def test_object_query_rejects_catalog_without_an_active_object_version(
+    tmp_path: Path,
+    active_version: int,
+    l0_mode: str,
+) -> None:
+    _write_catalog(tmp_path, active_version=active_version, l0_mode=l0_mode)
+
+    with pytest.raises(StatsError):
+        ObjectQueryClient(str(tmp_path)).query(
+            'SELECT * FROM "iris.worker"',
+            namespaces=["iris.worker"],
+        )
+
+
+def test_object_query_rejects_active_spec_without_logical_schema(tmp_path: Path) -> None:
+    _write_catalog(tmp_path, include_logical_schema=False)
+
+    with pytest.raises(StatsError, match="has no logical schema"):
+        ObjectQueryClient(str(tmp_path)).pin_catalog("iris.worker")

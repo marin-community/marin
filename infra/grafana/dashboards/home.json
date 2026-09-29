@@ -62,19 +62,51 @@
         "multi": true,
         "hide": 2,
         "refresh": 0
+      },
+      {
+        "name": "job",
+        "type": "constant",
+        "description": "Hidden sentinel that aligns the Home and Jobs shared-dataset request shape without running a job selector.",
+        "query": "__none__",
+        "current": {
+          "selected": true,
+          "text": "__none__",
+          "value": "__none__"
+        },
+        "options": [
+          {
+            "selected": true,
+            "text": "__none__",
+            "value": "__none__"
+          }
+        ],
+        "hide": 2
       }
     ]
   },
   "links": [
+    {
+      "linkRef": "fleet_accelerators"
+    },
     {
       "asDropdown": false,
       "icon": "dashboard",
       "includeVars": true,
       "keepTime": true,
       "targetBlank": false,
-      "title": "Accelerators",
+      "title": "Node details",
       "type": "link",
-      "url": "/d/marin-accel"
+      "url": "/d/marin-nodes"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Node pools",
+      "type": "link",
+      "url": "/d/marin-node-pools"
     },
     {
       "asDropdown": false,
@@ -97,14 +129,16 @@
       "url": "/d/marin-runs"
     },
     {
-      "asDropdown": false,
-      "icon": "dashboard",
-      "includeVars": true,
-      "keepTime": true,
-      "targetBlank": false,
-      "title": "Clusters",
-      "type": "link",
-      "url": "/d/marin-clusters"
+      "linkRef": "rl_post_training"
+    },
+    {
+      "linkRef": "async_rl"
+    },
+    {
+      "linkRef": "fleet_health"
+    },
+    {
+      "linkRef": "cluster_capacity"
     },
     {
       "asDropdown": false,
@@ -112,9 +146,9 @@
       "includeVars": true,
       "keepTime": true,
       "targetBlank": false,
-      "title": "Pipelines",
+      "title": "Training run",
       "type": "link",
-      "url": "/d/marin-pipelines"
+      "url": "/d/marin-training"
     },
     {
       "asDropdown": false,
@@ -122,9 +156,19 @@
       "includeVars": true,
       "keepTime": true,
       "targetBlank": false,
-      "title": "Inference",
+      "title": "Inference overview",
       "type": "link",
-      "url": "/d/marin-inference"
+      "url": "/d/marin-inference-overview"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": false,
+      "targetBlank": false,
+      "title": "Storage",
+      "type": "link",
+      "url": "/d/marin-storage"
     },
     {
       "asDropdown": false,
@@ -221,13 +265,13 @@
           "source": "url",
           "format": "table",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/accelerator/overview",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "SELECT SUM(value) / 1000.0 AS value FROM ( SELECT value, ROW_NUMBER() OVER (PARTITION BY \"cluster\", json_get(attributes_json, 'gpu_uuid') ORDER BY timestamp_ms DESC) AS rn FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name = 'gpu_power_watts' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT)) WHERE rn = 1"
+                "key": "clusters",
+                "value": "${cluster:csv}"
               },
               {
                 "key": "from",
@@ -236,6 +280,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "power"
               }
             ]
           },
@@ -379,6 +431,16 @@
         "y": 36
       },
       "panelRef": "gpu_rack_tray_inventory"
+    },
+    {
+      "id": 16,
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 45
+      },
+      "panelRef": "rl_recent_runs"
     }
   ]
 }

@@ -284,7 +284,7 @@ def actor_result_with_recovery(
     call: Callable[[], ActorFuture],
     initial_future: ActorFuture | None,
     actor_index: int,
-    recovery_timeout: float,
+    timeout: float,
     deadline: float,
 ) -> Any:
     backoff = ExponentialBackoff(initial=0.5, maximum=10.0, factor=2.0, jitter=0.25)
@@ -292,9 +292,7 @@ def actor_result_with_recovery(
     while True:
         remaining = deadline - time.monotonic()
         if future is None and remaining <= 0:
-            raise MemoryStoreUnavailable(
-                f"memory-store actor {actor_index} did not recover within {recovery_timeout:g} seconds"
-            )
+            raise MemoryStoreUnavailable(f"memory-store actor {actor_index} did not recover within {timeout:g} seconds")
         try:
             if future is None:
                 future = call()
@@ -302,13 +300,13 @@ def actor_result_with_recovery(
             return future.result(timeout=max(0.0, remaining))
         except TimeoutError as exc:
             raise MemoryStoreUnavailable(
-                f"memory-store actor {actor_index} did not respond within {recovery_timeout:g} seconds"
+                f"memory-store actor {actor_index} did not respond within {timeout:g} seconds"
             ) from exc
         except ActorUnavailableError as exc:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise MemoryStoreUnavailable(
-                    f"memory-store actor {actor_index} did not recover within {recovery_timeout:g} seconds"
+                    f"memory-store actor {actor_index} did not recover within {timeout:g} seconds"
                 ) from exc
             future = None
             delay = min(backoff.next_interval(), remaining)
@@ -345,7 +343,7 @@ class MemoryStore(Generic[K, V]):
         """Return the value for one key or raise `KeyError`."""
         return self.get_many([key])[0]
 
-    def _reload(self, actor_index: int, deadline: float) -> None:
+    def _reload(self, actor_index: int, timeout: float, deadline: float) -> None:
         actor = self.actors[actor_index]
 
         def call() -> ActorFuture:
@@ -359,7 +357,7 @@ class MemoryStore(Generic[K, V]):
             call,
             initial_future,
             actor_index,
-            self.recovery_timeout,
+            timeout,
             deadline,
         )
         if stats is None:
@@ -370,6 +368,7 @@ class MemoryStore(Generic[K, V]):
         actor_index: int,
         call: Callable[[], ActorFuture],
         initial_future: ActorFuture | None,
+        timeout: float,
         deadline: float,
     ) -> _MemoryTableResult:
         future = initial_future
@@ -378,14 +377,14 @@ class MemoryStore(Generic[K, V]):
                 call,
                 future,
                 actor_index,
-                self.recovery_timeout,
+                timeout,
                 deadline,
             )
             if result.status is MemoryTableStatus.READY:
                 return result
             if result.status is MemoryTableStatus.DESTROYED:
                 raise MemoryStoreDestroyed(f"memory table {self.name!r} has been destroyed")
-            self._reload(actor_index, deadline)
+            self._reload(actor_index, timeout, deadline)
             future = None
 
     def get_many(self, keys: Sequence[K]) -> list[V]:
@@ -419,6 +418,7 @@ class MemoryStore(Generic[K, V]):
                 actor_index,
                 calls[actor_index],
                 futures[actor_index],
+                self.recovery_timeout,
                 deadline,
             )
             assert isinstance(result, MemoryTableLookup)
@@ -431,17 +431,19 @@ class MemoryStore(Generic[K, V]):
 
         return cast(list[V], results)
 
-    def stats(self) -> tuple[MemoryStoreActorStats, ...]:
-        """Return load statistics ordered by worker index."""
+    def stats(self, timeout: float) -> tuple[MemoryStoreActorStats, ...]:
+        """Return load statistics ordered by worker index within `timeout`."""
+        if timeout <= 0:
+            raise ValueError("timeout must be positive")
         calls = {
             actor_index: lambda actor=actor: actor.memory_table_stats.remote(self.table_id)
             for actor_index, actor in enumerate(self.actors)
         }
-        deadline = time.monotonic() + self.recovery_timeout
+        deadline = time.monotonic() + timeout
         futures = start_actor_calls(calls)
         stats: list[MemoryStoreActorStats] = []
         for actor_index in range(len(self.actors)):
-            result = self._ready_result(actor_index, calls[actor_index], futures[actor_index], deadline)
+            result = self._ready_result(actor_index, calls[actor_index], futures[actor_index], timeout, deadline)
             assert isinstance(result, MemoryTableStatsResult)
             assert result.stats is not None
             stats.append(result.stats)

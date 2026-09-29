@@ -45,12 +45,9 @@ def terminate_coscheduled_siblings(
     """Terminate coscheduled siblings.
 
     Each sibling is moved to ``TASK_STATE_COSCHED_FAILED``, which is
-    unconditionally terminal. The attempt is left unfinished
-    (``finished_at_ms`` NULL) so the sibling's chips stay accounted for until
-    its process is actually stopped: because the attempt is terminal but still
-    worker-bound, the reconcile planner sends the worker a ``stop`` for it
-    (``reconcile/worker.py``), and the worker's resulting terminal observation
-    finalizes the attempt and releases capacity.
+    unconditionally terminal. Worker-bound attempts stay unfinished until the
+    worker confirms termination and releases capacity. Attempts without a worker
+    use the controller termination time because no worker confirmation will arrive.
     """
     error = f"Coscheduled sibling {failed_task_id.to_wire()} failed"
 
@@ -62,7 +59,7 @@ def terminate_coscheduled_siblings(
             job_pb2.TASK_STATE_COSCHED_FAILED,
             error,
             now_ms,
-            stamp_attempt_finished=False,
+            stamp_attempt_finished=sib.current_worker_id is None,
         )
         state.emit_task_event(
             TaskActionEvent(
@@ -101,7 +98,7 @@ def requeue_coscheduled_siblings(
             job_pb2.TASK_STATE_PENDING,
             error,
             now_ms,
-            stamp_attempt_finished=False,
+            stamp_attempt_finished=sib.current_worker_id is None,
             attempt_state=job_pb2.TASK_STATE_COSCHED_FAILED,
         )
         state.emit_task_event(

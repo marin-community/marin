@@ -80,12 +80,11 @@ import click
 import yaml
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS
 from iris.cluster.config import load_config
+from iris.cluster.platforms.k8s.constants import CW_REPO_NAME, CW_REPO_URL
 from iris.cluster.platforms.k8s.network_manifests import (
     CERT_MANAGER_CHART,
     CLUSTERISSUER_CRD,
     CONTROLLER_PROXY_INGRESS_NAME,
-    CW_REPO_NAME,
-    CW_REPO_URL,
     DEFAULT_CLUSTER_ISSUER,
     DEFAULT_TLS_SECRET,
     INGRESS_NAME,

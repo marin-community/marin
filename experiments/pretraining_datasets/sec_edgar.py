@@ -8,7 +8,7 @@ from marin.datakit.download.sec_edgar import sec_edgar_normalize_steps
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize import TokenizeConfig, tokenize
-from rigging.filesystem import prefix_join
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.marin_tokenizer import marin_tokenizer
 
