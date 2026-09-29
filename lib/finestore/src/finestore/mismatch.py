@@ -61,7 +61,11 @@ class ProbeRow(BaseModel):
         if (self.routed_experts is None) != (self.route_valid_mask is None):
             raise ValueError("probe routes require an explicit token-and-layer validity mask")
         if self.routed_experts_shape is not None and self.route_valid_mask is not None:
-            if len(self.routed_experts_shape) != 3 or len(self.route_valid_mask) != response_length:
+            if (
+                len(self.routed_experts_shape) != 3
+                or self.routed_experts_shape[0] != response_length
+                or len(self.route_valid_mask) != response_length
+            ):
                 raise ValueError("probe route validity must match [response, layer, expert] routes")
             if any(len(token_layers) != self.routed_experts_shape[1] for token_layers in self.route_valid_mask):
                 raise ValueError("probe route validity must cover every captured layer")
