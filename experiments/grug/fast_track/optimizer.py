@@ -433,7 +433,7 @@ def _sinkhorn_hyperball(momentum: float, iters: int, nesterov: bool, learning_ra
 
 
 # Leaves the trainer writes as data statistics (never trained): the fixed-encoder n-gram table and its code.
-_FROZEN_LEAVES = re.compile(r"(?:^|\.)(ngram_stat_(table|code)|latent_select_mask)$")
+_FROZEN_LEAVES = re.compile(r"(?:^|\.)(ngram_stat_(table|code)|latent_select_mask|embed2_sign_table)$")
 # The groups built by ``muonh_transform_at`` (the ones ``muonh_retraction`` applies to).
 _MUONH_GROUPS = frozenset({"muonh", "kda_beta", "muonh_attn", "muonh_routed", "muonh_router", "upper_qk"})
 _HYPERBALL_GROUPS = _MUONH_GROUPS | {"adamh", "sinkhornh"}
@@ -790,6 +790,40 @@ def scale_with_grug_muonh(
     return optax.GradientTransformation(init_fn, update_fn)
 
 
+class RowAdamState(NamedTuple):
+    count: jax.Array
+    nu: optax.Updates
+    """One fp32 second moment per row, ``[..., rows, 1]``."""
+
+
+def scale_by_row_adam(beta2: float, eps: float) -> optax.GradientTransformation:
+    """Momentum-free Adam with one second moment per row (the hashed n-gram table's rule in modded-nanogpt
+    record #360): ``v = beta2 v + (1 - beta2) mean_row(g^2)`` and direction ``sqrt(1 - beta2^t) g / (sqrt(v) + eps)``
+    before the ``-lr`` scale. A row with zero gradient gets a zero update while its ``v`` decays, so the rule
+    only needs the touched rows (this dense form is its loss reference). ``v`` is sliced from the parameter,
+    so it keeps the table's row sharding."""
+
+    def init_fn(params):
+        nu = jax.tree.map(lambda p: jnp.zeros_like(p[..., :1], dtype=jnp.float32), params)
+        return RowAdamState(count=jnp.zeros([], jnp.int32), nu=nu)
+
+    def update_fn(updates, state, params=None):
+        del params
+        count = optax.safe_increment(state.count)
+        nu = jax.tree.map(
+            lambda g, v: beta2 * v + (1 - beta2) * jnp.mean(jnp.square(g.astype(jnp.float32)), -1, keepdims=True),
+            updates,
+            state.nu,
+        )
+        step_scale = jnp.sqrt(1 - beta2 ** count.astype(jnp.float32))
+        direction = jax.tree.map(
+            lambda g, v: (step_scale * g.astype(jnp.float32) / (jnp.sqrt(v) + eps)).astype(g.dtype), updates, nu
+        )
+        return direction, RowAdamState(count=count, nu=nu)
+
+    return optax.GradientTransformation(init_fn, update_fn)
+
+
 def cautious(inner: optax.GradientTransformation) -> optax.GradientTransformation:
     """Cautious optimizer (arXiv 2411.16085): keep only the coordinates of the inner direction whose sign
     agrees with the gradient, rescaled by the kept fraction per leaf. ``inner`` returns the descent
@@ -964,7 +998,7 @@ def ema_nesterov(
 
 
 def optimizer_diagnostics(opt_state) -> dict[str, jax.Array]:
-    """``train/optim/`` metrics of the EMA-Nesterov and MuonSphere states found in ``opt_state``."""
+    """``train/optim/`` metrics of the EMA-Nesterov, MuonSphere and row-Adam states found in ``opt_state``."""
 
     def find(state_type):
         # Searched per type: an EmaNesterovState wraps the MuonSphere states inside its ``inner``.
@@ -991,6 +1025,13 @@ def optimizer_diagnostics(opt_state) -> dict[str, jax.Array]:
         metrics["train/optim/spectral_sigma_over_radius_mean"] = sum(jnp.sum(q) for q, _ in pairs) / count
         metrics["train/optim/spectral_sigma_over_radius_max"] = jnp.max(jnp.stack([jnp.max(q) for q, _ in pairs]))
         metrics["train/optim/spectral_radius_mean"] = sum(jnp.sum(r) for _, r in pairs) / count
+    row_states = find(RowAdamState)
+    if row_states:
+        # Per-row RMS gradient scale of the n-gram tables, and the fraction of rows ever touched.
+        nus = jax.tree.leaves(row_states[0].nu)
+        rows = sum(v.size for v in nus)
+        metrics["train/optim/embed2_row_rms_mean"] = sum(jnp.sum(jnp.sqrt(v)) for v in nus) / rows
+        metrics["train/optim/embed2_row_touched_frac"] = sum(jnp.sum(v > 0) for v in nus) / rows
     return metrics
 
 
@@ -1065,6 +1106,12 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     embed_group: str = "adam"
     embed2_lr_mult: float = 1.0
     """Adam LR multiplier of the second (e.g. bigram) embedding table alone."""
+    embed2_row_sparse_adam: bool = False
+    """Train the second / third tables with ``scale_by_row_adam`` (beta1 = 0, one fp32 second moment per row, no
+    AdEMAMix / cautious masking / grokfast) at ``embed2_lr_mult`` x ``adam_lr``: record #360's row-sparse-compatible
+    rule, run densely. Cuts the tables' optimizer state from two (three with AdEMAMix) copies to ``rows`` floats."""
+    embed2_beta2: float = 0.95
+    """Second-moment decay of ``embed2_row_sparse_adam``."""
     sinkhorn_momentum: float = 0.95
     sinkhorn_iters: int = 5
     sinkhorn_nesterov: bool = True
@@ -1293,6 +1340,14 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 components.append(optax.scale(-lr))
                 return optax.chain(*components)
 
+            def row_adam_at(lr):
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(scale_by_row_adam(self.embed2_beta2, self.epsilon))
+                components.append(optax.scale(-lr))
+                return optax.chain(*components)
+
             def router_adam_at(lr):
                 components = []
                 if self.max_grad_norm:
@@ -1355,7 +1410,11 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                     self.sinkhorn_nesterov,
                     learning_rate * self.sinkhorn_lr_mult,
                 ),
-                "embed2": plain_adam_at(adam_lr * self.embed2_lr_mult),
+                "embed2": (
+                    row_adam_at(adam_lr * self.embed2_lr_mult)
+                    if self.embed2_row_sparse_adam
+                    else plain_adam_at(adam_lr * self.embed2_lr_mult)
+                ),
                 # The n-gram statistic table and its code are data statistics written by the trainer, not trained.
                 "frozen": optax.set_to_zero(),
                 "ple": plain_adam_at(adam_lr * self.ple_lr_mult),
@@ -1475,7 +1534,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 return "output_bigram"
             if "token_embed_ple" in path_lower:
                 return "ple"
-            if re.search(r"token_embed(2|3)", path_lower) and self.embed2_lr_mult != 1.0:
+            if re.search(r"token_embed(2|3)", path_lower) and (
+                self.embed2_lr_mult != 1.0 or self.embed2_row_sparse_adam
+            ):
                 return "embed2"
             if "token_embed" in path_lower:
                 return self.embed_group

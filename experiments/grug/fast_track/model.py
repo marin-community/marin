@@ -411,6 +411,39 @@ def _bigram_hash_ids(
     return (x % jnp.uint32(num_buckets)).astype(jnp.int32)
 
 
+# Sign-hash multipliers of modded-nanogpt record #360 (``bigram_kernels.py``), per n-gram order, ordered
+# (current token, lag 1, lag 2); the sign-pool seed.
+_SIGN_HASH_MULTIPLIERS = {2: (48271, 30011), 3: (58699, 39779, 26801)}
+_EMBED2_SIGN_SEED = 20260928
+
+
+def _ngram_sign_ids(
+    token_ids: Int[Array, "B S"],
+    segment_ids: Int[Array, "B S"] | None,
+    sentinel: int,
+    ngram: int,
+    pool_rows: int,
+    salt: int = 0,
+) -> Int[Array, "B S"]:
+    """Sign-pool row of each n-gram (``embed2_sign_trick``): the record's ``(c0 x_t) ^ (c1 x_{t-1}) ^ ...``
+    masked to the power-of-two ``pool_rows``, independent of ``_bigram_hash_ids``'s murmur hash of the same key.
+    A previous token missing (position 0 or an earlier document) is the table hash's ``sentinel``, so those keys
+    stay distinct per current token (the record instead sends every history-less n-gram to row 0; its table
+    also collapses them into one row). ``salt`` xors a per-head constant in (salt 0 is the record's hash)."""
+    if ngram not in _SIGN_HASH_MULTIPLIERS:
+        raise ValueError(f"embed2_sign_trick supports n-gram orders {sorted(_SIGN_HASH_MULTIPLIERS)}, got {ngram}")
+    multipliers = _SIGN_HASH_MULTIPLIERS[ngram]
+    x = token_ids.astype(jnp.uint32) * jnp.uint32(multipliers[0])
+    for lag in range(1, ngram):
+        prev = jnp.pad(token_ids[:, :-lag], ((0, 0), (lag, 0)), constant_values=sentinel)
+        if segment_ids is not None:
+            other_doc = jnp.pad(segment_ids[:, lag:] != segment_ids[:, :-lag], ((0, 0), (lag, 0)), constant_values=True)
+            prev = jnp.where(other_doc, sentinel, prev)
+        x = x ^ (prev.astype(jnp.uint32) * jnp.uint32(multipliers[lag]))
+    x = x ^ jnp.uint32((salt * _HASH_SALT_STEP) & 0xFFFFFFFF)
+    return (x & jnp.uint32(pool_rows - 1)).astype(jnp.int32)
+
+
 def _padded_spec(x: jax.Array) -> tuple:
     """``x``'s partition spec entries, padded with None to ``x.ndim``."""
     spec = tuple(_partition_spec_of(x) or ())
@@ -1055,6 +1088,14 @@ class GrugModelConfig:
     embed2_head_orders: tuple[int, ...] = ()
     """With ``embed2_hash_heads``, the n-gram order of each head (e.g. ``(2, 2, 3, 3)``: two bigram and two trigram
     slices in the same table and gather). Empty: every head uses ``embed2_ngram``."""
+    embed2_sign_trick: bool = False
+    """Count-sketch sign trick of modded-nanogpt PR #299 / record #360 on the hashed n-gram table: each gathered
+    row is multiplied elementwise by a +-1 row of a fixed random ``[embed2_sign_pool, row width]`` pool, picked by
+    an independent (the record's multiply-xor) hash of the same n-gram key, so n-grams colliding in a table row
+    see near-orthogonal signs and their contributions roughly cancel instead of adding. Each hash head gets its
+    own sign hash. Sign flips preserve RMS, so ``embed2_norm`` sees the same scale. Needs ``second_embed_bigram``."""
+    embed2_sign_pool: int = 8192
+    """Rows of the +-1 sign pool (a power of two, like the record's)."""
     trigram_gate: bool = False
     """The ``bigram_gate`` content gate (same rank) on the trigram source (``embed3_rows``), with its own parameters."""
     bigram_gate_rank: int = 0
@@ -1158,6 +1199,13 @@ class GrugModelConfig:
                 raise ValueError("zero-computation experts do not support moe_bank2, hash layers or dense router grad")
             if self.moe_null_target_frac is not None and not 0.0 < self.moe_null_target_frac < 1.0:
                 raise ValueError(f"moe_null_target_frac must be in (0, 1), got {self.moe_null_target_frac}")
+
+        if self.embed2_sign_trick and not (self.second_embed and self.second_embed_bigram):
+            raise ValueError("embed2_sign_trick needs second_embed and second_embed_bigram")
+        if self.embed2_sign_trick and (
+            self.embed2_sign_pool <= 0 or self.embed2_sign_pool & (self.embed2_sign_pool - 1)
+        ):
+            raise ValueError(f"embed2_sign_pool must be a power of two, got {self.embed2_sign_pool}")
 
         if self.latent_select_pattern not in ("first", "random", "rotating"):
             raise ValueError(
@@ -4868,6 +4916,8 @@ class Transformer(eqx.Module):
     attn_res_query_final: Float[Array, " D"] | None
     """Pseudo-query of the final AttnRes gate, whose mix feeds the final norms and the lm_head."""
     token_embed2: jax.Array | None
+    embed2_sign_table: jax.Array | None
+    """``[embed2_sign_pool, row width]`` fixed +-1 bf16 sign pool (``embed2_sign_trick``); frozen for the optimizer."""
     embed2_norm: LearnedRMSNorm | None
     bigram_gate_w: Float[Array, " D"] | None
     bigram_gate_b: Float[Array, ""] | None
@@ -5012,6 +5062,19 @@ class Transformer(eqx.Module):
                     P(_FSDP_AXES, None) if cfg.embed2_fsdp else P(None, None),
                 )
                 if cfg.second_embed
+                else None
+            ),
+            embed2_sign_table=(
+                reshard(
+                    jnp.sign(
+                        random.normal(
+                            random.PRNGKey(_EMBED2_SIGN_SEED),
+                            (cfg.embed2_sign_pool, (cfg.embed2_dim or cfg.hidden_dim) // cfg.embed2_hash_heads),
+                        )
+                    ).astype(jnp.bfloat16),
+                    P(None, None),
+                )
+                if cfg.embed2_sign_trick
                 else None
             ),
             token_embed_ple=(
@@ -5434,6 +5497,16 @@ class Transformer(eqx.Module):
                     b_, s_ = token_ids.shape
                     flat_ids = jax.lax.reshape(head_ids, (b_, s_ * heads), out_sharding=P(_BATCH_AXES, None))
                     head_rows = gather2(table2, flat_ids)
+                    if self.embed2_sign_table is not None:
+                        head_signs = jnp.stack(
+                            [
+                                _ngram_sign_ids(token_ids, doc_start, rows_per_head, order, cfg.embed2_sign_pool, salt=h)
+                                for h, order in enumerate(cfg.embed2_head_orders or (cfg.embed2_ngram,) * heads)
+                            ],
+                            axis=-1,
+                        )
+                        flat_signs = jax.lax.reshape(head_signs, (b_, s_ * heads), out_sharding=P(_BATCH_AXES, None))
+                        head_rows = head_rows * self._embed2_signs(flat_signs, head_rows.dtype)
                     rows2 = jax.lax.reshape(
                         head_rows, (b_, s_, head_rows.shape[-1] * heads), out_sharding=P(_BATCH_AXES, None, None)
                     )
@@ -5444,6 +5517,15 @@ class Transformer(eqx.Module):
                             token_ids, doc_start, cfg.embed2_rows or cfg.vocab_size, cfg.embed2_ngram
                         )
                     rows2 = gather2(table2, ids2)
+                    if self.embed2_sign_table is not None:
+                        sign_ids = _ngram_sign_ids(
+                            token_ids,
+                            doc_start,
+                            cfg.embed2_rows or cfg.vocab_size,
+                            cfg.embed2_ngram,
+                            cfg.embed2_sign_pool,
+                        )
+                        rows2 = rows2 * self._embed2_signs(sign_ids, rows2.dtype)
                 if self.embed2_up is not None:
                     rows2 = jnp.einsum(
                         "bsr,rd->bsd", rows2, self.embed2_up.astype(rows2.dtype), out_sharding=_batch_spec()
@@ -6003,6 +6085,11 @@ class Transformer(eqx.Module):
             "train/attn_res/knob_output_bigram_w_norm": jnp.linalg.norm(w),
             "train/attn_res/knob_output_bigram_logit_rms": jnp.sqrt(jnp.mean(jnp.square(sample @ w))),
         }
+
+    def _embed2_signs(self, sign_ids: Int[Array, "B S"], dtype) -> jax.Array:
+        """The +-1 sign rows of ``sign_ids`` (``embed2_sign_trick``); the pool is a constant."""
+        assert self.embed2_sign_table is not None
+        return _embedding_gather_autodiff(jax.lax.stop_gradient(self.embed2_sign_table), sign_ids).astype(dtype)
 
     def _ngram_stat_read(
         self, hidden: Float[Array, "B S D"], token_ids: Int[Array, "B S"], segment_ids: Int[Array, "B S"] | None
