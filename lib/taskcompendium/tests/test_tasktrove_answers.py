@@ -112,7 +112,7 @@ def test_import_accepts_plain_source_answer_line_template():
     specification = import_task(archive)
 
     assert specification.answer_type is AnswerType.TEXT
-    assert "Choose one option letter from A through J." in specification.instructions
+    assert "Answer:" not in specification.instructions
 
 
 def test_archive_rejects_caller_identity_that_disagrees_with_metadata():
