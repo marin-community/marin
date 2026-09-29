@@ -7,6 +7,7 @@ import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
@@ -36,6 +37,11 @@ class GradingAttempt:
     convention: SubmissionConvention
     response: str | None
     environment: object
+
+
+@runtime_checkable
+class StateGrader(Protocol):
+    def grade_state(self, expected_state_json: str) -> float: ...
 
 
 class Verifier(BaseModel, ABC):
@@ -79,10 +85,9 @@ class StateMatchVerifier(Verifier):
     def grade(self, attempt: GradingAttempt) -> GradeResult:
         if attempt.convention.answer_format.value != "state":
             raise ValueError("State grading requires a state submission convention")
-        grade_state = getattr(attempt.environment, "grade_state", None)
-        if grade_state is None:
+        if not isinstance(attempt.environment, StateGrader):
             raise TypeError("State verifier requires a stateful provider")
-        return GradeResult(Outcome.GRADED, float(grade_state(self.expected_state_json)))
+        return GradeResult(Outcome.GRADED, float(attempt.environment.grade_state(self.expected_state_json)))
 
 
 def state_match(expected_state_json: str) -> VerifierSpec:

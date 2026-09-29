@@ -7,10 +7,11 @@ import hashlib
 import importlib
 import json
 import stat
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+from types import MappingProxyType
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
@@ -32,9 +33,13 @@ STATEFUL_ENVIRONMENT = "stateful"
 SPECIFICATION_FILE = "specification.json"
 SUBMISSION_CONVENTION_FILE = "submission_convention.json"
 ENVIRONMENT_CONFIG_FILE = "environment_config.json"
-REGISTERED_PROVIDERS = {
-    "nemo_workplace:v1": "taskcompendium.providers.nemo_workplace.provider:NemoWorkplaceEnvironment",
-}
+AGENT_RESOURCES_DIR = "inputs"
+PRIVATE_RESOURCES_DIR = "private_resources"
+REGISTERED_PROVIDERS: Mapping[str, str] = MappingProxyType(
+    {
+        "nemo_workplace:v1": "taskcompendium.providers.nemo_workplace.provider:NemoWorkplaceEnvironment",
+    }
+)
 
 
 class HarborEnvironmentConfig(BaseModel):
@@ -218,9 +223,9 @@ def validate_exported_resources(specification: TaskSpec, task_dir: Path) -> None
     total_bytes = 0
     for resource in specification.resources:
         root = (
-            task_dir / "environment" / "inputs"
+            task_dir / "environment" / AGENT_RESOURCES_DIR
             if resource.visibility == ResourceVisibility.AGENT
-            else task_dir / "private_resources"
+            else task_dir / PRIVATE_RESOURCES_DIR
         )
         relative = validate_resource_path(resource.path)
         if root.is_symlink() or root.parent.is_symlink():
@@ -278,14 +283,14 @@ def lower_to_harbor(
     if any(resource.visibility == ResourceVisibility.AGENT for resource in specification.resources):
         materialize_resources(
             specification.resources,
-            destination / "environment" / "inputs",
+            destination / "environment" / AGENT_RESOURCES_DIR,
             visibility=ResourceVisibility.AGENT,
             trusted_resolver=trusted_resolver,
         )
     if any(resource.visibility != ResourceVisibility.AGENT for resource in specification.resources):
         materialize_resources(
             specification.resources,
-            destination / "private_resources",
+            destination / PRIVATE_RESOURCES_DIR,
             visibility=frozenset({ResourceVisibility.VERIFIER, ResourceVisibility.ORACLE}),
             trusted_resolver=trusted_resolver,
         )

@@ -20,6 +20,7 @@ from harbor.verifier.base import BaseVerifier
 
 from taskcompendium.grading import GradeResult, Outcome
 from taskcompendium.lowering import (
+    AGENT_RESOURCES_DIR,
     ENVIRONMENT_CONFIG_FILE,
     SPECIFICATION_FILE,
     SUBMISSION_CONVENTION_FILE,
@@ -37,6 +38,26 @@ AGENT_LOGS_PATH = "/logs/agent"
 ARTIFACTS_LOGS_PATH = "/logs/artifacts"
 HARBOR_DOWNLOAD_DIRS = frozenset({AGENT_LOGS_PATH, ARTIFACTS_LOGS_PATH})
 HARBOR_EMPTY_DIRS = HARBOR_DOWNLOAD_DIRS | {"/logs/verifier", "/tests"}
+
+
+def _chat_completion(
+    api_base: str, api_key_env: str | None, request_timeout: float, body: dict[str, Any]
+) -> dict[str, Any]:
+    headers = {"Content-Type": "application/json"}
+    if api_key_env is not None:
+        headers["Authorization"] = f"Bearer {os.environ[api_key_env]}"
+    request = urllib.request.Request(
+        f"{api_base}{CHAT_COMPLETIONS_PATH}", data=json.dumps(body).encode(), headers=headers, method="POST"
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=request_timeout) as response:
+            message = json.load(response)["choices"][0]["message"]
+    except urllib.error.HTTPError as error:
+        detail = error.read(4096).decode("utf-8", errors="replace")
+        raise RuntimeError(f"Chat completion HTTP {error.code}: {detail}") from error
+    if not isinstance(message, dict):
+        raise ValueError("Chat completion requires an assistant message object")
+    return message
 
 
 def _record_response(logs_dir: Path, instruction: str, response: str, context: AgentContext) -> None:
@@ -66,7 +87,7 @@ class NoToolEnvironment(BaseEnvironment):
         return EnvironmentCapabilities(disable_internet=True)
 
     def _validate_definition(self) -> None:
-        if (self.environment_dir / "inputs").exists():
+        if (self.environment_dir / AGENT_RESOURCES_DIR).exists():
             raise ValueError("Direct chat cannot expose filesystem inputs")
 
     async def start(self, force_build: bool) -> None:
@@ -142,18 +163,7 @@ class DirectChatAgent(BaseAgent):
 
     def _completion(self, instruction: str) -> str:
         body = {"model": self.model_name, "messages": [{"role": "user", "content": instruction}]}
-        headers = {"Content-Type": "application/json"}
-        if self.api_key_env is not None:
-            headers["Authorization"] = f"Bearer {os.environ[self.api_key_env]}"
-        request = urllib.request.Request(
-            f"{self.api_base}{CHAT_COMPLETIONS_PATH}", data=json.dumps(body).encode(), headers=headers, method="POST"
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=self.request_timeout) as response:
-                message: dict[str, Any] = json.load(response)["choices"][0]["message"]
-        except urllib.error.HTTPError as error:
-            detail = error.read(4096).decode("utf-8", errors="replace")
-            raise RuntimeError(f"Chat completion HTTP {error.code}: {detail}") from error
+        message = _chat_completion(self.api_base, self.api_key_env, self.request_timeout, body)
         if message.get("tool_calls") or not isinstance(message.get("content"), str):
             raise ValueError("Direct chat requires a textual final answer")
         return message["content"]
@@ -176,18 +186,7 @@ class StatefulToolAgent(DirectChatAgent):
 
     def _message(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> dict[str, Any]:
         body = {"model": self.model_name, "messages": messages, "tools": tools}
-        headers = {"Content-Type": "application/json"}
-        if self.api_key_env is not None:
-            headers["Authorization"] = f"Bearer {os.environ[self.api_key_env]}"
-        request = urllib.request.Request(
-            f"{self.api_base}{CHAT_COMPLETIONS_PATH}", data=json.dumps(body).encode(), headers=headers, method="POST"
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=self.request_timeout) as response:
-                message = json.load(response)["choices"][0]["message"]
-        except urllib.error.HTTPError as error:
-            detail = error.read(4096).decode("utf-8", errors="replace")
-            raise RuntimeError(f"Chat completion HTTP {error.code}: {detail}") from error
+        message = _chat_completion(self.api_base, self.api_key_env, self.request_timeout, body)
         if not isinstance(message, dict) or message.get("role") != "assistant":
             raise ValueError("Stateful completion requires an assistant message")
         return message
