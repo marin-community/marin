@@ -1,0 +1,12 @@
+{
+  "dataset": "nvidia/Nemotron-RL-agent-workplace_assistant",
+  "dataset_revision": "c86a908379e0a361a573c395e175d3c1aa128e6c",
+  "dataset_owner": "NVIDIA Corporation",
+  "dataset_license": "CC-BY-4.0",
+  "dataset_card_url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-agent-workplace_assistant/blob/c86a908379e0a361a573c395e175d3c1aa128e6c/README.md",
+  "dataset_card_sha256": "afb783d398188a18a54222f9f124930bbf6de051587ce3c4949684bb9da8931a",
+  "example_source": "NVIDIA-NeMo/Gym resources_servers/workplace_assistant/data/example.jsonl row 0",
+  "example_revision": "1e668906d2e69a9e8ee9aaafc60050a4025d9688",
+  "example_license": "Apache-2.0",
+  "example_license_url": "https://github.com/NVIDIA-NeMo/Gym/blob/1e668906d2e69a9e8ee9aaafc60050a4025d9688/resources_servers/workplace_assistant/README.md"
+}

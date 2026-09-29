@@ -51,6 +51,8 @@ EXCLUDE_PATTERNS = [
     ".git/**",
     ".github/**",
     "tests/snapshots/**",
+    # These byte-pinned upstream seeds include trailing spaces and missing final newlines.
+    "lib/taskcompendium/src/taskcompendium/providers/nemo_workplace/vendor/csv_data/**/*.csv",
     # grpc generated files
     "**/*_connect.py",
     "**/*_pb2.py",

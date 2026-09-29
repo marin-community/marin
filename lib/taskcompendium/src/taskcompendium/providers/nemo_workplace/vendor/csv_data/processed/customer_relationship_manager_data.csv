@@ -1,0 +1,201 @@
+customer_id,assigned_to_email,customer_name,customer_email,customer_phone,last_contact_date,product_interest,status,follow_up_by,notes
+00000189,lena.schmidt@atlas.com,Taylor Jackson,taylor.jackson@nanolabs,,2023-11-30 23:59:00,Consulting,Lost,2023-12-22 23:59:00,2023-11-07: Had a call. 2023-11-25: Had a call. 
+00000107,sofia.santos@atlas.com,Quinn Harris,quinn.harris@nanoforcerobotics,,2023-11-30 23:59:00,Consulting,Proposal,2023-12-14 23:59:00,2023-11-26: Saw the demo. 2023-11-29: Had a call. 2023-10-27: Had a call. 
+00000052,raj.patel@atlas.com,Jaden White,jaden.white@protracefoods,724-857-2625,2023-11-30 23:59:00,Hardware,Won,2023-12-13 23:59:00,2023-10-17: Had a call. 
+00000102,sofia.santos@atlas.com,Alex Thomas,alex.thomas@proenergy,,2023-11-30 23:59:00,Hardware,Qualified,2023-12-22 23:59:00,2023-10-15: On holiday. 
+00000187,lena.schmidt@atlas.com,Quinn Robinson,quinn.robinson@flexenergy,399-396-5380,2023-11-30 23:59:00,Hardware,Lead,2023-12-23 23:59:00,
+00000154,raj.patel@atlas.com,Jordan Garcia,jordan.garcia@forceenergy,607-148-6642,2023-11-30 23:59:00,Services,Lead,2023-12-27 23:59:00,2023-11-20: Saw the demo. 2023-11-14: Met in person. 2023-10-27: On holiday. 
+00000105,nadia.moreau@atlas.com,Reese Taylor,reese.taylor@pointdynamics,,2023-11-30 23:59:00,Hardware,Won,2023-12-25 23:59:00,2023-10-30: Saw the demo. 2023-11-19: Met in person. 2023-11-02: Met in person. 
+00000149,raj.patel@atlas.com,Jessie Thomas,jessie.thomas@greendynamicsecurity,,2023-11-29 23:59:00,Services,Lead,2023-12-21 23:59:00,
+00000198,nadia.moreau@atlas.com,Angel Williams,angel.williams@techinteractivefoods,368-320-1652,2023-11-29 23:59:00,Software,Proposal,2023-12-07 23:59:00,2023-11-02: Saw the demo. 2023-11-10: Met in person. 2023-10-28: Met in person. 
+00000197,raj.patel@atlas.com,Angel Robinson,angel.robinson@greencloud,,2023-11-29 23:59:00,Services,Proposal,2023-12-16 23:59:00,2023-10-25: Met in person. 
+00000060,akira.sato@atlas.com,Taylor Wilson,taylor.wilson@visionsoftware,952-257-9165,2023-11-29 23:59:00,Consulting,Won,2023-12-28 23:59:00,2023-11-02: Saw the demo. 2023-10-27: Met in person. 
+00000141,lena.schmidt@atlas.com,Jordan Davis,jordan.davis@omnienergy,906-607-4052,2023-11-29 23:59:00,Training,Proposal,2023-12-29 23:59:00,2023-11-26: Had a call. 2023-10-01: Saw the demo. 
+00000159,sofia.santos@atlas.com,Parker Martin,parker.martin@solarsystems,,2023-11-28 23:59:00,Hardware,Qualified,2023-12-11 23:59:00,2023-10-21: Met in person. 2023-10-03: On holiday. 
+00000033,akira.sato@atlas.com,Morgan Thompson,morgan.thompson@solarpathtech,,2023-11-28 23:59:00,Training,Proposal,2023-12-08 23:59:00,2023-10-09: Met in person. 2023-11-12: Saw the demo. 2023-11-30: Met in person. 
+00000028,akira.sato@atlas.com,Avery Miller,avery.miller@interactiveelectronics,,2023-11-28 23:59:00,Training,Lost,2023-12-15 23:59:00,2023-11-12: Had a call. 2023-11-16: Saw the demo. 
+00000054,nadia.moreau@atlas.com,Quinn Martinez,quinn.martinez@visionelectronics,330-763-3441,2023-11-28 23:59:00,Hardware,Lost,2023-12-13 23:59:00,2023-10-05: Had a call. 
+00000009,lena.schmidt@atlas.com,Cameron Brown,cameron.brown@pathenergy,,2023-11-28 23:59:00,Services,Won,2023-12-05 23:59:00,2023-11-01: Had a call. 2023-10-08: Saw the demo. 
+00000161,lena.schmidt@atlas.com,Dakota Davis,dakota.davis@peakenergy,659-600-4015,2023-11-28 23:59:00,Training,Qualified,2023-12-22 23:59:00,
+00000076,lena.schmidt@atlas.com,Dakota Wilson,dakota.wilson@pointsystems,,2023-11-27 23:59:00,Software,Lead,2023-12-24 23:59:00,2023-10-04: Met in person. 2023-10-18: On holiday. 
+00000165,lena.schmidt@atlas.com,Jordan Wilson,jordan.wilson@ultrafoods,147-176-5593,2023-11-27 23:59:00,Hardware,Lost,2023-12-21 23:59:00,
+00000130,akira.sato@atlas.com,Rahul Johnson,rahul.johnson@mindanalytics,,2023-11-26 23:59:00,Services,Lost,2023-12-23 23:59:00,2023-10-19: Had a call. 2023-11-24: Had a call. 2023-10-28: On holiday. 
+00000126,akira.sato@atlas.com,Cameron Martinez,cameron.martinez@omnibiotech,,2023-11-26 23:59:00,Consulting,Lost,2023-12-23 23:59:00,2023-11-11: Saw the demo. 2023-10-31: On holiday. 
+00000074,akira.sato@atlas.com,Casey Brown,casey.brown@biotech,218-199-4846,2023-11-26 23:59:00,Services,Proposal,2023-12-20 23:59:00,2023-10-25: Met in person. 
+00000142,raj.patel@atlas.com,Shannon Taylor,shannon.taylor@solarsecurity,,2023-11-26 23:59:00,Consulting,Lost,2023-12-07 23:59:00,2023-10-18: On holiday. 2023-11-21: Had a call. 2023-10-22: On holiday. 
+00000038,raj.patel@atlas.com,Alex Jackson,alex.jackson@blueglobalfoods,758-538-3223,2023-11-25 23:59:00,Consulting,Lost,2023-12-16 23:59:00,2023-10-04: Saw the demo. 
+00000135,raj.patel@atlas.com,Shannon White,shannon.white@nextelectronics,613-893-8726,2023-11-25 23:59:00,Hardware,Proposal,2023-12-25 23:59:00,
+00000106,raj.patel@atlas.com,Jordan Martin,jordan.martin@visionsecurity,,2023-11-24 23:59:00,Services,Qualified,2023-12-17 23:59:00,
+00000072,akira.sato@atlas.com,Peyton Anderson,peyton.anderson@quantinteractivesoftware,872-331-7511,2023-11-24 23:59:00,Training,Qualified,2023-12-18 23:59:00,2023-10-06: Met in person. 2023-10-01: Saw the demo. 
+00000156,lena.schmidt@atlas.com,Jamie Jackson,jamie.jackson@cyberlabs,762-180-8369,2023-11-24 23:59:00,Training,Won,2023-12-12 23:59:00,
+00000117,nadia.moreau@atlas.com,Riley Thomas,riley.thomas@nanoglobalenergy,,2023-11-24 23:59:00,Services,Lead,2023-12-20 23:59:00,2023-10-03: On holiday. 2023-10-05: On holiday. 2023-11-19: Saw the demo. 
+00000069,nadia.moreau@atlas.com,Jaden Thomas,jaden.thomas@bluecoreanalytics,,2023-11-23 23:59:00,Services,Won,2023-12-21 23:59:00,2023-10-18: Had a call. 2023-11-06: Had a call. 2023-11-28: Met in person. 
+00000166,lena.schmidt@atlas.com,Taylor Taylor,taylor.taylor@linkfoods,,2023-11-23 23:59:00,Training,Lost,2023-12-12 23:59:00,2023-10-25: On holiday. 2023-11-20: Had a call. 
+00000036,akira.sato@atlas.com,Shannon Garcia,shannon.garcia@solardynamicelectronics,,2023-11-23 23:59:00,Services,Lost,2023-12-13 23:59:00,2023-11-27: Had a call. 2023-11-24: Met in person. 2023-10-31: Had a call. 
+00000125,sofia.santos@atlas.com,Morgan Robinson,morgan.robinson@ecoscopeinnovations,,2023-11-22 23:59:00,Software,Proposal,2023-11-29 23:59:00,
+00000163,nadia.moreau@atlas.com,Parker Moore,parker.moore@globalanalytics,,2023-11-22 23:59:00,Hardware,Won,2023-12-21 23:59:00,2023-11-21: On holiday. 2023-10-07: Had a call. 2023-11-03: On holiday. 
+00000005,raj.patel@atlas.com,Quinn Garcia,quinn.garcia@cyberdynamicinnovations,,2023-11-22 23:59:00,Training,Lost,2023-11-30 23:59:00,2023-10-26: Saw the demo. 2023-10-05: On holiday. 
+00000183,lena.schmidt@atlas.com,Shannon Harris,shannon.harris@ecopointtech,596-239-4196,2023-11-22 23:59:00,Software,Proposal,2023-12-11 23:59:00,2023-10-27: Met in person. 2023-10-27: Met in person. 2023-11-01: On holiday. 
+00000043,akira.sato@atlas.com,Rahul Williams,rahul.williams@nanoinnovations,,2023-11-22 23:59:00,Consulting,Lost,2023-12-14 23:59:00,
+00000114,sofia.santos@atlas.com,Peyton Miller,peyton.miller@biodynamics,417-627-7524,2023-11-22 23:59:00,Software,Lost,2023-12-16 23:59:00,2023-10-17: Had a call. 2023-11-18: On holiday. 2023-10-19: Saw the demo. 
+00000025,sofia.santos@atlas.com,Casey Jackson,casey.jackson@biolinkhardware,,2023-11-22 23:59:00,Hardware,Lead,2023-12-13 23:59:00,2023-10-20: On holiday. 2023-10-15: Had a call. 
+00000044,akira.sato@atlas.com,Jamie White,jamie.white@wavecloud,,2023-11-21 23:59:00,Software,Lost,2023-12-15 23:59:00,2023-10-30: Met in person. 2023-11-22: Saw the demo. 2023-10-21: On holiday. 
+00000120,sofia.santos@atlas.com,Jamie Williams,jamie.williams@solarspaceenergy,,2023-11-21 23:59:00,Training,Proposal,2023-12-19 23:59:00,2023-11-12: Saw the demo. 2023-11-15: Had a call. 
+00000078,lena.schmidt@atlas.com,Shannon Brown,shannon.brown@ecowavesolutions,233-653-5106,2023-11-21 23:59:00,Software,Won,2023-12-03 23:59:00,
+00000098,lena.schmidt@atlas.com,Angel Thompson,angel.thompson@nextspacetech,,2023-11-21 23:59:00,Training,Won,2023-12-08 23:59:00,
+00000168,raj.patel@atlas.com,Avery Jackson,avery.jackson@scopeenergy,489-187-5839,2023-11-21 23:59:00,Software,Lost,2023-12-05 23:59:00,
+00000024,raj.patel@atlas.com,Avery White,avery.white@ecolinkrobotics,,2023-11-21 23:59:00,Hardware,Lost,2023-12-03 23:59:00,2023-10-02: On holiday. 2023-11-17: Saw the demo. 2023-11-20: Met in person. 
+00000051,sofia.santos@atlas.com,Reese Jones,reese.jones@traceelectronics,,2023-11-20 23:59:00,Consulting,Lead,2023-12-16 23:59:00,2023-11-19: Met in person. 
+00000097,raj.patel@atlas.com,Kerry Thompson,kerry.thompson@scopesoftware,,2023-11-20 23:59:00,Consulting,Proposal,2023-12-20 23:59:00,
+00000064,akira.sato@atlas.com,Parker Harris,parker.harris@forcerobotics,258-176-8692,2023-11-20 23:59:00,Services,Proposal,2023-12-05 23:59:00,2023-11-09: Met in person. 2023-11-11: Had a call. 
+00000027,nadia.moreau@atlas.com,Jordan Jones,jordan.jones@pointelectronics,,2023-11-20 23:59:00,Consulting,Qualified,2023-12-07 23:59:00,2023-11-08: Had a call. 2023-10-25: On holiday. 2023-10-17: Had a call. 
+00000101,sofia.santos@atlas.com,Kerry Williams,kerry.williams@accesssecurity,,2023-11-20 23:59:00,Consulting,Proposal,2023-12-07 23:59:00,2023-11-12: Had a call. 
+00000186,nadia.moreau@atlas.com,Rahul Robinson,rahul.robinson@omnitraceenergy,,2023-11-20 23:59:00,Training,Lost,2023-12-03 23:59:00,2023-11-21: Had a call. 
+00000123,raj.patel@atlas.com,Dakota Harris,dakota.harris@peakventures,755-701-3981,2023-11-19 23:59:00,Services,Won,2023-11-30 23:59:00,2023-11-02: Had a call. 2023-11-23: Had a call. 2023-11-03: On holiday. 
+00000167,akira.sato@atlas.com,Casey White,casey.white@flexlogics,887-728-7499,2023-11-19 23:59:00,Services,Lead,2023-12-06 23:59:00,
+00000171,raj.patel@atlas.com,Taylor Robinson,taylor.robinson@ecoaccessinnovations,398-523-7353,2023-11-19 23:59:00,Consulting,Won,2023-11-28 23:59:00,2023-11-06: On holiday. 
+00000188,lena.schmidt@atlas.com,Quinn Brown,quinn.brown@peaknetworks,429-948-5055,2023-11-18 23:59:00,Consulting,Lead,2023-12-16 23:59:00,2023-11-01: On holiday. 2023-11-06: Saw the demo. 2023-11-10: Met in person. 
+00000001,akira.sato@atlas.com,Jessie Wilson,jessie.wilson@solarwavefoods,,2023-11-18 23:59:00,Software,Qualified,2023-11-30 23:59:00,2023-10-22: Saw the demo. 2023-10-10: On holiday. 2023-11-18: Saw the demo. 
+00000070,akira.sato@atlas.com,Rahul Wilson,rahul.wilson@wavebiotech,,2023-11-18 23:59:00,Software,Lost,2023-12-18 23:59:00,2023-11-10: Had a call. 
+00000034,lena.schmidt@atlas.com,Avery Harris,avery.harris@innohardware,,2023-11-18 23:59:00,Services,Lead,2023-12-02 23:59:00,2023-11-19: Met in person. 2023-11-10: On holiday. 
+00000090,nadia.moreau@atlas.com,Quinn Taylor,quinn.taylor@neosystems,,2023-11-17 23:59:00,Training,Won,2023-12-07 23:59:00,2023-10-09: Met in person. 
+00000016,lena.schmidt@atlas.com,Riley Moore,riley.moore@forceanalytics,,2023-11-16 23:59:00,Services,Qualified,2023-12-10 23:59:00,2023-10-10: On holiday. 2023-10-19: On holiday. 2023-10-04: Had a call. 
+00000146,lena.schmidt@atlas.com,Angel Garcia,angel.garcia@ultratracenetworks,638-557-9653,2023-11-15 23:59:00,Training,Qualified,2023-12-03 23:59:00,
+00000119,lena.schmidt@atlas.com,Alex Davis,alex.davis@accesscloud,220-368-5264,2023-11-15 23:59:00,Consulting,Won,2023-12-06 23:59:00,2023-11-09: Saw the demo. 
+00000020,lena.schmidt@atlas.com,Reese Thomas,reese.thomas@spaceenergy,,2023-11-15 23:59:00,Training,Lost,2023-12-01 23:59:00,
+00000021,sofia.santos@atlas.com,Jamie Moore,jamie.moore@quantpathsystems,378-388-4450,2023-11-15 23:59:00,Training,Lead,2023-12-02 23:59:00,2023-11-13: Saw the demo. 
+00000042,sofia.santos@atlas.com,Riley Miller,riley.miller@greenlinkfoods,,2023-11-14 23:59:00,Training,Qualified,2023-11-30 23:59:00,
+00000053,raj.patel@atlas.com,Avery Williams,avery.williams@innosolutions,,2023-11-14 23:59:00,Consulting,Qualified,2023-12-10 23:59:00,2023-10-19: Had a call. 2023-10-15: Saw the demo. 2023-11-15: Saw the demo. 
+00000104,nadia.moreau@atlas.com,Kerry Davis,kerry.davis@solartech,,2023-11-13 23:59:00,Consulting,Won,2023-12-13 23:59:00,2023-10-29: Saw the demo. 
+00000073,akira.sato@atlas.com,Rahul Moore,rahul.moore@bluepointdesigns,,2023-11-13 23:59:00,Consulting,Lost,2023-11-27 23:59:00,2023-10-02: Saw the demo. 2023-11-28: On holiday. 2023-11-11: Had a call. 
+00000139,akira.sato@atlas.com,Reese Wilson,reese.wilson@biosystems,834-583-2647,2023-11-13 23:59:00,Training,Won,2023-11-24 23:59:00,
+00000013,sofia.santos@atlas.com,Cameron Jones,cameron.jones@quantelectronics,520-578-1887,2023-11-13 23:59:00,Software,Lead,2023-12-10 23:59:00,
+00000148,lena.schmidt@atlas.com,Jordan Harris,jordan.harris@nextcloud,677-159-8575,2023-11-13 23:59:00,Consulting,Lost,2023-11-29 23:59:00,
+00000099,sofia.santos@atlas.com,Parker Robinson,parker.robinson@innoventures,496-518-6543,2023-11-13 23:59:00,Services,Qualified,2023-12-09 23:59:00,
+00000026,sofia.santos@atlas.com,Quinn Williams,quinn.williams@futureventures,,2023-11-13 23:59:00,Hardware,Proposal,2023-12-07 23:59:00,2023-11-30: Had a call. 2023-10-08: Saw the demo. 
+00000056,lena.schmidt@atlas.com,Shannon Robinson,shannon.robinson@futureinteractivesolutions,,2023-11-13 23:59:00,Services,Proposal,2023-12-08 23:59:00,
+00000084,nadia.moreau@atlas.com,Taylor White,taylor.white@peakventures,161-700-6400,2023-11-12 23:59:00,Services,Qualified,2023-11-22 23:59:00,2023-10-23: Met in person. 2023-11-25: Had a call. 2023-10-19: Saw the demo. 
+00000140,nadia.moreau@atlas.com,Angel Martin,angel.martin@ultraanalytics,,2023-11-11 23:59:00,Training,Won,2023-11-19 23:59:00,
+00000032,raj.patel@atlas.com,Cameron Jackson,cameron.jackson@geolinkdesigns,,2023-11-11 23:59:00,Software,Lead,2023-12-10 23:59:00,
+00000112,lena.schmidt@atlas.com,Parker Garcia,parker.garcia@techminddesigns,,2023-11-10 23:59:00,Services,Won,2023-11-29 23:59:00,2023-10-17: Had a call. 2023-10-23: Had a call. 
+00000067,lena.schmidt@atlas.com,Kerry Jackson,kerry.jackson@mindnetworks,246-337-8555,2023-11-10 23:59:00,Training,Won,2023-11-25 23:59:00,2023-10-17: Had a call. 2023-11-27: Met in person. 2023-11-27: Saw the demo. 
+00000145,akira.sato@atlas.com,Dakota Taylor,dakota.taylor@portdesigns,888-418-2923,2023-11-10 23:59:00,Consulting,Won,2023-11-26 23:59:00,2023-11-09: On holiday. 2023-10-15: On holiday. 
+00000194,raj.patel@atlas.com,Parker Martinez,parker.martinez@techbiotech,459-839-4490,2023-11-10 23:59:00,Training,Lead,2023-12-10 23:59:00,2023-11-28: Met in person. 
+00000095,akira.sato@atlas.com,Dakota Martinez,dakota.martinez@scopesoftware,,2023-11-10 23:59:00,Software,Lead,2023-12-06 23:59:00,2023-11-25: Saw the demo. 2023-10-10: Met in person. 
+00000143,raj.patel@atlas.com,Alex Anderson,alex.anderson@prostreamfoods,,2023-11-09 23:59:00,Software,Won,2023-12-06 23:59:00,2023-11-22: Met in person. 2023-11-02: Saw the demo. 2023-10-06: Met in person. 
+00000136,raj.patel@atlas.com,Riley Anderson,riley.anderson@innosoftware,659-462-5331,2023-11-09 23:59:00,Training,Lost,2023-12-01 23:59:00,2023-10-16: Saw the demo. 
+00000127,sofia.santos@atlas.com,Taylor Johnson,taylor.johnson@innosoftware,575-308-6573,2023-11-08 23:59:00,Consulting,Won,2023-11-19 23:59:00,2023-11-25: Saw the demo. 2023-11-16: Saw the demo. 
+00000004,akira.sato@atlas.com,Rahul Davis,rahul.davis@streamventures,373-818-2169,2023-11-08 23:59:00,Hardware,Lead,2023-12-05 23:59:00,2023-11-04: On holiday. 
+00000176,sofia.santos@atlas.com,Reese Moore,reese.moore@nextaccesselectronics,559-712-8851,2023-11-07 23:59:00,Software,Won,2023-11-26 23:59:00,2023-11-04: Had a call. 2023-11-20: Saw the demo. 2023-11-14: Had a call. 
+00000133,nadia.moreau@atlas.com,Jamie Anderson,jamie.anderson@ecoinnovations,731-857-5902,2023-11-07 23:59:00,Software,Lead,2023-11-24 23:59:00,2023-11-15: Saw the demo. 2023-10-31: Had a call. 2023-10-24: Saw the demo. 
+00000011,lena.schmidt@atlas.com,Dakota Thompson,dakota.thompson@solarlinksystems,165-446-1344,2023-11-07 23:59:00,Software,Qualified,2023-12-01 23:59:00,2023-11-07: On holiday. 
+00000180,lena.schmidt@atlas.com,Riley Smith,riley.smith@wavedynamics,928-915-2025,2023-11-06 23:59:00,Hardware,Lead,2023-11-16 23:59:00,2023-10-24: Saw the demo. 
+00000109,nadia.moreau@atlas.com,Angel Harris,angel.harris@ecointeractivesolutions,362-320-3449,2023-11-05 23:59:00,Hardware,Lead,2023-12-05 23:59:00,2023-10-08: Saw the demo. 2023-10-16: Saw the demo. 2023-10-08: Had a call. 
+00000023,raj.patel@atlas.com,Taylor Brown,taylor.brown@pointtech,,2023-11-05 23:59:00,Services,Won,2023-11-16 23:59:00,2023-10-09: Had a call. 2023-10-20: Saw the demo. 2023-11-27: Had a call. 
+00000190,lena.schmidt@atlas.com,Cameron White,cameron.white@ultrahardware,948-390-6533,2023-11-05 23:59:00,Services,Qualified,2023-11-30 23:59:00,2023-11-06: Met in person. 
+00000049,nadia.moreau@atlas.com,Alex Garcia,alex.garcia@nextdynamiclabs,,2023-11-05 23:59:00,Software,Qualified,2023-11-21 23:59:00,2023-11-10: Met in person. 
+00000184,sofia.santos@atlas.com,Jordan Moore,jordan.moore@cybercoresecurity,899-568-9115,2023-11-05 23:59:00,Training,Qualified,2023-11-28 23:59:00,
+00000199,lena.schmidt@atlas.com,Kerry Brown,kerry.brown@futurecorelogics,623-308-3545,2023-11-04 23:59:00,Software,Won,2023-11-21 23:59:00,2023-11-07: Had a call. 2023-10-20: Met in person. 2023-11-16: On holiday. 
+00000007,sofia.santos@atlas.com,Jamie Davis,jamie.davis@omnibiotech,490-710-8668,2023-11-03 23:59:00,Software,Proposal,2023-11-18 23:59:00,
+00000196,raj.patel@atlas.com,Kerry Robinson,kerry.robinson@procoresolutions,,2023-11-03 23:59:00,Services,Qualified,2023-11-29 23:59:00,2023-11-17: Met in person. 
+00000111,nadia.moreau@atlas.com,Kerry Thomas,kerry.thomas@cyberforcefoods,780-784-2402,2023-11-03 23:59:00,Training,Proposal,2023-11-21 23:59:00,
+00000089,sofia.santos@atlas.com,Rahul White,rahul.white@quantanalytics,,2023-11-03 23:59:00,Software,Won,2023-12-01 23:59:00,2023-10-03: On holiday. 2023-10-26: Had a call. 
+00000030,nadia.moreau@atlas.com,Jessie Martinez,jessie.martinez@ecoinnovations,552-791-4501,2023-11-02 23:59:00,Services,Proposal,2023-11-24 23:59:00,2023-11-12: Had a call. 
+00000008,nadia.moreau@atlas.com,Shannon Jones,shannon.jones@proelectronics,103-839-5315,2023-11-02 23:59:00,Services,Proposal,2023-11-14 23:59:00,
+00000017,lena.schmidt@atlas.com,Jaden Martin,jaden.martin@nanoedgecloud,,2023-11-02 23:59:00,Hardware,Lead,2023-11-11 23:59:00,2023-10-05: Had a call. 
+00000115,nadia.moreau@atlas.com,Jessie Jackson,jessie.jackson@solarflexdesigns,,2023-11-01 23:59:00,Software,Lead,2023-11-30 23:59:00,2023-10-24: Saw the demo. 2023-11-21: Had a call. 2023-11-16: Met in person. 
+00000063,lena.schmidt@atlas.com,Jessie Johnson,jessie.johnson@neohardware,779-911-3492,2023-11-01 23:59:00,Software,Lead,2023-11-09 23:59:00,2023-11-02: Saw the demo. 
+00000129,raj.patel@atlas.com,Morgan Anderson,morgan.anderson@bluestreaminnovations,,2023-11-01 23:59:00,Training,Lead,2023-11-24 23:59:00,2023-11-01: Saw the demo. 2023-11-01: Had a call. 2023-10-06: Met in person. 
+00000037,nadia.moreau@atlas.com,Jessie Garcia,jessie.garcia@aerobiotech,324-379-8140,2023-11-01 23:59:00,Hardware,Proposal,2023-11-08 23:59:00,2023-10-22: Met in person. 2023-11-16: On holiday. 2023-11-23: Met in person. 
+00000040,akira.sato@atlas.com,Jordan Smith,jordan.smith@globaldynamics,256-344-3068,2023-10-31 23:59:00,Training,Won,2023-11-28 23:59:00,
+00000039,lena.schmidt@atlas.com,Dakota Anderson,dakota.anderson@neodesigns,358-954-2341,2023-10-31 23:59:00,Services,Won,2023-11-07 23:59:00,
+00000172,raj.patel@atlas.com,Quinn Martin,quinn.martin@nextlogics,382-531-5911,2023-10-31 23:59:00,Training,Proposal,2023-11-09 23:59:00,2023-10-17: On holiday. 2023-11-16: Met in person. 
+00000179,akira.sato@atlas.com,Morgan Wilson,morgan.wilson@nanopathenergy,438-673-7985,2023-10-30 23:59:00,Training,Won,2023-11-13 23:59:00,2023-11-10: On holiday. 2023-10-12: Met in person. 2023-10-26: Had a call. 
+00000128,nadia.moreau@atlas.com,Casey Anderson,casey.anderson@cybersoftware,,2023-10-29 23:59:00,Services,Lead,2023-11-12 23:59:00,2023-10-07: Had a call. 
+00000177,lena.schmidt@atlas.com,Alex Jones,alex.jones@portnetworks,631-671-4621,2023-10-29 23:59:00,Services,Lead,2023-11-16 23:59:00,2023-10-30: On holiday. 2023-10-23: Had a call. 2023-10-31: Had a call. 
+00000147,akira.sato@atlas.com,Avery Thompson,avery.thompson@ultrapathfoods,268-435-9525,2023-10-29 23:59:00,Software,Proposal,2023-11-08 23:59:00,2023-11-15: Met in person. 
+00000118,sofia.santos@atlas.com,Jordan Robinson,jordan.robinson@nextsoftware,,2023-10-29 23:59:00,Consulting,Lost,2023-11-07 23:59:00,2023-11-03: Saw the demo. 
+00000059,lena.schmidt@atlas.com,Kerry Martin,kerry.martin@solartech,662-234-5719,2023-10-29 23:59:00,Services,Proposal,2023-11-27 23:59:00,2023-10-08: Had a call. 2023-11-10: On holiday. 2023-11-15: On holiday. 
+00000047,lena.schmidt@atlas.com,Riley Wilson,riley.wilson@profoods,666-643-6632,2023-10-28 23:59:00,Services,Won,2023-11-27 23:59:00,2023-10-23: Met in person. 2023-10-18: Saw the demo. 
+00000029,raj.patel@atlas.com,Shannon Jackson,shannon.jackson@propeaksecurity,,2023-10-27 23:59:00,Services,Lost,2023-11-24 23:59:00,2023-11-13: On holiday. 2023-11-09: Saw the demo. 2023-10-26: Had a call. 
+00000170,nadia.moreau@atlas.com,Morgan White,morgan.white@pathsecurity,,2023-10-27 23:59:00,Software,Lost,2023-11-06 23:59:00,
+00000087,lena.schmidt@atlas.com,Riley Williams,riley.williams@interactivesolutions,643-320-7163,2023-10-27 23:59:00,Training,Proposal,2023-11-17 23:59:00,2023-10-11: Saw the demo. 2023-10-20: Saw the demo. 
+00000075,akira.sato@atlas.com,Jaden Brown,jaden.brown@mindsystems,,2023-10-27 23:59:00,Services,Won,2023-11-11 23:59:00,
+00000158,sofia.santos@atlas.com,Cameron Miller,cameron.miller@linkhardware,718-820-4350,2023-10-26 23:59:00,Training,Lost,2023-11-09 23:59:00,2023-11-19: Saw the demo. 2023-10-25: Met in person. 
+00000131,sofia.santos@atlas.com,Riley Johnson,riley.johnson@bluesecurity,666-395-2204,2023-10-25 23:59:00,Consulting,Lost,2023-11-17 23:59:00,2023-11-18: Saw the demo. 2023-11-22: Had a call. 2023-10-09: Had a call. 
+00000160,akira.sato@atlas.com,Avery Martinez,avery.martinez@bluecoreelectronics,300-437-4768,2023-10-25 23:59:00,Services,Lead,2023-11-19 23:59:00,2023-11-01: Saw the demo. 
+00000164,nadia.moreau@atlas.com,Peyton Williams,peyton.williams@biologics,,2023-10-25 23:59:00,Consulting,Lost,2023-11-18 23:59:00,2023-10-04: Had a call. 2023-11-14: On holiday. 2023-10-06: Met in person. 
+00000062,raj.patel@atlas.com,Jamie Harris,jamie.harris@aerohardware,665-881-9903,2023-10-25 23:59:00,Training,Lead,2023-11-15 23:59:00,2023-11-25: On holiday. 2023-11-14: On holiday. 
+00000182,akira.sato@atlas.com,Peyton Jones,peyton.jones@peakventures,,2023-10-25 23:59:00,Consulting,Won,2023-11-14 23:59:00,2023-11-06: Met in person. 
+00000195,nadia.moreau@atlas.com,Taylor Jones,taylor.jones@scopesystems,,2023-10-25 23:59:00,Hardware,Proposal,2023-11-12 23:59:00,2023-10-21: On holiday. 2023-10-16: Saw the demo. 2023-11-11: Had a call. 
+00000181,lena.schmidt@atlas.com,Parker Anderson,parker.anderson@ecodesigns,701-216-6700,2023-10-23 23:59:00,Training,Proposal,2023-11-13 23:59:00,2023-11-22: Saw the demo. 
+00000066,lena.schmidt@atlas.com,Peyton Smith,peyton.smith@bioinnovations,,2023-10-23 23:59:00,Hardware,Won,2023-11-10 23:59:00,2023-10-10: On holiday. 2023-11-03: Met in person. 2023-11-06: On holiday. 
+00000173,nadia.moreau@atlas.com,Dakota Jones,dakota.jones@nextanalytics,,2023-10-22 23:59:00,Services,Lost,2023-11-17 23:59:00,2023-11-21: Saw the demo. 2023-10-29: Saw the demo. 2023-10-28: On holiday. 
+00000100,raj.patel@atlas.com,Casey Garcia,casey.garcia@waveanalytics,972-772-3463,2023-10-22 23:59:00,Services,Lead,2023-10-31 23:59:00,2023-11-28: Saw the demo. 
+00000022,lena.schmidt@atlas.com,Jordan Williams,jordan.williams@omnidynamiclabs,,2023-10-22 23:59:00,Training,Qualified,2023-11-02 23:59:00,2023-10-11: Met in person. 2023-11-05: Met in person. 
+00000093,raj.patel@atlas.com,Riley Thompson,riley.thompson@coredesigns,,2023-10-22 23:59:00,Training,Proposal,2023-11-05 23:59:00,2023-11-19: On holiday. 2023-10-05: Had a call. 
+00000103,raj.patel@atlas.com,Casey Thompson,casey.thompson@dynamiccloud,,2023-10-22 23:59:00,Hardware,Won,2023-11-17 23:59:00,2023-11-08: Met in person. 
+00000071,akira.sato@atlas.com,Jordan Martinez,jordan.martinez@smartrobotics,,2023-10-21 23:59:00,Hardware,Lost,2023-11-20 23:59:00,2023-10-12: On holiday. 2023-10-09: Saw the demo. 2023-11-03: Saw the demo. 
+00000081,nadia.moreau@atlas.com,Jessie Jones,jessie.jones@geointeractivesoftware,,2023-10-21 23:59:00,Services,Proposal,2023-11-16 23:59:00,2023-10-05: On holiday. 
+00000108,raj.patel@atlas.com,Reese Jackson,reese.jackson@greenlinkventures,,2023-10-21 23:59:00,Services,Lead,2023-10-31 23:59:00,2023-11-20: On holiday. 2023-10-09: Had a call. 
+00000058,sofia.santos@atlas.com,Angel Taylor,angel.taylor@alphasecurity,190-422-5135,2023-10-21 23:59:00,Hardware,Proposal,2023-10-31 23:59:00,2023-11-25: Had a call. 2023-11-12: Met in person. 2023-10-27: Had a call. 
+00000116,sofia.santos@atlas.com,Morgan Garcia,morgan.garcia@provisioninnovations,435-776-5843,2023-10-20 23:59:00,Training,Lead,2023-11-10 23:59:00,2023-10-11: Met in person. 2023-10-23: Met in person. 2023-10-03: Saw the demo. 
+00000185,nadia.moreau@atlas.com,Avery Johnson,avery.johnson@solarsecurity,204-853-5055,2023-10-20 23:59:00,Hardware,Won,2023-10-28 23:59:00,2023-10-17: Saw the demo. 2023-11-25: Had a call. 2023-10-29: Had a call. 
+00000080,akira.sato@atlas.com,Casey Harris,casey.harris@nanotracenetworks,844-902-9543,2023-10-20 23:59:00,Software,Lead,2023-11-10 23:59:00,
+00000041,akira.sato@atlas.com,Quinn Thomas,quinn.thomas@tracebiotech,835-217-3683,2023-10-20 23:59:00,Services,Proposal,2023-10-30 23:59:00,
+00000055,akira.sato@atlas.com,Jaden Taylor,jaden.taylor@spacesystems,,2023-10-20 23:59:00,Training,Qualified,2023-11-18 23:59:00,2023-11-30: Saw the demo. 2023-11-02: Met in person. 2023-10-29: Had a call. 
+00000137,sofia.santos@atlas.com,Peyton Taylor,peyton.taylor@ultrahardware,457-673-5480,2023-10-19 23:59:00,Services,Qualified,2023-10-29 23:59:00,2023-11-27: Met in person. 2023-11-22: Saw the demo. 2023-11-19: On holiday. 
+00000174,nadia.moreau@atlas.com,Cameron Martin,cameron.martin@neoenergy,,2023-10-19 23:59:00,Services,Qualified,2023-11-18 23:59:00,2023-11-06: On holiday. 2023-10-21: Met in person. 2023-10-18: Met in person. 
+00000138,nadia.moreau@atlas.com,Taylor Thomas,taylor.thomas@solarmindlabs,306-947-9824,2023-10-18 23:59:00,Hardware,Qualified,2023-11-11 23:59:00,2023-10-09: Had a call. 2023-11-09: On holiday. 
+00000061,nadia.moreau@atlas.com,Avery Brown,avery.brown@tracedynamics,864-239-2143,2023-10-18 23:59:00,Services,Lost,2023-11-07 23:59:00,2023-11-29: Saw the demo. 2023-11-22: Had a call. 
+00000086,nadia.moreau@atlas.com,Avery Smith,avery.smith@ecogloballabs,,2023-10-18 23:59:00,Hardware,Won,2023-11-16 23:59:00,2023-11-28: Saw the demo. 2023-10-23: Had a call. 
+00000068,akira.sato@atlas.com,Dakota Thomas,dakota.thomas@forceanalytics,,2023-10-17 23:59:00,Software,Won,2023-11-07 23:59:00,2023-10-13: Met in person. 2023-11-24: Met in person. 
+00000094,akira.sato@atlas.com,Rahul Thomas,rahul.thomas@nextvisionnetworks,,2023-10-17 23:59:00,Software,Won,2023-10-30 23:59:00,2023-11-08: On holiday. 
+00000006,lena.schmidt@atlas.com,Angel Jackson,angel.jackson@solarwaverobotics,352-862-9830,2023-10-17 23:59:00,Software,Qualified,2023-11-16 23:59:00,2023-11-27: Met in person. 2023-10-24: On holiday. 2023-10-09: Met in person. 
+00000065,raj.patel@atlas.com,Shannon Martin,shannon.martin@aerotracetech,,2023-10-16 23:59:00,Software,Lead,2023-11-12 23:59:00,2023-10-15: Had a call. 2023-10-28: Had a call. 
+00000031,nadia.moreau@atlas.com,Shannon Williams,shannon.williams@cyberlinkanalytics,250-125-1757,2023-10-16 23:59:00,Consulting,Lead,2023-11-07 23:59:00,
+00000153,sofia.santos@atlas.com,Parker Taylor,parker.taylor@flexfoods,712-891-6253,2023-10-16 23:59:00,Consulting,Lost,2023-11-01 23:59:00,2023-11-12: On holiday. 
+00000152,raj.patel@atlas.com,Alex Wilson,alex.wilson@visionlogics,134-557-1797,2023-10-16 23:59:00,Consulting,Lead,2023-11-15 23:59:00,
+00000151,nadia.moreau@atlas.com,Alex Smith,alex.smith@prosoftware,644-488-4762,2023-10-16 23:59:00,Software,Lead,2023-11-06 23:59:00,2023-10-10: Saw the demo. 2023-10-13: Had a call. 
+00000121,nadia.moreau@atlas.com,Peyton Davis,peyton.davis@innoportventures,224-305-3275,2023-10-16 23:59:00,Services,Proposal,2023-11-07 23:59:00,
+00000144,raj.patel@atlas.com,Angel Anderson,angel.anderson@cybersolutions,,2023-10-16 23:59:00,Services,Lost,2023-11-06 23:59:00,2023-10-22: Saw the demo. 2023-11-07: Had a call. 
+00000035,akira.sato@atlas.com,Peyton Wilson,peyton.wilson@flexinnovations,182-241-3471,2023-10-15 23:59:00,Software,Lead,2023-11-03 23:59:00,2023-11-15: On holiday. 
+00000175,sofia.santos@atlas.com,Avery Davis,avery.davis@spacesolutions,,2023-10-14 23:59:00,Consulting,Won,2023-11-04 23:59:00,2023-11-23: Had a call. 2023-11-22: Met in person. 
+00000162,nadia.moreau@atlas.com,Jessie Brown,jessie.brown@cyberpeaklogics,,2023-10-14 23:59:00,Software,Qualified,2023-11-06 23:59:00,2023-10-24: Had a call. 2023-11-09: Met in person. 2023-11-12: Met in person. 
+00000048,sofia.santos@atlas.com,Cameron Anderson,cameron.anderson@quantedgesecurity,,2023-10-14 23:59:00,Services,Won,2023-11-13 23:59:00,2023-10-18: Saw the demo. 2023-10-07: On holiday. 2023-10-19: On holiday. 
+00000012,akira.sato@atlas.com,Reese Williams,reese.williams@interactiveinnovations,343-385-8953,2023-10-14 23:59:00,Hardware,Lead,2023-11-07 23:59:00,2023-11-16: Met in person. 
+00000157,lena.schmidt@atlas.com,Quinn Jackson,quinn.jackson@ecodynamicbiotech,,2023-10-13 23:59:00,Services,Lost,2023-11-07 23:59:00,2023-10-31: On holiday. 
+00000113,lena.schmidt@atlas.com,Jamie Johnson,jamie.johnson@flexsecurity,,2023-10-12 23:59:00,Software,Lead,2023-11-09 23:59:00,2023-11-14: Met in person. 2023-11-10: On holiday. 2023-11-21: On holiday. 
+00000191,lena.schmidt@atlas.com,Morgan Harris,morgan.harris@solarforcesolutions,805-235-5945,2023-10-11 23:59:00,Services,Lost,2023-10-26 23:59:00,
+00000015,lena.schmidt@atlas.com,Avery Jones,avery.jones@bioglobalsecurity,871-969-4872,2023-10-11 23:59:00,Hardware,Lead,2023-10-31 23:59:00,2023-10-31: On holiday. 2023-11-25: Met in person. 2023-11-27: Had a call. 
+00000155,akira.sato@atlas.com,Avery Martin,avery.martin@corenetworks,,2023-10-10 23:59:00,Training,Lead,2023-10-31 23:59:00,
+00000014,akira.sato@atlas.com,Casey Wilson,casey.wilson@ultradynamics,,2023-10-09 23:59:00,Hardware,Qualified,2023-10-29 23:59:00,2023-10-18: Met in person. 
+00000010,sofia.santos@atlas.com,Reese Martinez,reese.martinez@greenmindlogics,878-645-3060,2023-10-09 23:59:00,Services,Lead,2023-11-06 23:59:00,2023-11-30: On holiday. 2023-10-17: Met in person. 2023-10-14: On holiday. 
+00000132,nadia.moreau@atlas.com,Jamie Miller,jamie.miller@accesscloud,141-146-1637,2023-10-09 23:59:00,Hardware,Proposal,2023-11-07 23:59:00,2023-11-21: Met in person. 2023-11-03: Met in person. 
+00000077,raj.patel@atlas.com,Cameron Robinson,cameron.robinson@techflextech,,2023-10-09 23:59:00,Training,Won,2023-11-03 23:59:00,2023-10-05: On holiday. 
+00000079,nadia.moreau@atlas.com,Jaden Anderson,jaden.anderson@techwaveenergy,,2023-10-09 23:59:00,Services,Proposal,2023-11-08 23:59:00,2023-11-03: Had a call. 2023-11-17: Had a call. 2023-10-31: Met in person. 
+00000124,raj.patel@atlas.com,Shannon Wilson,shannon.wilson@smartcorecloud,356-301-5496,2023-10-09 23:59:00,Training,Proposal,2023-11-05 23:59:00,2023-11-09: Had a call. 2023-11-02: On holiday. 
+00000150,raj.patel@atlas.com,Rahul Jackson,rahul.jackson@solaraccessdesigns,799-777-9835,2023-10-09 23:59:00,Training,Won,2023-11-05 23:59:00,2023-10-08: On holiday. 2023-11-04: Met in person. 
+00000002,nadia.moreau@atlas.com,Casey Thomas,casey.thomas@smartwavebiotech,847-570-9785,2023-10-08 23:59:00,Training,Lost,2023-10-27 23:59:00,
+00000050,lena.schmidt@atlas.com,Peyton Martin,peyton.martin@geoflexsoftware,152-358-8827,2023-10-08 23:59:00,Training,Lost,2023-10-17 23:59:00,2023-11-01: Had a call. 2023-11-06: Had a call. 2023-10-10: On holiday. 
+00000085,nadia.moreau@atlas.com,Parker Miller,parker.miller@nextlinkhardware,458-965-7022,2023-10-08 23:59:00,Training,Proposal,2023-10-23 23:59:00,2023-11-21: Met in person. 
+00000178,lena.schmidt@atlas.com,Rahul Taylor,rahul.taylor@streamsoftware,594-456-8801,2023-10-07 23:59:00,Software,Lost,2023-10-28 23:59:00,2023-10-21: Had a call. 2023-10-20: Had a call. 2023-11-21: Had a call. 
+00000082,akira.sato@atlas.com,Avery Anderson,avery.anderson@alphabiotech,564-617-8048,2023-10-07 23:59:00,Training,Won,2023-11-05 23:59:00,
+00000083,lena.schmidt@atlas.com,Jessie Anderson,jessie.anderson@forcedesigns,,2023-10-07 23:59:00,Software,Qualified,2023-10-24 23:59:00,2023-10-21: Saw the demo. 2023-10-24: On holiday. 2023-11-13: Met in person. 
+00000193,lena.schmidt@atlas.com,Jamie Martin,jamie.martin@greenaccessnetworks,848-925-2678,2023-10-07 23:59:00,Hardware,Won,2023-10-24 23:59:00,2023-11-26: Saw the demo. 2023-10-09: Met in person. 
+00000057,akira.sato@atlas.com,Morgan Martin,morgan.martin@nanowavesoftware,699-546-9056,2023-10-06 23:59:00,Hardware,Lost,2023-10-28 23:59:00,2023-10-27: Saw the demo. 2023-10-21: Had a call. 
+00000018,akira.sato@atlas.com,Jaden Wilson,jaden.wilson@dynamicbiotech,,2023-10-06 23:59:00,Hardware,Lost,2023-10-26 23:59:00,2023-11-29: Saw the demo. 2023-10-14: Saw the demo. 
+00000003,akira.sato@atlas.com,Rahul Martinez,rahul.martinez@dynamiclogics,333-891-5741,2023-10-06 23:59:00,Consulting,Lost,2023-10-20 23:59:00,
+00000000,nadia.moreau@atlas.com,Casey Smith,casey.smith@futurelinknetworks,854-204-9935,2023-10-06 23:59:00,Training,Won,2023-10-31 23:59:00,2023-10-03: Had a call. 2023-10-06: On holiday. 2023-10-15: Had a call. 
+00000169,lena.schmidt@atlas.com,Riley Brown,riley.brown@alphapointinnovations,,2023-10-06 23:59:00,Software,Won,2023-10-13 23:59:00,2023-10-29: Saw the demo. 2023-11-18: Saw the demo. 
+00000088,lena.schmidt@atlas.com,Jordan Brown,jordan.brown@dynamicbiotech,,2023-10-06 23:59:00,Hardware,Proposal,2023-10-21 23:59:00,2023-11-12: Met in person. 2023-11-01: Met in person. 2023-10-27: Saw the demo. 
+00000046,lena.schmidt@atlas.com,Kerry Moore,kerry.moore@aeroportsolutions,,2023-10-06 23:59:00,Consulting,Qualified,2023-10-20 23:59:00,2023-11-01: On holiday. 2023-11-14: Met in person. 2023-11-11: Met in person. 
+00000096,nadia.moreau@atlas.com,Peyton Moore,peyton.moore@pointtech,,2023-10-05 23:59:00,Software,Qualified,2023-10-21 23:59:00,2023-10-29: Had a call. 2023-10-04: Saw the demo. 2023-11-23: Saw the demo. 
+00000122,raj.patel@atlas.com,Rahul Harris,rahul.harris@aerotracerobotics,,2023-10-05 23:59:00,Training,Qualified,2023-10-21 23:59:00,2023-11-15: Met in person. 2023-11-03: Met in person. 2023-11-19: Met in person. 
+00000019,lena.schmidt@atlas.com,Jamie Taylor,jamie.taylor@solarinteractiveinnovations,569-736-2638,2023-10-05 23:59:00,Hardware,Lost,2023-10-29 23:59:00,2023-11-02: Saw the demo. 
+00000134,akira.sato@atlas.com,Angel Davis,angel.davis@nanoaccessbiotech,941-797-4968,2023-10-03 23:59:00,Hardware,Qualified,2023-10-28 23:59:00,
+00000091,akira.sato@atlas.com,Avery Thomas,avery.thomas@greendesigns,,2023-10-02 23:59:00,Services,Proposal,2023-10-23 23:59:00,
+00000092,akira.sato@atlas.com,Jaden Jackson,jaden.jackson@omnianalytics,,2023-10-02 23:59:00,Services,Qualified,2023-10-19 23:59:00,2023-11-21: Met in person. 
+00000110,lena.schmidt@atlas.com,Dakota Williams,dakota.williams@tracehardware,,2023-10-02 23:59:00,Services,Lead,2023-10-29 23:59:00,2023-11-15: On holiday. 
+00000045,sofia.santos@atlas.com,Reese Harris,reese.harris@bluebiotech,,2023-10-02 23:59:00,Services,Lost,2023-10-24 23:59:00,2023-10-12: Met in person. 2023-10-14: Saw the demo. 
+00000192,sofia.santos@atlas.com,Jordan Jackson,jordan.jackson@forcenetworks,193-820-2559,2023-10-01 23:59:00,Software,Qualified,2023-10-14 23:59:00,2023-10-05: On holiday. 2023-11-07: On holiday. 2023-11-03: Met in person. 

@@ -1,0 +1,301 @@
+task_id,task_name,assigned_to_email,list_name,due_date,board
+00000149,Add animation to carousel,leila.azizi@atlas.com,Backlog,2023-11-27,Front end
+00000037,Add authentication for email notification,carlos.rodriguez@atlas.com,Completed,2023-11-27,Back end
+00000061,Update Flask to latest version,aisha.chen@atlas.com,Completed,2023-11-27,Back end
+00000093,Optimize database query for search functionality,fatima.khan@atlas.com,Completed,2023-11-27,Back end
+00000096,Add authentication for third-party login,carlos.rodriguez@atlas.com,Completed,2023-11-27,Back end
+00000103,Fix alignment issue in homepage,nia.johnson@atlas.com,Completed,2023-11-27,Front end
+00000125,Add animation to form submission button,chenwei.zhang@atlas.com,Backlog,2023-11-27,Front end
+00000137,Fix alignment issue in settings page,chenwei.zhang@atlas.com,In Progress,2023-11-27,Front end
+00000145,Implement responsive layout for profile page,chenwei.zhang@atlas.com,Backlog,2023-11-27,Front end
+00000151,Fix alignment issue in profile page,leila.azizi@atlas.com,Backlog,2023-11-27,Front end
+00000192,Add animation to form submission button,leila.azizi@atlas.com,Completed,2023-11-27,Front end
+00000203,Update brand colors in website,jinsoo.kim@atlas.com,In Review,2023-11-27,Design
+00000249,Design logo for e-commerce platform,luis.ortiz@atlas.com,In Review,2023-11-27,Design
+00000250,Develop prototype for payment gateway,jinsoo.kim@atlas.com,Backlog,2023-11-27,Design
+00000258,Design logo for blog,olga.petrova@atlas.com,Backlog,2023-11-27,Design
+00000279,Design logo for website,jinsoo.kim@atlas.com,In Review,2023-11-27,Design
+00000293,Create wireframe for homepage,luis.ortiz@atlas.com,Backlog,2023-11-27,Design
+00000294,Develop prototype for login system,olga.petrova@atlas.com,Backlog,2023-11-27,Design
+00000031,Fix bug in user management module,aisha.chen@atlas.com,Completed,2023-11-27,Back end
+00000029,Optimize database query for user management,yuki.tanaka@atlas.com,Completed,2023-11-27,Back end
+00000299,Improve UX of onboarding process,luis.ortiz@atlas.com,Backlog,2023-11-27,Design
+00000011,Update Django to latest version,aisha.chen@atlas.com,Completed,2023-11-27,Back end
+00000016,Fix bug in content delivery module,dmitri.ivanov@atlas.com,Completed,2023-11-27,Back end
+00000000,Implement report generation API,aisha.chen@atlas.com,Completed,2023-11-28,Back end
+00000107,Add animation to form submission button,nia.johnson@atlas.com,Completed,2023-11-28,Front end
+00000122,Fix alignment issue in homepage,anaya.patel@atlas.com,Backlog,2023-11-28,Front end
+00000060,Update react to latest version,dmitri.ivanov@atlas.com,Completed,2023-11-28,Back end
+00000165,Design UI for landing page,chenwei.zhang@atlas.com,In Review,2023-11-28,Front end
+00000052,Add authentication for email notification,fatima.khan@atlas.com,Completed,2023-11-28,Back end
+00000051,Add authentication for cloud storage,aisha.chen@atlas.com,Completed,2023-11-28,Back end
+00000194,Design UI for settings page,santiago.martinez@atlas.com,Backlog,2023-11-28,Front end
+00000220,Develop prototype for login system,kofi.mensah@atlas.com,Backlog,2023-11-28,Design
+00000017,Implement user profile management API,dmitri.ivanov@atlas.com,Completed,2023-11-28,Back end
+00000241,Develop prototype for report generation,jinsoo.kim@atlas.com,Completed,2023-11-28,Design
+00000085,Optimize database query for report generation,fatima.khan@atlas.com,Completed,2023-11-28,Back end
+00000268,Improve UX of feedback submission,amir.ali@atlas.com,Backlog,2023-11-28,Design
+00000269,Design logo for website,amir.ali@atlas.com,Backlog,2023-11-28,Design
+00000244,Develop prototype for payment gateway,kofi.mensah@atlas.com,Backlog,2023-11-28,Design
+00000013,Implement payment gateway API,carlos.rodriguez@atlas.com,Completed,2023-11-29,Back end
+00000105,Integrate Google Maps API with frontend,chenwei.zhang@atlas.com,Backlog,2023-11-29,Front end
+00000113,Design UI for landing page,leila.azizi@atlas.com,In Review,2023-11-29,Front end
+00000069,Implement report generation API,dmitri.ivanov@atlas.com,Completed,2023-11-29,Back end
+00000275,Design logo for admin panel,luis.ortiz@atlas.com,Backlog,2023-11-29,Design
+00000062,Implement user profile management API,yuki.tanaka@atlas.com,Completed,2023-11-29,Back end
+00000020,Optimize database query for user management,dmitri.ivanov@atlas.com,Completed,2023-11-29,Back end
+00000056,Add authentication for third-party login,dmitri.ivanov@atlas.com,Completed,2023-11-29,Back end
+00000265,Update brand colors in e-commerce platform,jinsoo.kim@atlas.com,In Review,2023-11-29,Design
+00000088,Add authentication for third-party login,aisha.chen@atlas.com,Completed,2023-11-29,Back end
+00000179,Fix alignment issue in homepage,santiago.martinez@atlas.com,Backlog,2023-11-29,Front end
+00000166,Integrate Twilio SMS API with frontend,nia.johnson@atlas.com,Completed,2023-11-29,Front end
+00000234,Create wireframe for homepage,kofi.mensah@atlas.com,Backlog,2023-11-29,Design
+00000047,Implement login system API,aisha.chen@atlas.com,Completed,2023-11-29,Back end
+00000183,Add animation to dropdown menu,chenwei.zhang@atlas.com,In Review,2023-11-29,Front end
+00000190,Fix alignment issue in dashboard,leila.azizi@atlas.com,Backlog,2023-11-29,Front end
+00000043,Update Vue.js to latest version,carlos.rodriguez@atlas.com,Completed,2023-11-29,Back end
+00000257,Develop prototype for search functionality,jinsoo.kim@atlas.com,Backlog,2023-11-29,Design
+00000006,Add authentication for cloud storage,dmitri.ivanov@atlas.com,Completed,2023-11-29,Back end
+00000170,Implement responsive layout for landing page,chenwei.zhang@atlas.com,Backlog,2023-11-30,Front end
+00000246,Design logo for admin panel,jinsoo.kim@atlas.com,Backlog,2023-11-30,Design
+00000106,Fix alignment issue in dashboard,chenwei.zhang@atlas.com,Backlog,2023-11-30,Front end
+00000276,Improve UX of onboarding process,olga.petrova@atlas.com,In Review,2023-11-30,Design
+00000133,Design UI for homepage,anaya.patel@atlas.com,Backlog,2023-11-30,Front end
+00000070,Implement search functionality API,aisha.chen@atlas.com,In Review,2023-11-30,Back end
+00000039,Fix bug in data storage module,carlos.rodriguez@atlas.com,Backlog,2023-11-30,Back end
+00000066,Fix bug in payment processing module,fatima.khan@atlas.com,Backlog,2023-11-30,Back end
+00000138,Design UI for landing page,santiago.martinez@atlas.com,Backlog,2023-11-30,Front end
+00000064,Implement login system API,dmitri.ivanov@atlas.com,Backlog,2023-11-30,Back end
+00000009,Fix bug in user authentication module,dmitri.ivanov@atlas.com,In Progress,2023-11-30,Back end
+00000153,Integrate Google Maps API with frontend,santiago.martinez@atlas.com,Backlog,2023-11-30,Front end
+00000261,Update brand colors in e-commerce platform,olga.petrova@atlas.com,Completed,2023-11-30,Design
+00000262,Create wireframe for settings page,amir.ali@atlas.com,Backlog,2023-11-30,Design
+00000162,Design UI for settings page,nia.johnson@atlas.com,Backlog,2023-11-30,Front end
+00000140,Design UI for profile page,santiago.martinez@atlas.com,Completed,2023-11-30,Front end
+00000092,Fix bug in payment processing module,carlos.rodriguez@atlas.com,In Review,2023-12-01,Back end
+00000014,Implement login system API,carlos.rodriguez@atlas.com,Backlog,2023-12-01,Back end
+00000101,Implement responsive layout for homepage,anaya.patel@atlas.com,Backlog,2023-12-01,Front end
+00000290,Update brand colors in admin panel,jinsoo.kim@atlas.com,Backlog,2023-12-01,Design
+00000225,Develop prototype for user profile management,olga.petrova@atlas.com,Backlog,2023-12-01,Design
+00000008,Update Django to latest version,dmitri.ivanov@atlas.com,Backlog,2023-12-01,Back end
+00000130,Design UI for dashboard,anaya.patel@atlas.com,Backlog,2023-12-01,Front end
+00000154,Implement responsive layout for settings page,santiago.martinez@atlas.com,Completed,2023-12-01,Front end
+00000135,Add animation to form submission button,santiago.martinez@atlas.com,Backlog,2023-12-01,Front end
+00000201,Create wireframe for settings page,kofi.mensah@atlas.com,Backlog,2023-12-01,Design
+00000180,Fix alignment issue in profile page,santiago.martinez@atlas.com,Backlog,2023-12-01,Front end
+00000111,Fix alignment issue in settings page,leila.azizi@atlas.com,Backlog,2023-12-01,Front end
+00000237,Improve UX of sign-up flow,luis.ortiz@atlas.com,Backlog,2023-12-01,Design
+00000160,Integrate Stripe payment API with frontend,chenwei.zhang@atlas.com,Backlog,2023-12-01,Front end
+00000035,Fix bug in content delivery module,fatima.khan@atlas.com,In Review,2023-12-01,Back end
+00000067,Add authentication for payment gateway,dmitri.ivanov@atlas.com,In Review,2023-12-01,Back end
+00000076,Implement user profile management API,carlos.rodriguez@atlas.com,In Review,2023-12-01,Back end
+00000077,Implement report generation API,carlos.rodriguez@atlas.com,Backlog,2023-12-01,Back end
+00000079,Fix bug in content delivery module,aisha.chen@atlas.com,Backlog,2023-12-01,Back end
+00000251,Update brand colors in e-commerce platform,luis.ortiz@atlas.com,Backlog,2023-12-02,Design
+00000205,Design logo for e-commerce platform,amir.ali@atlas.com,Backlog,2023-12-02,Design
+00000186,Add animation to navigation bar,chenwei.zhang@atlas.com,In Review,2023-12-02,Front end
+00000184,Fix alignment issue in landing page,chenwei.zhang@atlas.com,Backlog,2023-12-02,Front end
+00000181,Fix alignment issue in profile page,chenwei.zhang@atlas.com,Backlog,2023-12-02,Front end
+00000010,Update Flask to latest version,fatima.khan@atlas.com,Backlog,2023-12-02,Back end
+00000005,Add authentication for third-party login,fatima.khan@atlas.com,Backlog,2023-12-02,Back end
+00000119,Add animation to modal window,leila.azizi@atlas.com,Backlog,2023-12-02,Front end
+00000115,Add animation to dropdown menu,anaya.patel@atlas.com,In Review,2023-12-02,Front end
+00000272,Update brand colors in website,luis.ortiz@atlas.com,In Review,2023-12-02,Design
+00000278,Develop prototype for report generation,olga.petrova@atlas.com,In Progress,2023-12-02,Design
+00000198,Add animation to navigation bar,anaya.patel@atlas.com,In Review,2023-12-02,Front end
+00000100,Fix alignment issue in profile page,anaya.patel@atlas.com,Backlog,2023-12-02,Front end
+00000089,Add authentication for cloud storage,carlos.rodriguez@atlas.com,Backlog,2023-12-02,Back end
+00000259,Update brand colors in blog,olga.petrova@atlas.com,Backlog,2023-12-03,Design
+00000256,Improve UX of checkout process,jinsoo.kim@atlas.com,Completed,2023-12-03,Design
+00000266,Design logo for e-commerce platform,olga.petrova@atlas.com,Backlog,2023-12-03,Design
+00000169,Implement responsive layout for landing page,nia.johnson@atlas.com,Backlog,2023-12-03,Front end
+00000116,Fix alignment issue in settings page,santiago.martinez@atlas.com,In Review,2023-12-03,Front end
+00000231,Design logo for mobile app,kofi.mensah@atlas.com,Backlog,2023-12-03,Design
+00000173,Fix alignment issue in dashboard,anaya.patel@atlas.com,Backlog,2023-12-03,Front end
+00000177,Implement responsive layout for profile page,leila.azizi@atlas.com,Backlog,2023-12-03,Front end
+00000229,Create wireframe for profile page,amir.ali@atlas.com,Backlog,2023-12-03,Design
+00000071,Add authentication for cloud storage,fatima.khan@atlas.com,Backlog,2023-12-03,Back end
+00000211,Improve UX of content creation,kofi.mensah@atlas.com,Backlog,2023-12-03,Design
+00000081,Optimize database query for search functionality,carlos.rodriguez@atlas.com,Backlog,2023-12-03,Back end
+00000027,Update Node.js to latest version,yuki.tanaka@atlas.com,Backlog,2023-12-03,Back end
+00000045,Optimize database query for report generation,dmitri.ivanov@atlas.com,Backlog,2023-12-03,Back end
+00000124,Design UI for dashboard,chenwei.zhang@atlas.com,Backlog,2023-12-03,Front end
+00000155,Design UI for settings page,leila.azizi@atlas.com,Backlog,2023-12-04,Front end
+00000282,Update brand colors in blog,jinsoo.kim@atlas.com,Backlog,2023-12-04,Design
+00000152,Integrate AWS S3 API with frontend,anaya.patel@atlas.com,Backlog,2023-12-04,Front end
+00000283,Create wireframe for profile page,jinsoo.kim@atlas.com,Backlog,2023-12-04,Design
+00000083,Fix bug in user management module,carlos.rodriguez@atlas.com,Backlog,2023-12-04,Back end
+00000036,Fix bug in user authentication module,yuki.tanaka@atlas.com,Backlog,2023-12-04,Back end
+00000236,Update brand colors in e-commerce platform,kofi.mensah@atlas.com,Backlog,2023-12-04,Design
+00000161,Add animation to navigation bar,leila.azizi@atlas.com,Backlog,2023-12-04,Front end
+00000057,Fix bug in user authentication module,aisha.chen@atlas.com,Backlog,2023-12-04,Back end
+00000032,Implement search functionality API,carlos.rodriguez@atlas.com,Backlog,2023-12-04,Back end
+00000164,Add animation to navigation bar,nia.johnson@atlas.com,Backlog,2023-12-04,Front end
+00000040,Fix bug in user management module,fatima.khan@atlas.com,Backlog,2023-12-04,Back end
+00000219,Update brand colors in mobile app,kofi.mensah@atlas.com,In Review,2023-12-04,Design
+00000216,Design logo for admin panel,amir.ali@atlas.com,Backlog,2023-12-04,Design
+00000213,Update brand colors in admin panel,kofi.mensah@atlas.com,Backlog,2023-12-04,Design
+00000187,Integrate Stripe payment API with frontend,santiago.martinez@atlas.com,Backlog,2023-12-04,Front end
+00000157,Design UI for profile page,leila.azizi@atlas.com,In Review,2023-12-04,Front end
+00000291,Develop prototype for payment gateway,amir.ali@atlas.com,Backlog,2023-12-04,Design
+00000150,Implement responsive layout for homepage,nia.johnson@atlas.com,Completed,2023-12-04,Front end
+00000024,Update Flask to latest version,carlos.rodriguez@atlas.com,Backlog,2023-12-04,Back end
+00000099,Fix bug in content delivery module,carlos.rodriguez@atlas.com,Backlog,2023-12-04,Back end
+00000114,Integrate Stripe payment API with frontend,anaya.patel@atlas.com,Backlog,2023-12-04,Front end
+00000120,Add animation to dropdown menu,nia.johnson@atlas.com,In Review,2023-12-04,Front end
+00000019,Implement data export API,aisha.chen@atlas.com,Backlog,2023-12-04,Back end
+00000065,Fix bug in payment processing module,yuki.tanaka@atlas.com,Backlog,2023-12-05,Back end
+00000042,Optimize database query for search functionality,aisha.chen@atlas.com,Backlog,2023-12-05,Back end
+00000007,Fix bug in content delivery module,yuki.tanaka@atlas.com,In Review,2023-12-05,Back end
+00000206,Improve UX of content creation,jinsoo.kim@atlas.com,Backlog,2023-12-05,Design
+00000210,Create wireframe for homepage,olga.petrova@atlas.com,Backlog,2023-12-05,Design
+00000048,Fix bug in data storage module,fatima.khan@atlas.com,Backlog,2023-12-05,Back end
+00000112,Fix alignment issue in homepage,leila.azizi@atlas.com,Completed,2023-12-05,Front end
+00000176,Implement responsive layout for settings page,anaya.patel@atlas.com,Backlog,2023-12-05,Front end
+00000097,Optimize database query for user management,aisha.chen@atlas.com,Backlog,2023-12-05,Back end
+00000139,Fix alignment issue in profile page,nia.johnson@atlas.com,Completed,2023-12-05,Front end
+00000074,Update react to latest version,fatima.khan@atlas.com,In Progress,2023-12-05,Back end
+00000270,Design logo for admin panel,kofi.mensah@atlas.com,In Review,2023-12-05,Design
+00000136,Fix alignment issue in settings page,nia.johnson@atlas.com,Backlog,2023-12-05,Front end
+00000199,Design UI for dashboard,santiago.martinez@atlas.com,In Review,2023-12-05,Front end
+00000289,Improve UX of sign-up flow,amir.ali@atlas.com,Backlog,2023-12-05,Design
+00000004,Update Django to latest version,fatima.khan@atlas.com,Backlog,2023-12-05,Back end
+00000239,Create wireframe for dashboard,jinsoo.kim@atlas.com,Backlog,2023-12-05,Design
+00000191,Integrate Stripe payment API with frontend,nia.johnson@atlas.com,In Review,2023-12-06,Front end
+00000296,Improve UX of feedback submission,luis.ortiz@atlas.com,In Review,2023-12-06,Design
+00000252,Design logo for mobile app,amir.ali@atlas.com,In Review,2023-12-06,Design
+00000003,Implement user profile management API,fatima.khan@atlas.com,Backlog,2023-12-06,Back end
+00000212,Improve UX of onboarding process,jinsoo.kim@atlas.com,Backlog,2023-12-06,Design
+00000091,Add authentication for third-party login,yuki.tanaka@atlas.com,In Progress,2023-12-06,Back end
+00000178,Integrate REST API with frontend,nia.johnson@atlas.com,Completed,2023-12-06,Front end
+00000215,Update brand colors in website,olga.petrova@atlas.com,Backlog,2023-12-06,Design
+00000021,Update react to latest version,carlos.rodriguez@atlas.com,Backlog,2023-12-06,Back end
+00000055,Implement data export API,carlos.rodriguez@atlas.com,Completed,2023-12-06,Back end
+00000254,Develop prototype for data export,jinsoo.kim@atlas.com,Backlog,2023-12-06,Design
+00000050,Implement payment gateway API,yuki.tanaka@atlas.com,Completed,2023-12-06,Back end
+00000072,Fix bug in user management module,yuki.tanaka@atlas.com,Backlog,2023-12-07,Back end
+00000044,Fix bug in payment processing module,dmitri.ivanov@atlas.com,Backlog,2023-12-07,Back end
+00000025,Fix bug in payment processing module,aisha.chen@atlas.com,In Review,2023-12-07,Back end
+00000059,Optimize database query for content delivery,aisha.chen@atlas.com,Backlog,2023-12-07,Back end
+00000288,Update brand colors in blog,kofi.mensah@atlas.com,Backlog,2023-12-07,Design
+00000109,Add animation to dropdown menu,santiago.martinez@atlas.com,Backlog,2023-12-07,Front end
+00000144,Fix alignment issue in landing page,leila.azizi@atlas.com,Backlog,2023-12-07,Front end
+00000038,Add authentication for payment gateway,yuki.tanaka@atlas.com,Backlog,2023-12-07,Back end
+00000129,Add animation to carousel,nia.johnson@atlas.com,Backlog,2023-12-07,Front end
+00000146,Integrate REST API with frontend,anaya.patel@atlas.com,Backlog,2023-12-07,Front end
+00000167,Integrate Twilio SMS API with frontend,anaya.patel@atlas.com,Backlog,2023-12-07,Front end
+00000238,Develop prototype for report generation,amir.ali@atlas.com,Backlog,2023-12-07,Design
+00000156,Design UI for homepage,nia.johnson@atlas.com,Backlog,2023-12-07,Front end
+00000271,Design logo for website,olga.petrova@atlas.com,In Review,2023-12-07,Design
+00000098,Optimize database query for data export,yuki.tanaka@atlas.com,Backlog,2023-12-07,Back end
+00000253,Design logo for mobile app,olga.petrova@atlas.com,Backlog,2023-12-07,Design
+00000217,Design logo for blog,kofi.mensah@atlas.com,In Review,2023-12-07,Design
+00000295,Design logo for blog,luis.ortiz@atlas.com,Backlog,2023-12-08,Design
+00000286,Develop prototype for report generation,luis.ortiz@atlas.com,Backlog,2023-12-08,Design
+00000263,Design logo for website,luis.ortiz@atlas.com,Backlog,2023-12-08,Design
+00000233,Design logo for e-commerce platform,kofi.mensah@atlas.com,Backlog,2023-12-08,Design
+00000223,Improve UX of onboarding process,kofi.mensah@atlas.com,Backlog,2023-12-08,Design
+00000292,Design logo for admin panel,olga.petrova@atlas.com,In Review,2023-12-08,Design
+00000087,Update Node.js to latest version,aisha.chen@atlas.com,Backlog,2023-12-08,Back end
+00000196,Add animation to form submission button,anaya.patel@atlas.com,In Progress,2023-12-08,Front end
+00000142,Integrate REST API with frontend,leila.azizi@atlas.com,Backlog,2023-12-08,Front end
+00000141,Design UI for profile page,nia.johnson@atlas.com,Backlog,2023-12-08,Front end
+00000134,Implement responsive layout for dashboard,santiago.martinez@atlas.com,Completed,2023-12-08,Front end
+00000063,Optimize database query for report generation,carlos.rodriguez@atlas.com,Backlog,2023-12-08,Back end
+00000123,Add animation to carousel,anaya.patel@atlas.com,Backlog,2023-12-08,Front end
+00000175,Design UI for dashboard,nia.johnson@atlas.com,Backlog,2023-12-08,Front end
+00000104,Add animation to carousel,chenwei.zhang@atlas.com,Completed,2023-12-08,Front end
+00000082,Optimize database query for data export,carlos.rodriguez@atlas.com,Backlog,2023-12-08,Back end
+00000075,Optimize database query for user management,fatima.khan@atlas.com,In Progress,2023-12-08,Back end
+00000188,Add animation to carousel,santiago.martinez@atlas.com,Backlog,2023-12-08,Front end
+00000195,Integrate AWS S3 API with frontend,nia.johnson@atlas.com,Backlog,2023-12-08,Front end
+00000143,Implement responsive layout for homepage,leila.azizi@atlas.com,Backlog,2023-12-08,Front end
+00000086,Optimize database query for content delivery,carlos.rodriguez@atlas.com,In Progress,2023-12-09,Back end
+00000159,Implement responsive layout for profile page,anaya.patel@atlas.com,In Progress,2023-12-09,Front end
+00000002,Update Node.js to latest version,fatima.khan@atlas.com,In Progress,2023-12-09,Back end
+00000224,Design logo for blog,amir.ali@atlas.com,Backlog,2023-12-09,Design
+00000028,Optimize database query for content delivery,dmitri.ivanov@atlas.com,Backlog,2023-12-09,Back end
+00000221,Develop prototype for data export,olga.petrova@atlas.com,Backlog,2023-12-09,Design
+00000080,Optimize database query for report generation,aisha.chen@atlas.com,In Review,2023-12-09,Back end
+00000110,Add animation to modal window,anaya.patel@atlas.com,Backlog,2023-12-09,Front end
+00000243,Create wireframe for landing page,amir.ali@atlas.com,Backlog,2023-12-09,Design
+00000172,Fix alignment issue in settings page,anaya.patel@atlas.com,Backlog,2023-12-09,Front end
+00000174,Implement responsive layout for dashboard,nia.johnson@atlas.com,Backlog,2023-12-09,Front end
+00000108,Implement responsive layout for homepage,santiago.martinez@atlas.com,Backlog,2023-12-09,Front end
+00000128,Fix alignment issue in landing page,santiago.martinez@atlas.com,Backlog,2023-12-09,Front end
+00000247,Create wireframe for profile page,kofi.mensah@atlas.com,Completed,2023-12-09,Design
+00000235,Update brand colors in admin panel,luis.ortiz@atlas.com,In Progress,2023-12-09,Design
+00000163,Integrate Google Maps API with frontend,leila.azizi@atlas.com,Backlog,2023-12-09,Front end
+00000127,Implement responsive layout for homepage,chenwei.zhang@atlas.com,In Review,2023-12-10,Front end
+00000298,Create wireframe for landing page,jinsoo.kim@atlas.com,Backlog,2023-12-10,Design
+00000230,Improve UX of feedback submission,jinsoo.kim@atlas.com,In Review,2023-12-10,Design
+00000117,Fix alignment issue in landing page,nia.johnson@atlas.com,Backlog,2023-12-10,Front end
+00000026,Implement user profile management API,aisha.chen@atlas.com,Backlog,2023-12-10,Back end
+00000053,Fix bug in data storage module,dmitri.ivanov@atlas.com,In Review,2023-12-10,Back end
+00000245,Develop prototype for search functionality,luis.ortiz@atlas.com,Completed,2023-12-10,Design
+00000023,Update Node.js to latest version,carlos.rodriguez@atlas.com,Backlog,2023-12-10,Back end
+00000204,Create wireframe for homepage,amir.ali@atlas.com,Backlog,2023-12-10,Design
+00000049,Implement login system API,fatima.khan@atlas.com,Backlog,2023-12-10,Back end
+00000022,Update react to latest version,aisha.chen@atlas.com,Backlog,2023-12-10,Back end
+00000068,Optimize database query for content delivery,yuki.tanaka@atlas.com,Backlog,2023-12-10,Back end
+00000285,Create wireframe for homepage,jinsoo.kim@atlas.com,Backlog,2023-12-11,Design
+00000001,Implement payment gateway API,aisha.chen@atlas.com,Completed,2023-12-11,Back end
+00000094,Add authentication for file upload,dmitri.ivanov@atlas.com,In Review,2023-12-11,Back end
+00000126,Integrate Google Maps API with frontend,nia.johnson@atlas.com,In Review,2023-12-11,Front end
+00000274,Improve UX of checkout process,amir.ali@atlas.com,Backlog,2023-12-11,Design
+00000281,Develop prototype for login system,jinsoo.kim@atlas.com,Backlog,2023-12-11,Design
+00000015,Update Flask to latest version,dmitri.ivanov@atlas.com,Backlog,2023-12-11,Back end
+00000012,Update Django to latest version,yuki.tanaka@atlas.com,In Review,2023-12-11,Back end
+00000248,Create wireframe for dashboard,luis.ortiz@atlas.com,Completed,2023-12-11,Design
+00000208,Update brand colors in admin panel,olga.petrova@atlas.com,Backlog,2023-12-11,Design
+00000054,Optimize database query for data export,fatima.khan@atlas.com,Backlog,2023-12-11,Back end
+00000222,Update brand colors in blog,luis.ortiz@atlas.com,Backlog,2023-12-11,Design
+00000033,Fix bug in data storage module,aisha.chen@atlas.com,Completed,2023-12-11,Back end
+00000209,Create wireframe for settings page,luis.ortiz@atlas.com,Backlog,2023-12-11,Design
+00000202,Update brand colors in admin panel,amir.ali@atlas.com,Backlog,2023-12-11,Design
+00000034,Fix bug in user management module,dmitri.ivanov@atlas.com,Completed,2023-12-11,Back end
+00000277,Update brand colors in e-commerce platform,amir.ali@atlas.com,Backlog,2023-12-12,Design
+00000168,Implement responsive layout for settings page,leila.azizi@atlas.com,Backlog,2023-12-12,Front end
+00000267,Develop prototype for user profile management,jinsoo.kim@atlas.com,In Progress,2023-12-12,Design
+00000214,Update brand colors in mobile app,jinsoo.kim@atlas.com,In Progress,2023-12-12,Design
+00000280,Improve UX of checkout process,luis.ortiz@atlas.com,In Review,2023-12-12,Design
+00000118,Add animation to dropdown menu,leila.azizi@atlas.com,In Review,2023-12-12,Front end
+00000102,Implement responsive layout for profile page,nia.johnson@atlas.com,Backlog,2023-12-12,Front end
+00000226,Design logo for mobile app,luis.ortiz@atlas.com,Completed,2023-12-12,Design
+00000218,Improve UX of checkout process,olga.petrova@atlas.com,Backlog,2023-12-12,Design
+00000287,Improve UX of sign-up flow,kofi.mensah@atlas.com,Backlog,2023-12-12,Design
+00000046,Fix bug in user authentication module,carlos.rodriguez@atlas.com,Backlog,2023-12-12,Back end
+00000264,Develop prototype for login system,amir.ali@atlas.com,In Review,2023-12-12,Design
+00000207,Improve UX of content creation,luis.ortiz@atlas.com,Backlog,2023-12-12,Design
+00000260,Develop prototype for search functionality,amir.ali@atlas.com,Backlog,2023-12-12,Design
+00000148,Integrate Twilio SMS API with frontend,santiago.martinez@atlas.com,Backlog,2023-12-12,Front end
+00000073,Optimize database query for data export,dmitri.ivanov@atlas.com,In Review,2023-12-12,Back end
+00000030,Optimize database query for content delivery,fatima.khan@atlas.com,Backlog,2023-12-12,Back end
+00000147,Fix alignment issue in homepage,chenwei.zhang@atlas.com,Backlog,2023-12-12,Front end
+00000297,Update brand colors in mobile app,amir.ali@atlas.com,Backlog,2023-12-13,Design
+00000284,Design logo for mobile app,jinsoo.kim@atlas.com,Backlog,2023-12-13,Design
+00000084,Add authentication for file upload,carlos.rodriguez@atlas.com,Backlog,2023-12-13,Back end
+00000090,Fix bug in data storage module,yuki.tanaka@atlas.com,Backlog,2023-12-13,Back end
+00000041,Implement report generation API,fatima.khan@atlas.com,Backlog,2023-12-13,Back end
+00000185,Implement responsive layout for landing page,santiago.martinez@atlas.com,Backlog,2023-12-13,Front end
+00000189,Design UI for settings page,chenwei.zhang@atlas.com,Backlog,2023-12-13,Front end
+00000095,Fix bug in user authentication module,fatima.khan@atlas.com,Backlog,2023-12-13,Back end
+00000200,Create wireframe for profile page,luis.ortiz@atlas.com,Backlog,2023-12-13,Design
+00000197,Fix alignment issue in dashboard,nia.johnson@atlas.com,In Review,2023-12-13,Front end
+00000273,Design logo for blog,jinsoo.kim@atlas.com,Completed,2023-12-13,Design
+00000078,Add authentication for email notification,dmitri.ivanov@atlas.com,Backlog,2023-12-13,Back end
+00000171,Fix alignment issue in landing page,anaya.patel@atlas.com,Backlog,2023-12-13,Front end
+00000121,Integrate Twilio SMS API with frontend,leila.azizi@atlas.com,In Review,2023-12-13,Front end
+00000227,Update brand colors in mobile app,olga.petrova@atlas.com,Backlog,2023-12-13,Design
+00000228,Create wireframe for dashboard,olga.petrova@atlas.com,In Review,2023-12-13,Design
+00000232,Design logo for website,kofi.mensah@atlas.com,Backlog,2023-12-13,Design
+00000158,Integrate Twilio SMS API with frontend,chenwei.zhang@atlas.com,Backlog,2023-12-13,Front end
+00000058,Add authentication for file upload,yuki.tanaka@atlas.com,Backlog,2023-12-13,Back end
+00000131,Implement responsive layout for profile page,santiago.martinez@atlas.com,Backlog,2023-12-13,Front end
+00000255,Improve UX of onboarding process,amir.ali@atlas.com,Backlog,2023-12-13,Design
+00000132,Fix alignment issue in dashboard,santiago.martinez@atlas.com,Backlog,2023-12-13,Front end
+00000240,Develop prototype for data export,amir.ali@atlas.com,Completed,2023-12-13,Design
+00000242,Improve UX of content creation,olga.petrova@atlas.com,Completed,2023-12-13,Design
+00000018,Update Vue.js to latest version,yuki.tanaka@atlas.com,Backlog,2023-12-13,Back end
+00000182,Design UI for homepage,leila.azizi@atlas.com,Completed,2023-12-13,Front end
+00000193,Add animation to modal window,chenwei.zhang@atlas.com,Backlog,2023-12-13,Front end

@@ -114,6 +114,12 @@ launch = ChatLaunch(model="model-id", api_base="https://example.com/v1", api_key
 
 Harbor runs the agent in the direct-chat environment, which exposes no filesystem or shell tools. The custom verifier reads the final response and resolves the private verifier kind through an explicit map. The selected verifier validates its JSON configuration and receives the response, convention, and Harbor's verifier-side environment. The built-in exact-answer verifier extracts and compares the answer directly, without a temporary answer file. A wrong answer receives reward `0.0`; a malformed submission has no reward; a verifier infrastructure failure has no reward and is recorded separately in `taskcompendium-result.json`. The package requires Harbor's [custom-verifier task loading](https://github.com/marin-community/harbor/pull/155) and does not use `tests/test.sh`.
 
+### NeMo Workplace row 0
+
+`taskcompendium.importers.nemo_workplace.import_row` accepts only the pinned row 0 bytes from the NeMo Gym Workplace Assistant example. It verifies the raw row digest, all 27 source tool schemas, the provider revision, and the immutable CSV seed digest. The spec retains the source row and provenance as verifier-private resources. Its state verifier holds an expected snapshot constructed by applying the source gold action to a separate fresh seed. The model sees only the source request and the provider's 27 tools; the final message ends the trial, and the verifier compares the provider's mutable tables. Tool errors become observations, so a later valid call can recover in the same trial.
+
+The vendored provider code and example row are attributed to NVIDIA Corporation under the [NeMo Gym Workplace Assistant license at the pinned source revision](https://github.com/NVIDIA-NeMo/Gym/blob/1e668906d2e69a9e8ee9aaafc60050a4025d9688/resources_servers/workplace_assistant/README.md) (Apache 2.0). The separate [Hugging Face dataset card at the recorded revision](https://huggingface.co/datasets/nvidia/Nemotron-RL-agent-workplace_assistant/blob/c86a908379e0a361a573c395e175d3c1aa128e6c/README.md) says CC BY 4.0. This importer covers only Gym example row 0; any import of Hub rows must preserve that dataset attribution and license.
+
 Run the package tests from the repository root:
 
 ```bash

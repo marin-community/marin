@@ -11,9 +11,10 @@ dependencies = ["pydantic>=2.0"]
 
 [project.optional-dependencies]
 harbor = ["harbor"]
+workplace = ["pandas>=2.2"]
 
 [dependency-groups]
-test = ["pytest>=8.3", "pytest-asyncio", "pytest-timeout"]
+test = ["pytest>=8.3", "pytest-asyncio", "pytest-timeout", "pandas>=2.2"]
 
 [tool.uv.workspace]
 
@@ -39,6 +40,7 @@ markers = [
 
 [tool.ruff]
 extend = "../../pyproject.toml"
+extend-exclude = ["src/taskcompendium/providers/nemo_workplace/vendor/workplace_assistant_tools"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["taskcompendium"]
