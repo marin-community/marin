@@ -71,11 +71,12 @@ function findingView(finding) {
   return item;
 }
 const methodNames = {runtime_execution: "Task attempt & verifier", model_judgment: "Independent judge", synthesis: "Combined review", static_inspection: "Code / evidence inspection", static_audit: "Imported audit", human_review: "Human review"};
-function reviewCard(review, subjects) {
+function reviewCard(review, subjects, supersededIds) {
   const subject = subjects.find(item => item.id === review.subject_id);
   const scope = subject?.level === "source" ? "Source" : "Task";
   const issues = review.findings.filter(item => item.kind === "issue");
-  const title = `${methodNames[review.method] || label(review.method)} · ${scope} · ${label(review.verdict)}`;
+  const superseded = supersededIds.has(review.id);
+  const title = `${methodNames[review.method] || label(review.method)} · ${scope} · ${label(review.verdict)}${superseded ? " · Superseded opinion" : ""}`;
   const card = fold(title, () => {
     const content = node("div", undefined, "review-card-content");
     content.append(node("p", review.reviewer.label, "review-byline"), pretty(review.summary));
@@ -103,7 +104,7 @@ function reviewCard(review, subjects) {
       contributing_reviews: review.derived_from_review_ids, tags: review.tags, attributes: review.attributes,
     }));
     return content;
-  }, review.method === "synthesis" && subject?.level === "source", "review-card");
+  }, !superseded && review.method === "synthesis" && subject?.level === "source", "review-card");
   if (issues.length) card.querySelector("summary").append(node("span", `${issues.length} issue${issues.length === 1 ? "" : "s"}`, "issue-badge"));
   return card;
 }
@@ -144,7 +145,9 @@ async function artifactPage(record) {
     const subjects = [...collection.subjects, ...record.supplemental_reviews.flatMap(item => item.collection.subjects)];
     const provenance = collection.execution_provenance;
     const date = reviews.map(review => review.reviewed_at).filter(Boolean).sort().at(-1) || "Unknown";
-    document.getElementById("provenance").textContent = `Reviewed ${date} · MarinSkyRL commit ${provenance?.marinskyrl_commit || "Not recorded in imported review"}`;
+    const referenceCommit = reviews.map(review => review.attributes?.inspected_marinskyrl_commit).find(Boolean);
+    const codeProvenance = provenance?.marinskyrl_commit ? `MarinSkyRL execution commit ${provenance.marinskyrl_commit}` : referenceCommit ? `MarinSkyRL reference commit ${referenceCommit} · Reused evidence and current inspection` : "MarinSkyRL commit not recorded in imported review";
+    document.getElementById("provenance").textContent = `Reviewed ${date} · ${codeProvenance}`;
     const container = document.getElementById("reviews");
     if (record.verifier_issues.length) container.append(fold("Confirmed verifier defects remain unresolved", () => {
       const content = node("div", undefined, "review-card-content");
@@ -232,8 +235,10 @@ async function artifactPage(record) {
         content.append(textSection("Limitations", report.limitations, true), artifactLink("difficulty.json", "Browse task outcomes & estimate details")); return content;
       }, true, "review-card"));
     }
-    const ordered = [...reviews].sort((a, b) => Number(b.method === "synthesis" && subjects.find(s => s.id === b.subject_id)?.level === "source") - Number(a.method === "synthesis" && subjects.find(s => s.id === a.subject_id)?.level === "source"));
-    ordered.forEach(review => container.append(reviewCard(review, subjects)));
+    const supersededIds = new Set(reviews.map(review => review.supersedes_review_id).filter(Boolean));
+    const sourceSynthesis = review => review.method === "synthesis" && subjects.find(subject => subject.id === review.subject_id)?.level === "source";
+    const ordered = [...reviews].sort((a, b) => Number(supersededIds.has(a.id)) - Number(supersededIds.has(b.id)) || Number(sourceSynthesis(b)) - Number(sourceSynthesis(a)) || (b.reviewed_at || "").localeCompare(a.reviewed_at || ""));
+    ordered.forEach(review => container.append(reviewCard(review, subjects, supersededIds)));
     container.append(fold(`All saved evidence (${record.artifacts.length})`, () => {
       const list = node("ul", undefined, "evidence-list");
       record.artifacts.forEach(item => { const row = node("li"); row.append(artifactLink(item.path)); list.append(row); }); return list;

@@ -172,6 +172,17 @@ execution rather than a manually assigned score. Validate the repaired behavior
 against the saved failing inputs and appropriate incorrect-answer controls.
 The historical finding remains in the review pool.
 
+Reuse existing source and task reviews before scheduling fresh quality judgments.
+An imported audit with no Atlas rating needs a source synthesis that cites its
+findings, preserves disagreements, and states applicability to the current release.
+Missing ratings alone do not warrant another solver run or three-judge panel.
+Reserve additional judgments and native checks for specific evidence gaps,
+changed tasks/verifiers, consequential disagreements, or suspected defects.
+Keep unknown historical dates and revisions unknown. Record the inspected
+MarinSkyRL reference commit separately from native execution provenance.
+The review page displays the reference commit for reused evidence, and marks
+superseded opinions while keeping their original content available.
+
 Demotion sets `catalog_sources.difficulty` to null. Existing `difficulty.json`
 reports and traces remain in `review_artifacts`; the review page labels them as
 historical while a defect is open. Collect and publish a current difficulty
