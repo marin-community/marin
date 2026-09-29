@@ -240,7 +240,10 @@ September run: June code used short/long windows of 1024/2048
 (`short = cfg.sliding_window // 2`), while the current code uses short
 2048 / long full-context plus the last-layer long rule — and both eras
 log `sliding_window=2048`, so the config match did not catch it (#9529).
-A same-stack June-window probe is queued to quantify the split.
+The same-stack June-window probe measured 163,720 tok/s: windows explain
+1.74% of the gap, and the remaining ~5.0% (171,910 vs 163,720) is
+unexplained. A same-model `save_moe` remat recovery attempt OOM'd at this
+cell; a short profile is queued for a same-model speedup (#9529).
 
 Matched-pair training curves (d1280): [W&B report — variant vs baseline](https://wandb.ai/marin-community/marin_moe/reports/moe_boundary-d1280-matched-pair:-variant-vs-baseline--VmlldzoxODAyMDY5MQ==).
 
@@ -256,7 +259,10 @@ Reading:
   cell, and via the baseline law the windows alone imply a larger loss
   win than the variant measured (d512 −0.0179 vs −0.0007; d768 −0.0136
   vs −0.0087; d1024 −0.0136 vs −0.0066; d1280 −0.0120 vs −0.0065), so the
-  operator's Δloss cannot be separated from the confound. A
+  operator's Δloss cannot be separated from the confound. The law-implied
+  numbers are an upper bound on the compute channel: the +10.5% analytic
+  attention FLOPs bought only +1.74% wall-clock at d1280 (June-window
+  probe, #9529), and the receptive-field channel is unmeasured. A
   matched-window rerun is required before any gate-grade conclusion; the
   numbers below are retained as the record of what was measured. The one
   unconfounded result is throughput parity of the operator itself
