@@ -12,12 +12,14 @@ from pathlib import Path
 import pytest
 
 from taskcompendium.final_action import decode_action
-from taskcompendium.harbor.runner import ChatLaunch, ReplayLaunch, run_trial
+from taskcompendium.harbor.runner import ChatLaunch, run_trial
 from taskcompendium.importers.nemo_predicted_action import canonical_sha256, import_row
 from taskcompendium.lowering import HarborEnvironmentConfig, compatible_lowerings, lower_to_harbor, read_specification
 from taskcompendium.models import AnswerType, FunctionCall, ToolCallComparatorConfig
 from taskcompendium.predicted_action import compare
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
+
+from .harbor_replay import run_replay_trial
 
 FIXTURES = Path(__file__).parent / "fixtures/nemo"
 
@@ -190,7 +192,7 @@ async def test_predicted_action_harbor_replay_outcomes(tmp_path, response, rewar
     environment_config = HarborEnvironmentConfig()
     task = lower_to_harbor(specification, convention, environment_config, tmp_path / "task")
 
-    result = await run_trial(task, environment_config, ReplayLaunch(response=response), tmp_path / "trials", "run")
+    result = await run_replay_trial(task, response, tmp_path / "trials", "run")
 
     outcome = json.loads((tmp_path / "trials/run/verifier/taskcompendium-result.json").read_text())
     assert (outcome["status"], outcome["reward"]) == (status, reward)

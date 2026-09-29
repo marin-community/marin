@@ -4,7 +4,6 @@
 """Resolve a launch separately from a task-owned Harbor environment configuration."""
 
 from pathlib import Path
-from typing import Any
 
 from harbor.models.trial.config import TrialConfig
 from harbor.models.trial.result import TrialResult
@@ -21,17 +20,9 @@ from taskcompendium.lowering import (
     read_submission_convention,
     validate_environment_config,
 )
-from taskcompendium.submission import chat_request, conversation_messages
+from taskcompendium.submission import chat_request
 
 DEFAULT_CHAT_TIMEOUT = 120
-
-
-class ReplayLaunch(BaseModel):
-    """A fixed assistant message for exercising the Harbor trial path."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    response: dict[str, Any]
 
 
 class ChatLaunch(BaseModel):
@@ -48,7 +39,7 @@ class ChatLaunch(BaseModel):
 async def run_trial(
     task_dir: Path,
     environment_config: HarborEnvironmentConfig,
-    launch: ReplayLaunch | ChatLaunch,
+    launch: ChatLaunch,
     trials_dir: Path,
     trial_name: str,
 ) -> TrialResult:
@@ -57,21 +48,12 @@ async def run_trial(
         raise ValueError("Launch environment configuration differs from the exported task")
     specification = read_specification(task_dir / SPECIFICATION_FILE)
     validate_environment_config(specification, environment_config)
-    if isinstance(launch, ReplayLaunch):
-        agent: dict[str, Any] = {
-            "import_path": "taskcompendium.harbor.adapter:ReplayAgent",
-            "kwargs": {
-                **launch.model_dump(),
-                "messages": conversation_messages(specification.context),
-            },
-        }
-    else:
-        convention = read_submission_convention(task_dir / SUBMISSION_CONVENTION_FILE)
-        agent = {
-            "import_path": "taskcompendium.harbor.adapter:ChatAgent",
-            "model_name": launch.model,
-            "kwargs": {**launch.model_dump(exclude={"model"}), "request": chat_request(specification, convention)},
-        }
+    convention = read_submission_convention(task_dir / SUBMISSION_CONVENTION_FILE)
+    agent = {
+        "import_path": "taskcompendium.harbor.adapter:ChatAgent",
+        "model_name": launch.model,
+        "kwargs": {**launch.model_dump(exclude={"model"}), "request": chat_request(specification, convention)},
+    }
     config = TrialConfig.model_validate(
         {
             "task": {"path": str(task_dir.resolve())},

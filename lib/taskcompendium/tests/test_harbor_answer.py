@@ -15,7 +15,7 @@ import pytest
 from harbor.models.task.task import Task
 
 from taskcompendium.grading import exact_answer
-from taskcompendium.harbor.runner import ChatLaunch, ReplayLaunch, run_trial
+from taskcompendium.harbor.runner import ChatLaunch, run_trial
 from taskcompendium.lowering import (
     DIRECT_CHAT_ENVIRONMENT,
     HarborEnvironmentConfig,
@@ -36,6 +36,8 @@ from taskcompendium.models import (
     VerifierSpec,
 )
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
+
+from .harbor_replay import run_replay_trial
 
 
 def _answer_action(answer: str) -> dict:
@@ -117,13 +119,7 @@ async def test_direct_chat_harbor_trial_distinguishes_answer_outcomes(
     assert Task.is_valid_dir(task, disable_verification=True)
     assert "12" not in (task / "instruction.md").read_text()
 
-    result = await run_trial(
-        task,
-        environment_config,
-        ReplayLaunch(response={"role": "assistant", "content": response}),
-        tmp_path / "trials",
-        "run",
-    )
+    result = await run_replay_trial(task, {"role": "assistant", "content": response}, tmp_path / "trials", "run")
 
     outcome = json.loads((tmp_path / "trials/run/verifier/taskcompendium-result.json").read_text())
     assert outcome["status"] == status
@@ -145,13 +141,7 @@ async def test_direct_chat_exact_comparison_uses_pinned_normalization(tmp_path, 
         tmp_path / "task",
     )
 
-    result = await run_trial(
-        task,
-        environment_config,
-        ReplayLaunch(response={"role": "assistant", "content": "STRASSE   PARK"}),
-        tmp_path / "trials",
-        "run",
-    )
+    result = await run_replay_trial(task, {"role": "assistant", "content": "STRASSE   PARK"}, tmp_path / "trials", "run")
 
     assert result.verifier_result.rewards == {"reward": 1.0}
 
@@ -166,13 +156,7 @@ async def test_direct_chat_harbor_trial_records_private_metadata_failure(tmp_pat
     )
     (task / "submission_convention.json").write_text("{invalid")
 
-    result = await run_trial(
-        task,
-        environment_config,
-        ReplayLaunch(response={"role": "assistant", "content": "12"}),
-        tmp_path / "trials",
-        "run",
-    )
+    result = await run_replay_trial(task, {"role": "assistant", "content": "12"}, tmp_path / "trials", "run")
 
     outcome = json.loads((tmp_path / "trials/run/verifier/taskcompendium-result.json").read_text())
     assert outcome["status"] == "infra_error"
@@ -190,7 +174,7 @@ async def test_text_convention_rejects_tool_call_submission(tmp_path, specificat
     )
 
     message = _answer_action("12")
-    result = await run_trial(task, environment_config, ReplayLaunch(response=message), tmp_path / "trials", "run")
+    result = await run_replay_trial(task, message, tmp_path / "trials", "run")
     outcome = json.loads((tmp_path / "trials/run/verifier/taskcompendium-result.json").read_text())
     assert result.verifier_result is None
     assert outcome["status"] == "extraction_error"
@@ -227,12 +211,8 @@ async def test_answer_call_grades_semantic_answers_through_harbor(tmp_path, spec
     environment_config = HarborEnvironmentConfig()
     task = lower_to_harbor(specification, convention, environment_config, tmp_path / "task")
 
-    correct = await run_trial(
-        task, environment_config, ReplayLaunch(response=_answer_action("12")), tmp_path / "trials", "correct"
-    )
-    wrong = await run_trial(
-        task, environment_config, ReplayLaunch(response=_answer_action("13")), tmp_path / "trials", "wrong"
-    )
+    correct = await run_replay_trial(task, _answer_action("12"), tmp_path / "trials", "correct")
+    wrong = await run_replay_trial(task, _answer_action("13"), tmp_path / "trials", "wrong")
 
     assert correct.verifier_result.rewards == {"reward": 1.0}
     assert wrong.verifier_result.rewards == {"reward": 0.0}
@@ -268,9 +248,7 @@ async def test_answer_call_does_not_dispatch_and_requires_its_submission_functio
 
     invalid = _answer_action("12")
     invalid["tool_calls"][0]["function"]["name"] = "lookup"
-    invalid_result = await run_trial(
-        task, environment_config, ReplayLaunch(response=invalid), tmp_path / "trials", "invalid"
-    )
+    invalid_result = await run_replay_trial(task, invalid, tmp_path / "trials", "invalid")
     outcome = json.loads((tmp_path / "trials/invalid/verifier/taskcompendium-result.json").read_text())
     assert invalid_result.verifier_result is None
     assert outcome["status"] == "extraction_error"

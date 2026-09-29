@@ -15,7 +15,6 @@ from tasktrove_verify.grade import grade as source_grade
 from tasktrove_verify.spec import McqSpec
 
 from taskcompendium.grading import Outcome
-from taskcompendium.harbor.runner import ReplayLaunch, run_trial
 from taskcompendium.importers.tasktrove.convert import MAX_ARCHIVE_MEMBERS, read_archive
 from taskcompendium.importers.tasktrove.mcqa import import_task
 from taskcompendium.lowering import HarborEnvironmentConfig, lower_to_harbor
@@ -23,10 +22,15 @@ from taskcompendium.models import AnswerType, VerifierKind
 from taskcompendium.submission import AnswerFormat, SubmissionConvention, render_instruction
 from taskcompendium.verifier_registry import grade_answer
 
+from .harbor_replay import run_replay_trial
+
 FIXTURE = Path(__file__).parent / "fixtures/tasktrove/mcq-1961bdb52b5a.tar.gz"
 TASKTROVE_SOURCE = "laion__nemotron-gym-knowledge-mcqa-v2"
+
+
 TASKTROVE_PATH = "Nemotron-RL-knowledge-mcqa-1961bdb52b5a.tar.gz"
 RELEASE_URI = "s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.9"
+
 RELEASE_REVISION = "2026.09.10.9"
 
 
@@ -141,13 +145,7 @@ async def test_imported_mcqa_runs_through_direct_chat_harbor(tmp_path):
         tmp_path / "task",
     )
 
-    result = await run_trial(
-        task,
-        environment_config,
-        ReplayLaunch(response={"role": "assistant", "content": "C"}),
-        tmp_path / "trials",
-        "mcqa",
-    )
+    result = await run_replay_trial(task, {"role": "assistant", "content": "C"}, tmp_path / "trials", "mcqa")
 
     outcome = json.loads((tmp_path / "trials/mcqa/verifier/taskcompendium-result.json").read_text())
     assert result.exception_info is None, result.exception_info

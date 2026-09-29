@@ -118,28 +118,6 @@ class NoToolEnvironment(BaseEnvironment):
             raise ValueError("Direct chat has no filesystem")
 
 
-class ReplayAgent(BaseAgent):
-    """Supply a fixed assistant message for exercising a Harbor trial."""
-
-    def __init__(self, *args, response: dict[str, Any], messages: list[dict[str, Any]], **kwargs):
-        super().__init__(*args, **kwargs)
-        self.response = response
-        self.messages = messages
-
-    @staticmethod
-    def name() -> str:
-        return "taskcompendium-replay"
-
-    def version(self) -> str:
-        return "0.1"
-
-    async def setup(self, environment: BaseEnvironment) -> None:
-        pass
-
-    async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
-        _record_submission(self.logs_dir, self.messages, self.response, context)
-
-
 class ChatAgent(BaseAgent):
     """Send one prepared chat request and retain the final assistant message."""
 
