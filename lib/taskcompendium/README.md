@@ -6,6 +6,8 @@ Training and evaluation tasks arrive with different prompt formats, answer rules
 
 The current implementation exports Harbor tasks for text, number, native-action, and state results. A task can require several named, versioned action interfaces. File results have no submission convention in this package.
 
+The NeMo Workplace row 0 import supplies the first Python tool provider. State grading is separate from tool selection: a tool-backed task can also submit a text or number answer.
+
 ## What does it contain?
 
 - **Task specs** describe the source problem, required capabilities, the kind of result, and how to verify it.
@@ -47,8 +49,6 @@ flowchart LR
 `ConversationInput` is not a lossless Responses API transcript. It excludes provider reasoning items. The NeMo importer omits an unencrypted historical reasoning summary only when a visible assistant message or function call follows it. It rejects encrypted reasoning and reasoning left at the decision point. Exact provider continuation from reasoning state is outside this contract.
 
 For example, a task asking “What is 7 + 5?” can have `answer_type=number` and a private expected answer of `12`. The plain, JSON, and `answer_call` conventions carry that answer as `12`, `{"answer":"12"}`, and a final `submit_answer({"answer":"12"})` call, respectively. Each extracts a string for the same numeric verifier, which accepts both `12` and `12.0`. A task asking for a function call has `answer_type=native_action`; its context retains the conversation and its `final_tools` describe the source functions. The verifier and expected answer are never added to the model-visible input. Importers must make source output instructions neutral to the supported conventions, or reject rows they cannot safely rewrite. A raw-output requirement in a source message would conflict with a JSON or function-call convention; `answer_type=text` alone cannot detect that conflict in prose.
-
-
 
 ## What can a task represent?
 
@@ -172,12 +172,16 @@ The host chat environment exposes no filesystem or shell tools. The custom verif
 
 The package tests use `tests/harbor_replay.py` to feed fixed HTTP responses through the production `ChatAgent` and Harbor trial path. The public launcher requires a model endpoint.
 
+### NeMo Workplace row 0
 
+`taskcompendium.importers.nemo_workplace.select_row_zero` selects row 0 from the [pinned NeMo Gym JSONL source](https://github.com/NVIDIA-NeMo/Gym/blob/1e668906d2e69a9e8ee9aaafc60050a4025d9688/resources_servers/workplace_assistant/data/example.jsonl) supplied by a trusted caller. It checks the bounded full-file digest and returns the exact row bytes, including the newline. `import_row` then verifies the row digest, all 27 source tool schemas, the provider revision, and the immutable CSV seed digest. The `workplace` binding names `NemoWorkplaceProvider` in the [pinned external repository](https://github.com/marin-community/nemo_workplace/tree/f92a1efb9bcf416b953136463b2022c5525f4b23). A trusted caller supplies that clean checkout when exporting; trials use the staged snapshot without fetching the repository. The spec retains the selected row and attribution as verifier-private resources. Its `ProviderState(provider="workplace")` convention retrieves canonical state without receiving the expected value. The private `structured_exact` verifier compares it with an expected snapshot constructed by applying the source gold action to a separate fresh seed. The model sees only the source request and the provider's 27 tools; the final message ends the trial. Tool errors become observations, so a later valid call can recover in the same trial. To reproduce the source request, set `ChatLaunch(temperature=1.0, parallel_tool_calls=False)`.
+
+The external provider repository carries NVIDIA's source code, seed files, license, and attribution at the [NeMo Gym source revision](https://github.com/NVIDIA-NeMo/Gym/blob/1e668906d2e69a9e8ee9aaafc60050a4025d9688/resources_servers/workplace_assistant/README.md) (Apache 2.0). TaskCompendium stores the source URL, revision, digests, and license attribution; the selected row is materialized only in an exported private task. The separate [Hugging Face dataset card at the recorded revision](https://huggingface.co/datasets/nvidia/Nemotron-RL-agent-workplace_assistant/blob/c86a908379e0a361a573c395e175d3c1aa128e6c/README.md) says CC BY 4.0. This importer covers only Gym example row 0; any import of Hub rows must preserve that dataset attribution and license.
 
 Run the package tests from the repository root:
 
 ```bash
-uv run --project lib/taskcompendium --extra harbor --group test pytest lib/taskcompendium/tests -q
+uv run --project lib/taskcompendium --extra harbor --extra workplace --group test pytest lib/taskcompendium/tests -q
 
 # Type-check the package from its own project directory after installing its dependencies.
 cd lib/taskcompendium
