@@ -44,6 +44,7 @@ from levanter.grug.grug_moe import MoeImplementation
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
+from levanter.pipeline import reshape_batch_into_microbatches
 from levanter.schedule import BatchSchedule
 from levanter.store.jagged_array import set_jagged_array_read_cache_bytes
 from levanter.trainer import TrainerConfig
@@ -251,6 +252,10 @@ class GrugTrainerConfig:
     grad_capture_starts: tuple[int, ...] = ()
     grad_capture_len: int = 48
     grad_capture_path: str | None = None
+    # Split each train batch into this many equal microbatches, run forward and backward on one at a time and
+    # average their gradients: the same update with 1/k of the activation memory, at some speed cost. MoE
+    # capacity and routing statistics then apply per microbatch. 1: off.
+    grad_accum_microbatches: int = 1
 
     # Grug builds its own compact (replica_dcn, data, expert, model) mesh instead of using
     # the Trainer's logical axis mapping; `data` absorbs whatever these two leave free.
@@ -921,6 +926,30 @@ def _loss_and_grads(
     return jax.value_and_grad(loss_fn, has_aux=True)(params)
 
 
+def _accumulated_loss_and_grads(
+    num_microbatches: int, params, batch, mp: jmp.Policy, z_loss, step, loop_active, router_tie_active
+):
+    """``_loss_and_grads`` over ``num_microbatches`` equal slices of ``batch``, one at a time: the loss, gradients
+    and float metrics are averaged, integer metrics (counts) summed. The first microbatch runs outside the scan so
+    its outputs give the accumulator's shapes and shardings."""
+    micro = reshape_batch_into_microbatches(batch, num_microbatches)
+
+    def one(microbatch):
+        return _loss_and_grads(params, microbatch, mp, z_loss, step, loop_active, router_tie_active=router_tie_active)
+
+    def add(total, new):
+        return jax.tree.map(jnp.add, total, new)
+
+    first = one(jax.tree.map(lambda x: x[0], micro))
+    total, _ = jax.lax.scan(lambda acc, mb: (add(acc, one(mb)), None), first, jax.tree.map(lambda x: x[1:], micro))
+    (loss, metrics), grads = total
+
+    def mean(x):
+        return x / num_microbatches if jnp.issubdtype(x.dtype, jnp.floating) else x
+
+    return (loss / num_microbatches, jax.tree.map(mean, metrics)), jax.tree.map(mean, grads)
+
+
 def _compute_diagnostic_watch_stats(
     params, batch, mp: jmp.Policy, z_loss: float | None, watch_config: WatchConfig, router_tie_active: bool
 ):
@@ -988,8 +1017,10 @@ def _make_train_step(
     watch_config: WatchConfig | None = None,
     byte_table: jax.Array | None = None,
     byte_aux_steps: int = 0,
+    grad_accum_microbatches: int = 1,
 ):
-    """``byte_table`` (with ``byte_aux_steps``) turns on the byte-level auxiliary loss, its weight decaying
+    """``grad_accum_microbatches`` > 1 averages gradients over that many microbatches (``_accumulated_loss_and_grads``).
+    ``byte_table`` (with ``byte_aux_steps``) turns on the byte-level auxiliary loss, its weight decaying
     linearly from the model's ``byte_aux_weight`` to 0 at ``byte_aux_steps``."""
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
@@ -1023,18 +1054,25 @@ def _make_train_step(
         if byte_table is not None:
             progress = state.step.astype(jnp.float32) / max(byte_aux_steps, 1)
             byte_weight = qb_params.config.byte_aux_weight * jnp.clip(1.0 - progress, 0.0, 1.0)
-        (loss, summarized_metrics), grads = _loss_and_grads(
-            qb_params,
-            batch,
-            mp,
-            z_loss,
-            state.step,
-            loop_active,
-            head_replay,
-            byte_table,
-            byte_weight,
-            router_tie_active,
-        )
+        if grad_accum_microbatches > 1:
+            if head_replay is not None or byte_table is not None or state.newton_muon is not None:
+                raise ValueError("grad_accum_microbatches needs no head replay, byte aux loss or Newton-Muon")
+            (loss, summarized_metrics), grads = _accumulated_loss_and_grads(
+                grad_accum_microbatches, qb_params, batch, mp, z_loss, state.step, loop_active, router_tie_active
+            )
+        else:
+            (loss, summarized_metrics), grads = _loss_and_grads(
+                qb_params,
+                batch,
+                mp,
+                z_loss,
+                state.step,
+                loop_active,
+                head_replay,
+                byte_table,
+                byte_weight,
+                router_tie_active,
+            )
         final_hidden = summarized_metrics.pop(FINAL_HIDDEN_KEY, None)
         newton_muon = state.newton_muon
         opt_grads = grads
@@ -1412,6 +1450,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         watch_config=inline_watch_config,
         byte_table=byte_table,
         byte_aux_steps=int(config.model.byte_aux_decay_frac * trainer.num_train_steps),
+        grad_accum_microbatches=config.trainer.grad_accum_microbatches,
     )
 
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)

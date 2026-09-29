@@ -405,6 +405,7 @@ def build_h100_ladder_run(
     router_tie_specs: tuple[str, ...] = (),
     grad_capture_starts: tuple[int, ...] = (),
     grad_capture_len: int = 48,
+    grad_accum_microbatches: int = 1,
 ) -> ArtifactStep[ThroughputResult]:
     """Build one H100 scaling-ladder rung.
 
@@ -463,6 +464,11 @@ def build_h100_ladder_run(
     batch_size = batch_size if batch_size is not None else rung.baseline_batch
     if batch_size <= 0 or batch_size % rung.global_device_count != 0:
         raise ValueError(f"batch_size must be positive and divisible by {rung.global_device_count}, got {batch_size}")
+    if grad_accum_microbatches < 1 or batch_size % (grad_accum_microbatches * rung.global_device_count) != 0:
+        raise ValueError(
+            f"batch_size {batch_size} must split into {grad_accum_microbatches} microbatches divisible by "
+            f"{rung.global_device_count} devices"
+        )
     if num_steps is None:
         if match is MatchMode.DATA:
             # DATA holds the baseline's token budget.
@@ -508,6 +514,7 @@ def build_h100_ladder_run(
         routing_dump_batches=routing_dump_batches,
         grad_capture_starts=grad_capture_starts,
         grad_capture_len=grad_capture_len,
+        grad_accum_microbatches=grad_accum_microbatches,
     )
     train_resources = ResourceConfig.with_gpu(
         "H100",
@@ -811,6 +818,13 @@ def _job_env_args(job_env: tuple[str, ...]) -> list[str]:
 )
 @click.option("--grad-capture-len", default=48, show_default=True, help="Steps per --grad-capture-starts window.")
 @click.option(
+    "--grad-accum",
+    "grad_accum_microbatches",
+    default=1,
+    show_default=True,
+    help="Microbatches per train batch (gradient accumulation): the same update with less activation memory.",
+)
+@click.option(
     "--routing-dump-batches",
     type=click.IntRange(min=1),
     default=8,
@@ -893,6 +907,7 @@ def main(
     routing_dump_batches: int,
     grad_capture_starts: str,
     grad_capture_len: int,
+    grad_accum_microbatches: int,
     router_tie_class: tuple[str, ...],
     model_set: tuple[str, ...],
     opt_set: tuple[str, ...],
@@ -938,6 +953,7 @@ def main(
         routing_dump_batches=routing_dump_batches,
         grad_capture_starts=tuple(int(step) for step in grad_capture_starts.split(",") if step),
         grad_capture_len=grad_capture_len,
+        grad_accum_microbatches=grad_accum_microbatches,
         router_tie_specs=router_tie_specs,
     )
 

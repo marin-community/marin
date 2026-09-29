@@ -19,7 +19,7 @@ from levanter.grug.attention import AttentionMask
 import experiments.grug.fast_track.analyze_grad_capture as a
 import experiments.grug.fast_track.test_kda_local as t
 from experiments.grug.fast_track.grad_capture import capture_matrices, capture_steps, write_capture
-from experiments.grug.fast_track.train import _loss_and_grads, _make_grad_capture_step
+from experiments.grug.fast_track.train import _accumulated_loss_and_grads, _loss_and_grads, _make_grad_capture_step
 
 _MP = jmp.get_policy("params=float32,compute=float32,output=float32")
 
@@ -148,3 +148,26 @@ def test_capture_on_an_expert_sharded_mesh():
     )
     assert result.returncode == 0, result.stderr[-4000:]
     assert "EP_OK" in result.stdout
+
+
+def test_accumulated_gradients_average_the_microbatches():
+    mesh, model, _ = _setup()
+    tokens = jax.random.randint(jax.random.PRNGKey(4), (4, t._SEQ), 0, t._VOCAB)
+    batch = GrugLmExample(
+        tokens=tokens, loss_weight=jax.numpy.ones(tokens.shape, np.float32), attn_mask=AttentionMask.causal()
+    )
+    step = np.asarray(3, np.int32)
+    halves = [
+        GrugLmExample(tokens=tokens[i : i + 2], loss_weight=batch.loss_weight[i : i + 2], attn_mask=batch.attn_mask)
+        for i in (0, 2)
+    ]
+    with jax.set_mesh(mesh):
+        (loss, _), grads = jax.jit(lambda m: _accumulated_loss_and_grads(2, m, batch, _MP, None, step, None, None))(
+            model
+        )
+        parts = [jax.jit(lambda m, b=b: _loss_and_grads(m, b, _MP, None, step))(model) for b in halves]
+    np.testing.assert_allclose(float(loss), np.mean([float(p[0][0]) for p in parts]), rtol=1e-6)
+    expected = jax.tree.map(lambda x, y: (np.asarray(x) + np.asarray(y)) / 2, parts[0][1], parts[1][1])
+    got = jax.tree.leaves(jax.device_get(grads))
+    for g, e in zip(got, jax.tree.leaves(expected), strict=True):
+        np.testing.assert_allclose(g, e, rtol=1e-4, atol=1e-7)
