@@ -3,12 +3,12 @@
     "moe_boundary"
   ],
   "base_sha": "7b63e0d0cefcb19282fd9cc7efb3c109cbfc4801",
-  "head_sha": "557ce6ae0d6c738746670ea543ec3caf2764370e",
+  "head_sha": "169ce11fb9b8f9e5be8f5e30f016399cefb955c8",
   "report_count": 1,
   "reports": [
     {
       "closest_variant": "moe",
-      "distance_score": 2267,
+      "distance_score": 2273,
       "report_relpath": "moe_boundary/index.html",
       "status_counts": {
         "added": 4,
