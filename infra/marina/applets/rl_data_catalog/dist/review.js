@@ -157,13 +157,18 @@ function difficultyRun(model, identityPath, record) {
           checkpoint_revision: identity.config.model.revision || "Not exposed by provider",
           provider: identity.config.model.provider || "Local model service",
           generation_parameters: identity.config.model.parameters,
-          request_timeout: identity.config.model.timeout,
+          ...(identity.harbor ? {harbor_execution: identity.harbor, worker_timeout: identity.config.runtime.worker_timeout} : {request_timeout: identity.config.model.timeout}),
           agent_timeout: identity.config.runtime.agent_timeout,
           maximum_turns: identity.config.runtime.max_turns,
           verifier_configuration: identity.config.runtime.gym_config,
           native_execution: identity.marinskyrl,
           task_sample_sha256: identity.tasks_sha256,
         }), artifactLink(identityPath, "Recorded run manifest ↗"));
+        if (identity.harbor) {
+          const runPrefix = identityPath.slice(0, -"run.json".length);
+          const result = record.artifacts.find(item => item.path.startsWith(runPrefix) && item.path.endsWith("/harbor-result.json"));
+          if (result) settings.append(fold("Applied Harbor agent, environment and verifier settings", () => savedEvidence("Resolved native trial configuration", result.path)));
+        }
         if (identity.record_kind === "reconstructed_execution_settings") settings.prepend(node("p", identity.note, "difficulty-evidence-status"));
       }).catch(error => settings.replaceChildren(node("p", error.message, "issue-highlight")));
     }
