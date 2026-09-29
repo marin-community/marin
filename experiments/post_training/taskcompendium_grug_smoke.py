@@ -52,7 +52,7 @@ TASKCOMPENDIUM_REQUIREMENT = (
 CLUSTER = "cw-us-east-02a"
 GPUS_PER_NODE = 8
 SEED = 17
-TASK_COUNT = 2
+TASK_COUNT = 8
 MAX_STEPS = 1
 MAX_TURNS = 3
 
@@ -100,8 +100,19 @@ def write_task_packages(config: TaskPackagesConfig) -> None:
     workplace, workplace_convention, workplace_binding = load_fixture()
     with tempfile.TemporaryDirectory(prefix="taskcompendium-smoke-") as temporary:
         root = Path(temporary)
-        lower_to_harbor(chat, convention, HarborEnvironmentConfig(), root / "chat")
-        lower_to_harbor(workplace, workplace_convention, workplace_binding, root / "workplace")
+        for repeat in range(TASK_COUNT // 2):
+            lower_to_harbor(
+                chat.model_copy(update={"id": f"{chat.id}-repeat-{repeat}"}),
+                convention,
+                HarborEnvironmentConfig(),
+                root / f"chat-{repeat}",
+            )
+            lower_to_harbor(
+                workplace.model_copy(update={"id": f"{workplace.id}-repeat-{repeat}"}),
+                workplace_convention,
+                workplace_binding,
+                root / f"workplace-{repeat}",
+            )
         for source in sorted(root.rglob("*")):
             if source.is_file():
                 destination = prefix_join(config.output_path, source.relative_to(root).as_posix())
