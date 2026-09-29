@@ -161,6 +161,22 @@ async function artifactPage(record) {
           const interval = model.wilson_95 ? ` · 95% interval ${(100 * model.wilson_95[0]).toFixed(1)}–${(100 * model.wilson_95[1]).toFixed(1)}%` : "";
           content.append(node("h3", `${label(model.size)} · ${model.model}`), node("p", `${model.solved}/${model.verified} solved · ${model.unverified} unverified${interval}`, "formatted-prose"));
         }
+        for (const followup of report.protocol_followups || []) {
+          content.append(fold(`Generation setting follow-up · ${label(followup.state)}`, () => {
+            const section = node("div", undefined, "review-card-content");
+            section.append(node("p", "Additional run on the same sampled tasks. The original paired measurements remain above.", "formatted-prose"));
+            if (followup.state === "complete") {
+              const interval = followup.wilson_95 ? ` · 95% interval ${(100 * followup.wilson_95[0]).toFixed(1)}–${(100 * followup.wilson_95[1]).toFixed(1)}%` : "";
+              section.append(node("p", `Large follow-up: ${followup.solved}/${followup.verified} solved · ${followup.unverified} unverified${interval}`, "formatted-prose"));
+            }
+            const truncated = followup.original_generation_diagnostics?.reasoning_only_truncated_tasks ?? followup.original_reasoning_only_truncations;
+            if (truncated !== undefined) section.append(node("p", `${truncated} original task responses hit the output budget while thinking and submitted no final answer.`, "formatted-prose issue-highlight"));
+            section.append(textSection("Generation settings", {original_reasoning_effort: followup.original_reasoning_effort, changed_parameter: followup.changed_parameter}, true));
+            if (record.artifacts.some(item => item.path === followup.report_path)) section.append(artifactLink(followup.report_path, "Browse follow-up task outcomes & traces"));
+            if (record.artifacts.some(item => item.path === followup.original_report_path)) section.append(node("p"), artifactLink(followup.original_report_path, "Browse preserved original report"));
+            return section;
+          }, true));
+        }
         content.append(textSection("Limitations", report.limitations, true), artifactLink("difficulty.json", "Browse task outcomes & estimate details")); return content;
       }, true, "review-card"));
     }

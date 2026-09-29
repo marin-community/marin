@@ -123,7 +123,9 @@ is the sum of complete configuration counts and HF's estimates for incomplete
 configurations: approximately 4,476,918 rows at the September 28 audit. The dataset
 card reports approximately six million. The applet exposes this discrepancy in
 the count basis and does not treat the 1,200,238 preview rows as the full dataset.
-This is a repository-wide count: the SkyRL registry does not select a configuration.
+This is a repository-wide count across all four configurations. OpenScience's
+native loader requires an explicit `parameters.subset`; task inputs and reviews
+retain that selection.
 
 All Agentic sources use Multi-turn interaction, including excluded Task Trove
 sources. Task Trove sources use Harbor and Agentic. Other interaction labels
@@ -145,6 +147,11 @@ show paired small/large model solve rates; its report includes task counts,
 sampling scope, checkpoint revisions, and uncertainty. These curated columns are
 stored separately and survive refreshes. Changed source data or verifier revisions
 hide stale Quality and Difficulty values while retaining the historical review link.
+Generation-setting follow-ups show their solve rates and changed settings beside
+the original pair, with links to both reports and traces. The output budget
+includes thinking tokens. When a model exhausts it before submitting a final
+answer, the report records that failure so the solve rate can be interpreted for
+the stated generation setting.
 
 The review tooling, example configuration, and JSON schema are checked in under
 `experiments/rl_data_reviews/`. Copy `review-config.example.json` to a local file,

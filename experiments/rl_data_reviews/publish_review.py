@@ -20,6 +20,19 @@ from native_revision_attestation import revision_attestation
 ROOT = Path(__file__).parent
 MARIN = ROOT.parents[1]
 APPLET = "fb11c931-5861-4878-8bb5-a964d652b45f"
+SQL_CLIENT = """import json
+import sys
+from urllib.parse import urlsplit
+from marina.client import marina_request
+
+payload = json.load(sys.stdin)
+applet = payload.pop("applet")
+details = marina_request("https://marina.oa.dev", "GET", f"/api/marina/applets/{applet}")
+url = urlsplit(details["authenticated_url"])
+origin = f"{url.scheme}://{url.netloc}"
+result = marina_request(origin, "POST", f"/a/{applet}/query", json_body=payload)
+json.dump(result, sys.stdout)
+"""
 
 
 def quality(collection):
@@ -59,15 +72,12 @@ def sql(statement, parameters):
             "uv",
             "run",
             "--no-sync",
-            "marina",
-            "applets",
-            "sql",
-            APPLET,
-            statement,
-            "--parameters",
-            json.dumps(parameters, ensure_ascii=False),
+            "python",
+            "-c",
+            SQL_CLIENT,
         ],
         cwd=MARIN,
+        input=json.dumps({"applet": APPLET, "sql": statement, "parameters": parameters}, ensure_ascii=False),
         capture_output=True,
         text=True,
         check=True,

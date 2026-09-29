@@ -9,6 +9,8 @@
     ["Issue / observation", "An issue describes a potential technical defect. An observation records other evidence or context. Red highlights mark issues."],
     ["Severity / confidence", "Severity measures the impact of a defect. Confidence describes how strongly the evidence supports a judgment."],
     ["Difficulty", "Solved tasks divided by attempts with a usable verifier result. Missing or failed executions and unusable verifier results are excluded from that rate and counted as unverified. The 95% interval describes sampling uncertainty."],
+    ["Reasoning effort / output budget", "Effort controls the checkpoint's thinking setting, such as Low or Max. The output budget limits all generated tokens, including thinking. Thinking can use up this budget before a final answer appears. The saved trace records when that happened."],
+    ["Generation setting follow-up", "An additional run on the same sampled tasks with a documented setting change. The original measurements and traces remain available alongside the new result."],
     ["Evidence / traces", "Saved model requests, responses, environment events, verifier logs, and source code supporting a review."],
     ["Revision / SHA", "A commit or content hash identifying the exact dataset, model checkpoint, or verifier code. MSkyRL means MarinSkyRL."],
     ["Canonical source / family", "Canonical source names the parent dataset or blend. Component rows describe its distinct task subsets. Family describes the task domain."],
