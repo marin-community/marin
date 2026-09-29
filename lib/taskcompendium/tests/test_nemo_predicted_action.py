@@ -239,7 +239,7 @@ async def test_predicted_action_chat_requests_native_output_without_dispatch(tmp
     requests = []
     monkeypatch.setenv("NEMO_TEST_API_KEY", "test-token")
 
-    def respond(request, timeout):
+    def respond(request, **_kwargs):
         requests.append((json.loads(request.data), request.get_header("Authorization")))
         response = {"choices": [{"message": _action("authenticate_user", row["expected_action"]["arguments"])}]}
         return BytesIO(json.dumps(response).encode())
@@ -353,7 +353,7 @@ async def test_chat_protocol_failure_is_ungraded_and_retains_raw_response(tmp_pa
     environment_config = HarborEnvironmentConfig()
     task = lower_to_harbor(specification, convention, environment_config, tmp_path / "task")
 
-    def respond(request, timeout):
+    def respond(*_args, **_kwargs):
         return BytesIO(json.dumps({"choices": [{"message": response}]}).encode())
 
     monkeypatch.setattr("taskcompendium.harbor.adapter.urllib.request.urlopen", respond)

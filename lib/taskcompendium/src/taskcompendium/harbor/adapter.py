@@ -183,8 +183,8 @@ class SemanticVerifier(BaseVerifier):
             root = self.task.paths.task_dir
             specification = read_specification(root / SPECIFICATION_FILE)
             convention = read_submission_convention(root / SUBMISSION_CONVENTION_FILE)
-            response_path = self.trial_paths.agent_dir / SUBMISSION_FILE
-            conversation = ConversationTrace.model_validate_json(response_path.read_text())
+            conversation_path = self.trial_paths.agent_dir / SUBMISSION_FILE
+            conversation = ConversationTrace.model_validate_json(conversation_path.read_text())
             result = grade_answer(specification, convention, conversation, self.environment)
         except Exception as error:
             result = GradeResult(Outcome.INFRA_ERROR, None, f"{type(error).__name__}: {error}")

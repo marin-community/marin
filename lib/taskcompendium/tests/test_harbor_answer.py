@@ -266,7 +266,7 @@ async def test_answer_call_does_not_dispatch_and_requires_its_submission_functio
     task = lower_to_harbor(specification, convention, environment_config, tmp_path / "task")
     requests = []
 
-    def respond(request, timeout):
+    def respond(request, **_kwargs):
         requests.append(json.loads(request.data))
         return BytesIO(json.dumps({"choices": [{"message": _answer_action("12")}]}).encode())
 
