@@ -21,7 +21,7 @@ import cloudpickle
 import humanfriendly
 from fray.actor import ActorFuture, ActorGroup, ActorHandle, ActorUnavailableError
 from fray.client import Client
-from fray.current_client import current_client
+from fray.current_client import BACKEND_ENV, RAY_BACKEND, current_client
 from fray.local_backend import LocalClient
 from fray.types import ActorConfig, ResourceConfig
 from iris.client.client import get_iris_ctx
@@ -211,9 +211,13 @@ def _require_resolvable_worker_handles(client: Client) -> None:
     an actor response. Serializing an ``IrisActorHandle`` drops its resolver, and the
     handle rebinds through the ambient Iris context -- which a driver outside a job
     does not have. Without this check the load fails later, inside ``load_pass``, as a
-    bare "requires IrisContext" from deep in fray.
+    bare "requires IrisContext" from deep in fray. Ray handles carry their actor name
+    and re-resolve through the Ray runtime in any process, so a Ray-backed driver
+    (``FRAY_BACKEND=ray``, set by ``RayClient.connect``) always passes.
     """
     if isinstance(client, LocalClient) or get_iris_ctx() is not None:
+        return
+    if os.environ.get(BACKEND_ENV) == RAY_BACKEND:
         return
     raise RuntimeError(
         "load_memory_store requires a driver running inside an Iris job: worker handles "

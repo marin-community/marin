@@ -14,6 +14,9 @@ from fray.local_backend import LocalClient
 
 logger = logging.getLogger(__name__)
 
+BACKEND_ENV = "FRAY_BACKEND"
+RAY_BACKEND = "ray"
+
 _current_client_var: contextvars.ContextVar[Client | None] = contextvars.ContextVar("_current_client_var", default=None)
 
 
@@ -22,13 +25,20 @@ def current_client() -> Client:
 
     Resolution order:
         1. Explicitly set client (via set_current_client)
-        2. Auto-detect Iris environment (get_iris_ctx() returns context)
-        3. LocalClient() default
+        2. Ray backend when ``FRAY_BACKEND=ray`` (set by RayClient in the driver and its workers)
+        3. Auto-detect Iris environment (get_iris_ctx() returns context)
+        4. LocalClient() default
     """
     client = _current_client_var.get()
     if client is not None:
         logger.info("current_client: using explicitly set client")
         return client
+
+    if os.environ.get(BACKEND_ENV) == RAY_BACKEND:
+        from fray.ray_backend import RayClient  # noqa: PLC0415
+
+        logger.info("current_client: using Ray backend (%s=%s)", BACKEND_ENV, RAY_BACKEND)
+        return RayClient.attach()
 
     try:
         from iris.client.context_state import has_current_context  # noqa: PLC0415

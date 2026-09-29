@@ -1,0 +1,50 @@
+# Three-node Ray cluster (head + 2 workers) for the fray Docker lane. All nodes share
+# the marin checkout (read-only), one uv venv volume, and a /shared scratch volume
+# that tests use for chunk storage so actors on any node see the same files.
+# The venv is synced once by the head; keep the volumes between runs (`docker compose
+# down` without `-v`) to avoid re-installing it.
+x-node: &node
+  build: .
+  image: marin-fray-ray-cluster
+  shm_size: 1g
+  volumes:
+    - ../../../..:/workspace:ro
+    - venv:/opt/venv
+    - uv-cache:/opt/uv-cache
+    - shared:/shared
+
+services:
+  head:
+    <<: *node
+    command: ["/workspace/lib/fray/tests/ray_cluster/head.sh"]
+    environment:
+      FRAY_TEST_RAY_ADDRESS: 127.0.0.1:6379
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/venv/bin/ray status --address 127.0.0.1:6379 >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 120
+      start_period: 30s
+
+  worker:
+    <<: *node
+    command:
+      - /opt/venv/bin/ray
+      - start
+      - --address=head:6379
+      - --num-cpus=2
+      - --num-gpus=0
+      - --memory=8000000000
+      - --object-store-memory=200000000
+      - --disable-usage-stats
+      - --block
+    deploy:
+      replicas: 2
+    depends_on:
+      head:
+        condition: service_healthy
+
+volumes:
+  venv:
+  uv-cache:
+  shared:

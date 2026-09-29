@@ -12,6 +12,10 @@ Distributed execution abstraction layer. Start with the shared instructions in `
 - `src/fray/actor.py` — `ActorHandle`, `ActorGroup`, actor hosting
 - `src/fray/iris_backend.py` — Iris backend
 - `src/fray/local_backend.py` — Local/thread backend (testing)
+- `src/fray/ray_backend.py` — Ray backend (jobs as tasks, actors as named actors
+  owned by their creator so a dead driver or coordinator takes them down). Import it
+  directly; `current_client()` selects it only when `FRAY_BACKEND=ray`, which
+  `RayClient.connect()` sets for the driver and its workers.
 - `src/fray/device_flops.py` — TPU/GPU flops calculation
 - `src/fray/cluster/` — type re-exports (back-compat shim for `from fray.cluster import ResourceConfig`)
 
@@ -23,6 +27,10 @@ Distributed execution abstraction layer. Start with the shared instructions in `
   ambient Iris context or task environment is present.
 - Actor resources: set `num_cpus=0` on actors to avoid head-node resource contention.
 - Testing: use `LocalClient` for unit tests. Only use the Iris backend for integration tests.
+  The `client` fixture in `tests/conftest.py` also runs the shared contract tests
+  against `RayClient` on an in-process Ray when `ray` is installed; set
+  `FRAY_TEST_RAY_ADDRESS` to target a running cluster instead. Ray must be imported
+  with `RAY_ENABLE_UV_RUN_RUNTIME_ENV=0` when the driver runs under `uv run`.
 - Task setup: `EnvironmentConfig(setup_scripts=...)` controls how the worker prepares
   the env — `None` for the default uv-sync, `[]` to skip (bring-your-own image), or a
   verbatim list; iris always appends its runtime-deps step. See `lib/iris/AGENTS.md`.

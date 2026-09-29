@@ -27,8 +27,12 @@ fray_tpu_test = ["jax==0.11.1", "jaxlib==0.11.1", "libtpu==0.0.46.*", { include-
 dev = [{ include-group = "test" }]
 
 [tool.pytest.ini_options]
-addopts = "-m 'not slow' --import-mode=importlib"
+addopts = "-m 'not slow and not docker' --import-mode=importlib"
 pythonpath = ["src", "tests"]
+markers = [
+    "slow: mark tests as slow for CI - use -m 'not slow'",
+    "docker: mark tests that require a Docker daemon",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/fray"]
