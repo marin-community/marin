@@ -1,11 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Minimal Harbor runtime for direct-chat answer tasks."""
+"""Harbor agents and verifier adapters for direct and workspace submissions."""
 
 import asyncio
 import json
 import os
+import tempfile
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -19,13 +20,23 @@ from harbor.models.verifier.result import VerifierResult
 from harbor.verifier.base import BaseVerifier
 
 from taskcompendium.grading import GradeResult, Outcome
+from taskcompendium.harbor.script_runtime import run_script_verifier
+from taskcompendium.harbor.workspace import UnsafeWorkspaceError, capture_workspace
 from taskcompendium.lowering import (
+    ENVIRONMENT_CONFIG_FILE,
+    PRIVATE_RESOURCES_DIR,
     SPECIFICATION_FILE,
     SUBMISSION_CONVENTION_FILE,
+    WORKSPACE_DOCKER_ENVIRONMENT,
+    read_environment_config,
     read_specification,
     read_submission_convention,
+    validate_exported_private_resources,
 )
-from taskcompendium.verifier_registry import grade_answer
+from taskcompendium.models import AnswerType, TaskSpec
+from taskcompendium.submission import SubmissionConvention, extract_answer
+from taskcompendium.verifier_registry import grade_answer, resolve_verifier
+from taskcompendium.verifiers.script import ScriptVerifier
 
 RESPONSE_FILE = "response.txt"
 AGENT_LOGS_PATH = "/logs/agent"
@@ -96,9 +107,10 @@ class NoToolEnvironment(BaseEnvironment):
 class ReplayAgent(BaseAgent):
     """Submit a caller-provided final response without a model request."""
 
-    def __init__(self, *args, response: str, **kwargs):
+    def __init__(self, *args, response: str, workspace_command: str | None = None, **kwargs):
         super().__init__(*args, **kwargs)
         self.response = response
+        self.workspace_command = workspace_command
 
     @staticmethod
     def name() -> str:
@@ -111,6 +123,13 @@ class ReplayAgent(BaseAgent):
         pass
 
     async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
+        if self.workspace_command is not None:
+            completed = await environment.exec(self.workspace_command, cwd="/app")
+            if completed.return_code != 0:
+                raise RuntimeError(
+                    f"Workspace replay command failed ({completed.return_code}): "
+                    f"{(completed.stderr or completed.stdout or '')[-1000:]}"
+                )
         _record_response(self.logs_dir, instruction, self.response, context)
 
 
@@ -162,21 +181,88 @@ class SemanticVerifier(BaseVerifier):
     """Grade the submitted answer against the task's private reference."""
 
     async def verify(self) -> VerifierResult:
+        script_task = False
         try:
             root = self.task.paths.task_dir
             specification = read_specification(root / SPECIFICATION_FILE)
             convention = read_submission_convention(root / SUBMISSION_CONVENTION_FILE)
             response_path = self.trial_paths.agent_dir / RESPONSE_FILE
             response = response_path.read_text() if response_path.exists() else None
-            result = grade_answer(specification, convention, response, self.environment)
+            verifier = resolve_verifier(specification.verifier)
+            if isinstance(verifier, ScriptVerifier):
+                script_task = True
+                result = await self._grade_script(specification, convention, response, verifier)
+            else:
+                result = grade_answer(specification, convention, response, self.environment)
+        except UnsafeWorkspaceError as error:
+            result = GradeResult(Outcome.INVALID_TASK, None, "Final workspace cannot be captured safely")
+            self._write_result(result)
+            raise RuntimeError(result.error) from error
         except Exception as error:
-            result = GradeResult(Outcome.INFRA_ERROR, None, f"{type(error).__name__}: {error}")
+            if script_task:
+                self.logger.exception("Script verifier failed")
+                result = GradeResult(Outcome.INFRA_ERROR, None, "Script verifier infrastructure failure")
+            else:
+                result = GradeResult(Outcome.INFRA_ERROR, None, f"{type(error).__name__}: {error}")
             self._write_result(result)
             raise RuntimeError(result.error) from error
         self._write_result(result)
         if result.status != Outcome.GRADED or result.reward is None:
             raise RuntimeError(result.error or result.status.value)
         return VerifierResult(rewards={"reward": result.reward})
+
+    async def _grade_script(
+        self,
+        specification: TaskSpec,
+        convention: SubmissionConvention,
+        response: str | None,
+        verifier: ScriptVerifier,
+    ) -> GradeResult:
+        if specification.answer_type in (AnswerType.TEXT, AnswerType.NUMBER):
+            try:
+                answer = extract_answer(response, convention)
+            except (ValueError, TypeError) as error:
+                return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
+        else:
+            answer = None
+        root = self.task.paths.task_dir
+        try:
+            validate_exported_private_resources(specification, root)
+        except ValueError:
+            return GradeResult(Outcome.INVALID_TASK, None, "Pinned private resources are unavailable or changed")
+        environment_config = read_environment_config(root / ENVIRONMENT_CONFIG_FILE)
+        submission = {
+            "protocol_version": verifier.protocol_version,
+            "answer_type": specification.answer_type.value,
+            "convention_id": convention.id,
+            "answer": answer,
+        }
+        with tempfile.TemporaryDirectory(prefix="taskcompendium-snapshot-") as temporary:
+            scratch = Path(temporary)
+            workspace = scratch / "workspace"
+            if environment_config.environment == WORKSPACE_DOCKER_ENVIRONMENT:
+                await capture_workspace(self.environment, workspace)
+            else:
+                workspace.mkdir()
+
+            def resolve_exported(uri: str) -> bytes:
+                for resource in verifier.resources:
+                    if resource.uri == uri:
+                        return (root / PRIVATE_RESOURCES_DIR / resource.path).read_bytes()
+                raise ValueError("Unknown private resource reference")
+
+            result = await asyncio.to_thread(
+                run_script_verifier,
+                verifier,
+                submission,
+                workspace,
+                scratch / "result",
+                resolve_exported,
+            )
+            if result.status == Outcome.GRADED:
+                return GradeResult(Outcome.GRADED, result.reward)
+            self.logger.warning("Script verification failed: %s", result.error)
+            return GradeResult(result.status, None, "Script verification did not produce a score")
 
     def _write_result(self, result: GradeResult) -> None:
         self.trial_paths.verifier_dir.mkdir(parents=True, exist_ok=True)

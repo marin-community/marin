@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "taskcompendium"
 version = "0.1.0"
-description = "Semantic answer tasks and Harbor direct-chat lowerings"
+description = "Semantic tasks and Harbor verifier lowerings"
 requires-python = ">=3.12"
 dependencies = ["pydantic>=2.0", "tasktrove-verify"]
 

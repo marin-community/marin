@@ -5,6 +5,7 @@
 
 import json
 from enum import StrEnum
+from pathlib import PurePosixPath
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
@@ -16,6 +17,8 @@ class AnswerFormat(StrEnum):
 
     PLAIN = "plain"
     JSON = "json"
+    FILE = "file"
+    WORKSPACE = "workspace"
 
 
 class SubmissionConvention(BaseModel):
@@ -25,15 +28,37 @@ class SubmissionConvention(BaseModel):
 
     id: str
     answer_format: AnswerFormat
+    output_path: str | None = None
 
     @model_validator(mode="after")
     def validate_convention(self) -> "SubmissionConvention":
         if not self.id:
             raise ValueError("A submission convention id is required")
+        if self.answer_format == AnswerFormat.FILE:
+            path = self.output_path
+            if (
+                path is None
+                or path.startswith("/")
+                or "\\" in path
+                or ":" in path.split("/")[0]
+                or any(ord(character) < 32 for character in path)
+                or any(part in ("", ".", "..") for part in path.split("/"))
+            ):
+                raise ValueError("A file submission requires a normalized relative output path")
+            if PurePosixPath(path).as_posix() != path:
+                raise ValueError("A file submission requires a normalized relative output path")
+        elif self.output_path is not None:
+            raise ValueError("Only a file submission may specify an output path")
         return self
 
     def supports(self, answer_type: AnswerType) -> bool:
-        return answer_type in (AnswerType.TEXT, AnswerType.NUMBER)
+        if self.answer_format in (AnswerFormat.PLAIN, AnswerFormat.JSON):
+            return answer_type in (AnswerType.TEXT, AnswerType.NUMBER)
+        if self.answer_format == AnswerFormat.FILE:
+            return answer_type == AnswerType.FILE
+        if self.answer_format == AnswerFormat.WORKSPACE:
+            return answer_type == AnswerType.WORKSPACE_STATE
+        raise ValueError(f"Unsupported answer format: {self.answer_format}")
 
 
 def _object_with_unique_fields(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -54,6 +79,10 @@ def render_instruction(specification: TaskSpec, convention: SubmissionConvention
         suffix = "Give your answer as plain text."
     elif convention.answer_format == AnswerFormat.JSON:
         suffix = 'Give your answer as a JSON object with an "answer" field.'
+    elif convention.answer_format == AnswerFormat.FILE:
+        suffix = f"Write your final file to /app/{convention.output_path}."
+    elif convention.answer_format == AnswerFormat.WORKSPACE:
+        suffix = "Complete the requested changes in /app."
     else:
         raise ValueError(f"Unsupported answer format: {convention.answer_format}")
     return f"{specification.instructions.rstrip()}\n\n{suffix}\n"

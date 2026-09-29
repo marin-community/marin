@@ -3,21 +3,27 @@
 
 """A pinned answer task through Harbor's custom-verifier trial lifecycle."""
 
+import base64
+import hashlib
 import json
 import subprocess
 import sys
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from threading import Thread
 
 import pytest
 from harbor.models.task.task import Task
 
 from taskcompendium.grading import exact_answer
+from taskcompendium.harbor import script_runtime
 from taskcompendium.harbor.runner import ChatLaunch, ReplayLaunch, run_trial
 from taskcompendium.lowering import (
     DIRECT_CHAT_ENVIRONMENT,
+    WORKSPACE_DOCKER_ENVIRONMENT,
     HarborEnvironmentConfig,
+    LoweringCandidate,
     SelectionPolicy,
     compatible_lowerings,
     lower_to_harbor,
@@ -26,6 +32,7 @@ from taskcompendium.lowering import (
 )
 from taskcompendium.models import AnswerType, Source, TaskRequirements, TaskSpec, VerifierKind, VerifierSpec
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
+from taskcompendium.verifiers.script import PrivateResource, ScriptVerifier, script_verifier
 
 
 @dataclass
@@ -106,6 +113,86 @@ async def test_direct_chat_harbor_trial_distinguishes_answer_outcomes(
     else:
         assert result.exception_info is None, result.exception_info
         assert result.verifier_result.rewards == {"reward": reward}
+
+
+async def test_script_verifier_uses_extracted_answer_without_exposing_private_files(
+    tmp_path, monkeypatch, specification
+):
+    script = b"#!/usr/bin/env python3\n"
+    reference = b"12"
+    resources = tuple(
+        PrivateResource(
+            path=path,
+            sha256=hashlib.sha256(content).hexdigest(),
+            embedded_base64=base64.b64encode(content).decode(),
+            executable=executable,
+        )
+        for path, content, executable in (("grade.py", script, True), ("reference.txt", reference, False))
+    )
+    verifier = ScriptVerifier(
+        entrypoint="grade.py",
+        timeout_seconds=5,
+        runtime_image=f"example/grader@sha256:{'a' * 64}",
+        resources=resources,
+    )
+    specification = specification.model_copy(update={"verifier": script_verifier(verifier)})
+    seen_answers = []
+
+    def fake_docker(command, **kwargs):
+        mounts = {}
+        for index, token in enumerate(command):
+            if token == "--mount":
+                fields = dict(part.split("=", 1) for part in command[index + 1].split(",") if "=" in part)
+                mounts[fields["dst"]] = fields["src"]
+        assert set(mounts) == {"/app", "/tests", "/verifier"}
+        assert not (tmp_path / "task-plain/environment/grade.py").exists()
+        answer = json.loads((Path(mounts["/verifier"]) / "submission.json").read_text())["answer"]
+        seen_answers.append(answer)
+        expected = (Path(mounts["/tests"]) / "reference.txt").read_text()
+        (Path(mounts["/verifier"]) / "result.json").write_text(
+            json.dumps({"status": "scored", "reward": float(answer == expected)})
+        )
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(script_runtime.subprocess, "run", fake_docker)
+    for name, answer_format, response, reward in (
+        ("plain", AnswerFormat.PLAIN, "12", 1.0),
+        ("json", AnswerFormat.JSON, '{"answer":"12"}', 1.0),
+        ("wrong", AnswerFormat.PLAIN, "13", 0.0),
+    ):
+        task = lower_to_harbor(
+            specification,
+            SubmissionConvention(id=name, answer_format=answer_format),
+            HarborEnvironmentConfig(),
+            tmp_path / f"task-{name}",
+        )
+        assert reference not in (task / "instruction.md").read_bytes()
+        result = await run_trial(
+            task, HarborEnvironmentConfig(), ReplayLaunch(response=response), tmp_path / "trials", name
+        )
+        assert result.verifier_result.rewards == {"reward": reward}
+    assert seen_answers == ["12", "12", "13"]
+
+    staged_reference = tmp_path / "task-wrong/private_resources/reference.txt"
+    staged_reference.write_text("tampered")
+    result = await run_trial(
+        tmp_path / "task-wrong", HarborEnvironmentConfig(), ReplayLaunch(response="12"), tmp_path / "trials", "tampered"
+    )
+    outcome = json.loads((tmp_path / "trials/tampered/verifier/taskcompendium-result.json").read_text())
+    assert result.verifier_result is None
+    assert outcome["status"] == "invalid_task"
+    assert outcome["reward"] is None
+    assert seen_answers == ["12", "12", "13"]
+
+    staged_reference.unlink()
+    result = await run_trial(
+        tmp_path / "task-wrong", HarborEnvironmentConfig(), ReplayLaunch(response="12"), tmp_path / "trials", "missing"
+    )
+    outcome = json.loads((tmp_path / "trials/missing/verifier/taskcompendium-result.json").read_text())
+    assert result.verifier_result is None
+    assert outcome["status"] == "invalid_task"
+    assert outcome["reward"] is None
+    assert seen_answers == ["12", "12", "13"]
 
 
 async def test_direct_chat_exact_comparison_uses_pinned_normalization(tmp_path, specification):
@@ -232,6 +319,41 @@ def test_file_result_cannot_use_text_submission_convention(tmp_path, specificati
     with pytest.raises(ValueError, match="cannot carry 'file'"):
         lower_to_harbor(specification, convention, HarborEnvironmentConfig(), tmp_path / "task")
     assert not (tmp_path / "task").exists()
+
+
+def test_workspace_state_lowering_requires_a_snapshot_capable_environment(tmp_path, specification):
+    script = b"#!/usr/bin/env python3\n"
+    resource = PrivateResource(
+        path="grade.py",
+        sha256=hashlib.sha256(script).hexdigest(),
+        embedded_base64=base64.b64encode(script).decode(),
+        executable=True,
+    )
+    verifier = ScriptVerifier(
+        entrypoint="grade.py",
+        timeout_seconds=5,
+        runtime_image=f"example/grader@sha256:{'a' * 64}",
+        resources=(resource,),
+    )
+    specification = specification.model_copy(
+        update={
+            "answer_type": AnswerType.WORKSPACE_STATE,
+            "requirements": TaskRequirements(capabilities=("filesystem",)),
+            "verifier": script_verifier(verifier),
+        }
+    )
+    convention = SubmissionConvention(id="workspace", answer_format=AnswerFormat.WORKSPACE)
+    docker_config = HarborEnvironmentConfig(
+        environment=WORKSPACE_DOCKER_ENVIRONMENT,
+        docker_image=f"example/agent@sha256:{'b' * 64}",
+        tools=("filesystem",),
+    )
+
+    assert compatible_lowerings(specification, (convention,), (HarborEnvironmentConfig(), docker_config)) == (
+        LoweringCandidate(convention, docker_config),
+    )
+    task = lower_to_harbor(specification, convention, docker_config, tmp_path / "task")
+    assert Task.is_valid_dir(task, disable_verification=True)
 
 
 def test_selection_policies_use_compatible_conventions(specification):

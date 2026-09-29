@@ -19,6 +19,7 @@ WHITESPACE = re.compile(r"\s+")
 class Outcome(StrEnum):
     GRADED = "graded"
     EXTRACTION_ERROR = "extraction_error"
+    INVALID_TASK = "invalid_task"
     INFRA_ERROR = "infra_error"
 
 

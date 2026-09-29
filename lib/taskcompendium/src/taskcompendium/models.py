@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Private semantics for one deterministic, single-turn answer task."""
+"""Private semantics for one deterministic task."""
 
 from enum import StrEnum
 
@@ -25,6 +25,7 @@ class VerifierKind(StrEnum):
 
     EXACT_ANSWER = "exact_answer"
     MCQ_ANSWER = "mcq_answer"
+    SCRIPT = "script"
 
 
 class Source(BaseModel):
