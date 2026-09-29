@@ -3,10 +3,15 @@ You are identifying scientific units in one computational biology repository:
 
 Repository URL: {{REPO_URL}}
 
-Your job is to produce a source inventory that task authors can use without
-repeating repository-wide exploration. Find useful scientific operations and
-analyses, identify their code and documentation, and connect them to relevant
-data. An author will use selected records to propose and construct tasks.
+Your job is to identify scientific operations and analyses in this repository
+that could become computational biology tasks for an AI agent. Each task will
+provide input data and a scientific objective, require the agent to produce
+output artifacts, and evaluate those artifacts with an executable grader.
+
+Another LLM worker, called the task author, will use your inventory to design
+and build these tasks. Provide enough source context, dependencies, and data
+references for that worker to proceed without repeating repository-wide
+exploration.
 
 Use any supplied scientific focus, prior source records, dataset inventory, and
 shared task requirements. If only the repository is supplied, discover the
