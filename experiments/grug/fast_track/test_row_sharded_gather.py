@@ -84,7 +84,8 @@ tokens = jax.random.randint(jax.random.PRNGKey(2), (8, kda_test._SEQ), 0, kda_te
 results = {}
 for fsdp in [False, True]:
     with jax.set_mesh(mesh((1, 4, 2, 1))):
-        model = M.Transformer.init(kda_test._config(embed2_fsdp=fsdp, **cfg), key=jax.random.PRNGKey(0))
+        config = kda_test._config(embed2_fsdp=fsdp, embed2_row_sharded_gather=fsdp, **cfg)
+        model = M.Transformer.init(config, key=jax.random.PRNGKey(0))
         tk = reshard(tokens, P(M._BATCH_AXES, None))
         w = reshard(jnp.ones(tokens.shape, jnp.float32), P(M._BATCH_AXES, None))
         params, static = eqx.partition(model, eqx.is_array)

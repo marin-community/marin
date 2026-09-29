@@ -373,7 +373,18 @@ def _table2_gather(cfg: "GrugModelConfig"):
     """Lookup for the tables stored like the second one (``embed2_fsdp``, ``embed2_grad_fp32``)."""
     if not cfg.embed2_fsdp:
         return _embedding_gather if cfg.embed2_grad_fp32 else _embedding_gather_autodiff
-    return _row_sharded_embedding_gather if cfg.embed2_grad_fp32 else _replicated_autodiff_gather
+    if not cfg.embed2_grad_fp32:
+        return _replicated_autodiff_gather
+    if cfg.embed2_row_sharded_gather:
+        return _row_sharded_embedding_gather
+    return _replicated_fp32_gather
+
+
+def _replicated_fp32_gather(table: jax.Array, token_ids: Int[Array, "B S"]) -> Float[Array, "B S D"]:
+    """All-gather the row-sharded table and look up through the fp32-backward gather. Its backward builds a dense
+    full-size gradient and all-reduces it; cheaper than the row-sharded path while the table is small (d512: +6.5%
+    step time for the row-sharded path), but it does not fit at d1024 (a 2M x 1024 table)."""
+    return _embedding_gather(reshard(table, P(None, None)), token_ids)
 
 
 # Pair-combine multiplier and murmur3 finalizer constants for the (previous, current) bigram hash.
@@ -1102,10 +1113,12 @@ class GrugModelConfig:
     """With ``bigram_gate``, a per-channel gate instead of a scalar: ``g_t = sigmoid(rms(e_t) * rms(b_t) @ A @ B + c)``
     with rank-r ``A`` (random) and ``B`` (zero), so each token keeps some bigram features and drops others."""
     embed2_fsdp: bool = False
-    """Store the second table (and so its optimizer / EMA state) row-sharded over the FSDP axes, looked up in place
-    (``_row_sharded_embedding_gather``: ids and cotangents cross the network, never the table or its gradient;
-    ``embed2_grad_fp32=False`` still all-gathers a replicated copy). Same math; for rungs where the replicated
-    table or its gradient doesn't fit."""
+    """Store the second table (and so its optimizer / EMA state) row-sharded over the FSDP axes. The lookup either
+    all-gathers it (default) or reads rows in place (``embed2_row_sharded_gather``). Same math."""
+    embed2_row_sharded_gather: bool = False
+    """With ``embed2_fsdp``, look rows up where they live (all-gather the ids, reduce-scatter the rows; backward
+    scatter-adds into each shard) instead of all-gathering the table and all-reducing a dense full-size gradient.
+    Needed at d1024+ (the dense path's ~12 GiB of temporaries OOMs there); slower at d512 (+6.5% step)."""
     ngram_stat_rows: int = 0
     """Rows per n-gram order of a fixed-encoder *statistic* table, its own AttnRes source (0: off). Row h holds
     ``[sum of code(y), count]`` over every occurrence of an n-gram hashing to h followed by next token y, where
