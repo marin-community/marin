@@ -29,8 +29,7 @@ from marin.inference.config import (
 from marin.inference.iris import IrisServiceConfig, run_iris_service
 from rigging.filesystem.buckets import filesystem_for
 
-from experiments.datakit.science_sft_conversion.conversion import MODEL
-
+MODEL = "MiniMaxAI/MiniMax-M3-MXFP8"
 MODEL_REVISION = "c5454eb03678d8710e54a4e0fc681b9f3b4a3dba"
 logger = logging.getLogger(__name__)
 

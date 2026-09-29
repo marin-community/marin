@@ -1,5 +1,11 @@
 # Science-forward text-to-chat conversion
 
+The active producer uses Ortet GLM 5.3 through the RNO2A relay and batch API.
+See [ORTET.md](ORTET.md) for its launch and resume procedure. The MiniMax
+serving commands below document the retired H100 conversion setup.
+
+## Retired MiniMax setup
+
 `sources.json` pins the 17 non-chat source artifacts used by the science-forward
 SFT mix. They contain 862 Parquet shards in the CoreWeave copy of the source
 pool. The Nemotron Math Proofs, Nemotron Science v2, and TextbookReasoning

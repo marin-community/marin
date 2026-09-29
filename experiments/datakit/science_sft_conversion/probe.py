@@ -7,23 +7,23 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import random
 from itertools import islice
 
-import httpx
 import pyarrow.parquet as pq
-from iris.client.client import iris_ctx
 from rigging.filesystem.atomic import atomic_rename
 from rigging.filesystem.buckets import filesystem_for
 
+from experiments.datakit.science_sft_conversion.batch_transport import GLMBatchChatClient
 from experiments.datakit.science_sft_conversion.conversion import (
-    REQUEST_TIMEOUT,
     Source,
     _convert_chunk,
     _source_files,
     sources,
     split_source,
 )
+from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, resolve_glm_base_url
 
 logger = logging.getLogger(__name__)
 
@@ -61,19 +61,23 @@ def _source_samples(source: Source, count: int, seed: int) -> list[tuple[Source,
     return samples
 
 
-async def probe(output_url: str, samples_per_source: int, seed: int, endpoint_name: str, concurrency: int) -> None:
+async def probe(
+    output_url: str,
+    samples_per_source: int,
+    seed: int,
+    relay_job: str,
+    concurrency: int,
+    source_names: tuple[str, ...],
+) -> None:
     """Write sampled source chunks and validated conversions to JSON."""
-    controller = iris_ctx().client
-    if controller is None:
-        raise RuntimeError("Run the probe as an Iris task")
-    endpoint = controller.resolve_endpoint(endpoint_name).rstrip("/")
-    samples = [sample for source in sources() for sample in _source_samples(source, samples_per_source, seed)]
+    endpoint = resolve_glm_base_url(relay_job).removesuffix("/v1")
+    selected = [source for source in sources() if not source_names or source.name in source_names]
+    if source_names and {source.name for source in selected} != set(source_names):
+        raise ValueError("Unknown source in probe selection")
+    samples = [sample for source in selected for sample in _source_samples(source, samples_per_source, seed)]
 
     semaphore = asyncio.Semaphore(concurrency)
-    async with httpx.AsyncClient(
-        timeout=httpx.Timeout(REQUEST_TIMEOUT),
-        limits=httpx.Limits(max_connections=concurrency, max_keepalive_connections=concurrency),
-    ) as client:
+    async with GLMBatchChatClient(endpoint, os.environ[GLM_BULK_TOKEN_ENV], batch_size=32, workers=2) as client:
         records = await asyncio.gather(
             *(
                 _convert_chunk(client, semaphore, endpoint, source, source_id, chunk, chunk_index, chunk_count)
@@ -106,8 +110,11 @@ async def probe(output_url: str, samples_per_source: int, seed: int, endpoint_na
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-path", required=True)
-    parser.add_argument("--endpoint", required=True)
+    parser.add_argument("--relay-job", required=True)
     parser.add_argument("--concurrency", type=int, required=True)
+    parser.add_argument(
+        "--source", action="append", default=[], help="Source name; omit for one sample from every source"
+    )
     parser.add_argument("--samples-per-source", type=int, default=1)
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
@@ -116,7 +123,9 @@ def main() -> None:
     if args.concurrency < 1:
         parser.error("--concurrency must be positive")
     logging.basicConfig(level=logging.INFO)
-    asyncio.run(probe(args.output_path, args.samples_per_source, args.seed, args.endpoint, args.concurrency))
+    asyncio.run(
+        probe(args.output_path, args.samples_per_source, args.seed, args.relay_job, args.concurrency, tuple(args.source))
+    )
 
 
 if __name__ == "__main__":

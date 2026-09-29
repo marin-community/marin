@@ -7,32 +7,29 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import time
 
-import httpx
-from iris.client.client import iris_ctx
 from rigging.filesystem.atomic import atomic_rename
 from rigging.filesystem.buckets import filesystem_for
 
+from experiments.datakit.science_sft_conversion.batch_transport import GLMBatchChatClient
 from experiments.datakit.science_sft_conversion.conversion import (
     QUESTION_SOLUTION_SOURCES,
-    REQUEST_TIMEOUT,
     ConversionMode,
     _document,
     _row_request,
     format_for,
     sources,
 )
+from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, resolve_glm_base_url
 
 logger = logging.getLogger(__name__)
 
 
-async def benchmark(input_url: str, output_url: str, endpoint_name: str, concurrency: int) -> None:
+async def benchmark(input_url: str, output_url: str, relay_job: str, concurrency: int) -> None:
     """Save request timings, token counts, and first-attempt validation results."""
-    controller = iris_ctx().client
-    if controller is None:
-        raise RuntimeError("Run the benchmark as an Iris task")
-    endpoint = controller.resolve_endpoint(endpoint_name).rstrip("/")
+    endpoint = resolve_glm_base_url(relay_job).removesuffix("/v1")
     fs, path = filesystem_for(input_url)
     with fs.open(path, "rb") as stream:
         samples = json.load(stream)
@@ -40,10 +37,7 @@ async def benchmark(input_url: str, output_url: str, endpoint_name: str, concurr
     semaphore = asyncio.Semaphore(concurrency)
     started = time.monotonic()
 
-    async with httpx.AsyncClient(
-        timeout=httpx.Timeout(REQUEST_TIMEOUT),
-        limits=httpx.Limits(max_connections=concurrency, max_keepalive_connections=concurrency),
-    ) as client:
+    async with GLMBatchChatClient(endpoint, os.environ[GLM_BULK_TOKEN_ENV], batch_size=64, workers=2) as client:
 
         async def request(sample: dict) -> dict:
             source = source_by_name[sample["source"]]
@@ -89,7 +83,7 @@ async def benchmark(input_url: str, output_url: str, endpoint_name: str, concurr
     elapsed = time.monotonic() - started
     completion_tokens = sum(result["usage"]["completion_tokens"] for result in results)
     report = {
-        "endpoint": endpoint_name,
+        "relay_job": relay_job,
         "input": input_url,
         "concurrency": concurrency,
         "elapsed": elapsed,
@@ -109,13 +103,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input-path", required=True)
     parser.add_argument("--output-path", required=True)
-    parser.add_argument("--endpoint", required=True)
+    parser.add_argument("--relay-job", required=True)
     parser.add_argument("--concurrency", type=int, required=True)
     args = parser.parse_args()
     if args.concurrency < 1:
         parser.error("--concurrency must be positive")
     logging.basicConfig(level=logging.INFO)
-    asyncio.run(benchmark(args.input_path, args.output_path, args.endpoint, args.concurrency))
+    asyncio.run(benchmark(args.input_path, args.output_path, args.relay_job, args.concurrency))
 
 
 if __name__ == "__main__":

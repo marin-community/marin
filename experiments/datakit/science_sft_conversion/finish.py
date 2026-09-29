@@ -26,7 +26,6 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class HandoffConfig:
     producer_job: str
-    serving_job: str
     store_path: str
     num_shards: int
     max_workers: int
@@ -51,7 +50,6 @@ def finish_conversion(config: HandoffConfig) -> None:
     if not result.complete:
         raise ValueError(f"Full conversion audit failed: {result}")
     logger.info("Full conversion passed audit: %s", result)
-    client.job(JobName.from_string(config.serving_job)).cancel()
     store = prepare_store(
         prefix_join(OUTPUT_ROOT, OUTPUT_MAIN_DIR), config.store_path, TOKENIZER, config.num_shards, config.max_workers
     )
@@ -63,7 +61,6 @@ def finish_conversion(config: HandoffConfig) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--producer-job", required=True)
-    parser.add_argument("--serving-job", required=True, help="Dedicated conversion pool to stop after the audit")
     parser.add_argument("--store-path", required=True)
     parser.add_argument("--num-shards", type=int, required=True)
     parser.add_argument("--max-workers", type=int, required=True)
@@ -75,7 +72,6 @@ def main() -> None:
         parser.error("num-shards, max-workers, and timeout-hours must be positive")
     config = HandoffConfig(
         producer_job=args.producer_job,
-        serving_job=args.serving_job,
         store_path=args.store_path,
         num_shards=args.num_shards,
         max_workers=args.max_workers,

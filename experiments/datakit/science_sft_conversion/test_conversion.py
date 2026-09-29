@@ -13,9 +13,11 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from marin.datakit.chat_normalize import CHAT_SCHEMA, ChatChannel
+from marin.inference.openai_batch import BatchOutput, BatchSubmission
 
-from experiments.datakit.science_sft_conversion import conversion, probe
+from experiments.datakit.science_sft_conversion import batch_transport, conversion, probe
 from experiments.datakit.science_sft_conversion.audit import audit
+from experiments.datakit.science_sft_conversion.batch_transport import GLMBatchChatClient
 from experiments.datakit.science_sft_conversion.conversion import (
     ConversionMode,
     Source,
@@ -27,6 +29,45 @@ from experiments.datakit.science_sft_conversion.conversion import (
     format_for,
     stratified_batches,
 )
+
+
+def test_glm_batch_transport_routes_out_of_order_responses_and_retries_missing_results(monkeypatch) -> None:
+    class FakeBatchClient:
+        def __init__(self, base_url: str, token: str, priority: str) -> None:
+            assert base_url == "http://relay/bulk/v1"
+            assert token == "batch-token"
+            assert priority == "batch"
+            self.requests: list[dict] = []
+
+        def submit(self, requests: list[dict], filename: str) -> BatchSubmission:
+            self.requests = requests
+            return BatchSubmission("file-1", "batch-1")
+
+        def wait(self, batch_id: str, poll_seconds: float, timeout_seconds: float) -> dict:
+            return {"status": "completed"}
+
+        def output(self, batch: dict) -> BatchOutput:
+            second, first, _missing = self.requests
+            rows = [
+                {"custom_id": item["custom_id"], "response": {"status_code": 200, "body": {"answer": answer}}}
+                for item, answer in ((first, "second"), (second, "first"))
+            ]
+            return BatchOutput("".join(json.dumps(row) + "\n" for row in rows), None)
+
+    monkeypatch.setattr(batch_transport, "OpenAIBatchClient", FakeBatchClient)
+
+    async def run() -> list[httpx.Response]:
+        async with GLMBatchChatClient("http://relay", "batch-token", batch_size=3, workers=1) as client:
+            return await asyncio.gather(
+                *(client.post("http://relay/v1/chat/completions", json={"request": index}) for index in range(3))
+            )
+
+    first, second, missing = asyncio.run(run())
+    assert first.json() == {"answer": "first"}
+    assert second.json() == {"answer": "second"}
+    assert missing.status_code == 502
+    with pytest.raises(httpx.HTTPStatusError):
+        missing.raise_for_status()
 
 
 def validated_document(

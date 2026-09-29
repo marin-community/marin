@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Resume-safe MiniMax conversion of the science-forward mix's text sources.
+"""Resume-safe GLM conversion of the science-forward mix's text sources.
 
 Each Iris task owns a stable subset of stratified input Parquet batches. Output files
 are committed one small input batch at a time, so a preempted task skips work
@@ -13,6 +13,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import random
 import re
 from collections import Counter
@@ -21,11 +22,11 @@ from dataclasses import dataclass
 from enum import StrEnum
 from itertools import zip_longest
 from pathlib import Path
+from typing import Protocol
 
 import httpx
 import pyarrow as pa
 import pyarrow.parquet as pq
-from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from marin.datakit.chat_normalize import CHAT_SCHEMA, validate_chat_messages
 from marin.datakit.download.rollout_transforms import openai_chat_document
@@ -34,11 +35,13 @@ from rigging.filesystem.atomic import atomic_rename
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import prefix_join
 
+from experiments.datakit.science_sft_conversion.batch_transport import GLMBatchChatClient
 from experiments.datasets.science_forward_converted import OUTPUT_MAIN_DIR, OUTPUT_ROOT, SOURCE_NAME
+from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, GLM_MODEL, resolve_glm_base_url
 
 logger = logging.getLogger(__name__)
 
-MODEL = "MiniMaxAI/MiniMax-M3-MXFP8"
+MODEL = GLM_MODEL
 SOURCES_PATH = Path(__file__).with_name("sources.json")
 MAX_SOURCE_CHARS = 8_000
 INPUT_BATCH_SIZE = 1_024
@@ -50,7 +53,8 @@ MIN_EVIDENCE_PARAGRAPHS = 8
 MAX_EVIDENCE_PARAGRAPHS = 32
 EVIDENCE_GENERATION_TOKENS = 2_048
 EVIDENCE_REASONING_CHARS = 4_096
-REQUEST_TIMEOUT = 1_800.0
+BATCH_SIZE = 64
+BATCH_WORKERS = 2
 DEFERRED_RETRY_DELAY = 60.0
 NEMOTRON_MATH_TEXTBOOKS = "nemotron_specialized/math_textbooks"
 SWALLOW_MATH_QA = "swallow-math-v2/qa"
@@ -130,6 +134,10 @@ class ConvertedChunk:
 
 class ConversionRejected(ValueError):
     """A generated chunk exhausted validation retries without a usable conversation."""
+
+
+class ChatClient(Protocol):
+    async def post(self, url: str, *, json: dict) -> httpx.Response: ...
 
 
 @dataclass(frozen=True)
@@ -489,7 +497,8 @@ def _row_request(
         "temperature": 1.0,
         "top_p": 0.95,
         "max_tokens": MAX_GENERATION_TOKENS,
-        "chat_template_kwargs": {"thinking_mode": "disabled"},
+        "chat_template_kwargs": {"reasoning_effort": "low"},
+        "prompt_cache_key": f"science-sft:{source.name}:{mode.value}",
     }
 
 
@@ -611,7 +620,7 @@ def _evidence_answer(paragraphs: list[str], selected: Format) -> str:
 
 
 async def _convert_evidence_chunk(
-    client: httpx.AsyncClient,
+    client: ChatClient,
     endpoint: str,
     source: Source,
     source_id: str,
@@ -702,7 +711,7 @@ async def _convert_evidence_chunk(
 
 
 async def _convert_chunk(
-    client: httpx.AsyncClient,
+    client: ChatClient,
     semaphore: asyncio.Semaphore,
     endpoint: str,
     source: Source,
@@ -808,7 +817,7 @@ async def _convert_chunk(
 
 
 async def _convert_batch(
-    client: httpx.AsyncClient,
+    client: ChatClient,
     semaphore: asyncio.Semaphore,
     endpoint: str,
     source: Source,
@@ -866,7 +875,7 @@ def _write_batch(documents: list[dict], output_url: str) -> None:
 
 
 async def convert_work_batch(
-    work: WorkBatch, endpoint: str, client: httpx.AsyncClient, semaphore: asyncio.Semaphore, output_root: str
+    work: WorkBatch, endpoint: str, client: ChatClient, semaphore: asyncio.Semaphore, output_root: str
 ) -> bool:
     item = work.item
     source = item.source
@@ -920,7 +929,7 @@ async def convert_work_batch(
 async def _consume_batches(
     work: Iterator[WorkBatch],
     endpoint: str,
-    client: httpx.AsyncClient,
+    client: ChatClient,
     semaphore: asyncio.Semaphore,
     output_root: str,
     deferred: list[WorkBatch],
@@ -933,7 +942,7 @@ async def _consume_batches(
 async def convert_work_batches(
     work: list[WorkBatch],
     endpoint: str,
-    client: httpx.AsyncClient,
+    client: ChatClient,
     concurrency: int,
     concurrent_batches: int,
     output_root: str,
@@ -954,26 +963,30 @@ async def convert_work_batches(
 
 
 async def run_worker(
-    max_items: int | None, max_batches: int | None, endpoint_name: str, concurrency: int, concurrent_batches: int
+    max_items: int | None,
+    max_batches: int | None,
+    relay_job: str,
+    concurrency: int,
+    concurrent_batches: int,
+    batch_size: int,
+    batch_workers: int,
 ) -> None:
     info = get_job_info()
     if info is None:
         raise RuntimeError("Run the conversion worker as an Iris task")
-    client = iris_ctx().client
-    if client is None:
-        raise RuntimeError("Iris task has no controller client")
-    endpoint = client.resolve_endpoint(endpoint_name).rstrip("/")
+    endpoint = resolve_glm_base_url(relay_job).removesuffix("/v1")
     logger.info(
-        "Worker %d/%d using endpoint %s with %d requests", info.task_index, info.num_tasks, endpoint_name, concurrency
+        "Worker %d/%d using GLM relay %s with %d requests",
+        info.task_index,
+        info.num_tasks,
+        relay_job,
+        concurrency,
     )
     work = stratified_batches(_work_items(), SAMPLING_SEED, max_batches)[info.task_index :: info.num_tasks]
     if max_items is not None:
         work = work[:max_items]
-    async with httpx.AsyncClient(
-        timeout=httpx.Timeout(REQUEST_TIMEOUT),
-        limits=httpx.Limits(max_connections=concurrency, max_keepalive_connections=concurrency),
-    ) as http_client:
-        await convert_work_batches(work, endpoint, http_client, concurrency, concurrent_batches, OUTPUT_ROOT)
+    async with GLMBatchChatClient(endpoint, os.environ[GLM_BULK_TOKEN_ENV], batch_size, batch_workers) as batch_client:
+        await convert_work_batches(work, endpoint, batch_client, concurrency, concurrent_batches, OUTPUT_ROOT)
 
 
 def main() -> None:
@@ -983,15 +996,29 @@ def main() -> None:
         "--concurrent-batches", type=int, required=True, help="Batches sharing each task's request budget"
     )
     parser.add_argument("--max-batches", type=int, help="Limit each row group to this many batches for a smoke run")
-    parser.add_argument("--endpoint", required=True)
+    parser.add_argument("--relay-job", required=True)
     parser.add_argument("--concurrency", type=int, default=MAX_CONCURRENT_REQUESTS)
+    parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
+    parser.add_argument("--batch-workers", type=int, default=BATCH_WORKERS)
     args = parser.parse_args()
     if args.concurrency < 1:
         parser.error("--concurrency must be positive")
     logging.basicConfig(level=logging.INFO)
     if args.concurrent_batches < 1:
         parser.error("concurrent-batches must be positive")
-    asyncio.run(run_worker(args.max_items, args.max_batches, args.endpoint, args.concurrency, args.concurrent_batches))
+    if min(args.batch_size, args.batch_workers) < 1:
+        parser.error("batch-size and batch-workers must be positive")
+    asyncio.run(
+        run_worker(
+            args.max_items,
+            args.max_batches,
+            args.relay_job,
+            args.concurrency,
+            args.concurrent_batches,
+            args.batch_size,
+            args.batch_workers,
+        )
+    )
 
 
 if __name__ == "__main__":

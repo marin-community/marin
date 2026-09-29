@@ -90,3 +90,14 @@ def test_openai_batch_client_round_trips_batch_wire_protocol(monkeypatch) -> Non
         "endpoint": "/v1/chat/completions",
         "priority": "bulk",
     }
+
+
+def test_openai_batch_wait_times_out_when_remote_batch_stays_active(monkeypatch) -> None:
+    def urlopen(request: urllib.request.Request, *, timeout: float):
+        return _Response(b'{"status":"in_progress","request_counts":{"completed":0}}')
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    client = OpenAIBatchClient("https://inference.example/bulk/v1", "secret", timeout=12)
+
+    with pytest.raises(TimeoutError, match="did not finish"):
+        client.wait("batch-1", poll_seconds=0, timeout_seconds=0)
