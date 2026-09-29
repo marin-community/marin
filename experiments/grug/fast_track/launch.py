@@ -386,6 +386,7 @@ def build_h100_ladder_run(
     seed: int = 0,
     profile_start_step: int | None = None,
     dump_hlo: bool = False,
+    xla_memory_report: bool = False,
     pgle_runs: int = 0,
     ema_beta: float | None = None,
     ema_last_steps: int | None = None,
@@ -597,6 +598,7 @@ def build_h100_ladder_run(
                 grug_trainer,
                 trainer=trainer,
                 hlo_dump_path=prefix_join(ctx.output_path, "train_step.hlo.txt") if dump_hlo else None,
+                xla_memory_report_path=prefix_join(ctx.output_path, "xla_memory") if xla_memory_report else None,
                 routing_dump_path=prefix_join(ctx.output_path, "routing") if routing_dump_steps else None,
                 grad_capture_path=prefix_join(ctx.output_path, "grad_capture") if grad_capture_starts else None,
             ),
@@ -748,6 +750,11 @@ def _job_env_args(job_env: tuple[str, ...]) -> list[str]:
 )
 @click.option("--dump-hlo", is_flag=True, help="Write the compiled train-step HLO to <output>/train_step.hlo.txt.")
 @click.option(
+    "--xla-memory-report",
+    is_flag=True,
+    help="Dump XLA's train-step buffer assignment and memory-usage report to <output>/xla_memory/ (also on OOM).",
+)
+@click.option(
     "--pgle-runs",
     type=int,
     default=0,
@@ -892,6 +899,7 @@ def main(
     seed: int,
     profile_start_step: int | None,
     dump_hlo: bool,
+    xla_memory_report: bool,
     pgle_runs: int,
     ema_beta: float | None,
     ema_last_steps: int | None,
@@ -935,6 +943,7 @@ def main(
         seed=seed,
         profile_start_step=profile_start_step,
         dump_hlo=dump_hlo,
+        xla_memory_report=xla_memory_report,
         pgle_runs=pgle_runs,
         ema_beta=ema_beta,
         ema_last_steps=ema_last_steps,

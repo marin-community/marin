@@ -5,6 +5,7 @@ import concurrent.futures
 import dataclasses
 import functools
 import gc
+import glob
 import logging
 import os
 import re
@@ -214,6 +215,9 @@ class GrugTrainerConfig:
     save_checkpoints: bool = False
     # Write the compiled (optimized) train-step HLO text here after the first step, for profile attribution.
     hlo_dump_path: str | None = None
+    # Dump XLA's buffer assignment and memory-usage report for the train step and upload them here (process 0),
+    # also when the step fails, e.g. with an out-of-memory error: attributes the temp buffer to HLO values.
+    xla_memory_report_path: str | None = None
     # Weight EMA over the last ``ema_last_steps`` steps (the whole run when None): until then the EMA
     # tracks the params, afterwards ``ema <- ema_beta * ema + (1 - ema_beta) * params``. Evals from the
     # EMA start on score the EMA. None: no EMA.
@@ -1963,6 +1967,34 @@ def _write_train_step_hlo(
     logger.info("Wrote train-step HLO (%d chars) to %s", len(text), path)
 
 
+_XLA_DUMP_DIR = "/tmp/grug_xla_dump"
+_XLA_MEMORY_REPORT_SUFFIXES = ("buffer-assignment.txt", "memory-usage-report.txt")
+
+
+def _xla_memory_report_flags() -> str:
+    return f"--xla_dump_to={_XLA_DUMP_DIR} --xla_dump_hlo_module_re=jit_train_step --xla_dump_hlo_as_text"
+
+
+def _upload_xla_memory_reports(dest: str) -> None:
+    reports = [
+        path
+        for path in glob.glob(f"{_XLA_DUMP_DIR}/*jit_train_step*")
+        if path.endswith(_XLA_MEMORY_REPORT_SUFFIXES) and "after_optimizations" in path
+    ]
+    for path in reports:
+        with open(path, "rb") as src, fsspec.open(f"{dest.rstrip('/')}/{os.path.basename(path)}", "wb") as dst:
+            dst.write(src.read())
+    logger.info("uploaded %d XLA memory reports to %s", len(reports), dest)
+
+
+def _run_grug_local_with_memory_report(config: GrugRunConfig) -> None:
+    try:
+        _run_grug_local(config)
+    finally:
+        if jax.process_index() == 0:
+            _upload_xla_memory_reports(config.trainer.xla_memory_report_path)
+
+
 def run_grug(config: GrugRunConfig) -> None:
     """Dispatch grug training through Fray jobs."""
     trainer = config.trainer.trainer
@@ -1975,10 +2007,14 @@ def run_grug(config: GrugRunConfig) -> None:
     _apply_runtime_defaults(
         inline_watch_enabled=inline_watch_enabled, ragged_transport=config.ragged_transport if ragged else None
     )
+    local_entrypoint = _run_grug_local
+    if config.trainer.xla_memory_report_path is not None:
+        os.environ["XLA_FLAGS"] = f"{os.environ.get('XLA_FLAGS', '')} {_xla_memory_report_flags()}".strip()
+        local_entrypoint = _run_grug_local_with_memory_report
     dispatch_grug_training_run(
         run_id=trainer.id,
         config=config,
-        local_entrypoint=_run_grug_local,
+        local_entrypoint=local_entrypoint,
         resources=config.resources,
         processes_per_task=config.processes_per_task,
         max_retries_failure=config.max_retries_failure,
