@@ -48,7 +48,7 @@ def _clean_instructions(instructions: str, options: int) -> str:
 
 
 def import_task(archive: TaskArchive) -> TaskSpec:
-    """Import a cleaned Nemotron MCQA archive with its original verifier contract."""
+    """Import a cleaned MCQA archive as a text-answer task."""
     try:
         metadata = tomllib.loads(archive.files[TASK_MANIFEST].decode())[METADATA_TABLE]
         if metadata.get("family") != FAMILY or metadata.get("converter") != CONVERTER:

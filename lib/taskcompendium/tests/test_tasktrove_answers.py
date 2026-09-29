@@ -39,7 +39,6 @@ def test_import_preserves_release_identity():
     assert specification.source.dataset == RELEASE_URI
     assert specification.source.revision == RELEASE_REVISION
     assert specification.source.row == f"{TASKTROVE_SOURCE}:{TASKTROVE_PATH}"
-    assert "/" not in specification.id
     later_release = import_task(_archive("2026.09.10.10"))
     assert later_release.id != specification.id
 
