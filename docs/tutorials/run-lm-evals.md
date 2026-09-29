@@ -195,7 +195,8 @@ The `graphwalks` key uses the pinned `openai/graphwalks` dataset and grades the 
 `Final Answer: [...]` line with set F1, following the dataset card. Prompts that cannot fit within
 the served model's context and output budget are skipped; the record reports the benchmark size,
 attempted count, and scored coverage. Compare scores together with these counts because the models'
-context windows differ.
+context windows differ. The Qwen catalog serves its native 262,144-token context to admit more
+`parents` and `bfs` prompts. Some examples exceed even that window and remain context skips.
 
 The Grug catalog entry omits the `grug` reasoning parser because the pinned Marin GPU vLLM wheel
 lacks [the parser](https://github.com/marin-community/vllm/pull/79). A one-item GraphWalks run with
