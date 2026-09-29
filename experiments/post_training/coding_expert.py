@@ -74,7 +74,7 @@ PARENT_REVISION = "227263f32121ac79ba96de6136b86221e58b05db"
 DATASET = "open-r1/verifiable-coding-problems-python_decontaminated-tested-shuffled"
 DATASET_REVISION = "98191eb6eefd276b7ebb4eb8d25c4a167cc65605"
 SKYRL_RUNTIME_COMMIT = "92fbe5126329c38659b54913424e64c39bbeab89"
-SHELLBOX_COMMIT = "cb4a330d9b631847208f2188a36ee5c7b50953d2"
+SHELLBOX_COMMIT = "ee9e2b9f06a9da1c43dc3b3462460d933f81d32a"
 SHELLBOX_REQUIREMENT = (
     "marin-shellbox[shellsim] @ "
     f"git+https://github.com/marin-community/marin.git@{SHELLBOX_COMMIT}#subdirectory=lib/shellbox"
