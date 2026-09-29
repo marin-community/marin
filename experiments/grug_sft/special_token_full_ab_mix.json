@@ -212,13 +212,14 @@
     "penfever-traces/qwen35-122b-32k/nemotron-math-oracle-filtered": 96336289,
     "penfever-traces/qwen35-122b-32k/nl2bash-tasks-cleaned-oracle": 6787999,
     "penfever-traces/qwen35-122b-32k/selfinstruct-naive-sandboxes-2-verified": 9110740,
+    "science-tool-use-conversations": 20855889,
     "synthetic-misconceptions-conversations": 1704859,
     "ultrachat-persona-conversations": 324455701,
     "wildchat-glm53-format-completions": 9506138
   },
   "batch_size": 256,
   "context_length": 262144,
-  "sft_fraction": 0.7999469475616734,
-  "sft_token_budget": 234382295958,
+  "sft_fraction": 0.800018128726087,
+  "sft_token_budget": 234403151847,
   "steps": 4366
 }

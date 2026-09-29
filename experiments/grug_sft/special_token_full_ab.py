@@ -1,9 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Train the 234.382B-token A/B SFT mix outside the Snowball pretraining mix.
+"""Train the 234.403B-token SFT mix outside the Snowball pretraining mix.
 
-The allocation uses the scored SFT source list and corrected Terminus token counts.
+The allocation includes scored A/B sources, science tool-use chats, and corrected Terminus counts.
 The Terminus entries in the store manifest must use stores built after the reasoning parser fix.
 """
 

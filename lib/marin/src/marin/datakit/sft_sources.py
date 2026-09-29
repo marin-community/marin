@@ -26,6 +26,7 @@ from marin.datakit.download.numinamath_v1_5 import numinamath_v1_5_chat_normaliz
 from marin.datakit.download.open_swe_traces import OPEN_SWE_TRACES_PARTITIONS, open_swe_traces_chat_normalize_steps
 from marin.datakit.download.openthoughts4_code import openthoughts4_code_chat_normalize_steps
 from marin.datakit.download.penfever_rollouts import penfever_rollouts_chat_normalize_steps
+from marin.datakit.download.science_tool_use_conversations import science_tool_use_chat_normalize_steps
 from marin.datakit.download.superior_reasoning import superior_reasoning_chat_normalize_steps
 from marin.datakit.download.swe_rebench_openhands import swe_rebench_openhands_chat_normalize_steps
 from marin.datakit.download.swe_zero_12m import swe_zero_12m_chat_normalize_steps
@@ -368,6 +369,7 @@ def all_sft_sources() -> dict[str, DatakitChatSource]:
         ("numinamath-1.5", numinamath_v1_5_chat_normalize_steps),
         ("numinamath-tir", numinamath_tir_chat_normalize_steps),
         ("openthoughts4-code-glm-5.2-n4", openthoughts4_code_chat_normalize_steps),
+        ("science-tool-use-conversations", science_tool_use_chat_normalize_steps),
         ("superior-reasoning", superior_reasoning_chat_normalize_steps),
         ("swe-rebench-openhands", swe_rebench_openhands_chat_normalize_steps),
         ("swe-zero-12m", swe_zero_12m_chat_normalize_steps),
@@ -402,6 +404,9 @@ def all_sft_sources() -> dict[str, DatakitChatSource]:
     token_counts.update(TERMINUS_TOKEN_COUNTS_B)
     token_counts["synthetic-misconceptions-conversations"] = 0.001704859
     token_counts["identity-data"] = 0.061711380
+    # Reproduced locally on the pinned source with chat normalization, rendering,
+    # whitespace compaction, and BOS/EOS tokenization; artifact validation is pending.
+    token_counts["science-tool-use-conversations"] = 0.020855889
     token_counts["ultrachat-persona-conversations"] = 0.324455701
     return {
         name: DatakitChatSource(
