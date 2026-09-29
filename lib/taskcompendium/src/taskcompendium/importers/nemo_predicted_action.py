@@ -9,14 +9,17 @@ from typing import Any
 
 from taskcompendium.models import (
     AnswerType,
+    AssistantToolCalls,
+    ConversationInput,
+    ConversationToolCall,
     FunctionCall,
-    NativeActionRequest,
-    NativeFunction,
-    NativeMessage,
+    FunctionDefinition,
     Source,
+    TaskContext,
     TaskRequirements,
     TaskSpec,
-    format_native_messages,
+    TextMessage,
+    ToolResult,
 )
 from taskcompendium.predicted_action_verifier import predicted_action_verifier
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
@@ -56,7 +59,7 @@ def _expected_calls(value: Any) -> tuple[FunctionCall, ...]:
     raise ValueError("unsupported expected_action")
 
 
-def _functions(request: dict[str, Any]) -> tuple[NativeFunction, ...]:
+def _functions(request: dict[str, Any]) -> tuple[FunctionDefinition, ...]:
     tools = request.get("tools")
     if not isinstance(tools, list) or not tools:
         raise ValueError("source request requires advertised functions")
@@ -72,27 +75,43 @@ def _functions(request: dict[str, Any]) -> tuple[NativeFunction, ...]:
             raise ValueError("function description must be a string")
         if strict is not None and not isinstance(strict, bool):
             raise ValueError("function strict must be a boolean")
-        functions.append(NativeFunction(name=name, parameters=parameters, description=description, strict=strict))
+        functions.append(FunctionDefinition(name=name, parameters=parameters, description=description, strict=strict))
     if len({function.name for function in functions}) != len(functions):
         raise ValueError("advertised function names must be unique")
     return tuple(functions)
 
 
-def _messages(request: dict[str, Any]) -> tuple[NativeMessage, ...]:
-    messages = request.get("input")
-    if not isinstance(messages, list):
+def _events(request: dict[str, Any]) -> tuple[TextMessage | AssistantToolCalls | ToolResult, ...]:
+    items = request.get("input")
+    if not isinstance(items, list):
         raise ValueError("source input must be a list")
-    turns = []
-    for message in messages:
-        if not isinstance(message, dict):
+    events: list[TextMessage | AssistantToolCalls | ToolResult] = []
+    pending_calls: list[ConversationToolCall] = []
+    for item in items:
+        if not isinstance(item, dict):
             raise ValueError("unsupported source input item")
-        if message.get("type") == "reasoning":
-            if message.get("encrypted_content") is not None or not isinstance(message.get("summary"), list):
+        if item.get("type") == "reasoning":
+            if item.get("encrypted_content") is not None or not isinstance(item.get("summary"), list):
                 raise ValueError("unsupported source reasoning item")
             continue  # API reasoning summaries are not conversation messages.
-        if message.get("type") != "message" or message.get("role") not in {"system", "user", "assistant"}:
+        if item.get("type") == "function_call":
+            if not all(isinstance(item.get(key), str) and item[key] for key in ("call_id", "name", "arguments")):
+                raise ValueError("source function calls require call_id, name, and arguments")
+            pending_calls.append(
+                ConversationToolCall(call_id=item["call_id"], name=item["name"], arguments=item["arguments"])
+            )
+            continue
+        if pending_calls:
+            events.append(AssistantToolCalls(calls=tuple(pending_calls)))
+            pending_calls = []
+        if item.get("type") == "function_call_output":
+            if not isinstance(item.get("call_id"), str) or not isinstance(item.get("output"), str):
+                raise ValueError("source function results require call_id and string output")
+            events.append(ToolResult(call_id=item["call_id"], content=item["output"]))
+            continue
+        if item.get("type") != "message" or item.get("role") not in {"system", "developer", "user", "assistant"}:
             raise ValueError("unsupported source input item")
-        content = message.get("content")
+        content = item.get("content")
         if isinstance(content, list):
             if not all(
                 isinstance(item, dict) and item.get("type") == "output_text" and isinstance(item.get("text"), str)
@@ -102,10 +121,12 @@ def _messages(request: dict[str, Any]) -> tuple[NativeMessage, ...]:
             content = "".join(item["text"] for item in content)
         if not isinstance(content, str) or not content.strip():
             raise ValueError("source messages require text")
-        turns.append(NativeMessage(role=message["role"], content=content))
-    if not turns:
-        raise ValueError("source input has no messages")
-    return tuple(turns)
+        events.append(TextMessage(role=item["role"], content=content))
+    if pending_calls:
+        events.append(AssistantToolCalls(calls=tuple(pending_calls)))
+    if not events:
+        raise ValueError("source input has no conversation events")
+    return tuple(events)
 
 
 def import_row(row: dict[str, Any], expected_sha256: str) -> tuple[TaskSpec, SubmissionConvention]:
@@ -123,7 +144,7 @@ def import_row(row: dict[str, Any], expected_sha256: str) -> tuple[TaskSpec, Sub
     if unsupported:
         raise ValueError(f"unsupported source request settings: {', '.join(sorted(unsupported))}")
     functions = _functions(request)
-    messages = _messages(request)
+    events = _events(request)
     tool_choice = request.get("tool_choice")
     parallel_tool_calls = request.get("parallel_tool_calls")
     if tool_choice is not None and (not isinstance(tool_choice, str) or tool_choice not in {"auto", "none", "required"}):
@@ -141,17 +162,18 @@ def import_row(row: dict[str, Any], expected_sha256: str) -> tuple[TaskSpec, Sub
     source = Source(dataset=DATASET, revision=REVISION, row=expected_sha256, importer_revision=IMPORTER_REVISION)
     specification = TaskSpec(
         id=f"nemo-predicted-action-{expected_sha256}",
-        instructions=format_native_messages(messages),
+        context=TaskContext(
+            input=ConversationInput(
+                functions=functions,
+                events=events,
+                tool_choice=tool_choice,
+                parallel_tool_calls=parallel_tool_calls,
+            ),
+            requirements=TaskRequirements(),
+            answer_type=AnswerType.NATIVE_ACTION,
+        ),
         verifier=predicted_action_verifier(expected_calls),
         source=source,
-        requirements=TaskRequirements(),
-        answer_type=AnswerType.NATIVE_ACTION,
-        native_action_request=NativeActionRequest(
-            functions=functions,
-            messages=messages,
-            tool_choice=tool_choice,
-            parallel_tool_calls=parallel_tool_calls,
-        ),
     )
     convention = SubmissionConvention(
         id="native-final-action",

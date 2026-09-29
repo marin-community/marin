@@ -39,20 +39,20 @@ HARBOR_DOWNLOAD_DIRS = frozenset({AGENT_LOGS_PATH, ARTIFACTS_LOGS_PATH})
 HARBOR_EMPTY_DIRS = HARBOR_DOWNLOAD_DIRS | {VERIFIER_LOGS_PATH, TESTS_PATH}
 
 
-def _record_answer(logs_dir: Path, instruction: str, answer: str, context: AgentContext) -> None:
+def _record_answer(logs_dir: Path, messages: list[dict[str, Any]], answer: str, context: AgentContext) -> None:
     logs_dir.mkdir(parents=True, exist_ok=True)
     (logs_dir / RESPONSE_FILE).write_text(answer)
     context.metadata = {
         "assistant_final": answer,
         "turns": 1,
-        "all_messages": [{"role": "user", "content": instruction}, {"role": "assistant", "content": answer}],
+        "all_messages": [*messages, {"role": "assistant", "content": answer}],
         "summarization_count": 0,
         "tools": [],
     }
 
 
 def _record_action(
-    logs_dir: Path, messages: list[dict[str, str]], action: dict[str, Any], context: AgentContext
+    logs_dir: Path, messages: list[dict[str, Any]], action: dict[str, Any], context: AgentContext
 ) -> None:
     logs_dir.mkdir(parents=True, exist_ok=True)
     (logs_dir / ACTION_FILE).write_text(json.dumps(action))
@@ -147,7 +147,7 @@ class ReplayAgent(BaseAgent):
         pass
 
     async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
-        _record_answer(self.logs_dir, instruction, self.response, context)
+        _record_answer(self.logs_dir, [{"role": "user", "content": instruction}], self.response, context)
 
 
 class ActionReplayAgent(BaseAgent):
@@ -174,13 +174,24 @@ class ActionReplayAgent(BaseAgent):
 class DirectChatAgent(BaseAgent):
     """Send the rendered request to an OpenAI-compatible chat endpoint."""
 
-    def __init__(self, *args, api_base: str, request_timeout: float, api_key_env: str | None = None, **kwargs):
+    def __init__(
+        self,
+        *args,
+        api_base: str,
+        request_timeout: float,
+        events: list[dict[str, Any]],
+        submission_instruction: str,
+        api_key_env: str | None = None,
+        **kwargs,
+    ):
         super().__init__(*args, **kwargs)
         if self.model_name is None:
             raise ValueError("Direct chat requires a model name")
         self.api_base = api_base.rstrip("/")
         self.api_key_env = api_key_env
         self.request_timeout = request_timeout
+        self.events = events
+        self.submission_instruction = submission_instruction
 
     @staticmethod
     def name() -> str:
@@ -192,16 +203,42 @@ class DirectChatAgent(BaseAgent):
     async def setup(self, environment: BaseEnvironment) -> None:
         pass
 
-    def _completion(self, instruction: str) -> str:
-        body = {"model": self.model_name, "messages": [{"role": "user", "content": instruction}]}
+    def _chat_messages(self) -> list[dict[str, Any]]:
+        messages = []
+        for event in self.events:
+            if event["type"] == "message":
+                messages.append({"role": event["role"], "content": event["content"]})
+            elif event["type"] == "assistant_tool_calls":
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": event["content"],
+                        "tool_calls": [
+                            {
+                                "id": call["call_id"],
+                                "type": "function",
+                                "function": {"name": call["name"], "arguments": call["arguments"]},
+                            }
+                            for call in event["calls"]
+                        ],
+                    }
+                )
+            else:
+                messages.append({"role": "tool", "tool_call_id": event["call_id"], "content": event["content"]})
+        if self.submission_instruction:
+            messages.append({"role": "user", "content": self.submission_instruction})
+        return messages
+
+    def _completion(self) -> str:
+        body = {"model": self.model_name, "messages": self._chat_messages()}
         message = _chat_completion(self.api_base, self.api_key_env, self.request_timeout, body)
         if message.get("tool_calls") or not isinstance(message.get("content"), str):
             raise ValueError("Direct chat requires a textual final answer")
         return message["content"]
 
     async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
-        response = await asyncio.to_thread(self._completion, instruction)
-        _record_answer(self.logs_dir, instruction, response, context)
+        response = await asyncio.to_thread(self._completion)
+        _record_answer(self.logs_dir, self._chat_messages(), response, context)
 
 
 class NativeActionAgent(DirectChatAgent):
@@ -211,14 +248,12 @@ class NativeActionAgent(DirectChatAgent):
         self,
         *args,
         functions: list[dict[str, Any]],
-        messages: list[dict[str, str]],
         tool_choice: str | None = None,
         parallel_tool_calls: bool | None = None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self.functions = functions
-        self.messages = messages
         self.tool_choice = tool_choice
         self.parallel_tool_calls = parallel_tool_calls
 
@@ -234,7 +269,7 @@ class NativeActionAgent(DirectChatAgent):
                 if function.get(key) is not None:
                     definition[key] = function[key]
             tools.append({"type": "function", "function": definition})
-        body: dict[str, Any] = {"model": self.model_name, "messages": self.messages, "tools": tools}
+        body: dict[str, Any] = {"model": self.model_name, "messages": self._chat_messages(), "tools": tools}
         if self.tool_choice is not None:
             body["tool_choice"] = self.tool_choice
         if self.parallel_tool_calls is not None:
@@ -244,7 +279,7 @@ class NativeActionAgent(DirectChatAgent):
     # Harbor passes instruction by keyword; the source messages are the native-action prompt.
     async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
         response = await asyncio.to_thread(self._action_completion)
-        _record_action(self.logs_dir, self.messages, response, context)
+        _record_action(self.logs_dir, self._chat_messages(), response, context)
 
 
 class AnswerCallAgent(DirectChatAgent):
@@ -254,8 +289,8 @@ class AnswerCallAgent(DirectChatAgent):
     def name() -> str:
         return "taskcompendium-answer-call"
 
-    def _answer_completion(self, instruction: str) -> dict[str, Any]:
-        messages = [{"role": "user", "content": instruction}]
+    def _answer_completion(self) -> dict[str, Any]:
+        messages = self._chat_messages()
         body = {
             "model": self.model_name,
             "messages": messages,
@@ -266,8 +301,8 @@ class AnswerCallAgent(DirectChatAgent):
         return _chat_completion(self.api_base, self.api_key_env, self.request_timeout, body)
 
     async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
-        response = await asyncio.to_thread(self._answer_completion, instruction)
-        _record_action(self.logs_dir, [{"role": "user", "content": instruction}], response, context)
+        response = await asyncio.to_thread(self._answer_completion)
+        _record_action(self.logs_dir, self._chat_messages(), response, context)
 
 
 class SemanticVerifier(BaseVerifier):

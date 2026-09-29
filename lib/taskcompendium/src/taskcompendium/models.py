@@ -6,11 +6,11 @@
 from dataclasses import dataclass
 from enum import StrEnum
 from math import isfinite
-from typing import Any
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-SCHEMA_VERSION = "0.6"
+SCHEMA_VERSION = "0.7"
 
 
 class AnswerType(StrEnum):
@@ -80,8 +80,8 @@ class ToolCallComparatorConfig:
             raise ValueError("Numeric tolerance must be finite and nonnegative")
 
 
-class NativeFunction(BaseModel):
-    """Advertised output function, without an execution binding."""
+class FunctionDefinition(BaseModel):
+    """Function advertised to the model, without an execution binding."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -91,44 +91,107 @@ class NativeFunction(BaseModel):
     strict: bool | None = None
 
 
-class NativeMessage(BaseModel):
-    """One source conversation turn sent to a native-action model."""
+class TextMessage(BaseModel):
+    """One source conversation turn sent to the model."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    type: Literal["message"] = "message"
     role: str
     content: str
 
     @model_validator(mode="after")
-    def validate_message(self) -> "NativeMessage":
-        if self.role not in {"system", "user", "assistant"} or not self.content.strip():
-            raise ValueError("Native messages require a supported role and nonempty content")
+    def validate_message(self) -> "TextMessage":
+        if self.role not in {"system", "developer", "user", "assistant"} or not self.content.strip():
+            raise ValueError("Conversation messages require a supported role and nonempty content")
         return self
 
 
-def format_native_messages(messages: tuple[NativeMessage, ...]) -> str:
-    """Produce the Harbor instruction view of structured source messages."""
-    return "\n\n".join(f"{message.role.title()}:\n{message.content.strip()}" for message in messages)
-
-
-class NativeActionRequest(BaseModel):
-    """Source conversation and advertised output functions for one task."""
+class ConversationToolCall(BaseModel):
+    """One historical assistant function call in the conversation prefix."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    messages: tuple[NativeMessage, ...]
-    functions: tuple[NativeFunction, ...]
+    call_id: str
+    name: str
+    arguments: str
+
+
+class AssistantToolCalls(BaseModel):
+    """A historical assistant message containing function calls."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["assistant_tool_calls"] = "assistant_tool_calls"
+    calls: tuple[ConversationToolCall, ...]
+    content: str | None = None
+
+
+class ToolResult(BaseModel):
+    """A historical result for a function call in the conversation prefix."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["tool_result"] = "tool_result"
+    call_id: str
+    content: str
+
+
+ConversationEvent = Annotated[TextMessage | AssistantToolCalls | ToolResult, Field(discriminator="type")]
+
+
+def format_conversation(events: tuple[ConversationEvent, ...]) -> str:
+    """Produce the Harbor instruction view of a structured conversation."""
+    sections = []
+    for event in events:
+        if isinstance(event, TextMessage):
+            sections.append(f"{event.role.title()}:\n{event.content.strip()}")
+        elif isinstance(event, AssistantToolCalls):
+            calls = "\n".join(f"{call.call_id}: {call.name}({call.arguments})" for call in event.calls)
+            content = f"{event.content}\n" if event.content is not None else ""
+            sections.append(f"Assistant:\n{content}{calls}")
+        else:
+            sections.append(f"Tool result {event.call_id}:\n{event.content}")
+    return "\n\n".join(sections)
+
+
+class ConversationInput(BaseModel):
+    """The model-visible conversation prefix and advertised functions."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    events: tuple[ConversationEvent, ...]
+    functions: tuple[FunctionDefinition, ...] = ()
     tool_choice: str | None = None
     parallel_tool_calls: bool | None = None
 
     @model_validator(mode="after")
-    def validate_request(self) -> "NativeActionRequest":
-        if not self.messages or not self.functions:
-            raise ValueError("Native actions require messages and advertised functions")
+    def validate_input(self) -> "ConversationInput":
+        if not self.events:
+            raise ValueError("Conversation input requires events")
         if len({function.name for function in self.functions}) != len(self.functions):
             raise ValueError("Advertised function names must be unique")
         if self.tool_choice is not None and self.tool_choice not in {"auto", "none", "required"}:
             raise ValueError("Unsupported native tool choice")
+        pending: set[str] = set()
+        seen: set[str] = set()
+        for event in self.events:
+            if isinstance(event, AssistantToolCalls):
+                if pending or not event.calls:
+                    raise ValueError("Historical calls require preceding results and a nonempty batch")
+                for call in event.calls:
+                    if not call.call_id or not call.name or call.call_id in seen:
+                        raise ValueError("Historical call identifiers and names must be unique and nonempty")
+                    pending.add(call.call_id)
+                    seen.add(call.call_id)
+            elif isinstance(event, ToolResult):
+                if event.call_id not in pending:
+                    raise ValueError("Historical tool result has no pending call")
+                pending.remove(event.call_id)
+            elif pending:
+                raise ValueError("Historical calls require results before the next message")
+        if pending:
+            raise ValueError("Historical calls require results before the final decision")
         return self
 
 
@@ -146,31 +209,37 @@ class TaskRequirements(BaseModel):
     action_interfaces: tuple[str, ...] = ()
 
 
+class TaskContext(BaseModel):
+    """Model input, result kind, and environment functionality for one task."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    input: ConversationInput
+    answer_type: AnswerType
+    requirements: TaskRequirements
+
+    @model_validator(mode="after")
+    def validate_context(self) -> "TaskContext":
+        if self.answer_type == AnswerType.NATIVE_ACTION and not self.input.functions:
+            raise ValueError("Native-action tasks require advertised functions")
+        return self
+
+
 class TaskSpec(BaseModel):
     """The private definition of one deterministic answer task."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     id: str
-    instructions: str
+    context: TaskContext
     verifier: VerifierSpec
     source: Source
-    requirements: TaskRequirements
-    answer_type: AnswerType
-    native_action_request: NativeActionRequest | None = None
     schema_version: str = SCHEMA_VERSION
 
     @model_validator(mode="after")
     def validate_specification(self) -> "TaskSpec":
         if self.schema_version != SCHEMA_VERSION:
             raise ValueError(f"Unsupported TaskSpec schema: {self.schema_version}")
-        if not self.id or not self.instructions.strip():
-            raise ValueError("A task id and instructions are required")
-        if self.answer_type == AnswerType.NATIVE_ACTION:
-            if self.native_action_request is None:
-                raise ValueError("Native-action tasks require a source request")
-            if self.instructions != format_native_messages(self.native_action_request.messages):
-                raise ValueError("Final-action instructions differ from source messages")
-        elif self.native_action_request is not None:
-            raise ValueError("Only native-action tasks can carry a source request")
+        if not self.id:
+            raise ValueError("A task id is required")
         return self

@@ -35,16 +35,15 @@ def test_pinned_nemo_row_keeps_expected_action_private(tmp_path):
     provenance = json.loads((FIXTURES / "predicted-action.provenance.json").read_text())
     assert canonical_sha256(row) == provenance["canonical_json_sha256"]
     specification, convention = import_row(row, provenance["canonical_json_sha256"])
-    assert specification.answer_type == AnswerType.NATIVE_ACTION
+    assert specification.context.answer_type == AnswerType.NATIVE_ACTION
     assert convention.supports(AnswerType.NATIVE_ACTION)
     assert not convention.supports(AnswerType.FILE)
-    request = specification.native_action_request
-    assert request is not None
+    request = specification.context.input
     assert specification.source.dataset == provenance["dataset"]
     assert specification.source.revision == provenance["dataset_revision"]
-    assert [message.role for message in request.messages] == ["system", "user", "assistant", "user"]
-    assert request.messages[0].content == row["responses_create_params"]["input"][0]["content"]
-    assert request.messages[-1].content == row["responses_create_params"]["input"][-1]["content"]
+    assert [message.role for message in request.events] == ["system", "user", "assistant", "user"]
+    assert request.events[0].content == row["responses_create_params"]["input"][0]["content"]
+    assert request.events[-1].content == row["responses_create_params"]["input"][-1]["content"]
     task = lower_to_harbor(specification, convention, HarborEnvironmentConfig(), tmp_path / "task")
     public = (task / "instruction.md").read_text() + (task / "submission_convention.json").read_text()
     assert row["expected_action"]["arguments"] not in public
@@ -126,23 +125,6 @@ def test_predicted_action_rejects_crafted_message_target_on_private_read(tmp_pat
         read_specification(task / "specification.json")
 
 
-def test_predicted_action_rejects_instruction_message_drift(tmp_path):
-    row = json.loads((FIXTURES / "predicted-action.json").read_text())
-    specification, convention = import_row(row, canonical_sha256(row))
-    changed = specification.model_copy(update={"instructions": "Changed instruction"})
-
-    assert compatible_lowerings(changed, (convention,), (HarborEnvironmentConfig(),)) == ()
-
-    with pytest.raises(ValueError, match="differ from source messages"):
-        lower_to_harbor(
-            changed,
-            convention,
-            HarborEnvironmentConfig(),
-            tmp_path / "task",
-        )
-    assert not (tmp_path / "task").exists()
-
-
 def test_predicted_action_reuses_final_action_convention_without_changing_source_request(tmp_path):
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
     specification, _ = import_row(row, canonical_sha256(row))
@@ -152,7 +134,7 @@ def test_predicted_action_reuses_final_action_convention_without_changing_source
     assert len(candidates) == 1
     task = lower_to_harbor(specification, convention, HarborEnvironmentConfig(), tmp_path / "task")
     exported = read_specification(task / "specification.json")
-    assert exported.native_action_request == specification.native_action_request
+    assert exported.context == specification.context
 
 
 @pytest.mark.parametrize(
@@ -216,6 +198,15 @@ async def test_predicted_action_rejects_text_replay_before_trial(tmp_path):
 
 async def test_predicted_action_chat_requests_native_output_without_dispatch(tmp_path, monkeypatch):
     row = json.loads((FIXTURES / "predicted-action.json").read_text())
+    row["responses_create_params"]["input"][-1:-1] = [
+        {
+            "type": "function_call",
+            "call_id": "call-profile",
+            "name": "get_user_profile",
+            "arguments": '{"user_id":"GROOM2024"}',
+        },
+        {"type": "function_call_output", "call_id": "call-profile", "output": '{"verified":false}'},
+    ]
     specification, _ = import_row(row, canonical_sha256(row))
     convention = SubmissionConvention(id="generic-final-action", answer_format=AnswerFormat.FINAL_ACTION)
     environment_config = HarborEnvironmentConfig()
@@ -240,17 +231,39 @@ async def test_predicted_action_chat_requests_native_output_without_dispatch(tmp
     assert result.exception_info is None, result.exception_info
     assert result.verifier_result.rewards == {"reward": 1.0}
     request, authorization = requests[0]
-    native_request = specification.native_action_request
-    assert native_request is not None
+    native_request = specification.context.input
     assert [tool["function"]["name"] for tool in request["tools"]] == [
         function.name for function in native_request.functions
     ]
     assert [tool["function"]["parameters"] for tool in request["tools"]] == [
         function.parameters for function in native_request.functions
     ]
-    assert request["messages"] == [
-        {"role": message.role, "content": message.content} for message in native_request.messages
+    assert [message["role"] for message in request["messages"]] == [
+        "system",
+        "user",
+        "assistant",
+        "assistant",
+        "tool",
+        "user",
     ]
+    assert request["messages"][0]["content"] == row["responses_create_params"]["input"][0]["content"]
+    assert request["messages"][3] == {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "call-profile",
+                "type": "function",
+                "function": {"name": "get_user_profile", "arguments": '{"user_id":"GROOM2024"}'},
+            }
+        ],
+    }
+    assert request["messages"][4] == {
+        "role": "tool",
+        "tool_call_id": "call-profile",
+        "content": '{"verified":false}',
+    }
+    assert request["messages"][-1]["content"] == row["responses_create_params"]["input"][-1]["content"]
     assert request["tool_choice"] == "auto"
     assert request["parallel_tool_calls"] is False
     assert authorization == "Bearer test-token"

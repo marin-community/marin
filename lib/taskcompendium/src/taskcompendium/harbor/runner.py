@@ -21,7 +21,7 @@ from taskcompendium.lowering import (
     read_submission_convention,
     validate_environment_config,
 )
-from taskcompendium.submission import AnswerFormat
+from taskcompendium.submission import AnswerFormat, submission_instruction
 
 DEFAULT_CHAT_TIMEOUT = 120
 
@@ -91,13 +91,12 @@ async def run_trial(
             raise ValueError("Chat launch requires a readable convention")
         agent_path = "taskcompendium.harbor.adapter:DirectChatAgent"
         kwargs = launch.model_dump(exclude={"model"})
+        request = specification.context.input
+        kwargs["events"] = [event.model_dump(mode="json") for event in request.events]
+        kwargs["submission_instruction"] = submission_instruction(convention)
         if answer_format == AnswerFormat.FINAL_ACTION:
-            request = specification.native_action_request
-            if request is None:
-                raise ValueError("Final-action task requires a source request")
             agent_path = "taskcompendium.harbor.adapter:NativeActionAgent"
             kwargs["functions"] = [function.model_dump(mode="json") for function in request.functions]
-            kwargs["messages"] = [message.model_dump(mode="json") for message in request.messages]
             kwargs["tool_choice"] = request.tool_choice
             kwargs["parallel_tool_calls"] = request.parallel_tool_calls
         elif answer_format == AnswerFormat.ANSWER_CALL:

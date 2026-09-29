@@ -25,7 +25,17 @@ from taskcompendium.lowering import (
     read_specification,
     select_lowerings,
 )
-from taskcompendium.models import AnswerType, Source, TaskRequirements, TaskSpec, VerifierKind, VerifierSpec
+from taskcompendium.models import (
+    AnswerType,
+    ConversationInput,
+    Source,
+    TaskContext,
+    TaskRequirements,
+    TaskSpec,
+    TextMessage,
+    VerifierKind,
+    VerifierSpec,
+)
 from taskcompendium.submission import AnswerFormat, SubmissionConvention
 
 
@@ -43,18 +53,19 @@ def _answer_action(answer: str) -> dict:
 class ChatEndpoint:
     url: str
     authorizations: list[str | None]
+    requests: list[dict]
     status: int
     body: bytes
 
 
 @pytest.fixture
 def chat_endpoint():
-    endpoint = ChatEndpoint("", [], 200, b'{"choices":[{"message":{"role":"assistant","content":"12"}}]}')
+    endpoint = ChatEndpoint("", [], [], 200, b'{"choices":[{"message":{"role":"assistant","content":"12"}}]}')
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
             endpoint.authorizations.append(self.headers.get("Authorization"))
-            self.rfile.read(int(self.headers["Content-Length"]))
+            endpoint.requests.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
             self.send_response(endpoint.status)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
@@ -79,11 +90,13 @@ def chat_endpoint():
 def specification() -> TaskSpec:
     return TaskSpec(
         id="arithmetic-7-plus-5",
-        instructions="What is 7 + 5?",
+        context=TaskContext(
+            input=ConversationInput(events=(TextMessage(role="user", content="What is 7 + 5?"),)),
+            requirements=TaskRequirements(),
+            answer_type=AnswerType.NUMBER,
+        ),
         verifier=exact_answer("12"),
         source=Source(dataset="hand-authored", revision="2026-09-16", row="arithmetic-7-plus-5", importer_revision="1"),
-        requirements=TaskRequirements(),
-        answer_type=AnswerType.NUMBER,
     )
 
 
@@ -174,7 +187,9 @@ async def test_answer_task_rejects_action_replay_before_trial(tmp_path, specific
 
 @pytest.mark.parametrize("answer_type", [AnswerType.TEXT, AnswerType.NUMBER])
 async def test_answer_call_grades_semantic_answers_through_harbor(tmp_path, specification, answer_type):
-    specification = specification.model_copy(update={"answer_type": answer_type})
+    specification = specification.model_copy(
+        update={"context": specification.context.model_copy(update={"answer_type": answer_type})}
+    )
     convention = SubmissionConvention(id="answer-call", answer_format=AnswerFormat.ANSWER_CALL)
     environment_config = HarborEnvironmentConfig()
     task = lower_to_harbor(specification, convention, environment_config, tmp_path / "task")
@@ -229,7 +244,13 @@ async def test_answer_call_does_not_dispatch_and_requires_its_submission_functio
 
 
 def test_direct_chat_rejects_unsatisfied_requirements(tmp_path, specification):
-    specification = specification.model_copy(update={"requirements": TaskRequirements(capabilities=("filesystem",))})
+    specification = specification.model_copy(
+        update={
+            "context": specification.context.model_copy(
+                update={"requirements": TaskRequirements(capabilities=("filesystem",))}
+            )
+        }
+    )
 
     with pytest.raises(ValueError, match="cannot satisfy"):
         lower_to_harbor(
@@ -306,7 +327,9 @@ def test_old_verifier_schema_is_rejected_on_read(tmp_path, specification):
 
 
 def test_file_result_cannot_use_text_submission_convention(tmp_path, specification):
-    specification = specification.model_copy(update={"answer_type": AnswerType.FILE})
+    specification = specification.model_copy(
+        update={"context": specification.context.model_copy(update={"answer_type": AnswerType.FILE})}
+    )
     convention = SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN)
 
     assert compatible_lowerings(specification, (convention,), (HarborEnvironmentConfig(),)) == ()
@@ -356,6 +379,46 @@ async def test_chat_trial_resolves_key_at_runtime_without_persisting_it(
     assert any(path.name == "config.json" for path in artifacts)
     assert any(path.name == "result.json" for path in artifacts)
     assert all(secret not in path.read_text() for path in artifacts)
+
+
+async def test_chat_trial_preserves_conversation_roles(tmp_path, specification, chat_endpoint):
+    context = specification.context.model_copy(
+        update={
+            "input": ConversationInput(
+                events=(
+                    TextMessage(role="system", content="Answer arithmetic questions."),
+                    TextMessage(role="user", content="What is 2 + 2?"),
+                    TextMessage(role="assistant", content="4"),
+                    TextMessage(role="user", content="What is 7 + 5?"),
+                )
+            )
+        }
+    )
+    specification = specification.model_copy(update={"context": context})
+    environment_config = HarborEnvironmentConfig()
+    task = lower_to_harbor(
+        specification,
+        SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
+        environment_config,
+        tmp_path / "task",
+    )
+
+    result = await run_trial(
+        task,
+        environment_config,
+        ChatLaunch(model="fixture-model", api_base=chat_endpoint.url),
+        tmp_path / "trials",
+        "run",
+    )
+
+    assert result.verifier_result.rewards == {"reward": 1.0}
+    assert chat_endpoint.requests[0]["messages"] == [
+        {"role": "system", "content": "Answer arithmetic questions."},
+        {"role": "user", "content": "What is 2 + 2?"},
+        {"role": "assistant", "content": "4"},
+        {"role": "user", "content": "What is 7 + 5?"},
+        {"role": "user", "content": "Give your answer as plain text."},
+    ]
 
 
 async def test_chat_http_error_preserves_server_diagnostic(tmp_path, specification, chat_endpoint):

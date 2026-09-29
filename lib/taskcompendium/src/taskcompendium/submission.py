@@ -9,7 +9,7 @@ from enum import StrEnum
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from taskcompendium.final_action import SubmittedCalls, decode_action, parse_arguments, unique_json_fields
-from taskcompendium.models import AnswerType, TaskSpec, format_native_messages
+from taskcompendium.models import AnswerType, TaskSpec, format_conversation
 
 ANSWER_CALL_NAME = "submit_answer"
 ANSWER_FIELD = "answer"
@@ -63,36 +63,39 @@ class SubmissionConvention(BaseModel):
 
 
 def submission_compatible(specification: TaskSpec, convention: SubmissionConvention) -> bool:
-    if not convention.supports(specification.answer_type):
+    context = specification.context
+    if not convention.supports(context.answer_type):
         return False
     if convention.answer_format == AnswerFormat.FINAL_ACTION:
-        request = specification.native_action_request
-        return request is not None and specification.instructions == format_native_messages(request.messages)
-    return specification.native_action_request is None
+        return bool(context.input.functions)
+    return (
+        not context.input.functions and context.input.tool_choice is None and context.input.parallel_tool_calls is None
+    )
+
+
+def submission_instruction(convention: SubmissionConvention) -> str:
+    """Return the instruction added after a conversation prefix."""
+    if convention.answer_format == AnswerFormat.PLAIN:
+        return "Give your answer as plain text."
+    if convention.answer_format == AnswerFormat.JSON:
+        return f'Give your answer as a JSON object with an "{ANSWER_FIELD}" field.'
+    if convention.answer_format == AnswerFormat.ANSWER_CALL:
+        return f'Call {ANSWER_CALL_NAME} with your final answer as the "{ANSWER_FIELD}" string.'
+    if convention.answer_format == AnswerFormat.FINAL_ACTION:
+        return ""
+    raise ValueError(f"Unsupported answer format: {convention.answer_format}")
 
 
 def render_instruction(specification: TaskSpec, convention: SubmissionConvention) -> str:
     """Return Harbor instruction text for the selected convention."""
-    if not convention.supports(specification.answer_type):
-        raise ValueError(f"Submission convention {convention.id!r} cannot carry {specification.answer_type.value!r}")
+    context = specification.context
+    if not submission_compatible(specification, convention):
+        raise ValueError(
+            f"Submission convention {convention.id!r} cannot carry {context.answer_type.value!r} in this context"
+        )
     if convention.answer_format == AnswerFormat.FINAL_ACTION:
-        request = specification.native_action_request
-        if request is None:
-            raise ValueError("Final-action task requires a source request")
-        if specification.instructions != format_native_messages(request.messages):
-            raise ValueError("Final-action instructions differ from source messages")
-        return specification.instructions
-    if specification.native_action_request is not None:
-        raise ValueError("Text tasks cannot carry native action requests")
-    if convention.answer_format == AnswerFormat.PLAIN:
-        suffix = "Give your answer as plain text."
-    elif convention.answer_format == AnswerFormat.JSON:
-        suffix = f'Give your answer as a JSON object with an "{ANSWER_FIELD}" field.'
-    elif convention.answer_format == AnswerFormat.ANSWER_CALL:
-        suffix = f'Call {ANSWER_CALL_NAME} with your final answer as the "{ANSWER_FIELD}" string.'
-    else:
-        raise ValueError(f"Unsupported answer format: {convention.answer_format}")
-    return f"{specification.instructions.rstrip()}\n\n{suffix}\n"
+        return format_conversation(context.input.events)
+    return f"{format_conversation(context.input.events)}\n\n{submission_instruction(convention)}\n"
 
 
 def extract_answer(response: str | None, convention: SubmissionConvention) -> str:
