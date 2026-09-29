@@ -16,7 +16,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from taskcompendium.models import SCHEMA_VERSION, AnswerType, TaskSpec
-from taskcompendium.submission import SubmissionConvention, render_instruction
+from taskcompendium.submission import WORKSPACE_ROOT, SubmissionConvention, render_instruction
 from taskcompendium.verifier_registry import resolve_verifier
 from taskcompendium.verifiers.script import (
     MAX_RESOURCE_BYTES,
@@ -206,13 +206,16 @@ def lower_to_harbor(
         (destination / "environment").mkdir()
         if environment_config.environment == WORKSPACE_DOCKER_ENVIRONMENT:
             (destination / "environment" / "docker-compose.yaml").write_text(
-                "services:\n  main:\n    working_dir: /app\n"
+                f"services:\n  main:\n    working_dir: {WORKSPACE_ROOT}\n"
             )
         (destination / "instruction.md").write_text(instruction)
         environment_lines = ['version = "1.0"', "", "[environment]", "allow_internet = false"]
         if environment_config.environment == WORKSPACE_DOCKER_ENVIRONMENT:
             environment_lines.extend(
-                [f"docker_image = {json.dumps(environment_config.docker_image)}", 'workdir = "/app"']
+                [
+                    f"docker_image = {json.dumps(environment_config.docker_image)}",
+                    f"workdir = {json.dumps(WORKSPACE_ROOT)}",
+                ]
             )
         (destination / "task.toml").write_text("\n".join(environment_lines) + "\n")
         (destination / SPECIFICATION_FILE).write_text(specification.model_dump_json(indent=2) + "\n")

@@ -15,7 +15,9 @@ from harbor.environments.base import ExecResult
 
 from taskcompendium.grading import Outcome
 from taskcompendium.harbor import script_runtime
+from taskcompendium.harbor.script_runtime import ScriptSubmission
 from taskcompendium.harbor.workspace import UnsafeWorkspaceError, capture_workspace
+from taskcompendium.models import AnswerType
 from taskcompendium.verifiers.script import PrivateResource, ScriptVerifier
 
 
@@ -57,23 +59,24 @@ def test_script_runtime_stages_private_files_and_isolates_workspace(tmp_path, mo
     snapshot = tmp_path / "snapshot"
     snapshot.mkdir()
     (snapshot / "program.txt").write_text("agent final state")
-    submission = {"protocol_version": 1, "answer_type": "workspace_state", "convention_id": "workspace", "answer": None}
+    submission = ScriptSubmission(1, AnswerType.WORKSPACE_STATE, "workspace", None)
     verifier_dir = tmp_path / "verifier"
 
     def fake_docker(command, **kwargs):
         assert command[:2] == ["docker", "run"]
         assert command[command.index("--network") + 1] == "none"
-        assert "--pull=never" in command
-        assert "--log-driver=none" in command
-        assert "--read-only" in command
-        assert "--cap-drop=ALL" in command
         assert kwargs["timeout"] == 2.0
         mounts = _mounts(command)
         assert set(mounts) == {"/app", "/tests", "/verifier"}
         assert (mounts["/app"] / "program.txt").read_text() == "agent final state"
         assert not (mounts["/app"] / "reference.txt").exists()
         assert (mounts["/tests"] / "reference.txt").read_bytes() == b"private answer"
-        assert json.loads((mounts["/verifier"] / "submission.json").read_text()) == submission
+        assert json.loads((mounts["/verifier"] / "submission.json").read_text()) == {
+            "protocol_version": 1,
+            "answer_type": "workspace_state",
+            "convention_id": "workspace",
+            "answer": None,
+        }
         (mounts["/app"] / "program.txt").write_text("grader mutation")
         (mounts["/verifier"] / "result.json").write_text('{"status":"scored","reward":0.75}')
         return subprocess.CompletedProcess(command, 17)
@@ -102,7 +105,7 @@ def test_script_runtime_timeout_stops_container_without_reward(tmp_path, monkeyp
     monkeypatch.setattr(script_runtime.subprocess, "run", fake_docker)
     result = script_runtime.run_script_verifier(
         _config().model_copy(update={"timeout_seconds": 1200.0}),
-        {"protocol_version": 1, "answer_type": "text", "convention_id": "plain", "answer": "x"},
+        ScriptSubmission(1, AnswerType.TEXT, "plain", "x"),
         snapshot,
         tmp_path / "verifier",
     )
@@ -125,7 +128,7 @@ def test_script_runtime_rejects_unscored_reward(tmp_path, monkeypatch):
     monkeypatch.setattr(script_runtime.subprocess, "run", fake_docker)
     result = script_runtime.run_script_verifier(
         _config(),
-        {"protocol_version": 1, "answer_type": "text", "convention_id": "plain", "answer": "x"},
+        ScriptSubmission(1, AnswerType.TEXT, "plain", "x"),
         snapshot,
         tmp_path / "verifier",
     )

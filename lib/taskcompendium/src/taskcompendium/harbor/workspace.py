@@ -10,7 +10,8 @@ from pathlib import Path
 
 from harbor.environments.base import BaseEnvironment
 
-WORKSPACE_ROOT = "/app"
+from taskcompendium.submission import WORKSPACE_ROOT
+
 MAX_WORKSPACE_FILES = 4096
 MAX_WORKSPACE_BYTES = 256 * 1024 * 1024
 MOUNT_ESCAPE = re.compile(r"\\([0-7]{3})")

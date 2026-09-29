@@ -11,11 +11,12 @@ import stat
 import subprocess
 import tempfile
 import uuid
-from collections.abc import Mapping
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
 
 from taskcompendium.grading import GradeResult, Outcome
+from taskcompendium.models import AnswerType
+from taskcompendium.submission import WORKSPACE_ROOT
 from taskcompendium.verifiers.script import (
     NetworkPolicy,
     ResourceResolver,
@@ -23,7 +24,7 @@ from taskcompendium.verifiers.script import (
     materialize_private_resources,
 )
 
-APP_DIR = "/app"
+APP_DIR = WORKSPACE_ROOT
 TESTS_DIR = "/tests"
 VERIFIER_DIR = "/verifier"
 SUBMISSION_FILE = "submission.json"
@@ -37,6 +38,16 @@ CPU_LIMIT = "1"
 PID_LIMIT = "64"
 TMPFS_LIMIT = "64m"
 DOCKER_CLEANUP_TIMEOUT = 10
+
+
+@dataclass(frozen=True)
+class ScriptSubmission:
+    """The normalized answer and submission metadata given to a script grader."""
+
+    protocol_version: int
+    answer_type: AnswerType
+    convention_id: str
+    answer: str | None
 
 
 def _copy_workspace(source: Path, destination: Path) -> None:
@@ -154,22 +165,16 @@ def _docker_command(config: ScriptVerifier, root: Path, container_name: str, doc
 
 def run_script_verifier(
     config: ScriptVerifier,
-    submission: Mapping[str, Any],
+    submission: ScriptSubmission,
     workspace_snapshot: Path,
     verifier_dir: Path,
     resolve_uri: ResourceResolver | None = None,
     *,
     docker_binary: str = "docker",
 ) -> GradeResult:
-    """Grade a frozen workspace without executing task code in the host process.
-
-    The OCI image must already be present locally. Docker output is discarded,
-    and its log driver is disabled; only the bounded result protocol is read.
-    """
+    """Grade a frozen workspace with an isolated script and return its verdict."""
     try:
-        record = dict(submission)
-        if set(record) != {"protocol_version", "answer_type", "convention_id", "answer"}:
-            raise ValueError("Submission record has invalid fields")
+        record = asdict(submission)
         if record["protocol_version"] != 1 or isinstance(record["protocol_version"], bool):
             raise ValueError("Unsupported submission protocol")
         if record["answer_type"] not in {"text", "number", "file", "workspace_state", "native_action"}:

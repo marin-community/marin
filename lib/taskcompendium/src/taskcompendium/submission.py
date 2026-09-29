@@ -11,6 +11,8 @@ from pydantic import BaseModel, ConfigDict, model_validator
 
 from taskcompendium.models import AnswerType, TaskSpec
 
+WORKSPACE_ROOT = "/app"
+
 
 class AnswerFormat(StrEnum):
     """A model-visible envelope for a submitted answer."""
@@ -80,9 +82,9 @@ def render_instruction(specification: TaskSpec, convention: SubmissionConvention
     elif convention.answer_format == AnswerFormat.JSON:
         suffix = 'Give your answer as a JSON object with an "answer" field.'
     elif convention.answer_format == AnswerFormat.FILE:
-        suffix = f"Write your final file to /app/{convention.output_path}."
+        suffix = f"Write your final file to {WORKSPACE_ROOT}/{convention.output_path}."
     elif convention.answer_format == AnswerFormat.WORKSPACE:
-        suffix = "Complete the requested changes in /app."
+        suffix = f"Complete the requested changes in {WORKSPACE_ROOT}."
     else:
         raise ValueError(f"Unsupported answer format: {convention.answer_format}")
     return f"{specification.instructions.rstrip()}\n\n{suffix}\n"

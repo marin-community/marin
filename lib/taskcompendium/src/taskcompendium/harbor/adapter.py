@@ -20,7 +20,7 @@ from harbor.models.verifier.result import VerifierResult
 from harbor.verifier.base import BaseVerifier
 
 from taskcompendium.grading import GradeResult, Outcome
-from taskcompendium.harbor.script_runtime import run_script_verifier
+from taskcompendium.harbor.script_runtime import ScriptSubmission, run_script_verifier
 from taskcompendium.harbor.workspace import UnsafeWorkspaceError, capture_workspace
 from taskcompendium.lowering import (
     ENVIRONMENT_CONFIG_FILE,
@@ -231,12 +231,12 @@ class SemanticVerifier(BaseVerifier):
         except ValueError:
             return GradeResult(Outcome.INVALID_TASK, None, "Pinned private resources are unavailable or changed")
         environment_config = read_environment_config(root / ENVIRONMENT_CONFIG_FILE)
-        submission = {
-            "protocol_version": verifier.protocol_version,
-            "answer_type": specification.answer_type.value,
-            "convention_id": convention.id,
-            "answer": answer,
-        }
+        submission = ScriptSubmission(
+            protocol_version=verifier.protocol_version,
+            answer_type=specification.answer_type,
+            convention_id=convention.id,
+            answer=answer,
+        )
         with tempfile.TemporaryDirectory(prefix="taskcompendium-snapshot-") as temporary:
             scratch = Path(temporary)
             workspace = scratch / "workspace"

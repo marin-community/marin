@@ -126,12 +126,7 @@ class ScriptVerifier(BaseModel):
             raise ValueError("Script timeout must be finite and positive")
         if self.protocol_version != PROTOCOL_VERSION:
             raise ValueError(f"Unsupported script result protocol: {self.protocol_version}")
-        paths: set[str] = set()
-        for resource in self.resources:
-            folded = resource.path.casefold()
-            if folded in paths or any(folded.startswith(f"{path}/") or path.startswith(f"{folded}/") for path in paths):
-                raise ValueError("Private resource path collision")
-            paths.add(folded)
+        _validate_resource_paths(self.resources)
         entrypoint = next((resource for resource in self.resources if resource.path == self.entrypoint), None)
         if entrypoint is None or not entrypoint.executable:
             raise ValueError("Script entrypoint must be an executable private resource")
@@ -141,6 +136,15 @@ class ScriptVerifier(BaseModel):
 def script_verifier(config: ScriptVerifier) -> VerifierSpec:
     """Serialize a script contract for a private TaskSpec verifier."""
     return VerifierSpec(kind=VerifierKind.SCRIPT, parameters_json=config.model_dump_json())
+
+
+def _validate_resource_paths(resources: Sequence[PrivateResource]) -> None:
+    paths: set[str] = set()
+    for resource in resources:
+        folded = resource.path.casefold()
+        if folded in paths or any(folded.startswith(f"{path}/") or path.startswith(f"{folded}/") for path in paths):
+            raise ValueError(f"Private resource path collision: {resource.path}")
+        paths.add(folded)
 
 
 def materialize_private_resources(
@@ -155,16 +159,10 @@ def materialize_private_resources(
         raise ValueError("Private resource destination cannot be a symlink")
     content_by_path: dict[str, bytes] = {}
     executable_paths: set[str] = set()
-    folded_paths: set[str] = set()
+    _validate_resource_paths(resources)
     total_bytes = 0
     for resource in resources:
         path = _relative_resource_path(resource.path)
-        folded = path.casefold()
-        if folded in folded_paths or any(
-            folded.startswith(f"{existing}/") or existing.startswith(f"{folded}/") for existing in folded_paths
-        ):
-            raise ValueError(f"Private resource path collision: {path}")
-        folded_paths.add(folded)
         if resource.embedded_base64 is not None:
             content = _decode_embedded(resource.embedded_base64)
         else:
