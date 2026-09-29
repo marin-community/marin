@@ -4,6 +4,7 @@
 """Export a direct-chat TaskSpec submission as a Harbor task package."""
 
 import hashlib
+import importlib
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -12,14 +13,18 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
-from taskcompendium.models import SCHEMA_VERSION, TaskSpec
+from taskcompendium.models import SCHEMA_VERSION, AnswerType, TaskSpec
 from taskcompendium.submission import SubmissionConvention, render_instruction
 from taskcompendium.verifier_registry import validate_verifier
 
 DIRECT_CHAT_ENVIRONMENT = "direct_chat"
+STATEFUL_ENVIRONMENT = "stateful"
 SPECIFICATION_FILE = "specification.json"
 SUBMISSION_CONVENTION_FILE = "submission_convention.json"
 ENVIRONMENT_CONFIG_FILE = "environment_config.json"
+REGISTERED_PROVIDERS = {
+    "nemo_workplace:v1": "taskcompendium.providers.nemo_workplace.provider:NemoWorkplaceEnvironment",
+}
 
 
 class HarborEnvironmentConfig(BaseModel):
@@ -29,12 +34,64 @@ class HarborEnvironmentConfig(BaseModel):
 
     environment: str = DIRECT_CHAT_ENVIRONMENT
     tools: tuple[str, ...] = ()
+    action_interface: str | None = None
+    seed_sha256: str | None = None
+    provider: str | None = None
+    provider_revision: str | None = None
+    tools_sha256: str | None = None
 
     @model_validator(mode="after")
-    def validate_direct_chat(self) -> "HarborEnvironmentConfig":
-        if self.environment != DIRECT_CHAT_ENVIRONMENT or self.tools:
-            raise ValueError("This lowering supports direct chat without tools")
+    def validate_binding(self) -> "HarborEnvironmentConfig":
+        if self.environment == DIRECT_CHAT_ENVIRONMENT:
+            if self.tools or any(
+                value is not None
+                for value in (
+                    self.action_interface,
+                    self.seed_sha256,
+                    self.provider,
+                    self.provider_revision,
+                    self.tools_sha256,
+                )
+            ):
+                raise ValueError("Direct chat cannot bind tools or a provider")
+        elif self.environment == STATEFUL_ENVIRONMENT:
+            if self.provider not in REGISTERED_PROVIDERS:
+                raise ValueError("Unknown stateful provider")
+            if not all((self.action_interface, self.seed_sha256, self.provider_revision, self.tools_sha256)):
+                raise ValueError("Stateful binding requires interface, seed, provider revision, and tools digest")
+            for digest in (self.seed_sha256, self.tools_sha256):
+                if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
+                    raise ValueError("Stateful binding requires lowercase SHA256 digests")
+        else:
+            raise ValueError(f"Unknown Harbor environment: {self.environment}")
         return self
+
+
+def provider_class(config: HarborEnvironmentConfig) -> type:
+    """Resolve the one registered implementation named by a stateful binding."""
+    if config.provider is None:
+        raise ValueError("Stateful provider is required")
+    module_name, class_name = REGISTERED_PROVIDERS[config.provider].split(":")
+    return getattr(importlib.import_module(module_name), class_name)
+
+
+def validate_provider_surface(config: HarborEnvironmentConfig) -> None:
+    """Check provider identity and action schemas before an export or launch."""
+    provider = provider_class(config)
+    for field, expected in (
+        ("ACTION_INTERFACE", config.action_interface),
+        ("SEED_SHA256", config.seed_sha256),
+        ("PROVIDER_REVISION", config.provider_revision),
+    ):
+        if getattr(provider, field) != expected:
+            raise ValueError(f"Provider {field} differs from Harbor binding")
+    definitions = provider.TOOL_DEFINITIONS
+    digest = hashlib.sha256(json.dumps(definitions, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    if digest != config.tools_sha256:
+        raise ValueError("Provider tool schemas differ from Harbor binding")
+    names = tuple(definition["function"]["name"] for definition in definitions)
+    if names != config.tools or len(set(names)) != len(names):
+        raise ValueError("Provider tool names differ from Harbor binding")
 
 
 @dataclass(frozen=True)
@@ -59,14 +116,21 @@ def compatible_lowerings(
     environment_configs: Sequence[HarborEnvironmentConfig],
 ) -> tuple[LoweringCandidate, ...]:
     """Enumerate conventions and environments that preserve this task's contract."""
-    if specification.requirements.capabilities or specification.requirements.action_interfaces:
-        return ()
     return tuple(
         LoweringCandidate(convention, environment_config)
         for convention in convention_library
         if convention.supports(specification.answer_type)
         for environment_config in environment_configs
+        if _is_compatible(specification, environment_config)
     )
+
+
+def _is_compatible(specification: TaskSpec, environment_config: HarborEnvironmentConfig) -> bool:
+    try:
+        validate_environment_config(specification, environment_config)
+    except ValueError:
+        return False
+    return True
 
 
 def select_lowerings(
@@ -100,11 +164,21 @@ def select_lowerings(
 
 
 def validate_environment_config(specification: TaskSpec, environment_config: HarborEnvironmentConfig) -> None:
-    """Require direct chat to satisfy every declared semantic operation."""
-    if environment_config != HarborEnvironmentConfig():
-        raise ValueError("Only direct-chat environment configuration is supported")
-    if specification.requirements.capabilities or specification.requirements.action_interfaces:
-        raise ValueError("Direct chat cannot satisfy capability or action-interface requirements")
+    """Require the selected binding to satisfy the task's semantic requirements."""
+    if environment_config.environment == DIRECT_CHAT_ENVIRONMENT:
+        if specification.requirements.capabilities or specification.requirements.action_interfaces:
+            raise ValueError("Direct chat cannot satisfy capability or action-interface requirements")
+        if specification.answer_type == AnswerType.STATE:
+            raise ValueError("Direct chat cannot grade environment state")
+        return
+    if specification.answer_type != AnswerType.STATE:
+        raise ValueError("Stateful binding requires a state task")
+    requirements = specification.requirements
+    if requirements.capabilities or requirements.action_interfaces != (environment_config.action_interface,):
+        raise ValueError("Stateful binding does not satisfy action-interface requirements")
+    if requirements.seed_sha256 != environment_config.seed_sha256:
+        raise ValueError("Stateful binding seed differs from task seed")
+    validate_provider_surface(environment_config)
 
 
 def read_specification(path: Path) -> TaskSpec:

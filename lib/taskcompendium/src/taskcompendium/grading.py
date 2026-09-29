@@ -71,6 +71,26 @@ class ExactAnswerVerifier(Verifier):
         return GradeResult(Outcome.GRADED, float(match))
 
 
+class StateMatchVerifier(Verifier):
+    """Compare authoritative provider state with independently constructed gold state."""
+
+    expected_state_json: str
+
+    def grade(self, attempt: GradingAttempt) -> GradeResult:
+        if attempt.convention.answer_format.value != "state":
+            raise ValueError("State grading requires a state submission convention")
+        grade_state = getattr(attempt.environment, "grade_state", None)
+        if grade_state is None:
+            raise TypeError("State verifier requires a stateful provider")
+        return GradeResult(Outcome.GRADED, float(grade_state(self.expected_state_json)))
+
+
+def state_match(expected_state_json: str) -> VerifierSpec:
+    """Construct a private state grader descriptor."""
+    verifier = StateMatchVerifier(expected_state_json=expected_state_json)
+    return VerifierSpec(kind=VerifierKind.STATE_MATCH, parameters_json=verifier.model_dump_json())
+
+
 def exact_answer(expected: str, ignore_case: bool = True, collapse_whitespace: bool = True) -> VerifierSpec:
     """Construct a pinned exact-answer verifier descriptor."""
     verifier = ExactAnswerVerifier(expected=expected, ignore_case=ignore_case, collapse_whitespace=collapse_whitespace)

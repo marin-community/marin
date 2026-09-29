@@ -20,14 +20,19 @@ from harbor.verifier.base import BaseVerifier
 
 from taskcompendium.grading import GradeResult, Outcome
 from taskcompendium.lowering import (
+    ENVIRONMENT_CONFIG_FILE,
     SPECIFICATION_FILE,
     SUBMISSION_CONVENTION_FILE,
+    read_environment_config,
     read_specification,
     read_submission_convention,
+    validate_provider_surface,
 )
+from taskcompendium.submission import AnswerFormat
 from taskcompendium.verifier_registry import grade_answer
 
 RESPONSE_FILE = "response.txt"
+CHAT_COMPLETIONS_PATH = "/chat/completions"
 AGENT_LOGS_PATH = "/logs/agent"
 ARTIFACTS_LOGS_PATH = "/logs/artifacts"
 HARBOR_DOWNLOAD_DIRS = frozenset({AGENT_LOGS_PATH, ARTIFACTS_LOGS_PATH})
@@ -141,7 +146,7 @@ class DirectChatAgent(BaseAgent):
         if self.api_key_env is not None:
             headers["Authorization"] = f"Bearer {os.environ[self.api_key_env]}"
         request = urllib.request.Request(
-            f"{self.api_base}/chat/completions", data=json.dumps(body).encode(), headers=headers, method="POST"
+            f"{self.api_base}{CHAT_COMPLETIONS_PATH}", data=json.dumps(body).encode(), headers=headers, method="POST"
         )
         try:
             with urllib.request.urlopen(request, timeout=self.request_timeout) as response:
@@ -158,6 +163,78 @@ class DirectChatAgent(BaseAgent):
         _record_response(self.logs_dir, instruction, response, context)
 
 
+class StatefulToolAgent(DirectChatAgent):
+    """Run an ordered tool conversation against one mutable Harbor environment."""
+
+    def __init__(self, *args, max_turns: int, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.max_turns = max_turns
+
+    @staticmethod
+    def name() -> str:
+        return "taskcompendium-stateful-tools"
+
+    def _message(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> dict[str, Any]:
+        body = {"model": self.model_name, "messages": messages, "tools": tools}
+        headers = {"Content-Type": "application/json"}
+        if self.api_key_env is not None:
+            headers["Authorization"] = f"Bearer {os.environ[self.api_key_env]}"
+        request = urllib.request.Request(
+            f"{self.api_base}{CHAT_COMPLETIONS_PATH}", data=json.dumps(body).encode(), headers=headers, method="POST"
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.request_timeout) as response:
+                message = json.load(response)["choices"][0]["message"]
+        except urllib.error.HTTPError as error:
+            detail = error.read(4096).decode("utf-8", errors="replace")
+            raise RuntimeError(f"Chat completion HTTP {error.code}: {detail}") from error
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            raise ValueError("Stateful completion requires an assistant message")
+        return message
+
+    async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
+        tools = await environment.native_tool_definitions()
+        binding = read_environment_config(environment.environment_dir.parent / ENVIRONMENT_CONFIG_FILE)
+        validate_provider_surface(binding)
+        if tools != list(type(environment).TOOL_DEFINITIONS):
+            raise ValueError("Runtime tool surface differs from exported binding")
+        messages: list[dict[str, Any]] = [{"role": "user", "content": instruction}]
+        actions: list[dict[str, Any]] = []
+        seen_call_ids: set[str] = set()
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
+        for turn in range(1, self.max_turns + 1):
+            message = await asyncio.to_thread(self._message, messages, tools)
+            calls = message.get("tool_calls") or []
+            messages.append(message)
+            context.metadata = {
+                "assistant_final": message.get("content") if not calls else None,
+                "turns": turn,
+                "all_messages": messages,
+                "summarization_count": 0,
+                "tools": actions,
+                "tool_definitions": tools,
+            }
+            if not calls:
+                if not isinstance(message.get("content"), str):
+                    raise ValueError("Stateful completion requires tool calls or a textual final message")
+                (self.logs_dir / RESPONSE_FILE).write_text(message["content"])
+                return
+            for call in calls:
+                call_id = call["id"]
+                if not isinstance(call_id, str) or not call_id or call_id in seen_call_ids:
+                    raise ValueError("Tool call IDs must be unique nonempty strings")
+                seen_call_ids.add(call_id)
+                function = call["function"]
+                name, arguments = function["name"], function["arguments"]
+                if not isinstance(name, str) or not isinstance(arguments, str):
+                    raise ValueError("Tool calls require a name and JSON argument string")
+                observation = await environment.dispatch_action(name, arguments, call_id)
+                actions.append({"call_id": call_id, "name": name, "arguments": arguments, "observation": observation})
+                messages.append({"role": "tool", "tool_call_id": call_id, "content": observation})
+                context.metadata["all_messages"] = messages
+        raise RuntimeError(f"Stateful agent exhausted {self.max_turns} turns")
+
+
 class SemanticVerifier(BaseVerifier):
     """Grade the submitted answer against the task's private reference."""
 
@@ -168,6 +245,8 @@ class SemanticVerifier(BaseVerifier):
             convention = read_submission_convention(root / SUBMISSION_CONVENTION_FILE)
             response_path = self.trial_paths.agent_dir / RESPONSE_FILE
             response = response_path.read_text() if response_path.exists() else None
+            if convention.answer_format == AnswerFormat.STATE and response is None:
+                raise RuntimeError("Stateful agent did not finish with a final message")
             result = grade_answer(specification, convention, response, self.environment)
         except Exception as error:
             result = GradeResult(Outcome.INFRA_ERROR, None, f"{type(error).__name__}: {error}")

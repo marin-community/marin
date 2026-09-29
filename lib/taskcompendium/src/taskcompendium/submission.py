@@ -16,6 +16,7 @@ class AnswerFormat(StrEnum):
 
     PLAIN = "plain"
     JSON = "json"
+    STATE = "state"
 
 
 class SubmissionConvention(BaseModel):
@@ -33,6 +34,8 @@ class SubmissionConvention(BaseModel):
         return self
 
     def supports(self, answer_type: AnswerType) -> bool:
+        if self.answer_format == AnswerFormat.STATE:
+            return answer_type == AnswerType.STATE
         return answer_type in (AnswerType.TEXT, AnswerType.NUMBER)
 
 
@@ -54,6 +57,11 @@ def render_instruction(specification: TaskSpec, convention: SubmissionConvention
         suffix = "Give your answer as plain text."
     elif convention.answer_format == AnswerFormat.JSON:
         suffix = 'Give your answer as a JSON object with an "answer" field.'
+    elif convention.answer_format == AnswerFormat.STATE:
+        suffix = (
+            "Use the available tools to complete the task. "
+            "Your final message ends the interaction; the result is graded from the environment state."
+        )
     else:
         raise ValueError(f"Unsupported answer format: {convention.answer_format}")
     return f"{specification.instructions.rstrip()}\n\n{suffix}\n"
