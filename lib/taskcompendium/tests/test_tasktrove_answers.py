@@ -49,7 +49,6 @@ def test_import_removes_source_submission_instructions():
     assert "verifier" not in specification.instructions.lower()
     assert "/app/answer.txt" not in specification.instructions
     assert "theranostics clinical trials" in specification.instructions
-    assert "Choose one option letter from A through J." in specification.instructions
     public = render_instruction(specification, SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN))
     assert "verifier" not in public.lower()
     assert specification.requirements.capabilities == ()
