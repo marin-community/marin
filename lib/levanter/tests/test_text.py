@@ -24,7 +24,12 @@ from levanter.data.text.datasets import (
     count_corpus_sizes,
     dataset_for_component,
 )
-from levanter.data.text.examples import GrugLmExample, grug_lm_example_from_named, named_lm_example_from_grug
+from levanter.data.text.examples import (
+    GrugLmExample,
+    causal_example_on_host,
+    grug_lm_example_from_named,
+    named_lm_example_from_grug,
+)
 from levanter.data.text.formats import (
     ChatLmDatasetFormat,
     LmDatasetFormatBase,
@@ -132,6 +137,28 @@ def test_unnamed_lm_example_parity_with_named():
     assert converted.attn_mask.sliding_window == named.attn_mask.sliding_window
     np.testing.assert_array_equal(converted.attn_mask.segment_ids[0].array, named.attn_mask.segment_ids[0].array)
     np.testing.assert_array_equal(converted.attn_mask.segment_ids[1].array, named.attn_mask.segment_ids[1].array)
+
+
+@pytest.mark.parametrize("with_weights", [False, True])
+@pytest.mark.parametrize("eos_id", [None, 3])
+@pytest.mark.parametrize("block_cross_document_attention", [False, True])
+def test_host_causal_example_matches_jax(with_weights, eos_id, block_cross_document_attention):
+    tokens = np.array([5, 3, 7, 3, 3, 1, 3, 2], dtype=np.int32)
+    loss_weight = np.linspace(0.5, 1.2, tokens.shape[0], dtype=np.float32) if with_weights else None
+    kwargs = dict(eos_id=eos_id, block_cross_document_attention=block_cross_document_attention)
+
+    host = causal_example_on_host(tokens, loss_weight=loss_weight, **kwargs)
+    reference = GrugLmExample.causal(
+        jnp.asarray(tokens), loss_weight=None if loss_weight is None else jnp.asarray(loss_weight), **kwargs
+    )
+
+    host_leaves, host_def = jax.tree.flatten(host)
+    ref_leaves, ref_def = jax.tree.flatten(reference)
+    assert host_def == ref_def
+    for h, r in zip(host_leaves, ref_leaves, strict=True):
+        assert isinstance(h, np.ndarray)
+        assert h.dtype == r.dtype
+        np.testing.assert_array_equal(h, np.asarray(r))
 
 
 def test_named_unnamed_lm_example_roundtrip():

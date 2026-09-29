@@ -208,6 +208,39 @@ class GrugLmExample:
         return loss_weight
 
 
+def causal_example_on_host(
+    tokens: np.ndarray,
+    *,
+    loss_weight: np.ndarray | None = None,
+    eos_id: int | None = None,
+    block_cross_document_attention: bool = True,
+) -> GrugLmExample:
+    """Numpy twin of `GrugLmExample.causal` (no ignore id, segment ids or sliding window) for data loaders.
+
+    Building examples on the host with numpy keeps per-example JAX dispatch out of the loader threads, where it
+    contends for the GIL with the training loop. Leaves and dtypes match the JAX version exactly.
+    """
+    if tokens.ndim != 1:
+        raise ValueError("tokens must be a 1D array")
+    if not np.issubdtype(tokens.dtype, np.integer):
+        raise ValueError("tokens must be an integer array")
+
+    causal_loss_mask = np.arange(tokens.shape[0]) < (tokens.shape[0] - 1)
+    if loss_weight is not None:
+        dtype = np.result_type(loss_weight.dtype, np.float32)
+        loss_weight = loss_weight.astype(dtype) * causal_loss_mask.astype(dtype)
+    else:
+        loss_weight = causal_loss_mask.astype(np.float32)
+
+    attn_mask = GrugAttentionMask.causal()
+    if block_cross_document_attention and eos_id is not None:
+        doc_starts = np.zeros(tokens.shape[0], dtype=np.int32)
+        doc_starts[1:] = tokens[:-1] == eos_id
+        attn_mask = attn_mask.with_segment_ids(np.cumsum(doc_starts, dtype=np.int32))
+
+    return GrugLmExample(tokens=tokens, loss_weight=loss_weight, attn_mask=attn_mask)
+
+
 @register_dataclass
 @dataclass(frozen=True)
 class LabeledLmExample:

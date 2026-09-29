@@ -45,6 +45,7 @@ from levanter.data.text.cache import (
 )
 from levanter.data.text.examples import (
     GrugLmExample,
+    causal_example_on_host,
     named_lm_example_from_grug,
 )
 from levanter.data.text.formats import (
@@ -152,20 +153,13 @@ class CausalLmDataset(MappedAsyncDataset[TokenSeqDict, GrugLmExample]):
         self.eos_id = eos_id
         self.block_cross_document_attention = block_cross_document_attention
 
-        sharding = _single_cpu_sharding()
-
-        @functools.partial(eqx.filter_jit)
         def _create_lm_example(example_dict: TokenSeqDict) -> GrugLmExample:
-            example = GrugLmExample.causal(
-                tokens=example_dict["input_ids"],
+            return causal_example_on_host(
+                example_dict["input_ids"],
                 loss_weight=example_dict.get("loss_weights"),
                 eos_id=eos_id,
                 block_cross_document_attention=block_cross_document_attention,
             )
-
-            example = jax.lax.with_sharding_constraint(example, sharding)
-
-            return example
 
         super().__init__(self.dataset, _create_lm_example)
 
@@ -201,42 +195,16 @@ class PrebuiltLmDataset(MappedAsyncDataset[dict, GrugLmExample]):
         self.loss_weights_key = loss_weights_key
         self.loss_weight_transform = loss_weight_transform or _identity_loss_weight
 
-        sharding = _single_cpu_sharding()
-
-        if loss_weights_key is None:
-
-            @functools.partial(eqx.filter_jit)
-            def _create_lm_example(tokens: jax.Array) -> GrugLmExample:
-                example = GrugLmExample.causal(
-                    tokens=tokens,
-                    eos_id=eos_id,
-                    block_cross_document_attention=block_cross_document_attention,
-                )
-                example = jax.lax.with_sharding_constraint(example, sharding)
-                return example
-
-            def _map(example: dict) -> GrugLmExample:
-                # pyrefly: ignore[bad-return]  # eqx.filter_jit wrapper types the call as returning Unknown
-                return _create_lm_example(example[input_ids_key])
-
-        else:
-
-            @functools.partial(eqx.filter_jit)
-            def _create_lm_example(tokens: jax.Array, loss_weight: jax.Array) -> GrugLmExample:
-                example = GrugLmExample.causal(
-                    tokens=tokens,
-                    loss_weight=loss_weight,
-                    eos_id=eos_id,
-                    block_cross_document_attention=block_cross_document_attention,
-                )
-                example = jax.lax.with_sharding_constraint(example, sharding)
-                return example
-
-            def _map(example: dict) -> GrugLmExample:
-                loss_weight = example[loss_weights_key]
-                loss_weight = self.loss_weight_transform(loss_weight)
-                # pyrefly: ignore[bad-return, bad-argument-count]  # eqx.filter_jit wrapper hides the real signature
-                return _create_lm_example(example[input_ids_key], loss_weight)
+        def _map(example: dict) -> GrugLmExample:
+            loss_weight = None
+            if loss_weights_key is not None:
+                loss_weight = self.loss_weight_transform(example[loss_weights_key])
+            return causal_example_on_host(
+                example[input_ids_key],
+                loss_weight=loss_weight,
+                eos_id=eos_id,
+                block_cross_document_attention=block_cross_document_attention,
+            )
 
         super().__init__(self.dataset, _map)
 
