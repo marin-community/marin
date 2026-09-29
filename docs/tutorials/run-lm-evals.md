@@ -197,6 +197,9 @@ the served model's context and output budget are skipped; the record reports the
 attempted count, and scored coverage. Compare scores together with these counts because the models'
 context windows differ. The Qwen catalog serves its native 262,144-token context to admit more
 `parents` and `bfs` prompts. Some examples exceed even that window and remain context skips.
+Each request reserves twice `max(4096, tokenized gold answer length + 4096)` output tokens. The
+sample archive records the requested budget and the server's finish reason so length-limited
+responses can be separated from completed answers.
 
 The Grug catalog entry omits the `grug` reasoning parser because the pinned Marin GPU vLLM wheel
 lacks [the parser](https://github.com/marin-community/vllm/pull/79). A one-item GraphWalks run with

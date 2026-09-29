@@ -3,6 +3,8 @@
 
 """GraphWalks' published scoring contract and durable evaluation output."""
 
+import json
+
 import datasets
 import pytest
 import requests
@@ -50,7 +52,7 @@ def test_graphwalks_records_scored_sample_and_context_coverage(tmp_path, monkeyp
             return None
 
         def json(self):
-            return {"choices": [{"message": {"content": "Reasoning\nFinal Answer: [b, a]"}}]}
+            return {"choices": [{"message": {"content": "Reasoning\nFinal Answer: [b, a]"}, "finish_reason": "stop"}]}
 
     rows = [
         {
@@ -85,12 +87,13 @@ def test_graphwalks_records_scored_sample_and_context_coverage(tmp_path, monkeyp
     def post(*args, **kwargs):
         if not session.ready:
             raise requests.ConnectionError("serving endpoint preempted")
+        assert kwargs["json"]["max_tokens"] == 8232
         return Response()
 
     monkeypatch.setattr(requests, "post", post)
 
     root = str(tmp_path / "run")
-    outcome = GraphWalksExecutor(max_model_len=5000)(session, root, {})
+    outcome = GraphWalksExecutor(max_model_len=9000)(session, root, {})
 
     assert outcome.coverage["graphwalks"].n_benchmark == 2
     assert outcome.coverage["graphwalks"].n_attempted == 1
@@ -101,3 +104,4 @@ def test_graphwalks_records_scored_sample_and_context_coverage(tmp_path, monkeyp
     sample = sample_from_archive_row(row)
     assert sample.grading.score == 1.0
     assert sample.prompt_messages[0].content == "Find parents"
+    assert json.loads(sample.doc)["finish_reason"] == "stop"

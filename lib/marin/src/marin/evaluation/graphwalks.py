@@ -45,6 +45,7 @@ _PREFIX_TOKEN_MARGIN = 256
 _PREFIX_CHARS_PER_TOKEN = 8
 _MIN_OUTPUT_TOKENS = 4096
 _REASONING_RESERVE = 4096
+_OUTPUT_BUDGET_MULTIPLIER = 2
 _FINAL_ANSWER = re.compile(r"\[.*\]")
 
 
@@ -89,6 +90,7 @@ class _GraphWalksRow(TypedDict):
 class _Result:
     example: _Example
     output: str | None
+    finish_reason: str | None
     error: str | None
 
 
@@ -182,10 +184,11 @@ def _request(example: _Example, session: RemoteInferenceSession) -> _Result:
                 endpoint.url("chat/completions"), json=body, headers=headers, timeout=_REQUEST_TIMEOUT
             )
             response.raise_for_status()
-            content = response.json()["choices"][0]["message"]["content"]
+            choice = response.json()["choices"][0]
+            content = choice["message"]["content"]
             if not isinstance(content, str):
                 raise ValueError("chat response content is not text")
-            return _Result(example=example, output=content, error=None)
+            return _Result(example=example, output=content, finish_reason=choice["finish_reason"], error=None)
         except requests.HTTPError as exc:
             response = exc.response
             if response is not None and response.status_code == 400:
@@ -196,14 +199,14 @@ def _request(example: _Example, session: RemoteInferenceSession) -> _Result:
                     example.output_tokens,
                     response.text,
                 )
-                return _Result(example=example, output=None, error="http_400")
+                return _Result(example=example, output=None, finish_reason=None, error="http_400")
             if attempt + 1 == _MAX_REQUEST_ATTEMPTS:
-                return _Result(example=example, output=None, error=type(exc).__name__)
+                return _Result(example=example, output=None, finish_reason=None, error=type(exc).__name__)
             session.wait_until_ready()
             time.sleep(2**attempt)
         except requests.RequestException as exc:
             if attempt + 1 == _MAX_REQUEST_ATTEMPTS:
-                return _Result(example=example, output=None, error=type(exc).__name__)
+                return _Result(example=example, output=None, finish_reason=None, error=type(exc).__name__)
             session.wait_until_ready()
     raise AssertionError("unreachable")
 
@@ -240,6 +243,7 @@ def _sample(result: _Result) -> EvalSample:
                 "prompt_chars": result.example.prompt_chars,
                 "prompt_tokens": result.example.prompt_tokens,
                 "max_output_tokens": result.example.output_tokens,
+                "finish_reason": result.finish_reason,
                 "problem_type": result.example.problem_type,
                 "date_added": result.example.date_added,
             }
@@ -263,10 +267,11 @@ class GraphWalksExecutor:
         *,
         judge: RemoteInferenceSession | None = None,
     ) -> EvaluationOutcome:
-        if self.max_model_len <= _MIN_OUTPUT_TOKENS + _CONTEXT_MARGIN:
-            raise ValueError("GraphWalks requires room for a prompt and at least 4096 output tokens")
-        if self.max_output_tokens < _MIN_OUTPUT_TOKENS:
-            raise ValueError("GraphWalks output cap must be at least 4096 tokens")
+        minimum_output_tokens = _MIN_OUTPUT_TOKENS * _OUTPUT_BUDGET_MULTIPLIER
+        if self.max_model_len <= minimum_output_tokens + _CONTEXT_MARGIN:
+            raise ValueError("GraphWalks requires room for a prompt and at least 8192 output tokens")
+        if self.max_output_tokens < minimum_output_tokens:
+            raise ValueError("GraphWalks output cap must be at least 8192 tokens")
         if self.limit is not None and self.limit <= 0:
             raise ValueError("GraphWalks limit must be positive")
         if session.model.tokenizer is None:
@@ -296,7 +301,9 @@ class GraphWalksExecutor:
             prompt = row["prompt"]
             answer_text = "Final Answer: [" + ", ".join(row["answer_nodes"]) + "]"
             answer_tokens = len(tokenizer.encode(answer_text, add_special_tokens=False))
-            required_output_tokens = max(_MIN_OUTPUT_TOKENS, answer_tokens + _REASONING_RESERVE)
+            required_output_tokens = _OUTPUT_BUDGET_MULTIPLIER * max(
+                _MIN_OUTPUT_TOKENS, answer_tokens + _REASONING_RESERVE
+            )
             if required_output_tokens > self.max_output_tokens:
                 skipped_output_cap[row["problem_type"]] += 1
                 continue
@@ -369,7 +376,7 @@ class GraphWalksExecutor:
                         "not_inspected_after_limit": selection.not_inspected_after_limit,
                         "max_model_len": self.max_model_len,
                         "max_output_tokens": self.max_output_tokens,
-                        "output_budget_policy": "max(4096, tokenized_gold_list_length + 4096)",
+                        "output_budget_policy": "2 * max(4096, tokenized_gold_list_length + 4096)",
                     },
                     sort_keys=True,
                 ).encode(),
