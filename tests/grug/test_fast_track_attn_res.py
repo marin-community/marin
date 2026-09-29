@@ -4,6 +4,7 @@
 """Block AttnRes in grug fast_track, combined with MLA + Inkling relative-position attention on the global
 layers and either sliding-window attention or KDA on the local layers."""
 
+import dataclasses
 import functools
 import math
 from pathlib import Path
@@ -141,7 +142,24 @@ def _reference_hidden(model: Transformer, tokens: jax.Array) -> jax.Array:
     seg_size = max(1, cfg.num_layers // cfg.attn_res_num_blocks)
     blocks: list[jax.Array] = []
     partial: jax.Array | None = hidden
+    prelude_output = None
+    prelude_len = cfg.num_layers // 3
+    core_end = prelude_len + cfg.num_layers // 3 + int(cfg.num_layers % 3 > 0)
     for i, layer in enumerate(_sliced_layers(model)):
+        if cfg.boundary_alpha is not None and i == prelude_len:
+            assert partial is not None
+            prelude_output = sum(source.astype(jnp.float32) for source in [*blocks, partial]).astype(hidden.dtype)
+            blocks = []
+            partial = (cfg.boundary_alpha * prelude_output).astype(hidden.dtype)
+        if cfg.boundary_alpha is not None and i == core_end:
+            assert partial is not None and prelude_output is not None
+            core_output = sum(source.astype(jnp.float32) for source in [*blocks, partial]).astype(hidden.dtype)
+            blocks = []
+            partial = (
+                core_output.astype(jnp.float32)
+                * jax.lax.rsqrt(jnp.mean(core_output.astype(jnp.float32) ** 2, axis=-1, keepdims=True) + eps)
+                + cfg.boundary_alpha * prelude_output
+            ).astype(hidden.dtype)
         if i % seg_size == 0 and i // seg_size < cfg.attn_res_num_blocks:
             assert partial is not None
             blocks.append(partial)
@@ -225,6 +243,38 @@ def test_attn_res_mla_inkling_matches_straight_line_reference(
         expected_kda = [i % 2 == 0 and i != num_layers - 1 for i in range(num_layers)]
         assert [isinstance(layer.attn, KimiDeltaAttention) for layer in layers] == expected_kda
     _assert_matches_reference(cfg, mesh)
+
+
+@pytest.mark.parametrize("num_layers", [6, 8])
+def test_boundary_operator_matches_straight_line_reference(mesh, fp32_kda_kernel, num_layers):
+    cfg = _config(dense=False, num_layers=num_layers, num_blocks=8)
+    cfg = dataclasses.replace(cfg, boundary_alpha=1.0)
+    _assert_matches_reference(cfg, mesh)
+
+
+def test_boundary_operator_keeps_bigram_source_trainable(mesh, fp32_kda_kernel):
+    cfg = dataclasses.replace(
+        _config(dense=False, num_layers=6, num_blocks=8),
+        boundary_alpha=1.0,
+        second_embed=True,
+        second_embed_bigram=True,
+        embed2_rows=256,
+        bigram_gate=True,
+        bigram_gate_rank=4,
+    )
+    with jax.set_mesh(mesh):
+        model = Transformer.init(cfg, key=jax.random.key(0))
+        tokens = jax.random.randint(jax.random.key(1), (_BATCH, _SEQ), 0, cfg.vocab_size)
+        cotangent = jax.random.normal(jax.random.key(2), (_BATCH, _SEQ, cfg.hidden_dim))
+
+        def loss(m):
+            return jnp.sum(m(tokens)[0].astype(jnp.float32) * cotangent)
+
+        value, grads = eqx.filter_jit(eqx.filter_value_and_grad(loss))(model)
+
+    assert np.isfinite(value)
+    assert grads.token_embed2 is not None
+    assert float(jnp.max(jnp.abs(grads.token_embed2))) > 0
 
 
 def test_kma_optimizer_groups(mesh):

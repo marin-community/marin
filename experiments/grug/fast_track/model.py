@@ -549,6 +549,8 @@ class GrugModelConfig:
     # partial), scored by a learned per-sublayer pseudo-query against the RMS-normalized sources.
     attn_res: bool = False
     attn_res_num_blocks: int = 8
+    boundary_alpha: float | None = None
+    """Operator-1 boundary injection across prelude, core, and coda (None: disabled)."""
     attn_res_layer_backward: AttnResLayerBackward = AttnResLayerBackward.RECOMPUTE
     attn_res_remat_attention: bool = False
     """Rematerialize the attention branch inside each AttnRes layer's backward, so its residuals (incl.
@@ -1170,6 +1172,11 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be < num_experts, because QB routing selects top-(k+1)")
         if self.local_mixer == LocalMixer.KDA and not self.attn_res:
             raise ValueError("local_mixer=kda requires attn_res (KDA layers run in the unrolled AttnRes loop)")
+        if self.boundary_alpha is not None:
+            if not self.attn_res or self.loop_passes != 1 or self.num_layers < 3:
+                raise ValueError("boundary_alpha requires AttnRes, one pass, and at least three layers")
+            if self.boundary_alpha <= 0:
+                raise ValueError("boundary_alpha must be positive")
         if self.attn_res_key_rank is not None:
             if not self.attn_res or not 0 < self.attn_res_key_rank < self.hidden_dim:
                 raise ValueError("attn_res_key_rank needs attn_res and 0 < attn_res_key_rank < hidden_dim")
@@ -5807,9 +5814,22 @@ class Transformer(eqx.Module):
             per-layer router stats and the pass's gate z terms."""
             blocks, block_logits, partial = state
             stats_out, z_out = [], []
+            prelude_output = None
+            prelude_len = num_layers // 3
+            core_end = prelude_len + num_layers // 3 + int(num_layers % 3 > 0)
             kv_share: dict[str, jax.Array] | None = {} if cfg.mla_share_kv_latent or cfg.value_residual_layers else None
             for i, layer in enumerate(layers):
                 eff = pass_index * num_layers + i
+                if cfg.boundary_alpha is not None and i == prelude_len:
+                    assert partial is not None
+                    prelude_output = _stream_sum((*blocks, partial))
+                    blocks, block_logits = (), ()
+                    partial = (cfg.boundary_alpha * prelude_output).astype(partial.dtype)
+                if cfg.boundary_alpha is not None and i == core_end:
+                    assert partial is not None and prelude_output is not None
+                    core_output = _stream_sum((*blocks, partial))
+                    blocks, block_logits = (), ()
+                    partial = (rms_norm(core_output, eps) + cfg.boundary_alpha * prelude_output).astype(partial.dtype)
                 if cfg.attn_res_full or (eff % seg_size == 0 and eff // seg_size < block_cap):
                     assert partial is not None
                     blocks = (*blocks, partial)
