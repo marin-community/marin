@@ -7,7 +7,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-SCHEMA_VERSION = "0.5"
+SCHEMA_VERSION = "0.6"
 
 
 class AnswerType(StrEnum):
@@ -24,6 +24,7 @@ class VerifierKind(StrEnum):
     """The registered grader used to check a submission."""
 
     EXACT_ANSWER = "exact_answer"
+    MCQ_ANSWER = "mcq_answer"
 
 
 class Source(BaseModel):

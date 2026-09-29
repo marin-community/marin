@@ -16,6 +16,20 @@ def _answer(workspace: Path, text: str) -> None:
 
 
 @pytest.mark.parametrize(
+    "candidate, expected_reward, detail",
+    [
+        (" c ", 1.0, {"extracted": "C", "expected": "C"}),
+        ("B", 0.0, {"extracted": "B", "expected": "C"}),
+        ("E", 0.0, {"reason": "out_of_range", "extracted": "E", "expected": "C"}),
+        ("", 0.0, {"reason": "no_answer_line", "expected": "C"}),
+    ],
+)
+def test_mcq_candidate_scores_extracted_option(candidate, expected_reward, detail):
+    result = grade_mcq.grade_mcq_candidate(McqSpec(expected=" C ", options=4), candidate)
+    assert (result.status, result.reward, result.detail) == (Status.SCORED, expected_reward, detail)
+
+
+@pytest.mark.parametrize(
     "text, reward",
     [
         ("The third option fits.\nAnswer: C\n", 1.0),
