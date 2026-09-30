@@ -39,6 +39,7 @@ _TEMPORARY_OUTPUT_PREFIX = "skyrl"
 _TRACE_JOBS_SUBDIR = "trace_jobs"
 _TRAJECTORIES_SUBDIR = "trajectories"
 _LAUNCHER_DIAGNOSTIC_LINES = 20
+_IMMUTABLE_REVISION_PATTERN = r"[0-9a-f]{40}"
 SKYRL_TEMPORARY_STORAGE_TTL_DAYS = 14
 IRIS_HUB_CLUSTER_CONFIG = "lib/iris/config/marin.yaml"
 
@@ -64,7 +65,7 @@ class SkyRLRuntime:
     commit: str = MARIN_SKYRL.commit
 
     def __post_init__(self) -> None:
-        if not re.fullmatch(r"[0-9a-f]{40}", self.commit):
+        if not re.fullmatch(_IMMUTABLE_REVISION_PATTERN, self.commit):
             raise ValueError("SkyRL runtime requires an immutable commit")
 
 
@@ -309,7 +310,7 @@ class PinnedHfModel:
             if repository.count("/") != 1 or "://" in repository:
                 raise ValueError("Pinned Hugging Face model requires an org/repository ID")
         for revision in (self.revision, self.tokenizer_revision):
-            if not re.fullmatch(r"[0-9a-f]{40}", revision):
+            if not re.fullmatch(_IMMUTABLE_REVISION_PATTERN, revision):
                 raise ValueError("Pinned Hugging Face model requires immutable revisions")
 
     def deps(self) -> tuple[()]:

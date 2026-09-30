@@ -87,11 +87,12 @@ class TaskPackagesConfig:
 
 
 def write_task_packages(config: TaskPackagesConfig) -> None:
-    """Lower one direct chat task and the pinned Workplace row into a private artifact."""
+    """Export repeated native chat and Workplace tasks into a private artifact."""
     from taskcompendium.grading import exact_answer  # noqa: PLC0415
     from taskcompendium.importers.nemo_workplace import (  # noqa: PLC0415
         PROVIDER,
         PROVIDER_GIT_REVISION,
+        PROVIDER_NAME,
         PROVIDER_REPOSITORY,
         SOURCE_EXAMPLE_MAX_BYTES,
         SOURCE_EXAMPLE_URL,
@@ -138,7 +139,7 @@ def write_task_packages(config: TaskPackagesConfig) -> None:
         provider_source = Path(provider_temporary) / "provider-snapshot"
         stage_git_provider(PROVIDER, checkout, provider_source)
         with urlopen(SOURCE_EXAMPLE_URL, timeout=30) as source:
-            workplace, workplace_convention, workplace_binding = import_row(
+            workplace, workplace_convention, workplace_environment = import_row(
                 select_row_zero(source.read(SOURCE_EXAMPLE_MAX_BYTES + 1)), provider_source
             )
         for repeat in range(TASK_COUNT // 2):
@@ -151,9 +152,9 @@ def write_task_packages(config: TaskPackagesConfig) -> None:
             lower_to_harbor(
                 workplace.model_copy(update={"id": f"{workplace.id}-repeat-{repeat}"}),
                 workplace_convention,
-                workplace_binding,
+                workplace_environment,
                 root / f"workplace-{repeat}",
-                trusted_provider_sources={"workplace": checkout},
+                trusted_provider_sources={PROVIDER_NAME: checkout},
             )
         for source in sorted(root.rglob("*")):
             if source.is_file():
