@@ -72,7 +72,7 @@ async def run_trial(
         request["temperature"] = launch.temperature
     if launch.parallel_tool_calls is not None:
         if "parallel_tool_calls" in request and request["parallel_tool_calls"] != launch.parallel_tool_calls:
-            raise ValueError("Launch parallel-tool policy differs from the source task")
+            raise ValueError("Launch parallel-tool policy conflicts with the submission convention")
         request["parallel_tool_calls"] = launch.parallel_tool_calls
     agent_kwargs = {
         "api_base": launch.api_base,
