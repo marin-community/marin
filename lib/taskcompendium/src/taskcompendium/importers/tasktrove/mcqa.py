@@ -9,7 +9,7 @@ import tomllib
 
 from tasktrove_verify.spec import McqSpec, parse_spec
 
-from taskcompendium.importers.tasktrove.convert import METADATA_TABLE, TASK_MANIFEST
+from taskcompendium.importers.tasktrove.convert import INSTRUCTION_FILE, METADATA_TABLE, TASK_MANIFEST, VERIFIER_FILE
 from taskcompendium.importers.tasktrove.models import TaskArchive
 from taskcompendium.models import AnswerType, ConversationInput, EnvironmentRequirements, TaskSpec, TextMessage
 from taskcompendium.verifiers.multiple_choice import multiple_choice_answer
@@ -56,10 +56,10 @@ def import_task(archive: TaskArchive) -> TaskSpec:
         tags = metadata.get("tags", [])
         if not isinstance(tags, list) or any(not isinstance(tag, str) for tag in tags):
             raise ValueError("TaskTrove tags must be an ordered list of strings")
-        contract = parse_spec(archive.files["tests/verifier.toml"].decode())
+        contract = parse_spec(archive.files[VERIFIER_FILE].decode())
         if not isinstance(contract, McqSpec):
             raise ValueError("TaskTrove MCQA archive must declare an MCQ verifier")
-        instructions = _clean_instructions(archive.files["instruction.md"].decode(), contract.options)
+        instructions = _clean_instructions(archive.files[INSTRUCTION_FILE].decode(), contract.options)
     except (KeyError, UnicodeDecodeError, tomllib.TOMLDecodeError, ValueError) as error:
         raise ValueError(f"Invalid TaskTrove MCQA archive: {error}") from error
     identity = json.dumps(

@@ -119,7 +119,7 @@ async def test_imported_ifeval_matches_source_checker_for_good_and_bad_answers(t
 async def test_ifeval_checker_crash_is_an_infrastructure_error(monkeypatch):
     specification = import_tasktrove(_archive())
 
-    def crash(text, params):
+    def crash(_text, _params):
         raise RuntimeError("checker failure")
 
     monkeypatch.setitem(source_ifeval.CONSTRAINTS, "first_word:first_word_sent", crash)

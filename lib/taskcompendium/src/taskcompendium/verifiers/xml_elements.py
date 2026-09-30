@@ -5,17 +5,16 @@
 
 from dataclasses import replace
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from typing import Self
 
 from pydantic import model_validator
-from tasktrove_verify.grade import Status
 from tasktrove_verify.modes.grade_xml import grade as grade_xml
 from tasktrove_verify.spec import XmlElementsSpec
 
-from taskcompendium.grading import GradeResult, Outcome, Verifier
+from taskcompendium.grading import GradeResult, Verifier
 from taskcompendium.models import VerifierKind, VerifierSpec
-from taskcompendium.submission import GradingAttempt, Submission, TextSubmission
+from taskcompendium.submission import GradingAttempt, Submission
+from taskcompendium.verifiers.structured_output import grade_file_output
 
 
 class XmlElementsVerifier(Verifier):
@@ -32,17 +31,12 @@ class XmlElementsVerifier(Verifier):
         return self
 
     async def grade(self, submission: Submission, *, attempt: GradingAttempt) -> GradeResult:
-        if not isinstance(submission, TextSubmission):
-            raise TypeError("XML element verifier requires a text submission")
         contract = XmlElementsSpec(required=self.required, any_of=self.any_of)
-        with TemporaryDirectory() as directory:
-            workspace = Path(directory)
-            output = workspace / "answer.txt"
-            output.write_text(submission.value)
-            result = grade_xml(replace(contract, output=str(output)), workspace, workspace)
-        if result.status is not Status.SCORED:
-            return GradeResult(Outcome.INFRA_ERROR, None, "XML source grader did not score the submission")
-        return GradeResult(Outcome.GRADED, result.reward)
+
+        def grade_candidate(output: Path, workspace: Path):
+            return grade_xml(replace(contract, output=str(output)), workspace, workspace)
+
+        return grade_file_output(submission, format_name="XML", grade_candidate=grade_candidate)
 
 
 def xml_elements_answer(required: tuple[str, ...], any_of: tuple[str, ...]) -> VerifierSpec:

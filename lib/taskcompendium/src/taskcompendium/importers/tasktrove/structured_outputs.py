@@ -9,7 +9,7 @@ import tomllib
 
 from tasktrove_verify.spec import CsvColumnsSpec, XmlElementsSpec, parse_spec
 
-from taskcompendium.importers.tasktrove.convert import METADATA_TABLE, TASK_MANIFEST
+from taskcompendium.importers.tasktrove.convert import INSTRUCTION_FILE, METADATA_TABLE, TASK_MANIFEST, VERIFIER_FILE
 from taskcompendium.importers.tasktrove.models import TaskArchive
 from taskcompendium.models import (
     AnswerType,
@@ -24,6 +24,8 @@ from taskcompendium.verifiers.xml_elements import xml_elements_answer
 
 FAMILY = "other"
 CONVERTER = "nemotron_structured_outputs"
+XML_MODE = "xml-elements"
+CSV_MODE = "csv-columns"
 _PREFIX_INTRO = "You will produce a structured response. Write your final answer to `/app/answer.txt`."
 _SUBMISSION_HEADING = "\n## Submitting your answer (IMPORTANT)\n"
 _XML_REQUEST = (
@@ -84,11 +86,11 @@ def _specification(archive: TaskArchive, tags: tuple[str, ...], prompt: str, ver
 def import_xml_task(archive: TaskArchive) -> TaskSpec:
     """Import one XML structured-output task."""
     try:
-        tags = _source_metadata(archive, "xml-elements")
-        contract = parse_spec(archive.files["tests/verifier.toml"].decode())
+        tags = _source_metadata(archive, XML_MODE)
+        contract = parse_spec(archive.files[VERIFIER_FILE].decode())
         if not isinstance(contract, XmlElementsSpec):
             raise ValueError("TaskTrove XML archive must declare an XML-elements verifier")
-        prompt = _clean_instructions(archive.files["instruction.md"].decode(), "xml-elements", _XML_REQUEST)
+        prompt = _clean_instructions(archive.files[INSTRUCTION_FILE].decode(), XML_MODE, _XML_REQUEST)
         verifier = xml_elements_answer(contract.required, contract.any_of)
         return _specification(archive, tags, prompt, verifier)
     except (KeyError, UnicodeDecodeError, tomllib.TOMLDecodeError, ValueError) as error:
@@ -98,11 +100,11 @@ def import_xml_task(archive: TaskArchive) -> TaskSpec:
 def import_csv_task(archive: TaskArchive) -> TaskSpec:
     """Import one CSV structured-output task."""
     try:
-        tags = _source_metadata(archive, "csv-columns")
-        contract = parse_spec(archive.files["tests/verifier.toml"].decode())
+        tags = _source_metadata(archive, CSV_MODE)
+        contract = parse_spec(archive.files[VERIFIER_FILE].decode())
         if not isinstance(contract, CsvColumnsSpec):
             raise ValueError("TaskTrove CSV archive must declare a CSV-columns verifier")
-        prompt = _clean_instructions(archive.files["instruction.md"].decode(), "csv-columns", _CSV_REQUEST)
+        prompt = _clean_instructions(archive.files[INSTRUCTION_FILE].decode(), CSV_MODE, _CSV_REQUEST)
         verifier = csv_columns_answer(contract.required, contract.any_of)
         return _specification(archive, tags, prompt, verifier)
     except (KeyError, UnicodeDecodeError, tomllib.TOMLDecodeError, ValueError) as error:

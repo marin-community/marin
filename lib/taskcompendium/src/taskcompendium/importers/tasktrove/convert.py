@@ -17,6 +17,8 @@ from taskcompendium.importers.tasktrove.models import TaskArchive
 
 TASK_MANIFEST = "task.toml"
 METADATA_TABLE = "metadata"
+INSTRUCTION_FILE = "instruction.md"
+VERIFIER_FILE = "tests/verifier.toml"
 MAX_ARCHIVE_BYTES = 32 * 1024 * 1024
 MAX_ARCHIVE_MEMBERS = 1_024
 
