@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 from taskcompendium.resources import SHA256_PATTERN, TaskResource, validate_resource_paths
 
-SCHEMA_VERSION = "0.15"
+SCHEMA_VERSION = "0.17"
 
 
 class AnswerType(StrEnum):
