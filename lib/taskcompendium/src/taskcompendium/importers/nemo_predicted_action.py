@@ -14,12 +14,12 @@ from taskcompendium.models import (
     AssistantToolCalls,
     ConversationInput,
     ConversationToolCall,
+    EnvironmentRequirements,
+    FinalTools,
     FunctionCall,
     FunctionDefinition,
     Source,
-    TaskRequirements,
     TaskSpec,
-    TaskTools,
     TextMessage,
     ToolResult,
 )
@@ -178,8 +178,8 @@ def import_row(row: dict[str, Any], expected_sha256: str) -> tuple[TaskSpec, Sub
     specification = TaskSpec(
         id=f"nemo-predicted-action-{expected_sha256}",
         context=ConversationInput(events=events),
-        requirements=TaskRequirements(),
-        tools=TaskTools(
+        environment_requirements=EnvironmentRequirements(),
+        final_tools=FinalTools(
             functions=functions,
             tool_choice=tool_choice,
             parallel_tool_calls=parallel_tool_calls,

@@ -58,7 +58,7 @@ def test_uri_digest_mismatch_leaves_no_staged_files(tmp_path):
     destination = tmp_path / "tests"
 
     with pytest.raises(ValueError, match="digest mismatch"):
-        materialize_private_resources((script, reference), destination, lambda uri: b"tampered")
+        materialize_private_resources((script, reference), destination, lambda _uri: b"tampered")
 
     assert not destination.exists()
 

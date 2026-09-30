@@ -128,16 +128,19 @@ def select_lowerings(
 def validate_environment_config(specification: TaskSpec, environment_config: HarborEnvironmentConfig) -> None:
     """Require the selected environment to satisfy the task's operations."""
     if environment_config.environment == DIRECT_CHAT_ENVIRONMENT:
-        if specification.requirements.capabilities or specification.requirements.action_interfaces:
+        if (
+            specification.environment_requirements.capabilities
+            or specification.environment_requirements.action_interfaces
+        ):
             raise ValueError("Direct chat cannot satisfy capability or action-interface requirements")
         if specification.answer_type in (AnswerType.FILE, AnswerType.STATE, AnswerType.WORKSPACE_STATE):
             raise ValueError("Direct chat cannot capture a final workspace")
         return
-    if specification.requirements.action_interfaces:
+    if specification.environment_requirements.action_interfaces:
         raise ValueError("A provider-backed task needs an explicit verifier-side snapshot or bridge")
     if specification.answer_type == AnswerType.NATIVE_ACTION:
         raise ValueError("Native-action submissions need a provider-side snapshot or bridge")
-    if not set(specification.requirements.capabilities).issubset(set(environment_config.tools)):
+    if not set(specification.environment_requirements.capabilities).issubset(set(environment_config.tools)):
         raise ValueError("Workspace Docker environment does not satisfy capability requirements")
     if specification.answer_type in (AnswerType.FILE, AnswerType.WORKSPACE_STATE) and not isinstance(
         resolve_verifier(specification.verifier), ScriptVerifier

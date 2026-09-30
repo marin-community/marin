@@ -2,11 +2,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Translate the private prompt-injection checker into the script result protocol.
-
-This file is staged inside the isolated verifier image. The importer supplies
-the three mount paths and the source checker's timeout as fixed arguments.
-"""
+"""Accept the private checker mount paths and emit a script result record."""
 
 import json
 import math

@@ -40,10 +40,6 @@ def resolve_verifier(specification: VerifierSpec) -> Verifier | ScriptVerifier:
         raise ValueError(f"Invalid {specification.kind.value!r} verifier parameters: {error}") from error
 
 
-def validate_verifier(specification: VerifierSpec) -> None:
-    resolve_verifier(specification)
-
-
 def grade_answer(
     specification: TaskSpec, convention: SubmissionConvention, conversation: ConversationTrace, environment: object
 ) -> GradeResult:
