@@ -20,6 +20,7 @@ import os
 import re
 import string
 import unicodedata
+from dataclasses import dataclass
 from pathlib import Path
 
 import openai
@@ -28,7 +29,14 @@ from tasktrove_verify.grade import InvalidTask, Reward, read_output, scored
 from tasktrove_verify.modes.extract import extract_boxed
 from tasktrove_verify.modes.grade_ifeval import resolve_checks
 from tasktrove_verify.modes.ifeval import Check
-from tasktrove_verify.spec import RUBRIC_CHECKLIST, RUBRIC_REFERENCE, RUBRICS, JudgeSpec, Spec
+from tasktrove_verify.spec import (
+    RUBRIC_CHECKLIST,
+    RUBRIC_REFERENCE,
+    RUBRICS,
+    JudgeRuntimeConfig,
+    JudgeSpec,
+    Spec,
+)
 
 BASE_URL_ENV = "TASKTROVE_JUDGE_BASE_URL"
 API_KEY_ENV = "TASKTROVE_JUDGE_API_KEY"
@@ -43,7 +51,7 @@ candidate response with the reference answer(s) below. Judge the substantive ans
 wording, notation, formatting, verbosity, hedging and extra detail that does not contradict a \
 reference.
 
-Score 1 when the candidate gives the same substantive answer as any reference.
+{context}Score 1 when the candidate gives the same substantive answer as any reference.
 Score 0.5 when the candidate is materially incomplete but correct in part.
 Score 0 otherwise, including contradictions, missing key facts and unrelated answers.
 {question}
@@ -77,7 +85,26 @@ SCORE_PATTERN = re.compile(r"score\s*[:=]\s*\**\s*(\d+(?:\.\d+)?)", re.IGNORECAS
 logger = logging.getLogger(__name__)
 
 
-def grade(spec: Spec, tests_dir: Path, workspace: Path) -> Reward:
+class JudgeInfrastructureError(RuntimeError):
+    """A judge endpoint failed or returned a response without a valid score."""
+
+    def __init__(self, message: str, evidence: dict | None = None):
+        super().__init__(message)
+        self.evidence = evidence or {}
+
+
+@dataclass
+class _CallBudget:
+    maximum: int
+    used: int = 0
+
+    def consume(self) -> None:
+        if self.used >= self.maximum:
+            raise JudgeInfrastructureError(f"judge request budget exhausted after {self.used} requests")
+        self.used += 1
+
+
+def grade(spec: Spec, tests_dir: Path, workspace: Path, runtime: JudgeRuntimeConfig | None = None) -> Reward:
     assert isinstance(spec, JudgeSpec)
     if spec.rubric not in RUBRICS:
         raise InvalidTask(f"unknown judge rubric {spec.rubric!r}; known rubrics: {sorted(RUBRICS)}")
@@ -100,8 +127,8 @@ def grade(spec: Spec, tests_dir: Path, workspace: Path) -> Reward:
     if spec.rubric == RUBRIC_REFERENCE:
         if spec.exact_gate and normalize(boxed_answer(candidate)) in {normalize(r) for r in references}:
             return scored(1.0, gate="exact")
-        return _judge_reference(spec, references, candidate)
-    return _judge_checklist(spec, criteria, context, candidate)
+        return _judge_reference(spec, references, context, candidate, runtime)
+    return _judge_checklist(spec, criteria, context, candidate, runtime)
 
 
 def _context(spec: JudgeSpec, tests_dir: Path) -> str:
@@ -117,8 +144,10 @@ def _passes(check: Check, candidate: str, params: dict) -> bool:
     try:
         passed, _ = check(candidate, params)
     except Exception as error:
-        logger.warning("constraint check %s crashed on the candidate, counted as failed: %s", check.__name__, error)
-        return False
+        raise JudgeInfrastructureError(
+            f"deterministic constraint check {check.__name__} failed: {error}",
+            {"constraint": check.__name__, "diagnostic": f"{type(error).__name__}: {error}"},
+        ) from error
     return passed
 
 
@@ -139,7 +168,28 @@ def normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def _client(spec: JudgeSpec) -> tuple[openai.OpenAI, str]:
+def _client(spec: JudgeSpec, runtime: JudgeRuntimeConfig | None) -> tuple[openai.OpenAI, str, float]:
+    if runtime is not None:
+        if spec.model.strip() and spec.model.strip() != runtime.model:
+            raise RuntimeError(
+                f"task requires judge model {spec.model.strip()!r}, but the runner selected {runtime.model!r}"
+            )
+        if (
+            not runtime.base_url.strip()
+            or not runtime.model.strip()
+            or runtime.request_timeout <= 0
+            or runtime.max_requests <= 0
+        ):
+            raise RuntimeError("judge runtime requires a model, endpoint, and positive timeout and request budget")
+        api_key = os.environ.get(runtime.api_key_env) if runtime.api_key_env else None
+        if runtime.api_key_env and not api_key:
+            raise RuntimeError(f"judge credential environment variable {runtime.api_key_env!r} is unset")
+        timeout = min(spec.request_timeout, runtime.request_timeout)
+        return (
+            openai.OpenAI(base_url=runtime.base_url, api_key=api_key or "unused", timeout=timeout, max_retries=0),
+            runtime.model,
+            timeout,
+        )
     base_url = os.environ.get(BASE_URL_ENV, "").strip()
     model = spec.model.strip() or os.environ.get(MODEL_ENV, "").strip()
     if not base_url:
@@ -147,52 +197,99 @@ def _client(spec: JudgeSpec) -> tuple[openai.OpenAI, str]:
     if not model:
         raise RuntimeError(f"no judge model: set {MODEL_ENV} or the spec's model field")
     # Local OpenAI-compatible servers ignore the key, but the client insists on a non-empty one.
-    return openai.OpenAI(base_url=base_url, api_key=os.environ.get(API_KEY_ENV) or "unused"), model
+    return (
+        openai.OpenAI(base_url=base_url, api_key=os.environ.get(API_KEY_ENV) or "unused", max_retries=0),
+        model,
+        spec.request_timeout,
+    )
 
 
 def _question(spec: JudgeSpec) -> str:
     return f"\nQuestion:\n{spec.question.strip()}\n" if spec.question.strip() else ""
 
 
-def _judge_reference(spec: JudgeSpec, references: tuple[str, ...], candidate: str) -> Reward:
-    client, model = _client(spec)
+def _judge_reference(
+    spec: JudgeSpec, references: tuple[str, ...], context: str, candidate: str, runtime: JudgeRuntimeConfig | None
+) -> Reward:
+    client, model, timeout = _client(spec, runtime)
     prompt = REFERENCE_PROMPT.format(
+        context=f"Reference context (not the candidate):\n{context.strip()}\n" if context.strip() else "",
         question=_question(spec),
         references="\n".join(f"- {reference}" for reference in references),
         candidate=candidate.strip(),
     )
-    score, reply = _ask(client, model, prompt, spec.request_timeout)
-    if score is None:
-        return scored(0.0, reason="unparseable_judge_response", model=model, response=reply[-REASONING_LIMIT:])
-    return scored(score, model=model, reasoning=_reasoning(reply))
+    budget = _CallBudget(runtime.max_requests) if runtime is not None else None
+    try:
+        score, reply, attempts = _ask(client, model, prompt, timeout, budget, spec.rubric)
+    except Exception as error:
+        evidence = error.evidence if isinstance(error, JudgeInfrastructureError) else {}
+        raise JudgeInfrastructureError(
+            f"judge request failed: {error}", {"model": model, "prompt": prompt, **evidence}
+        ) from error
+    return scored(score, model=model, prompt=prompt, reasoning=_reasoning(reply), response=reply, attempts=attempts)
 
 
-def _judge_checklist(spec: JudgeSpec, criteria: tuple[str, ...], context: str, candidate: str) -> Reward:
-    client, model = _client(spec)
+def _judge_checklist(
+    spec: JudgeSpec,
+    criteria: tuple[str, ...],
+    context: str,
+    candidate: str,
+    runtime: JudgeRuntimeConfig | None,
+) -> Reward:
+    client, model, timeout = _client(spec, runtime)
     context_block = f"\nReference context (not the candidate):\n{context.strip()}\n" if context.strip() else ""
     results = []
+    budget = _CallBudget(runtime.max_requests) if runtime is not None else None
     for criterion in criteria:
         prompt = CHECKLIST_PROMPT.format(
             context=context_block, question=_question(spec), candidate=candidate.strip(), criterion=criterion.strip()
         )
-        score, reply = _ask(client, model, prompt, spec.request_timeout)
+        try:
+            score, reply, attempts = _ask(client, model, prompt, timeout, budget, spec.rubric)
+        except Exception as error:
+            evidence = error.evidence if isinstance(error, JudgeInfrastructureError) else {}
+            raise JudgeInfrastructureError(
+                f"judge request failed for criterion {criterion!r}: {error}",
+                {"model": model, "criteria": results, "prompt": prompt, **evidence},
+            ) from error
         results.append(
-            {"criterion": criterion, "passed": score is not None and score >= 1.0, "reasoning": _reasoning(reply)}
+            {
+                "criterion": criterion,
+                "passed": score >= 1.0,
+                "reasoning": _reasoning(reply),
+                "prompt": prompt,
+                "response": reply,
+                "attempts": attempts,
+            }
         )
     passed = sum(1 for result in results if result["passed"])
     return scored(passed / len(results), model=model, passed=passed, total=len(results), criteria=results)
 
 
-def _ask(client: openai.OpenAI, model: str, prompt: str, timeout: float) -> tuple[float | None, str]:
+def _ask(
+    client: openai.OpenAI, model: str, prompt: str, timeout: float, budget: _CallBudget | None, rubric: str
+) -> tuple[float, str, list[dict]]:
     """The parsed score and raw reply, retrying once when the model leaves out the SCORE line."""
-    reply = ""
+    attempts: list[dict] = []
     for attempt in range(1, ATTEMPTS + 1):
-        reply = _complete(client, model, prompt, timeout)
-        score = _score(reply)
+        try:
+            if budget is not None:
+                budget.consume()
+        except JudgeInfrastructureError as error:
+            raise JudgeInfrastructureError(str(error), {"attempts": attempts}) from error
+        entry = {"attempt": attempt}
+        attempts.append(entry)
+        try:
+            reply = _complete(client, model, prompt, timeout)
+        except Exception as error:
+            entry["error"] = f"{type(error).__name__}: {error}"
+            raise JudgeInfrastructureError(f"judge endpoint request failed: {error}", {"attempts": attempts}) from error
+        entry["response"] = reply
+        score = _score(reply, rubric)
         if score is not None:
-            return score, reply
+            return score, reply, attempts
         logger.warning("judge %s returned no SCORE line on attempt %d", model, attempt)
-    return None, reply
+    raise JudgeInfrastructureError("judge returned no parseable score after retries", {"attempts": attempts})
 
 
 def _complete(client: openai.OpenAI, model: str, prompt: str, timeout: float) -> str:
@@ -205,13 +302,14 @@ def _complete(client: openai.OpenAI, model: str, prompt: str, timeout: float) ->
     return response.choices[0].message.content or ""
 
 
-def _score(reply: str) -> float | None:
+def _score(reply: str, rubric: str) -> float | None:
     """The last ``SCORE: <value>`` in the reply, when it is a value the rubric allows."""
     matches = SCORE_PATTERN.findall(reply)
     if not matches:
         return None
     score = float(matches[-1])
-    return score if 0.0 <= score <= 1.0 else None
+    valid_scores = {0.0, 1.0} if rubric == RUBRIC_CHECKLIST else {0.0, 0.5, 1.0}
+    return score if score in valid_scores else None
 
 
 def _reasoning(reply: str) -> str:

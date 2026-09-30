@@ -24,6 +24,7 @@ from harbor.environments.capabilities import EnvironmentCapabilities
 from harbor.models.agent.context import AgentContext
 from harbor.models.verifier.result import VerifierResult
 from harbor.verifier.base import BaseVerifier
+from tasktrove_verify.spec import JudgeRuntimeConfig
 
 from taskcompendium.grading import GradeResult, Outcome
 from taskcompendium.harbor.protocol import assistant_message, chat_conversation
@@ -324,6 +325,10 @@ class ChatAgent(BaseAgent):
 class SemanticVerifier(BaseVerifier):
     """Grade the submitted answer or authoritative state."""
 
+    def __init__(self, *args, judge_runtime: dict[str, Any] | None = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.judge_runtime = JudgeRuntimeConfig(**judge_runtime) if judge_runtime is not None else None
+
     async def verify(self) -> VerifierResult:
         try:
             root = self.task.paths.task_dir
@@ -337,6 +342,7 @@ class SemanticVerifier(BaseVerifier):
                 conversation=conversation,
                 tool_providers=self.environment.providers,
                 workspace=self.environment,
+                judge_runtime=self.judge_runtime,
             )
             result = await grade_answer(specification, convention, attempt)
         except Exception as error:
@@ -350,6 +356,7 @@ class SemanticVerifier(BaseVerifier):
 
     def _write_result(self, result: GradeResult) -> None:
         self.trial_paths.verifier_dir.mkdir(parents=True, exist_ok=True)
-        (self.trial_paths.verifier_dir / "taskcompendium-result.json").write_text(
-            json.dumps({"status": result.status.value, "reward": result.reward, "error": result.error}) + "\n"
-        )
+        payload: dict[str, object] = {"status": result.status.value, "reward": result.reward, "error": result.error}
+        if result.evidence:
+            payload["evidence"] = result.evidence
+        (self.trial_paths.verifier_dir / "taskcompendium-result.json").write_text(json.dumps(payload) + "\n")

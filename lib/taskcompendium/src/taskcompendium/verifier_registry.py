@@ -22,6 +22,7 @@ from taskcompendium.submission import (
     SubmissionConvention,
     SubmissionFailure,
 )
+from taskcompendium.verifiers.judge import JudgeVerifier
 from taskcompendium.verifiers.mathematical import MathematicalAnswerVerifier
 from taskcompendium.verifiers.multiple_choice import MultipleChoiceVerifier
 from taskcompendium.verifiers.predicted_action import PredictedActionVerifier
@@ -34,6 +35,7 @@ VERIFIERS: Mapping[VerifierKind, type[Verifier]] = MappingProxyType(
         VerifierKind.NUMERIC_ANSWER: NumericAnswerVerifier,
         VerifierKind.MATHEMATICAL_ANSWER: MathematicalAnswerVerifier,
         VerifierKind.MCQ_ANSWER: MultipleChoiceVerifier,
+        VerifierKind.JUDGE: JudgeVerifier,
     }
 )
 

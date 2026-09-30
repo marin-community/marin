@@ -224,6 +224,17 @@ class JudgeSpec:
 
 
 @dataclass(frozen=True)
+class JudgeRuntimeConfig:
+    """Runner-owned judge endpoint settings, separate from the private task rubric."""
+
+    model: str
+    base_url: str
+    api_key_env: str | None
+    request_timeout: float
+    max_requests: int
+
+
+@dataclass(frozen=True)
 class ScriptSpec:
     path: str
     args: tuple[str, ...] = ()

@@ -134,12 +134,16 @@ def test_spec_model_overrides_the_environment(tmp_path, fake_judge):
     assert (reward.reward, reward.detail["model"]) == (0.0, "override/judge-70b")
 
 
-def test_unparseable_reply_is_retried_once_then_scores_zero(tmp_path, fake_judge):
+def test_unparseable_reply_is_retried_once_then_raises_infrastructure_error(tmp_path, fake_judge):
     fake_judge.replies = ["I cannot grade this."]
     spec = JudgeSpec(references=(REFERENCE,), exact_gate=False)
-    reward = grade_judge.grade(spec, tmp_path, _workspace(tmp_path, "something else"))
-    assert (reward.reward, reward.status) == (0.0, Status.SCORED)
-    assert reward.detail["reason"] == "unparseable_judge_response"
+    with pytest.raises(grade_judge.JudgeInfrastructureError, match="no parseable score") as error:
+        grade_judge.grade(spec, tmp_path, _workspace(tmp_path, "something else"))
+
+    assert [attempt["response"] for attempt in error.value.evidence["attempts"]] == [
+        "I cannot grade this.",
+        "I cannot grade this.",
+    ]
     assert len(fake_judge.prompts) == 2
 
 
@@ -185,12 +189,31 @@ def test_checklist_scores_the_fraction_of_criteria_the_judge_passes(tmp_path, fa
     assert CRITERIA[1] in fake_judge.prompts[1] and CRITERIA[0] not in fake_judge.prompts[1]
 
 
+def test_checklist_rejects_partial_scores_as_infrastructure_error(tmp_path, fake_judge):
+    fake_judge.replies = ["Partly meets it.\nSCORE: 0.5"]
+    spec = JudgeSpec(rubric="checklist", criteria=(CRITERIA[0],))
+    with pytest.raises(grade_judge.JudgeInfrastructureError, match="no parseable score") as error:
+        grade_judge.grade(spec, tmp_path, _workspace(tmp_path, "two steps"))
+    assert [attempt["response"] for attempt in error.value.evidence["attempts"]] == [
+        "Partly meets it.\nSCORE: 0.5",
+        "Partly meets it.\nSCORE: 0.5",
+    ]
+
+
 def test_checklist_shows_the_context_file_to_the_judge(tmp_path, fake_judge):
     (tmp_path / "conversation.txt").write_text("[USER]: plan my week\n[ASSISTANT]: sure")
     fake_judge.replies = ["SCORE: 1"]
     spec = JudgeSpec(rubric="checklist", criteria=(CRITERIA[0],), context="conversation.txt")
     grade_judge.grade(spec, tmp_path, _workspace(tmp_path, "1. 2. 3."))
     assert "plan my week" in fake_judge.prompts[0]
+
+
+def test_reference_rubric_shows_private_context_to_the_judge(tmp_path, fake_judge):
+    (tmp_path / "context.txt").write_text("The setting is the year 2042.")
+    fake_judge.replies = ["The answer matches.\nSCORE: 1"]
+    spec = JudgeSpec(references=("Mars",), context="context.txt", exact_gate=False)
+    grade_judge.grade(spec, tmp_path, _workspace(tmp_path, "The red planet"))
+    assert "The setting is the year 2042." in fake_judge.prompts[0]
 
 
 def test_missing_context_file_is_an_invalid_task(tmp_path, fake_judge):
@@ -218,6 +241,21 @@ def test_constraints_that_pass_hand_over_to_the_judge(tmp_path, fake_judge):
     )
     reward = grade_judge.grade(spec, tmp_path, _workspace(tmp_path, "Ada Lovelace was first. Sincerely."))
     assert reward.reward == 1.0 and len(fake_judge.prompts) == 1
+
+
+def test_constraint_exception_is_infrastructure_error_not_zero_reward(tmp_path, fake_judge, monkeypatch):
+    def broken_check(candidate: str, params: dict):
+        raise OSError("checker storage unavailable")
+
+    spec = _checklist(constraints=(Constraint("broken", {}),))
+    monkeypatch.setattr(grade_judge, "resolve_checks", lambda constraints: [(constraints[0], broken_check)])
+    with pytest.raises(grade_judge.JudgeInfrastructureError, match="checker storage unavailable") as error:
+        grade_judge.grade(spec, tmp_path, _workspace(tmp_path, "candidate"))
+    assert error.value.evidence == {
+        "constraint": "broken_check",
+        "diagnostic": "OSError: checker storage unavailable",
+    }
+    assert fake_judge.prompts == []
 
 
 def test_checklist_without_criteria_is_an_invalid_task(tmp_path, unconfigured_judge):

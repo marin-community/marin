@@ -9,6 +9,7 @@ from harbor.models.trial.config import TrialConfig
 from harbor.models.trial.result import TrialResult
 from harbor.trial.trial import Trial
 from pydantic import BaseModel, ConfigDict, Field
+from tasktrove_verify.spec import JudgeRuntimeConfig
 
 from taskcompendium.lowering import (
     ENVIRONMENT_CONFIG_FILE,
@@ -48,6 +49,7 @@ async def run_trial(
     launch: ChatLaunch,
     trials_dir: Path,
     trial_name: str,
+    judge_runtime: JudgeRuntimeConfig | None = None,
 ) -> TrialResult:
     """Run a lowered task and return Harbor's trial result."""
     if environment_config != read_environment_config(task_dir / ENVIRONMENT_CONFIG_FILE):
@@ -100,7 +102,10 @@ async def run_trial(
                 "model_name": launch.model,
                 "kwargs": agent_kwargs,
             },
-            "verifier": {"import_path": "taskcompendium.harbor.adapter:SemanticVerifier"},
+            "verifier": {
+                "import_path": "taskcompendium.harbor.adapter:SemanticVerifier",
+                "kwargs": {"judge_runtime": judge_runtime.__dict__} if judge_runtime is not None else {},
+            },
             **({"trial_attempt_timeout_sec": launch.trial_timeout} if launch.trial_timeout is not None else {}),
         }
     )

@@ -4,7 +4,7 @@
 """Grade submissions with typed private verifiers."""
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, JsonValue, field_validator, model_validator
@@ -33,6 +33,7 @@ class GradeResult:
     status: Outcome
     reward: float | None
     error: str | None = None
+    evidence: dict = field(default_factory=dict)
 
 
 class Verifier(BaseModel, ABC):

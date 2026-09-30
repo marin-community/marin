@@ -34,6 +34,7 @@ class VerifierKind(StrEnum):
     NUMERIC_ANSWER = "numeric"
     MATHEMATICAL_ANSWER = "math"
     MCQ_ANSWER = "mcq"
+    JUDGE = "judge"
 
 
 class Source(BaseModel):

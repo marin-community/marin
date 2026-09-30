@@ -12,6 +12,7 @@ from math import isfinite
 from typing import Annotated, Any, Literal, Protocol, Self, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+from tasktrove_verify.spec import JudgeRuntimeConfig
 
 from taskcompendium.models import (
     AnswerType,
@@ -62,6 +63,7 @@ class GradingAttempt:
     conversation: ConversationTrace
     tool_providers: Mapping[str, object]
     workspace: object
+    judge_runtime: JudgeRuntimeConfig | None = None
 
 
 @dataclass(frozen=True)
