@@ -256,3 +256,20 @@ forward (`m30c-grntriton-01/02`) matches Pallas-Triton. The in-kernel [BT,128]x[
 ~0.02 s/step. Remaining option: a K=128 CuTe/QuACK GEMM with norm and gate in its epilogue, ~0.1 s/step,
 1-2 days, held unless the stack falls short. Queue remainder: SwiGLU dswiglu epilogue (B), short-conv
 backward (~0.08, CUDA/CuTe), device idle 0.35 s (unanalyzed), CuTe norm epilogue (~0.1).
+
+## M30-012 Agent B: #9481 fold into D, and E (SwiGLU backward in the dh epilogue) (2026-09-30)
+
+3-layer rematted scan, hero per-shard shapes, GB200x4 (ms/step): main 345.4; A+B+C 332.1; A+B+C + #9481
+(C's port) 323.6; D 298.6; D + mirror params 299.0; D + mirror + pipelined chunks 307.4. Pipelining works
+inside D (the recompute still drops the return and down GEMM, grads exact) but costs 8.7 ms on 4 GPUs,
+so it is dropped (kept in a1d699e67e). Mirror params are neutral on 4 GPUs but remove two offset
+all-to-alls per transport, so they are kept: 6a6bb78853 (gate `m30b-gate-mirror-01`: out/drops/dx/dW13/dW2
+equal to main, dS within 1 ulp).
+E (12643e682c = D + mirror + E): QuACK's grouped dh GEMM runs `dswiglu` in a custom packed-CD epilogue
+plus the column reduction for D's <h, dh>. dh is never written and the XLA SwiGLU-backward pass is gone.
+One chunk on one GB200: 3.54 vs 5.10 ms. Gate `m30b-gate-epi-02`: out/drops/dW2 equal; dx/dW13/dS ~1 ulp
+(median 0.49-0.56%, max <= 0.82%; fp32 SwiGLU backward on the unrounded accumulator). Scan: D 298.7 ->
+D+mirror+E 290.3 (-2.8 ms/layer, ~-0.13 s/step).
+Arms queued: `m30b-unfilled-02` (A+B+C), `m30b-sonic-01` (D + H-A4 flag, remat VLOG, doubles as smoke).
+Next: C integrates 12643e682c into the stack (plus #9481's model commits, pgle_profile, norm kernel)
+and queues the stacked trace arm now.
