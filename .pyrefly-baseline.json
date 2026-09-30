@@ -1,3 +1,739 @@
 {
-  "errors": []
+  "errors": [
+    {
+      "column": 33,
+      "path": "lib/finestore/src/finestore/reader.py",
+      "name": "not-iterable",
+      "concise_description": "`not in` is not supported between `Unknown` and `object`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/__init__.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/nn/activations.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/nn/activations.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/nn/activations.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/nn/activations.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/nn/activations.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/nn/activations.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/nn/activations.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/nn/activations.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/nn/activations.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/nn/activations.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/nn/activations.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/nn/activations.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/nn/activations.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/nn/activations.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/nn/activations.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/nn/activations.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/nn/activations.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/nn/normalization.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 12,
+      "path": "lib/haliax/src/haliax/nn/normalization.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `NamedArray | Unknown` is not assignable to declared return type `A`",
+      "severity": "error"
+    },
+    {
+      "column": 42,
+      "path": "lib/haliax/src/haliax/nn/pool.py",
+      "name": "not-iterable",
+      "concise_description": "Type `int` is not iterable",
+      "severity": "error"
+    },
+    {
+      "column": 19,
+      "path": "lib/haliax/src/haliax/nn/pool.py",
+      "name": "bad-assignment",
+      "concise_description": "`tuple[LiteralString | tuple[int, int], ...]` is not assignable to variable `padding` with type `Literal['SAME', 'VALID'] | int | tuple[tuple[int, int], ...]`",
+      "severity": "error"
+    },
+    {
+      "column": 16,
+      "path": "lib/iris/src/iris/cluster/controller/ops/job.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `int` is not assignable to declared return type `PriorityBand`",
+      "severity": "error"
+    },
+    {
+      "column": 16,
+      "path": "lib/iris/src/iris/cluster/controller/ops/job.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `int` is not assignable to declared return type `PriorityBand`",
+      "severity": "error"
+    },
+    {
+      "column": 71,
+      "path": "lib/iris/src/iris/testing/journeys/backend.py",
+      "name": "bad-assignment",
+      "concise_description": "`set[str]` is not assignable to dict value type `frozenset[str]`",
+      "severity": "error"
+    },
+    {
+      "column": 42,
+      "path": "lib/levanter/src/levanter/data/text/datasets.py",
+      "name": "missing-argument",
+      "concise_description": "Missing argument `loss_weight` in function `_create_lm_example`",
+      "severity": "error"
+    },
+    {
+      "column": 16,
+      "path": "lib/levanter/src/levanter/eval_harness.py",
+      "name": "bad-return",
+      "concise_description": "Returned type `list[tuple[float64, float64]]` is not assignable to declared return type `list[tuple[float, bool]]`",
+      "severity": "error"
+    },
+    {
+      "column": 54,
+      "path": "lib/levanter/src/levanter/inference/engine.py",
+      "name": "bad-assignment",
+      "concise_description": "`int | None` is not assignable to dict value type `int`",
+      "severity": "error"
+    },
+    {
+      "column": 56,
+      "path": "lib/levanter/src/levanter/inference/engine.py",
+      "name": "bad-assignment",
+      "concise_description": "`int | None` is not assignable to dict value type `int`",
+      "severity": "error"
+    },
+    {
+      "column": 55,
+      "path": "lib/levanter/src/levanter/inference/engine.py",
+      "name": "bad-assignment",
+      "concise_description": "`int | None` is not assignable to dict value type `int`",
+      "severity": "error"
+    },
+    {
+      "column": 72,
+      "path": "lib/levanter/src/levanter/inference/engine.py",
+      "name": "bad-assignment",
+      "concise_description": "`int | None` is not assignable to dict value type `int`",
+      "severity": "error"
+    },
+    {
+      "column": 9,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/batched_xla.py",
+      "name": "bad-unpacking",
+      "concise_description": "Cannot unpack tuple[Array, Array] | tuple[Array, Array, Array] (of size 2) into 3 values",
+      "severity": "error"
+    },
+    {
+      "column": 5,
+      "path": "lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/batched_xla.py",
+      "name": "bad-unpacking",
+      "concise_description": "Cannot unpack tuple[Array, Array] | tuple[Array, Array, Array] (of size 3) into 2 values",
+      "severity": "error"
+    },
+    {
+      "column": 69,
+      "path": "lib/levanter/src/levanter/main/inference_repl.py",
+      "name": "bad-specialization",
+      "concise_description": "`LmConfig[Unknown]` is not assignable to upper bound `HFCompatConfig` of type variable `LevConfig`",
+      "severity": "error"
+    },
+    {
+      "column": 25,
+      "path": "lib/marin/src/marin/datakit/download/diagnostic_logs.py",
+      "name": "bad-assignment",
+      "concise_description": "`dict[str, int]` is not assignable to dict value type `bool | dict[str, JsonValue] | float | int | list[JsonValue] | str | None`",
+      "severity": "error"
+    },
+    {
+      "column": 33,
+      "path": "lib/marin/src/marin/datakit/download/diagnostic_logs.py",
+      "name": "bad-assignment",
+      "concise_description": "`dict[str, int]` is not assignable to dict value type `bool | dict[str, JsonValue] | float | int | list[JsonValue] | str | None`",
+      "severity": "error"
+    },
+    {
+      "column": 32,
+      "path": "lib/marin/src/marin/datakit/download/diagnostic_logs.py",
+      "name": "bad-assignment",
+      "concise_description": "`dict[str, str]` is not assignable to dict value type `bool | dict[str, JsonValue] | float | int | list[JsonValue] | str | None`",
+      "severity": "error"
+    },
+    {
+      "column": 35,
+      "path": "lib/marin/src/marin/experiment/train.py",
+      "name": "bad-assignment",
+      "concise_description": "`tuple[str, str, str]` is not assignable to dict value type `list[str] | str`",
+      "severity": "error"
+    },
+    {
+      "column": 64,
+      "path": "lib/marin/src/marin/experiment/train.py",
+      "name": "bad-assignment",
+      "concise_description": "`tuple[str, str, str]` is not assignable to dict value type `list[str] | str`",
+      "severity": "error"
+    },
+    {
+      "column": 25,
+      "path": "lib/marin/src/marin/inference/python_tools.py",
+      "name": "invalid-annotation",
+      "concise_description": "Function call cannot be used in annotations",
+      "severity": "error"
+    },
+    {
+      "column": 30,
+      "path": "lib/marin/src/marin/inference/python_tools.py",
+      "name": "invalid-annotation",
+      "concise_description": "Function call cannot be used in annotations",
+      "severity": "error"
+    }
+  ]
 }

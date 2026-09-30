@@ -809,7 +809,7 @@ def check_pyrefly(files: list[pathlib.Path], fix: bool) -> int:
     args = [
         "uvx",
         "--from",
-        "pyrefly>=1.0.0,<1.1.0",
+        "pyrefly==1.4.0.dev2",
         "pyrefly",
         "check",
         "--baseline",
