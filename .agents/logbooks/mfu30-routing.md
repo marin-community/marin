@@ -340,3 +340,20 @@ shared-expert GEMMs are free to cover dispatch c0 and return c1, so every transp
 the case #9481's pipelining targets, and a four-GPU scan without a shared expert cannot show it. Pipelined variant
 for the rack: branch `research/mcwitt/mfu30-routing-pipelined` @ 64909b24d0 (= 12643e682c D+mirror+E with the
 pipelined forward of a1d699e67e; values identical).
+
+## M30B-019 Review of C's stack integration (`research/mcwitt/mfu30-stack` @ 8eff7b8ec4, `-pipelined` @ 7393a9ae26)
+
+- `lib/levanter/src/levanter/grug/_moe/` is byte-identical to 12643e682c (sequential); the pipelined branch
+  adds only 64909b24d0's forward. `train.py` (overlap-limit forcing) and `dispatch.py` (TF_CPP forwarding)
+  unchanged from my lineage. `model.py` keeps `MOE_OUTPUT_REMAT_NAME` and the offload_carry save policy.
+- #9481 model commits against D: the QB `_forward_barrier((s_minus_alpha, moe_out))` holds the whole MoE
+  output, but QB statistics are not differentiated, so the recompute drops the barrier; the MLP-weight
+  prefetch barrier sits upstream of the routed MLP. Checked with `b/model_dce.py` (the model smoke config, grad
+  jaxpr traced on CPU, per scan body): forward scan 4 ragged a2a (2 dispatch + 2 return); backward scan 8
+  (2 recomputed dispatches + 2 reverse returns + 2 reverse dispatches + 2 row-dot returns) on both branches,
+  so the recomputed returns stay dead at model level. The pipelined branch shows 4 forward barriers (2 chunk +
+  QB + prefetch) and 2 in the backward (the dead return-path barrier is gone).
+- The portable ragged_dot expert MLP keeps y as a residual for its row dot, so only the QuACK path drops the
+  recomputed down projection (by design; the hero is QuACK). The model smoke checks finiteness and norm
+  parity, not the GPU-level drop of the QuACK down GEMM; my layer scan (`m30b-gate-epi-02`) covers that.
+- No blocking issues found.
