@@ -465,9 +465,10 @@ unknown-name = true
 # Complex overload resolution (stdlib/library overloads); sampling found ~no real bugs.
 no-matching-overload = false
 
-# Mostly third-party stub noise (smart_open, Flax, jax/numpy arrays), with a handful of
-# real callsite mismatches buried in the volume.
-bad-argument-type = false
+# Shape-typed call sites report mismatches under this code, so it must stay on for
+# shape annotations to check anything. Pre-existing third-party stub noise
+# (smart_open, Flax) lives in .pyrefly-baseline.json.
+bad-argument-type = true
 
 # Real "code that can be better written" bugs mixed with control-flow false positives
 # pyrefly cannot prove safe.
@@ -486,13 +487,6 @@ unbound-name = false
 matches = "lib/levanter/src/levanter/inference/jit_scheduler.py"
 [tool.pyrefly.sub_config.errors]
 unknown-name = false
-
-# Turn bad-argument-type ON for these controller-driving scripts (it is off
-# repo-wide) so a wrong-type call into the controller API fails type-checking.
-[[tool.pyrefly.sub_config]]
-matches = "lib/iris/scripts/**"
-[tool.pyrefly.sub_config.errors]
-bad-argument-type = true
 
 [tool.hatch.metadata]
 allow-direct-references = true
