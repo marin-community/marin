@@ -32,7 +32,7 @@ from taskcompendium.models import (
 from taskcompendium.submission import AnswerCall, FinalAction, PlainText, ProviderState
 from taskcompendium.verifiers.predicted_action import predicted_action_verifier
 
-from .conftest import container_runtime
+from .conftest import ServiceFault
 
 
 def _definition(name: str) -> dict:
@@ -75,16 +75,16 @@ class BrokenStateProvider(BetaProvider):
     PROVIDER_REVISION = "beta-broken"
 
 
-def _binding(provider: type[AlphaProvider]) -> ToolBinding:
+def _binding(provider: type[AlphaProvider], runtime_factory) -> ToolBinding:
     return ToolBinding(
         action_interface=provider.ACTION_INTERFACE,
         seed_sha256=provider.SEED_SHA256,
-        runtime=container_runtime(
+        runtime=runtime_factory(
             provider.ACTION_INTERFACE,
             provider.SEED_SHA256,
             provider.PROVIDER_REVISION,
             provider.TOOL_DEFINITIONS,
-            broken_state=provider is BrokenStateProvider,
+            fault=ServiceFault.STATE_UNAVAILABLE if provider is BrokenStateProvider else ServiceFault.NORMAL,
         ),
         tool_definitions=tuple(provider.TOOL_DEFINITIONS),
         state_available=True,
@@ -133,8 +133,13 @@ def _call(name: str, call_id: str, arguments: str = "{}") -> dict:
     return {"id": call_id, "type": "function", "function": {"name": name, "arguments": arguments}}
 
 
-async def test_two_providers_dispatch_and_grade_named_state(tmp_path, monkeypatch, service_processes):
-    binding = HarborEnvironmentConfig(tool_providers={"alpha": _binding(AlphaProvider), "beta": _binding(BetaProvider)})
+async def test_two_providers_dispatch_and_grade_named_state(tmp_path, monkeypatch, service_processes, runtime_factory):
+    binding = HarborEnvironmentConfig(
+        tool_providers={
+            "alpha": _binding(AlphaProvider, runtime_factory),
+            "beta": _binding(BetaProvider, runtime_factory),
+        }
+    )
     task = lower_to_harbor(
         _specification(AnswerType.STATE),
         ProviderState(id="state", provider="beta"),
@@ -178,9 +183,14 @@ async def test_two_providers_dispatch_and_grade_named_state(tmp_path, monkeypatc
 
 @pytest.mark.parametrize("beta_calls,expected_reward", [(0, 0.0), (2, 0.0)])
 async def test_provider_state_noop_and_wrong_result_score_zero(
-    tmp_path, monkeypatch, beta_calls, expected_reward, service_processes
+    tmp_path, monkeypatch, beta_calls, expected_reward, service_processes, runtime_factory
 ):
-    binding = HarborEnvironmentConfig(tool_providers={"alpha": _binding(AlphaProvider), "beta": _binding(BetaProvider)})
+    binding = HarborEnvironmentConfig(
+        tool_providers={
+            "alpha": _binding(AlphaProvider, runtime_factory),
+            "beta": _binding(BetaProvider, runtime_factory),
+        }
+    )
     task = lower_to_harbor(
         _specification(AnswerType.STATE), ProviderState(id="state", provider="beta"), binding, tmp_path / "task"
     )
@@ -203,9 +213,12 @@ async def test_provider_state_noop_and_wrong_result_score_zero(
     assert outcome["status"] == "graded"
 
 
-async def test_unavailable_provider_state_remains_ungraded(tmp_path, monkeypatch, service_processes):
+async def test_unavailable_provider_state_remains_ungraded(tmp_path, monkeypatch, service_processes, runtime_factory):
     binding = HarborEnvironmentConfig(
-        tool_providers={"alpha": _binding(AlphaProvider), "beta": _binding(BrokenStateProvider)}
+        tool_providers={
+            "alpha": _binding(AlphaProvider, runtime_factory),
+            "beta": _binding(BrokenStateProvider, runtime_factory),
+        }
     )
     task = lower_to_harbor(
         _specification(AnswerType.STATE), ProviderState(id="state", provider="beta"), binding, tmp_path / "task"
@@ -225,11 +238,13 @@ async def test_unavailable_provider_state_remains_ungraded(tmp_path, monkeypatch
     assert outcome["reward"] is None
 
 
-async def test_added_provider_tool_does_not_change_bound_surface(tmp_path, monkeypatch, service_processes):
+async def test_added_provider_tool_does_not_change_bound_surface(
+    tmp_path, monkeypatch, service_processes, runtime_factory
+):
     alpha = ToolBinding(
         action_interface=ExpandedAlphaProvider.ACTION_INTERFACE,
         seed_sha256=ExpandedAlphaProvider.SEED_SHA256,
-        runtime=container_runtime(
+        runtime=runtime_factory(
             ExpandedAlphaProvider.ACTION_INTERFACE,
             ExpandedAlphaProvider.SEED_SHA256,
             ExpandedAlphaProvider.PROVIDER_REVISION,
@@ -241,7 +256,7 @@ async def test_added_provider_tool_does_not_change_bound_surface(tmp_path, monke
         tools=("increment_alpha",),
         tools_sha256=_digest(AlphaProvider.TOOL_DEFINITIONS),
     )
-    binding = HarborEnvironmentConfig(tool_providers={"alpha": alpha, "beta": _binding(BetaProvider)})
+    binding = HarborEnvironmentConfig(tool_providers={"alpha": alpha, "beta": _binding(BetaProvider, runtime_factory)})
     task = lower_to_harbor(
         _specification(AnswerType.TEXT),
         PlainText(id="plain"),
@@ -263,8 +278,13 @@ async def test_added_provider_tool_does_not_change_bound_surface(tmp_path, monke
     assert [tool["function"]["name"] for tool in requests[0]["tools"]] == ["increment_alpha", "increment_beta"]
 
 
-async def test_provider_call_can_precede_terminal_answer_call(tmp_path, monkeypatch, service_processes):
-    binding = HarborEnvironmentConfig(tool_providers={"alpha": _binding(AlphaProvider), "beta": _binding(BetaProvider)})
+async def test_provider_call_can_precede_terminal_answer_call(tmp_path, monkeypatch, service_processes, runtime_factory):
+    binding = HarborEnvironmentConfig(
+        tool_providers={
+            "alpha": _binding(AlphaProvider, runtime_factory),
+            "beta": _binding(BetaProvider, runtime_factory),
+        }
+    )
     task = lower_to_harbor(
         _specification(AnswerType.TEXT),
         AnswerCall(id="answer-call"),
@@ -303,8 +323,13 @@ async def test_provider_call_can_precede_terminal_answer_call(tmp_path, monkeypa
     assert submission.events[-1].calls[0].call_id == "final"
 
 
-async def test_provider_call_can_precede_source_final_action(tmp_path, monkeypatch, service_processes):
-    binding = HarborEnvironmentConfig(tool_providers={"alpha": _binding(AlphaProvider), "beta": _binding(BetaProvider)})
+async def test_provider_call_can_precede_source_final_action(tmp_path, monkeypatch, service_processes, runtime_factory):
+    binding = HarborEnvironmentConfig(
+        tool_providers={
+            "alpha": _binding(AlphaProvider, runtime_factory),
+            "beta": _binding(BetaProvider, runtime_factory),
+        }
+    )
     task = lower_to_harbor(
         _specification(AnswerType.NATIVE_ACTION),
         FinalAction(id="final-action"),
@@ -332,7 +357,7 @@ async def test_provider_call_can_precede_source_final_action(tmp_path, monkeypat
     assert submission.events[-1].calls[0].name == "finish"
 
 
-async def test_composite_keeps_workspace_operations_outside_tool_providers(tmp_path):
+async def test_composite_keeps_workspace_operations_outside_tool_providers(tmp_path, runtime_factory):
     environment_dir = tmp_path / "environment"
     environment_dir.mkdir()
     composite = CompositeToolEnvironment(
@@ -342,7 +367,7 @@ async def test_composite_keeps_workspace_operations_outside_tool_providers(tmp_p
         trial_paths=TrialPaths(UPath(tmp_path / "trial")),
         task_env_config=EnvironmentConfig(),
         tool_providers={
-            "alpha": _binding(AlphaProvider).model_dump(mode="json"),
+            "alpha": _binding(AlphaProvider, runtime_factory).model_dump(mode="json"),
         },
     )
 
@@ -353,19 +378,21 @@ async def test_composite_keeps_workspace_operations_outside_tool_providers(tmp_p
     assert result.stdout == "/app\n"
 
 
-async def test_malformed_provider_response_remains_ungraded_with_raw_trace(tmp_path, monkeypatch, service_processes):
-    beta = _binding(BetaProvider).model_copy(
+async def test_malformed_provider_response_remains_ungraded_with_raw_trace(
+    tmp_path, monkeypatch, service_processes, runtime_factory
+):
+    beta = _binding(BetaProvider, runtime_factory).model_copy(
         update={
-            "runtime": container_runtime(
+            "runtime": runtime_factory(
                 BetaProvider.ACTION_INTERFACE,
                 BetaProvider.SEED_SHA256,
                 BetaProvider.PROVIDER_REVISION,
                 BetaProvider.TOOL_DEFINITIONS,
-                wrong_id=True,
+                fault=ServiceFault.WRONG_RESPONSE_ID,
             )
         }
     )
-    config = HarborEnvironmentConfig(tool_providers={"alpha": _binding(AlphaProvider), "beta": beta})
+    config = HarborEnvironmentConfig(tool_providers={"alpha": _binding(AlphaProvider, runtime_factory), "beta": beta})
     task = lower_to_harbor(
         _specification(AnswerType.STATE), ProviderState(id="state", provider="beta"), config, tmp_path / "task"
     )
@@ -384,19 +411,21 @@ async def test_malformed_provider_response_remains_ungraded_with_raw_trace(tmp_p
     assert any(json.loads(event["raw_response"]).get("id") == "invalid" for event in trace if "raw_response" in event)
 
 
-async def test_service_action_failure_retains_call_once_without_final_message(tmp_path, monkeypatch, service_processes):
-    beta = _binding(BetaProvider).model_copy(
+async def test_service_action_failure_retains_call_once_without_final_message(
+    tmp_path, monkeypatch, service_processes, runtime_factory
+):
+    beta = _binding(BetaProvider, runtime_factory).model_copy(
         update={
-            "runtime": container_runtime(
+            "runtime": runtime_factory(
                 BetaProvider.ACTION_INTERFACE,
                 BetaProvider.SEED_SHA256,
                 BetaProvider.PROVIDER_REVISION,
                 BetaProvider.TOOL_DEFINITIONS,
-                fail_call=True,
+                fault=ServiceFault.CALL_FAILURE,
             )
         }
     )
-    config = HarborEnvironmentConfig(tool_providers={"alpha": _binding(AlphaProvider), "beta": beta})
+    config = HarborEnvironmentConfig(tool_providers={"alpha": _binding(AlphaProvider, runtime_factory), "beta": beta})
     task = lower_to_harbor(
         _specification(AnswerType.STATE), ProviderState(id="state", provider="beta"), config, tmp_path / "task"
     )

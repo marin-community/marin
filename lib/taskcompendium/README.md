@@ -6,7 +6,7 @@ Training and evaluation tasks arrive with different prompt formats, answer rules
 
 The current implementation exports Harbor tasks for text, number, native-action, and state results. A task can require several named, versioned action interfaces. File results have no submission convention in this package.
 
-The NeMo Workplace row 0 import supplies the first container tool service. State grading is separate from tool selection: a tool-backed task can also submit a text or number answer.
+NeMo Workplace tasks use a container tool service. State grading is separate from tool selection: a tool-backed task can also submit a text or number answer.
 
 ## What does it contain?
 
@@ -72,7 +72,7 @@ With the `answer_call` convention, the chat agent adds `submit_answer(answer: st
 
 The caller builds or pulls each image before export. `lower_to_harbor` checks its local OCI labels against the declared interface, seed, implementation revision, and complete schema digest. The exported task stores only the binding manifest. It contains no provider source checkout. Trial startup uses `docker run --pull never` and verifies the running service's identity and schemas again. Provider code runs inside the container, with no network, host mounts, Linux capabilities, or writable root filesystem. A bounded temporary filesystem is available at `/tmp`.
 
-Each provider process serves JSON-lines requests with `id`, `method`, and `params` fields, returning the same ID and either `result` or `error`. `initialize` checks the immutable identity and returns schemas; `call` dispatches one action with its model call ID; `state` retrieves authoritative JSON-compatible state. Requests are serialized and never retried. The provider persists across tool turns and is destroyed after the trial. Wire requests, responses, failures, and bounded diagnostics are retained in `provider-<name>.jsonl`. Full MCP interoperability is outside this initial transport.
+Each provider process serves JSON-lines requests with `id`, `method`, and `params` fields, returning the same ID and either `result` or `error`. `initialize` checks the immutable identity and returns schemas; `call` dispatches one action with its model call ID; `state` retrieves authoritative JSON-compatible state. Requests are serialized and never retried. The provider persists across tool turns and is destroyed after the trial. Wire requests, responses, failures, and bounded diagnostics are retained in `provider-<name>.jsonl`. The JSON-lines transport does not implement MCP interoperability.
 
 Tool providers expose callable actions. `environment_requirements` separately describes workspace capabilities such as filesystem and shell access. The host chat runtime cannot satisfy those requirements. A workspace runtime must supply them; declaring a capability on a tool provider does not create a workspace.
 
@@ -198,8 +198,8 @@ runtime = ContainerService(
     command=("python", "-m", "nemo_workplace.server"),
 )
 imports = import_dataset_split(Path("train.jsonl").read_bytes(), "train", provider_source, runtime)
-specification, convention, binding = imports[0]
-lower_to_harbor(specification, convention, binding, Path("/path/to/new-harbor-task"))
+specification, convention, environment_config = imports[0]
+lower_to_harbor(specification, convention, environment_config, Path("/path/to/new-harbor-task"))
 ```
 
 The image must be staged on the Docker host before export and launch. The preparation environment requires the pinned provider's pandas dependency; trial dependencies are packaged in the image. No source or image fetch happens during a trial.

@@ -49,7 +49,6 @@ ROW_SHA256_BY_ID = {
     3: "db067d6ae118a3bde1c14ca4dee055c6c62aa5dbb876c01346ca368e256e4f61",
     4: "ba3ee0fa9e41141699a785b22b1bfadda76eb5f09bab33d4a2285a9fd7a7a3d4",
 }
-ROW_SHA256 = ROW_SHA256_BY_ID[0]
 PROVIDER_REPOSITORY = "https://github.com/marin-community/nemo_workplace"
 PROVIDER_GIT_REVISION = "27b39001312617403021635f0492e120abc2cd34"
 PROVIDER = f"python+git+{PROVIDER_REPOSITORY}@{PROVIDER_GIT_REVISION}:nemo_workplace.provider:NemoWorkplaceProvider"
@@ -98,11 +97,6 @@ def select_rows(source: bytes) -> tuple[bytes, ...]:
     if set(selected) != set(ROW_SHA256_BY_ID):
         raise ValueError("Workplace example source does not contain all pinned rows")
     return tuple(selected[row_id] for row_id in sorted(selected))
-
-
-def select_row_zero(source: bytes) -> bytes:
-    """Select row 0 for callers that need the original single-row entrypoint."""
-    return select_rows(source)[0]
 
 
 def select_dataset_rows(source: bytes, split: WorkplaceSplit) -> tuple[bytes, ...]:

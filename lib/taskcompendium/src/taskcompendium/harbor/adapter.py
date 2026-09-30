@@ -11,7 +11,6 @@ separate services. Trial logs retain raw model messages and tool observations.
 """
 
 import asyncio
-import hashlib
 import json
 import os
 import urllib.error
@@ -42,7 +41,7 @@ from taskcompendium.lowering import (
 )
 from taskcompendium.models import AssistantToolCalls, ConversationToolCall, ConversationTrace
 from taskcompendium.submission import GradingAttempt
-from taskcompendium.tool_provider import ManagedToolProvider, ToolProvider
+from taskcompendium.tool_provider import ManagedToolProvider, ToolProvider, tool_schema_sha256
 from taskcompendium.verifier_registry import grade_answer
 
 SUBMISSION_FILE = "submission.json"
@@ -90,9 +89,7 @@ class CompositeToolEnvironment(BaseEnvironment):
             validate_provider_surface(binding)
             self.providers[name] = ContainerToolProvider(
                 runtime=binding.runtime,
-                action_interface=binding.action_interface,
-                seed_sha256=binding.seed_sha256,
-                provider_revision=binding.provider_revision,
+                identity=binding.identity,
                 tool_definitions=list(binding.tool_definitions),
                 trace_path=Path(str(self.trial_paths.agent_dir / f"provider-{name}.jsonl")),
             )
@@ -167,9 +164,7 @@ class CompositeToolEnvironment(BaseEnvironment):
             provider_tools = selected_tool_definitions(
                 await self.providers[provider_name].native_tool_definitions(), binding.tools
             )
-            digest = hashlib.sha256(
-                json.dumps(provider_tools, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
-            ).hexdigest()
+            digest = tool_schema_sha256(provider_tools)
             if digest != binding.tools_sha256:
                 raise ValueError(f"Runtime tool surface differs for provider {provider_name!r}")
             for definition in provider_tools:

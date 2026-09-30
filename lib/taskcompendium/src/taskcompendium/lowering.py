@@ -25,6 +25,7 @@ from taskcompendium.submission import (
     render_instruction,
     submission_compatible,
 )
+from taskcompendium.tool_provider import ProviderIdentity, tool_schema_sha256
 from taskcompendium.verifier_registry import validate_verifier
 
 ENVIRONMENT_DIR = "environment"
@@ -46,6 +47,14 @@ class ToolBinding(BaseModel):
     tools_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     tool_definitions: tuple[dict[str, Any], ...]
     state_available: bool
+
+    @property
+    def identity(self) -> ProviderIdentity:
+        return ProviderIdentity(
+            action_interface=self.action_interface,
+            seed_sha256=self.seed_sha256,
+            provider_revision=self.provider_revision,
+        )
 
     @model_validator(mode="after")
     def validate_binding(self) -> "ToolBinding":
@@ -89,9 +98,7 @@ def selected_tool_definitions(definitions: Sequence[dict[str, Any]], tool_names:
 def validate_provider_surface(binding: ToolBinding) -> None:
     """Validate a caller's declared schemas without importing provider code."""
     definitions = selected_tool_definitions(binding.tool_definitions, binding.tools)
-    digest = hashlib.sha256(
-        json.dumps(definitions, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
-    ).hexdigest()
+    digest = tool_schema_sha256(definitions)
     if digest != binding.tools_sha256:
         raise ValueError("Provider tool schemas differ from Harbor binding")
 
@@ -204,15 +211,7 @@ def validate_environment_config(
     state_provider = _validate_provider_requirements(specification, convention, environment_config)
     for name, binding in environment_config.tool_providers.items():
         validate_provider_surface(binding)
-        validate_container_image(
-            binding.runtime,
-            {
-                "action_interface": binding.action_interface,
-                "seed_sha256": binding.seed_sha256,
-                "provider_revision": binding.provider_revision,
-            },
-            list(binding.tool_definitions),
-        )
+        validate_container_image(binding.runtime, binding.identity, list(binding.tool_definitions))
         if name == state_provider and not binding.state_available:
             raise ValueError("State task requires canonical provider state")
 
@@ -279,7 +278,7 @@ def _write_harbor_task(
     destination: Path,
     instruction: str,
 ) -> None:
-    """Write files after all selected provider sources have been checked."""
+    """Write files after the selected image metadata and task contracts have been checked."""
     (destination / "instruction.md").write_text(instruction)
     (destination / "task.toml").write_text(
         'version = "1.0"\n\n[environment]\nallow_internet = false\n\n[verifier]\nenvironment_mode = "shared"\n'

@@ -22,8 +22,6 @@ from taskcompendium.models import (
 )
 from taskcompendium.submission import AnswerCall, PlainText, ProviderState
 
-from .conftest import container_runtime
-
 
 def _digest(value):
     return hashlib.sha256(
@@ -31,7 +29,7 @@ def _digest(value):
     ).hexdigest()
 
 
-def _external_services(tmp_path, monkeypatch, *, names=("lookup_a", "lookup_b")):
+def _bindings(runtime_factory, *, names=("lookup_a", "lookup_b")):
     bindings = []
     for service, name in zip(("a", "b"), names, strict=True):
         definitions = ({"type": "function", "function": {"name": name, "parameters": {"type": "object"}}},)
@@ -40,7 +38,7 @@ def _external_services(tmp_path, monkeypatch, *, names=("lookup_a", "lookup_b"))
                 action_interface=f"{service}:v1",
                 seed_sha256=service * 64,
                 provider_revision=f"{service}-v1",
-                runtime=container_runtime(f"{service}:v1", service * 64, f"{service}-v1", definitions),
+                runtime=runtime_factory(f"{service}:v1", service * 64, f"{service}-v1", definitions),
                 tools=(name,),
                 tools_sha256=_digest(definitions),
                 tool_definitions=definitions,
@@ -65,12 +63,12 @@ def _specification() -> TaskSpec:
     )
 
 
-def test_provider_tool_collisions_reject_export(tmp_path, monkeypatch):
-    bindings = _external_services(tmp_path, monkeypatch, names=("lookup", "lookup"))
+def test_provider_tool_collisions_reject_export(tmp_path, runtime_factory):
+    bindings = _bindings(runtime_factory, names=("lookup", "lookup"))
     with pytest.raises(ValueError, match="Tool names must be unique"):
         HarborEnvironmentConfig(tool_providers=dict(zip(("a", "b"), bindings, strict=True)))
 
-    terminal_collision = _external_services(tmp_path, monkeypatch, names=("lookup", "submit_answer"))
+    terminal_collision = _bindings(runtime_factory, names=("lookup", "submit_answer"))
     environment_config = HarborEnvironmentConfig(tool_providers=dict(zip(("a", "b"), terminal_collision, strict=True)))
     convention = AnswerCall(id="answer-call")
     with pytest.raises(ValueError, match="Submission function names collide"):
@@ -88,8 +86,8 @@ def test_provider_tool_collisions_reject_export(tmp_path, monkeypatch):
     ("changed", "error"),
     (({"seed_sha256": "c" * 64}, "seed differs"), ({"action_interface": "other:v1"}, "interface differs")),
 )
-def test_provider_requirement_mismatch_rejects_export_before_task_files(tmp_path, monkeypatch, changed, error):
-    bindings = _external_services(tmp_path, monkeypatch)
+def test_provider_requirement_mismatch_rejects_export_before_task_files(tmp_path, runtime_factory, changed, error):
+    bindings = _bindings(runtime_factory)
     wrong = bindings[1].model_copy(update=changed)
     environment_config = HarborEnvironmentConfig(tool_providers={"a": bindings[0], "b": wrong})
     convention = PlainText(id="plain")
@@ -98,8 +96,8 @@ def test_provider_requirement_mismatch_rejects_export_before_task_files(tmp_path
     assert not (tmp_path / "task").exists()
 
 
-def test_state_grader_cannot_target_an_unbound_service(tmp_path, monkeypatch):
-    bindings = _external_services(tmp_path, monkeypatch)
+def test_state_grader_cannot_target_an_unbound_service(tmp_path, runtime_factory):
+    bindings = _bindings(runtime_factory)
     environment_config = HarborEnvironmentConfig(tool_providers=dict(zip(("a", "b"), bindings, strict=True)))
     specification = _specification().model_copy(
         update={"answer_type": AnswerType.STATE, "verifier": structured_exact({})}
@@ -109,8 +107,8 @@ def test_state_grader_cannot_target_an_unbound_service(tmp_path, monkeypatch):
         lower_to_harbor(specification, convention, environment_config, tmp_path / "task")
 
 
-def test_state_provider_must_expose_canonical_snapshot(tmp_path, monkeypatch):
-    bindings = _external_services(tmp_path, monkeypatch)
+def test_state_provider_must_expose_canonical_snapshot(tmp_path, runtime_factory):
+    bindings = _bindings(runtime_factory)
     environment_config = HarborEnvironmentConfig(tool_providers=dict(zip(("a", "b"), bindings, strict=True)))
     specification = _specification().model_copy(
         update={"answer_type": AnswerType.STATE, "verifier": structured_exact({})}
@@ -121,8 +119,8 @@ def test_state_provider_must_expose_canonical_snapshot(tmp_path, monkeypatch):
         lower_to_harbor(specification, convention, environment_config, tmp_path / "task")
 
 
-def test_host_chat_rejects_workspace_requirements_with_tool_providers(tmp_path, monkeypatch):
-    bindings = _external_services(tmp_path, monkeypatch)
+def test_host_chat_rejects_workspace_requirements_with_tool_providers(tmp_path, runtime_factory):
+    bindings = _bindings(runtime_factory)
     environment_config = HarborEnvironmentConfig(tool_providers={"a": bindings[0], "b": bindings[1]})
     convention = PlainText(id="plain")
 
@@ -137,8 +135,8 @@ def test_host_chat_rejects_workspace_requirements_with_tool_providers(tmp_path, 
         )
 
 
-def test_container_export_contains_manifest_without_provider_code(tmp_path, monkeypatch):
-    bindings = _external_services(tmp_path, monkeypatch)
+def test_container_export_contains_manifest_without_provider_code(tmp_path, runtime_factory):
+    bindings = _bindings(runtime_factory)
     config = HarborEnvironmentConfig(tool_providers=dict(zip(("a", "b"), bindings, strict=True)))
     task = lower_to_harbor(_specification(), PlainText(id="plain"), config, tmp_path / "task")
     exported = json.loads((task / "environment_config.json").read_text())

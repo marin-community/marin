@@ -3,8 +3,29 @@
 
 """Tool services composed into a trial environment."""
 
+import hashlib
+import json
 from collections.abc import Sequence
 from typing import Any, Protocol, runtime_checkable
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class ProviderIdentity(BaseModel):
+    """Immutable action interface, initial state, and implementation identity."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    action_interface: str = Field(min_length=1)
+    seed_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    provider_revision: str = Field(min_length=1)
+
+
+def tool_schema_sha256(definitions: Sequence[dict[str, Any]]) -> str:
+    """Hash the ordered OpenAI-compatible schemas in their canonical JSON form."""
+    return hashlib.sha256(
+        json.dumps(list(definitions), sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    ).hexdigest()
 
 
 @runtime_checkable
@@ -13,7 +34,9 @@ class ToolProvider(Protocol):
 
     async def native_tool_definitions(self) -> list[dict[str, Any]]: ...
 
-    async def dispatch_action(self, name: str, arguments: str, call_id: str) -> str: ...
+    async def dispatch_action(self, name: str, arguments: str, call_id: str) -> str:
+        """Execute one call and return its model-visible observation string."""
+        ...
 
 
 @runtime_checkable

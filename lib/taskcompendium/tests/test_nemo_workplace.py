@@ -144,9 +144,7 @@ async def test_workplace_service_has_no_workspace_access_or_network(tmp_path, pr
     binding = config.tool_providers["workplace"]
     provider = ContainerToolProvider(
         runtime=workplace_runtime,
-        action_interface=binding.action_interface,
-        seed_sha256=binding.seed_sha256,
-        provider_revision=binding.provider_revision,
+        identity=binding.identity,
         tool_definitions=list(binding.tool_definitions),
         trace_path=tmp_path / "service.jsonl",
     )

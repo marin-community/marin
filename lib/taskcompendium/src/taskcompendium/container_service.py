@@ -4,7 +4,6 @@
 """Run one isolated JSON-lines tool service for the duration of a trial."""
 
 import asyncio
-import hashlib
 import json
 import subprocess
 import uuid
@@ -12,6 +11,8 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
+
+from taskcompendium.tool_provider import ProviderIdentity, tool_schema_sha256
 
 MAX_PROTOCOL_BYTES = 16 * 1024 * 1024
 MAX_DIAGNOSTIC_BYTES = 64 * 1024
@@ -36,7 +37,7 @@ IMAGE_LABELS = {
 
 
 def validate_container_image(
-    runtime: ContainerService, identity: dict[str, str], definitions: list[dict[str, Any]]
+    runtime: ContainerService, identity: ProviderIdentity, definitions: list[dict[str, Any]]
 ) -> None:
     """Check a previously staged image's immutable metadata without pulling it."""
     inspection = subprocess.run(
@@ -50,10 +51,7 @@ def validate_container_image(
     if not isinstance(images, list) or len(images) != 1:
         raise ValueError("Expected one staged provider image")
     labels = images[0]["Config"]["Labels"] or {}
-    digest = hashlib.sha256(
-        json.dumps(definitions, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
-    ).hexdigest()
-    expected = {**identity, "tools_sha256": digest}
+    expected = {**identity.model_dump(), "tools_sha256": tool_schema_sha256(definitions)}
     if any(labels.get(IMAGE_LABELS[key]) != value for key, value in expected.items()):
         raise ValueError("Provider image metadata differs from its declared identity or tool schemas")
 
@@ -69,18 +67,12 @@ class ContainerToolProvider:
         self,
         *,
         runtime: ContainerService,
-        action_interface: str,
-        seed_sha256: str,
-        provider_revision: str,
+        identity: ProviderIdentity,
         tool_definitions: list[dict[str, Any]],
         trace_path: Path | None = None,
     ) -> None:
         self.runtime = runtime
-        self.identity = {
-            "action_interface": action_interface,
-            "seed_sha256": seed_sha256,
-            "provider_revision": provider_revision,
-        }
+        self.identity = identity
         self.tool_definitions = tool_definitions
         self.trace_path = trace_path
         self.container_name = f"taskcompendium-provider-{uuid.uuid4().hex}"
@@ -139,8 +131,10 @@ class ContainerToolProvider:
             limit=MAX_PROTOCOL_BYTES + 1,
         )
         self.stderr_task = asyncio.create_task(self._read_diagnostics())
-        response = await self._request("initialize", self.identity)
-        if not isinstance(response, dict) or any(response.get(key) != value for key, value in self.identity.items()):
+        response = await self._request("initialize", self.identity.model_dump())
+        if not isinstance(response, dict) or any(
+            response.get(key) != value for key, value in self.identity.model_dump().items()
+        ):
             raise ProviderProtocolError("Container provider identity differs from the selected binding")
         if response.get("tools") != self.tool_definitions:
             raise ProviderProtocolError("Container provider schemas differ from the selected binding")
