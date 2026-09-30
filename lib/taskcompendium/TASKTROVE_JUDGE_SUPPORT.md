@@ -8,7 +8,7 @@ TaskCompendium schema 0.13 represents the model-visible prompt as `ConversationI
 
 `tasktrove-verify` defines `Mode.JUDGE` and `JudgeSpec`. Its `reference` rubric accepts only 0, 0.5, or 1 and has an optional normalized exact-match gate. Its `checklist` rubric asks one yes/no question per criterion, accepts only 0 or 1, and returns the fraction passed. Both can run IFEval constraints first. It uses temperature-zero OpenAI-compatible chat calls, retries once when a response has no valid rubric score, and disables SDK retries so the runner request budget is exact. A nonempty source `JudgeSpec.model` must match the selected judge model only when a remote judge call is needed; an exact-gate hit completes locally without contacting or requiring that model.
 
-TaskCompendium exposes a `judge` optional extra that installs `tasktrove-verify[judge]`. The `openai` package is imported only when grading a judge task. PR [#9567](https://github.com/marin-community/marin/pull/9567) remains open and extracts `verifyit`; this change does not alter that dependency or migrate TaskCompendium independently.
+TaskCompendium exposes a `judge` optional extra that installs `tasktrove-verify[judge]`. The `openai` package is imported only when grading a judge task. This adapter uses the existing TaskTrove scorer and does not add a separate verifier implementation.
 
 The shared judge mode now raises an infrastructure error after bounded retries when a response has no valid rubric score. Checklist grading fails as a whole if any criterion has no valid score. Provider, timeout, quota, transport, or deterministic-constraint checker failures also return no reward; a checker crash cannot be treated as a failed candidate answer. Successful and failed grades retain judge prompts and every judge response attempt in verifier evidence, without credentials.
 
@@ -32,7 +32,7 @@ The source `JudgeSpec.model` acts as a private model requirement for remote grad
 | `context` | Optional inline private context string | Converter reads the source file and embeds its text; shared reference and checklist prompts receive it; never add it to `ConversationInput`. |
 | `constraints` | Existing `Constraint` values | Resolve with the shared IFEval check registry before judging. |
 | `rubric` | Existing `reference` / `checklist` enum | Reject unsupported values during conversion. |
-| `model` | Private requested-model value | Require a match with the runtime-selected model. |
+| `model` | Private requested-model value | Require a match with the runtime-selected model when a remote judge call is needed. |
 | `exact_gate` | `exact_gate: bool` | Run the deterministic gate before calling the judge. |
 | `request_timeout` | `request_timeout: float` | Clamp to the runner's timeout limit. |
 | `output` | Not source-controlled in TaskCompendium | Use a temporary answer file populated from the extracted submission. |
@@ -67,6 +67,6 @@ Retain the task digest, source pin and row, converter revision, public projectio
 
 Five synthetic TaskCompendium tasks have run through Harbor replay against a local scripted endpoint: exact reference gating, semantic reference grading, checklist averaging, malformed-response retries, and request-budget exhaustion. Malformed-response and budget failures produced `infra_error`, no reward, and retained judge evidence. The two source-backed converter trials above establish bounded examples, not source-batch coverage. Neither the synthetic tests nor these source trials test HTTP 429/5xx, transport failure, deterministic constraints, nonempty private context, or the release public projection. The internal S3 source batch and alpha projection therefore remain unvalidated.
 
-## Remaining decisions
+## Runtime policy
 
-Before merging support, maintainers need to define the production judge endpoint/model allowlist and request budget. Conversion coverage remains unknown until the pinned S3 manifest and representative archives are audited. Each included source batch must pass the source-pinned Harbor acceptance gate above.
+Production deployment needs an explicit endpoint/model allowlist and request budget. Conversion coverage remains unknown until the pinned S3 manifest and representative archives are audited. Each included source batch must pass the source-pinned Harbor acceptance gate above.

@@ -191,7 +191,7 @@ async def test_malformed_reply_retry_counts_against_request_budget(tmp_path, jud
 
 
 async def test_constraint_checker_exception_is_infra_error_without_reward(tmp_path, judge_endpoint, monkeypatch):
-    def broken_check(candidate: str, params: dict):
+    def broken_check(_candidate: str, _params: dict):
         raise OSError("checker unavailable")
 
     monkeypatch.setattr(grade_judge, "resolve_checks", lambda constraints: [(constraints[0], broken_check)])

@@ -254,7 +254,7 @@ def test_constraints_that_pass_hand_over_to_the_judge(tmp_path, fake_judge):
 
 
 def test_constraint_exception_is_infrastructure_error_not_zero_reward(tmp_path, fake_judge, monkeypatch):
-    def broken_check(candidate: str, params: dict):
+    def broken_check(_candidate: str, _params: dict):
         raise OSError("checker storage unavailable")
 
     spec = _checklist(constraints=(Constraint("broken", {}),))
