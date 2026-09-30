@@ -154,3 +154,18 @@ training-semantics changes: which tokens drop, capacity or chunking that alters 
 **HBM budget order** (headroom ~46 GiB at MEM_FRACTION 0.81, ~35 at 0.75; A's analysis): H-A4 ~10 GiB
 (~50 ms/GiB), then B's saved latent MoE output ~19 GiB for a SonicMoE-style backward (~25-30 ms/GiB,
 unmeasured), then H-A1 on-device optimizer state 34.6 GiB (~8 ms/GiB) only if room remains.
+
+## M30-005 Same-code noise and in-run drift (2026-09-30)
+
+`gcab-control-20260930` vs `gcab-freeze-20260930` (gc.freeze is host-side, so the step is same-code for MFU):
+360-step medians 28.312 vs 28.342; 55-step block medians agree within 0.02-0.05 (28.525/28.541,
+28.470/28.503, 28.395/28.409, 28.290/28.336, 28.177/28.203, 28.117/28.151). Both drift down ~0.4 MFU over
+330 steps. Consequences for the protocol: (1) compare arms only over matched step windows; the screening
+window (restore +5..+59) reads ~0.2 above a long-run median, so main reads ~28.5 there; (2) run-to-run sd
+in a matched window is ~0.03, so the 0.15 keep bar is conservative; (3) the goal claim needs a long
+confirmation run (>= 200 steps) whose median is >= 30%, not an early-window screen.
+
+B's SonicMoE-style backward (M30B-009, approved, building): dS = rowsum(dh ⊙ h)/w on the expert side and
+the latent MoE output saved on device (18.0 GiB), so remat drops the recomputed down GEMM (0.279 s),
+return all-to-all exposure (0.18 s) and combine gather-sum; priced -0.40 to -0.50 s/step. Forward, dx,
+dW13, dW2 unchanged; dS changes at rounding level. Chunk barrier re-tied from `returned` to h.
