@@ -54,11 +54,11 @@ For example, a task asking “What is 7 + 5?” can have `answer_type=number` an
 
 ### Text answers
 
-A text task uses `answer_type=text`. Plain text, a JSON object with an `answer` string, and `submit_answer(answer: string)` can carry its answer. `exact_answer` compares normalized text; `mcq_answer` grades a single option letter. The same verifier grades the extracted answer across these conventions.
+A text task uses `answer_type=text`. Plain text, a JSON object with an `answer` string, and `submit_answer(answer: string)` can carry its answer. The `exact` verifier compares normalized text; `mcq` grades a single option letter. The same verifier grades the extracted answer across these conventions.
 
 ### Numeric answers
 
-A numeric task uses `answer_type=number` and can use the same submission conventions as text. `numeric_answer` parses the extracted string as a number and applies the explicitly configured absolute and relative tolerances. For example, both `12` and `12.0` can satisfy an expected value of `12.0`.
+A numeric task uses `answer_type=number` and can use the same submission conventions as text. The `numeric` verifier parses the extracted string as a number and applies the explicitly configured absolute and relative tolerances. For example, both `12` and `12.0` can satisfy an expected value of `12.0`.
 
 ### Final function calls
 
@@ -82,7 +82,7 @@ Tool providers expose callable actions. `environment_requirements` separately de
 
 ### TaskTrove MCQA
 
-The TaskTrove MCQA importer reads archives from a cleaned release. See the [published TaskTrove Clean dataset](https://huggingface.co/datasets/open-athena/task-trove). Its caller passes the archive bytes, upstream subset, archive path, and release provenance to `read_archive`. The reader checks the subset and path against the archive manifest; the release URI and revision are caller-supplied provenance. The importer checks the source answer-line template before replacing it with a one-letter instruction. Its text answer works with plain and JSON submission conventions. The private `mcq_answer` verifier stores the expected letter and option count. Any author can use that verifier; it currently calls the shared `tasktrove-verify` MCQ scorer after extracting the submission. This importer supports only MCQ mode. Executable TaskTrove modes require their own runtime contract.
+The TaskTrove MCQA importer reads archives from a cleaned release. See the [published TaskTrove Clean dataset](https://huggingface.co/datasets/open-athena/task-trove). Its caller passes the archive bytes, upstream subset, archive path, and release provenance to `read_archive`. The reader checks the subset and path against the archive manifest; the release URI and revision are caller-supplied provenance. The importer checks the source answer-line template before replacing it with a one-letter instruction. Its text answer works with plain and JSON submission conventions. The private `mcq` verifier stores the expected letter and option count. Any author can use that verifier; it currently calls the shared `tasktrove-verify` MCQ scorer after extracting the submission. This importer supports only MCQ mode. Executable TaskTrove modes require their own runtime contract.
 
 ### NeMo predicted function calls
 
@@ -96,7 +96,7 @@ Each spec selects a private verifier and stores its configuration in `VerifierSp
 
 Install `taskcompendium[math]` for symbolic grading. `mathematical_answer(expected, math_type)` from `taskcompendium.verifiers.mathematical` preserves a string reference and a `tasktrove_verify.spec.MathType`. It uses the shared mathematical scorer: the last boxed expression or last nonempty line is compared symbolically; lists preserve order, and sets and intervals support relation comparison. Invalid references raise configuration errors; malformed candidates score zero. Use `answer_type=number` for a single finite real numeric expression and `answer_type=text` for general symbolic content. Both types support plain, JSON, and answer-call submission. Importers can use `tasktrove_verify.modes.grade_math.is_finite_real_scalar(MathSpec(...))` to establish numeric semantics without converting the reference to a float. Classification disables syntax repair and rejects references whose parsed number, real, or finite properties are unknown; a scalar label alone does not exclude coordinate pairs.
 
-The current kinds are `exact_answer` for normalized text, `numeric_answer` for numbers with explicit absolute and relative tolerances, `mathematical_answer` for symbolic expressions, `mcq_answer` for a single option letter, `predicted_action` for final function calls, and `structured_exact` for type-strict JSON values. Structured matching ignores object-key order and preserves array order. The expected answer and grading settings stay out of the model-visible instruction.
+The serialized kinds are `exact` for normalized text, `numeric` for numbers with explicit absolute and relative tolerances, `math` for symbolic expressions, `mcq` for a single option letter, `predicted_action` for final function calls, and `structured_exact` for type-strict JSON values. Structured matching ignores object-key order and preserves array order. Schema 0.12 uses these strings to match the corresponding tasktrove_verify/verifyit modes; former answer-suffixed kind strings are rejected. Python enum members and constructor names remain `EXACT_ANSWER`/`exact_answer`, `NUMERIC_ANSWER`/`numeric_answer`, `MCQ_ANSWER`/`multiple_choice_answer`, and `MATHEMATICAL_ANSWER`/`mathematical_answer`. The expected answer and grading settings stay out of the model-visible instruction.
 
 ## What is a lowering?
 

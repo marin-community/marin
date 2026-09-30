@@ -11,7 +11,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
-SCHEMA_VERSION = "0.11"
+SCHEMA_VERSION = "0.12"
 SHA256_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
 
 
@@ -28,12 +28,12 @@ class AnswerType(StrEnum):
 class VerifierKind(StrEnum):
     """The registered grader used to check a submission."""
 
-    EXACT_ANSWER = "exact_answer"
+    EXACT_ANSWER = "exact"
     STRUCTURED_EXACT = "structured_exact"
     PREDICTED_ACTION = "predicted_action"
-    NUMERIC_ANSWER = "numeric_answer"
-    MATHEMATICAL_ANSWER = "mathematical_answer"
-    MCQ_ANSWER = "mcq_answer"
+    NUMERIC_ANSWER = "numeric"
+    MATHEMATICAL_ANSWER = "math"
+    MCQ_ANSWER = "mcq"
 
 
 class Source(BaseModel):
