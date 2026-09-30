@@ -110,6 +110,9 @@ def _archive(
             "trainer@0:fp32_head": [-2.03, -3.03],
             "trainer@0:reread_replay": [-2.02, -3.02],
             "trainer@0:repeat_reread_replay": [-2.02, -3.02],
+            "trainer@0:reread_replay+stack": [-2.02, -3.03],
+            # Under the stack the batch layout moves the second token's score by 0.02.
+            "trainer@0:repeat_reread_replay+stack": [-2.02, -3.05],
             # Closer to the re-read than the kept stack on prompt p0 and farther on p1.
             "trainer@0:prompt_dependent": [-2.01, -3.01] if position < 2 else [-2.03, -3.03],
             "vllm.rescore@1": [-1.99, -2.99],
@@ -200,6 +203,8 @@ def test_report_recovers_same_weight_modes_paired_intervals_and_drift(tmp_path, 
     assert report["comparisons"]["trainer_floor"]["metrics"]["abs_p99"] == 0.0
     assert report["comparisons"]["trainer_determinism"]["metrics"]["byte_equal_fraction"] == 1.0
     assert report["comparisons"]["replay_layout_floor"]["metrics"]["abs_p99"] == 0.0
+    assert report["comparisons"]["reread_layout_floor"]["metrics"]["abs_mean"] == 0.0
+    assert report["comparisons"]["reread_layout_floor+stack"]["metrics"]["abs_mean"] == pytest.approx(0.01)
     assert report["comparisons"]["prompt_replay_effect"]["metrics"]["abs_p99"] == pytest.approx(0.03)
     assert report["paired_improvements"]["router_replay"]["abs_p99"]["ci95"][0] > 0
     assert report["paired_improvements"]["router_replay_filtered"]["abs_p99"]["ci95"][0] > 0

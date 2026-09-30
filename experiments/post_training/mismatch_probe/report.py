@@ -47,6 +47,7 @@ METRIC_TITLES = {
 KEEP_RULE_METRICS = ("abs_mean", "abs_p99", "k3")
 NATIVE_MODE = "native"
 REREAD_REPLAY_MODE = "reread_replay"
+REPEAT_REREAD_REPLAY_MODE = "repeat_reread_replay"
 REPLAY_MODE = "router_replay"
 BOOTSTRAP_DRAWS = 1000
 GENERATION_SCORING = f"{GENERATION_SCORER}@0"
@@ -219,6 +220,16 @@ def _comparison_definitions(scores: dict[str, dict[str, ScoreRow]]) -> dict[str,
     if prefill is not None:
         for mode in _update_zero_trainer_modes(scores):
             add(f"{mode}_vs_reread", _trainer_scoring(0, mode), prefill)
+    # A numerics stack's batch-layout floor: the trainer against itself on the re-read's routes, repeat layout
+    # (reversed order, larger micro-batches) against the native one, both under that stack.
+    for mode in _update_zero_trainer_modes(scores):
+        if mode == REPEAT_REREAD_REPLAY_MODE or mode.startswith(f"{REPEAT_REREAD_REPLAY_MODE}+"):
+            stack = mode.removeprefix(REPEAT_REREAD_REPLAY_MODE)
+            add(
+                f"reread_layout_floor{stack}",
+                _trainer_scoring(0, mode),
+                _trainer_scoring(0, f"{REREAD_REPLAY_MODE}{stack}"),
+            )
     add("reread_noise", RESCORE_AGAIN_SCORING, RESCORE_SCORING)
     add("reread_vs_frozen", RESCORE_SCORING, FROZEN_RESCORE_SCORING)
     updates = sorted({row.update for rows in scores.values() for row in rows.values() if row.update > 0})
