@@ -66,7 +66,7 @@ async def test_provider_state_uses_generic_type_strict_structured_grading(actual
 
 
 async def test_exact_answer_grades_string_provider_state():
-    task = _task("complete").model_copy(update={"verifier": exact_answer("complete")})
+    task = _task("complete").model_copy(update={"verifier": exact_answer(("complete",))})
     trace = ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content="Done.")))
 
     result = await grade_answer(
@@ -94,7 +94,7 @@ async def test_provider_state_failure_does_not_score_zero():
 
 
 async def test_invalid_agent_submission_uses_explicit_zero_reward_policy():
-    task = _task({}).model_copy(update={"answer_type": AnswerType.TEXT, "verifier": exact_answer("yes")})
+    task = _task({}).model_copy(update={"answer_type": AnswerType.TEXT, "verifier": exact_answer(("yes",))})
     trace = ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content='{"answer":')))
 
     result = await grade_answer(task, JsonAnswer(id="json"), GradingAttempt(trace, {}, object()))
