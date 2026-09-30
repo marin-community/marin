@@ -81,17 +81,3 @@ local model/runner/dependency overlays. Launch manifests record exact hashes in
 baseline evidence. These ignored artifacts are not a published reproduction
 package. Subsequent runner cleanup removed per-leaf finite-state diagnostics
 and per-step memory dumps; it has not been benchmarked again on hardware.
-
-## Review boundaries
-
-The small Muon expert-stack sharding correction and its numerical regression
-can be reviewed independently. The Hero stage adapter, runner, and parity tests
-form the Marin pipeline change. JAXPP memory-space rebinding and forward-host
-residual placement are separate dependency fixes; explicit startup preparation
-needs its own lifecycle API. Resolve these dependencies before presenting the
-65K command as a stock-install recipe.
-
-DualPipeV split-rematerialization, delayed-cotangent offload, and per-task waits
-remain experimental scratch overlays. They are not required by the validated
-1F1B recipe and should stay outside its initial PR. Follow the existing CP work
-rather than introducing another context-parallel implementation here.

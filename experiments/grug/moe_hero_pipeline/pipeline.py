@@ -136,7 +136,11 @@ def make_pipeline_mesh(
 
 
 class GrugMoePipelineStage(eqx.Module):
-    """The parameters and layer range owned by one pipeline stage."""
+    """The parameters and layer range owned by one pipeline stage.
+
+    Embedding fields are None except on the first stage; output and final-norm
+    fields are None except on the last stage. Every stage owns its block range.
+    """
 
     token_embed: jax.Array | None
     embed_norm: RMSNorm | None
@@ -577,6 +581,8 @@ def make_automatic_pipeline_step(
 
 @dataclass(frozen=True)
 class ParkedPipelineState:
+    """Host-resident state with the original shardings needed to restore it."""
+
     state: GrugMoeAutomaticPipelineState
     original_shardings: tuple[jaxpp.MpmdSharding, ...]
     local_device_bytes: int
@@ -587,10 +593,11 @@ def _copy_array_to_host(array: jax.Array) -> jax.Array:
 
 
 def park_pipeline_state(state: GrugMoeAutomaticPipelineState) -> ParkedPipelineState:
-    """Copy device state to host, then invalidate all original local device buffers.
+    """Free device memory for disposable warmup by parking real state on host.
 
-    Callers must discard aliases of the original state and restore the returned
-    state before training. Already-host-resident optimizer arrays remain intact.
+    Device buffers are invalidated after their host copies complete. Callers must
+    discard aliases of the original state and restore the returned state before
+    training. Already-host-resident optimizer arrays remain intact.
     """
     pp, _ = _jaxpp_modules()
     originals, tree = jax.tree.flatten(state)
