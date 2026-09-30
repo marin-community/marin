@@ -110,3 +110,28 @@ A+B+C) is superseded; the branch was force-pushed.
 - GPU gates (GB200x4, hero env): `m30c-stackgate-03` (sequential), `m30c-stackgate-pipe-01` (pipelined):
   B's module gate plus `stack/model_smoke.py`, a 4-layer EP4 hero model with the ragged backend, carry
   offload (saving the routed output), #9481's model commits, and the fused norm on and off.
+
+### Gates and trace arms (2026-09-30 14:36 PT)
+
+Both lineages gate on GB200x4 with the hero env (`m30c-stackgate-03` sequential, `m30c-stackgate-pipe-01`
+pipelined): routing gate 0 failures over 6 cases (out, drops, dx, dW13, dW2 bitwise equal to main; d_weights
+at ~1 bf16 ulp, max 0.4%), QuACK contract passes, pytest 88 passed with the same 3 GPU-only failures as main.
+3-layer rematted scan (median step): main 339.0 / 340.6 ms, D 292.5 / 293.6, sequential stack module 289.9,
+pipelined stack module 296.0. The scan has no shared experts, so it cannot show the pipelining's benefit.
+Model smoke (4-layer EP4 hero model, ragged backend, carry offload saving the routed output, #9481 model
+commits): finite loss and gradients with the norm modules and with the fused norm; loss 7.657223 vs
+7.657212 (sequential) and 7.657224 vs 7.657212 (pipelined); temp 0.28 vs 0.26 GiB. The largest per-leaf
+relative gradient difference, fused vs modules, is ~6%, in the routed-MoE leaves (router, experts, latent
+projections). A bf16 CPU reproduction localizes it there; in f32 every leaf agrees within 1e-4. It is top-k
+routing flipping on near-ties after a rounding-level change in `mlp_in`, not a kernel error, so any
+forward-rounding change (the fused norm, the Triton-GEMM flag) moves the first-step loss at ~1e-6-1e-5
+relative and cannot reproduce 1.261413 exactly.
+
+Trace arms (program: stack HEAD + `--xla_gpu_enable_host_memory_offloading=true
+--xla_gpu_enable_triton_gemm=false` + `--gated-norm-implementation pallas_gpu`, remat VLOG
+`TF_CPP_MIN_LOG_LEVEL=0 TF_CPP_VMODULE=hlo_rematerialization=1`, seed 0, 180000-180060, profiled
+180021-180023, no --timeout), pipelined first:
+- `m30c-stackpipe-trace-01` (`/mwittmann/m30c-stackpipe-trace-01-coord`, port 33302) from
+  `research/mcwitt/mfu30-stack-pipelined` @ `7393a9ae26`.
+- `m30c-stackseq-trace-01` (`/mwittmann/m30c-stackseq-trace-01-coord`, port 33303) from
+  `research/mcwitt/mfu30-stack` @ `4ee7986fb4` (code identical to `8eff7b8ec4`).
