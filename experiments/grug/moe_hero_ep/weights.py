@@ -7,7 +7,7 @@ import hashlib
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any
+from typing import cast
 
 import equinox as eqx
 import jax
@@ -22,6 +22,7 @@ from experiments.grug.checkpointing import LEGACY_STATE_KEY, MASTER_PARAMS_KEY
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, Transformer, apply_qb_betas
 
 logger = logging.getLogger(__name__)
+PENDING_QB_BETAS_KEY = "pending_qb_betas"
 
 
 @dataclass(frozen=True)
@@ -53,7 +54,7 @@ def restore_weights(
     elif (checkpoint_path / "manifest.ocdbt").exists():
         # Probe known metadata keys inside the database. Filesystem directories cannot reveal this layout.
         kvstore = ts.KvStore.open({"driver": "ocdbt", "base": build_kvstore_spec(checkpoint)}).result()
-        wrapped = kvstore.read(f"{LEGACY_STATE_KEY}/pending_qb_betas/zarr.json").result().state == "value"
+        wrapped = kvstore.read(f"{LEGACY_STATE_KEY}/{PENDING_QB_BETAS_KEY}/zarr.json").result().state == "value"
         prefix = f"{LEGACY_STATE_KEY}/" if wrapped else ""
         master = kvstore.read(f"{prefix}{MASTER_PARAMS_KEY}/token_embed/zarr.json").result().state == "value"
     else:
@@ -63,9 +64,9 @@ def restore_weights(
         master = (checkpoint_path / f"{prefix}{MASTER_PARAMS_KEY}").exists()
     weights_key = MASTER_PARAMS_KEY if master else "params"
     logger.info("Restore checkpoint arrays: weights=%s, wrapped=%s", weights_key, wrapped)
-    state_template: dict[str, Any] = {
+    state_template: dict[str, Transformer | jax.ShapeDtypeStruct] = {
         weights_key: template,
-        "pending_qb_betas": jax.ShapeDtypeStruct((config.num_layers, config.num_experts), jnp.float32),
+        PENDING_QB_BETAS_KEY: jax.ShapeDtypeStruct((config.num_layers, config.num_experts), jnp.float32),
     }
     state = load_checkpoint(
         {LEGACY_STATE_KEY: state_template} if wrapped else state_template,
@@ -77,5 +78,5 @@ def restore_weights(
         state = state[LEGACY_STATE_KEY]
     jax.block_until_ready(state)
     logger.info("Checkpoint arrays ready; apply pending router bias")
-    pending = state["pending_qb_betas"]
-    return RestoredWeights(apply_qb_betas(state[weights_key], pending), weights_key, pending)
+    pending = cast(jax.Array, state[PENDING_QB_BETAS_KEY])
+    return RestoredWeights(apply_qb_betas(cast(Transformer, state[weights_key]), pending), weights_key, pending)

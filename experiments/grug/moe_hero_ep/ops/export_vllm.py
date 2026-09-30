@@ -10,7 +10,7 @@ import logging
 import re
 import shutil
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
@@ -54,6 +54,31 @@ class ExportConfig:
     replica_axis_size: int = 1
 
 
+@dataclass(frozen=True)
+class ShardSpec:
+    root: StoragePath
+    group: str
+    export_id: str
+    tensor_names: list[str]
+
+    @property
+    def path(self) -> StoragePath:
+        return self.root / f"model-{self.group}.safetensors"
+
+    @property
+    def progress_path(self) -> StoragePath:
+        return self.root / f".export-progress-{self.group}.json"
+
+
+@dataclass(frozen=True)
+class ShardRecord:
+    export_id: str
+    filename: str
+    bytes: int
+    sha256: str
+    tensor_names: list[str]
+
+
 def _sha256(path: StoragePath) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as source:
@@ -74,6 +99,7 @@ def _write_json(path: StoragePath, value: dict) -> None:
 
 
 def _writer_step[T](action: Callable[[], T]) -> T | None:
+    """Return the action result on process zero, None elsewhere; propagate writer failure to all ranks."""
     # Only the main thread enters collectives. A writer I/O error reaches every rank
     # before any rank can enter the next gather or skip a completed shard.
     error = None
@@ -91,45 +117,48 @@ def _writer_step[T](action: Callable[[], T]) -> T | None:
     return result
 
 
-def _split_experts(name: str, value: np.ndarray) -> dict[str, np.ndarray]:
+def _split_names(name: str, num_experts: int) -> list[str]:
     match = EXPERT_BANK.fullmatch(name)
     if match is None:
+        return [name]
+    return [f"{match[1]}.{i}.{match[2]}.weight" for i in range(num_experts)]
+
+
+def _split_experts(name: str, value: np.ndarray) -> dict[str, np.ndarray]:
+    if EXPERT_BANK.fullmatch(name) is None:
         return {name: value}
     if value.ndim != 3:
         raise ValueError(f"Expected a 3D routed expert bank: {name} {value.shape}")
-    return {f"{match[1]}.{i}.{match[2]}.weight": value[i] for i in range(value.shape[0])}
+    return dict(zip(_split_names(name, value.shape[0]), value, strict=True))
 
 
-def _completed_shard(root: StoragePath, group: str, export_id: str, names: list[str]) -> dict | None:
-    progress = root / f".export-progress-{group}.json"
-    if not progress.exists():
+def _completed_shard(spec: ShardSpec) -> ShardRecord | None:
+    if not spec.progress_path.exists():
         return None
-    record = json.loads(progress.read_text())
-    filename = f"model-{group}.safetensors"
-    if record["export_id"] != export_id or record["filename"] != filename or record["tensor_names"] != names:
-        raise ValueError(f"Shard identity changed: {progress}")
-    shard = root / filename
-    if not shard.exists() or shard.size() != record["bytes"] or _sha256(shard) != record["sha256"]:
-        raise ValueError(f"Shard integrity check failed: {shard}")
+    record = draccus.decode(ShardRecord, json.loads(spec.progress_path.read_text()))
+    if (
+        record.export_id != spec.export_id
+        or record.filename != spec.path.name
+        or record.tensor_names != spec.tensor_names
+    ):
+        raise ValueError(f"Shard identity changed: {spec.progress_path}")
+    if not spec.path.exists() or spec.path.size() != record.bytes or _sha256(spec.path) != record.sha256:
+        raise ValueError(f"Shard integrity check failed: {spec.path}")
     return record
 
 
-def _store_shard(
-    root: StoragePath, group: str, export_id: str, names: list[str], tensors: dict[str, np.ndarray], local_root: Path
-) -> dict:
-    if sorted(tensors) != names:
-        raise ValueError(f"Incomplete tensor mapping for {group}")
-    filename = f"model-{group}.safetensors"
-    local = local_root / filename
+def _store_shard(spec: ShardSpec, tensors: dict[str, np.ndarray], local_root: Path) -> ShardRecord:
+    if sorted(tensors) != spec.tensor_names:
+        raise ValueError(f"Incomplete tensor mapping for {spec.group}")
+    local = local_root / spec.path.name
     save_file(tensors, local, metadata={"format": "pt"})
     size, checksum = local.stat().st_size, _sha256(StoragePath(str(local)))
-    target = root / filename
     # An upload without progress is uncommitted and may be rewritten after interruption.
     # Committed shards were already verified by _completed_shard.
-    with local.open("rb") as source, target.open("wb") as destination:
+    with local.open("rb") as source, spec.path.open("wb") as destination:
         shutil.copyfileobj(source, destination, length=COPY_BLOCK_BYTES)
-    record = {"export_id": export_id, "filename": filename, "bytes": size, "sha256": checksum, "tensor_names": names}
-    _write_json(root / f".export-progress-{group}.json", record)
+    record = ShardRecord(spec.export_id, spec.path.name, size, checksum, spec.tensor_names)
+    _write_json(spec.progress_path, asdict(record))
     local.unlink()
     return record
 
@@ -138,7 +167,6 @@ def export(config: ExportConfig) -> None:
     """Write or resume an export; refuse any destination with a completion manifest.
 
     All JAX processes call this with the same config after distributed initialization.
-    Host staging holds one layer (or the global tensors) plus serialization buffers.
     A destination belongs to exactly one exporting gang at a time.
     """
     root = StoragePath(config.destination)
@@ -175,20 +203,15 @@ def export(config: ExportConfig) -> None:
             groups.setdefault(group, []).append(name)
 
         weight_map: dict[str, str] = {}
-        records: list[dict] = []
+        records: list[ShardRecord] = []
         payload_size = sum(x.size * x.dtype.itemsize for x in state_dict.values())
         with TemporaryDirectory(prefix="hero-export-") as directory:
             for group, source_names in groups.items():
                 expected_names = []
                 for name in source_names:
-                    match = EXPERT_BANK.fullmatch(name)
-                    expected_names.extend(
-                        [f"{match[1]}.{i}.{match[2]}.weight" for i in range(config.model.num_experts)]
-                        if match
-                        else [name]
-                    )
-                expected_names.sort()
-                completed = _writer_step(partial(_completed_shard, root, group, export_id, expected_names))
+                    expected_names.extend(_split_names(name, config.model.num_experts))
+                spec = ShardSpec(root, group, export_id, sorted(expected_names))
+                completed = _writer_step(partial(_completed_shard, spec))
                 reuse = multihost_utils.broadcast_one_to_all(np.asarray(completed is not None))
                 if not reuse:
                     tensors: dict[str, np.ndarray] = {}
@@ -200,15 +223,13 @@ def export(config: ExportConfig) -> None:
                         del replicated
                         multihost_utils.sync_global_devices(f"export-{group}-{name}")
 
-                    completed = _writer_step(
-                        partial(_store_shard, root, group, export_id, expected_names, tensors, Path(directory))
-                    )
+                    completed = _writer_step(partial(_store_shard, spec, tensors, Path(directory)))
                     del tensors
                     gc.collect()
                 if completed is not None:
                     records.append(completed)
-                    weight_map.update({name: completed["filename"] for name in expected_names})
-                    logger.info("%s %s", "Verified" if reuse else "Uploaded", completed["filename"])
+                    weight_map.update({name: completed.filename for name in spec.tensor_names})
+                    logger.info("%s %s", "Verified" if reuse else "Uploaded", completed.filename)
 
         def finish():
             _write_json(root / "config.json", hf_config)
@@ -225,8 +246,8 @@ def export(config: ExportConfig) -> None:
                     "pending_qb_rule": "applied once by restore_weights before BF16 conversion",
                     "pending_qb_betas_sha256": pending_hash,
                     "tensor_count": len(weight_map),
-                    "total_safetensors_bytes": sum(record["bytes"] for record in records),
-                    "shards": records,
+                    "total_safetensors_bytes": sum(record.bytes for record in records),
+                    "shards": [asdict(record) for record in records],
                     "mesh": dict(mesh.shape),
                     "process_count": jax.process_count(),
                 },
