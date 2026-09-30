@@ -99,19 +99,6 @@ class BrokenStateProvider(BetaProvider):
         raise RuntimeError("state unavailable")
 
 
-class HarborBackedProvider(CompositeToolEnvironment):
-    ACTION_INTERFACE = AlphaProvider.ACTION_INTERFACE
-    SEED_SHA256 = AlphaProvider.SEED_SHA256
-    PROVIDER_REVISION = AlphaProvider.PROVIDER_REVISION
-    TOOL_DEFINITIONS = AlphaProvider.TOOL_DEFINITIONS
-
-    async def native_tool_definitions(self) -> list[dict]:
-        return list(self.TOOL_DEFINITIONS)
-
-    async def dispatch_action(self, name: str, arguments: str, call_id: str) -> str:
-        return "{}"
-
-
 class ManagedProvider(AlphaProvider):
     ACTION_INTERFACE = "managed:v1"
     SEED_SHA256 = "f" * 64
@@ -186,27 +173,6 @@ def _specification(answer_type: AnswerType) -> TaskSpec:
         ),
         source=Source(dataset="test", revision="1", row="0", importer_revision="1"),
     )
-
-
-def test_harbor_environment_cannot_be_bound_as_tool_provider(tmp_path):
-    binding = ToolBinding(
-        action_interface=HarborBackedProvider.ACTION_INTERFACE,
-        seed_sha256=HarborBackedProvider.SEED_SHA256,
-        provider=f"python:{__name__}:HarborBackedProvider",
-        provider_revision=HarborBackedProvider.PROVIDER_REVISION,
-        tools=("increment_alpha",),
-        tools_sha256=_digest(HarborBackedProvider.TOOL_DEFINITIONS),
-    )
-    environment = HarborEnvironmentConfig(tool_providers={"alpha": binding, "beta": _binding(BetaProvider)})
-
-    with pytest.raises(ValueError, match="must not be a Harbor environment"):
-        lower_to_harbor(
-            _specification(AnswerType.TEXT),
-            PlainText(id="plain"),
-            environment,
-            tmp_path / "task",
-        )
-    assert not (tmp_path / "task").exists()
 
 
 def _call(name: str, call_id: str, arguments: str = "{}") -> dict:

@@ -5,7 +5,6 @@
 
 import hashlib
 import importlib
-import importlib.util
 import inspect
 import json
 import shutil
@@ -125,11 +124,6 @@ def selected_tool_definitions(definitions: Sequence[dict[str, Any]], tool_names:
 def validate_provider_surface(binding: ToolBinding, provider_source: Path | None = None) -> None:
     """Check provider identity and action schemas before an export or launch."""
     provider = provider_class(binding, provider_source)
-    # Providers are composed into a Harbor environment; they do not implement one.
-    if importlib.util.find_spec("harbor") is not None:
-        harbor_base = importlib.import_module("harbor.environments.base").BaseEnvironment
-        if issubclass(provider, harbor_base):
-            raise ValueError("A tool provider must not be a Harbor environment")
     for method in ("native_tool_definitions", "dispatch_action"):
         if not inspect.iscoroutinefunction(getattr(provider, method, None)):
             raise ValueError(f"Tool provider requires async {method}")
