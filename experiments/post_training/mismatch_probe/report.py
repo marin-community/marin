@@ -166,6 +166,9 @@ def _comparison_definitions(scores: dict[str, dict[str, ScoreRow]]) -> dict[str,
 
     add("implementation_mismatch", NATIVE_SCORING, GENERATION_SCORING)
     add("trainer_floor", _trainer_scoring(0, "repeat"), NATIVE_SCORING)
+    add("trainer_determinism", _trainer_scoring(0, "native_again"), NATIVE_SCORING)
+    add("replay_layout_floor", _trainer_scoring(0, "repeat_replay"), _trainer_scoring(0, "router_replay"))
+    add("prompt_replay_effect", _trainer_scoring(0, "router_replay"), _trainer_scoring(0, "router_replay_response"))
     for mode in _trainer_modes(scores):
         add(f"{mode}_vs_generation", _trainer_scoring(0, mode), GENERATION_SCORING)
     updates = sorted({row.update for rows in scores.values() for row in rows.values() if row.update > 0})

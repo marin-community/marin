@@ -87,7 +87,10 @@ def _archive(
             "vllm.rescore@0": [-2.0, -3.0],
             "trainer@0:native": [-2.1, -3.1],
             "trainer@0:repeat": [-2.1, -3.1],
+            "trainer@0:native_again": [-2.1, -3.1],
             "trainer@0:router_replay": [-2.02, -3.02],
+            "trainer@0:repeat_replay": [-2.02, -3.02],
+            "trainer@0:router_replay_response": [-2.05, -3.05],
             "trainer@0:router_replay_filtered": [-2.01, -3.01],
             "trainer@0:fp32_head": [-2.03, -3.03],
             "vllm.rescore@1": [-1.99, -2.99],
@@ -171,6 +174,9 @@ def test_report_recovers_same_weight_modes_paired_intervals_and_drift(tmp_path, 
     report = analyze_archive(str(root), bootstrap_draws=80)
     assert report["comparisons"]["implementation_mismatch"]["metrics"]["abs_p99"] > 0.09
     assert report["comparisons"]["trainer_floor"]["metrics"]["abs_p99"] == 0.0
+    assert report["comparisons"]["trainer_determinism"]["metrics"]["byte_equal_fraction"] == 1.0
+    assert report["comparisons"]["replay_layout_floor"]["metrics"]["abs_p99"] == 0.0
+    assert report["comparisons"]["prompt_replay_effect"]["metrics"]["abs_p99"] == pytest.approx(0.03)
     assert report["paired_improvements"]["router_replay"]["abs_p99"]["ci95"][0] > 0
     assert report["paired_improvements"]["router_replay_filtered"]["abs_p99"]["ci95"][0] > 0
     assert report["comparisons"]["fp32_head_vs_generation"]["metrics"]["abs_p99"] == pytest.approx(0.03)

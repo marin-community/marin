@@ -46,6 +46,8 @@ TINY_GRUG_POLICY = PolicySpec(
 
 WARMUP_UPDATES = 3
 REPLAY_MODES = ("router_replay", "router_replay_response", "router_replay_filtered")
+# Numerics campaign: determinism and batch-layout references, full and response-only replay.
+NUMERICS_MODES = ("native_again", "router_replay", "router_replay_response", "repeat_replay")
 
 
 @dataclass(frozen=True)

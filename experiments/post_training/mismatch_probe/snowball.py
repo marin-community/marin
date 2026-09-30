@@ -29,7 +29,7 @@ from mergedeep import merge
 
 from experiments.post_training.async_rl import GPUS_PER_NODE, SNOWBALL_RECIPE
 from experiments.post_training.curriculum_rl.launch import SNOWBALL_MODEL, SNOWBALL_POLICY, SNOWBALL_SFT_EXPORT_URI
-from experiments.post_training.mismatch_probe.launch import REPLAY_MODES, ProbeSettings, probe_block
+from experiments.post_training.mismatch_probe.launch import NUMERICS_MODES, REPLAY_MODES, ProbeSettings, probe_block
 
 TOKENIZER_REVISION = "a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2"
 HELDOUT_DATA_URI = (
@@ -59,7 +59,8 @@ def snowball_recipe(
     response_tokens: int,
 ) -> str:
     replay = campaign is Campaign.MISMATCH or routing is not Routing.NATIVE
-    probe = probe_block(settings, router_replay=replay, trainer_modes=REPLAY_MODES if replay else ())
+    modes = NUMERICS_MODES if campaign is Campaign.MISMATCH else REPLAY_MODES if replay else ()
+    probe = probe_block(settings, router_replay=replay, trainer_modes=modes)
     probe["generator"]["sampling_params"]["seed"] = settings.seed
     config = {
         "entrypoint": "standard",
