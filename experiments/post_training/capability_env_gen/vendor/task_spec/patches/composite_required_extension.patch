@@ -1,0 +1,38 @@
+--- a/src/taskcompendium/harbor/verifier.py
++++ b/src/taskcompendium/harbor/verifier.py
+@@ -73,7 +73,16 @@
+         root = self.task.paths.task_dir
+         spec = from_json((root / "specification.json").read_bytes())
+         renderings = renderings_from_json((root / "renderings.json").read_bytes())
+-        names = json.loads((root / "manifest.json").read_text())["step_names"]
++        manifest = json.loads((root / "manifest.json").read_text())
++        required_extensions = manifest.get("required_extensions", [])
++        if required_extensions:
++            identifiers = [
++                item.get("id") for item in required_extensions if isinstance(item, dict)
++            ]
++            raise RuntimeError(
++                "Unsupported mandatory task extension(s): " + ", ".join(identifiers)
++            )
++        names = manifest["step_names"]
+         step_index = names.index(self.step_name) if self.step_name is not None else 0
+         protocol = renderings[step_index]
+         source_state_verifier = spec.steps[step_index].verifier
+--- a/src/taskcompendium/harbor/runner.py
++++ b/src/taskcompendium/harbor/runner.py
+@@ -31,7 +31,14 @@
+     manifest = json.loads((task_dir / "manifest.json").read_text())
+     if manifest["harbor_revision"] != HARBOR_REVISION:
+         raise ValueError("Export manifest requires a different Harbor revision")
+-    specification = from_json((task_dir / "specification.json").read_bytes())
++    specification_path = task_dir / "specification.json"
++    if manifest.get("required_extensions"):
++        from capability_pipeline.composite_extension import (
++            resolve_runner_specification,
++        )
++
++        specification_path = resolve_runner_specification(task_dir, execution)
++    specification = from_json(specification_path.read_bytes())
+     if manifest["specification_sha256"] != specification_hash(specification):
+         raise ValueError("Export specification does not match its manifest hash")
+     renderings = renderings_from_json((task_dir / "renderings.json").read_bytes())

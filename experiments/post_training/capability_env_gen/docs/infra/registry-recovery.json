@@ -1,0 +1,266 @@
+{
+  "apiVersion": "v1",
+  "kind": "List",
+  "items": [
+    {
+      "apiVersion": "v1",
+      "data": {
+        "config.yml": "version: 0.1\nlog: {level: info}\nstorage:\n  s3:\n    region: auto\n    regionendpoint: https://cwobject.com\n    bucket: marin-us-east-02a\n    rootdirectory: /registry\n    v4auth: true\n    forcepathstyle: false\n    secure: true\n  delete: {enabled: true}\n  cache: {blobdescriptor: inmemory}\nauth:\n  htpasswd: {realm: envgen, path: /auth/htpasswd}\nhttp:\n  addr: 0.0.0.0:5000\n  debug: {addr: 0.0.0.0:5001}\nhealth:\n  storagedriver: {enabled: true, interval: 30s, threshold: 3}\n"
+      },
+      "kind": "ConfigMap",
+      "metadata": {
+        "annotations": {},
+        "name": "registry-config",
+        "namespace": "envreg"
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "annotations": {
+          "deployment.kubernetes.io/revision": "5"
+        },
+        "name": "registry",
+        "namespace": "envreg"
+      },
+      "spec": {
+        "progressDeadlineSeconds": 600,
+        "replicas": 1,
+        "revisionHistoryLimit": 10,
+        "selector": {
+          "matchLabels": {
+            "app": "registry"
+          }
+        },
+        "strategy": {
+          "rollingUpdate": {
+            "maxSurge": "25%",
+            "maxUnavailable": "25%"
+          },
+          "type": "RollingUpdate"
+        },
+        "template": {
+          "metadata": {
+            "annotations": {
+              "kubectl.kubernetes.io/restartedAt": "2026-09-19T00:10:37-07:00"
+            },
+            "labels": {
+              "app": "registry"
+            }
+          },
+          "spec": {
+            "containers": [
+              {
+                "env": [
+                  {
+                    "name": "REGISTRY_STORAGE",
+                    "value": "s3"
+                  },
+                  {
+                    "name": "REGISTRY_STORAGE_S3_REGION",
+                    "value": "auto"
+                  },
+                  {
+                    "name": "REGISTRY_STORAGE_S3_REGIONENDPOINT",
+                    "value": "https://cwobject.com"
+                  },
+                  {
+                    "name": "REGISTRY_STORAGE_S3_BUCKET",
+                    "value": "marin-us-east-02a"
+                  },
+                  {
+                    "name": "REGISTRY_STORAGE_S3_ROOTDIRECTORY",
+                    "value": "/registry"
+                  },
+                  {
+                    "name": "REGISTRY_STORAGE_S3_V4AUTH",
+                    "value": "true"
+                  },
+                  {
+                    "name": "REGISTRY_STORAGE_S3_FORCEPATHSTYLE",
+                    "value": "false"
+                  },
+                  {
+                    "name": "REGISTRY_STORAGE_DELETE_ENABLED",
+                    "value": "true"
+                  },
+                  {
+                    "name": "REGISTRY_AUTH",
+                    "value": "htpasswd"
+                  },
+                  {
+                    "name": "REGISTRY_AUTH_HTPASSWD_REALM",
+                    "value": "envgen"
+                  },
+                  {
+                    "name": "REGISTRY_AUTH_HTPASSWD_PATH",
+                    "value": "/auth/htpasswd"
+                  },
+                  {
+                    "name": "REGISTRY_HTTP_ADDR",
+                    "value": "0.0.0.0:5000"
+                  },
+                  {
+                    "name": "REGISTRY_STORAGE_S3_ACCESSKEY",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "key": "accesskey",
+                        "name": "cw-s3"
+                      }
+                    }
+                  },
+                  {
+                    "name": "REGISTRY_STORAGE_S3_SECRETKEY",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "key": "secretkey",
+                        "name": "cw-s3"
+                      }
+                    }
+                  },
+                  {
+                    "name": "REGISTRY_HTTP_DEBUG_ADDR",
+                    "value": "0.0.0.0:5001"
+                  },
+                  {
+                    "name": "REGISTRY_LOG_LEVEL",
+                    "value": "debug"
+                  }
+                ],
+                "image": "registry:3.0.0",
+                "imagePullPolicy": "IfNotPresent",
+                "name": "registry",
+                "ports": [
+                  {
+                    "containerPort": 5000,
+                    "protocol": "TCP"
+                  }
+                ],
+                "resources": {
+                  "limits": {
+                    "cpu": "4",
+                    "memory": "8Gi"
+                  },
+                  "requests": {
+                    "cpu": "1",
+                    "memory": "2Gi"
+                  }
+                },
+                "terminationMessagePath": "/dev/termination-log",
+                "terminationMessagePolicy": "File",
+                "volumeMounts": [
+                  {
+                    "mountPath": "/auth",
+                    "name": "auth",
+                    "readOnly": true
+                  },
+                  {
+                    "mountPath": "/etc/docker/registry",
+                    "name": "cfg",
+                    "readOnly": true
+                  }
+                ]
+              }
+            ],
+            "dnsPolicy": "ClusterFirst",
+            "restartPolicy": "Always",
+            "schedulerName": "default-scheduler",
+            "securityContext": {},
+            "terminationGracePeriodSeconds": 30,
+            "volumes": [
+              {
+                "name": "auth",
+                "secret": {
+                  "defaultMode": 420,
+                  "items": [
+                    {
+                      "key": "htpasswd",
+                      "path": "htpasswd"
+                    }
+                  ],
+                  "secretName": "registry-htpasswd"
+                }
+              },
+              {
+                "configMap": {
+                  "defaultMode": 420,
+                  "name": "registry-config"
+                },
+                "name": "cfg"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "annotations": {},
+        "name": "registry",
+        "namespace": "envreg"
+      },
+      "spec": {
+        "internalTrafficPolicy": "Cluster",
+        "ports": [
+          {
+            "port": 5000,
+            "protocol": "TCP",
+            "targetPort": 5000
+          }
+        ],
+        "selector": {
+          "app": "registry"
+        },
+        "sessionAffinity": "None",
+        "type": "ClusterIP"
+      }
+    },
+    {
+      "apiVersion": "networking.k8s.io/v1",
+      "kind": "Ingress",
+      "metadata": {
+        "annotations": {
+          "cert-manager.io/cluster-issuer": "letsencrypt-http01-prod",
+          "traefik.ingress.kubernetes.io/router.entrypoints": "websecure"
+        },
+        "name": "registry",
+        "namespace": "envreg"
+      },
+      "spec": {
+        "ingressClassName": "traefik",
+        "rules": [
+          {
+            "host": "envreg.208261-marin-gpu.coreweave.app",
+            "http": {
+              "paths": [
+                {
+                  "backend": {
+                    "service": {
+                      "name": "registry",
+                      "port": {
+                        "number": 5000
+                      }
+                    }
+                  },
+                  "path": "/",
+                  "pathType": "Prefix"
+                }
+              ]
+            }
+          }
+        ],
+        "tls": [
+          {
+            "hosts": [
+              "envreg.208261-marin-gpu.coreweave.app"
+            ],
+            "secretName": "registry-tls"
+          }
+        ]
+      }
+    }
+  ]
+}

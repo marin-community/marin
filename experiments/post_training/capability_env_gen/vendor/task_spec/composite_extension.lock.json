@@ -1,0 +1,24 @@
+{
+  "schema_version": "taskcompendium-composite-extension-overlay-v1",
+  "base_revision": "dc6b501c8604bcd2e3c20c1e9947679845fdfef8",
+  "files": {
+    "src/taskcompendium/harbor/verifier.py": {
+      "base_sha256": "208ef5d5e99adc91aec5fce624c280e96401c59a8c4c5a02c6d26735de0fd657",
+      "patched_sha256": "cd770d4a5ec2ccfc882de6fce6433095faf6515b8cbe9ad36b51afd7e4470128"
+    },
+    "src/taskcompendium/harbor/runner.py": {
+      "base_sha256": "f7e14c819644469b86929c2770e4e3f02237fda6882f88f48cc0342ddc99ca9d",
+      "patched_sha256": "c9540cfde9fae294d9de98229ca97a564ef6b36a29f16906b271b07bc7c4192a"
+    },
+    "src/taskcompendium/lowering.py": {
+      "base_sha256": "86141beaf8a1c5113f504a3cdf71921f004b5040e4cf6d8d9bfb49e5973af6ca",
+      "patched_sha256": "9a5212468b1376174166556be2a4d838e0e35329a89bb4a9da196190af0b553f"
+    }
+  },
+  "file": "src/taskcompendium/harbor/verifier.py",
+  "base_sha256": "208ef5d5e99adc91aec5fce624c280e96401c59a8c4c5a02c6d26735de0fd657",
+  "patched_sha256": "cd770d4a5ec2ccfc882de6fce6433095faf6515b8cbe9ad36b51afd7e4470128",
+  "extension_id": "taskcompendium-composite-verifier-v1",
+  "patch": "vendor/task_spec/patches/composite_required_extension.patch",
+  "patch_sha256": "c7223d7bfb417c5f4d04c5b14d95c3bc94a82af61d98910f320006d9a30e85eb"
+}

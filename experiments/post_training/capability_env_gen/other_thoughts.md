@@ -1,0 +1,3 @@
+# Running log of random thoughts that come to mind after the original pipeline task was started
+* 6:28PM Sep 18: Rich/multi-step tasks would be cool--both ones that dynamically generate extra stages with a simulated user and more static ones. We should test this after a more basic POC though
+* 12:11AM Sep 19: One type of half-LLM-as-judge verifier is fixed tests that mutate. The task (to avoid overspecifying) asks the agent to produce code that does x (instead of "with y interface")--then a small LLM rewrites the existing tests with the same logic but probing the actually implemented interface by the agent

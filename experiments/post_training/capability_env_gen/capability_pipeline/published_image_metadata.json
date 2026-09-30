@@ -1,0 +1,130 @@
+{
+  "canonical_encoding": "RFC8259 sorted compact UTF-8",
+  "images": {
+    "envreg.208261-marin-gpu.coreweave.app/capability-env-gen/c32-geometry-topology-repair-candidate@sha256:dcc31498e37351639cd2eaa89910388fb2f8cd5ccc0e97d272cdbfa655b08d1b": {
+      "config": {
+        "architecture": "amd64",
+        "config": {
+          "ArgsEscaped": true,
+          "Cmd": null,
+          "Entrypoint": [
+            "/opt/task/entrypoint.sh"
+          ],
+          "Env": [
+            "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/lib/postgresql/16/bin",
+            "GOSU_VERSION=1.17",
+            "LANG=en_US.utf8",
+            "PG_MAJOR=16",
+            "PG_VERSION=16.4-1.pgdg110+2",
+            "PGDATA=/var/lib/postgresql/data",
+            "POSTGIS_MAJOR=3",
+            "POSTGIS_VERSION=3.4.3+dfsg-2.pgdg110+1",
+            "POSTGRES_USER=storm",
+            "POSTGRES_PASSWORD=storm",
+            "POSTGRES_DB=storm"
+          ],
+          "ExposedPorts": {
+            "5432/tcp": {}
+          },
+          "Labels": {
+            "maintainer": "PostGIS Project - https://postgis.net",
+            "org.opencontainers.image.description": "PostGIS 3.4.3+dfsg-2.pgdg110+1 spatial database extension with PostgreSQL 16 bullseye",
+            "org.opencontainers.image.source": "https://github.com/postgis/docker-postgis"
+          },
+          "StopSignal": "SIGINT",
+          "User": "",
+          "Volumes": {
+            "/var/lib/postgresql/data": {}
+          },
+          "WorkingDir": ""
+        },
+        "os": "linux",
+        "rootfs": {
+          "diff_ids": [
+            "sha256:34d52215556e1bd6ef276f4902613a47172be7c5e4d644781d7bad9ecbe98075"
+          ],
+          "type": "layers"
+        }
+      },
+      "manifest": {
+        "config": {
+          "digest": "sha256:5ae72585bdab51873d1a96faa017db4307acb32d9fce2b7696f2b9a42d04ff15",
+          "mediaType": "application/vnd.oci.image.config.v1+json",
+          "size": 969
+        },
+        "layers": [
+          {
+            "digest": "sha256:68541359a6eea67ed0ea7bf8bbaaf1d6f53cd3e07e5c109745f8dbfdfca8eefd",
+            "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+            "size": 222256130
+          }
+        ],
+        "mediaType": "application/vnd.oci.image.manifest.v1+json",
+        "schemaVersion": 2
+      }
+    },
+    "envreg.208261-marin-gpu.coreweave.app/capability-env-gen/c32-geometry-topology-repair-verifier@sha256:25cda6cf8b745cbc02614069ee165e9af4816f672ffae7b41ed3d640c707ce29": {
+      "config": {
+        "architecture": "amd64",
+        "config": {
+          "ArgsEscaped": true,
+          "Cmd": null,
+          "Entrypoint": [
+            "/opt/verifier/entrypoint.sh"
+          ],
+          "Env": [
+            "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/lib/postgresql/16/bin",
+            "GOSU_VERSION=1.17",
+            "LANG=en_US.utf8",
+            "PG_MAJOR=16",
+            "PG_VERSION=16.4-1.pgdg110+2",
+            "PGDATA=/var/lib/postgresql/data",
+            "POSTGIS_MAJOR=3",
+            "POSTGIS_VERSION=3.4.3+dfsg-2.pgdg110+1",
+            "POSTGRES_USER=storm",
+            "POSTGRES_PASSWORD=storm",
+            "POSTGRES_DB=storm"
+          ],
+          "ExposedPorts": {
+            "5432/tcp": {}
+          },
+          "Labels": {
+            "maintainer": "PostGIS Project - https://postgis.net",
+            "org.opencontainers.image.description": "PostGIS 3.4.3+dfsg-2.pgdg110+1 spatial database extension with PostgreSQL 16 bullseye",
+            "org.opencontainers.image.source": "https://github.com/postgis/docker-postgis"
+          },
+          "StopSignal": "SIGINT",
+          "User": "",
+          "Volumes": {
+            "/var/lib/postgresql/data": {}
+          },
+          "WorkingDir": ""
+        },
+        "os": "linux",
+        "rootfs": {
+          "diff_ids": [
+            "sha256:55674e7c390d2b1680c740741756471ae38107f6b31124aaad031888c8a011e6"
+          ],
+          "type": "layers"
+        }
+      },
+      "manifest": {
+        "config": {
+          "digest": "sha256:23c47d1e66c8df87e0f6ea59c24e9419fa2dc2ecd52ede15d9649fd48331de54",
+          "mediaType": "application/vnd.oci.image.config.v1+json",
+          "size": 973
+        },
+        "layers": [
+          {
+            "digest": "sha256:39e1ef7bd86b7c3198445d2b9fecacd1b85d49f0164ca0a4ced8302bed9b478c",
+            "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+            "size": 359879809
+          }
+        ],
+        "mediaType": "application/vnd.oci.image.manifest.v1+json",
+        "schemaVersion": 2
+      }
+    }
+  },
+  "schema_version": "capability-published-image-runtime-metadata-v1"
+}

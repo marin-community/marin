@@ -1,0 +1,148 @@
+# Capability image publisher: single-replica Deployment in envreg (cw-us-east-02a).
+# Rendered by `publisher_kit.py render-deployment` (string.Template; `$$` is a
+# literal dollar). Never apply this file raw. Contains no secret values: the
+# registry credential and object-store keys are Secret references only.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: capability-image-publisher
+  namespace: envreg
+  labels:
+    app.kubernetes.io/name: capability-image-publisher
+    app.kubernetes.io/part-of: capability-env-gen
+spec:
+  replicas: 1
+  # Recreate: never two publishers at once (a rolling surge would overlap).
+  strategy:
+    type: Recreate
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: capability-image-publisher
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: capability-image-publisher
+        app.kubernetes.io/part-of: capability-env-gen
+      annotations:
+        capability-env-gen/source-sha256: "${SOURCE_SHA256}"
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      nodeSelector:
+        kubernetes.io/arch: amd64
+      terminationGracePeriodSeconds: 120
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+        - name: work
+          emptyDir:
+            sizeLimit: 64Gi
+        - name: private-credentials
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+        - name: registry-credentials
+          secret:
+            secretName: capability-registry-publisher
+            defaultMode: 0440
+            items:
+              - key: credentials.json
+                path: credentials.json
+      initContainers:
+        # Fetch the sha-pinned publisher source. It is verified here and again
+        # (then extracted) by the publisher container; nothing runs unless the
+        # archive matches the digest rendered into this pod template.
+        - name: fetch-pinned-source
+          image: "${AWS_CLI_IMAGE}"
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              mkdir -p /work/home
+              rm -f /work/source.tar.gz
+              aws configure set default.s3.addressing_style virtual
+              aws --endpoint-url https://cwobject.com s3 cp "${SOURCE_URI}" /work/source.tar.gz --only-show-errors
+              printf '%s  %s\n' "${SOURCE_SHA256}" /work/source.tar.gz | sha256sum -c -
+          env:
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom: {secretKeyRef: {name: "${S3_SECRET}", key: accesskey}}
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom: {secretKeyRef: {name: "${S3_SECRET}", key: secretkey}}
+            - {name: AWS_DEFAULT_REGION, value: auto}
+            - {name: HOME, value: /work/home}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 1Gi}
+          volumeMounts:
+            - {name: work, mountPath: /work}
+      containers:
+        - name: publisher
+          image: "${PYTHON_IMAGE}"
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              rm -rf /work/deps /work/tmp /work/packets /work/liveness
+              mkdir -p /work/deps /work/tmp /work/packets /work/home
+              python3 - <<'PY'
+              import hashlib, pathlib, shutil, tarfile
+              archive = pathlib.Path("/work/source.tar.gz")
+              if hashlib.sha256(archive.read_bytes()).hexdigest() != "${SOURCE_SHA256}":
+                  raise SystemExit("publisher source archive differs from its pinned sha256")
+              shutil.rmtree("/work/controller", ignore_errors=True)
+              with tarfile.open(archive) as source:
+                  source.extractall("/work/controller", filter="data")
+              PY
+              python3 -m pip install --disable-pip-version-check --no-cache-dir --no-deps \
+                --require-hashes --target /work/deps -r /work/controller/ops/publisher/requirements.txt >/dev/null
+              export PYTHONPATH=/work/deps:/work/controller
+              exec python3 -m scripts.run_image_publisher_service \
+                --queue "${QUEUE_URI}" \
+                --work-root /work/packets \
+                --credentials-file /run/secrets/capability-registry/credentials.json \
+                --private-credentials /run/publisher/registry.json \
+                --expected-registry "${REGISTRY_HOST}" \
+                --capture-object-prefix "${CAPTURE_PREFIX}" \
+                --max-rootfs-bytes "${MAX_ROOTFS_BYTES}" \
+                --concurrency "${CONCURRENCY}" \
+                --poll-seconds "${POLL_SECONDS}" \
+                --source-sha256 "${SOURCE_SHA256}" \
+                --liveness-file /work/liveness
+          env:
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom: {secretKeyRef: {name: "${S3_SECRET}", key: accesskey}}
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom: {secretKeyRef: {name: "${S3_SECRET}", key: secretkey}}
+            - {name: AWS_DEFAULT_REGION, value: auto}
+            - {name: HOME, value: /work/home}
+            - {name: TMPDIR, value: /work/tmp}
+            - {name: PYTHONDONTWRITEBYTECODE, value: "1"}
+            - {name: PYTHONUNBUFFERED, value: "1"}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources:
+            # unpack_handoff holds an expanded packet in memory (bounded at 6 GiB
+            # by the service); two concurrent packets plus layer streaming.
+            requests: {cpu: "2", memory: 8Gi, ephemeral-storage: 8Gi}
+            limits: {cpu: "4", memory: 16Gi, ephemeral-storage: 70Gi}
+          # The loop rewrites /work/liveness every poll; a wedged loop restarts.
+          livenessProbe:
+            exec:
+              command: ["python3", "-c", "import os,sys,time; sys.exit(0 if time.time() - os.path.getmtime('/work/liveness') < 600 else 1)"]
+            initialDelaySeconds: 180
+            periodSeconds: 60
+            timeoutSeconds: 10
+            failureThreshold: 3
+          volumeMounts:
+            - {name: work, mountPath: /work}
+            - {name: private-credentials, mountPath: /run/publisher}
+            - {name: registry-credentials, mountPath: /run/secrets/capability-registry, readOnly: true}

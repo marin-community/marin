@@ -1,0 +1,226 @@
+--- a/shellsim-bridge/Cargo.toml
++++ b/shellsim-bridge/Cargo.toml
+@@ -9,3 +9,4 @@
+ serde = { version = "1", features = ["derive"] }
+ serde_json = "1"
+ base64 = "0.22"
++sha2 = "0.10"
+--- a/shellsim-bridge/Cargo.lock
++++ b/shellsim-bridge/Cargo.lock
+@@ -374,6 +374,7 @@
+  "base64",
+  "serde",
+  "serde_json",
++ "sha2",
+  "shellsim",
+ ]
+ 
+--- a/shellsim-bridge/README.md
++++ b/shellsim-bridge/README.md
+@@ -26,7 +26,7 @@
+ Subsequent requests use `exec` (command, optional base64 stdin, optional cwd and
+ env), `read` (path), `write` (path and base64 data), `mkdir` (path, recursive),
+ `list` (path, immediate names), `walk` (path, absolute recursive paths), `stat`
+-(path, is_dir/is_file), or `close`. `exec` returns base64 stdout/stderr,
++(path, is_dir/is_file), `snapshot` (path plus explicit bounds), or `close`. `exec` returns base64 stdout/stderr,
+ return_code, stop_reason, and cumulative resource usage. Reads and writes retain
+ arbitrary binary content. Unknown commands are ShellSim errors; they never fall
+ through to a host shell.
+@@ -39,3 +39,24 @@
+ files remain readable for result collection. The upstream Linux seccomp backstop
+ is enabled when supported; it is not a host-filesystem sandbox. Filesystem
+ isolation comes from the simulator's VFS rather than host command execution.
++
++
++`snapshot` is the complete, bounded VFS inventory used by reset evidence. Its
++request is:
++
++```json
++{"op":"snapshot","path":"/work","limits":{"max_entries":10000,"max_file_bytes":67108864,"max_response_bytes":4194304}}
++```
++
++The root must be a directory and cannot be a final symlink. The response records
++every raw VFS node below it in lexical order, including `.`. Directory, regular
++file, and symlink entries carry the canonical relative path and mode. Regular
++files additionally carry byte size and SHA-256; symlinks carry their raw target
++without traversal. The operation reads the VFS `NodeKind::File` byte slice
++directly, so it is not subject to the 16 MiB `read` transport cap. It rejects
++entry, aggregate-file-byte, or response bounds rather than omitting nodes.
++
++`snapshot_sha256` is SHA-256 of the compact UTF-8 JSON serialization of the
++`snapshot` object itself, whose fields are ordered `schema_version`, `root`,
++`limits`, and `entries`; entry fields are ordered `path`, `kind`, `mode`, `size`,
++`sha256`, `target`, with absent properties represented by JSON `null`.
+--- a/shellsim-bridge/src/main.rs
++++ b/shellsim-bridge/src/main.rs
+@@ -1,13 +1,47 @@
+ //! One isolated, metered ShellSim environment per JSONL connection. No host shell dispatch.
+ use base64::{engine::general_purpose::STANDARD, Engine};
+-use serde::Deserialize;
++use serde::{Deserialize, Serialize};
+ use serde_json::{json, Value};
+-use shellsim::{vfs, Interp, Limits};
++use sha2::{Digest, Sha256};
++use shellsim::{vfs, vfs::NodeKind, Interp, Limits};
+ use std::collections::BTreeMap;
+ use std::io::{self, BufRead, Read, Write};
+ 
+-const MAX_REQUEST_BYTES: u64 = 16 * 1024 * 1024;
++const MAX_REQUEST_BYTES: u64 = 32 * 1024 * 1024;
+ const MAX_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
++const SNAPSHOT_SCHEMA: &str = "taskcompendium-shellsim-vfs-snapshot-v1";
++
++#[derive(Clone, Deserialize, Serialize)]
++#[serde(deny_unknown_fields)]
++struct SnapshotLimits {
++    max_entries: usize,
++    max_file_bytes: u64,
++    max_response_bytes: usize,
++}
++
++#[derive(Serialize)]
++struct SnapshotEntry {
++    path: String,
++    kind: &'static str,
++    mode: u32,
++    size: Option<u64>,
++    sha256: Option<String>,
++    target: Option<String>,
++}
++
++#[derive(Serialize)]
++struct SnapshotWire {
++    schema_version: &'static str,
++    root: String,
++    limits: SnapshotLimits,
++    entries: Vec<SnapshotEntry>,
++}
++
++fn sha256_hex(bytes: &[u8]) -> String {
++    let mut hasher = Sha256::new();
++    hasher.update(bytes);
++    format!("{:x}", hasher.finalize())
++}
+ 
+ #[derive(Deserialize)]
+ #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
+@@ -42,6 +76,10 @@
+     Stat {
+         path: String,
+     },
++    Snapshot {
++        path: String,
++        limits: SnapshotLimits,
++    },
+     Close,
+ }
+ 
+@@ -58,6 +96,67 @@
+     }
+     let sim = state.as_mut().ok_or("session not initialized")?;
+     let result = match request {
++        Request::Snapshot { path, limits } => {
++            if limits.max_entries == 0 || limits.max_file_bytes == 0
++                || limits.max_response_bytes == 0 || limits.max_response_bytes > MAX_RESPONSE_BYTES {
++                return Err("snapshot limits must be positive and response bounded".into());
++            }
++            let requested = vfs::resolve_against(&sim.cwd, &path);
++            let root = sim.vfs.realpath(&requested, false).map_err(|e| e.to_string())?;
++            let root_node = sim.vfs.raw_get(&root).ok_or("snapshot root disappeared")?;
++            if !matches!(&root_node.kind, NodeKind::Dir) {
++                return Err("snapshot root must be a directory without a final symlink".into());
++            }
++            let mut total_file_bytes = 0u64;
++            let mut entries = Vec::new();
++            let prefix = if root == "/" { "/".to_string() } else { format!("{root}/") };
++            for absolute in sim.vfs.walk(&root) {
++                if entries.len() >= limits.max_entries {
++                    return Err("snapshot entry limit exceeded".into());
++                }
++                let relative = if absolute == root {
++                    ".".to_string()
++                } else {
++                    absolute.strip_prefix(&prefix).ok_or("snapshot path escaped root")?.to_string()
++                };
++                if relative != "." && (relative.is_empty() || relative.starts_with('/')
++                    || relative.split('/').any(|part| part.is_empty() || part == "." || part == "..")) {
++                    return Err("snapshot VFS path is not canonical".into());
++                }
++                let node = sim.vfs.raw_get(&absolute).ok_or("snapshot node disappeared")?;
++                let entry = match &node.kind {
++                    NodeKind::Dir => SnapshotEntry { path: relative, kind: "directory", mode: node.mode,
++                        size: None, sha256: None, target: None },
++                    NodeKind::File(bytes) => {
++                        let size = u64::try_from(bytes.len()).map_err(|_| "snapshot file length overflow")?;
++                        total_file_bytes = total_file_bytes.checked_add(size)
++                            .ok_or("snapshot total file bytes overflow")?;
++                        if total_file_bytes > limits.max_file_bytes {
++                            return Err("snapshot file-byte limit exceeded".into());
++                        }
++                        SnapshotEntry { path: relative, kind: "file", mode: node.mode, size: Some(size),
++                            sha256: Some(sha256_hex(bytes)), target: None }
++                    }
++                    NodeKind::Symlink(target) => SnapshotEntry { path: relative, kind: "symlink", mode: node.mode,
++                        size: None, sha256: None, target: Some(target.clone()) },
++                };
++                entries.push(entry);
++            }
++            let entry_count = entries.len();
++            let wire = SnapshotWire { schema_version: SNAPSHOT_SCHEMA, root, limits, entries };
++            let canonical = serde_json::to_vec(&wire).map_err(|e| e.to_string())?;
++            let max_response_bytes = wire.limits.max_response_bytes;
++            let result = json!({
++                "snapshot": wire,
++                "snapshot_sha256": sha256_hex(&canonical),
++                "entry_count": entry_count,
++                "total_file_bytes": total_file_bytes,
++            });
++            if serde_json::to_vec(&result).map_err(|e| e.to_string())?.len() > max_response_bytes {
++                return Err("snapshot response limit exceeded".into());
++            }
++            result
++        }
+         Request::Exec {
+             command,
+             stdin,
+@@ -195,4 +294,39 @@
+         assert_eq!(responses[2]["result"]["data"], STANDARD.encode("saved\n"));
+         assert_eq!(responses[3]["result"]["return_code"], 127);
+     }
+-}
++
++    #[test]
++    fn snapshot_hashes_large_files_without_read_response_limit() {
++        let mut state = Some(Interp::with_limits(Limits {
++            cpu: 10000, memory: 128 * 1024 * 1024, disk: 64 * 1024 * 1024, output: 4096,
++        }));
++        let sim = state.as_mut().unwrap();
++        sim.vfs.mkdir_all("/", "/work/empty").unwrap();
++        sim.vfs.write("/", "/work/large.bin", &vec![b'x'; 17 * 1024 * 1024], 0o640).unwrap();
++        sim.vfs.symlink("/", "large.bin", "/work/link").unwrap();
++        let response = handle(&mut state, Request::Snapshot {
++            path: "/work".to_string(),
++            limits: SnapshotLimits { max_entries: 8, max_file_bytes: 32 * 1024 * 1024,
++                max_response_bytes: 4096 },
++        }).unwrap();
++        let entries = response["snapshot"]["entries"].as_array().unwrap();
++        assert_eq!(entries.len(), 4);
++        assert_eq!(entries[1]["path"], "empty");
++        assert_eq!(entries[2]["mode"], 0o640);
++        assert_eq!(entries[3]["target"], "large.bin");
++        assert_eq!(entries[2]["sha256"], sha256_hex(&vec![b'x'; 17 * 1024 * 1024]));
++    }
++
++    #[test]
++    fn snapshot_rejects_incomplete_bounds() {
++        let mut state = Some(Interp::with_limits(Limits {
++            cpu: 10000, memory: 1024 * 1024, disk: 1024 * 1024, output: 4096,
++        }));
++        state.as_mut().unwrap().vfs.mkdir_all("/", "/work").unwrap();
++        let error = handle(&mut state, Request::Snapshot {
++            path: "/work".to_string(),
++            limits: SnapshotLimits { max_entries: 1, max_file_bytes: 1, max_response_bytes: 1 },
++        }).unwrap_err();
++        assert_eq!(error, "snapshot response limit exceeded");
++    }
++}

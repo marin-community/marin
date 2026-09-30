@@ -1,0 +1,25 @@
+{
+  "schema_version": "taskcompendium-shellsim-vfs-snapshot-overlay-v1",
+  "extension_id": "taskcompendium-shellsim-vfs-snapshot-v1",
+  "base_revision": "dc6b501c8604bcd2e3c20c1e9947679845fdfef8",
+  "patch": "vendor/task_spec/patches/shellsim_vfs_snapshot_extension.patch",
+  "patch_sha256": "f47eec7505b2b2ee734fb0c9267795e7774829cc82fdaca450d5051b4cf2d340",
+  "files": {
+    "shellsim-bridge/Cargo.toml": {
+      "base_sha256": "0caa6f5c0f3067b502b0ef941367d8360917310b092290a604c3d293673fbd5f",
+      "patched_sha256": "b8feb962eec71e7a831e13eed181b4a756a7c8207f00b52e2799a4e9134059d1"
+    },
+    "shellsim-bridge/Cargo.lock": {
+      "base_sha256": "836ae2eaddb0d206c154db3ae880af3eb544e8db9f2e59e4f27394a5c0e7326f",
+      "patched_sha256": "08d2ca8f00fdfc1205153eed7590b3d70048caec348a919e3801aafbe2447e16"
+    },
+    "shellsim-bridge/README.md": {
+      "base_sha256": "f80371f5071a96fe032ea256b18c15f4dd347c75b4e36561a55d1f82c33098de",
+      "patched_sha256": "9d451530b80eac6ffd209b4bc003693d2f616ca1672b7f2823b5045353d5e90f"
+    },
+    "shellsim-bridge/src/main.rs": {
+      "base_sha256": "4b23e2823603edde2bf1ac277a7b00416b7d4c4f16bf0c989c71427bb2712c79",
+      "patched_sha256": "b038d952d0573a10fa4a931c7233d8025bace5cf035e510631f2b2db93f8e403"
+    }
+  }
+}

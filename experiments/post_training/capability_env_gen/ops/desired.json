@@ -1,0 +1,1064 @@
+{
+  "bases": {
+    "hc1": {
+      "active": true,
+      "concurrency": 30,
+      "cpu": 16,
+      "disk": "200GB",
+      "extra_args": [
+        "--",
+        "--acceptance-seed",
+        "acceptance-seeds.json"
+      ],
+      "mem": "192g",
+      "note": "live at init: cap-construct-003-hc1-s2",
+      "source": "build/construct-003/construct-src-seeded/hc1"
+    },
+    "hc2": {
+      "active": true,
+      "concurrency": 30,
+      "cpu": 16,
+      "disk": "200GB",
+      "extra_args": [
+        "--",
+        "--acceptance-seed",
+        "acceptance-seeds.json"
+      ],
+      "mem": "192g",
+      "note": "live at init: cap-construct-003-hc2-s1",
+      "source": "build/construct-003/construct-src-seeded/hc2"
+    },
+    "hc3": {
+      "active": true,
+      "concurrency": 30,
+      "cpu": 16,
+      "disk": "200GB",
+      "extra_args": [
+        "--",
+        "--acceptance-seed",
+        "acceptance-seeds.json"
+      ],
+      "mem": "192g",
+      "note": "live at init: cap-construct-003-hc3-s2",
+      "source": "build/construct-003/construct-src-seeded/hc3"
+    },
+    "hc4": {
+      "active": false,
+      "concurrency": 30,
+      "cpu": 16,
+      "disk": "200GB",
+      "extra_args": [
+        "--",
+        "--acceptance-seed",
+        "acceptance-seeds.json"
+      ],
+      "mem": "192g",
+      "note": "held 04:58Z 09-30: median 0.676 rising, preemptions rotating; other tenant batch ~480 pending",
+      "source": "build/construct-003/construct-src-seeded/hc4"
+    },
+    "shard-000": {
+      "active": true,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "live at init: cap-construct-003-shard-000-c6",
+      "source": "build/construct-003/construct-src-003/shard-000.json"
+    },
+    "shard-001": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 13:18Z 09-30: readd step 1 reversed (preemption surge +41/2min, median 0.66-0.69)",
+      "source": "build/construct-003/construct-src-003/shard-001.json"
+    },
+    "shard-002": {
+      "active": true,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "live at init: cap-construct-003-shard-002-c6",
+      "source": "build/construct-003/construct-src-003/shard-002.json"
+    },
+    "shard-003": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:06Z 09-30: fleet shed round 2 (median 0.765, 2nd worker preempting); v1, most recently upgraded",
+      "source": "build/construct-003/construct-src-003/shard-003.json"
+    },
+    "shard-004": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:10Z 09-30: fleet shed round 3 (median 0.73 refilled, preemptions +21/2min on 2 workers)",
+      "source": "build/construct-003/construct-src-003/shard-004.json"
+    },
+    "shard-005": {
+      "active": true,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "live at init: cap-construct-003-shard-005-c6",
+      "source": "build/construct-003/construct-src-003/shard-005.json"
+    },
+    "shard-006": {
+      "active": true,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "live at init: cap-construct-003-shard-006-c6",
+      "source": "build/construct-003/construct-src-003/shard-006.json"
+    },
+    "shard-007": {
+      "active": true,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "live at init: cap-construct-003-shard-007-c6",
+      "source": "build/construct-003/construct-src-003/shard-007.json"
+    },
+    "shard-008": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:06Z 09-30: fleet shed round 2 (median 0.765, 2nd worker preempting); v1, most recently upgraded",
+      "source": "build/construct-003/construct-src-003/shard-008.json"
+    },
+    "shard-009": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:10Z 09-30: fleet shed round 3 (median 0.73 refilled, preemptions +21/2min on 2 workers)",
+      "source": "build/construct-003/construct-src-003/shard-009.json"
+    },
+    "shard-010": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:10Z 09-30: fleet shed round 3 (median 0.73 refilled, preemptions +21/2min on 2 workers)",
+      "source": "build/construct-003/construct-src-003/shard-010.json"
+    },
+    "shard-011": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 13:18Z 09-30: readd step 1 reversed (preemption surge +41/2min, median 0.66-0.69)",
+      "source": "build/construct-003/construct-src-003/shard-011.json"
+    },
+    "shard-012": {
+      "active": true,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "live at init: cap-construct-003-shard-012-c6",
+      "source": "build/construct-003/construct-src-003/shard-012.json"
+    },
+    "shard-013": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 13:18Z 09-30: readd step 1 reversed (preemption surge +41/2min, median 0.66-0.69)",
+      "source": "build/construct-003/construct-src-003/shard-013.json"
+    },
+    "shard-014": {
+      "active": true,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "live at init: cap-construct-003-shard-014-c6",
+      "source": "build/construct-003/construct-src-003/shard-014.json"
+    },
+    "shard-015": {
+      "active": true,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "live at init: cap-construct-003-shard-015-c6",
+      "source": "build/construct-003/construct-src-003/shard-015.json"
+    },
+    "shard-016": {
+      "active": true,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "live at init: cap-construct-003-shard-016-g4",
+      "source": "build/construct-003/construct-src-003/shard-016.json"
+    },
+    "shard-017": {
+      "active": true,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "live at init: cap-construct-003-shard-017-c6",
+      "source": "build/construct-003/construct-src-003/shard-017.json"
+    },
+    "shard-018": {
+      "active": true,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "live at init: cap-construct-003-shard-018-a1",
+      "source": "build/construct-003/construct-src-003/shard-018.json"
+    },
+    "shard-019": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 13:18Z 09-30: readd step 1 reversed (preemption surge +41/2min, median 0.66-0.69)",
+      "source": "build/construct-003/construct-src-003/shard-019.json"
+    },
+    "shard-020": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 13:18Z 09-30: readd step 1 reversed (preemption surge +41/2min, median 0.66-0.69)",
+      "source": "build/construct-003/construct-src-003/shard-020.json"
+    },
+    "shard-021": {
+      "active": true,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "live at init: cap-construct-003-shard-021-g2",
+      "source": "build/construct-003/construct-src-003/shard-021.json"
+    },
+    "shard-022": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 13:18Z 09-30: readd step 1 reversed (preemption surge +41/2min, median 0.66-0.69)",
+      "source": "build/construct-003/construct-src-003/shard-022.json"
+    },
+    "shard-023": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:02Z 09-30: fleet shed (median 0.82, preemptions rising, waiting 220); old code, cancelled -> relaunches on v1 when re-activated",
+      "source": "build/construct-003/construct-src-003/shard-023.json"
+    },
+    "shard-024": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:10Z 09-30: fleet shed round 3 (median 0.73 refilled, preemptions +21/2min on 2 workers)",
+      "source": "build/construct-003/construct-src-003/shard-024.json"
+    },
+    "shard-025": {
+      "active": true,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "live at init: cap-construct-003-shard-025-c6",
+      "source": "build/construct-003/construct-src-003/shard-025.json"
+    },
+    "shard-026": {
+      "active": true,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "live at init: cap-construct-003-shard-026-k1",
+      "source": "build/construct-003/construct-src-003/shard-026.json"
+    },
+    "shard-027": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:02Z 09-30: fleet shed (median 0.82, preemptions rising, waiting 220); old code, cancelled -> relaunches on v1 when re-activated",
+      "source": "build/construct-003/construct-src-003/shard-027.json"
+    },
+    "shard-028": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:06Z 09-30: fleet shed round 2 (median 0.765, 2nd worker preempting); v1, most recently upgraded",
+      "source": "build/construct-003/construct-src-003/shard-028.json"
+    },
+    "shard-029": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:10Z 09-30: fleet shed round 3 (median 0.73 refilled, preemptions +21/2min on 2 workers)",
+      "source": "build/construct-003/construct-src-003/shard-029.json"
+    },
+    "shard-030": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:06Z 09-30: fleet shed round 2 (median 0.765, 2nd worker preempting); v1, most recently upgraded",
+      "source": "build/construct-003/construct-src-003/shard-030.json"
+    },
+    "shard-031": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:02Z 09-30: fleet shed (median 0.82, preemptions rising, waiting 220); old code, cancelled -> relaunches on v1 when re-activated",
+      "source": "build/construct-003/construct-src-003/shard-031.json"
+    },
+    "shard-032": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:02Z 09-30: fleet shed (median 0.82, preemptions rising, waiting 220); old code, cancelled -> relaunches on v1 when re-activated",
+      "source": "build/construct-003/construct-src-003/shard-032.json"
+    },
+    "shard-033": {
+      "active": true,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "live at init: cap-construct-003-shard-033-g2",
+      "source": "build/construct-003/construct-src-003/shard-033.json"
+    },
+    "shard-034": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:02Z 09-30: fleet shed (median 0.82, preemptions rising, waiting 220); old code, cancelled -> relaunches on v1 when re-activated",
+      "source": "build/construct-003/construct-src-003/shard-034.json"
+    },
+    "shard-035": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:06Z 09-30: fleet shed round 2 (median 0.765, 2nd worker preempting); v1, most recently upgraded",
+      "source": "build/construct-003/construct-src-003/shard-035.json"
+    },
+    "shard-036": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:06Z 09-30: fleet shed round 2 (median 0.765, 2nd worker preempting); v1, most recently upgraded",
+      "source": "build/construct-003/construct-src-003/shard-036.json"
+    },
+    "shard-037": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:02Z 09-30: fleet shed (median 0.82, preemptions rising, waiting 220); old code, cancelled -> relaunches on v1 when re-activated",
+      "source": "build/construct-003/construct-src-003/shard-037.json"
+    },
+    "shard-038": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:06Z 09-30: fleet shed round 2 (median 0.765, 2nd worker preempting); v1, most recently upgraded",
+      "source": "build/construct-003/construct-src-003/shard-038.json"
+    },
+    "shard-039": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:06Z 09-30: fleet shed round 2 (median 0.765, 2nd worker preempting); v1, most recently upgraded",
+      "source": "build/construct-003/construct-src-003/shard-039.json"
+    },
+    "shard-040": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:02Z 09-30: fleet shed (median 0.82, preemptions rising, waiting 220); old code, cancelled -> relaunches on v1 when re-activated",
+      "source": "build/construct-003/construct-src-003/shard-040.json"
+    },
+    "shard-041": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:02Z 09-30: fleet shed (median 0.82, preemptions rising, waiting 220); old code, cancelled -> relaunches on v1 when re-activated",
+      "source": "build/construct-003/construct-src-003/shard-041.json"
+    },
+    "shard-042": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:06Z 09-30: fleet shed round 2 (median 0.765, 2nd worker preempting); v1, most recently upgraded",
+      "source": "build/construct-003/construct-src-003/shard-042.json"
+    },
+    "shard-043": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:02Z 09-30: fleet shed (median 0.82, preemptions rising, waiting 220); old code, cancelled -> relaunches on v1 when re-activated",
+      "source": "build/construct-003/construct-src-003/shard-043.json"
+    },
+    "shard-044": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:02Z 09-30: fleet shed (median 0.82, preemptions rising, waiting 220); old code, cancelled -> relaunches on v1 when re-activated",
+      "source": "build/construct-003/construct-src-003/shard-044.json"
+    },
+    "shard-045": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:06Z 09-30: fleet shed round 2 (median 0.765, 2nd worker preempting); v1, most recently upgraded",
+      "source": "build/construct-003/construct-src-003/shard-045.json"
+    },
+    "shard-046": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:02Z 09-30: fleet shed (median 0.82, preemptions rising, waiting 220); old code, cancelled -> relaunches on v1 when re-activated",
+      "source": "build/construct-003/construct-src-003/shard-046.json"
+    },
+    "shard-047": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:10Z 09-30: fleet shed round 3 (median 0.73 refilled, preemptions +21/2min on 2 workers)",
+      "source": "build/construct-003/construct-src-003/shard-047.json"
+    },
+    "shard-048": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:02Z 09-30: fleet shed (median 0.82, preemptions rising, waiting 220); old code, cancelled -> relaunches on v1 when re-activated",
+      "source": "build/construct-003/construct-src-003/shard-048.json"
+    },
+    "shard-049": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:02Z 09-30: fleet shed (median 0.82, preemptions rising, waiting 220); old code, cancelled -> relaunches on v1 when re-activated",
+      "source": "build/construct-003/construct-src-003/shard-049.json"
+    },
+    "shard-050": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:10Z 09-30: fleet shed round 3 (median 0.73 refilled, preemptions +21/2min on 2 workers)",
+      "source": "build/construct-003/construct-src-003/shard-050.json"
+    },
+    "shard-051": {
+      "active": true,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "live at init: cap-construct-003-shard-051-a1",
+      "source": "build/construct-003/construct-src-003/shard-051.json"
+    },
+    "shard-052": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:02Z 09-30: fleet shed (median 0.82, preemptions rising, waiting 220); old code, cancelled -> relaunches on v1 when re-activated",
+      "source": "build/construct-003/construct-src-003/shard-052.json"
+    },
+    "shard-053": {
+      "active": true,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "live at init: cap-construct-003-shard-053-h1",
+      "source": "build/construct-003/construct-src-003/shard-053.json"
+    },
+    "shard-054": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:02Z 09-30: fleet shed (median 0.82, preemptions rising, waiting 220); old code, cancelled -> relaunches on v1 when re-activated",
+      "source": "build/construct-003/construct-src-003/shard-054.json"
+    },
+    "shard-055": {
+      "active": true,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "live at init: cap-construct-003-shard-055-c6",
+      "source": "build/construct-003/construct-src-003/shard-055.json"
+    },
+    "shard-056": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:10Z 09-30: fleet shed round 3 (median 0.73 refilled, preemptions +21/2min on 2 workers)",
+      "source": "build/construct-003/construct-src-003/shard-056.json"
+    },
+    "shard-057": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:02Z 09-30: fleet shed (median 0.82, preemptions rising, waiting 220); old code, cancelled -> relaunches on v1 when re-activated",
+      "source": "build/construct-003/construct-src-003/shard-057.json"
+    },
+    "shard-058": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:02Z 09-30: fleet shed (median 0.82, preemptions rising, waiting 220); old code, cancelled -> relaunches on v1 when re-activated",
+      "source": "build/construct-003/construct-src-003/shard-058.json"
+    },
+    "shard-059": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:10Z 09-30: fleet shed round 3 (median 0.73 refilled, preemptions +21/2min on 2 workers)",
+      "source": "build/construct-003/construct-src-003/shard-059.json"
+    },
+    "shard-060": {
+      "active": true,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "live at init: cap-construct-003-shard-060-k1",
+      "source": "build/construct-003/construct-src-003/shard-060.json"
+    },
+    "shard-061": {
+      "active": true,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "live at init: cap-construct-003-shard-061-a1",
+      "source": "build/construct-003/construct-src-003/shard-061.json"
+    },
+    "shard-062": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:10Z 09-30: fleet shed round 3 (median 0.73 refilled, preemptions +21/2min on 2 workers)",
+      "source": "build/construct-003/construct-src-003/shard-062.json"
+    },
+    "shard-063": {
+      "active": true,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "live at init: cap-construct-003-shard-063-a1",
+      "source": "build/construct-003/construct-src-003/shard-063.json"
+    },
+    "shard-064": {
+      "active": true,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "live at init: cap-construct-003-shard-064-k1",
+      "source": "build/construct-003/construct-src-003/shard-064.json"
+    },
+    "shard-065": {
+      "active": true,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "live at init: cap-construct-003-shard-065-a1",
+      "source": "build/construct-003/construct-src-003/shard-065.json"
+    },
+    "shard-066": {
+      "active": true,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "live at init: cap-construct-003-shard-066-k1",
+      "source": "build/construct-003/construct-src-003/shard-066.json"
+    },
+    "shard-067": {
+      "active": true,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "live at init: cap-construct-003-shard-067-k1",
+      "source": "build/construct-003/construct-src-003/shard-067.json"
+    },
+    "shard-068": {
+      "active": false,
+      "concurrency": 30,
+      "cpu": 16,
+      "disk": "200GB",
+      "extra_args": [],
+      "mem": "192g",
+      "note": "held 04:52Z 09-30: median 0.66, 2 workers preempting (deep-session KV growth)",
+      "source": "build/construct-003/construct-src-003/shard-068.json"
+    },
+    "shard-069": {
+      "active": true,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "live at init: cap-construct-003-shard-069-c6",
+      "source": "build/construct-003/construct-src-003/shard-069.json"
+    },
+    "shard-070": {
+      "active": false,
+      "concurrency": 30,
+      "cpu": 16,
+      "disk": "200GB",
+      "extra_args": [],
+      "mem": "192g",
+      "note": "cut 03:57Z 09-30: waiting 97->118->184, kv_max 0.88-0.90, median >0.70; preemptions flat",
+      "source": "build/construct-003/construct-src-003/shard-070.json"
+    },
+    "shard-071": {
+      "active": true,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "healer-hold.txt",
+      "source": "build/construct-003/construct-src-003/shard-071.json"
+    },
+    "shard-072": {
+      "active": true,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "live at init: cap-construct-003-shard-072-h1",
+      "source": "build/construct-003/construct-src-003/shard-072.json"
+    },
+    "shard-073": {
+      "active": true,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "live at init: cap-construct-003-shard-073-c6",
+      "source": "build/construct-003/construct-src-003/shard-073.json"
+    },
+    "shard-074": {
+      "active": false,
+      "concurrency": 30,
+      "cpu": 16,
+      "disk": "200GB",
+      "extra_args": [],
+      "mem": "192g",
+      "note": "cut 03:55Z 09-30: median 0.71 (2nd reading >0.70), 10 hot nodes, waiting 118; preemptions flat",
+      "source": "build/construct-003/construct-src-003/shard-074.json"
+    },
+    "shard-075": {
+      "active": true,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "healer-hold.txt",
+      "source": "build/construct-003/construct-src-003/shard-075.json"
+    },
+    "shard-076": {
+      "active": false,
+      "concurrency": 30,
+      "cpu": 16,
+      "disk": "200GB",
+      "extra_args": [],
+      "mem": "192g",
+      "note": "held 04:48Z 09-30: 2 workers preempting (median 0.56; other tenant batch load ~600 pending)",
+      "source": "build/construct-003/construct-src-003/shard-076.json"
+    },
+    "shard-077": {
+      "active": true,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "live at init: cap-construct-003-shard-077-f1",
+      "source": "build/construct-003/construct-src-003/shard-077.json"
+    },
+    "shard-078": {
+      "active": true,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "live at init: cap-construct-003-shard-078-h1",
+      "source": "build/construct-003/construct-src-003/shard-078.json"
+    },
+    "shard-079": {
+      "active": true,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "live at init: cap-construct-003-shard-079-a1",
+      "source": "build/construct-003/construct-src-003/shard-079.json"
+    },
+    "shard-080": {
+      "active": true,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "live at init: cap-construct-003-shard-080-a1",
+      "source": "build/construct-003/construct-src-003/shard-080.json"
+    },
+    "shard-081": {
+      "active": false,
+      "concurrency": 30,
+      "cpu": 16,
+      "disk": "200GB",
+      "extra_args": [],
+      "mem": "192g",
+      "note": "inactive 01:09Z 09-30: 6-worker preemption spike after pilot relaunch; re-add one at a time",
+      "source": "build/construct-003/construct-src-003/shard-081.json"
+    },
+    "shard-082": {
+      "active": false,
+      "concurrency": 30,
+      "cpu": 16,
+      "disk": "200GB",
+      "extra_args": [],
+      "mem": "192g",
+      "note": "held 04:14Z 09-30: fleet shed round 4 (median 0.638, preemptions +7/2min on 1 worker; relaxation needs <=0.60)",
+      "source": "build/construct-003/construct-src-003/shard-082.json"
+    },
+    "shard-083": {
+      "active": true,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "live at init: cap-construct-003-shard-083-k1",
+      "source": "build/construct-003/construct-src-003/shard-083.json"
+    },
+    "shard-084": {
+      "active": true,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "live at init: cap-construct-003-shard-084-c6",
+      "source": "build/construct-003/construct-src-003/shard-084.json"
+    },
+    "shard-085": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:06Z 09-30: fleet shed round 2 (median 0.765, 2nd worker preempting); v1, most recently upgraded",
+      "source": "build/construct-003/construct-src-003/shard-085.json"
+    },
+    "shard-086": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:02Z 09-30: fleet shed (median 0.82, preemptions rising, waiting 220); old code, cancelled -> relaunches on v1 when re-activated",
+      "source": "build/construct-003/construct-src-003/shard-086.json"
+    },
+    "shard-087": {
+      "active": true,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "live at init: cap-construct-003-shard-087-c6",
+      "source": "build/construct-003/construct-src-003/shard-087.json"
+    },
+    "shard-088": {
+      "active": false,
+      "concurrency": 30,
+      "cpu": 16,
+      "disk": "200GB",
+      "extra_args": [],
+      "mem": "192g",
+      "note": "inactive 01:09Z 09-30: 6-worker preemption spike after pilot relaunch; re-add one at a time",
+      "source": "build/construct-003/construct-src-003/shard-088.json"
+    },
+    "shard-089": {
+      "active": false,
+      "concurrency": 30,
+      "cpu": 16,
+      "disk": "200GB",
+      "extra_args": [],
+      "mem": "192g",
+      "note": "inactive 01:09Z 09-30: 6-worker preemption spike after pilot relaunch; re-add one at a time",
+      "source": "build/construct-003/construct-src-003/shard-089.json"
+    },
+    "shard-090": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:02Z 09-30: fleet shed (median 0.82, preemptions rising, waiting 220); old code, cancelled -> relaunches on v1 when re-activated",
+      "source": "build/construct-003/construct-src-003/shard-090.json"
+    },
+    "shard-091": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "quarantine.txt",
+      "source": "build/construct-003/construct-src-003/shard-091.json"
+    },
+    "shard-092": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:10Z 09-30: fleet shed round 3 (median 0.73 refilled, preemptions +21/2min on 2 workers)",
+      "source": "build/construct-003/construct-src-003/shard-092.json"
+    },
+    "shard-093": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:06Z 09-30: fleet shed round 2 (median 0.765, 2nd worker preempting); v1, most recently upgraded",
+      "source": "build/construct-003/construct-src-003/shard-093.json"
+    },
+    "shard-094": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:02Z 09-30: fleet shed (median 0.82, preemptions rising, waiting 220); old code, cancelled -> relaunches on v1 when re-activated",
+      "source": "build/construct-003/construct-src-003/shard-094.json"
+    },
+    "shard-095": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:02Z 09-30: fleet shed (median 0.82, preemptions rising, waiting 220); old code, cancelled -> relaunches on v1 when re-activated",
+      "source": "build/construct-003/construct-src-003/shard-095.json"
+    },
+    "shard-096": {
+      "active": true,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "live at init: cap-construct-003-shard-096-k1",
+      "source": "build/construct-003/construct-src-003/shard-096.json"
+    },
+    "shard-097": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:02Z 09-30: fleet shed (median 0.82, preemptions rising, waiting 220); old code, cancelled -> relaunches on v1 when re-activated",
+      "source": "build/construct-003/construct-src-003/shard-097.json"
+    },
+    "shard-098": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:10Z 09-30: fleet shed round 3 (median 0.73 refilled, preemptions +21/2min on 2 workers)",
+      "source": "build/construct-003/construct-src-003/shard-098.json"
+    },
+    "shard-099": {
+      "active": false,
+      "concurrency": 6,
+      "cpu": 6,
+      "disk": "150GB",
+      "extra_args": [],
+      "mem": "96g",
+      "note": "held 04:02Z 09-30: fleet shed (median 0.82, preemptions rising, waiting 220); old code, cancelled -> relaunches on v1 when re-activated",
+      "source": "build/construct-003/construct-src-003/shard-099.json"
+    }
+  },
+  "comment": "Operator-owned. active=false stops the supervisor from relaunching a base; concurrency is applied on the next launch (or at once with --enforce-concurrency).",
+  "generated_at": "2026-09-29T21:24:25Z",
+  "run": "catalog-full-construct-003",
+  "schema": "construct-003-desired-v1"
+}

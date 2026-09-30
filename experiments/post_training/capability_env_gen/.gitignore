@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+.DS_Store
+
+# Run outputs, datasets and live operational state stay local / on S3.
+runs/
+data/
+build/
+ops/state/
+catalog.json
+new_catalog.json
+*.jsonl
+docs/audits/
