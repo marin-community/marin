@@ -1,18 +1,24 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Per-group optimizer knobs: a separate MuonH momentum for the routed experts, and Sinkhorn momentum on the bigram
-table."""
+"""Per-group optimizer knobs: routed-expert momentum / consistency scaling / cautious masking / Adam, and Sinkhorn
+momentum on the bigram table."""
 
 import equinox as eqx
 import jax
+import jax.numpy as jnp
 import numpy as np
+import optax
 import pytest
 from jax.sharding import PartitionSpec as P
 from jax.sharding import reshard
 
 import experiments.grug.fast_track.test_ngram_stat as t
-from experiments.grug.fast_track.optimizer import GrugMoeMuonHConfig
+from experiments.grug.fast_track.optimizer import (
+    GrugMoeMuonHConfig,
+    cautious_matrix_deltas,
+    scale_by_expert_consistency,
+)
 
 _BIGRAM = dict(ngram_stat_rows=0, second_embed=True, second_embed_bigram=True, embed2_rows=64)
 
@@ -100,3 +106,55 @@ def test_qk_group_takes_its_own_lr_and_leaves_other_matrices_alone():
         np.asarray(base.kda_blocks.stacked.attn.w_q)
     )
     assert 1.5 < ratio < 2.5
+
+
+def test_expert_consistency_keeps_a_repeating_expert_and_mutes_a_noisy_one():
+    opt = scale_by_expert_consistency(optax.identity(), momentum=0.9, beta2=0.99)
+    fixed = jax.random.normal(jax.random.PRNGKey(0), (6, 5))
+    state = opt.init(jnp.zeros((2, 6, 5)))
+    for step in range(60):
+        noise = jax.random.normal(jax.random.PRNGKey(step + 1), (6, 5))
+        grad = jnp.stack([fixed, noise])
+        update, state = opt.update(grad, state)
+    np.testing.assert_allclose(np.asarray(update[0]), np.asarray(fixed), rtol=1e-4)
+    assert np.linalg.norm(update[1]) < 0.3 * np.linalg.norm(noise)
+
+
+def test_cautious_deltas_drop_uphill_coordinates_per_matrix():
+    grad = jnp.array([[[1.0, -1.0], [1.0, -1.0]], [[1.0, 1.0], [1.0, 1.0]]])
+    # The inner transform's delta descends on expert 0 but moves uphill on half of expert 1.
+    delta = jnp.array([[[-1.0, 1.0], [-1.0, 1.0]], [[-1.0, 1.0], [-1.0, 1.0]]])
+    opt = cautious_matrix_deltas(
+        optax.GradientTransformation(lambda p: optax.EmptyState(), lambda u, s, p=None: (delta, s))
+    )
+    out, _ = opt.update(grad, opt.init(grad))
+    np.testing.assert_allclose(np.asarray(out[0]), np.asarray(delta[0]))
+    np.testing.assert_allclose(np.asarray(out[1]), np.array([[-2.0, 0.0], [-2.0, 0.0]]))
+
+
+def test_routed_experts_can_train_with_adam():
+    _, model = t._model(**_BIGRAM)
+    params = eqx.filter(model, eqx.is_inexact_array)
+    mask = GrugMoeMuonHConfig(routed_expert_optimizer="adam").create_mask(params)
+    assert mask.kda_blocks.stacked.mlp.expert_mlp.w_up == "adam"
+    assert mask.kda_blocks.stacked.attn.w_q == "muonh"
+    with pytest.raises(ValueError):
+        GrugMoeMuonHConfig(routed_expert_optimizer="sgd")
+
+
+def test_routed_consistency_and_cautious_change_only_the_routed_experts():
+    mesh, model = t._model(**_BIGRAM)
+    params = eqx.filter(model, eqx.is_inexact_array)
+    with jax.set_mesh(mesh):
+        base = _two_steps(GrugMoeMuonHConfig(), params)
+        for config in (
+            GrugMoeMuonHConfig(muonh_routed_consistency_beta2=0.99),
+            GrugMoeMuonHConfig(muonh_routed_cautious=True),
+        ):
+            assert config.create_mask(params).kda_blocks.stacked.mlp.expert_mlp.w_up == "muonh_routed"
+            out = _two_steps(config, params)
+            np.testing.assert_allclose(
+                np.asarray(out.kda_blocks.stacked.attn.w_q), np.asarray(base.kda_blocks.stacked.attn.w_q), rtol=1e-6
+            )
+            routed, routed_base = (np.asarray(u.kda_blocks.stacked.mlp.expert_mlp.w_up) for u in (out, base))
+            assert not np.allclose(routed, routed_base)

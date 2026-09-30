@@ -846,6 +846,93 @@ def cautious(inner: optax.GradientTransformation) -> optax.GradientTransformatio
     return optax.GradientTransformation(inner.init, update)
 
 
+def _is_matrix_stack(x) -> bool:
+    return hasattr(x, "ndim") and x.ndim >= 2
+
+
+def cautious_matrix_deltas(inner: optax.GradientTransformation) -> optax.GradientTransformation:
+    """Cautious masking (arXiv 2411.16085) for transforms that emit parameter deltas (MuonH): zero each matrix's
+    update coordinates that move with the gradient (i.e. uphill on this batch), then rescale each matrix (the last two
+    axes, so each expert separately) by its kept fraction."""
+
+    def update(updates, state, params=None):
+        deltas, state = inner.update(updates, state, params)
+
+        def mask(d, g):
+            if not (_is_matrix_stack(d) and _is_matrix_stack(g)):
+                return d
+            keep = (d.astype(jnp.float32) * g.astype(jnp.float32) < 0).astype(jnp.float32)
+            kept = jnp.mean(keep, axis=(-2, -1), keepdims=True)
+            return (d.astype(jnp.float32) * keep / jnp.maximum(kept, 1e-3)).astype(d.dtype)
+
+        return jax.tree.map(mask, deltas, updates), state
+
+    return optax.GradientTransformation(inner.init, update)
+
+
+class ExpertConsistencyState(NamedTuple):
+    inner: optax.OptState
+    count: jax.Array
+    momentum: optax.Updates
+    grad_sq: optax.Updates
+
+
+def scale_by_expert_consistency(
+    inner: optax.GradientTransformation, momentum: float, beta2: float
+) -> optax.GradientTransformation:
+    """Scale each matrix's update (per expert for ``[L, E, in, out]`` stacks) by how consistent its gradient is.
+
+    With ``m`` an EMA of the gradient (``momentum``) and ``v`` an EMA of its squared Frobenius norm (``beta2``), both
+    bias-corrected, ``r² = ||m||² / v`` is 1 for a gradient that repeats step to step and ``r₀² = (1 - momentum) /
+    (1 + momentum)`` for pure noise. The update is multiplied by ``clip((r² - r₀²) / (1 - r₀²), 0, 1)``, so a matrix
+    whose gradient keeps changing its mind barely moves. The direction is still the inner transform's.
+    """
+    floor = (1.0 - momentum) / (1.0 + momentum)
+
+    def init_fn(params):
+        def zeros_sq(p):
+            return jnp.zeros((*p.shape[:-2], 1, 1), jnp.float32) if _is_matrix_stack(p) else None
+
+        return ExpertConsistencyState(
+            inner=inner.init(params),
+            count=jnp.zeros([], jnp.int32),
+            momentum=jax.tree.map(lambda p: jnp.zeros(p.shape, jnp.float32) if _is_matrix_stack(p) else None, params),
+            grad_sq=jax.tree.map(zeros_sq, params),
+        )
+
+    def update_fn(updates, state, params=None):
+        count = state.count + 1
+        is_leaf = lambda x: x is None  # noqa: E731
+
+        def ema_m(m, g):
+            return None if m is None else momentum * m + (1.0 - momentum) * g.astype(jnp.float32)
+
+        def ema_v(v, g):
+            if v is None:
+                return None
+            sq = jnp.sum(jnp.square(g.astype(jnp.float32)), axis=(-2, -1), keepdims=True)
+            return beta2 * v + (1.0 - beta2) * sq
+
+        momenta = jax.tree.map(ema_m, state.momentum, updates, is_leaf=is_leaf)
+        grad_sq = jax.tree.map(ema_v, state.grad_sq, updates, is_leaf=is_leaf)
+        m_corr = 1.0 - momentum ** count.astype(jnp.float32)
+        v_corr = 1.0 - beta2 ** count.astype(jnp.float32)
+
+        def scale(m, v):
+            if m is None:
+                return None
+            m_sq = jnp.sum(jnp.square(m / m_corr), axis=(-2, -1), keepdims=True)
+            r_sq = m_sq / jnp.maximum(v / v_corr, 1e-30)
+            return jnp.clip((r_sq - floor) / (1.0 - floor), 0.0, 1.0)
+
+        scales = jax.tree.map(scale, momenta, grad_sq, is_leaf=is_leaf)
+        deltas, inner_state = inner.update(updates, state.inner, params)
+        deltas = jax.tree.map(lambda d, c: d if c is None else (d * c).astype(d.dtype), deltas, scales, is_leaf=is_leaf)
+        return deltas, ExpertConsistencyState(inner_state, count, momenta, grad_sq)
+
+    return optax.GradientTransformation(init_fn, update_fn)
+
+
 def scale_by_grad_power(power: float) -> optax.GradientTransformation:
     """GradPower (arXiv 2505.24275; Parameter Golf #1682): ``g <- sign(g) |g|^power`` elementwise."""
 
@@ -1092,6 +1179,13 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     muonh_qk_momentum: float | None = None
     """MuonH momentum for the query/key projections (None: ``momentum``)."""
     muonh_routed_momentum: float | None = None
+    muonh_routed_consistency_beta2: float | None = None
+    """Scale each routed expert's MuonH update by its gradient consistency (``scale_by_expert_consistency``), with
+    this beta2 for the squared-norm EMA. None: off."""
+    muonh_routed_cautious: bool = False
+    """Cautious-mask the routed experts' MuonH updates per expert (``cautious_matrix_deltas``)."""
+    routed_expert_optimizer: str = "muonh"
+    """``muonh`` or ``adam``: which group trains the routed expert matrices."""
     """MuonH momentum for the routed-expert family (None: ``momentum``). Each expert sees ~1/64 of the tokens, so its
     per-step gradient is mostly noise; a longer average may suit it better than the dense matrices."""
     okls_targets: tuple[str, ...] = ()
@@ -1412,8 +1506,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 "muonh_qk": muonh_transform_at(
                     learning_rate * self.muonh_qk_lr_mult, 4, momentum=self.muonh_qk_momentum
                 ),
-                "muonh_routed": muonh_transform_at(
-                    learning_rate * self.muonh_routed_lr_mult, 3, momentum=self.muonh_routed_momentum
+                "muonh_routed": self._routed_transform(
+                    muonh_transform_at(learning_rate * self.muonh_routed_lr_mult, 3, momentum=self.muonh_routed_momentum)
                 ),
                 "muon_free": optax.chain(
                     scale_with_grug_muon_free(
@@ -1508,7 +1602,17 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             )
         return optax.inject_hyperparams(optimizer)(**schedules)
 
+    def _routed_transform(self, inner: optax.GradientTransformation) -> optax.GradientTransformation:
+        if self.muonh_routed_cautious:
+            inner = cautious_matrix_deltas(inner)
+        if self.muonh_routed_consistency_beta2 is not None:
+            momentum = self.momentum if self.muonh_routed_momentum is None else self.muonh_routed_momentum
+            inner = scale_by_expert_consistency(inner, momentum, self.muonh_routed_consistency_beta2)
+        return inner
+
     def __post_init__(self):
+        if self.routed_expert_optimizer not in ("muonh", "adam"):
+            raise ValueError(f"routed_expert_optimizer must be muonh or adam, got {self.routed_expert_optimizer!r}")
         if self.embed2_update not in ("adam", "sinkhorn"):
             raise ValueError(f"embed2_update must be adam or sinkhorn, got {self.embed2_update!r}")
         if self.embed2_update == "sinkhorn" and self.embed2_row_sparse_adam:
@@ -1549,7 +1653,12 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                     return "muonh_qk"
                 if self.muonh_attn_lr_mult != 1.0 and _OKLS_FAMILIES["attn"].search(path_lower):
                     return "muonh_attn"
-                routed_own_group = self.muonh_routed_lr_mult != 1.0 or self.muonh_routed_momentum is not None
+                routed_own_group = (
+                    self.muonh_routed_lr_mult != 1.0
+                    or self.muonh_routed_momentum is not None
+                    or self.muonh_routed_consistency_beta2 is not None
+                    or self.muonh_routed_cautious
+                )
                 if routed_own_group and _OKLS_FAMILIES["routed"].search(path_lower):
                     return "muonh_routed"
             return group
@@ -1614,6 +1723,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             if path_lower.endswith(".weight"):
                 return "adam"
             if hasattr(param, "ndim") and param.ndim in (2, 3, 4):
+                if self.routed_expert_optimizer == "adam" and _OKLS_FAMILIES["routed"].search(path_lower):
+                    return "adam"
                 return "muonh"
             return "adam"
 
