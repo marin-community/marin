@@ -370,3 +370,50 @@ CUDA/CuTe kernel with an SMEM/register ring carry (segment-id resets, fp32 dw pa
 s/step; a Triton rewrite cannot get there for the reason the docstring gives. Also available: summing the three
 addends of the MoE-branch input (W_up + two shared down projections) inside the conv's load saves one pass,
 ~0.02 s/step.
+
+## M30B-021 Streaming Triton short conv (`sconv_implementation=triton_gpu`)
+
+Build: `lib/levanter/src/levanter/kernels/pallas/short_conv/triton_gpu.py` (raw Triton via jax_triton, not
+CUDA/CuTe), selected by `short_conv(..., implementation="triton_gpu")`; hero switch `GrugModelConfig.
+sconv_implementation` (all three ShortConv sites) and `launch_diagnostics.py --sconv-implementation`. The
+implementation is a static module field, so the checkpoint tree is unchanged. Each program walks one sequence
+chunk of one channel block with the previous 3 x rows (and, backward, the next 3 dy rows) in registers with their
+segment ids; segment ids reset taps; the backward writes one fp32 dw partial per chunk, summed by the caller.
+Launch shape per direction (`TritonShortConvTiles`): forward chunk 32, 1024 channels, 4 warps, 8 rows per step;
+backward chunk 128, 256 channels, 4 warps, 8 rows per step.
+
+Rounding: with the reference's per-op bf16 rounding written as f32 round trips, LLVM folds them into bf16 ops and
+contracts multiply+add into `fma.rn.bf16x2` (one rounding where the reference has two), about 1 ulp off. The exact
+path issues `mul.rn.bf16x2` / `add.rn.bf16x2` as inline PTX; the compiled PTX has no bf16 FMA.
+
+Correctness (GB200, `m30b-sconv-02` default tiles, `m30b-sconv-03` tuned tiles; [16,4096,6144] and
+[16,4096,1536]; unpacked, packed, 1-3 token documents, -1 padding): output and dx bit-identical to
+`short_conv_reference` and to the Pallas kernel in every case; dw error against a float64 oracle equals the Pallas
+kernel's (rel 1.9e-3 to 3.7e-3, the bf16 output rounding). The sweep (`m30b-sconv-sweep-03`) checked out/dx parity
+for all 56 launch shapes at both widths: no shape breaks it. GPU tests added to `tests/kernels/test_short_conv.py`.
+
+Per call, ten calls per jit (`b/sconv_sweep.py`), ms:
+
+| shape | Pallas fwd | Triton fwd | Pallas bwd | Triton bwd | floor fwd / bwd (XLA 2- / 3-pass elementwise) |
+|---|---|---|---|---|---|
+| [16,4096,6144] | 0.437 | 0.262 | 1.065 | 0.480 | 0.242 / 0.350 |
+| [16,4096,1536] | 0.119 | 0.082 | 0.295 | 0.151 | 0.073 / 0.099 |
+
+The backward is occupancy-bound: 8 channels per thread needs 168 registers; 2 per thread needs 72-96 and runs at
+~5 TB/s. Pipelining the row loop (`num_stages` 2-3) did nothing.
+
+Block benchmark (`b/sconv_block_bench.py`, real hero Block on one GB200 with the routed MoE stubbed, remat +
+backward, `m30b-sconv-block-02`): short-conv kernel time per layer 4.39 -> 2.20 ms (-2.19 ms); block step median
+121.9 -> 120.3 ms (-1.6 ms, 3 interleaved reps each); temp 16.83 -> 16.22 GiB; loss bitwise equal. Gradient
+leaves that differ Pallas vs Triton are the same leaves, at the same size (~1e-5 rel-rms), as Pallas vs a Pallas
+rerun (attention weights, x, and `sconv_k` whose dy is attention's dk): run-to-run nondeterminism in the attention
+backward. The only Triton-specific differences are the `sconv_attn` / `sconv_mlp` weight gradients at 1.7e-7
+rel-rms (fp32 partial order). Over 48 layers the kernel saving is ~0.105 s/step (~0.76% of 13.892 s, ~+0.2 MFU
+points if it stays on the critical path).
+
+Hand-off to C: `b/sconv_on_stack.patch` is the full short-conv change (kernel, API, tests, model switch, launch
+flag) resolved against `research/mcwitt/mfu30-stack` @ 8eff7b8ec4; it also applies cleanly to `-pipelined` @
+7393a9ae26 (`git apply --index`). The only conflicts were the two switch plumbings side by side with C's
+`gated_norm_implementation`; both are kept. Short-conv and hero-model CPU tests pass on the result. Arm flag:
+`--sconv-implementation triton_gpu`. Not done: the three-addend summation in the conv load (skipped per the
+orchestrator).
