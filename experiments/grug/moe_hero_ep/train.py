@@ -32,7 +32,6 @@ from jax.tree_util import register_dataclass
 from jaxtyping import PRNGKeyArray
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
-from levanter.checkpoint_manifest import read_manifest
 from levanter.data.dataset import AsyncDataset
 from levanter.data.loader import DataLoader
 from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_batch_schedule
@@ -61,8 +60,7 @@ from levanter.utils.logging import LoadingTimeTrackerIterator
 from levanter.utils.mesh import MeshConfig
 
 from experiments.grug.checkpointing import (
-    LEGACY_STATE_KEY,
-    MASTER_PARAMS_KEY,
+    checkpoint_stores_master,
     restore_grug_state_from_checkpoint,
 )
 from experiments.grug.dispatch import dispatch_grug_training_run
@@ -158,19 +156,6 @@ def restore_template_from(state):
     jax.tree.map(lambda leaf: leaf.delete() if isinstance(leaf, jax.Array) else None, state)
     gc.collect()
     return template
-
-
-def checkpoint_stores_master(candidate: str) -> bool:
-    """Whether checkpoint ``candidate``'s manifest lists fp32 master parameters.
-
-    A missing manifest raises ``FileNotFoundError``, which restore treats like any other
-    unreadable candidate.
-    """
-    manifest = read_manifest(candidate)
-    if manifest is None:
-        raise FileNotFoundError(f"{candidate} has no manifest.json, so its layout cannot be read")
-    markers = (MASTER_PARAMS_KEY, f"{LEGACY_STATE_KEY}/{MASTER_PARAMS_KEY}")
-    return any(path == marker or path.startswith(marker + "/") for path in manifest.array_paths for marker in markers)
 
 
 def template_for_candidate_layout(
