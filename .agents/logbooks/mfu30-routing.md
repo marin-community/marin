@@ -222,3 +222,22 @@ the 36 GiB pinned-host carry stack as device memory and recomputes 10.6 GiB in t
 saved-output stack is caller usage at the backward while loop, so without A's H-A4 flag
 (`--xla_gpu_enable_host_memory_offloading=true`) XLA would likely rematerialize ~18 GiB more in the backward.
 The D arm should run with that flag.
+
+## M30B-011 Overlap > 1 races; barrier reverted; ragged runs force overlap 1 (2026-09-30)
+
+`m30b-diag-sonic-02` (hero shapes, no overlap flag): main repeatable; the candidate's gradients differ run
+to run, and the next configuration hung until cancelled. `m30b-diag-sonic-03` added a barrier holding the
+backward transports until the recompute's last dispatch (ea3e4d6194): the candidate configuration hung
+again, so the barrier does not remove the hazard (other backward transports are independent too) and it
+would cost overlap under limit 1. Reverted (eea9d79d4b). `train.py` now forces
+`--xla_gpu_experimental_parallel_collective_overlap_limit=1` for every ragged run (ce112504f1), as the
+carry offload already did; the hero configuration was already at 1. Under limit 1 (`m30b-diag-sonic-01`,
+`m30b-scan-sonic-02`, `m30b-gate-sonic-02`) all configurations are repeatable and exact.
+
+## M30B-012 Rack arm status (2026-09-30)
+
+`m30b-unfilled-01` cancelled (the coordinator `--timeout` counts Kueue queue time). Resubmitted without a
+timeout as `m30b-unfilled-02` (`/mwittmann/m30b-unfilled-02-coord`, port 33202, from worktree
+`~/projects/marin.mfu30-routing-arm` pinned at fcec70f93d = e612b34244 lib, profiled 180021-180023).
+Scoring (orchestrator): median over 180011-180059 against `mhep-ctx4k-s0-20260930` (28.255%, 13.892 s,
+peak 103.09 GiB; loss 180000 1.261413, 180001 1.234596, 180002 1.200221, 180003 1.256785).
