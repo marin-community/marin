@@ -26,6 +26,11 @@ SCORES_TABLE = "scores"
 MANIFEST_TABLE = "manifest"
 
 
+def _validate_tensor_fields(data: bytes | None, shape: list[int] | None, dtype: str | None, label: str) -> None:
+    if (data is None) != (shape is None) or (data is None) != (dtype is None):
+        raise ValueError(f"{label} requires bytes, shape and dtype together")
+
+
 class ProbeRow(BaseModel):
     """One frozen answer, including token identity and generation-time routes."""
 
@@ -49,16 +54,15 @@ class ProbeRow(BaseModel):
     route_valid_mask: list[list[bool]] | None = None
 
     @model_validator(mode="after")
-    def validate_token_lengths(self) -> ProbeRow:
+    def validate_token_and_route_layout(self) -> ProbeRow:
         response_length = len(self.vllm_output_ids)
         if any(
             len(values) != response_length for values in (self.trainer_input_ids, self.response_mask, self.loss_mask)
         ):
             raise ValueError("probe response IDs and masks must have the same length")
-        if (self.routed_experts is None) != (self.routed_experts_shape is None):
-            raise ValueError("probe routes require both bytes and shape")
-        if (self.routed_experts is None) != (self.routed_experts_dtype is None):
-            raise ValueError("probe routes require both bytes and dtype")
+        _validate_tensor_fields(
+            self.routed_experts, self.routed_experts_shape, self.routed_experts_dtype, "probe routes"
+        )
         if (self.routed_experts is None) != (self.route_valid_mask is None):
             raise ValueError("probe routes require an explicit token-and-layer validity mask")
         if self.routed_experts_shape is not None and self.route_valid_mask is not None:
@@ -93,10 +97,9 @@ class ScoreRow(BaseModel):
 
     @model_validator(mode="after")
     def validate_route_shape(self) -> ScoreRow:
-        if (self.expert_choices is None) != (self.expert_choices_shape is None):
-            raise ValueError("scorer route observations require both bytes and shape")
-        if (self.expert_choices is None) != (self.expert_choices_dtype is None):
-            raise ValueError("scorer route observations require both bytes and dtype")
+        _validate_tensor_fields(
+            self.expert_choices, self.expert_choices_shape, self.expert_choices_dtype, "scorer routes"
+        )
         if self.replacement_mask is not None and self.expert_choices is None:
             raise ValueError("replacement mask requires scorer route observations")
         return self
