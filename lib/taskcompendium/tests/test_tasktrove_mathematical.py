@@ -3,8 +3,8 @@
 
 """TaskTrove Clean mathematical import and direct-chat Harbor coverage."""
 
-import io
 import hashlib
+import io
 import json
 import tarfile
 
@@ -28,7 +28,7 @@ RELEASE_REVISION = "9065fa568394f286dab0081e43dc76fc87c48984"
 
 
 def _archive_bytes(expected: str = r"\frac{1}{3}", math_type: str = "scalar") -> bytes:
-    task_toml = f'''version = "1.0"
+    task_toml = f"""version = "1.0"
 
 [agent]
 timeout_sec = 900.0
@@ -44,7 +44,7 @@ converter = "nemotron_math"
 template_id = "math-template-1"
 mode = "math"
 tags = ["math", "nemotron", "source tag"]
-'''
+"""
     verifier_toml = f'mode = "math"\nexpected = {json.dumps(expected)}\nmath_type = "{math_type}"\n'
     files = {
         "task.toml": task_toml.encode(),
