@@ -48,10 +48,18 @@ def skyrl_temporary_run_path(output_path: str, *, ttl_days: int) -> str:
     return str(StoragePath(temporary_root) / _TEMPORARY_OUTPUT_PREFIX / StoragePath(output_path).key)
 
 
+class SkyRLRuntimeProfile(StrEnum):
+    """Frozen upstream dependency set for a SkyRL training strategy."""
+
+    FSDP = "fsdp"
+    MEGATRON = "megatron"
+
+
 @dataclass(frozen=True)
 class SkyRLRuntime:
-    """Identity-bearing SkyRL revision."""
+    """Identity-bearing SkyRL revision and locked dependency profile."""
 
+    profile: SkyRLRuntimeProfile
     commit: str = field(init=False, default=MARIN_SKYRL.commit)
 
 
@@ -71,7 +79,6 @@ class SkyRLRolePlan:
     policy_mini_batch_size: int
     micro_train_batch_size_per_gpu: int
     n_samples_per_prompt: int
-    reference_num_nodes: int | None = None
 
 
 @dataclass(frozen=True)
@@ -105,10 +112,6 @@ class SkyRLTopology:
         for field_name in positive_fields:
             if getattr(plan, field_name) <= 0:
                 raise ValueError(f"SkyRL role plan {field_name} must be positive")
-        if plan.reference_num_nodes is not None and plan.reference_num_nodes <= 0:
-            raise ValueError("SkyRL reference_num_nodes must be positive")
-        if plan.colocate_all and plan.reference_num_nodes is not None:
-            raise ValueError("SkyRL separate reference nodes require colocate_all=false")
 
         if plan.policy_num_nodes > self.num_nodes:
             raise ValueError("SkyRL policy_num_nodes exceeds the allocated topology")
@@ -144,8 +147,6 @@ class SkyRLTopology:
                 f"x PP{plan.inference_engine_pipeline_parallel_size} x DP{plan.inference_engine_data_parallel_size})"
             )
         planned_gpus = policy_gpus if plan.colocate_all else policy_gpus + rollout_gpus
-        if plan.reference_num_nodes is not None:
-            planned_gpus += plan.reference_num_nodes * plan.policy_num_gpus_per_node
         allocated_gpus = self.num_nodes * self.gpus_per_node
         # MarinSkyRL derives optional critic, teacher, and draft-trainer claims from the recipe
         # and validates that the complete role plan exactly consumes this allocation.
@@ -363,7 +364,7 @@ class SkyRLSpec:
     seed: int
 
     def __post_init__(self) -> None:
-        _validate_skyrl_recipe(self.config_yaml, self.topology)
+        _validate_skyrl_recipe(self.config_yaml, self.runtime, self.topology)
 
 
 @dataclass(frozen=True)
@@ -414,7 +415,13 @@ class SkyRLOutputPaths:
     terminal_manifest_uri: str
 
 
-_TRAINING_STRATEGY = "megatron"
+# The trainer strategy each runtime profile installs the closure for. A profile decides which
+# dependencies reach the pod; `trainer.strategy` decides which backend the trainer then asks for.
+# Nothing downstream reconciles them, so a mismatch installs one backend and runs another.
+_STRATEGY_FOR_PROFILE = {
+    SkyRLRuntimeProfile.FSDP: "fsdp2",
+    SkyRLRuntimeProfile.MEGATRON: "megatron",
+}
 
 _MISSING_CONFIG_VALUE = object()
 
@@ -442,10 +449,10 @@ def _role_plan_config_values(role_plan: SkyRLRolePlan) -> dict[str, object]:
     """Map Marin's typed role plan to the canonical SkyRL Hydra paths."""
     return {
         "trainer.placement.colocate_all": role_plan.colocate_all,
-        "trainer.placement.colocate_policy_ref": role_plan.reference_num_nodes is None,
+        "trainer.placement.colocate_policy_ref": True,
         "trainer.placement.policy_num_nodes": role_plan.policy_num_nodes,
         "trainer.placement.policy_num_gpus_per_node": role_plan.policy_num_gpus_per_node,
-        "trainer.placement.ref_num_nodes": role_plan.reference_num_nodes or role_plan.policy_num_nodes,
+        "trainer.placement.ref_num_nodes": role_plan.policy_num_nodes,
         "trainer.placement.ref_num_gpus_per_node": role_plan.policy_num_gpus_per_node,
         "trainer.train_batch_size": role_plan.train_batch_size,
         "trainer.policy_mini_batch_size": role_plan.policy_mini_batch_size,
@@ -489,17 +496,28 @@ def _materialize_role_plan_config(config: dict[str, object], role_plan: SkyRLRol
         _set_config_value(config, dotted_key, value)
 
 
+def _validate_entrypoint_config(config: dict[str, object], role_plan: SkyRLRolePlan) -> None:
+    """Reject entrypoint-specific constraints that MarinSkyRL would otherwise discover at startup."""
+    entrypoint = _declared_config_value(config, "entrypoint")
+    if entrypoint == "fully_async" and role_plan.train_batch_size != role_plan.policy_mini_batch_size:
+        raise ValueError(
+            "SkyRL fully_async entrypoint requires train_batch_size == policy_mini_batch_size; "
+            f"got {role_plan.train_batch_size} and {role_plan.policy_mini_batch_size}"
+        )
+
+
 def _effective_strategy(config: dict[str, object]) -> str | None:
     """Return the trainer strategy, or None when the recipe leaves it to Hydra."""
     trainer = config.get("trainer")
     return trainer.get("strategy") if isinstance(trainer, dict) else None
 
 
-def _validate_runtime_strategy(config: dict[str, object]) -> None:
+def _validate_runtime_strategy(config: dict[str, object], runtime: SkyRLRuntime) -> None:
     strategy = _effective_strategy(config)
-    if strategy is not None and strategy != _TRAINING_STRATEGY:
+    expected = _STRATEGY_FOR_PROFILE.get(runtime.profile)
+    if strategy is not None and expected is not None and strategy != expected:
         raise ValueError(
-            f"SkyRL installs the {_TRAINING_STRATEGY!r} backend, "
+            f"runtime profile {runtime.profile.value!r} installs the {expected!r} backend, "
             f"but config_yaml asks for trainer.strategy={strategy!r}"
         )
 
@@ -533,18 +551,28 @@ def _validate_skyrl_backend_constraints(
     if critic_path is not _MISSING_CONFIG_VALUE and critic_path:
         raise ValueError("Marin SkyRL artifact topology does not yet describe a separate critic role")
 
-    if not use_reference and plan.reference_num_nodes is not None:
-        raise ValueError("SkyRL separate reference nodes require a reference model")
+    if use_reference:
+        colocate_policy_ref = _declared_config_value(config, "trainer.placement.colocate_policy_ref")
+        if colocate_policy_ref is not _MISSING_CONFIG_VALUE and colocate_policy_ref is not True:
+            raise ValueError("Marin SkyRL artifact topology requires policy and reference roles to be colocated")
+        ref_num_nodes = _declared_config_value(config, "trainer.placement.ref_num_nodes")
+        ref_num_gpus = _declared_config_value(config, "trainer.placement.ref_num_gpus_per_node")
+        ref_num_nodes = plan.policy_num_nodes if ref_num_nodes in (_MISSING_CONFIG_VALUE, None) else ref_num_nodes
+        ref_num_gpus = plan.policy_num_gpus_per_node if ref_num_gpus in (_MISSING_CONFIG_VALUE, None) else ref_num_gpus
+        if (ref_num_nodes, ref_num_gpus) != (plan.policy_num_nodes, plan.policy_num_gpus_per_node):
+            raise ValueError("Marin SkyRL artifact topology requires policy and reference roles to share one footprint")
 
 
 def _validate_skyrl_recipe(
     config_yaml: str,
+    runtime: SkyRLRuntime,
     topology: SkyRLTopology,
 ) -> None:
     """Validate one effective recipe before building an artifact."""
     config = _parsed_config(config_yaml)
-    _validate_runtime_strategy(config)
+    _validate_runtime_strategy(config, runtime)
     _validate_role_plan_config(config, topology.role_plan)
+    _validate_entrypoint_config(config, topology.role_plan)
     _validate_skyrl_backend_constraints(config, topology)
 
 
@@ -734,7 +762,7 @@ def _launch_config_yaml(
         },
         "runtime": {
             "launcher_commit": spec.runtime.commit,
-            "profile": _TRAINING_STRATEGY,
+            "profile": spec.runtime.profile.value,
             "entrypoint": "",
             "experiments_dir": "/app/experiments",
             "task_env": task_env,
