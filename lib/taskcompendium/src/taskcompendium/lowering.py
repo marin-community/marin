@@ -27,6 +27,7 @@ from taskcompendium.submission import (
 )
 from taskcompendium.verifier_registry import validate_verifier
 
+ENVIRONMENT_DIR = "environment"
 SPECIFICATION_FILE = "specification.json"
 SUBMISSION_CONVENTION_FILE = "submission_convention.json"
 ENVIRONMENT_CONFIG_FILE = "environment_config.json"
@@ -263,7 +264,7 @@ def lower_to_harbor(
     instruction = render_instruction(specification, convention)
     destination.mkdir(parents=True, exist_ok=False)
     try:
-        (destination / "environment").mkdir()
+        (destination / ENVIRONMENT_DIR).mkdir()
         _write_harbor_task(specification, convention, environment_config, destination, instruction)
     except Exception:
         shutil.rmtree(destination)
