@@ -123,3 +123,14 @@ buffers 18.9 + NCCL/cuBLAS/context ~9.6 GiB). Peak today 103.1, so ~46 GiB exist
 persistent minus the 4 GiB optimizer-phase arena excess) for ~0.29 s (~8 ms/GiB); carry prefetch ~+9 GiB
 (August) for <=0.2 s. Reservation: 10 GiB for H-A4 first. Anything from C that reduces remat should beat
 ~8 ms/GiB to outrank H-A1; H-A1 goes only if >=35 GiB remains after H-A4 and C, at fraction 0.80-0.81.
+
+## M30A-008 Budget order from the orchestrator (2026-09-30)
+
+Order: H-A4 10 GiB, then B's saved latent MoE output ~19 GiB (~25-30 ms/GiB), then H-A1 only if room
+remains. After H-A4 + B (~29 GiB) there is ~6 GiB left at 0.75 and ~17 GiB at 0.81, so full H-A1
+(34.6 GiB) is out. Whole-leaf partial residency is the August C3' configuration (k expert momentum leaves
+resident, donated), which NaN'd from in-step clobbering. The donation-excluded variant was clean but
+measured -0.35. The only leaf set that fits afterwards is the dense one (embedding/router Adam + small
+leaves, 8.2 GiB, ~0.08 s exposed, ~10 ms/GiB), in the same hazard class and near the noise bar, so it
+is not planned unless the C3' root cause is found. Fidelity ruling recorded: rounding and reassociation
+changes are allowed within the same-code loss band; training-semantics changes are not.
