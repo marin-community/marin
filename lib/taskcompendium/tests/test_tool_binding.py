@@ -7,7 +7,6 @@ import asyncio
 import hashlib
 import importlib
 import json
-import shutil
 import subprocess
 import sys
 from io import BytesIO
@@ -23,7 +22,6 @@ from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
-    FinalTools,
     FunctionDefinition,
     ProviderRequirement,
     Source,
@@ -96,7 +94,7 @@ def _specification() -> TaskSpec:
             "b": ProviderRequirement(action_interface="b:v1", seed_sha256="b" * 64),
         },
         answer_type=AnswerType.TEXT,
-        verifier=exact_answer("done"),
+        verifier=exact_answer(("done",)),
         source=Source(dataset="test", revision="1", row="0", importer_revision="1"),
     )
 
@@ -151,7 +149,8 @@ def _git_provider(tmp_path: Path) -> tuple[ToolBinding, Path]:
     return binding, checkout
 
 
-async def test_git_provider_exports_verified_source_snapshot_and_runs_offline(tmp_path, monkeypatch):
+@pytest.fixture
+def git_provider_task(tmp_path, monkeypatch):
     binding, checkout = _git_provider(tmp_path)
     module_name = binding.provider.rsplit(":", maxsplit=2)[1]
     monkeypatch.setitem(sys.modules, module_name, ModuleType(module_name))
@@ -173,11 +172,19 @@ async def test_git_provider_exports_verified_source_snapshot_and_runs_offline(tm
         tmp_path / "task",
         trusted_provider_sources={"a": checkout},
     )
+    return task, binding, environment_config
+
+
+def test_git_provider_exports_verified_source_snapshot(git_provider_task):
+    task, binding, _ = git_provider_task
     source = task / "environment" / "provider_sources" / "a"
     validate_staged_git_provider(binding.provider, source)
     assert (source / "LICENSE").read_text() == "Apache-2.0\n"
     assert (source / "src" / binding.provider.rsplit(":", 2)[1] / "__init__.py").is_file()
 
+
+async def test_git_provider_runs_concurrent_offline_trials(git_provider_task, tmp_path, monkeypatch):
+    task, _, environment_config = git_provider_task
     requests = []
 
     def respond(request, timeout):
@@ -204,28 +211,31 @@ async def test_git_provider_exports_verified_source_snapshot_and_runs_offline(tm
     assert (
         sum(any(message.get("tool_call_id") == "git1" for message in request["messages"]) for request in requests) == 2
     )
-    validate_staged_git_provider(binding.provider, source)
 
-    (source / "LICENSE").write_text("changed\n")
-    with pytest.raises(ValueError, match="source digest mismatch"):
+
+@pytest.mark.parametrize("rewrite_manifest", (False, True), ids=("source", "source-and-manifest"))
+async def test_git_provider_tampering_prevents_launch(git_provider_task, tmp_path, rewrite_manifest):
+    task, _, environment_config = git_provider_task
+    source = task / "environment" / "provider_sources" / "a"
+    changed = b"changed\n"
+    (source / "LICENSE").write_bytes(changed)
+    error = "source digest mismatch"
+    if rewrite_manifest:
+        manifest_path = source / SOURCE_MANIFEST
+        manifest = json.loads(manifest_path.read_text())
+        license_entry = next(item for item in manifest["files"] if item["path"] == "LICENSE")
+        license_entry["sha256"] = hashlib.sha256(changed).hexdigest()
+        license_entry["git_blob"] = hashlib.sha1(b"blob 8\0" + changed, usedforsecurity=False).hexdigest()
+        manifest_path.write_text(json.dumps(manifest))
+        error = "tree differs from pinned commit"
+    with pytest.raises(ValueError, match=error):
         await run_trial(
             task,
             environment_config,
-            launch,
+            ChatLaunch(model="model", api_base="https://example.invalid"),
             tmp_path / "trials",
             "tampered",
         )
-    manifest_path = source / SOURCE_MANIFEST
-    manifest = json.loads(manifest_path.read_text())
-    changed = b"changed\n"
-    license_entry = next(item for item in manifest["files"] if item["path"] == "LICENSE")
-    license_entry["sha256"] = hashlib.sha256(changed).hexdigest()
-    license_entry["git_blob"] = hashlib.sha1(b"blob 8\0" + changed, usedforsecurity=False).hexdigest()
-    manifest_path.write_text(json.dumps(manifest))
-    with pytest.raises(ValueError, match="tree differs from pinned commit"):
-        await run_trial(task, environment_config, launch, tmp_path / "trials", "manifest-tampered")
-    shutil.rmtree(task)
-    assert not task.exists()
 
 
 def test_git_provider_rejects_changed_source_before_export_or_launch(tmp_path, monkeypatch):
@@ -286,7 +296,7 @@ def test_provider_tool_collisions_reject_export(tmp_path, monkeypatch):
         lower_to_harbor(_specification(), convention, environment_config, tmp_path / "task")
 
     plain_specification = _specification().model_copy(
-        update={"final_tools": FinalTools(functions=(FunctionDefinition(name="lookup", parameters={"type": "object"}),))}
+        update={"final_tools": (FunctionDefinition(name="lookup", parameters={"type": "object"}),)}
     )
     plain = PlainText(id="plain")
     with pytest.raises(ValueError, match="Submission function names collide"):
@@ -344,3 +354,61 @@ def test_host_chat_rejects_workspace_requirements_with_tool_providers(tmp_path, 
             environment_config,
             tmp_path / "capability",
         )
+
+
+@pytest.mark.parametrize(
+    "changed",
+    (
+        {"action_interface": "a:v2"},
+        {"seed_sha256": "c" * 64},
+        {"provider_revision": "wrong-revision"},
+        {"tools_sha256": "0" * 64},
+    ),
+)
+def test_git_provider_surface_mismatch_excludes_candidate(tmp_path, monkeypatch, changed):
+    binding, checkout = _git_provider(tmp_path)
+    binding = binding.model_copy(update=changed)
+    _, second = _external_services(tmp_path, monkeypatch)
+    environment_config = HarborEnvironmentConfig(tool_providers={"a": binding, "b": second})
+    specification = _specification().model_copy(
+        update={
+            "tool_providers": {
+                "a": ProviderRequirement(action_interface=binding.action_interface, seed_sha256=binding.seed_sha256),
+                "b": _specification().tool_providers["b"],
+            }
+        }
+    )
+    assert not compatible_lowerings(
+        specification, (PlainText(id="plain"),), (environment_config,), trusted_provider_sources={"a": checkout}
+    )
+
+
+def test_git_provider_without_state_excludes_state_candidate(tmp_path, monkeypatch):
+    binding, checkout = _git_provider(tmp_path)
+    _, second = _external_services(tmp_path, monkeypatch)
+    environment_config = HarborEnvironmentConfig(tool_providers={"a": binding, "b": second})
+    specification = _specification().model_copy(
+        update={"answer_type": AnswerType.STATE, "verifier": structured_exact({})}
+    )
+    assert not compatible_lowerings(
+        specification,
+        (ProviderState(id="state", provider="a"),),
+        (environment_config,),
+        trusted_provider_sources={"a": checkout},
+    )
+
+
+@pytest.mark.parametrize("name", ("../../../outside", "/absolute", "nested/provider", "..", r"..\outside"))
+def test_escaping_provider_name_prevents_export(tmp_path, monkeypatch, name):
+    binding, checkout = _git_provider(tmp_path)
+    with pytest.raises(ValueError):
+        environment_config = HarborEnvironmentConfig(tool_providers={name: binding})
+        lower_to_harbor(
+            _specification(),
+            PlainText(id="plain"),
+            environment_config,
+            tmp_path / "task",
+            trusted_provider_sources={name: checkout},
+        )
+    assert not (tmp_path / "task").exists()
+    assert not (tmp_path / "outside").exists()

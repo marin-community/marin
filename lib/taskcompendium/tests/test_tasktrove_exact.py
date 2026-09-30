@@ -4,7 +4,9 @@
 """TaskTrove exact imports with direct-chat Harbor coverage."""
 
 import json
+from dataclasses import replace
 
+import pytest
 from tasktrove_verify.grade import grade as source_grade
 from tasktrove_verify.spec import ExactSpec, parse_spec
 
@@ -42,7 +44,7 @@ def _source_task():
 def test_exact_import_preserves_tags_and_removes_file_harness():
     specification, source_contract = _source_task()
     assert specification.answer_type is AnswerType.TEXT
-    assert specification.verifier.kind is VerifierKind.EXACT_LIST_ANSWER
+    assert specification.verifier.kind is VerifierKind.EXACT_ANSWER
     assert specification.tags == ("test", "puzzle", "ordered-list")
     assert specification.source.dataset == FIXTURE_DATASET_URI
     assert specification.source.revision == FIXTURE_REVISION
@@ -53,21 +55,76 @@ def test_exact_import_preserves_tags_and_removes_file_harness():
     assert ", ".join(source_contract.expected) not in instruction
 
 
-async def test_exact_import_matches_source_verifier_on_ordered_lists(tmp_path):
-    specification, source_contract = _source_task()
-    correct = ", ".join(source_contract.expected)
-    incorrect_order = ", ".join(reversed(source_contract.expected))
-    answer_path = tmp_path / "answer.txt"
-    contract = ExactSpec(
-        expected=source_contract.expected,
-        ignore_case=source_contract.ignore_case,
-        ignore_whitespace=source_contract.ignore_whitespace,
-        ordered=source_contract.ordered,
-        output=str(answer_path),
+@pytest.mark.parametrize(
+    "contract,answers",
+    [
+        pytest.param(
+            ExactSpec(expected=("green", "blue")),
+            (("GREEN,  blue", 1.0), ("green\nblue", 1.0), ("blue, green", 0.0), ("green", 0.0)),
+            id="ordered-list",
+        ),
+        pytest.param(
+            ExactSpec(expected=("green", "blue", "green"), ordered=False),
+            (("blue,green,green", 1.0), ("green,blue", 0.0), ("blue,blue,green", 0.0)),
+            id="unordered-duplicates",
+        ),
+        pytest.param(
+            ExactSpec(expected=("green", "blue", "green")),
+            (("green,blue,green", 1.0), ("blue,green,green", 0.0)),
+            id="ordered-duplicates",
+        ),
+        pytest.param(
+            ExactSpec(expected=("New York", "blue"), ignore_case=False, ignore_whitespace=False),
+            ((" New York, blue ", 1.0), ("New  York,blue", 0.0), ("new York,blue", 0.0)),
+            id="strict-normalization",
+        ),
+        pytest.param(
+            ExactSpec(expected=("New York", "blue")),
+            ((" NEW  York, BLUE ", 1.0), (",New York,,blue,", 1.0)),
+            id="normalized-list",
+        ),
+        pytest.param(
+            ExactSpec(expected=("green", "blue")),
+            (
+                (r"Answer: \boxed{green, blue}", 1.0),
+                (r"\boxed{green, blue} then \boxed{blue, green}", 0.0),
+                (r"\boxed{green, blue", 0.0),
+            ),
+            id="boxed-list",
+        ),
+        pytest.param(
+            ExactSpec(expected=("Straße Park",)),
+            ((" STRASSE  Park ", 1.0), (r"Answer: \boxed{Straße Park}", 1.0), ("Straße", 0.0)),
+            id="scalar",
+        ),
+        pytest.param(
+            ExactSpec(expected=("green, blue",)),
+            (("green, blue", 1.0), ("green\nblue", 0.0), ("blue, green", 0.0)),
+            id="scalar-with-comma",
+        ),
+        pytest.param(
+            ExactSpec(expected=(r"\boxed{wrong}",)),
+            ((r"\boxed{wrong}", 1.0), ("wrong", 0.0)),
+            id="whole-answer-fallback",
+        ),
+    ],
+)
+async def test_exact_import_matches_source_verifier(tmp_path, contract, answers):
+    archive = _archive()
+    verifier_toml = (
+        'mode = "exact"\n'
+        f"expected = {json.dumps(contract.expected)}\n"
+        f"ignore_case = {str(contract.ignore_case).lower()}\n"
+        f"ignore_whitespace = {str(contract.ignore_whitespace).lower()}\n"
+        f"ordered = {str(contract.ordered).lower()}\n"
     )
-    for answer, reward in ((correct, 1.0), (incorrect_order, 0.0)):
+    archive = replace(archive, files={**archive.files, "tests/verifier.toml": verifier_toml.encode()})
+    specification = import_task(archive)
+    answer_path = tmp_path / "answer.txt"
+    source_contract = replace(contract, output=str(answer_path))
+    for answer, reward in answers:
         answer_path.write_text(answer)
-        source_result = source_grade(contract, tmp_path, tmp_path)
+        source_result = source_grade(source_contract, tmp_path, tmp_path)
         imported_result = await grade_answer(specification, PlainText(id="plain"), _attempt(specification, answer))
         assert source_result.reward == reward
         assert (imported_result.status, imported_result.reward) == (Outcome.GRADED, reward)
