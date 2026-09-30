@@ -327,3 +327,12 @@ match Pallas-vs-Pallas rerun differences (~1e-5 rel-rms in attention weights, x,
 **attention backward is run-to-run nondeterministic** and same-code hero runs are not bitwise. The only
 Triton-specific difference is sconv dw at 1.7e-7 (summation order). Patch for the stack:
 `b/sconv_on_stack.patch` (9303d20b97); C adds it behind the switch for the final program.
+
+## M30-016 Control replicate; independent scorer (2026-09-30)
+
+`score_arm.py` (median MFU over 180011-180059 minus profiled 180021-180023, peak, drops, pointwise loss vs
+the seed-0 control). Controls: s0 28.258 / 13.891 s, s1 28.229 / 13.905 s (same code and checkpoint,
+different data order: s1 loss at 180000 is 1.2063 vs 1.2614), so run-to-run MFU spread is ~0.03. Only
+seed 0 is a same-data loss reference. Short conv cleared its final GB200 check (`m30b-sconv-03`, 8/8,
+out/dx bitwise); it is on both stack branches behind `--sconv-implementation triton_gpu`
+(`mfu30-stack` @ cc55c78f45, `-pipelined` @ a7cc657e28), default off.
