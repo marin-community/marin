@@ -10,6 +10,7 @@ Variants:
   zeros: the branch module as is (loop-local zero inits).
   empty: every loop-local zero init replaced by `jax.lax.empty` (an uninitialized buffer). Values
          are wrong in unwritten rows, so only the HLO and timing are meaningful.
+  triton_empty: as empty, from a Triton kernel that writes nothing and reads the loop-variant tie.
 
 Usage (GB200x4): python autoresearch/loop-260930-mfu30/b/scan_probe.py
 """
@@ -41,6 +42,22 @@ _zeros = ragged._loop_local_zeros
 def _empty(rows, hidden_dim, dtype, tie, site):
     del tie, site
     return jax.lax.empty((rows, hidden_dim), dtype)
+
+
+@triton.jit
+def _leave_output_unwritten(tie_ptr, out_ptr):
+    pass
+
+
+def _triton_empty(rows, hidden_dim, dtype, tie, site):
+    """An uninitialized buffer from a kernel that writes nothing, tied to a loop-variant input."""
+    del site
+    return jt.triton_call(
+        tie,
+        kernel=_leave_output_unwritten,
+        out_shape=jax.ShapeDtypeStruct((rows, hidden_dim), dtype),
+        grid=(1,),
+    )
 
 
 def _mesh():
@@ -130,7 +147,7 @@ def main():
     chunk_capacity = int(np.ceil(np.ceil(CAPACITY_FACTOR * TOKENS_PER_SHARD * TOPK) / 2))
     big_shapes = (f"[{TOKENS_PER_SHARD * TOPK},{HIDDEN}]", f"[{chunk_capacity},{HIDDEN}]")
     print(json.dumps(dict(devices=len(jax.devices()), shards=shards, big_shapes=big_shapes)), flush=True)
-    for name, init_fn in (("zeros", _zeros), ("empty", _empty)):
+    for name, init_fn in (("zeros", _zeros), ("empty", _empty), ("triton_empty", _triton_empty)):
         compiled, args = _build(mesh, init_fn)
         text = compiled.as_text()
         for _ in range(2):
