@@ -292,9 +292,7 @@ def validate_submission_tools(
     environment_config: HarborEnvironmentConfig,
 ) -> None:
     """Keep terminal submission functions distinct from executable provider tools."""
-    if environment_config.tool_providers and specification.final_tools.tool_choice == "none":
-        raise ValueError("Provider tools conflict with final tool_choice=none")
-    terminal_names = {function.name for function in specification.final_tools.functions}
+    terminal_names = {function.name for function in specification.final_tools}
     if convention.answer_format == AnswerFormat.ANSWER_CALL:
         terminal_names.add(ANSWER_CALL_NAME)
     provider_names = {name for binding in environment_config.tool_providers.values() for name in binding.tools}
