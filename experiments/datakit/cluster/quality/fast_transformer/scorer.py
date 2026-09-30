@@ -6,8 +6,9 @@
 ``train.py`` fits the model and ``data.py`` builds a compact vocabulary remap from
 the training corpus; to score *new* text we need both the serialised model and that
 remap. :class:`PooledScorer` bundles them, ``load_pooled_scorer`` builds one from a
-model dir, and ``score_bme`` is the whole-doc (begin/middle/end) scoring used by both
-production scoring and calibration fitting. This module deliberately depends only on
+model dir. ``bme_windows`` / ``pool_bme`` are the whole-doc (begin/middle/end)
+scoring halves that production scoring runs around :meth:`PooledScorer.encode` and
+:meth:`PooledScorer.predict_ids`; ``score_bme`` composes them for calibration fitting. This module deliberately depends only on
 the model + inference forward, not on the training loop or the zephyr/iris pipeline.
 """
 
@@ -45,7 +46,7 @@ class PooledScorer:
     """A trained fast-transformer plus its tokenizer + vocab remap, ready to score."""
 
     model: FastTransformer
-    remap: dict[int, int]
+    remap_table: np.ndarray
     tokenizer_name: str
     max_tokens: int
 
@@ -67,20 +68,46 @@ class PooledScorer:
         template = FastTransformer(config, key=jr.PRNGKey(0))
         # eqx deserialise needs a local file path
         model = eqx.tree_deserialise_leaves(model_path, template)
-        return cls(model=model, remap=remap, tokenizer_name=meta["tokenizer"], max_tokens=meta["max_tokens"])
+        return cls(
+            model=model,
+            remap_table=remap_table(remap),
+            tokenizer_name=meta["tokenizer"],
+            max_tokens=meta["max_tokens"],
+        )
 
-    def score(self, texts: list[str], batch_size: int = 256) -> np.ndarray:
+    def encode(self, texts: list[str]) -> np.ndarray:
+        """Compact token ids as a dense ``[N, max_tokens]`` array, PAD-padded on the right.
+
+        This is the CPU half of scoring; :meth:`predict_ids` is the accelerator half,
+        so a caller can run the two on different threads.
+        """
+        return remap_ids(encode_texts(self.tokenizer_name, texts, self.max_tokens), self.remap_table, self.max_tokens)
+
+    def predict_ids(self, ids: np.ndarray) -> np.ndarray:
+        """Quality score in ``[0, 1]`` per row of :meth:`encode` output."""
+        return predict(self.model, ids)
+
+    def score(self, texts: list[str]) -> np.ndarray:
         """Quality score in ``[0, 1]`` per document."""
-        out = np.empty(len(texts), dtype=np.float32)
-        for start in range(0, len(texts), batch_size):
-            chunk = texts[start : start + batch_size]
-            encoded = encode_texts(self.tokenizer_name, chunk, self.max_tokens)
-            ids = np.full((len(chunk), self.max_tokens), PAD_ID, dtype=np.int32)
-            for i, row in enumerate(encoded):
-                mapped = [self.remap.get(t, UNK_ID) for t in row[: self.max_tokens]]
-                ids[i, : len(mapped)] = mapped
-            out[start : start + len(chunk)] = predict(self.model, ids)
-        return out
+        return self.predict_ids(self.encode(texts))
+
+
+def remap_table(remap: dict[int, int]) -> np.ndarray:
+    """Dense raw-id -> compact-id lookup; raw ids outside the table map to UNK."""
+    table = np.full(max(remap) + 1, UNK_ID, dtype=np.int32)
+    for raw, compact in remap.items():
+        table[raw] = compact
+    return table
+
+
+def remap_ids(rows: list[list[int]], table: np.ndarray, max_tokens: int) -> np.ndarray:
+    """Vectorized remap of tokenized rows into a ``[N, max_tokens]`` PAD-padded array."""
+    ids = np.full((len(rows), max_tokens), PAD_ID, dtype=np.int32)
+    last = len(table) - 1
+    for i, row in enumerate(rows):
+        raw = np.asarray(row[:max_tokens], dtype=np.int64)
+        ids[i, : len(raw)] = np.where(raw <= last, table[np.minimum(raw, last)], UNK_ID)
+    return ids
 
 
 def load_pooled_scorer(model_dir: str) -> PooledScorer:
@@ -93,9 +120,9 @@ def load_pooled_scorer(model_dir: str) -> PooledScorer:
     return PooledScorer.load(local_eqx, f"{model_dir}/{MODEL_REMAP}", f"{model_dir}/{MODEL_META}")
 
 
-def score_bme(scorer: PooledScorer, texts: list[str]) -> np.ndarray:
-    """Mean-pool the FT score over begin/middle/end ~512-token windows of each doc.
-    Short docs (<= one chunk) reduce to a single scored window."""
+def bme_windows(texts: list[str]) -> tuple[list[str], list[tuple[int, int]]]:
+    """Begin/middle/end ~512-token windows of each doc, flattened, with each doc's
+    ``[start, end)`` span into the flat list. Short docs (<= one chunk) are one window."""
     flat: list[str] = []
     spans: list[tuple[int, int]] = []
     for t in texts:
@@ -106,5 +133,15 @@ def score_bme(scorer: PooledScorer, texts: list[str]) -> np.ndarray:
             cs = [t[:CHUNK_CHARS], t[max(0, m - CHUNK_CHARS // 2) : m + CHUNK_CHARS // 2], t[-CHUNK_CHARS:]]
         spans.append((len(flat), len(flat) + len(cs)))
         flat.extend(cs)
-    s = scorer.score(flat)
-    return np.array([s[a:b].mean() for a, b in spans])
+    return flat, spans
+
+
+def pool_bme(window_scores: np.ndarray, spans: list[tuple[int, int]]) -> np.ndarray:
+    """Mean-pool per-window scores back to one score per doc."""
+    return np.array([window_scores[a:b].mean() for a, b in spans])
+
+
+def score_bme(scorer: PooledScorer, texts: list[str]) -> np.ndarray:
+    """Mean-pool the FT score over begin/middle/end ~512-token windows of each doc."""
+    flat, spans = bme_windows(texts)
+    return pool_bme(scorer.score(flat), spans)

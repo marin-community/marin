@@ -33,7 +33,11 @@ import functools
 import json
 import logging
 import posixpath
-from collections.abc import Iterator
+from collections import deque
+from collections.abc import Callable, Iterable, Iterator
+from concurrent.futures import Future, ThreadPoolExecutor
+from itertools import islice
+from typing import NamedTuple
 
 import numpy as np
 from fray.cluster import ResourceConfig
@@ -51,13 +55,18 @@ from zephyr.writers import ThreadedBatchWriter, write_parquet_file
 from experiments.datakit.cluster.quality.fast_transformer.artifact import BUCKET_EDGES, QualityScores
 from experiments.datakit.cluster.quality.fast_transformer.scorer import (
     PooledScorer,
+    bme_windows,
     load_pooled_scorer,
-    score_bme,
+    pool_bme,
 )
 
 logger = logging.getLogger(__name__)
 
 BATCH_SIZE = 512
+# Batches tokenized ahead of the model on worker threads. Tokenization is the CPU
+# half of a batch (~45% on CPU, nearly all of it on an accelerator), so keeping two
+# batches in flight lets it overlap the forward pass. Bounds memory to a few batches.
+PREFETCH_BATCHES = 2
 # Scoring is I/O-bound (workers sit ~25% CPU streaming parquet). A worker sits ~3 GiB
 # resident (model + a batch's JAX activations + per-seq-len compiled caches); a heavier
 # shard can spike transiently above that -- 4g OOM-killed workers on the 100B corpus.
@@ -73,28 +82,79 @@ _SHARD_FILE = "__shard_file"  # internal: input basename carried to the writer t
 def _load_scorer(model_dir: str, calib_file: str = MODEL_CALIB) -> tuple[PooledScorer, np.ndarray, np.ndarray]:
     """Load the scorer + calibration once per worker process."""
     scorer = load_pooled_scorer(model_dir)
+    # One encode here converts the 250K-vocab tokenizer and fixes its truncation
+    # state before the prefetch threads share it; two cold first calls would each
+    # convert it, and can collide on the backend's first-call mutation.
+    scorer.encode(["."])
     with open_url(f"{model_dir.rstrip('/')}/{calib_file}", "r") as fh:
         calib = json.loads(fh.read())
     logger.info("loaded FT scorer + calibration (%s) from %s", calib_file, model_dir)
     return scorer, np.asarray(calib["xk"], dtype=np.float64), np.asarray(calib["yk"], dtype=np.float64)
 
 
-def _predict_batch(records: list[dict], *, source: str, model_dir: str, calib_file: str) -> Iterator[dict]:
-    """Score a batch of records with bme; carry source/id/score/quality_bucket + text.
-    ``text`` is dropped for the lean main output and kept for the samples side
-    output; ``_SHARD_FILE`` names the output file after the input file."""
-    scorer, xk, yk = _load_scorer(model_dir, calib_file)
-    cal = np.interp(score_bme(scorer, [r["text"] for r in records]), xk, yk)
-    buckets = np.digitize(cal, BUCKET_EDGES)
-    for r, c, b in zip(records, cal, buckets, strict=True):
-        yield {
-            "source": source,
-            "id": r["id"],
-            "score": float(c),
-            "quality_bucket": int(b),
-            "text": r["text"][:SAMPLE_TEXT_CHARS],
-            _SHARD_FILE: posixpath.basename(r[DEFAULT_FILE_PATH_COLUMN]),
-        }
+class _PreparedBatch(NamedTuple):
+    records: list[dict]
+    ids: np.ndarray
+    spans: list[tuple[int, int]]
+
+
+def _prepare_batch(records: list[dict], scorer: PooledScorer) -> _PreparedBatch:
+    """The CPU half of scoring a batch: bme windows tokenized to compact ids."""
+    flat, spans = bme_windows([r["text"] for r in records])
+    return _PreparedBatch(records, scorer.encode(flat), spans)
+
+
+def prefetch[T, R](items: Iterable[T], fn: Callable[[T], R], depth: int) -> Iterator[R]:
+    """Map ``fn`` over ``items`` in order, computing up to ``depth`` results ahead
+    on worker threads while the caller consumes the current one."""
+    remaining = iter(items)
+    pending: deque[Future[R]] = deque()
+    with ThreadPoolExecutor(max_workers=depth) as pool:
+        for item in islice(remaining, depth):
+            pending.append(pool.submit(fn, item))
+        while pending:
+            result = pending.popleft().result()
+            for item in islice(remaining, 1):
+                pending.append(pool.submit(fn, item))
+            yield result
+
+
+def _score_batches(
+    batches: Iterable[list[dict]],
+    *,
+    source: str,
+    scorer: PooledScorer,
+    xk: np.ndarray,
+    yk: np.ndarray,
+) -> Iterator[dict]:
+    """Score batches of records with bme, tokenizing ahead of the model; carry
+    source/id/score/quality_bucket + text. ``text`` is dropped for the lean main
+    output and kept for the samples side output; ``_SHARD_FILE`` names the output
+    file after the input file."""
+    prepare = functools.partial(_prepare_batch, scorer=scorer)
+    for prepared in prefetch(batches, prepare, PREFETCH_BATCHES):
+        cal = np.interp(pool_bme(scorer.predict_ids(prepared.ids), prepared.spans), xk, yk)
+        buckets = np.digitize(cal, BUCKET_EDGES)
+        for r, c, b in zip(prepared.records, cal, buckets, strict=True):
+            yield {
+                "source": source,
+                "id": r["id"],
+                "score": float(c),
+                "quality_bucket": int(b),
+                "text": r["text"][:SAMPLE_TEXT_CHARS],
+                _SHARD_FILE: posixpath.basename(r[DEFAULT_FILE_PATH_COLUMN]),
+            }
+
+
+def _make_batch_scorer(*, source: str, model_dir: str, calib_file: str):
+    """A ``map_shard`` scorer over one input file's batches, using the per-process
+    cached model."""
+
+    def score_shard(batches: Iterator[list[dict]], _shard: ShardInfo) -> Iterator[dict]:
+        scorer, xk, yk = _load_scorer(model_dir, calib_file)
+        yield from _score_batches(batches, source=source, scorer=scorer, xk=xk, yk=yk)
+
+    return score_shard
 
 
 def _systematic_take(index: int, pct: float) -> bool:
@@ -177,7 +237,7 @@ def score_normalized(
             Dataset.from_list(files)
             .flat_map(functools.partial(load_file, include_file_paths=True))
             .window(BATCH_SIZE)
-            .flat_map(functools.partial(_predict_batch, source=source, model_dir=model_dir, calib_file=calib_file))
+            .map_shard(_make_batch_scorer(source=source, model_dir=model_dir, calib_file=calib_file))
             .map_shard(_make_scored_writer(output_path, sample_pct))
         )
         # InlineRunner keeps the per-process cached model alive across shards in a
