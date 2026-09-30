@@ -17,6 +17,12 @@ window.AtlasDifficulty = (() => {
       status.textContent = summary.status === "current" ? "Current · 65k context / 16k output" : summary.status === "invalid" ? "Protocol mismatch · excluded from current difficulty" : "Historical · earlier protocol";
       status.title = summary.status_note;
       chart.append(status);
+      if (summary.ordering_warning) {
+        const warning = document.createElement("span");
+        warning.className = "difficulty-ordering-warning";
+        warning.textContent = `⚠ ${summary.ordering_warning}`;
+        chart.append(warning);
+      }
     }
     for (const model of models) {
       const row = document.createElement("div");

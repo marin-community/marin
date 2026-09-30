@@ -18,7 +18,13 @@ from sqlalchemy.exc import DBAPIError
 
 from infra.marina.applets.rl_data_catalog.audit_nemotron import audit_blend
 from infra.marina.applets.rl_data_catalog.server import composition, hf_auth
-from infra.marina.applets.rl_data_catalog.server.app import migrate, refresh_catalog, save_snapshot, source_with_review
+from infra.marina.applets.rl_data_catalog.server.app import (
+    difficulty_summary,
+    migrate,
+    refresh_catalog,
+    save_snapshot,
+    source_with_review,
+)
 from infra.marina.applets.rl_data_catalog.server.catalog import (
     Snapshot,
     count_metadata,
@@ -379,6 +385,19 @@ def test_current_difficulty_does_not_accept_legacy_model_roles_or_unmatched_budg
     assert row["difficulty_summary"]["status"] == expected_status
     assert {model["measurement_status"] for model in row["difficulty_summary"]["models"]} == {expected_status}
     assert [model["solved"] for model in row["difficulty_summary"]["models"]] == [11, 17, 21]
+
+
+def test_difficulty_summary_surfaces_ordering_audit() -> None:
+    report = {
+        "estimated_at": "2026-09-30",
+        "sampling": {"task_count": 32},
+        "models": [],
+        "protocol": {"artifacts": [{"path": "difficulty/v3/ordering-audit.json"}]},
+        "limitations": ["The hosted arm exhausted its output budget while reasoning on 12 tasks."],
+    }
+    assert difficulty_summary(report)["ordering_warning"] == report["limitations"][0]
+    report["protocol"]["artifacts"] = []
+    assert difficulty_summary(report)["ordering_warning"] is None
 
 
 @pytest.mark.parametrize("original_quality", ["good", "bad"])

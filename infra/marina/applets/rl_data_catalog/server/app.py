@@ -152,12 +152,16 @@ def difficulty_summary(report: dict[str, Any]) -> dict[str, Any]:
                     ),
                 }
             )
+    audited_ordering = any(
+        artifact["path"].endswith("/ordering-audit.json") for artifact in report.get("protocol", {}).get("artifacts", [])
+    )
     return {
         "models": models,
         "estimated_at": report["estimated_at"],
         "sampling": report["sampling"],
         "status": status,
         "status_note": note,
+        "ordering_warning": report["limitations"][-1] if audited_ordering else None,
         "protocol": report.get("protocol"),
     }
 
