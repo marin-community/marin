@@ -21,8 +21,9 @@ logger = logging.getLogger(__name__)
 TRAIN_FILENAME = "train.parquet"
 VALIDATION_FILENAME = "validation.parquet"
 ENV_CLASS = "cat_count"
-DEFAULT_TRAIN_NS = (1, 2, 4, 7, 10, 20)
 HELDOUT_NS = (3, 5, 13, 16)
+EXTRAPOLATION_NS = (24, 28)
+DEFAULT_TRAIN_NS = tuple(n for n in range(1, 21) if n not in HELDOUT_NS)
 
 
 @dataclass(frozen=True)
@@ -35,8 +36,8 @@ class CatCountDataConfig:
     def __post_init__(self) -> None:
         if not self.train_ns or len(set(self.train_ns)) != len(self.train_ns) or min(self.train_ns) <= 0:
             raise ValueError("train_ns must contain distinct positive integers")
-        if set(self.train_ns) & set(HELDOUT_NS):
-            raise ValueError("held-out N must not appear in the training split")
+        if set(self.train_ns) & set((*HELDOUT_NS, *EXTRAPOLATION_NS)):
+            raise ValueError("evaluation-only N must not appear in the training split")
         if self.train_rows <= 0:
             raise ValueError("train_rows must be positive")
 
@@ -64,7 +65,7 @@ def cat_count_rows(config: CatCountDataConfig) -> tuple[list[dict[str, object]],
         rng.shuffle(cycle)
         schedule.extend(cycle)
     train = [cat_count_record(n, "train", index) for index, n in enumerate(schedule[: config.train_rows])]
-    eval_ns = (*config.train_ns, *HELDOUT_NS)
+    eval_ns = (*config.train_ns, *HELDOUT_NS, *EXTRAPOLATION_NS)
     validation = [cat_count_record(n, "validation", index) for index, n in enumerate(eval_ns)]
     return train, validation
 

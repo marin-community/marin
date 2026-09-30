@@ -1,10 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Launch CatCountCanary standard and asynchronous runs through MarinSkyRL Megatron."""
+"""Launch CatCountCanary synchronous and asynchronous runs through MarinSkyRL Megatron."""
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -37,6 +38,7 @@ from experiments.models import qwen2_5_0_5b, qwen2_5_0_5b_instruct, qwen3_0_6b
 from experiments.post_training.cat_count_data import (
     DEFAULT_TRAIN_NS,
     ENV_CLASS,
+    EXTRAPOLATION_NS,
     HELDOUT_NS,
     TRAIN_FILENAME,
     VALIDATION_FILENAME,
@@ -50,7 +52,9 @@ GPUS_PER_NODE = 2
 # Each task exceeds half of the H100 host's 128 CPUs.
 CPUS_PER_NODE = 65
 TRAIN_NS = DEFAULT_TRAIN_NS
-TRAIN_BATCH_SIZE = 32
+TRAIN_BATCH_SIZE = 64
+MICRO_TRAIN_BATCH_SIZE = 16
+MICRO_FORWARD_BATCH_SIZE = 32
 GROUP_SIZE = 8
 SEED = 17
 JOB_TIMEOUT_SECONDS = 7200
@@ -84,7 +88,12 @@ MODELS = MappingProxyType(
 PRESET_STEPS = MappingProxyType({"dry": 1, "calibrate": 30, "gate": 60, "gate-filter": 60, "on-policy": 30})
 
 
-def role_plan(*, batch_size: int = TRAIN_BATCH_SIZE, group_size: int = GROUP_SIZE) -> SkyRLRolePlan:
+def role_plan(
+    *,
+    batch_size: int = TRAIN_BATCH_SIZE,
+    group_size: int = GROUP_SIZE,
+    micro_train_batch_size: int = MICRO_TRAIN_BATCH_SIZE,
+) -> SkyRLRolePlan:
     return SkyRLRolePlan(
         colocate_all=False,
         policy_num_nodes=1,
@@ -96,7 +105,7 @@ def role_plan(*, batch_size: int = TRAIN_BATCH_SIZE, group_size: int = GROUP_SIZ
         inference_engine_expert_parallel_size=1,
         train_batch_size=batch_size,
         policy_mini_batch_size=batch_size,
-        micro_train_batch_size_per_gpu=1,
+        micro_train_batch_size_per_gpu=micro_train_batch_size,
         n_samples_per_prompt=group_size,
     )
 
@@ -130,9 +139,11 @@ PROTECTED_SETTINGS = (
             "trainer.max_ckpts_to_keep",
             "trainer.eval_before_train",
             "trainer.ckpt_interval",
+            "trainer.callbacks",
             "generator.chat_template",
             "generator.chat_template_kwargs",
             "generator.run_engines_locally",
+            "generator.enable_http_endpoint",
             "generator.backend",
             "generator.use_conversation_multi_turn",
             "generator.require_exact_chat_transport",
@@ -174,22 +185,24 @@ def apply_setting(config: dict, text: str) -> None:
 def training_config(
     *,
     preset: str = "gate",
-    entrypoint: str = "fully_async",
+    lane: str = "async",
     model: str = "qwen2.5-0.5b-instruct",
     batch_size: int = TRAIN_BATCH_SIZE,
     group_size: int = GROUP_SIZE,
+    micro_train_batch_size: int = MICRO_TRAIN_BATCH_SIZE,
+    eval_reward_rise: float | None = None,
     train_ns: tuple[int, ...] = TRAIN_NS,
     seed: int = SEED,
     settings: tuple[str, ...] = (),
 ) -> dict:
     if preset not in PRESET_STEPS:
         raise ValueError(f"unknown preset {preset!r}")
-    if entrypoint not in ("fully_async", "standard"):
-        raise ValueError(f"unknown entrypoint {entrypoint!r}")
-    if batch_size <= 0 or group_size <= 0:
-        raise ValueError("batch and group sizes must be positive")
+    if lane not in ("async", "sync"):
+        raise ValueError(f"unknown lane {lane!r}")
+    if batch_size <= 0 or group_size <= 0 or micro_train_batch_size <= 0:
+        raise ValueError("batch, group and micro-batch sizes must be positive")
     choice = MODELS[model]
-    plan = role_plan(batch_size=batch_size, group_size=group_size)
+    plan = role_plan(batch_size=batch_size, group_size=group_size, micro_train_batch_size=micro_train_batch_size)
     max_steps = PRESET_STEPS[preset]
     geometry = {
         "tensor_model_parallel_size": 1,
@@ -214,9 +227,9 @@ def training_config(
             "epochs": 2,
             "max_steps": max_steps,
             "update_epochs_per_batch": 1 if preset == "on-policy" else 2,
-            "micro_forward_batch_size_per_gpu": 1,
-            "eval_batch_size": len(train_ns) + len(HELDOUT_NS),
-            "eval_interval": 1 if preset == "dry" else 10,
+            "micro_forward_batch_size_per_gpu": MICRO_FORWARD_BATCH_SIZE,
+            "eval_batch_size": len(train_ns) + len(HELDOUT_NS) + len(EXTRAPOLATION_NS),
+            "eval_interval": 1 if preset == "dry" else 5,
             "hf_save_interval": max_steps,
             "resume_mode": "latest",
             "max_ckpts_to_keep": 1,
@@ -224,14 +237,17 @@ def training_config(
             "logger": "wandb",
             "project_name": "marin-cat-count-canary",
             "tracker_commit_each_step": True,
+            "training_metrics": True,
+            "policy_train_spans": True,
+            "rollout_spans": True,
             "algorithm": {
                 "advantage_estimator": "grpo",
-                "policy_loss_type": "regular",
+                "policy_loss_type": "behavior_clip" if lane == "async" else "regular",
                 "eps_clip_low": 0.2,
                 "eps_clip_high": 0.2,
                 "use_kl_loss": False,
                 "use_kl_in_reward": False,
-                "use_tis": True,
+                "use_tis": lane == "sync",
                 "tis_imp_ratio_cap": 2.0,
                 "dynamic_sampling": {"type": "filter" if preset == "gate-filter" else None},
             },
@@ -246,7 +262,7 @@ def training_config(
             },
             "ref": {"megatron_config": geometry},
             "rollout_buffer": {
-                "max_staleness_steps": 0 if entrypoint == "standard" or preset == "on-policy" else 2,
+                "max_staleness_steps": 0 if lane == "sync" or preset == "on-policy" else 2,
                 "batch_policy": "full_batch",
                 "max_in_flight": batch_size,
                 "object_store_root": None,
@@ -257,6 +273,7 @@ def training_config(
             "model_dtype": "bfloat16",
             "vllm_attention_backend": "FLASH_ATTN",
             "run_engines_locally": True,
+            "enable_http_endpoint": False,
             "weight_sync_backend": "nccl",
             "use_conversation_multi_turn": True,
             "require_exact_chat_transport": True,
@@ -264,8 +281,9 @@ def training_config(
             "enforce_eager": False,
             "chat_template": {"source": "name", "name_or_path": choice.chat_template},
             "sampling_params": {"temperature": 1.0, "top_p": 1.0, "logprobs": 0},
-            "eval_sampling_params": {"temperature": 1.0 if preset == "dry" else 0.0},
-            "eval_n_samples_per_prompt": group_size if preset == "dry" else 1,
+            "eval_sampling_params": {"temperature": 0.0},
+            "eval_n_samples_per_prompt": 1,
+            "inference_stats_interval": 1,
         },
         "data": {"kind": "parquet", "shuffle": False, "train_data": [], "val_data": []},
     }
@@ -277,18 +295,50 @@ def training_config(
     trainer = config["trainer"]
     trainer["eval_before_train"] = trainer["eval_interval"] > 0
     trainer["ckpt_interval"] = max(1, trainer["eval_interval"])
-    if entrypoint == "standard" and trainer["rollout_buffer"]["max_staleness_steps"] != 0:
-        raise click.BadParameter("the standard lane requires zero rollout staleness")
+    metric_groups = {}
+    for profile in ("eval", "eval/sampled"):
+        for split, counts in (("train", train_ns), ("heldout", HELDOUT_NS), ("extrapolation", EXTRAPOLATION_NS)):
+            for metric in ("avg_score", "environment/exact"):
+                metric_groups[f"{profile}/{split}/{metric}"] = [f"{profile}/cat_count_n{n}/{metric}" for n in counts]
+    if eval_reward_rise is not None and (
+        not math.isfinite(eval_reward_rise) or eval_reward_rise <= 0 or trainer["eval_interval"] <= 0
+    ):
+        raise ValueError("evaluation reward rise requires a finite positive margin and periodic evaluation")
+    trainer["callbacks"] = [
+        {"type": "checkpoint", "save_steps": trainer["ckpt_interval"]},
+        {
+            "type": "evaluation",
+            "eval_steps": trainer["eval_interval"],
+            "eval_before_train": trainer["eval_before_train"],
+            "additional_evaluations": {
+                "sampled": {"sampling_params": {"temperature": 1.0}, "n_samples_per_prompt": GROUP_SIZE}
+            },
+            "metric_groups": metric_groups,
+            "stop_on_improvement": {"eval/train/avg_score": eval_reward_rise} if eval_reward_rise is not None else {},
+        },
+        {"type": "hf_model_save", "save_steps": trainer["hf_save_interval"]},
+        {"type": "database_registration"},
+        {
+            "type": "inference_stats",
+            "log_every_steps": config["generator"]["inference_stats_interval"],
+            "log_to_console": True,
+            "log_to_tracker": True,
+        },
+    ]
+    if lane == "sync" and trainer["rollout_buffer"]["max_staleness_steps"] != 0:
+        raise click.BadParameter("the sync lane requires zero rollout staleness")
     return config
 
 
 def build_run(
     *,
     preset: str = "gate",
-    entrypoint: str = "fully_async",
+    lane: str = "async",
     model: str = "qwen2.5-0.5b-instruct",
     batch_size: int = TRAIN_BATCH_SIZE,
     group_size: int = GROUP_SIZE,
+    micro_train_batch_size: int = MICRO_TRAIN_BATCH_SIZE,
+    eval_reward_rise: float | None = None,
     train_ns: tuple[int, ...] = TRAIN_NS,
     seed: int = SEED,
     job_timeout_seconds: int = JOB_TIMEOUT_SECONDS,
@@ -299,10 +349,12 @@ def build_run(
         raise ValueError("job timeout must be positive")
     config = training_config(
         preset=preset,
-        entrypoint=entrypoint,
+        lane=lane,
         model=model,
         batch_size=batch_size,
         group_size=group_size,
+        micro_train_batch_size=micro_train_batch_size,
+        eval_reward_rise=eval_reward_rise,
         train_ns=train_ns,
         seed=seed,
         settings=settings,
@@ -311,7 +363,7 @@ def build_run(
     row_multiplier = 4 if preset == "gate-filter" else 1
     prefetch_rows = config["trainer"]["rollout_buffer"]["max_staleness_steps"] * batch_size
     train_rows = (batch_size * max_steps + prefetch_rows) * row_multiplier
-    identity = f"{model}-{entrypoint}-{preset}-{fingerprint_hash(yaml.safe_dump(config) + repr(train_ns))}"
+    identity = f"{model}-{lane}-{preset}-{fingerprint_hash(yaml.safe_dump(config) + repr(train_ns))}"
     data_name = f"documents/{EXPERIMENT_NAME}/{identity}"
     data = cat_count_data_step(
         data_name,
@@ -340,7 +392,9 @@ def build_run(
                 num_nodes=2,
                 gpus_per_node=GPUS_PER_NODE,
                 gpu_variant=GPU_VARIANT,
-                role_plan=role_plan(batch_size=batch_size, group_size=group_size),
+                role_plan=role_plan(
+                    batch_size=batch_size, group_size=group_size, micro_train_batch_size=micro_train_batch_size
+                ),
             ),
             retention=SkyRLRetentionPolicy(resume_checkpoint_count=1),
             seed=seed,
@@ -365,10 +419,12 @@ def build_run(
 
 @click.command(help=__doc__)
 @click.option("--preset", type=click.Choice(tuple(PRESET_STEPS)), default="dry", show_default=True)
-@click.option("--entrypoint", type=click.Choice(("fully_async", "standard")), default="fully_async")
+@click.option("--lane", type=click.Choice(("sync", "async")), default="async", show_default=True)
 @click.option("--model", type=click.Choice(tuple(MODELS)), default="qwen2.5-0.5b-instruct")
 @click.option("--batch-size", type=int, default=TRAIN_BATCH_SIZE)
 @click.option("--group-size", type=int, default=GROUP_SIZE)
+@click.option("--micro-train-batch-size", type=int, default=MICRO_TRAIN_BATCH_SIZE, show_default=True)
+@click.option("--eval-reward-rise", type=float, help="Stop after this gain in greedy training evaluation reward.")
 @click.option("--train-n", "train_ns", multiple=True, type=int)
 @click.option("--seed", type=int, default=SEED)
 @click.option("--job-timeout-seconds", type=int, default=JOB_TIMEOUT_SECONDS, show_default=True)
@@ -376,10 +432,12 @@ def build_run(
 @rl_build_options
 def main(
     preset: str,
-    entrypoint: str,
+    lane: str,
     model: str,
     batch_size: int,
     group_size: int,
+    micro_train_batch_size: int,
+    eval_reward_rise: float | None,
     train_ns: tuple[int, ...],
     seed: int,
     job_timeout_seconds: int,
@@ -387,10 +445,12 @@ def main(
 ) -> ArtifactStep[SkyRLRun]:
     return build_run(
         preset=preset,
-        entrypoint=entrypoint,
+        lane=lane,
         model=model,
         batch_size=batch_size,
         group_size=group_size,
+        micro_train_batch_size=micro_train_batch_size,
+        eval_reward_rise=eval_reward_rise,
         train_ns=train_ns or TRAIN_NS,
         seed=seed,
         job_timeout_seconds=job_timeout_seconds,
