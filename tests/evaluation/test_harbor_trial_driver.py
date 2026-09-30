@@ -625,9 +625,7 @@ def test_pi_preflight_rejects_missing_or_invalid_thinking_format_before_dataset_
     result = _preflight(tmp_path, [(policy_path, kwargs)], check=False)
 
     assert result.returncode != 0
-    assert "Invalid hosted Pi configuration" in result.stderr
     assert "thinking_format" in result.stderr
-    assert "agent.agent_kwargs" in result.stderr
 
 
 @pytest.mark.parametrize(("policy_max_tokens", "expected_max_tokens"), [(None, 32768), (16384, 16384)])

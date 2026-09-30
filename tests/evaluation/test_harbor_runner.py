@@ -429,14 +429,30 @@ def test_managed_harbor_pauses_and_resumes_after_inference_recovers(tmp_path, mo
     }
 
 
-def test_historical_harbor_descriptor_uses_locked_dependencies(monkeypatch):
+def test_historical_harbor_descriptor_uses_locked_dependencies(tmp_path, monkeypatch):
     commit = "21e0ea6a0cc1a0b617aebd86988ea93e1795f84a"
     project = f"config/external/harbor/pins/{commit}"
+    lock_dir = tmp_path / project
+    lock_dir.mkdir(parents=True)
+    (lock_dir / "uv.lock").write_text(
+        f"""
+[[package]]
+name = "harbor"
+source = {{ git = "https://github.com/marin-community/harbor.git#{commit}" }}
+[[package]]
+name = "marin-external-harbor"
+dependencies = [{{ name = "gcsfs" }}]
+[[package]]
+name = "gcsfs"
+version = "1.0"
+"""
+    )
+    monkeypatch.setattr(driver_config, "find_project_root", lambda _start: tmp_path)
     monkeypatch.setattr(driver_config, "HARBOR", replace(HARBOR, runtime_requirements=("future==1",)))
 
     descriptor = driver_config.harbor_runtime_descriptor(commit, project)
 
-    assert "gcsfs==2026.7.0" in descriptor
+    assert "gcsfs==1.0" in descriptor
     assert "future==1" not in descriptor
     with pytest.raises(ValueError, match="pins"):
         driver_config.harbor_runtime_descriptor("0" * 40, project)
