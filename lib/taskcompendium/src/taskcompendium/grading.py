@@ -46,13 +46,20 @@ class Verifier(BaseModel, ABC):
         """Grade a submission using this verifier's configuration."""
 
 
+class ExactAnswerOrder(StrEnum):
+    """Whether multiple accepted exact values must retain their source order."""
+
+    ORDERED = "ordered"
+    UNORDERED = "unordered"
+
+
 class ExactAnswerVerifier(Verifier):
     """Compare one or more text values using exact-mode normalization."""
 
     expected: tuple[str, ...]
     ignore_case: bool = True
     collapse_whitespace: bool = True
-    ordered: bool = True
+    ordering: ExactAnswerOrder = ExactAnswerOrder.ORDERED
 
     @model_validator(mode="after")
     def validate_expected(self) -> "ExactAnswerVerifier":
@@ -67,7 +74,7 @@ class ExactAnswerVerifier(Verifier):
             expected=self.expected,
             ignore_case=self.ignore_case,
             ignore_whitespace=self.collapse_whitespace,
-            ordered=self.ordered,
+            ordered=self.ordering is ExactAnswerOrder.ORDERED,
         )
         boxed = extract_boxed(submission.value)
         if boxed is not None:
@@ -145,14 +152,14 @@ def exact_answer(
     expected: tuple[str, ...],
     ignore_case: bool = True,
     collapse_whitespace: bool = True,
-    ordered: bool = True,
+    ordering: ExactAnswerOrder = ExactAnswerOrder.ORDERED,
 ) -> VerifierSpec:
     """Construct an exact verifier; one expected value matches the whole candidate."""
     verifier = ExactAnswerVerifier(
         expected=expected,
         ignore_case=ignore_case,
         collapse_whitespace=collapse_whitespace,
-        ordered=ordered,
+        ordering=ordering,
     )
     return VerifierSpec(kind=VerifierKind.EXACT_ANSWER, parameters_json=verifier.model_dump_json())
 
