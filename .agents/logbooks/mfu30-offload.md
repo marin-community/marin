@@ -49,8 +49,10 @@ Evidence in the baseline HLO: 143 `*.remat*` instructions, 84 of them in the bac
 per layer. Trace cost: **0.633 s/step on the compute stream** (0.630 in the backward body; 0.227 of it is
 the sync all-gather remat, mostly rank-skew wait; 0.11 overlaps collectives).
 
-The LHS memory tracker also counts host bytes (`ShapeSizeBytesFunction` without a memory-space filter)
-and is unaffected by the flag, so the schedule stays as conservative as today; only the remat clones go.
+The LHS is unaffected by the flag: its `MemoryPressureTracker` already skips non-default memory spaces,
+but it does count the live device entry parameters against a limit that has already subtracted them, so
+its temp budget is `(147.4 - 35.1) x 0.85 - 35.1 = 60.4 GiB` against a 67.5 GiB arena. Only the remat
+clones should go.
 
 H-A4: `XLA_FLAGS=--xla_gpu_enable_host_memory_offloading=true`. Prediction: remat count -> ~0, compute
 stream -0.4 s, step -0.3 to -0.5 s, arena +5-10 GiB (peak ~110 GiB). Numerics unchanged (remat recomputes
