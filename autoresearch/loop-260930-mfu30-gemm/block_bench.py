@@ -202,8 +202,9 @@ def main():
                 for k, (ms, n) in list(results[name]["kernels"].items())[:30]:
                     print(f"    {ms:8.3f} ms  n={n:3d}  {k}", flush=True)
             del out
-    if args.check:
-        # fp32 reference: the baseline code with fp32 parameters and activations.
+    if args.check and args.small:
+        # fp32 reference: the baseline code with fp32 parameters and activations (FA4 is bf16-only,
+        # so only the small reference-attention configuration runs it).
         with jax.set_mesh(mesh):
             block = build_block(base, cfg, jax.random.key(0))
             mask = make_mask(base, cfg)
@@ -212,6 +213,7 @@ def main():
             del ref
         lr_, gref = gr
         print(f"loss fp32 reference {lr_:.8e}")
+    if args.check and args.small:
         for (pa, a), (_, c), (_, r) in zip(
             jax.tree_util.tree_leaves_with_path(grads["baseline"][1]),
             jax.tree_util.tree_leaves_with_path(grads["candidate"][1]),
@@ -222,6 +224,7 @@ def main():
             eb = float(np.sqrt(np.mean((a32 - r32) ** 2))) / rr
             ec = float(np.sqrt(np.mean((c32 - r32) ** 2))) / rr
             print(f"  vs fp32 {jax.tree_util.keystr(pa)[:50]:50s} baseline rel-rms err {eb:.3e}  candidate {ec:.3e}")
+    if args.check:
         lb, gb = grads["baseline"]
         lc, gc = grads["candidate"]
         print(f"loss baseline {lb:.8e} candidate {lc:.8e} rel diff {abs(lc - lb) / abs(lb):.3e}")
