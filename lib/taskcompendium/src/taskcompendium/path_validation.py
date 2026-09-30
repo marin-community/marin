@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Portable file paths for pinned provider source packages."""
+"""Portable relative paths and file collision checks."""
 
 import unicodedata
 from collections.abc import Iterable
