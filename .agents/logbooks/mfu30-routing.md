@@ -302,3 +302,12 @@ fused 3.54 ms vs dh GEMM + XLA pass 5.10 ms (dh GEMM alone 3.04 ms): -1.56 ms pe
 96 calls. d_gate_up max 0.83% of the largest value (mean 5e-5), row dot max 0.17%: rounding level (fp32
 SwiGLU backward on the unrounded accumulator). Changes dx and dW13 at rounding level, so the gate now
 compares those to rounding (median and max) and keeps out/drops/dW2 exact. Gate `m30b-gate-epi-02`.
+
+## M30B-017 E gate passes (`m30b-gate-epi-02`, 12643e682c = D + mirror + E)
+
+Controls run the pre-E QuACK backward (frozen `unfused_backward.py`). Single layer, all six cases: out, drops and
+dW2 equal to main; dx, dW13 and dS median 0.49-0.56% elementwise (about one bf16 ulp), max <= 0.82% of the largest
+magnitude. Single-layer fwd+bwd: main 84.4 / D 81.4 / D+mirror+E 79.3 ms (uniform), 81.3 / 78.3 / 75.7 (skewed).
+3-layer rematted scan: main 342.2 / D 298.7 / D+mirror+E 290.3 ms: E is -2.8 ms per layer (~-0.13 s/step at 48
+layers on 4 GPUs); temp 35.30 / 31.92 / 31.82 GB; gradients vs main to rounding (dx, dW13 median 0.49%). pytest 88
+passed (two new QuACK dswiglu tests) + the same 3 GPU-only failures.
