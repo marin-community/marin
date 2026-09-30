@@ -50,6 +50,7 @@ REPLAY_MODES = ("router_replay", "router_replay_response", "router_replay_filter
 # response-only), and replay of the prefill re-read's routes (the prefill metric and its placebo).
 NUMERICS_MODES = (
     "native_again",
+    "native_capture",
     "router_replay",
     "router_replay_response",
     "repeat_replay",
@@ -86,7 +87,11 @@ PROBE_LAYOUTS = {
 
 
 def probe_block(
-    settings: ProbeSettings, *, router_replay: bool = True, trainer_modes: tuple[str, ...] = REPLAY_MODES
+    settings: ProbeSettings,
+    *,
+    router_replay: bool = True,
+    trainer_modes: tuple[str, ...] = REPLAY_MODES,
+    capture_layers: tuple[int, ...] = (),
 ) -> dict:
     """Render fixed-token collection settings for a synchronous Megatron recipe.
 
@@ -108,6 +113,7 @@ def probe_block(
                 "filtered_replay": {"keep_fraction": settings.keep_fraction},
                 "rescore_prefix_cache": settings.cache_mode,
                 "reread_again": settings.cache_mode != "on",
+                "capture_layers": list(capture_layers),
             },
         },
         "generator": {
@@ -136,6 +142,7 @@ def tiny_grug_recipe(
     *,
     warmup: bool,
     trainer_modes: tuple[str, ...] = REPLAY_MODES,
+    capture_layers: tuple[int, ...] = (),
 ) -> str:
     """Render one role-independent training recipe for the selected arm."""
     config = {
@@ -179,7 +186,7 @@ def tiny_grug_recipe(
         },
         "data": {"kind": "parquet", "train_data": [], "val_data": []},
     }
-    probe = probe_block(settings, trainer_modes=trainer_modes)
+    probe = probe_block(settings, trainer_modes=trainer_modes, capture_layers=capture_layers)
     probe["trainer"]["mismatch_probe"]["enabled"] = not warmup
     config = merge({}, config, probe)
     return yaml.safe_dump(config, sort_keys=False)
@@ -194,6 +201,7 @@ def build_arms(
     fixture_version: str,
     warmup: bool,
     trainer_modes: tuple[str, ...] = REPLAY_MODES,
+    capture_layers: tuple[int, ...] = (),
 ) -> dict[str, ArtifactStep[SkyRLRun]]:
     """Build separate training artifacts for arms sharing model and data inputs."""
     model = ArtifactStep.adopt(
@@ -245,6 +253,7 @@ def build_arms(
                     settings,
                     warmup=warmup,
                     trainer_modes=trainer_modes,
+                    capture_layers=capture_layers,
                 ),
                 runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
                 model=ArtifactHfModel(
@@ -280,6 +289,7 @@ def build_arms(
 @click.option("--keep-fraction", type=float, default=0.5, show_default=True)
 @click.option("--rescore-prefix-cache", "cache_mode", type=click.Choice(("off", "on", "both")), default="off")
 @click.option("--trainer-mode", "trainer_modes", multiple=True, default=REPLAY_MODES, show_default=True)
+@click.option("--capture-layer", "capture_layers", multiple=True, type=int)
 @rl_build_options
 def main(
     arm_names: tuple[str, ...],
@@ -296,6 +306,7 @@ def main(
     keep_fraction: float,
     cache_mode: str,
     trainer_modes: tuple[str, ...],
+    capture_layers: tuple[int, ...],
 ) -> dict[str, ArtifactStep[SkyRLRun]]:
     settings = ProbeSettings(
         seed=seed,
@@ -315,6 +326,7 @@ def main(
         fixture_version=fixture_version,
         warmup=warmup,
         trainer_modes=trainer_modes,
+        capture_layers=capture_layers,
     )
 
 

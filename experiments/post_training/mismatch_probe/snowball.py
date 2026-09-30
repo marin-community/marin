@@ -37,6 +37,9 @@ HELDOUT_DATA_URI = (
     "1.0.0-candidate1/batteries/e9-heldout-v1/snowball"
 )
 HELDOUT_FILENAME = "heldout-math-l345.parquet"
+# Parity-harness layers: the first layer, the first full-attention layer, and the first layer of
+# pipeline stage two.
+CAPTURE_LAYERS = (0, 3, 13)
 
 
 class Campaign(StrEnum):
@@ -59,8 +62,11 @@ def snowball_recipe(
     response_tokens: int,
 ) -> str:
     replay = campaign is Campaign.MISMATCH or routing is not Routing.NATIVE
-    modes = NUMERICS_MODES if campaign is Campaign.MISMATCH else REPLAY_MODES if replay else ()
-    probe = probe_block(settings, router_replay=replay, trainer_modes=modes)
+    numerics = campaign is Campaign.MISMATCH
+    modes = NUMERICS_MODES if numerics else REPLAY_MODES if replay else ()
+    probe = probe_block(
+        settings, router_replay=replay, trainer_modes=modes, capture_layers=CAPTURE_LAYERS if numerics else ()
+    )
     probe["generator"]["sampling_params"]["seed"] = settings.seed
     config = {
         "entrypoint": "standard",
