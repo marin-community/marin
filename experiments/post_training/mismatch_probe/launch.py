@@ -45,6 +45,7 @@ TINY_GRUG_POLICY = PolicySpec(
 )
 
 WARMUP_UPDATES = 3
+REPLAY_MODES = ("router_replay", "router_replay_filtered")
 
 
 @dataclass(frozen=True)
@@ -74,11 +75,18 @@ PROBE_LAYOUTS = {
 }
 
 
-def probe_block(settings: ProbeSettings) -> dict:
-    """Render fixed-token collection settings for a synchronous Megatron recipe."""
+def probe_block(
+    settings: ProbeSettings, *, router_replay: bool = True, trainer_modes: tuple[str, ...] = REPLAY_MODES
+) -> dict:
+    """Render fixed-token collection settings for a synchronous Megatron recipe.
+
+    Sampling is the full distribution at temperature one. MarinSkyRL applies the
+    behavior-logprob sampling program to probe runs, which sets ``min_tokens`` to zero,
+    so vLLM reports the probability of the distribution the trainer scores.
+    """
     return {
         "trainer": {
-            "policy": {"megatron_config": {"moe_router_replay": True}},
+            "policy": {"megatron_config": {"moe_router_replay": router_replay}},
             "mismatch_probe": {
                 "enabled": True,
                 "prompts": {"count": settings.prompt_count, "samples_per_prompt": settings.samples_per_prompt},
@@ -86,7 +94,7 @@ def probe_block(settings: ProbeSettings) -> dict:
                 "archive_uri": None,
                 "reuse_probe": settings.reuse_probe,
                 "score_after_updates": list(settings.updates),
-                "extra_trainer_modes": ["router_replay", "router_replay_filtered"],
+                "extra_trainer_modes": list(trainer_modes),
                 "filtered_replay": {"keep_fraction": settings.keep_fraction},
                 "rescore_prefix_cache": settings.cache_mode,
             },
@@ -95,7 +103,7 @@ def probe_block(settings: ProbeSettings) -> dict:
             "require_exact_chat_transport": True,
             "enable_prefix_caching": settings.cache_mode != "off",
             "engine_init_kwargs": {
-                "enable_return_routed_experts": True,
+                "enable_return_routed_experts": router_replay,
                 "logprobs_mode": "processed_logprobs",
                 "generation_config": "vllm",
             },
