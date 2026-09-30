@@ -45,6 +45,8 @@ CAPTURE_LAYERS = (0, 3, 13)
 class Campaign(StrEnum):
     MISMATCH = "mismatch"
     STEP_TIME = "step-time"
+    # One real update at the production learning rate: how far a single step moves the policy.
+    DRIFT = "drift"
 
 
 class Routing(StrEnum):
@@ -65,7 +67,12 @@ def snowball_recipe(
     extra_modes: tuple[str, ...] = (),
 ) -> str:
     replay = campaign is Campaign.MISMATCH or routing is not Routing.NATIVE
-    modes = (*(NUMERICS_MODES if campaign is Campaign.MISMATCH else REPLAY_MODES if replay else ()), *extra_modes)
+    if campaign is Campaign.MISMATCH:
+        modes = (*NUMERICS_MODES, *extra_modes)
+    elif campaign is Campaign.DRIFT:
+        modes = ("native_again", *extra_modes)
+    else:
+        modes = (*(REPLAY_MODES if replay else ()), *extra_modes)
     probe = probe_block(
         settings,
         router_replay=replay,
@@ -105,10 +112,11 @@ def snowball_recipe(
                 "use_kl_in_reward": False,
             },
             "policy": {
-                "grug_query_bias_update_mode": "frozen",
+                # Timing and mismatch campaigns hold the weights; the drift campaign trains as production does.
+                **({} if campaign is Campaign.DRIFT else {"grug_query_bias_update_mode": "frozen"}),
                 "optimizer_config": {
                     "optimizer": "AdamW",
-                    "lr": 0.0,
+                    "lr": SNOWBALL_RECIPE.learning_rate if campaign is Campaign.DRIFT else 0.0,
                     "weight_decay": SNOWBALL_RECIPE.weight_decay,
                     "max_grad_norm": SNOWBALL_RECIPE.max_grad_norm,
                 },
@@ -274,7 +282,7 @@ def main(
             seed,
             prompt_count,
             samples_per_prompt,
-            (0,) if selected is Campaign.MISMATCH else (0, steps),
+            {Campaign.MISMATCH: (0,), Campaign.DRIFT: (0, 1)}.get(selected, (0, steps)),
             keep_fraction,
             cache_mode,
             reuse_probe,
