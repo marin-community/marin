@@ -82,6 +82,7 @@ class SourceRights(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     license: str
+    license_url: str
     attribution: str
     source_card_url: str
     source_card_revision: str
@@ -90,11 +91,18 @@ class SourceRights(BaseModel):
     @model_validator(mode="after")
     def validate_rights(self) -> "SourceRights":
         if not all(
-            (self.license, self.attribution, self.source_card_url, self.source_card_revision, self.change_notice)
+            (
+                self.license,
+                self.license_url,
+                self.attribution,
+                self.source_card_url,
+                self.source_card_revision,
+                self.change_notice,
+            )
         ):
             raise ValueError("Each cohort needs license, attribution, pinned card, and change notice")
-        if not self.source_card_url.startswith("https://"):
-            raise ValueError("Source card URL must use HTTPS")
+        if not self.license_url.startswith("https://") or not self.source_card_url.startswith("https://"):
+            raise ValueError("License and source card URLs must use HTTPS")
         if not GIT_SHA_PATTERN.fullmatch(self.source_card_revision):
             raise ValueError("Source card revision must be a full Git commit")
         return self
@@ -343,7 +351,8 @@ def _card(cohorts: tuple[CohortInput, ...], data_files: list[dict[str, object]])
     for cohort in cohorts:
         lines.append(
             f"- `{cohort.config}/{cohort.cohort}` ({cohort.split}): {cohort.rights.attribution}, "
-            f"{cohort.rights.license}; [source card]({cohort.rights.source_card_url}) "
+            f"[{cohort.rights.license}]({cohort.rights.license_url}); "
+            f"[source card]({cohort.rights.source_card_url}) "
             f"at `{cohort.rights.source_card_revision}`. {cohort.rights.change_notice}"
         )
     lines.extend(
@@ -520,7 +529,8 @@ def _publication_card(manifest: dict[str, object], review: ReleaseReview) -> str
         rights = entry["rights"]
         lines.append(
             f"- `{entry['config']}/{entry['cohort']}` ({entry['split']}): {entry['exported_rows']} rows; "
-            f"{rights['attribution']}, {rights['license']}; [source card]({rights['source_card_url']}) "
+            f"{rights['attribution']}, [{rights['license']}]({rights['license_url']}); "
+            f"[source card]({rights['source_card_url']}) "
             f"at `{rights['source_card_revision']}`. {rights['change_notice']}"
         )
     lines.extend(("", f"Rights review: {review.rights_review_url}. Harbor evidence is recorded in `manifest.json`."))

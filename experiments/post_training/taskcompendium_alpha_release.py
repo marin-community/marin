@@ -111,6 +111,7 @@ def _workplace_cohorts(source_dir: Path, builder_revision: str) -> tuple[CohortI
     )
     rights = SourceRights(
         license="cc-by-4.0",
+        license_url="https://creativecommons.org/licenses/by/4.0/",
         attribution="NVIDIA Corporation, Nemotron-RL-agent-workplace_assistant",
         source_card_url=f"https://huggingface.co/datasets/{DATASET}/blob/{WORKPLACE_CARD_REVISION}/README.md",
         source_card_revision=WORKPLACE_CARD_REVISION,
@@ -192,6 +193,7 @@ def _tasktrove_cohorts(source_dir: Path, manifest: dict[str, Any]) -> tuple[Coho
                 projection_builder_revision=PROJECTION_BUILDER_REVISION,
                 rights=SourceRights(
                     license="cc-by-4.0",
+                    license_url="https://creativecommons.org/licenses/by/4.0/",
                     attribution=f"NVIDIA Corporation, {card_dataset}",
                     source_card_url=f"https://huggingface.co/datasets/{card_dataset}/blob/{card_revision}/README.md",
                     source_card_revision=card_revision,

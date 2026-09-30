@@ -164,6 +164,7 @@ def test_mixed_candidate_keeps_configs_source_proof_and_rights_separate(tmp_path
     tasktrove_path.write_text(json.dumps(regional_candidate) + "\n")
     rights = SourceRights(
         license="cc-by-4.0",
+        license_url="https://creativecommons.org/licenses/by/4.0/",
         attribution="NVIDIA Corporation",
         source_card_url="https://example.org/card",
         source_card_revision="1" * 40,
@@ -302,6 +303,7 @@ def test_mixed_candidate_rejects_private_or_unproved_tasktrove_record(tmp_path):
         projection_builder_revision="1" * 40,
         rights=SourceRights(
             license="cc-by-4.0",
+            license_url="https://creativecommons.org/licenses/by/4.0/",
             attribution="NVIDIA Corporation",
             source_card_url="https://example.org/card",
             source_card_revision="1" * 40,
@@ -385,6 +387,7 @@ def _workplace_candidate(tmp_path):
         projection_builder_revision="c" * 40,
         rights=SourceRights(
             license="cc-by-4.0",
+            license_url="https://creativecommons.org/licenses/by/4.0/",
             attribution="NVIDIA Corporation",
             source_card_url="https://example.org/card",
             source_card_revision="d" * 40,
@@ -432,6 +435,7 @@ def test_release_finalizer_writes_separate_ready_artifact(tmp_path):
     assert sha256(ready_data.read_bytes()).hexdigest() == sha256(candidate_data.read_bytes()).hexdigest()
     assert json.loads((candidate / "manifest.json").read_text())["publication_ready"] is False
     assert "TaskCompendium Alpha 1 Candidate" not in (ready / "README.md").read_text()
+    assert "[cc-by-4.0](https://creativecommons.org/licenses/by/4.0/)" in (ready / "README.md").read_text()
 
 
 def test_release_finalizer_rejects_data_changed_after_review(tmp_path):
