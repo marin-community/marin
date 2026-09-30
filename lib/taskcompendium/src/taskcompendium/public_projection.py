@@ -14,7 +14,6 @@ from taskcompendium.models import (
     ConversationInput,
     ConversationToolCall,
     EnvironmentRequirements,
-    FinalTools,
     FunctionDefinition,
     ProviderRequirement,
     Source,
@@ -45,7 +44,6 @@ _PUBLIC_NESTED_FIELDS = {
     ToolResult: {"type", "call_id", "content"},
     EnvironmentRequirements: {"capabilities"},
     ProviderRequirement: {"action_interface", "seed_sha256"},
-    FinalTools: {"functions", "tool_choice", "parallel_tool_calls"},
     FunctionDefinition: {"name", "parameters", "description", "strict"},
     Source: {"dataset", "revision", "row", "importer_revision"},
 }
@@ -61,7 +59,7 @@ class PublicTask(BaseModel):
     context: ConversationInput
     environment_requirements: EnvironmentRequirements
     tool_providers: dict[str, ProviderRequirement]
-    final_tools: FinalTools
+    final_tools: tuple[FunctionDefinition, ...]
     answer_type: AnswerType
     source: Source
     submission_instruction: str
