@@ -143,3 +143,12 @@ time) and never ran. Resubmitted the identical treatment without `--timeout`:
 apart from the flag; the `--offload-opt-state` knob defaults to the hero value). Protocol note: same-code
 gcab runs drift ~0.4 MFU down over 330 steps, so main reads ~28.5 in the 55-step screening window; score
 against `mhep-ctx4k-s0-20260930` over the same steps.
+
+## M30A-010 Seed-0 control landed; scoring window 180011-180059 (2026-09-30)
+
+`mhep-ctx4k-s0-20260930`: median 28.255 MFU (13.892 s) over 180005-180059, peak 103.09 GiB; loss
+180000 1.261413, 180001 1.234596, 180002 1.200221, 180003 1.256785. Steps 180000-180010 are restore
+warmup with no later drift, so arms score 180011-180059 (profiled 180021-180023 excluded). Gap to 30%:
+-0.81 s. Stack note: PR #9481's "re-gather hero attention weights in the backward pass" targets the same
+XLA-remat sync all-gathers H-A4 removes; the hmo-02 analysis must list which `all-gather*.remat` clones
+disappear so the stack knows whether it still needs that commit.
