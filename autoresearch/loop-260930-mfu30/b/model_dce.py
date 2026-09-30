@@ -40,7 +40,7 @@ def body_counts(jaxpr, prims, out, path="top"):
                     for p in param
                     if isinstance(p, (jax_core.ClosedJaxpr, jax_core.Jaxpr))
                 ]
-            for i, sub in enumerate(subs):
+            for sub in subs:
                 sub_path = f"{path}/{eqn.primitive.name}"
                 if eqn.primitive.name == "scan":
                     out.append((sub_path + f"#{len(out)}", body_counts(sub, prims, out, sub_path)))
