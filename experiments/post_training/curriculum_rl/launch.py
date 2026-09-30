@@ -23,7 +23,7 @@ from __future__ import annotations
 import logging
 import shutil
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -99,7 +99,18 @@ class PolicySpec:
     # engine data parallelism, and model-specific vLLM flags and sampling
     # kwargs.
     serve_gpus: int
-    trainer_config: dict[str, Any]
+    trainer_config: dict[str, Any] = field(
+        default_factory=lambda: {
+            "strategy": "megatron",
+            "megatron_config": {
+                "tensor_model_parallel_size": 1,
+                "pipeline_model_parallel_size": 1,
+                "context_parallel_size": 1,
+                "expert_model_parallel_size": 1,
+                "expert_tensor_parallel_size": 1,
+            },
+        }
+    )
     serve_memory: str | None = None
     serve_data_parallel_size: int | None = None
     serve_vllm_extra_args: tuple[str, ...] = ()
@@ -119,16 +130,6 @@ QWEN_POLICY = PolicySpec(
     enable_thinking=False,
     task_memory="128GB",
     serve_gpus=1,
-    trainer_config={
-        "strategy": "megatron",
-        "megatron_config": {
-            "tensor_model_parallel_size": 1,
-            "pipeline_model_parallel_size": 1,
-            "context_parallel_size": 1,
-            "expert_model_parallel_size": 1,
-            "expert_tensor_parallel_size": 1,
-        },
-    },
 )
 
 # Adopted in place from the exports prefix (~134GB referenced, not copied).
