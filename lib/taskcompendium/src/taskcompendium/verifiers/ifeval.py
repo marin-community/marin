@@ -10,9 +10,9 @@ from pydantic import JsonValue, model_validator
 from tasktrove_verify.modes.grade_ifeval import resolve_checks
 from tasktrove_verify.spec import Constraint
 
-from taskcompendium.grading import GradeResult, GradingAttempt, Outcome, Verifier
+from taskcompendium.grading import GradeResult, Outcome, Verifier
 from taskcompendium.models import VerifierKind, VerifierSpec
-from taskcompendium.submission import Submission, TextSubmission
+from taskcompendium.submission import GradingAttempt, Submission, TextSubmission
 
 
 @dataclass(frozen=True)
@@ -33,9 +33,7 @@ class IFEvalVerifier(Verifier):
         resolve_checks(tuple(Constraint(item.name, item.params) for item in self.constraints))
         return self
 
-    async def grade(
-        self, submission: Submission, *, specification: VerifierSpec, attempt: GradingAttempt
-    ) -> GradeResult:
+    async def grade(self, submission: Submission, *, attempt: GradingAttempt) -> GradeResult:
         if not isinstance(submission, TextSubmission):
             raise TypeError("IFEval verifier requires a text submission")
 

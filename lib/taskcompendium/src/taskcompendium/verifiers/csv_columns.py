@@ -13,9 +13,9 @@ from tasktrove_verify.grade import Status
 from tasktrove_verify.modes.grade_csv import grade as grade_csv
 from tasktrove_verify.spec import CsvColumnsSpec
 
-from taskcompendium.grading import GradeResult, GradingAttempt, Outcome, Verifier
+from taskcompendium.grading import GradeResult, Outcome, Verifier
 from taskcompendium.models import VerifierKind, VerifierSpec
-from taskcompendium.submission import Submission, TextSubmission
+from taskcompendium.submission import GradingAttempt, Submission, TextSubmission
 
 
 class CsvColumnsVerifier(Verifier):
@@ -31,9 +31,7 @@ class CsvColumnsVerifier(Verifier):
         CsvColumnsSpec(required=self.required, any_of=self.any_of)
         return self
 
-    async def grade(
-        self, submission: Submission, *, specification: VerifierSpec, attempt: GradingAttempt
-    ) -> GradeResult:
+    async def grade(self, submission: Submission, *, attempt: GradingAttempt) -> GradeResult:
         if not isinstance(submission, TextSubmission):
             raise TypeError("CSV column verifier requires a text submission")
         contract = CsvColumnsSpec(required=self.required, any_of=self.any_of)

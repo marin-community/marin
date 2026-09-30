@@ -19,16 +19,14 @@ from taskcompendium.lowering import (
     read_specification,
     read_submission_convention,
     validate_environment_config,
-    validate_submission_tools,
 )
-from taskcompendium.provider_sources import PROVIDER_SOURCES_DIR, parse_git_provider, validate_staged_git_provider
-from taskcompendium.submission import chat_request, submission_compatible
+from taskcompendium.submission import chat_request
 
 DEFAULT_CHAT_TIMEOUT = 120
 
 
 class ChatLaunch(BaseModel):
-    """A model endpoint and execution limits selected when a lowered task is run."""
+    """A model and endpoint selected when a lowered task is run."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -36,8 +34,6 @@ class ChatLaunch(BaseModel):
     api_base: str = Field(min_length=1)
     api_key_env: str | None = Field(default=None, min_length=1)
     request_timeout: float = Field(default=DEFAULT_CHAT_TIMEOUT, gt=0, allow_inf_nan=False)
-    max_turns: int = Field(default=16, gt=0)
-    trial_timeout: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     temperature: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     parallel_tool_calls: bool | None = None
 
@@ -53,20 +49,8 @@ async def run_trial(
     if environment_config != read_environment_config(task_dir / ENVIRONMENT_CONFIG_FILE):
         raise ValueError("Launch environment configuration differs from the exported task")
     specification = read_specification(task_dir / SPECIFICATION_FILE)
+    validate_environment_config(specification, environment_config)
     convention = read_submission_convention(task_dir / SUBMISSION_CONVENTION_FILE)
-    provider_sources = {
-        name: task_dir / "environment" / PROVIDER_SOURCES_DIR / name
-        for name, binding in environment_config.tool_providers.items()
-        if parse_git_provider(binding.provider) is not None
-    }
-    for name, source in provider_sources.items():
-        validate_staged_git_provider(environment_config.tool_providers[name].provider, source)
-    validate_environment_config(specification, convention, environment_config, provider_sources=provider_sources)
-    compatibility = submission_compatible(specification, convention)
-    if not compatibility.compatible:
-        raise ValueError(f"Submission convention differs from task contract: {'; '.join(compatibility.reasons)}")
-
-    validate_submission_tools(specification, convention, environment_config)
     request = chat_request(specification, convention)
     if launch.temperature is not None:
         request["temperature"] = launch.temperature
@@ -74,19 +58,12 @@ async def run_trial(
         if "parallel_tool_calls" in request and request["parallel_tool_calls"] != launch.parallel_tool_calls:
             raise ValueError("Launch parallel-tool policy conflicts with the submission convention")
         request["parallel_tool_calls"] = launch.parallel_tool_calls
-    agent_kwargs = {
-        "api_base": launch.api_base,
-        "api_key_env": launch.api_key_env,
-        "request_timeout": launch.request_timeout,
-        "request": request,
-        "max_turns": launch.max_turns,
-    }
-    environment = {
-        "import_path": "taskcompendium.harbor.adapter:CompositeToolEnvironment",
+    agent = {
+        "import_path": "taskcompendium.harbor.adapter:ChatAgent",
+        "model_name": launch.model,
         "kwargs": {
-            "tool_providers": {
-                name: binding.model_dump(mode="json") for name, binding in environment_config.tool_providers.items()
-            }
+            **launch.model_dump(exclude={"model", "temperature", "parallel_tool_calls"}),
+            "request": request,
         },
     }
     config = TrialConfig.model_validate(
@@ -94,14 +71,9 @@ async def run_trial(
             "task": {"path": str(task_dir.resolve())},
             "trials_dir": str(trials_dir.resolve()),
             "trial_name": trial_name,
-            "environment": environment,
-            "agent": {
-                "import_path": "taskcompendium.harbor.adapter:ChatAgent",
-                "model_name": launch.model,
-                "kwargs": agent_kwargs,
-            },
+            "environment": {"import_path": "taskcompendium.harbor.adapter:NoToolEnvironment"},
+            "agent": agent,
             "verifier": {"import_path": "taskcompendium.harbor.adapter:SemanticVerifier"},
-            **({"trial_attempt_timeout_sec": launch.trial_timeout} if launch.trial_timeout is not None else {}),
         }
     )
     trial = await Trial.create(config)

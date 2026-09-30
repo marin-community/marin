@@ -138,7 +138,6 @@ async def test_structured_output_import_matches_source_checker(mode: str, tmp_pa
             GradingAttempt(
                 ConversationTrace(events=(*specification.context.events, TextMessage(role="assistant", content=answer))),
                 {},
-                object(),
             ),
         )
         assert source_result.reward == expected_reward

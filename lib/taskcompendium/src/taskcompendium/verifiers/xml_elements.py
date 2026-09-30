@@ -13,9 +13,9 @@ from tasktrove_verify.grade import Status
 from tasktrove_verify.modes.grade_xml import grade as grade_xml
 from tasktrove_verify.spec import XmlElementsSpec
 
-from taskcompendium.grading import GradeResult, GradingAttempt, Outcome, Verifier
+from taskcompendium.grading import GradeResult, Outcome, Verifier
 from taskcompendium.models import VerifierKind, VerifierSpec
-from taskcompendium.submission import Submission, TextSubmission
+from taskcompendium.submission import GradingAttempt, Submission, TextSubmission
 
 
 class XmlElementsVerifier(Verifier):
@@ -31,9 +31,7 @@ class XmlElementsVerifier(Verifier):
         XmlElementsSpec(required=self.required, any_of=self.any_of)
         return self
 
-    async def grade(
-        self, submission: Submission, *, specification: VerifierSpec, attempt: GradingAttempt
-    ) -> GradeResult:
+    async def grade(self, submission: Submission, *, attempt: GradingAttempt) -> GradeResult:
         if not isinstance(submission, TextSubmission):
             raise TypeError("XML element verifier requires a text submission")
         contract = XmlElementsSpec(required=self.required, any_of=self.any_of)

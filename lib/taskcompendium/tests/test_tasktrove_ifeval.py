@@ -111,7 +111,6 @@ async def test_imported_ifeval_matches_source_checker_for_good_and_bad_answers(t
             GradingAttempt(
                 ConversationTrace(events=(*specification.context.events, TextMessage(role="assistant", content=answer))),
                 {},
-                object(),
             ),
         )
         assert (result.status, result.reward) == (Outcome.GRADED, expected_reward)
@@ -132,7 +131,6 @@ async def test_ifeval_checker_crash_is_an_infrastructure_error(monkeypatch):
                 events=(*specification.context.events, TextMessage(role="assistant", content=GOOD_ANSWER))
             ),
             {},
-            object(),
         ),
     )
 
