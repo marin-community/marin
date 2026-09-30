@@ -132,6 +132,11 @@ def _provider_module(provider_source: Path) -> ModuleType:
     return importlib.import_module(provider.__module__)
 
 
+def workplace_environment_config(provider_source: Path) -> HarborEnvironmentConfig:
+    """Load the Workplace tool binding from a verified provider snapshot."""
+    return _environment_config(_provider_module(provider_source))
+
+
 def _environment_config(provider: ModuleType) -> HarborEnvironmentConfig:
     """Select the source provider and its immutable tool surface."""
     return HarborEnvironmentConfig(
