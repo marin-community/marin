@@ -198,3 +198,20 @@ Rack arm `m30c-grnflag-01` (job `/mwittmann/m30c-grnflag-01-coord`, port 33301, 
 seed 0, steps 180000-180060, profiled 180021-180023. Expected -0.06 to -0.09 s/step (+0.12 to
 +0.19 MFU) against `mhep-ctx4k-s0-20260930` (28.255 median over 180011-180059). Loss differs from
 the control at bf16 rounding level from the first step (the forward is not bitwise).
+
+## M30C-007 Loss/lm_head and a raw-Triton gated norm (2026-09-30)
+
+Loss/lm_head (job `m30c-ce-01`, `bench_ce_hero_shape.py` fanout on GB200x4, hero CE [65536, 6144] x
+128256): production tiles (b 65536, v 4096, fast backward) 331-335 ms fwd+bwd; backward v 8192 320 ms,
+backward v 16384 320 ms, v 8192 both ways 328 ms, v 16384 323 ms, backward v 32768 336 ms. Best case
+<= 0.012 s/step. In the trace the CE is 0.303 s of GEMMs (power-capped, 1.25-1.53 PF/s) plus 0.03 s of
+elementwise at 6-7 TB/s. Closed.
+
+Raw Triton through jax-triton (jobs `m30c-grntriton-01/02`) does not beat Pallas Triton: a plain copy
+kernel streams at 6.3-6.5 TB/s, but the statistics kernel takes 0.26-0.31 ms (2.6-3.1 TB/s of one pass)
+and the output kernel 0.76-0.80 ms. The output kernel's elementwise work is not the problem: the same
+body reading precomputed logits (four passes) runs 0.51 ms (6.2 TB/s); the in-kernel [BT,128] x [128,BD]
+dot is. Dropping the bf16 rounding emulation (f32 intermediates) saves 5-15%. The cheapest variant
+(statistics kernel + cuBLAS logits GEMM + elementwise kernel) would take ~0.91 ms against 1.0 ms for XLA
+with the Triton-GEMM flag: ~0.02 s/step. The ~0.1 s/step version needs an epilogue-fused K=128 GEMM
+(CuTe/QuACK with x, rstd and w as epilogue inputs, out and gate as outputs).
