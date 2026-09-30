@@ -35,6 +35,7 @@ flowchart LR
 | `id` | Stable identity for this task. |
 | `context` | The ordered model-visible conversation: text messages, historical assistant function calls, and tool results. |
 | `environment_requirements` | General workspace capabilities, such as filesystem and shell access. |
+| `resources` | Private task files with normalized relative paths, visibility, executable bits, and inline content or digest-pinned references. |
 | `tool_providers` | Named tool interfaces and immutable seeds required by the task. |
 | `final_tools` | Terminal functions advertised at the decision point, tool choice, and the parallel-call setting. These functions are recorded as the result and are never dispatched to a provider. |
 | `answer_type` | The semantic result: `text`, `number`, `file`, `state`, or `native_action`. |
@@ -73,6 +74,8 @@ With the `answer_call` convention, the chat agent adds `submit_answer(answer: st
 For a Git provider, the trusted export caller supplies its local checkout through `trusted_provider_sources={"workplace": checkout_path}`. TaskCompendium checks the HTTPS origin, exact commit, clean tree, tracked file paths, size limits, and symlinks, then packages the tracked source under `environment/provider_sources/`. It validates the provider's interface, seed, and selected tool schemas from that packaged source before export completes. A launch rechecks every packaged file before Harbor starts. The provider runs from a process-local copy of the verified snapshot, so trials do not fetch source or write into the exported task. Its ordinary Python dependencies must already be available in the runtime. Git provider packages must use relative imports within their own package so they can load under an isolated namespace even when an installed copy was imported earlier.
 
 Tool providers expose callable actions. `environment_requirements` separately describes workspace capabilities such as filesystem and shell access. The host chat runtime cannot satisfy those requirements. A workspace runtime must supply them; declaring a capability on a tool provider does not create a workspace.
+
+Workspace runtimes can use `validate_resources` to resolve all references through a trusted caller and check digests, size limits, and path collisions before launch. `materialize_resources` writes only the selected visibility class beneath a caller-owned directory and rejects symlink paths and existing targets. Agent resources belong in the workspace; verifier and oracle resources remain private. Harbor host chat has no file surface and rejects every task with resources, including private-only resources. Docker and ShellSim bindings can use these resource operations when they supply a workspace.
 
 ### Files and state
 

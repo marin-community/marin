@@ -230,6 +230,8 @@ def _required_state_provider(
         raise ValueError("State result requires a structured exact verifier")
     bindings = environment_config.tool_providers
     requirements = specification.environment_requirements
+    if specification.resources:
+        raise ValueError("Host chat cannot expose task resources")
     if requirements.capabilities:
         raise ValueError("Host chat cannot satisfy workspace capability requirements")
     if not bindings:
