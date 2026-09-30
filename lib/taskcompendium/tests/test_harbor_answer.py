@@ -44,7 +44,6 @@ from taskcompendium.submission import (
     JsonAnswer,
     PlainText,
     SubmissionConvention,
-    submission_compatible,
 )
 from taskcompendium.verifier_registry import grade_answer
 from taskcompendium.verifiers.mathematical import mathematical_answer
@@ -455,7 +454,6 @@ def test_file_result_cannot_use_text_submission_convention(tmp_path, specificati
     specification = specification.model_copy(update={"answer_type": AnswerType.FILE})
     convention = PlainText(id="plain")
 
-    assert submission_compatible(specification, convention).reasons == ("plain cannot carry file",)
     assert compatible_lowerings(specification, (convention,), (HarborEnvironmentConfig(),)) == ()
     with pytest.raises(ValueError, match="incompatible: plain cannot carry file"):
         lower_to_harbor(specification, convention, HarborEnvironmentConfig(), tmp_path / "task")

@@ -11,7 +11,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
-SCHEMA_VERSION = "0.15"
+SCHEMA_VERSION = "0.17"
 SHA256_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
 
 

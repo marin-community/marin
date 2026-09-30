@@ -4,8 +4,8 @@
 """Stage pinned Python tool providers without fetching source during a trial.
 
 Installed providers use ``python:module:Class``. Git providers use
-``python+git+https://host/repo@<40-hex-sha>:module:Class``. The trusted export
-caller supplies a checkout of that exact commit; trials use only staged files.
+``python+git+https://host/repo@<40-hex-sha>:module:Class``. The code preparing
+tasks supplies a local checkout of that exact commit; trials use only staged files.
 """
 
 import ast
@@ -22,9 +22,11 @@ import tempfile
 import threading
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 from urllib.parse import urlsplit
 
 from taskcompendium.path_validation import validate_relative_file_path, validate_relative_file_paths
+from taskcompendium.tool_provider import ToolProviderFactory
 
 PROVIDER_SOURCES_DIR = "provider_sources"
 SOURCE_MANIFEST = ".taskcompendium-provider-manifest.json"
@@ -133,7 +135,7 @@ def _git_tree_digest(files: list[tuple[str, str, bytes]]) -> bytes:
 
 
 def validate_git_provider_checkout(provider: str, checkout: Path) -> GitProviderLocator:
-    """Verify a trusted caller's local checkout against a Git provider locator."""
+    """Verify the supplied local checkout against a Git provider locator."""
     locator = parse_git_provider(provider)
     if locator is None:
         raise ValueError("Provider is not Git-pinned")
@@ -282,7 +284,7 @@ def validate_staged_git_provider(provider: str, source: Path) -> None:
         raise ValueError("Git provider source tree differs from pinned commit")
 
 
-def import_staged_provider(provider: str, source: Path) -> type:
+def import_staged_provider(provider: str, source: Path) -> ToolProviderFactory:
     """Import an isolated copy of a verified package without modifying its snapshot."""
     locator = parse_git_provider(provider)
     if locator is None:
@@ -330,4 +332,4 @@ def import_staged_provider(provider: str, source: Path) -> type:
             package_root.resolve()
         ):
             raise ValueError("Git provider path must name a class in the pinned source")
-        return provider_class
+        return cast(ToolProviderFactory, provider_class)

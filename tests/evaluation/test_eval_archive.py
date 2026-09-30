@@ -390,9 +390,10 @@ def test_repeated_evalchemy_samples_keep_each_trial_and_score(tmp_path):
         row["source_id"] = 2
         row["sample_ordinal"] = 0
         rows.append(row)
-    _write_jsonl(results, rows)
+    source = _write_jsonl(results, rows)
 
     assert export_lm_eval_samples(str(results)).samples == 3
+    source.unlink()
     assert rebuild_lm_eval_samples(str(results)) == 3
 
     stored = ReadView(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")

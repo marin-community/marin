@@ -11,12 +11,11 @@ separate services. Trial logs retain raw model messages and tool observations.
 """
 
 import asyncio
-import hashlib
 import json
 import os
 import urllib.error
 import urllib.request
-from typing import Any, Protocol, cast, runtime_checkable
+from typing import Any, cast
 
 from harbor.agents.base import BaseAgent
 from harbor.environments.base import BaseEnvironment, ExecResult
@@ -42,6 +41,7 @@ from taskcompendium.lowering import (
 from taskcompendium.models import AssistantToolCalls, ConversationToolCall, ConversationTrace
 from taskcompendium.provider_sources import PROVIDER_SOURCES_DIR, parse_git_provider
 from taskcompendium.submission import GradingAttempt
+from taskcompendium.tool_provider import ManagedToolProvider, ToolProvider, tool_schema_sha256
 from taskcompendium.verifier_registry import grade_answer
 
 SUBMISSION_FILE = "submission.json"
@@ -57,24 +57,6 @@ TESTS_PATH = "/tests"
 # Only Harbor's standard paths are accepted; other filesystem operations fail.
 HARBOR_DOWNLOAD_DIRS = frozenset({AGENT_LOGS_PATH, ARTIFACTS_LOGS_PATH})
 HARBOR_EMPTY_DIRS = HARBOR_DOWNLOAD_DIRS | {VERIFIER_LOGS_PATH, TESTS_PATH}
-
-
-@runtime_checkable
-class ToolProvider(Protocol):
-    """A callable tool service whose state is scoped to one trial."""
-
-    async def native_tool_definitions(self) -> list[dict[str, Any]]: ...
-
-    async def dispatch_action(self, name: str, arguments: str, call_id: str) -> str: ...
-
-
-@runtime_checkable
-class ManagedToolProvider(Protocol):
-    """Optional tool-provider lifecycle, independent of Harbor's lifecycle."""
-
-    async def start(self) -> None: ...
-
-    async def stop(self) -> None: ...
 
 
 def _chat_completion(api_base: str, api_key: str | None, request_timeout: float, body: dict[str, Any]) -> dict[str, Any]:
@@ -111,8 +93,6 @@ class CompositeToolEnvironment(BaseEnvironment):
             )
             validate_provider_surface(binding, source)
             provider_type = provider_class(binding, source)
-            if issubclass(provider_type, BaseEnvironment):
-                raise TypeError(f"Tool provider {name!r} must not be a Harbor environment")
             provider = provider_type(**self.provider_kwargs(binding))
             if not isinstance(provider, ToolProvider):
                 raise TypeError(f"Provider {name!r} does not expose tool methods")
@@ -191,9 +171,7 @@ class CompositeToolEnvironment(BaseEnvironment):
             provider_tools = selected_tool_definitions(
                 await self.providers[provider_name].native_tool_definitions(), binding.tools
             )
-            digest = hashlib.sha256(
-                json.dumps(provider_tools, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
-            ).hexdigest()
+            digest = tool_schema_sha256(provider_tools)
             if digest != binding.tools_sha256:
                 raise ValueError(f"Runtime tool surface differs for provider {provider_name!r}")
             for definition in provider_tools:

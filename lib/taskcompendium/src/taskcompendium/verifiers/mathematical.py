@@ -29,9 +29,7 @@ class MathematicalAnswerVerifier(Verifier):
             raise ValueError(f"Invalid mathematical verifier contract: {error}") from error
         return self
 
-    async def grade(
-        self, submission: Submission, *, specification: VerifierSpec, attempt: GradingAttempt
-    ) -> GradeResult:
+    async def grade(self, submission: Submission, *, attempt: GradingAttempt) -> GradeResult:
         if not isinstance(submission, TextSubmission):
             raise TypeError("Mathematical verifier requires a text submission")
         result = grade_math_candidate(MathSpec(expected=self.expected, math_type=self.math_type), submission.value)
