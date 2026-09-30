@@ -6,7 +6,7 @@ window.AtlasDifficulty = (() => {
     return model.measurement_status === "current" ? `${titles[model.size]} · ${name}` : name;
   }
   function currentLarge(summary) {
-    return summary?.status === "current" ? summary.models.find(model => model.size === "large" && model.model === "Qwen/Qwen3.5-122B-A10B" && model.measurement_status === "current") : undefined;
+    return summary?.status === "current" ? summary.models.find(model => model.size === "large" && model.measurement_status === "current") : undefined;
   }
   function comparison(models, summary) {
     const chart = document.createElement("div");
