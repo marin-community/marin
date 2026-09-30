@@ -173,7 +173,7 @@ trainer:
   eval_interval: -1
   ckpt_interval: 2
   resume_mode: latest
-  logger: console
+  logger: wandb
   project_name: {ICEBALL_WANDB_PROJECT}
   hf_hub_repo_id: null
   policy:
@@ -189,6 +189,7 @@ generator:
   run_engines_locally: true
   weight_sync_backend: nccl
   sampling_params:
+    logprobs: 0
     temperature: 1.0
     top_p: 1.0
 

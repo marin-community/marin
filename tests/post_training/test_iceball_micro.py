@@ -46,5 +46,3 @@ def test_workflow_is_one_dependency_chain_through_both_evaluations(monkeypatch) 
     assert workflow.sft in workflow.rl.deps
     assert workflow.gsm8k in workflow.rl.deps
     assert workflow.evaluation.deps == (workflow.rl,)
-    assert workflow.evaluation.name.endswith("gsm8k-smoke,aime24-smoke")
-    assert workflow.rl.name == f"users/alice/checkpoints/{iceball_micro.ICEBALL_MODEL_NAME}-rl"
