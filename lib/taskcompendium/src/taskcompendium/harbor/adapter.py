@@ -77,11 +77,6 @@ class ManagedToolProvider(Protocol):
     async def stop(self) -> None: ...
 
 
-@runtime_checkable
-class SyncStateToolProvider(Protocol):
-    def canonical_state(self) -> Any: ...
-
-
 def _chat_completion(api_base: str, api_key: str | None, request_timeout: float, body: dict[str, Any]) -> dict[str, Any]:
     headers = {"Content-Type": "application/json"}
     if api_key is not None:
@@ -218,13 +213,6 @@ class CompositeToolEnvironment(BaseEnvironment):
         if owner is None:
             raise ValueError(f"Unknown provider tool: {name}")
         return await self.providers[owner].dispatch_action(name, arguments, call_id)
-
-    async def provider_state(self, provider_name: str) -> Any:
-        """Read one provider's canonical state without passing private expectations."""
-        provider = self.providers[provider_name]
-        if not isinstance(provider, SyncStateToolProvider):
-            raise TypeError(f"Provider {provider_name!r} cannot expose state")
-        return provider.canonical_state()
 
 
 class ChatAgent(BaseAgent):
