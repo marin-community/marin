@@ -147,6 +147,16 @@ def test_unparseable_reply_is_retried_once_then_raises_infrastructure_error(tmp_
     assert len(fake_judge.prompts) == 2
 
 
+@pytest.mark.parametrize("reply", ["SCORE: 1e6", "SCORE: 1.0.2"])
+def test_malformed_numeric_score_token_is_infrastructure_error(tmp_path, fake_judge, reply):
+    fake_judge.replies = [reply]
+    spec = JudgeSpec(references=(REFERENCE,), exact_gate=False)
+    with pytest.raises(grade_judge.JudgeInfrastructureError, match="no parseable score") as error:
+        grade_judge.grade(spec, tmp_path, _workspace(tmp_path, "something else"))
+    assert [attempt["response"] for attempt in error.value.evidence["attempts"]] == [reply, reply]
+    assert len(fake_judge.prompts) == 2
+
+
 def test_second_attempt_is_accepted(tmp_path, fake_judge):
     fake_judge.replies = ["I cannot grade this.", "Matches the reference.\nSCORE: 1"]
     spec = JudgeSpec(references=(REFERENCE,), exact_gate=False)

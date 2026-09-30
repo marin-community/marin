@@ -80,7 +80,7 @@ Give at most 25 words of reasoning, then end with a final line of exactly this f
 SCORE: <0|1>
 """
 
-SCORE_PATTERN = re.compile(r"score\s*[:=]\s*\**\s*(\d+(?:\.\d+)?)", re.IGNORECASE)
+SCORE_PATTERN = re.compile(r"(?im)^\s*score\s*[:=]\s*\**\s*(0(?:\.5)?|1)\s*\**\s*$")
 
 logger = logging.getLogger(__name__)
 
