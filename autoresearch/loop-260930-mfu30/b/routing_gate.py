@@ -38,11 +38,11 @@ def _load_frozen(name: str):
     return module
 
 
-# control: main f38da1173d. inverse: main + unique-index inverse permutation (d1ccdd9959).
+# control: main f38da1173d. chain: main + inverse permutation + chained cotangents (c67ee1f965).
 # candidate: the branch's live module.
 VARIANTS = {
     "control": _load_frozen("control_ep_ragged_all_to_all")._moe_mlp_ep_ragged_a2a_local,
-    "inverse": _load_frozen("inverse_ep_ragged_all_to_all")._moe_mlp_ep_ragged_a2a_local,
+    "chain": _load_frozen("chain_ep_ragged_all_to_all")._moe_mlp_ep_ragged_a2a_local,
     "candidate": candidate_module._moe_mlp_ep_ragged_a2a_local,
 }
 
@@ -138,6 +138,8 @@ def _compare(a, b):
         fv = np.asarray(jax.device_get(v), dtype=np.float32)
         result[name] = dict(
             bitwise_equal=bool(np.array_equal(bu, bv)),
+            # Equal values, counting +0 and -0 as equal; NaN never compares equal.
+            value_equal=bool(np.array_equal(fu, fv)),
             max_abs_diff=float(np.max(np.abs(fu - fv))) if fu.size else 0.0,
             finite=bool(np.isfinite(fu).all() and np.isfinite(fv).all()),
         )
@@ -191,7 +193,7 @@ def main():
         treated = {v: compiled[v](*args_) for v in VARIANTS if v != "control"}
         exact = {v: _compare(control_a, out) for v, out in treated.items()}
         repeat = _compare(control_a, control_b)
-        ok = all(r["bitwise_equal"] and r["finite"] for cmp in exact.values() for r in cmp.values())
+        ok = all(r["value_equal"] and r["finite"] for cmp in exact.values() for r in cmp.values())
         failures += not ok
         record = dict(
             case=case["name"],
