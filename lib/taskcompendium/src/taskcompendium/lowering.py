@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, TypeAdapter, model_validator
 
 from taskcompendium.models import SCHEMA_VERSION, TaskSpec
 from taskcompendium.submission import SubmissionConvention, render_instruction, submission_compatible
@@ -64,7 +64,7 @@ def compatible_lowerings(
     return tuple(
         LoweringCandidate(convention, environment_config)
         for convention in convention_library
-        if submission_compatible(specification, convention)
+        if submission_compatible(specification, convention).compatible
         for environment_config in environment_configs
     )
 
@@ -121,7 +121,7 @@ def read_environment_config(path: Path) -> HarborEnvironmentConfig:
 
 
 def read_submission_convention(path: Path) -> SubmissionConvention:
-    return SubmissionConvention.model_validate_json(path.read_text())
+    return TypeAdapter(SubmissionConvention).validate_json(path.read_text())
 
 
 def lower_to_harbor(

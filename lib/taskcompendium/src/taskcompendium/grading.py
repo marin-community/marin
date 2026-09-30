@@ -7,19 +7,24 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, JsonValue, field_validator, model_validator
 from tasktrove_verify.grade import InvalidTask, numeric_tolerance
 from tasktrove_verify.modes.grade_exact import grade_exact_candidate
 from tasktrove_verify.modes.grade_math import grade_numeric_candidate
 from tasktrove_verify.spec import ExactSpec, NumericSpec
 
-from taskcompendium.models import ConversationEvent, VerifierKind, VerifierSpec
-from taskcompendium.submission import SubmissionConvention, extract_answer
+from taskcompendium.models import VerifierKind, VerifierSpec
+from taskcompendium.submission import (
+    GradingAttempt,
+    StateSubmission,
+    Submission,
+    TextSubmission,
+)
 
 
 class Outcome(StrEnum):
     GRADED = "graded"
-    EXTRACTION_ERROR = "extraction_error"
+    SUBMISSION_FAILURE = "submission_failure"
     INFRA_ERROR = "infra_error"
 
 
@@ -30,22 +35,13 @@ class GradeResult:
     error: str | None = None
 
 
-@dataclass(frozen=True)
-class GradingAttempt:
-    """Submission evidence available to a verifier."""
-
-    convention: SubmissionConvention
-    conversation: tuple[ConversationEvent, ...]
-    environment: object
-
-
 class Verifier(BaseModel, ABC):
     """Validated private configuration that grades one submission."""
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
     @abstractmethod
-    def grade(self, attempt: GradingAttempt) -> GradeResult:
+    async def grade(self, submission: Submission, *, attempt: GradingAttempt) -> GradeResult:
         """Grade a submission using this verifier's configuration."""
 
 
@@ -63,15 +59,13 @@ class ExactAnswerVerifier(Verifier):
             raise ValueError("An exact answer is required")
         return value
 
-    def grade(self, attempt: GradingAttempt) -> GradeResult:
-        try:
-            candidate = extract_answer(attempt.conversation[-1], attempt.convention)
-        except (ValueError, TypeError) as error:
-            return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
+    async def grade(self, submission: Submission, *, attempt: GradingAttempt) -> GradeResult:
+        if not isinstance(submission, (TextSubmission, StateSubmission)) or not isinstance(submission.value, str):
+            raise TypeError("Exact-answer verifier requires a string value")
         contract = ExactSpec(
             expected=(self.expected,), ignore_case=self.ignore_case, ignore_whitespace=self.collapse_whitespace
         )
-        return GradeResult(Outcome.GRADED, grade_exact_candidate(contract, candidate).reward)
+        return GradeResult(Outcome.GRADED, grade_exact_candidate(contract, submission.value).reward)
 
 
 class NumericAnswerVerifier(Verifier):
@@ -92,19 +86,50 @@ class NumericAnswerVerifier(Verifier):
             raise ValueError(f"Invalid numeric verifier contract: {error}") from error
         return self
 
-    def grade(self, attempt: GradingAttempt) -> GradeResult:
+    async def grade(self, submission: Submission, *, attempt: GradingAttempt) -> GradeResult:
+        if not isinstance(submission, TextSubmission):
+            raise TypeError("Numeric verifier requires a text submission")
         try:
-            candidate = extract_answer(attempt.conversation[-1], attempt.convention)
-        except (ValueError, TypeError) as error:
-            return GradeResult(Outcome.EXTRACTION_ERROR, None, str(error))
-        try:
-            value = float(candidate.strip())
+            value = float(submission.value.strip())
         except ValueError:
             return GradeResult(Outcome.GRADED, 0.0)
         contract = NumericSpec(
             expected=self.expected, tolerance_abs=self.tolerance_abs, tolerance_rel=self.tolerance_rel
         )
         return GradeResult(Outcome.GRADED, grade_numeric_candidate(contract, value).reward)
+
+
+def json_values_equal(expected: JsonValue, actual: JsonValue, numeric_tolerance: float | None = None) -> bool:
+    """Compare JSON types and ordered arrays, optionally tolerating float differences."""
+    if type(expected) is not type(actual):
+        return False
+    if isinstance(expected, dict) and isinstance(actual, dict):
+        return expected.keys() == actual.keys() and all(
+            json_values_equal(value, actual[key], numeric_tolerance) for key, value in expected.items()
+        )
+    if isinstance(expected, list) and isinstance(actual, list):
+        return len(expected) == len(actual) and all(
+            json_values_equal(left, right, numeric_tolerance) for left, right in zip(expected, actual, strict=True)
+        )
+    if isinstance(expected, float) and isinstance(actual, float) and numeric_tolerance is not None:
+        return abs(expected - actual) <= numeric_tolerance
+    return expected == actual
+
+
+class StructuredExactVerifier(Verifier):
+    """Compare a JSON-compatible submission with a private expected object."""
+
+    expected: JsonValue
+
+    async def grade(self, submission: Submission, *, attempt: GradingAttempt) -> GradeResult:
+        if not isinstance(submission, StateSubmission):
+            raise TypeError("Structured exact verifier requires a state submission")
+        return GradeResult(Outcome.GRADED, float(json_values_equal(self.expected, submission.value)))
+
+
+def structured_exact(expected: JsonValue) -> VerifierSpec:
+    verifier = StructuredExactVerifier(expected=expected)
+    return VerifierSpec(kind=VerifierKind.STRUCTURED_EXACT, parameters_json=verifier.model_dump_json())
 
 
 def exact_answer(expected: str, ignore_case: bool = True, collapse_whitespace: bool = True) -> VerifierSpec:

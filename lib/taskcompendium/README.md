@@ -35,7 +35,7 @@ flowchart LR
 | `id` | Stable identity for this task. |
 | `context` | The ordered model-visible conversation: text messages, historical assistant function calls, and tool results. |
 | `environment_requirements` | Capabilities or action interfaces needed from the execution environment. |
-| `final_tools` | Functions advertised at the decision point, tool choice, and the parallel-call setting. These definitions do not bind functions to an implementation. |
+| `final_tools` | An ordered list of functions advertised at the decision point. These definitions do not bind functions to an implementation. |
 | `answer_type` | The semantic result: `text`, `number`, `file`, `state`, or `native_action`. |
 | `source` | Dataset, revision, row, and importer revision used to reproduce the spec. |
 | `verifier` | Private grading rule and configuration. See [What is a verifier?](#what-is-a-verifier) |
@@ -46,8 +46,6 @@ flowchart LR
 `ConversationInput` is not a lossless Responses API transcript. It excludes provider reasoning items. The NeMo importer omits an unencrypted historical reasoning summary only when a visible assistant message or function call follows it. It rejects encrypted reasoning and reasoning left at the decision point. Exact provider continuation from reasoning state is outside this contract.
 
 For example, a task asking “What is 7 + 5?” can have `answer_type=number` and a private expected answer of `12`. The plain, JSON, and `answer_call` conventions carry that answer as `12`, `{"answer":"12"}`, and a final `submit_answer({"answer":"12"})` call, respectively. Each extracts a string for the same numeric verifier, which accepts both `12` and `12.0`. A task asking for a function call has `answer_type=native_action`; its context retains the conversation and its tools describe the source functions. The verifier and expected answer are never added to the model-visible input. Importers must make source output instructions neutral to the supported conventions, or reject rows they cannot safely rewrite. A raw-output requirement in a source message would conflict with a JSON or function-call convention; `answer_type=text` alone cannot detect that conflict in prose.
-
-
 
 ## What can a task represent?
 
@@ -61,13 +59,13 @@ A numeric task uses `answer_type=number` and can use the same submission convent
 
 ### Final function calls
 
-A task whose result is a function call uses `answer_type=native_action`. Its `final_tools` field declares the available functions and call policy. The final-action submission convention captures the assistant's calls, and `predicted_action` compares their function names and decoded argument objects with the private expected calls. Direct chat stops after recording the response; it does not execute the calls.
+A task whose result is a function call uses `answer_type=native_action`. Its `final_tools` field declares the available functions. `FinalAction` defines whether a call is required and the maximum call count. The final-action submission convention captures the assistant's calls, and `predicted_action` compares their function names and decoded argument objects with the private expected calls. Direct chat stops after recording the response; it does not execute the calls.
 
-With the `answer_call` convention, the chat agent advertises only `submit_answer(answer: string)` and records the assistant's final response. It never invokes the function. The convention extracts the call's `answer` argument and passes it to the task's ordinary verifier. A non-call response or a call to another function is an extraction error. The same final-action decoder handles native-action tasks; their verifier compares the recorded call's function name and argument dictionary with the private expected call.
+With the `answer_call` convention, the chat agent adds `submit_answer(answer: string)` alongside the task’s final tools and records the assistant's final response. It never invokes the function. The convention extracts the call's `answer` argument and passes it to the task's ordinary verifier. A non-call response or a call to another function receives `submission_failure` with reward `0.0`. The same final-action decoder handles native-action tasks; their verifier compares the recorded call's function name and argument dictionary with the private expected call.
 
 ### Files and state
 
-`answer_type=file` names a file result. `answer_type=state` names the resulting environment state, which can include changes outside a filesystem. The schema includes these result types, but exporting and running them requires environment configurations, submission conventions, and verifiers that are not implemented in this slice. `environment_requirements` declares capabilities and action interfaces; it does not yet describe resource files or tool implementations.
+`answer_type=file` names a file result. `answer_type=state` names the resulting environment state, which can include changes outside a filesystem. The schema includes these result types, but exporting and running them requires environment configurations and submission conventions that are not implemented in this slice. A caller can grade an already acquired `StateSubmission` with the pure `structured_exact` verifier; state acquisition remains an environment concern. `environment_requirements` declares capabilities and action interfaces; it does not yet describe resource files or tool implementations.
 
 ## What can we import?
 
@@ -77,7 +75,7 @@ The TaskTrove MCQA importer reads archives from a cleaned release. See the [publ
 
 ### NeMo predicted function calls
 
-`taskcompendium.importers.nemo_predicted_action.import_row` accepts a NeMo predicted-function-call row and a caller-pinned digest of that row. `canonical_sha256(row)` hashes its UTF-8 JSON with sorted keys and compact separators; record the digest with the source revision before importing. The importer returns `(specification, convention)`, with `answer_type=native_action` and `AnswerFormat.FINAL_ACTION`. A hand-authored task can select the same convention with `SubmissionConvention(id="final-call", answer_format=AnswerFormat.FINAL_ACTION)`. The context carries the source conversation; `final_tools` carries advertised functions, tool choice, and the parallel-call setting. The convention describes how Harbor captures the final action and can be reused across tasks. The expected function calls remain in the private `predicted_action` verifier. There is one stored conversation, with no second flattened prompt to keep in sync.
+`taskcompendium.importers.nemo_predicted_action.import_row` accepts a NeMo predicted-function-call row and a caller-pinned digest of that row. `canonical_sha256(row)` hashes its UTF-8 JSON with sorted keys and compact separators; record the digest with the source revision before importing. The importer returns `(specification, convention)`, with `answer_type=native_action` and `AnswerFormat.FINAL_ACTION`. A hand-authored task can select the same convention with `FinalAction(id="final-call")`. The context carries the source conversation; `final_tools` carries advertised functions. `FinalAction.require_call` and `FinalAction.max_calls` carry the source call constraints. The convention describes how Harbor captures the final action and can be reused across tasks. The expected function calls remain in the private `predicted_action` verifier. There is one stored conversation, with no second flattened prompt to keep in sync.
 
 For a chat launch, the Harbor adapter sends the source turns and function definitions to the model, records its final function call, and stops without dispatching the call. The verifier compares function names and JSON arguments. The importer rejects rows whose expected action is an assistant text message because the source comparator gives any message full credit; it also rejects request settings it cannot carry. The pinned fixture records the NeMo Gym repository revision and blob SHA in `tests/fixtures/nemo/predicted-action.provenance.json`. Numeric tolerance is used only when explicitly set in the private verifier.
 
@@ -85,15 +83,15 @@ For a chat launch, the Harbor adapter sends the source turns and function defini
 
 Each spec selects a private verifier and stores its configuration in `VerifierSpec`. The submission convention extracts a candidate answer, then the verifier grades it. `answer_type` controls which submission conventions can carry the result; the verifier determines how to score it.
 
-The current kinds are `exact_answer` for normalized text, `numeric_answer` for numbers with explicit absolute and relative tolerances, `mcq_answer` for a single option letter, and `predicted_action` for final function calls. The expected answer and grading settings stay out of the model-visible instruction.
+The current kinds are `exact_answer` for normalized text, `numeric_answer` for numbers with explicit absolute and relative tolerances, `mcq_answer` for a single option letter, `structured_exact` for JSON values with strict type and array-order comparison, and `predicted_action` for final function calls. The expected answer and grading settings stay out of the model-visible instruction.
 
 ## What is a lowering?
 
 A lowering is one runnable presentation of a spec for a target framework. It combines a compatible submission convention with a Harbor environment configuration, then writes the target's task files. The spec says *what* result is needed; the convention says *how* the model delivers it; the environment configuration says *which capabilities* the environment provides. Agent and model selection happens when the task is launched.
 
-`SubmissionConvention.supports(spec.answer_type)` checks the result kind. `compatible_lowerings` uses that check and the environment requirements; it does not read convention IDs from the spec. The direct-chat environment configuration accepts only tasks with no required environment capabilities or action interfaces; a task requiring `shell` has no candidate in this slice. `select_lowerings` can keep all candidates, take the first, or sample one with an explicit RNG key. The order of the caller-supplied convention and environment configuration sequences determines the first candidate and the sample order. A training caller should record those ordered inputs, the selection policy and key, and the TaskCompendium code revision.
+`convention.supports(spec.answer_type)` checks the result kind. `compatible_lowerings` uses that check and the environment requirements; it does not read convention IDs from the spec. The direct-chat environment configuration accepts only tasks with no required environment capabilities or action interfaces; a task requiring `shell` has no candidate in this slice. `select_lowerings` can keep all candidates, take the first, or sample one with an explicit RNG key. The order of the caller-supplied convention and environment configuration sequences determines the first candidate and the sample order. A training caller should record those ordered inputs, the selection policy and key, and the TaskCompendium code revision.
 
-Submission conventions preserve the task’s advertised functions, tool choice, and parallel-call setting. Plain-text and JSON submissions keep those functions; `submit_answer` submission adds its function alongside them. A task requiring a tool call cannot use a text submission, and a task forbidding tool calls cannot use a call submission. An existing function named `submit_answer` conflicts with that convention and is rejected rather than replaced. When no source functions or settings are supplied, `submit_answer` submission requests one required call. This direct-chat slice captures the final assistant turn without executing advertised functions; executable tool providers are a separate environment concern.
+Submission conventions preserve the task’s advertised functions. Plain-text and JSON submissions keep those functions; `AnswerCall` adds `submit_answer` and requires one call with an answer string. An existing function named `submit_answer` conflicts with that convention and is rejected. `FinalAction(require_call=True)` requests a call, and `FinalAction(max_calls=1)` disables parallel calls. A launch may set `parallel_tool_calls` only when it agrees with the convention. Direct chat captures the final assistant turn without executing advertised functions.
 
 An author can require a particular execution environment without changing the semantic `TaskSpec`. Pass `required_environment="shellsim"` to `select_lowerings`; it keeps only ShellSim candidates and raises if none are compatible. A `shell` capability requests an operation, while ShellSim names a concrete execution choice. This initial slice offers only direct chat, so a ShellSim request fails rather than falling back to chat. The selected environment configuration is recorded in the exported Harbor package.
 
@@ -109,7 +107,7 @@ from taskcompendium.lowering import (
 )
 from taskcompendium.grading import numeric_answer
 from taskcompendium.models import AnswerType, ConversationInput, EnvironmentRequirements, Source, TaskSpec, TextMessage
-from taskcompendium.submission import AnswerFormat, SubmissionConvention
+from taskcompendium.submission import AnswerCall, JsonAnswer, PlainText
 
 spec = TaskSpec(
     id="arithmetic-7-plus-5",
@@ -120,9 +118,9 @@ spec = TaskSpec(
     source=Source(dataset="hand-authored", revision="2026-09-16", row="arithmetic-7-plus-5", importer_revision="1"),
 )
 conventions = (
-    SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN),
-    SubmissionConvention(id="json", answer_format=AnswerFormat.JSON),
-    SubmissionConvention(id="answer-call", answer_format=AnswerFormat.ANSWER_CALL),
+    PlainText(id="plain"),
+    JsonAnswer(id="json"),
+    AnswerCall(id="answer-call"),
 )
 candidates = compatible_lowerings(spec, conventions, (HarborEnvironmentConfig(),))
 chosen = select_lowerings(candidates, SelectionPolicy.SAMPLE, rng_key=1234)[0]
@@ -153,11 +151,11 @@ result = asyncio.run(
 
 Harbor runs one `ChatAgent` for every submission convention. The lowering prepares the conversation and tool configuration; the agent makes one request, validates the chat protocol, and writes a typed `ConversationTrace` to `submission.json`. This trace contains the complete model-visible conversation, including submission instructions and the final assistant message. Function-call arguments are decoded objects in both source context and grading evidence. The raw provider response is retained separately in `chat-response.json` for diagnostics.
 
-The direct-chat environment exposes no filesystem or shell tools. The custom verifier reads the typed trace and resolves the private verifier kind through an explicit map. The selected verifier receives the conversation, convention, and Harbor's verifier-side environment. Each harness translates its own protocol into these shared conversation types; graders do not assume OpenAI or Terminus wire formats. The exact and numeric verifiers extract the candidate and call the shared scorers directly, without a temporary answer file. A valid but wrong answer receives reward `0.0`. A well-formed message that violates its submission convention is an extraction error with no reward. A malformed provider message or tool-call argument fails at the harness boundary as an infrastructure error, with no reward and the raw response retained. Verifier infrastructure failures are recorded separately in `taskcompendium-result.json`. The package requires Harbor's [custom-verifier task loading](https://github.com/marin-community/harbor/pull/155) and does not use `tests/test.sh`. Install the pinned Harbor fork through the package extra with `uv sync --project lib/taskcompendium --extra harbor`; its revision is declared in `lib/taskcompendium/pyproject.toml`.
+The direct-chat environment exposes no filesystem or shell tools. The custom verifier reads the typed trace, creates a `GradingAttempt(conversation, workspace)`, and extracts one typed submission through `await convention.extract(attempt)`. It validates the private verifier configuration before extraction and calls `await verifier.grade(submission, attempt=attempt)`. Expected values stay in verifier configuration and are unavailable to convention extraction. Each harness translates its protocol into the shared conversation types.
 
-The package tests use a test-only `ReplayAgent` in `tests/harbor_replay.py` to write fixed assistant messages to the same artifact and exercise Harbor grading without a model request. Replay is absent from the installed package and public launcher.
+A valid but wrong answer receives reward `0.0`. A well-formed message that violates its submission convention receives `submission_failure` with reward `0.0`. A malformed provider message or tool-call argument fails at the harness boundary with no reward and the raw response retained. Verifier infrastructure failures are recorded as `infra_error` with no reward in `taskcompendium-result.json`. The package requires Harbor's [custom-verifier task loading](https://github.com/marin-community/harbor/pull/155) and does not use `tests/test.sh`. Install the pinned Harbor fork with `uv sync --project lib/taskcompendium --extra harbor`; its revision is declared in `lib/taskcompendium/pyproject.toml`.
 
-
+The package tests replay fixed assistant messages at the HTTP boundary through the production launcher and agent. Replay is absent from the installed package.
 
 Run the package tests from the repository root:
 

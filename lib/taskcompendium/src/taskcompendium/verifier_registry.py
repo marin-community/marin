@@ -8,15 +8,27 @@ from types import MappingProxyType
 
 from pydantic import ValidationError
 
-from taskcompendium.grading import ExactAnswerVerifier, GradeResult, GradingAttempt, NumericAnswerVerifier, Verifier
-from taskcompendium.models import ConversationTrace, TaskSpec, VerifierKind, VerifierSpec
-from taskcompendium.submission import SubmissionConvention
+from taskcompendium.grading import (
+    ExactAnswerVerifier,
+    GradeResult,
+    NumericAnswerVerifier,
+    Outcome,
+    StructuredExactVerifier,
+    Verifier,
+)
+from taskcompendium.models import TaskSpec, VerifierKind, VerifierSpec
+from taskcompendium.submission import (
+    GradingAttempt,
+    SubmissionConvention,
+    SubmissionFailure,
+)
 from taskcompendium.verifiers.multiple_choice import MultipleChoiceVerifier
 from taskcompendium.verifiers.predicted_action import PredictedActionVerifier
 
 VERIFIERS: Mapping[VerifierKind, type[Verifier]] = MappingProxyType(
     {
         VerifierKind.EXACT_ANSWER: ExactAnswerVerifier,
+        VerifierKind.STRUCTURED_EXACT: StructuredExactVerifier,
         VerifierKind.PREDICTED_ACTION: PredictedActionVerifier,
         VerifierKind.NUMERIC_ANSWER: NumericAnswerVerifier,
         VerifierKind.MCQ_ANSWER: MultipleChoiceVerifier,
@@ -38,8 +50,13 @@ def validate_verifier(specification: VerifierSpec) -> None:
     resolve_verifier(specification)
 
 
-def grade_answer(
-    specification: TaskSpec, convention: SubmissionConvention, conversation: ConversationTrace, environment: object
+async def grade_answer(
+    specification: TaskSpec, convention: SubmissionConvention, attempt: GradingAttempt
 ) -> GradeResult:
+    """Grade a task attempt, assigning zero reward to invalid agent submissions."""
     verifier = resolve_verifier(specification.verifier)
-    return verifier.grade(GradingAttempt(convention, conversation.events, environment))
+    try:
+        submission = await convention.extract(attempt)
+    except SubmissionFailure as error:
+        return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
+    return await verifier.grade(submission, attempt=attempt)

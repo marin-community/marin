@@ -34,6 +34,8 @@ class ChatLaunch(BaseModel):
     api_base: str = Field(min_length=1)
     api_key_env: str | None = Field(default=None, min_length=1)
     request_timeout: float = Field(default=DEFAULT_CHAT_TIMEOUT, gt=0, allow_inf_nan=False)
+    temperature: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    parallel_tool_calls: bool | None = None
 
 
 async def run_trial(
@@ -49,10 +51,20 @@ async def run_trial(
     specification = read_specification(task_dir / SPECIFICATION_FILE)
     validate_environment_config(specification, environment_config)
     convention = read_submission_convention(task_dir / SUBMISSION_CONVENTION_FILE)
+    request = chat_request(specification, convention)
+    if launch.temperature is not None:
+        request["temperature"] = launch.temperature
+    if launch.parallel_tool_calls is not None:
+        if "parallel_tool_calls" in request and request["parallel_tool_calls"] != launch.parallel_tool_calls:
+            raise ValueError("Launch parallel-tool policy conflicts with the submission convention")
+        request["parallel_tool_calls"] = launch.parallel_tool_calls
     agent = {
         "import_path": "taskcompendium.harbor.adapter:ChatAgent",
         "model_name": launch.model,
-        "kwargs": {**launch.model_dump(exclude={"model"}), "request": chat_request(specification, convention)},
+        "kwargs": {
+            **launch.model_dump(exclude={"model", "temperature", "parallel_tool_calls"}),
+            "request": request,
+        },
     }
     config = TrialConfig.model_validate(
         {
