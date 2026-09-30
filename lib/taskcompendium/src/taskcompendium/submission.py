@@ -111,7 +111,7 @@ class Convention(BaseModel, ABC):
             return answer_type == AnswerType.STATE
         if self.answer_format == AnswerFormat.FINAL_ACTION:
             return answer_type == AnswerType.NATIVE_ACTION
-        return answer_type in (AnswerType.TEXT, AnswerType.NUMBER)
+        return answer_type in (AnswerType.TEXT, AnswerType.NUMBER, AnswerType.MCQ)
 
     @abstractmethod
     async def extract(self, attempt: GradingAttempt) -> Submission:

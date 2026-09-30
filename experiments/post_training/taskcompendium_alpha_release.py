@@ -54,6 +54,7 @@ PROJECTION_MANIFEST_URI = (
 RELEASE_PREFIX = "s3://marin-us-east-02a/marin/taskcompendium/releases/"
 TASKTROVE_SOURCE = "s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.18.3"
 TASKTROVE_IMPORTER_REVISION = "taskcompendium-tasktrove-v0.3"
+TASKTROVE_ACCEPTED_SCHEMA = "0.13"
 PROJECTION_BUILDER_REVISION = "ee389a0e645fa086cdbd49a5c95e30c1516c014e"
 WORKPLACE_HARBOR_EVIDENCE = "https://github.com/marin-community/marin/pull/9523#issuecomment-5906493281"
 TASKTROVE_HARBOR_EVIDENCE = "https://github.com/marin-community/marin/pull/9593"
@@ -188,7 +189,7 @@ def _tasktrove_cohorts(source_dir: Path, manifest: dict[str, Any]) -> tuple[Coho
                 source_category=category,
                 projection_manifest_sha256=PROJECTION_MANIFEST_SHA256,
                 source_assets=assets,
-                task_spec_schema=SCHEMA_VERSION,
+                task_spec_schema=TASKTROVE_ACCEPTED_SCHEMA,
                 importer_revision=TASKTROVE_IMPORTER_REVISION,
                 projection_builder_revision=PROJECTION_BUILDER_REVISION,
                 rights=SourceRights(

@@ -10,11 +10,20 @@ import re
 import shutil
 import tempfile
 from pathlib import Path, PurePosixPath
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from taskcompendium.models import SHA256_PATTERN
+from taskcompendium.models import (
+    SHA256_PATTERN,
+    AnswerType,
+    ConversationInput,
+    EnvironmentRequirements,
+    FinalTools,
+    ProviderRequirement,
+    Source,
+)
+from taskcompendium.path_validation import validate_relative_file_path
 from taskcompendium.public_projection import PublicTask
 from taskcompendium.release_common import REPO_ID, sha256_file
 
@@ -68,12 +77,30 @@ class SourceProof(BaseModel):
 
 
 class AcceptedPublicRecord(BaseModel):
-    """A reviewed public task with independently pinned source-row proof."""
+    """A reviewed regional input with independently pinned source-row proof."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     task: PublicTask
     source_proof: SourceProof
+
+
+class PublishedRow(BaseModel):
+    """Agent-visible task fields and source provenance in the Hub row format."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    record_version: Literal[2] = 2
+    id: str
+    context: ConversationInput
+    environment_requirements: EnvironmentRequirements
+    tool_providers: dict[str, ProviderRequirement]
+    final_tools: FinalTools
+    answer_type: AnswerType
+    source: Source
+    tags: tuple[str, ...]
+    source_category: str | None
+    provenance: SourceProof
 
 
 class SourceRights(BaseModel):
@@ -285,6 +312,47 @@ def _validated_record(
     return record
 
 
+def _public_asset_path(path: str, cohort: CohortInput) -> str:
+    if cohort.config == TASKTROVE_CONFIG and cohort.source_dataset.startswith("s3://"):
+        prefix = f"{cohort.source_dataset.rstrip('/')}/"
+        if not path.startswith(prefix):
+            raise ValueError("TaskTrove source asset lies outside the pinned release")
+        path = path.removeprefix(prefix)
+    validate_relative_file_path(path)
+    return path
+
+
+def _published_row(record: AcceptedPublicRecord, cohort: CohortInput) -> PublishedRow:
+    """Convert a reviewed regional input to the public row schema."""
+    task = record.task
+    proof = record.source_proof.model_copy(
+        update={"input_file": _public_asset_path(record.source_proof.input_file, cohort)}
+    )
+    if proof.archive_path is not None:
+        validate_relative_file_path(proof.archive_path)
+    answer_type = task.answer_type
+    if cohort.config == TASKTROVE_CONFIG:
+        if cohort.cohort == "mcqa":
+            if answer_type not in (AnswerType.TEXT, AnswerType.MCQ):
+                raise ValueError("MCQA source must carry a text option letter")
+            answer_type = AnswerType.MCQ
+        source = task.source.model_copy(update={"dataset": TASKTROVE_CONFIG})
+    else:
+        source = task.source
+    return PublishedRow(
+        id=task.id,
+        context=task.context,
+        environment_requirements=task.environment_requirements,
+        tool_providers=task.tool_providers,
+        final_tools=task.final_tools,
+        answer_type=answer_type,
+        source=source,
+        tags=task.tags,
+        source_category=task.source_category,
+        provenance=proof,
+    )
+
+
 def _write_cohort(
     cohort: CohortInput,
     destination: Path,
@@ -309,7 +377,7 @@ def _write_cohort(
                 raise ValueError(f"Duplicate source row across cohorts: {record.source_proof.source_row}")
             seen_ids.add(record.task.id)
             seen_source_rows.add(source_key)
-            output.write(record.model_dump_json() + "\n")
+            output.write(_published_row(record, cohort).model_dump_json() + "\n")
             count += 1
     if count != cohort.accepted_rows:
         raise ValueError(f"Accepted row count mismatch: {cohort.cohort}")
@@ -338,7 +406,8 @@ def _card(cohorts: tuple[CohortInput, ...], data_files: list[dict[str, object]])
     lines.append(
         "This local candidate contains accepted, agent-visible tasks. The manifest records exported counts, "
         "source pins, rights, and Harbor sample evidence. Verifier settings, reference answers, gold actions, "
-        "and private resources are excluded. The builder does not upload to the Hub."
+        "and private resources are excluded. Rows place source pins in `provenance` and omit submission instructions. "
+        "The builder does not upload to the Hub."
     )
     lines.extend(
         (
@@ -402,7 +471,7 @@ def finalize_mixed_candidate(candidate: Path, destination: Path, review: Release
     return _write_ready_artifact(candidate, destination, manifest, review, data_paths)
 
 
-def _candidate_data_paths(candidate: Path, manifest: dict[str, object]) -> set[str]:
+def _candidate_data_paths(candidate: Path, manifest: dict[str, Any]) -> set[str]:
     """Validate the candidate's exact file inventory and return its listed data paths."""
     data_paths: set[str] = set()
     for entry in manifest["data_files"]:
@@ -446,7 +515,7 @@ def _candidate_data_paths(candidate: Path, manifest: dict[str, object]) -> set[s
     return data_paths
 
 
-def _validate_publication_evidence(candidate: Path, manifest: dict[str, object], review: ReleaseReview) -> None:
+def _validate_publication_evidence(candidate: Path, manifest: dict[str, Any], review: ReleaseReview) -> None:
     """Check reviewed Harbor evidence, export counts, and the candidate data digests."""
     if manifest["publication_ready"]:
         raise ValueError("Candidate is already publication-ready")
@@ -468,7 +537,7 @@ def _validate_publication_evidence(candidate: Path, manifest: dict[str, object],
 def _write_ready_artifact(
     candidate: Path,
     destination: Path,
-    manifest: dict[str, object],
+    manifest: dict[str, Any],
     review: ReleaseReview,
     data_paths: set[str],
 ) -> Path:
@@ -500,7 +569,7 @@ def _write_ready_artifact(
     return destination
 
 
-def _publication_card(manifest: dict[str, object], review: ReleaseReview) -> str:
+def _publication_card(manifest: dict[str, Any], review: ReleaseReview) -> str:
     """Render the ready card from manifest data so candidate prose is not trusted."""
     data_files = manifest["data_files"]
     licenses = {entry["rights"]["license"] for entry in data_files}
@@ -522,7 +591,8 @@ def _publication_card(manifest: dict[str, object], review: ReleaseReview) -> str
     lines.extend(("---", "", "# TaskCompendium Alpha 1", ""))
     lines.append(
         "This release contains accepted, agent-visible tasks. Verifier settings, reference answers, gold actions, "
-        "and private resources are excluded."
+        "and private resources are excluded. Rows place source pins in `provenance` and omit submission "
+        "instructions."
     )
     lines.append("")
     for entry in data_files:
@@ -569,11 +639,14 @@ def assemble_mixed_candidate(cohorts: tuple[CohortInput, ...], destination: Path
                     "accepted_rows": cohort.accepted_rows,
                     "exported_rows": rows,
                     "source": {
-                        "dataset": cohort.source_dataset,
+                        "dataset": TASKTROVE_CONFIG if cohort.config == TASKTROVE_CONFIG else cohort.source_dataset,
                         "revision": cohort.source_revision,
                         "subset": cohort.source_subset,
                         "category": cohort.source_category,
-                        "assets": [asset.model_dump(mode="json") for asset in cohort.source_assets],
+                        "assets": [
+                            {"path": _public_asset_path(asset.path, cohort), "pin": asset.pin}
+                            for asset in cohort.source_assets
+                        ],
                         "task_spec_schema": cohort.task_spec_schema,
                         "importer_revision": cohort.importer_revision,
                         "projection_builder_revision": cohort.projection_builder_revision,
@@ -586,7 +659,7 @@ def assemble_mixed_candidate(cohorts: tuple[CohortInput, ...], destination: Path
             )
         manifest = {
             "format_version": 1,
-            "public_record_version": 1,
+            "public_record_version": 2,
             "repo_id": REPO_ID,
             "visibility": "agent",
             "builder_revision": builder_revision,

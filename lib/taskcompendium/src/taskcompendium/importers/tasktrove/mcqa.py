@@ -48,7 +48,7 @@ def _clean_instructions(instructions: str, options: int) -> str:
 
 
 def import_task(archive: TaskArchive) -> TaskSpec:
-    """Import a cleaned MCQA archive as a text-answer task."""
+    """Import a cleaned MCQA archive as a multiple-choice task."""
     try:
         metadata = tomllib.loads(archive.files[TASK_MANIFEST].decode())[METADATA_TABLE]
         if metadata.get("family") != FAMILY or metadata.get("converter") != CONVERTER or metadata.get("mode") != "mcq":
@@ -70,7 +70,7 @@ def import_task(archive: TaskArchive) -> TaskSpec:
         id=f"tasktrove-{hashlib.sha256(identity.encode()).hexdigest()}",
         context=ConversationInput(events=(TextMessage(role="user", content=instructions),)),
         environment_requirements=EnvironmentRequirements(),
-        answer_type=AnswerType.TEXT,
+        answer_type=AnswerType.MCQ,
         verifier=multiple_choice_answer(contract.expected, contract.options),
         source=archive.source,
         tags=tuple(tags),

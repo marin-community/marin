@@ -11,7 +11,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
-SCHEMA_VERSION = "0.13"
+SCHEMA_VERSION = "0.14"
 SHA256_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
 
 
@@ -19,6 +19,7 @@ class AnswerType(StrEnum):
     """The kind of result the task asks the model to produce."""
 
     TEXT = "text"
+    MCQ = "mcq"
     NUMBER = "number"
     FILE = "file"
     STATE = "state"

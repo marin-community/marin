@@ -11,8 +11,9 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from huggingface_hub import HfApi, hf_hub_download
+from huggingface_hub import CommitOperationAdd, HfApi, hf_hub_download
 from rigging.filesystem.storage_path import StoragePath
+from taskcompendium.mixed_release import PublishedRow
 
 REPO_ID = "open-athena/taskcompendium-alpha-1"
 EXPECTED_ROWS = {
@@ -37,7 +38,9 @@ def _copy_and_verify(uri: str, destination: Path, expected_sha256: str, expected
 
 
 def _verify_hub_file(repo_id: str, revision: str, path: str, expected_sha256: str) -> None:
-    downloaded = Path(hf_hub_download(repo_id, path, repo_type="dataset", revision=revision, force_download=True))
+    downloaded = Path(
+        hf_hub_download(repo_id, path, repo_type="dataset", revision=revision, force_download=True, token=False)
+    )
     with downloaded.open("rb") as stream:
         digest = hashlib.file_digest(stream, "sha256").hexdigest()
     if digest != expected_sha256:
@@ -49,7 +52,11 @@ def _stage_release(
 ) -> dict[str, dict[str, Any]]:
     _copy_and_verify(f"{source_prefix}/manifest.json", local / "manifest.json", manifest_sha256)
     manifest = json.loads((local / "manifest.json").read_text())
-    if manifest["repo_id"] != REPO_ID or manifest["publication_ready"] is not True:
+    if (
+        manifest["repo_id"] != REPO_ID
+        or manifest["publication_ready"] is not True
+        or manifest["public_record_version"] != 2
+    ):
         raise ValueError("Reviewed manifest does not authorize the target public dataset")
     data_files = {entry["path"]: entry for entry in manifest["data_files"]}
     if set(data_files) != set(EXPECTED_ROWS):
@@ -62,23 +69,40 @@ def _stage_release(
     _copy_and_verify(f"{source_prefix}/README.md", local / "README.md", readme_sha256)
     for path, entry in data_files.items():
         _copy_and_verify(f"{source_prefix}/{path}", local / path, entry["sha256"], EXPECTED_ROWS[path])
+        with (local / path).open(encoding="utf-8") as stream:
+            for line in stream:
+                row = PublishedRow.model_validate_json(line)
+                if row.source.dataset.startswith(("s3://", "gs://")):
+                    raise ValueError(f"Public row exposes a regional bucket: {path}")
+    for path in local.rglob("*"):
+        if path.is_file():
+            with path.open("rb") as stream:
+                if any(b"s3://" in line or b"marin-us-east-02a" in line for line in stream):
+                    raise ValueError(f"Public release exposes a regional bucket: {path.relative_to(local)}")
     return data_files
 
 
-def _upload_private(local: Path) -> tuple[HfApi, str]:
+def _upload_update(local: Path, base_revision: str) -> tuple[HfApi, str]:
     api = HfApi()
-    api.create_repo(REPO_ID, repo_type="dataset", private=True, exist_ok=False)
-    commit = api.upload_folder(
-        folder_path=str(local),
+    current = api.repo_info(REPO_ID, repo_type="dataset")
+    if current.private or current.sha != base_revision:
+        raise ValueError("Public dataset head differs from the reviewed base revision")
+    commit = api.create_commit(
         repo_id=REPO_ID,
         repo_type="dataset",
-        commit_message="Publish TaskCompendium alpha 1 public task data",
+        operations=[
+            CommitOperationAdd(path_in_repo=path.relative_to(local).as_posix(), path_or_fileobj=path)
+            for path in sorted(local.rglob("*"))
+            if path.is_file()
+        ],
+        parent_commit=base_revision,
+        commit_message="Flatten TaskCompendium alpha 1 public rows",
     )
     return api, commit.oid
 
 
-def _verify_and_publish(
-    api: HfApi, revision: str, data_files: dict[str, dict[str, Any]], manifest_sha256: str, readme_sha256: str
+def _verify_public_update(
+    revision: str, data_files: dict[str, dict[str, Any]], manifest_sha256: str, readme_sha256: str
 ) -> None:
     expected_files = {
         "manifest.json": manifest_sha256,
@@ -87,8 +111,7 @@ def _verify_and_publish(
     }
     for path, digest in expected_files.items():
         _verify_hub_file(REPO_ID, revision, path, digest)
-    api.update_repo_settings(REPO_ID, private=False, repo_type="dataset")
-    public = HfApi(token=False).repo_info(REPO_ID, repo_type="dataset", revision=revision)
+    public = HfApi(token=False).repo_info(REPO_ID, repo_type="dataset")
     if public.private or public.sha != revision:
         raise ValueError("Hub public readback did not match the reviewed commit")
 
@@ -115,14 +138,17 @@ def main() -> None:
     parser.add_argument("--source-prefix", required=True)
     parser.add_argument("--manifest-sha256", required=True)
     parser.add_argument("--readme-sha256", required=True)
+    parser.add_argument("--base-revision", required=True)
     args = parser.parse_args()
     if not args.source_prefix.startswith("s3://marin-us-east-02a/marin/taskcompendium/releases/"):
         raise ValueError("Source must be the reviewed regional release prefix")
+    if len(args.base_revision) != 40 or any(char not in "0123456789abcdef" for char in args.base_revision):
+        raise ValueError("Base revision must be a full Git commit")
     with tempfile.TemporaryDirectory(prefix="taskcompendium-alpha-upload-") as directory:
         local = Path(directory)
         data_files = _stage_release(args.source_prefix.rstrip("/"), local, args.manifest_sha256, args.readme_sha256)
-        api, revision = _upload_private(local)
-        _verify_and_publish(api, revision, data_files, args.manifest_sha256, args.readme_sha256)
+        _, revision = _upload_update(local, args.base_revision)
+        _verify_public_update(revision, data_files, args.manifest_sha256, args.readme_sha256)
         _write_publication_summary(revision, data_files, args.manifest_sha256, args.readme_sha256)
 
 

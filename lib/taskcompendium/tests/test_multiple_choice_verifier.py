@@ -29,7 +29,7 @@ async def test_hand_authored_multiple_choice_answer(response, reward):
         id="hand-authored-mcq",
         context=ConversationInput(events=(TextMessage(role="user", content="Choose A, B, C, or D."),)),
         environment_requirements=EnvironmentRequirements(),
-        answer_type=AnswerType.TEXT,
+        answer_type=AnswerType.MCQ,
         verifier=multiple_choice_answer("B", 4),
         source=Source(dataset="hand-authored", revision="1", row="mcq", importer_revision="1"),
     )

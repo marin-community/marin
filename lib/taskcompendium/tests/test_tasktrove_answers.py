@@ -73,7 +73,7 @@ def test_import_removes_source_submission_instructions():
     public = render_instruction(specification, PlainText(id="plain"))
     assert "verifier" not in public.lower()
     assert specification.environment_requirements.capabilities == ()
-    assert specification.answer_type is AnswerType.TEXT
+    assert specification.answer_type is AnswerType.MCQ
 
 
 async def test_imported_mcqa_matches_source_grading(tmp_path):
@@ -161,7 +161,7 @@ def test_import_accepts_plain_source_answer_line_template():
 
     specification = import_task(archive)
 
-    assert specification.answer_type is AnswerType.TEXT
+    assert specification.answer_type is AnswerType.MCQ
     assert "Answer:" not in specification.context.events[0].content
 
 

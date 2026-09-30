@@ -103,8 +103,9 @@ def test_public_state_task_keeps_requirement_without_runtime_binding_or_expected
         public_task(specification, ProviderState(id="state", provider="workplace"), mismatched)
 
 
-def test_mixed_candidate_keeps_configs_source_proof_and_rights_separate(tmp_path):
+def test_mixed_candidate_exports_flat_tasks_with_provenance_and_rights_separate(tmp_path):
     source_digest = "a" * 64
+    source_uri = "s3://example-bucket/tasktrove/clean/2026.09.18.3"
     regional_pin = (
         "2026.09.18.3#manifest-sha256=" + "b" * 64 + "#parquet-size=100#parquet-etag=etag#parquet-version-id=id"
     )
@@ -134,7 +135,7 @@ def test_mixed_candidate_keeps_configs_source_proof_and_rights_separate(tmp_path
             answer_type=AnswerType.TEXT,
             verifier=exact_answer("private-tasktrove-answer"),
             source=Source(
-                dataset="open-athena/task-trove",
+                dataset=source_uri,
                 revision=regional_pin,
                 row="knowledge:knowledge/mcqa.jsonl",
                 importer_revision="mcq-v1",
@@ -150,7 +151,7 @@ def test_mixed_candidate_keeps_configs_source_proof_and_rights_separate(tmp_path
         task=tasktrove,
         source_proof=SourceProof(
             source_row="knowledge:knowledge/mcqa.jsonl",
-            input_file="source.parquet",
+            input_file=f"{source_uri}/source.parquet",
             input_object_pin=regional_pin,
             archive_path="knowledge/mcqa.jsonl",
             archive_sha256=archive_digest,
@@ -199,7 +200,7 @@ def test_mixed_candidate_keeps_configs_source_proof_and_rights_separate(tmp_path
         ),
         CohortInput(
             config="tasktrove_clean",
-            cohort="knowledge_mcqa",
+            cohort="mcqa",
             split="train",
             record_format="accepted_public_record",
             input_path=tasktrove_path,
@@ -207,11 +208,11 @@ def test_mixed_candidate_keeps_configs_source_proof_and_rights_separate(tmp_path
             accepted_rows=1,
             source_records=23860,
             parsed_rows=1,
-            source_dataset="open-athena/task-trove",
+            source_dataset=source_uri,
             source_subset="knowledge",
             source_category="knowledge",
             projection_manifest_sha256="c" * 64,
-            source_assets=(SourceAsset(path="source.parquet", pin=regional_pin),),
+            source_assets=(SourceAsset(path=f"{source_uri}/source.parquet", pin=regional_pin),),
             task_spec_schema="0.13",
             importer_revision="mcq-v1",
             projection_builder_revision="2" * 40,
@@ -236,12 +237,21 @@ def test_mixed_candidate_keeps_configs_source_proof_and_rights_separate(tmp_path
     assert [entry["exported_rows"] for entry in manifest["data_files"]] == [1, 1]
     assert manifest["publication_ready"] is False
     assert manifest["data_files"][1]["source"]["projection_manifest_sha256"] == "c" * 64
-    tasktrove_output = (destination / "data/tasktrove_clean/knowledge_mcqa.jsonl").read_text()
-    assert json.loads(tasktrove_output)["task"]["record_version"] == 1
-    assert json.loads(tasktrove_output)["task"]["tags"] == ["knowledge", "mcqa"]
-    assert json.loads(tasktrove_output)["source_proof"]["archive_sha256"] == archive_digest
-    assert "private-workplace-answer" not in (destination / "data/workplace/workplace_train.jsonl").read_text()
+    tasktrove_output = (destination / "data/tasktrove_clean/mcqa.jsonl").read_text()
+    row = json.loads(tasktrove_output)
+    assert row["record_version"] == 2
+    assert row["tags"] == ["knowledge", "mcqa"]
+    assert row["answer_type"] == "mcq"
+    assert row["source"]["dataset"] == "tasktrove_clean"
+    assert row["provenance"]["archive_sha256"] == archive_digest
+    assert row["provenance"]["input_file"] == "source.parquet"
+    assert "task" not in row and "source_proof" not in row and "submission_instruction" not in row
+    workplace_output = (destination / "data/workplace/workplace_train.jsonl").read_text()
+    assert "submission_instruction" not in workplace_output
+    assert "private-workplace-answer" not in workplace_output
     assert "private-tasktrove-answer" not in tasktrove_output
+    assert "example-bucket" not in tasktrove_output
+    assert "example-bucket" not in (destination / "manifest.json").read_text()
     assert "config_name: workplace" in (destination / "README.md").read_text()
     assert "config_name: tasktrove_clean" in (destination / "README.md").read_text()
 
