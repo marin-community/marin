@@ -94,6 +94,76 @@ def _output_kernel(
     tl.store(gate_ptr + offs, gate.to(tl.bfloat16))
 
 
+@triton.jit
+def _output_f32_kernel(
+    x_ptr, w_ptr, rstd_ptr, s_ptr, wu_ptr, out_ptr, gate_ptr,
+    D: tl.constexpr, R: tl.constexpr, BT: tl.constexpr, BD: tl.constexpr,
+):
+    """Same outputs, f32 intermediates: one rounding at each stored value."""
+    rows = (tl.program_id(0) * BT + tl.arange(0, BT)).to(tl.int64)
+    cols = tl.program_id(1) * BD + tl.arange(0, BD)
+    rk = tl.arange(0, R)
+    s = tl.load(s_ptr + rows[:, None] * R + rk[None, :])
+    wu = tl.load(wu_ptr + rk[:, None] * D + cols[None, :])
+    gate = tl.sigmoid(tl.dot(s, wu))
+    offs = rows[:, None] * D + cols[None, :]
+    x = tl.load(x_ptr + offs).to(tl.float32)
+    rstd = tl.load(rstd_ptr + rows)
+    w = tl.load(w_ptr + cols).to(tl.float32)
+    tl.store(out_ptr + offs, (x * rstd[:, None] * w[None, :] * gate).to(tl.bfloat16))
+    tl.store(gate_ptr + offs, gate.to(tl.bfloat16))
+
+
+@triton.jit
+def _output_nodot_kernel(
+    x_ptr, w_ptr, rstd_ptr, logit_ptr, out_ptr, gate_ptr,
+    D: tl.constexpr, BT: tl.constexpr, BD: tl.constexpr,
+):
+    """Elementwise part only: logits read from memory (isolates the in-kernel GEMM)."""
+    rows = (tl.program_id(0) * BT + tl.arange(0, BT)).to(tl.int64)
+    cols = tl.program_id(1) * BD + tl.arange(0, BD)
+    offs = rows[:, None] * D + cols[None, :]
+    gate = _logistic(tl.load(logit_ptr + offs).to(tl.float32))
+    x = tl.load(x_ptr + offs).to(tl.float32)
+    rstd = tl.load(rstd_ptr + rows)
+    w = tl.load(w_ptr + cols).to(tl.float32)
+    y = _rnd(x * rstd[:, None] * w[None, :])
+    tl.store(out_ptr + offs, (y * gate).to(tl.bfloat16))
+    tl.store(gate_ptr + offs, gate.to(tl.bfloat16))
+
+
+@triton.jit
+def _stats_f32_kernel(
+    x_ptr, w_ptr, wd_ptr, h_ptr, s_ptr, rstd_ptr, eps,
+    D: tl.constexpr, R: tl.constexpr, BT: tl.constexpr, BD: tl.constexpr, NS: tl.constexpr,
+):
+    """Stats with the silu in f32 (one rounding when storing)."""
+    rows = (tl.program_id(0) * BT + tl.arange(0, BT)).to(tl.int64)
+    rk = tl.arange(0, R)
+    acc = tl.zeros([BT, R], dtype=tl.float32)
+    sq = tl.zeros([BT, BD], dtype=tl.float32)
+    for k in tl.range(0, D, BD, num_stages=NS):
+        cols = k + tl.arange(0, BD)
+        x = tl.load(x_ptr + rows[:, None] * D + cols[None, :]).to(tl.float32)
+        w = tl.load(w_ptr + cols).to(tl.float32)
+        sq += x * x
+        acc = tl.dot((x * w[None, :]).to(tl.bfloat16), tl.load(wd_ptr + cols[:, None] * R + rk[None, :]), acc)
+    rstd = tl.rsqrt(tl.sum(sq, axis=1) * (1.0 / D) + eps)
+    h = acc * rstd[:, None]
+    ro = rows[:, None] * R + rk[None, :]
+    tl.store(h_ptr + ro, h.to(tl.bfloat16))
+    tl.store(s_ptr + ro, (h * tl.sigmoid(h)).to(tl.bfloat16))
+    tl.store(rstd_ptr + rows, rstd)
+
+
+def output_variant(kernel, x, w, rstd, s, wu, *, bt, bd, warps, stages):
+    return jt.triton_call(
+        x, w, rstd, s, wu, kernel=kernel,
+        out_shape=[jax.ShapeDtypeStruct((T, D), jnp.bfloat16)] * 2,
+        grid=(T // bt, D // bd), num_warps=warps, num_stages=stages, D=D, R=R, BT=bt, BD=bd,
+    )
+
+
 def triton_fwd(x, w, wd, wu, *, bt_s, bd_s, ns, warps_s, bt_o, bd_o, warps_o, stages_o):
     h, s, rstd = jt.triton_call(
         x, w, wd, kernel=_stats_kernel,
@@ -144,7 +214,7 @@ def main():
     by = profile(pal, (x, w, wd, wu), "pallas")
     print(f"Pallas pair {sum(by.values()):.3f} ms: {by}", flush=True)
     want = [np.asarray(a, np.float32) for a in pal(x, w, wd, wu)]
-    configs = list(itertools.product((32, 64, 128), (64, 128), (2, 3, 4), (4, 8)))
+    configs = [(128, 64, 3, 4), (128, 32, 4, 4)]
     best = {}
     for bt_s, bd_s, ns, warps_s in configs:
         fn = jax.jit(lambda *a, c=(bt_s, bd_s, ns, warps_s): triton_fwd(
@@ -157,7 +227,7 @@ def main():
         t = sum(v for n, v in by.items() if "stats" in n)
         best.setdefault("stats", []).append((t, (bt_s, bd_s, ns, warps_s)))
         print(f"stats bt={bt_s} bd={bd_s} ns={ns} warps={warps_s}: {t:.3f} ms ({gb / t:.2f} TB/s)", flush=True)
-    for bt_o, bd_o, warps_o, stages_o in itertools.product((32, 64, 128), (64, 128, 256), (4, 8), (1, 2)):
+    for bt_o, bd_o, warps_o, stages_o in [(64, 64, 8, 2), (64, 128, 4, 1)]:
         fn = jax.jit(lambda *a, c=(bt_o, bd_o, warps_o, stages_o): triton_fwd(
             *a, bt_s=64, bd_s=64, ns=3, warps_s=4, bt_o=c[0], bd_o=c[1], warps_o=c[2], stages_o=c[3]))
         try:
@@ -169,6 +239,31 @@ def main():
         best.setdefault("output", []).append((t, (bt_o, bd_o, warps_o, stages_o)))
         print(f"output bt={bt_o} bd={bd_o} warps={warps_o} stages={stages_o}: {t:.3f} ms ({3 * gb / t:.2f} TB/s)", flush=True)
     (ts, cs), (to, co) = min(best["stats"]), min(best["output"])
+    # Where does the output kernel's time go? Same tiles, three bodies.
+    _, _, rstd = jt.triton_call(
+        x, w, wd, kernel=_stats_kernel,
+        out_shape=[jax.ShapeDtypeStruct((T, R), jnp.bfloat16)] * 2 + [jax.ShapeDtypeStruct((T,), jnp.float32)],
+        grid=(T // 128,), num_warps=4, num_stages=1, eps=EPS, D=D, R=R, BT=128, BD=64, NS=3,
+    )
+    s = jnp.zeros((T, R), jnp.bfloat16) + 0.1
+    logits = (x * 0.5).astype(jnp.bfloat16)
+    for bt, bd, warps in ((64, 64, 8), (64, 128, 8), (128, 64, 8), (128, 128, 8), (64, 128, 4)):
+        for name, kern in (("exact", _output_kernel), ("f32", _output_f32_kernel)):
+            fn = jax.jit(lambda *a, k=kern, c=(bt, bd, warps): output_variant(k, *a, bt=c[0], bd=c[1], warps=c[2], stages=2))
+            by = profile(fn, (x, w, rstd, s, wu), f"var_{name}_{bt}_{bd}_{warps}")
+            print(f"output-{name} bt={bt} bd={bd} warps={warps}: {sum(by.values()):.3f} ms", flush=True)
+        fn = jax.jit(lambda a, b, c, d, bt=bt, bd=bd, warps=warps: jt.triton_call(
+            a, b, c, d, kernel=_output_nodot_kernel, out_shape=[jax.ShapeDtypeStruct((T, D), jnp.bfloat16)] * 2,
+            grid=(T // bt, D // bd), num_warps=warps, num_stages=2, D=D, BT=bt, BD=bd))
+        by = profile(fn, (x, w, rstd, logits), f"nodot_{bt}_{bd}_{warps}")
+        print(f"output-nodot (reads logits: 4 passes) bt={bt} bd={bd} warps={warps}: {sum(by.values()):.3f} ms", flush=True)
+    for bt, bd, ns, warps in ((128, 64, 3, 4), (128, 32, 4, 4), (64, 64, 4, 4)):
+        fn = jax.jit(lambda a, b, c, cfg=(bt, bd, ns, warps): jt.triton_call(
+            a, b, c, kernel=_stats_f32_kernel,
+            out_shape=[jax.ShapeDtypeStruct((T, R), jnp.bfloat16)] * 2 + [jax.ShapeDtypeStruct((T,), jnp.float32)],
+            grid=(T // cfg[0],), num_warps=cfg[3], num_stages=1, eps=EPS, D=D, R=R, BT=cfg[0], BD=cfg[1], NS=cfg[2]))
+        by = profile(fn, (x, w, wd), f"stats32_{bt}_{bd}_{ns}_{warps}")
+        print(f"stats-f32 bt={bt} bd={bd} ns={ns} warps={warps}: {sum(by.values()):.3f} ms", flush=True)
     print(f"BEST stats {cs} {ts:.3f} ms, output {co} {to:.3f} ms, total {ts + to:.3f} ms", flush=True)
     got = [np.asarray(a, np.float32) for a in jax.jit(lambda *a: triton_fwd(
         *a, bt_s=cs[0], bd_s=cs[1], ns=cs[2], warps_s=cs[3], bt_o=co[0], bd_o=co[1], warps_o=co[2], stages_o=co[3]))(x, w, wd, wu)]
