@@ -85,6 +85,10 @@ Tool providers expose callable actions. `environment_requirements` separately de
 
 The TaskTrove MCQA importer reads archives from a cleaned release. See the [published TaskTrove Clean dataset](https://huggingface.co/datasets/open-athena/task-trove). Its caller passes the archive bytes, upstream subset, archive path, and release provenance to `read_archive`. The reader checks the subset and path against the archive manifest; the release URI and revision are caller-supplied provenance. The importer checks the source answer-line template before replacing it with a one-letter instruction. Its text answer works with plain and JSON submission conventions. The private `mcq` verifier stores the expected letter and option count. Any author can use that verifier; it currently calls the shared `tasktrove-verify` MCQ scorer after extracting the submission. This importer supports only MCQ mode. Executable TaskTrove modes require their own runtime contract.
 
+### TaskTrove math
+
+With `taskcompendium[math]` installed, `taskcompendium.importers.tasktrove.mathematical.import_task` converts a `math` verifier into a direct-chat task. It retains the original symbolic reference and ordered source tags. The shared math classifier assigns `answer_type=number` only when it proves the reference is one finite real scalar; supported lists, sets, intervals, tuples, equations, and other symbolic answers use `text`. Invalid references, unsupported output instructions, tool requirements, and archives with extra task resources are rejected. The result contains the private `TaskSpec`, its ordered tags, and source metadata for catalog selection.
+
 ### NeMo predicted function calls
 
 `taskcompendium.importers.nemo_predicted_action.import_row` accepts a NeMo predicted-function-call row and a caller-pinned digest of that row. `canonical_sha256(row)` hashes its UTF-8 JSON with sorted keys and compact separators; record the digest with the source revision before importing. The importer returns `(specification, convention)`, with `answer_type=native_action` and `FinalAction(id="native-final-action")`. A hand-authored task can select the same convention with `FinalAction(id="final-call")`. The context carries the source conversation; `final_tools` carries advertised terminal functions, tool choice, and the parallel-call setting. The convention describes how Harbor captures the final action and can be reused across tasks. The expected function calls remain in the private `predicted_action` verifier. There is one stored conversation, with no second flattened prompt to keep in sync.
@@ -180,7 +184,7 @@ The package tests use `tests/harbor_replay.py` to feed fixed HTTP responses thro
 Run the package tests from the repository root:
 
 ```bash
-uv run --project lib/taskcompendium --extra harbor --group test pytest lib/taskcompendium/tests -q
+uv run --project lib/taskcompendium --extra harbor --extra math --group test pytest lib/taskcompendium/tests -q
 
 # Type-check the package from its own project directory after installing its dependencies.
 cd lib/taskcompendium

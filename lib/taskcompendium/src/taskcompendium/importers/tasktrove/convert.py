@@ -9,6 +9,7 @@ other members can supply environment or test files. The reader retains regular
 members as bytes and checks their paths, count, and total size before import.
 """
 
+import hashlib
 import io
 import tarfile
 import tomllib
@@ -61,4 +62,11 @@ def read_archive(
             raise ValueError("Task archive does not match its declared source identity")
     except (KeyError, UnicodeDecodeError, tomllib.TOMLDecodeError, ValueError) as error:
         raise ValueError(f"Invalid TaskTrove archive metadata: {error}") from error
-    return TaskArchive(upstream_subset, archive_path, release_uri, release_revision, files)
+    return TaskArchive(
+        upstream_subset,
+        archive_path,
+        release_uri,
+        release_revision,
+        hashlib.sha256(data).hexdigest(),
+        files,
+    )
