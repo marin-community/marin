@@ -407,7 +407,7 @@ def build_h100_ladder_run(
     grad_capture_starts: tuple[int, ...] = (),
     grad_capture_len: int = 48,
     grad_accum_microbatches: int = 1,
-    muon_probe_step: int | None = None,
+    muon_probe_steps: tuple[int, ...] = (),
 ) -> ArtifactStep[ThroughputResult]:
     """Build one H100 scaling-ladder rung.
 
@@ -517,7 +517,7 @@ def build_h100_ladder_run(
         grad_capture_starts=grad_capture_starts,
         grad_capture_len=grad_capture_len,
         grad_accum_microbatches=grad_accum_microbatches,
-        muon_probe_step=muon_probe_step,
+        muon_probe_steps=muon_probe_steps,
     )
     train_resources = ResourceConfig.with_gpu(
         "H100",
@@ -603,7 +603,7 @@ def build_h100_ladder_run(
                 xla_memory_report_path=prefix_join(ctx.output_path, "xla_memory") if xla_memory_report else None,
                 routing_dump_path=prefix_join(ctx.output_path, "routing") if routing_dump_steps else None,
                 grad_capture_path=prefix_join(ctx.output_path, "grad_capture") if grad_capture_starts else None,
-                muon_probe_path=prefix_join(ctx.output_path, "muon_probe") if muon_probe_step is not None else None,
+                muon_probe_path=prefix_join(ctx.output_path, "muon_probe") if muon_probe_steps else None,
             ),
             eval=(
                 None
@@ -828,10 +828,9 @@ def _job_env_args(job_env: tuple[str, ...]) -> list[str]:
 )
 @click.option("--grad-capture-len", default=48, show_default=True, help="Steps per --grad-capture-starts window.")
 @click.option(
-    "--muon-probe-step",
-    type=int,
-    default=None,
-    help="Run the Muon probe (muon_probe.py) at this step; results go to <output>/muon_probe/.",
+    "--muon-probe-steps",
+    default="",
+    help="Comma-separated steps at which to run the Muon probe (muon_probe.py); results go to <output>/muon_probe/.",
 )
 @click.option(
     "--grad-accum",
@@ -925,7 +924,7 @@ def main(
     grad_capture_starts: str,
     grad_capture_len: int,
     grad_accum_microbatches: int,
-    muon_probe_step: int | None,
+    muon_probe_steps: str,
     router_tie_class: tuple[str, ...],
     model_set: tuple[str, ...],
     opt_set: tuple[str, ...],
@@ -973,7 +972,7 @@ def main(
         grad_capture_starts=tuple(int(step) for step in grad_capture_starts.split(",") if step),
         grad_capture_len=grad_capture_len,
         grad_accum_microbatches=grad_accum_microbatches,
-        muon_probe_step=muon_probe_step,
+        muon_probe_steps=tuple(int(step) for step in muon_probe_steps.split(",") if step),
         router_tie_specs=router_tie_specs,
     )
 

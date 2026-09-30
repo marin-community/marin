@@ -19,6 +19,7 @@ The probe batches come from a separate iterator past the run's last step, so the
 unchanged. Results go to ``muon_probe_step<N>.npz``; ``analyze_muon_probe.py`` reduces and plots them.
 """
 
+import functools
 import io
 import logging
 from collections.abc import Callable, Iterator
@@ -28,7 +29,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from experiments.grug.fast_track.stiefel import _msign
+from experiments.grug.fast_track.stiefel import MSIGN_STEPS, _msign
 
 logger = logging.getLogger(__name__)
 
@@ -50,10 +51,10 @@ def _project(grads: dict[str, jax.Array], bases: dict[str, tuple[jax.Array, jax.
     return {name: jnp.einsum("mi,mn,ni->i", u, grads[name].astype(jnp.float32), v) for name, (u, v) in bases.items()}
 
 
-@jax.jit
-def _ns_spectra(grads: dict[str, jax.Array]) -> dict[str, jax.Array]:
-    """Singular values of Muon's quintic Newton-Schulz output for each gradient."""
-    return {name: jnp.linalg.svd(_msign(g.astype(jnp.float32)), compute_uv=False) for name, g in grads.items()}
+@functools.partial(jax.jit, static_argnames=("steps",))
+def _ns_spectra(grads: dict[str, jax.Array], steps: int) -> dict[str, jax.Array]:
+    """Singular values of Muon's quintic Newton-Schulz output (``steps`` iterations) for each gradient."""
+    return {name: jnp.linalg.svd(_msign(g.astype(jnp.float32), steps), compute_uv=False) for name, g in grads.items()}
 
 
 class MuonProbe:
@@ -61,11 +62,11 @@ class MuonProbe:
     step)``, returning the captured matrices' gradients and values under the current step's settings; ``batches``
     yields probe batches disjoint from the run's own."""
 
-    def __init__(self, step: int, path: str, captured_params: Callable, batches: Iterator):
+    def __init__(self, step: int, path: str, captured_params: Callable, batches: Iterator, ns_steps: int = MSIGN_STEPS):
         if step < 1:
             raise ValueError("muon_probe_step must be at least 1 (the momentum basis needs the previous update)")
         self.step, self.path = step, path.rstrip("/")
-        self._captured_params, self._batches = captured_params, batches
+        self._captured_params, self._batches, self._ns_steps = captured_params, batches, ns_steps
         self._gradients: Callable | None = None
         self._params_before: dict[str, np.ndarray] | None = None
         self._bases: dict[str, dict[str, tuple[jax.Array, jax.Array]]] = {}
@@ -112,7 +113,7 @@ class MuonProbe:
             momentum_bases[name] = (jax.device_put(um, place), jax.device_put(vm, place))
             self._out[f"sigma_update/{name}"] = sm
         self._bases = {"grad": grad_bases, "momentum": momentum_bases}
-        for name, s in jax.device_get(_ns_spectra(g_a)).items():
+        for name, s in jax.device_get(_ns_spectra(g_a, self._ns_steps)).items():
             self._out[f"sigma_ns/{name}"] = s
         heldout: dict[str, list[dict[str, np.ndarray]]] = {"grad": [], "momentum": []}
         for _ in range(HELDOUT_BATCHES):
