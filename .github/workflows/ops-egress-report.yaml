@@ -1,7 +1,7 @@
 name: "Ops - Egress Report"
 
-# Daily cross-region egress digest, on demand only. The daily schedule was
-# switched off 2026-09-29: Iris task logs stopped landing under
+# Cross-region egress digest over the trailing 24h, on demand only. The daily
+# schedule was switched off 2026-09-29: Iris task logs stopped landing under
 # gs://marin-us-central2/finelog/marin/log on 2026-09-03, so every scheduled
 # run since 2026-09-15 analysed no log lines and posted "No offenders today."
 # to #internal-discuss. Re-add the schedule once scripts/ops/cross_region.py
