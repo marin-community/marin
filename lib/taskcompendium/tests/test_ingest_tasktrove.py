@@ -143,19 +143,19 @@ def test_streaming_ingest_records_every_row_and_keeps_verifiers_private(tmp_path
     assert "expected" not in json.dumps(candidate)
     assert (tmp_path / "iris-output/ingestion-summary.json").exists()
 
-    math_report = ingest_tasktrove.ingest(
+    mcq_report = ingest_tasktrove.ingest(
         str(release),
         str(tmp_path / "math-output"),
         tmp_path / "math-iris-output",
         target_modes=frozenset({"mcq"}),
     )
-    math_ledger = pq.read_table(tmp_path / "math-output/ingestion-ledger.parquet").to_pylist()
-    assert math_report["selection"]["target_modes"] == ["mcq"]
-    assert math_report["input_rows_processed"] == len(rows)
-    assert math_report["counts"]["imported"] == 1
-    assert math_report["counts"]["rejected"] == 1
-    assert math_report["counts"]["out_of_scope"] == 2
-    assert math_report["candidate_archive_bytes_parsed"] == len(rows[0]["task_binary"]) + len(rows[2]["task_binary"])
-    assert math_report["archive_payload_bytes_materialized"] > math_report["candidate_archive_bytes_parsed"]
-    assert [row["disposition"] for row in math_ledger] == ["imported", "out-of-scope", "rejected", "out-of-scope"]
-    assert "mode not selected" in math_ledger[3]["reason"]
+    mcq_ledger = pq.read_table(tmp_path / "math-output/ingestion-ledger.parquet").to_pylist()
+    assert mcq_report["selection"]["target_modes"] == ["mcq"]
+    assert mcq_report["input_rows_processed"] == len(rows)
+    assert mcq_report["counts"]["imported"] == 1
+    assert mcq_report["counts"]["rejected"] == 1
+    assert mcq_report["counts"]["out_of_scope"] == 2
+    assert mcq_report["candidate_archive_bytes_parsed"] == len(rows[0]["task_binary"]) + len(rows[2]["task_binary"])
+    assert mcq_report["archive_payload_bytes_materialized"] > mcq_report["candidate_archive_bytes_parsed"]
+    assert [row["disposition"] for row in mcq_ledger] == ["imported", "out-of-scope", "rejected", "out-of-scope"]
+    assert "mode not selected" in mcq_ledger[3]["reason"]

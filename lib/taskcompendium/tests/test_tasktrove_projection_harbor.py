@@ -2,11 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import tarfile
+from io import BytesIO
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from experiments.post_training.taskcompendium import trial_tasktrove_math_candidates, trial_tasktrove_projection
+from experiments.post_training.taskcompendium import trial_tasktrove_math_candidates
 from experiments.post_training.taskcompendium.trial_tasktrove_projection import (
     _read_candidate_archive,
     _source_row_index,
@@ -61,30 +63,27 @@ def test_source_proof_requires_one_exact_private_ledger_match(tmp_path):
         _source_row_index(StoragePath(str(ledger_path)), _candidate(), _proof())
 
 
-def test_reimport_uses_the_accepted_clean_release_identity(monkeypatch):
+def test_reimported_archive_preserves_the_accepted_clean_release_identity():
     candidate = {
         "source": {
             "dataset": "s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.18.3",
             "revision": "2026.09.18.3",
         }
     }
-    captured = {}
+    source_subset = "synthetic-source"
+    archive_path = "synthetic-path.tar.gz"
+    manifest = ("[metadata]\n" f'tasktrove_source = "{source_subset}"\n' f'tasktrove_path = "{archive_path}"\n').encode()
+    archive_bytes = BytesIO()
+    with tarfile.open(fileobj=archive_bytes, mode="w:gz") as archive:
+        member = tarfile.TarInfo("task.toml")
+        member.size = len(manifest)
+        archive.addfile(member, BytesIO(manifest))
 
-    def record_arguments(*args):
-        captured["args"] = args
-        return object()
+    imported = _read_candidate_archive(archive_bytes.getvalue(), candidate, source_subset, archive_path)
 
-    monkeypatch.setattr(trial_tasktrove_projection, "read_archive", record_arguments)
-
-    _read_candidate_archive(b"archive", candidate, "source", "path.tar.gz")
-
-    assert captured["args"] == (
-        b"archive",
-        "source",
-        "path.tar.gz",
-        candidate["source"]["dataset"],
-        candidate["source"]["revision"],
-    )
+    assert imported.source.dataset == candidate["source"]["dataset"]
+    assert imported.source.revision == candidate["source"]["revision"]
+    assert imported.source.row == f"{source_subset}:{archive_path}"
 
 
 def test_math_batch_samples_are_deterministic_and_unique():

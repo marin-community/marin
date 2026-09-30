@@ -96,10 +96,17 @@ def test_audit_counts_dispositions_and_validates_candidate_proof_join(tmp_path):
     assert result["counts_by_dimension_and_disposition"]["tag"]["judge"]["out-of-scope"] == 1
 
 
-def test_audit_rejects_duplicate_candidates_and_invalid_allowlist(tmp_path):
+def test_audit_rejects_duplicate_candidate_ids(tmp_path):
     record = _public_record("task-1")
-    leaked = {**record, "verifier": {"gold": "private"}}
-    result = audit_artifacts(*_artifacts(tmp_path, public_records=[record, leaked]))
+    result = audit_artifacts(*_artifacts(tmp_path, public_records=[record, record]))
+
+    assert result["status"] == "failed"
+    assert result["validation_errors"]["duplicate_candidate_ids"] == 1
+
+
+def test_audit_rejects_public_candidate_with_unallowlisted_verifier(tmp_path):
+    candidate = {**_public_record("task-1"), "verifier": {"gold": "private"}}
+    result = audit_artifacts(*_artifacts(tmp_path, public_records=[candidate]))
 
     assert result["status"] == "failed"
     assert result["validation_errors"]["candidate_allowlist_mismatch"] == 1

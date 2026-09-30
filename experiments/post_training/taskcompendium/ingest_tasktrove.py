@@ -11,7 +11,7 @@ import tomllib
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -200,9 +200,9 @@ def ingest(
     buffers: dict[str, list[dict[str, Any]]] = {"catalog": [], "ledger": []}
     schemas = {"catalog": catalog_schema, "ledger": ledger_schema}
     writers: dict[str, pq.ParquetWriter | None] = {"catalog": None, "ledger": None}
-    writer_handles: dict[str, Any] = {}
-    candidate_handle: Any | None = None
-    proof_handle: Any | None = None
+    writer_handles: dict[str, BinaryIO] = {}
+    candidate_handle: BinaryIO | None = None
+    proof_handle: BinaryIO | None = None
     counts: Counter[str] = Counter()
     accepted_counts: Counter[str] = Counter()
     rejected_reasons: Counter[str] = Counter()

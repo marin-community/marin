@@ -11,13 +11,20 @@ import sqlite3
 import tempfile
 from collections import Counter
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import pyarrow.parquet as pq
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.taskcompendium.ingest_tasktrove import PUBLIC_CANDIDATE_COHORTS
+
+
+class HashDigest(Protocol):
+    def update(self, data: bytes, /) -> None: ...
+
+    def hexdigest(self) -> str: ...
+
 
 BATCH_SIZE = 65_536
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -81,7 +88,7 @@ def _count(counter: Counter[tuple[str, str, str]]) -> dict[str, dict[str, dict[s
     return result
 
 
-def _read_jsonl(path: StoragePath, errors: Counter[str], error_name: str, digest: Any):
+def _read_jsonl(path: StoragePath, errors: Counter[str], error_name: str, digest: HashDigest):
     if not path.exists():
         return
     with path.open("rb") as opened:

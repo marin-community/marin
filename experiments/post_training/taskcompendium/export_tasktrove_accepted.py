@@ -23,6 +23,7 @@ from taskcompendium.models import SCHEMA_VERSION
 from experiments.post_training.taskcompendium.audit_tasktrove_ingest import (
     PROOF_FIELDS,
     PUBLIC_FIELDS,
+    HashDigest,
     audit_artifacts,
 )
 from experiments.post_training.taskcompendium.ingest_tasktrove import PUBLIC_CANDIDATE_COHORTS
@@ -551,7 +552,7 @@ def export_accepted_records(
                 raise ValueError("Candidate proof digest differs from the ingestion manifest")
 
             output_counts: Counter[tuple[str, str, str]] = Counter()
-            output_hashes: dict[tuple[str, str, str], Any] = {}
+            output_hashes: dict[tuple[str, str, str], HashDigest] = {}
             output_sizes: Counter[tuple[str, str, str]] = Counter()
             output_paths: dict[tuple[str, str, str], str] = {}
             output_groups = list(

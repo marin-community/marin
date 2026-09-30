@@ -39,6 +39,7 @@ def test_catalog_and_public_projection_preserve_tags_and_isolate_verifier():
     private_specification = json.loads(private["specification_json"])
     assert json.loads(private_specification["verifier"]["parameters_json"]) == {"expected": "C", "options": 4}
     assert public["tags"] == ["qa", "mcq", "nemotron"]
+    assert public["final_tools"] == []
     assert public["record_version"] == 1
     assert set(public) == {
         "record_version",

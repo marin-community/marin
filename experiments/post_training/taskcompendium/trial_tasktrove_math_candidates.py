@@ -14,36 +14,10 @@ from typing import Any
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 
+from experiments.post_training.taskcompendium.audit_tasktrove_ingest import PROOF_FIELDS, PUBLIC_FIELDS
 from experiments.post_training.taskcompendium.trial_tasktrove_projection import _run
 
 OPENMATH_SOURCE = "laion__nemotron-gym-math-openmathreasoning-v2"
-CANDIDATE_FIELDS = frozenset(
-    {
-        "record_version",
-        "id",
-        "context",
-        "environment_requirements",
-        "tool_providers",
-        "final_tools",
-        "answer_type",
-        "source",
-        "submission_instruction",
-        "tags",
-        "source_category",
-    }
-)
-PROOF_FIELDS = frozenset(
-    {
-        "candidate_id",
-        "input_file",
-        "input_row",
-        "input_object_pin",
-        "source",
-        "path",
-        "archive_sha256",
-        "disposition",
-    }
-)
 
 
 def _sample_positions(row_count: int) -> tuple[int, ...]:
@@ -53,7 +27,7 @@ def _sample_positions(row_count: int) -> tuple[int, ...]:
 
 
 def _candidate_wrapper(candidate: dict[str, Any], proof: dict[str, Any]) -> dict[str, Any]:
-    if set(candidate) != CANDIDATE_FIELDS or set(proof) != PROOF_FIELDS:
+    if set(candidate) != PUBLIC_FIELDS or set(proof) != PROOF_FIELDS:
         raise ValueError("TaskTrove candidate/proof does not match the reviewed schema")
     source = candidate.get("source")
     if not isinstance(source, dict) or not isinstance(source.get("row"), str):

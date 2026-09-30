@@ -13,6 +13,8 @@ import pyarrow.parquet as pq
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 
+from experiments.post_training.taskcompendium.ingest_tasktrove import RELEASE_URI
+
 METADATA_COLUMNS = ("source", "path", "family", "template_id", "converter", "mode", "tags")
 SPLITS = ("tasks", "sft")
 BATCH_SIZE = 65_536
@@ -79,7 +81,7 @@ def inventory(release_uri: str) -> dict:
 
 
 def main() -> None:
-    release_uri = os.environ.get("TASKTROVE_RELEASE_URI", "s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.18.3")
+    release_uri = os.environ.get("TASKTROVE_RELEASE_URI", RELEASE_URI)
     result = inventory(release_uri)
     output = Path(os.environ["IRIS_OUTPUT_DIR"])
     output.mkdir(parents=True, exist_ok=True)
