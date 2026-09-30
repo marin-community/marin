@@ -23,6 +23,9 @@ class GatedRmsNormBlockSizes:
     stats_num_stages: int = 3
     out_num_warps: int = 4
     out_num_stages: int = 2
+    out_loop: bool = False
+    """Run the output kernel as one program per row block that loops over the hidden axis
+    (pipelined loads), instead of one program per ``[t, d]`` tile."""
 
     @classmethod
     def get_default(cls) -> "GatedRmsNormBlockSizes":

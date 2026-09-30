@@ -54,9 +54,11 @@ def gated_rms_norm_bwd(
 ) -> tuple[Float[Array, "T D"], Float[Array, " D"], Float[Array, "D R"], Float[Array, "R D"]]:
     """Backward of ``gated_rms_norm_reference`` from the forward's saved gate, projection and row scale.
 
-    ``y`` is recomputed elementwise from ``x`` rather than saved. The gate and SiLU steps use
-    the same JAX ops the reference's autodiff would emit, so they round at the same points;
-    the RMSNorm step is written out with the saved ``rstd`` in f32.
+    ``y`` is recomputed elementwise from ``x`` and never materialized: the down projection's
+    weight gradient uses ``y = diag(rstd) x diag(w)``, so ``x`` is the GEMM operand and ``rstd``
+    scales the small ``[T, R]`` cotangent instead. The gate and SiLU steps use the same JAX ops
+    the reference's autodiff would emit, so they round at the same points; the RMSNorm step is
+    written out with the saved ``rstd`` in f32.
     """
     dtype = x.dtype
     xf = x.astype(jnp.float32)
@@ -72,7 +74,8 @@ def gated_rms_norm_bwd(
     dsilu = jnp.einsum("td,rd->tr", dlogits, w_up)
     dw_up = jnp.einsum("tr,td->rd", silu, dlogits)
     (dgate_hidden,) = silu_vjp(dsilu)
-    dw_down = jnp.einsum("td,tr->dr", y, dgate_hidden)
+    scaled = (rstd[:, None] * dgate_hidden.astype(jnp.float32)).astype(dtype)
+    dw_down = weight[:, None] * jnp.einsum("td,tr->dr", x, scaled, preferred_element_type=jnp.float32)
     dy = (dy_direct + jnp.einsum("tr,dr->td", dgate_hidden, w_down)).astype(jnp.float32)
     # y = (x * rstd) * w, rstd = (mean(x^2) + eps)^-1/2
     dnormed = dy * weight

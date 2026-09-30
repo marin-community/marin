@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -uo pipefail
 D=autoresearch/loop-260930-mfu30-gemm
-export XLA_FLAGS="--xla_gpu_enable_command_buffer= --xla_gpu_memory_limit_slop_factor=85"
-python ${D}/grn_kernels.py --configs "128,64,128,8,3,8,2;128,32,128,8,4,8,2;128,128,128,8,3,8,2;64,64,128,4,3,4,2;64,128,128,4,3,4,2;128,64,64,8,3,4,2;128,64,256,8,3,8,2;64,64,256,4,3,8,2;128,32,128,4,4,8,3;128,64,128,8,4,16,2;64,32,64,4,4,4,2"
+H="--xla_gpu_enable_command_buffer= --xla_gpu_memory_limit_slop_factor=85"
+XLA_FLAGS="${H}" python ${D}/grn_kernels.py --configs "128,32,128,4,4,8,3;128,32,128,4,4,8,3,1;64,32,128,4,4,4,3,1;64,32,64,4,4,4,4,1;128,32,64,4,4,8,4,1;64,32,256,4,4,8,2,1;32,32,128,4,4,4,3,1;128,32,256,4,4,8,2,1;128,16,128,4,6,8,3,1;64,32,128,4,4,8,3,1"
+XLA_FLAGS="${H} --xla_gpu_enable_triton_gemm=false" python ${D}/grn_kernels.py --configs "128,32,128,4,4,8,3"

@@ -159,6 +159,25 @@ def _output_kernel(x_ref, w_ref, rstd_ref, silu_ref, w_up_ref, out_ref, gate_ref
     gate_ref[...] = gate.astype(gate_ref.dtype)
 
 
+def _output_loop_kernel(x_ref, w_ref, rstd_ref, silu_ref, w_up_ref, out_ref, gate_ref, *, d_block: int, dtype):
+    """``_output_kernel`` for a whole row block, streaming the hidden axis in a pipelined loop."""
+    hidden = x_ref.shape[1]
+    silu = silu_ref[...].astype(dtype)
+    rstd = rstd_ref[...]
+
+    def body(step, carry):
+        span = pl.ds(step * d_block, d_block)
+        logits = jnp.dot(silu, w_up_ref[:, span].astype(dtype), preferred_element_type=jnp.float32)
+        gate = _logistic(_round(logits, dtype), dtype)
+        x = x_ref[:, span].astype(jnp.float32)
+        y = _round(x * rstd[:, None] * w_ref[span].astype(jnp.float32)[None, :], dtype)
+        out_ref[:, span] = (y * gate).astype(out_ref.dtype)
+        gate_ref[:, span] = gate.astype(gate_ref.dtype)
+        return carry
+
+    jax.lax.fori_loop(0, hidden // d_block, body, 0)
+
+
 def _compiler_params(num_warps: int, num_stages: int):
     if pltriton is None or _FORCE_INTERPRET:  # pragma: no cover
         return None
@@ -212,21 +231,34 @@ def gated_rms_norm_pallas_fwd_local(
 
     out_shape = jax.ShapeDtypeStruct((tokens, hidden), dtype)
     gate_shape = jax.ShapeDtypeStruct((tokens, hidden), dtype)
-    output = pl.pallas_call(
-        functools.partial(_output_kernel, dtype=dtype),
-        out_shape=[out_shape, gate_shape],
-        grid=(tokens // bt, hidden // bd),
-        in_specs=[
+    if block_sizes.out_loop:
+        kernel = functools.partial(_output_loop_kernel, d_block=bd, dtype=dtype)
+        grid: tuple[int, ...] = (tokens // bt,)
+        in_specs = [
+            pl.BlockSpec((bt, hidden), lambda i: (i, 0)),
+            pl.BlockSpec((hidden,), lambda i: (0,)),
+            pl.BlockSpec((bt,), lambda i: (i,)),
+            pl.BlockSpec((bt, rank), lambda i: (i, 0)),
+            pl.BlockSpec((rank, hidden), lambda i: (0, 0)),
+        ]
+        out_specs = [pl.BlockSpec((bt, hidden), lambda i: (i, 0))] * 2
+    else:
+        kernel = functools.partial(_output_kernel, dtype=dtype)
+        grid = (tokens // bt, hidden // bd)
+        in_specs = [
             pl.BlockSpec((bt, bd), lambda i, j: (i, j)),
             pl.BlockSpec((bd,), lambda i, j: (j,)),
             pl.BlockSpec((bt,), lambda i, j: (i,)),
             pl.BlockSpec((bt, rank), lambda i, j: (i, 0)),
             pl.BlockSpec((rank, bd), lambda i, j: (0, j)),
-        ],
-        out_specs=[
-            pl.BlockSpec((bt, bd), lambda i, j: (i, j)),
-            pl.BlockSpec((bt, bd), lambda i, j: (i, j)),
-        ],
+        ]
+        out_specs = [pl.BlockSpec((bt, bd), lambda i, j: (i, j))] * 2
+    output = pl.pallas_call(
+        kernel,
+        out_shape=[out_shape, gate_shape],
+        grid=grid,
+        in_specs=in_specs,
+        out_specs=out_specs,
         compiler_params=_compiler_params(block_sizes.out_num_warps, block_sizes.out_num_stages),
         interpret=_FORCE_INTERPRET,
         cost_estimate=with_io_bytes_accessed(

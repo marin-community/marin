@@ -55,7 +55,8 @@ def main():
     by = profile(ref, (x, w, wd, wu), "ref")
     print(f"reference total {sum(by.values()):.3f} ms: " + ", ".join(f"{n}={t:.3f}" for n, t in sorted(by.items(), key=lambda kv: -kv[1])), flush=True)
     for spec in args.configs.split(";"):
-        bs = GatedRmsNormBlockSizes(*[int(v) for v in spec.split(",")])
+        vals = [int(v) for v in spec.split(",")]
+        bs = GatedRmsNormBlockSizes(*vals[:7], out_loop=bool(vals[7]) if len(vals) > 7 else False)
         fn = jax.jit(lambda *a: gated_rms_norm(*a, eps=1e-5, implementation="pallas_gpu", block_sizes=bs))
         try:
             by = profile(fn, (x, w, wd, wu), spec.replace(",", "_"))
