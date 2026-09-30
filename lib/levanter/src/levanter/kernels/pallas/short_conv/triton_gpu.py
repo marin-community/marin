@@ -72,8 +72,11 @@ class TritonShortConvTiles:
         return None
 
 
-FORWARD_TILES = TritonShortConvTiles(chunk=64, max_channel_block=1024, num_warps=4, num_stages=1, rows_per_step=4)
-BACKWARD_TILES = TritonShortConvTiles(chunk=64, max_channel_block=1024, num_warps=4, num_stages=1, rows_per_step=4)
+# Best measured on GB200 at the hero shapes ([16, 4096, C], C in {6144, 1536}), weighted by calls per
+# layer (autoresearch/loop-260930-mfu30/b/sconv_sweep.py). The backward carries twice the ring and four
+# fp32 accumulators, so it wants two channels per thread; eight per thread spills its occupancy.
+FORWARD_TILES = TritonShortConvTiles(chunk=32, max_channel_block=1024, num_warps=4, num_stages=1, rows_per_step=8)
+BACKWARD_TILES = TritonShortConvTiles(chunk=128, max_channel_block=256, num_warps=4, num_stages=1, rows_per_step=8)
 #: The local sequence length must be a multiple of this.
 SEQUENCE_MULTIPLE = math.lcm(FORWARD_TILES.chunk, BACKWARD_TILES.chunk)
 
