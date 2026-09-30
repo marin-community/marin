@@ -921,11 +921,11 @@ def expert_consistency_metrics(opt_state) -> dict[str, jax.Array]:
         return {}
     flat = jnp.concatenate(scales)
     return {
-        "train/expert_consistency_mean": jnp.mean(flat),
-        "train/expert_consistency_p10": jnp.percentile(flat, 10),
-        "train/expert_consistency_p50": jnp.percentile(flat, 50),
-        "train/expert_consistency_p90": jnp.percentile(flat, 90),
-        "train/expert_consistency_zero_frac": jnp.mean((flat == 0).astype(jnp.float32)),
+        "train/optim/expert_consistency_mean": jnp.mean(flat),
+        "train/optim/expert_consistency_p10": jnp.percentile(flat, 10),
+        "train/optim/expert_consistency_p50": jnp.percentile(flat, 50),
+        "train/optim/expert_consistency_p90": jnp.percentile(flat, 90),
+        "train/optim/expert_consistency_zero_frac": jnp.mean((flat == 0).astype(jnp.float32)),
     }
 
 

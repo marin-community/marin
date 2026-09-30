@@ -194,5 +194,5 @@ def test_consistency_metrics_report_the_per_expert_multipliers():
 
     with jax.set_mesh(t._mesh()):
         metrics = run(jnp.ones((2, 6, 5)), list(jax.random.split(jax.random.PRNGKey(0), 40)))
-    assert float(metrics["train/expert_consistency_p90"]) > 0.9
-    assert float(metrics["train/expert_consistency_p10"]) < 0.3
+    assert float(metrics["train/optim/expert_consistency_p90"]) > 0.9
+    assert float(metrics["train/optim/expert_consistency_p10"]) < 0.3
