@@ -44,6 +44,7 @@ def _archive(
     response_shift=0,
     forward_seconds=0.1,
     matching_native_routes=False,
+    missing_route_layer=False,
 ):
     rows = []
     scores = []
@@ -52,6 +53,8 @@ def _archive(
         sample = f"{prompt}:{position % 2}"
         response = [10 + position + response_shift, 20 + position + response_shift]
         captured = np.array([[[1, 2], [2, 3]], [[1, 2], [2, 3]]], dtype=np.uint8)
+        if missing_route_layer:
+            captured[:, 0] = 0
         rows.append(
             ProbeRow(
                 probe_hash=probe_hash,
@@ -73,7 +76,7 @@ def _archive(
                 routed_experts_shape=list(captured.shape) if with_routes else None,
                 routed_experts_dtype=str(captured.dtype) if with_routes else None,
                 route_valid_mask=(
-                    ([[False, True], [True, True]] if partial_route_mask else [[True, True], [True, True]])
+                    ([[False, True], [True, True]] if partial_route_mask else (captured != 0).any(-1).tolist())
                     if with_routes
                     else None
                 ),
@@ -273,6 +276,15 @@ def test_configuration_comparison_pairs_prompts_and_requires_same_starting_weigh
     assert route_effect["ci95"]["set_agreement"] == pytest.approx([0.5, 0.5])
     rendered = render_archive_comparison(paired)
     assert "0.2" in rendered and "| 50 | [50, 50] |" in rendered
+    missing_left, missing_right = tmp_path / "missing-left", tmp_path / "missing-right"
+    _archive(missing_left, with_routes=True, missing_route_layer=True)
+    _archive(missing_right, with_routes=True, missing_route_layer=True)
+    missing = compare_archives(str(missing_left), str(missing_right), bootstrap_draws=20)
+    assert "| layer_0 | nonfinite (nan) | - |" in render_archive_comparison(missing)
+    output = tmp_path / "missing-route-figures"
+    output.mkdir()
+    write_plots(analyze_archive(str(missing_left), bootstrap_draws=20), output)
+    assert (output / "routes.png").stat().st_size > 0
     cached = tmp_path / "cached"
     _archive(cached, cache_mode="on")
     with pytest.raises(ValueError, match="prefix-cache"):

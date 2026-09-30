@@ -500,7 +500,10 @@ def write_plots(report: dict, output_dir: Path) -> None:
             ]
             if layer_values:
                 ax.plot(
-                    [index for index, _ in layer_values], [value for _, value in layer_values], marker="o", label=name
+                    [index for index, _ in layer_values],
+                    [np.nan if isinstance(value, dict) else value for _, value in layer_values],
+                    marker="o",
+                    label=name,
                 )
         ax.set(xlabel="MoE layer", ylabel="expert-set agreement", ylim=(0, 1))
         ax.legend(fontsize="small")
@@ -509,23 +512,24 @@ def write_plots(report: dict, output_dir: Path) -> None:
         plt.close(fig)
 
 
-def _display_metric(value, *, percent_digits: int | None = None) -> str:
+def _display_metric(value, *, percent_digits: int | None = None, scale: float = 1.0) -> str:
     if isinstance(value, dict) and "nonfinite" in value:
         return f"nonfinite ({value['nonfinite']})"
     if not isinstance(value, (int, float)):
         return "unavailable"
+    value *= scale
     if not math.isfinite(value):
         return f"nonfinite ({value})"
     return f"{value:.{percent_digits}%}" if percent_digits is not None else f"{value:.5g}"
 
 
-def _display_interval(value, *, percent_digits: int | None = None) -> str:
+def _display_interval(value, *, percent_digits: int | None = None, scale: float = 1.0) -> str:
     if value is None:
         return "-"
     low, high = value
     return (
-        f"[{_display_metric(low, percent_digits=percent_digits)}, "
-        f"{_display_metric(high, percent_digits=percent_digits)}]"
+        f"[{_display_metric(low, percent_digits=percent_digits, scale=scale)}, "
+        f"{_display_metric(high, percent_digits=percent_digits, scale=scale)}]"
     )
 
 
@@ -691,8 +695,8 @@ def render_archive_comparison(comparison: dict) -> str:
         for key, value in item["right_minus_left"].items():
             layer = "all" if key == "set_agreement" else key.split("/", 1)[0]
             lines.append(
-                f"| {name} | {layer} | {_display_metric(value * 100)} | "
-                f"{_display_interval([bound * 100 for bound in item['ci95'][key]] if key in item['ci95'] else None)} |"
+                f"| {name} | {layer} | {_display_metric(value, scale=100)} | "
+                f"{_display_interval(item['ci95'].get(key), scale=100)} |"
             )
     return "\n".join(lines) + "\n"
 
