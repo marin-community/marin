@@ -3,6 +3,8 @@
 
 """Public API and backend selection for the depthwise causal short convolution."""
 
+from __future__ import annotations
+
 import functools
 import logging
 import warnings
@@ -14,7 +16,7 @@ import jax.numpy as jnp
 from jax import shard_map
 from jax.sharding import PartitionSpec as P
 from jax.sharding import get_abstract_mesh, reshard
-from jaxtyping import Array, Float, Int
+from shape_extensions import IntVar
 
 from levanter.sharding import partitioning_axes, partition_spec_of
 
@@ -88,13 +90,13 @@ def _assert_local_axes(name: str, array: jax.Array, axes: Sequence[int], mesh) -
 
 
 @functools.partial(jax.custom_vjp, nondiff_argnums=(3, 4))
-def _short_conv_pallas_local(
-    weight: Float[Array, "W C"],
-    x: Float[Array, "B S C"],
-    segment_ids: Int[Array, "B S"],
+def _short_conv_pallas_local[W: IntVar, C: IntVar, B: IntVar, S: IntVar](
+    weight: jax.Array[[W, C]],
+    x: jax.Array[[B, S, C]],
+    segment_ids: jax.Array[[B, S]],
     block_sizes: ShortConvBlockSizes,
     exact_reference_rounding: bool,
-) -> Float[Array, "B S C"]:
+) -> jax.Array[[B, S, C]]:
     return short_conv_pallas_fwd_local(
         weight,
         x,
@@ -153,31 +155,31 @@ def _round_up(value: int, multiple: int) -> int:
 LocalCall: TypeAlias = Callable[[jax.Array, jax.Array, jax.Array | None], jax.Array]
 
 
-def _pallas_local_call(
-    weight: jax.Array,
-    x: jax.Array,
-    segment_ids: jax.Array | None,
+def _pallas_local_call[W: IntVar, C: IntVar, B: IntVar, S: IntVar](
+    weight: jax.Array[[W, C]],
+    x: jax.Array[[B, S, C]],
+    segment_ids: jax.Array[[B, S]] | None,
     *,
     block_sizes: ShortConvBlockSizes,
     exact_reference_rounding: bool,
-) -> jax.Array:
+) -> jax.Array[[B, S, C]]:
     if segment_ids is None:
         # A constant segment ID makes every tap valid for unpacked inputs.
         segment_ids = jnp.zeros(x.shape[:2], jnp.int32)
     return _short_conv_pallas_local(weight, x, segment_ids, block_sizes, exact_reference_rounding)
 
 
-def _short_conv_sharded(
-    weight: Float[Array, "W C"],
-    x: Float[Array, "B S C"],
-    segment_ids: Int[Array, "B S"] | None,
+def _short_conv_sharded[W: IntVar, C: IntVar, B: IntVar, S: IntVar](
+    weight: jax.Array[[W, C]],
+    x: jax.Array[[B, S, C]],
+    segment_ids: jax.Array[[B, S]] | None,
     *,
     local_call: LocalCall,
     mesh,
     batch_axes: Sequence[str],
     seq_axis: str | None,
     padded_local_seq: int,
-) -> Float[Array, "B S C"]:
+) -> jax.Array[[B, S, C]]:
     """Run ``local_call`` inside an explicit ``shard_map``.
 
     Sequence shards prepend a left halo and right-pad to ``padded_local_seq`` before
@@ -243,16 +245,16 @@ def _short_conv_sharded(
     return _local(weight, x, segment_ids)
 
 
-def short_conv(
-    weight: Float[Array, "W C"],
-    x: Float[Array, "B S C"],
-    segment_ids: Int[Array, "B S"] | None = None,
+def short_conv[W: IntVar, C: IntVar, B: IntVar, S: IntVar](
+    weight: jax.Array[[W, C]],
+    x: jax.Array[[B, S, C]],
+    segment_ids: jax.Array[[B, S]] | None = None,
     *,
     implementation: Implementation | Sequence[Implementation] | None = None,
     block_sizes: ShortConvBlockSizes | None = None,
     exact_reference_rounding: bool = True,
     batch_axes: Sequence[str] = DEFAULT_BATCH_AXES,
-) -> Float[Array, "B S C"]:
+) -> jax.Array[[B, S, C]]:
     """Depthwise causal 1-D convolution over the sequence axis.
 
     ``out[b,t,c] = sum_lag weight[lag,c] * x[b,t-lag,c]``, with taps that would reach into
@@ -323,6 +325,7 @@ def short_conv(
         if name == "reference":
             if seq_axis is None:
                 return short_conv_reference(weight, x, segment_ids)
+            # pyrefly: ignore[bad-return]  # functools.partial re-instantiates B/S/C, so `sharded` returns fresh ones.
             return sharded(local_call=short_conv_reference, padded_local_seq=local_seq + halo)
         if name != "pallas_gpu":
             raise ValueError(f"Unknown short_conv implementation {name!r}")
@@ -339,6 +342,7 @@ def short_conv(
             warnings.warn(f"short_conv falling back from 'pallas_gpu' ({reason})", stacklevel=2)
             continue
 
+        # pyrefly: ignore[bad-return]  # functools.partial re-instantiates B/S/C, as above.
         return sharded(
             local_call=functools.partial(
                 _pallas_local_call,

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Float
+from shape_extensions import IntTuple, IntVar
 
 from levanter.kernels.pallas.ssd.reference import (
     ssd_scan_chunk_states_reference_batched,
@@ -28,14 +28,14 @@ from .reference import (
 )
 
 
-def mamba3_intra_chunk_xla_batched(
-    a_log_cumsum: Float[Array, "groups chunk"],
-    src_scale: Float[Array, "groups chunk"],
-    out_correction: Float[Array, "groups chunk"],
-    b: Float[Array, "groups chunk state"],
-    c: Float[Array, "groups chunk state"],
-    x: Float[Array, "groups chunk value"],
-) -> Float[Array, "groups chunk value"]:
+def mamba3_intra_chunk_xla_batched[G: IntVar, C: IntVar, N: IntVar, P: IntVar](
+    a_log_cumsum: jax.Array[[G, C]],
+    src_scale: jax.Array[[G, C]],
+    out_correction: jax.Array[[G, C]],
+    b: jax.Array[[G, C, N]],
+    c: jax.Array[[G, C, N]],
+    x: jax.Array[[G, C, P]],
+) -> jax.Array[[G, C, P]]:
     """Plain-JAX Mamba-3 local block on the transformed `g` recurrence."""
 
     with jax.named_scope("mamba3_intra_chunk"):
@@ -48,29 +48,29 @@ def mamba3_intra_chunk_xla_batched(
         return (y - correction).astype(x.dtype)
 
 
-def mamba3_chunk_state_xla_batched(
-    a_log_cumsum: Float[Array, "groups chunk"],
-    src_scale: Float[Array, "groups chunk"],
-    b: Float[Array, "groups chunk state"],
-    x: Float[Array, "groups chunk value"],
-) -> Float[Array, "groups value state"]:
+def mamba3_chunk_state_xla_batched[G: IntVar, C: IntVar, N: IntVar, P: IntVar](
+    a_log_cumsum: jax.Array[[G, C]],
+    src_scale: jax.Array[[G, C]],
+    b: jax.Array[[G, C, N]],
+    x: jax.Array[[G, C, P]],
+) -> jax.Array[[G, P, N]]:
     """Plain-JAX chunk-state accumulation."""
 
     with jax.named_scope("mamba3_chunk_state"):
         return ssd_chunk_state_xla_batched(a_log_cumsum, src_scale, b, x)
 
 
-def mamba3_chunked_forward_xla_batched(
-    a_log_cumsum: Float[Array, "groups chunks chunk"],
-    src_scale: Float[Array, "groups chunks chunk"],
-    out_correction: Float[Array, "groups chunks chunk"],
-    b: Float[Array, "groups chunks chunk state"],
-    c: Float[Array, "groups chunks chunk state"],
-    x: Float[Array, "groups chunks chunk value"],
+def mamba3_chunked_forward_xla_batched[G: IntVar, K: IntVar, C: IntVar, N: IntVar, P: IntVar](
+    a_log_cumsum: jax.Array[[G, K, C]],
+    src_scale: jax.Array[[G, K, C]],
+    out_correction: jax.Array[[G, K, C]],
+    b: jax.Array[[G, K, C, N]],
+    c: jax.Array[[G, K, C, N]],
+    x: jax.Array[[G, K, C, P]],
     *,
     prefix_emit_variant: PrefixEmitVariant = PREFIX_EMIT_AUTO,
     local_output_variant: LocalOutputVariant = LOCAL_OUTPUT_AUTO,
-) -> tuple[Float[Array, "groups chunks chunk value"], Float[Array, "groups value state"]]:
+) -> tuple[jax.Array[[G, K, C, P]], jax.Array[[G, P, N]]]:
     """Chunked Mamba-3 forward pass in plain JAX/XLA."""
 
     if prefix_emit_variant == PREFIX_EMIT_AUTO and local_output_variant == LOCAL_OUTPUT_AUTO:
@@ -87,17 +87,17 @@ def mamba3_chunked_forward_xla_batched(
     )
 
 
-def _mamba3_chunked_forward_xla_batched_impl(
-    a_log_cumsum: Float[Array, "groups chunks chunk"],
-    src_scale: Float[Array, "groups chunks chunk"],
-    out_correction: Float[Array, "groups chunks chunk"],
-    b: Float[Array, "groups chunks chunk state"],
-    c: Float[Array, "groups chunks chunk state"],
-    x: Float[Array, "groups chunks chunk value"],
+def _mamba3_chunked_forward_xla_batched_impl[G: IntVar, K: IntVar, C: IntVar, N: IntVar, P: IntVar](
+    a_log_cumsum: jax.Array[[G, K, C]],
+    src_scale: jax.Array[[G, K, C]],
+    out_correction: jax.Array[[G, K, C]],
+    b: jax.Array[[G, K, C, N]],
+    c: jax.Array[[G, K, C, N]],
+    x: jax.Array[[G, K, C, P]],
     *,
     prefix_emit_variant: PrefixEmitVariant = PREFIX_EMIT_AUTO,
     local_output_variant: LocalOutputVariant = LOCAL_OUTPUT_AUTO,
-) -> tuple[Float[Array, "groups chunks chunk value"], Float[Array, "groups value state"]]:
+) -> tuple[jax.Array[[G, K, C, P]], jax.Array[[G, P, N]]]:
     """Chunked Mamba-3 forward pass in plain JAX/XLA."""
 
     with jax.named_scope("mamba3_chunked_forward"):
@@ -130,20 +130,21 @@ def _materialize_cotangent(
     cotangent: jax.Array | jax.custom_derivatives.SymbolicZero,
     primal: jax.Array,
 ) -> jax.Array:
+    # Called for both the chunked-value and final-state outputs, which differ in shape, so this stays bare.
     if isinstance(cotangent, jax.custom_derivatives.SymbolicZero):
         return jnp.zeros_like(primal)
     return cotangent
 
 
 @jax.custom_vjp
-def _mamba3_chunked_forward_xla_batched_default_custom_vjp(
-    a_log_cumsum: Float[Array, "groups chunks chunk"],
-    src_scale: Float[Array, "groups chunks chunk"],
-    out_correction: Float[Array, "groups chunks chunk"],
-    b: Float[Array, "groups chunks chunk state"],
-    c: Float[Array, "groups chunks chunk state"],
-    x: Float[Array, "groups chunks chunk value"],
-) -> tuple[Float[Array, "groups chunks chunk value"], Float[Array, "groups value state"]]:
+def _mamba3_chunked_forward_xla_batched_default_custom_vjp[G: IntVar, K: IntVar, C: IntVar, N: IntVar, P: IntVar](
+    a_log_cumsum: jax.Array[[G, K, C]],
+    src_scale: jax.Array[[G, K, C]],
+    out_correction: jax.Array[[G, K, C]],
+    b: jax.Array[[G, K, C, N]],
+    c: jax.Array[[G, K, C, N]],
+    x: jax.Array[[G, K, C, P]],
+) -> tuple[jax.Array[[G, K, C, P]], jax.Array[[G, P, N]]]:
     return _mamba3_chunked_forward_xla_batched_impl(
         a_log_cumsum,
         src_scale,
@@ -156,16 +157,23 @@ def _mamba3_chunked_forward_xla_batched_default_custom_vjp(
     )
 
 
-def _mamba3_chunked_forward_xla_batched_default_custom_vjp_fwd(
-    a_log_cumsum: Float[Array, "groups chunks chunk"],
-    src_scale: Float[Array, "groups chunks chunk"],
-    out_correction: Float[Array, "groups chunks chunk"],
-    b: Float[Array, "groups chunks chunk state"],
-    c: Float[Array, "groups chunks chunk state"],
-    x: Float[Array, "groups chunks chunk value"],
+def _mamba3_chunked_forward_xla_batched_default_custom_vjp_fwd[G: IntVar, K: IntVar, C: IntVar, N: IntVar, P: IntVar](
+    a_log_cumsum: jax.Array[[G, K, C]],
+    src_scale: jax.Array[[G, K, C]],
+    out_correction: jax.Array[[G, K, C]],
+    b: jax.Array[[G, K, C, N]],
+    c: jax.Array[[G, K, C, N]],
+    x: jax.Array[[G, K, C, P]],
 ) -> tuple[
-    tuple[Float[Array, "groups chunks chunk value"], Float[Array, "groups value state"]],
-    tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array],
+    tuple[jax.Array[[G, K, C, P]], jax.Array[[G, P, N]]],
+    tuple[
+        jax.Array[[G, K, C]],
+        jax.Array[[G, K, C]],
+        jax.Array[[G, K, C]],
+        jax.Array[[G, K, C, N]],
+        jax.Array[[G, K, C, N]],
+        jax.Array[[G, K, C, P]],
+    ],
 ]:
     outputs = _mamba3_chunked_forward_xla_batched_impl(
         a_log_cumsum,
@@ -181,25 +189,39 @@ def _mamba3_chunked_forward_xla_batched_default_custom_vjp_fwd(
     return outputs, residuals
 
 
-def _mamba3_chunked_forward_xla_batched_default_custom_vjp_bwd(
-    residuals: tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array],
-    cotangents: tuple[
-        jax.Array | jax.custom_derivatives.SymbolicZero,
-        jax.Array | jax.custom_derivatives.SymbolicZero,
+def _mamba3_chunked_forward_xla_batched_default_custom_vjp_bwd[G: IntVar, K: IntVar, C: IntVar, N: IntVar, P: IntVar](
+    residuals: tuple[
+        jax.Array[[G, K, C]],
+        jax.Array[[G, K, C]],
+        jax.Array[[G, K, C]],
+        jax.Array[[G, K, C, N]],
+        jax.Array[[G, K, C, N]],
+        jax.Array[[G, K, C, P]],
     ],
-) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
+    cotangents: tuple[
+        jax.Array[[G, K, C, P]] | jax.custom_derivatives.SymbolicZero,
+        jax.Array[[G, P, N]] | jax.custom_derivatives.SymbolicZero,
+    ],
+) -> tuple[
+    jax.Array[[G, K, C]],
+    jax.Array[[G, K, C]],
+    jax.Array[[G, K, C]],
+    jax.Array[[G, K, C, N]],
+    jax.Array[[G, K, C, N]],
+    jax.Array[[G, K, C, P]],
+]:
     a_log_cumsum, src_scale, out_correction, b, c, x = residuals
     y_bar, final_state_bar = cotangents
     primals = (a_log_cumsum, src_scale, out_correction, b, c, x)
 
     def forward_impl(
-        a_log_cumsum_in: jax.Array,
-        src_scale_in: jax.Array,
-        out_correction_in: jax.Array,
-        b_in: jax.Array,
-        c_in: jax.Array,
-        x_in: jax.Array,
-    ) -> tuple[jax.Array, jax.Array]:
+        a_log_cumsum_in: jax.Array[[G, K, C]],
+        src_scale_in: jax.Array[[G, K, C]],
+        out_correction_in: jax.Array[[G, K, C]],
+        b_in: jax.Array[[G, K, C, N]],
+        c_in: jax.Array[[G, K, C, N]],
+        x_in: jax.Array[[G, K, C, P]],
+    ) -> tuple[jax.Array[[G, K, C, P]], jax.Array[[G, P, N]]]:
         return _mamba3_chunked_forward_xla_batched_impl(
             a_log_cumsum_in,
             src_scale_in,
@@ -227,12 +249,12 @@ _mamba3_chunked_forward_xla_batched_default_custom_vjp.defvjp(
 )
 
 
-def mamba3_mimo_chunk_state_xla_chunked_batched(
-    a_log_cumsum: Float[Array, "groups chunks chunk"],
-    src_scale: Float[Array, "groups chunks chunk"],
-    b: Float[Array, "groups chunks chunk state rank"],
-    x: Float[Array, "groups chunks rank chunk value"],
-) -> Float[Array, "groups chunks value state"]:
+def mamba3_mimo_chunk_state_xla_chunked_batched[G: IntVar, K: IntVar, C: IntVar, N: IntVar, R: IntVar, P: IntVar](
+    a_log_cumsum: jax.Array[[G, K, C]],
+    src_scale: jax.Array[[G, K, C]],
+    b: jax.Array[[G, K, C, N, R]],
+    x: jax.Array[[G, K, R, C, P]],
+) -> jax.Array[[G, K, P, N]]:
     """Chunk-state accumulation for rank-expanded MIMO inputs with the same `[P, N]` carry as SISO."""
 
     acc_dtype = jnp.float32
@@ -250,14 +272,14 @@ def mamba3_mimo_chunk_state_xla_chunked_batched(
         ).astype(x.dtype)
 
 
-def mamba3_mimo_chunked_forward_ranked_xla_batched(
-    a_log_cumsum: Float[Array, "groups chunks chunk"],
-    src_scale: Float[Array, "groups chunks chunk"],
-    out_correction: Float[Array, "groups chunks chunk"],
-    b: Float[Array, "groups chunks chunk state rank"],
-    c: Float[Array, "groups chunks chunk state rank"],
-    x: Float[Array, "groups chunks rank chunk value"],
-) -> tuple[Float[Array, "groups chunks rank chunk value"], Float[Array, "groups value state"]]:
+def mamba3_mimo_chunked_forward_ranked_xla_batched[G: IntVar, K: IntVar, C: IntVar, N: IntVar, R: IntVar, P: IntVar](
+    a_log_cumsum: jax.Array[[G, K, C]],
+    src_scale: jax.Array[[G, K, C]],
+    out_correction: jax.Array[[G, K, C]],
+    b: jax.Array[[G, K, C, N, R]],
+    c: jax.Array[[G, K, C, N, R]],
+    x: jax.Array[[G, K, R, C, P]],
+) -> tuple[jax.Array[[G, K, R, C, P]], jax.Array[[G, P, N]]]:
     """Chunked MIMO forward pass on rank-expanded tensors before gating/collapse."""
 
     acc_dtype = jnp.float32
@@ -319,18 +341,20 @@ def mamba3_mimo_chunked_forward_ranked_xla_batched(
         return (local_output.astype(acc_dtype) + prefix_output).astype(x.dtype), final_state
 
 
-def mamba3_mimo_chunked_forward_xla_batched(
-    a_log_cumsum: Float[Array, "groups chunks chunk"],
-    src_scale: Float[Array, "groups chunks chunk"],
-    out_correction: Float[Array, "groups chunks chunk"],
-    b: Float[Array, "groups chunks chunk state rank"],
-    c: Float[Array, "groups chunks chunk state rank"],
-    x_base: Float[Array, "groups chunks chunk value"],
-    z_base: Float[Array, "groups chunks chunk value"],
-    w_x: Float[Array, "groups value rank"] | Float[Array, "value rank"],
-    w_z: Float[Array, "groups value rank"] | Float[Array, "value rank"],
-    w_o: Float[Array, "groups value rank"] | Float[Array, "value rank"],
-) -> tuple[Float[Array, "groups chunks chunk value"], Float[Array, "groups value state"]]:
+def mamba3_mimo_chunked_forward_xla_batched[
+    G: IntVar, K: IntVar, C: IntVar, N: IntVar, R: IntVar, P: IntVar, WBatch: IntTuple
+](
+    a_log_cumsum: jax.Array[[G, K, C]],
+    src_scale: jax.Array[[G, K, C]],
+    out_correction: jax.Array[[G, K, C]],
+    b: jax.Array[[G, K, C, N, R]],
+    c: jax.Array[[G, K, C, N, R]],
+    x_base: jax.Array[[G, K, C, P]],
+    z_base: jax.Array[[G, K, C, P]],
+    w_x: jax.Array[[*WBatch, P, R]],
+    w_z: jax.Array[[*WBatch, P, R]],
+    w_o: jax.Array[[*WBatch, P, R]],
+) -> tuple[jax.Array[[G, K, C, P]], jax.Array[[G, P, N]]]:
     """Chunked MIMO forward pass in plain JAX/XLA with lightweight rank expand/gate/collapse."""
 
     with jax.named_scope("mamba3_mimo_output_xla"):

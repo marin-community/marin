@@ -13,17 +13,20 @@ against the shifted ``segment_ids``, a bf16-rounded multiply, a bf16-rounded add
 lag order -- fixes the rounding that the fused kernel is required to match.
 """
 
+from __future__ import annotations
+
+import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Float, Int
+from shape_extensions import IntVar
 
 from .config import OOB_SEGMENT
 
 
-def short_conv_reference(
-    weight: Float[Array, "W C"],
-    x: Float[Array, "B S C"],
-    segment_ids: Int[Array, "B S"] | None = None,
-) -> Float[Array, "B S C"]:
+def short_conv_reference[W: IntVar, C: IntVar, B: IntVar, S: IntVar](
+    weight: jax.Array[[W, C]],
+    x: jax.Array[[B, S, C]],
+    segment_ids: jax.Array[[B, S]] | None = None,
+) -> jax.Array[[B, S, C]]:
     """``out[b,t,c] = sum_lag weight[lag,c] * x[b,t-lag,c]``, zeroed across segments.
 
     A tap that reaches into a previous document is dropped (the shifted ``segment_ids``

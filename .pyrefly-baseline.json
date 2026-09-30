@@ -5832,63 +5832,42 @@
       "severity": "error"
     },
     {
-      "column": 21,
-      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/api.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 69,
-      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/api.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis is out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 35,
-      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/api.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 45,
-      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/api.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 45,
-      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/api.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 26,
-      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/api.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 27,
-      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/api.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 22,
+      "column": 28,
       "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
       "name": "unsupported-operation",
       "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
       "severity": "error"
     },
     {
-      "column": 22,
+      "column": 27,
+      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 28,
+      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 24,
+      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 24,
+      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
+      "name": "unsupported-operation",
+      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
+      "severity": "error"
+    },
+    {
+      "column": 24,
       "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
       "name": "unsupported-operation",
       "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
@@ -5934,202 +5913,6 @@
       "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
       "name": "unsupported-operation",
       "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 22,
-      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 19,
-      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 13,
-      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
-      "name": "bad-index",
-      "concise_description": "Too many indices for tensor: got 2, expected at most 0",
-      "severity": "error"
-    },
-    {
-      "column": 19,
-      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: einsum: operand 0 expected rank 3, got 0",
-      "severity": "error"
-    },
-    {
-      "column": 22,
-      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: einsum: operand 2 expected rank 2, got 0",
-      "severity": "error"
-    },
-    {
-      "column": 31,
-      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: einsum: operand 2 expected rank 3, got 0",
-      "severity": "error"
-    },
-    {
-      "column": 28,
-      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 32,
-      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 26,
-      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 24,
-      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 24,
-      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 24,
-      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 21,
-      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 28,
-      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 27,
-      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 28,
-      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 24,
-      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 24,
-      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 24,
-      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/reference.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 30,
-      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/xla.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 30,
-      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/xla.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 26,
-      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/xla.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: einsum: operand 2 expected rank 3, got 0",
-      "severity": "error"
-    },
-    {
-      "column": 24,
-      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/xla.py",
-      "name": "bad-index",
-      "concise_description": "Too many indices for tensor: got 2, expected at most 0",
-      "severity": "error"
-    },
-    {
-      "column": 42,
-      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/xla.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: einsum: operand 0 expected rank 4, got 0",
-      "severity": "error"
-    },
-    {
-      "column": 43,
-      "path": "lib/levanter/src/levanter/kernels/pallas/mamba3/xla.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: einsum: operand 2 expected rank 3, got 0",
-      "severity": "error"
-    },
-    {
-      "column": 17,
-      "path": "lib/levanter/src/levanter/kernels/pallas/short_conv/api.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 26,
-      "path": "lib/levanter/src/levanter/kernels/pallas/short_conv/reference.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
-      "severity": "error"
-    },
-    {
-      "column": 34,
-      "path": "lib/levanter/src/levanter/kernels/pallas/short_conv/reference.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
       "severity": "error"
     },
     {
@@ -6161,111 +5944,6 @@
       "severity": "error"
     },
     {
-      "column": 12,
-      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/reference.py",
-      "name": "bad-index",
-      "concise_description": "Too many indices for tensor: got 2, expected at most 0",
-      "severity": "error"
-    },
-    {
-      "column": 29,
-      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/reference.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: einsum: operand 1 expected rank 2, got 0",
-      "severity": "error"
-    },
-    {
-      "column": 22,
-      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/reference.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: einsum: operand 2 expected rank 2, got 0",
-      "severity": "error"
-    },
-    {
-      "column": 28,
-      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/reference.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 34,
-      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/reference.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 24,
-      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/reference.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 28,
-      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/reference.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 32,
-      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/reference.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 24,
-      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/reference.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 24,
-      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/reference.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 24,
-      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/reference.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 22,
-      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/reference.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 21,
-      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/reference.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 12,
-      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/xla.py",
-      "name": "bad-index",
-      "concise_description": "Too many indices for tensor: got 2, expected at most 0",
-      "severity": "error"
-    },
-    {
-      "column": 29,
-      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/xla.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
       "column": 17,
       "path": "lib/levanter/src/levanter/kernels/pallas/ssd/xla.py",
       "name": "unexpected-keyword",
@@ -6280,20 +5958,6 @@
       "severity": "error"
     },
     {
-      "column": 22,
-      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/xla.py",
-      "name": "bad-index",
-      "concise_description": "Too many indices for tensor: got 2, expected at most 0",
-      "severity": "error"
-    },
-    {
-      "column": 29,
-      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/xla.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
       "column": 17,
       "path": "lib/levanter/src/levanter/kernels/pallas/ssd/xla.py",
       "name": "unexpected-keyword",
@@ -6301,66 +5965,10 @@
       "severity": "error"
     },
     {
-      "column": 31,
-      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/xla.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: einsum: operand 0 expected rank 4, got 0",
-      "severity": "error"
-    },
-    {
-      "column": 31,
-      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/xla.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: matmul expects at least 1-D arrays",
-      "severity": "error"
-    },
-    {
       "column": 53,
       "path": "lib/levanter/src/levanter/kernels/pallas/ssd/xla.py",
       "name": "unexpected-keyword",
       "concise_description": "Unexpected keyword argument `preferred_element_type` in function `jax.numpy.matmul`",
-      "severity": "error"
-    },
-    {
-      "column": 26,
-      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/xla.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: einsum: operand 1 expected rank 3, got 0",
-      "severity": "error"
-    },
-    {
-      "column": 36,
-      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/xla.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 42,
-      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/xla.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 43,
-      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/xla.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 41,
-      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/xla.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 43,
-      "path": "lib/levanter/src/levanter/kernels/pallas/ssd/xla.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: einsum: operand 2 expected rank 3, got 0",
       "severity": "error"
     },
     {

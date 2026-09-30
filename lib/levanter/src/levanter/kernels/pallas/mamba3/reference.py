@@ -7,7 +7,7 @@ import math
 
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Float
+from shape_extensions import IntTuple, IntVar
 
 from levanter.kernels.pallas.ssd.reference import (
     intra_chunk_log_alpha_cumsum,
@@ -20,10 +20,10 @@ from levanter.kernels.pallas.ssd.reference import (
 )
 
 
-def prepare_mamba3_scales(
-    dt: Float[Array, "... chunk"],
-    lam: Float[Array, "... chunk"],
-) -> tuple[Float[Array, "... chunk"], Float[Array, "... chunk"]]:
+def prepare_mamba3_scales[Batch: IntTuple, C: IntVar](
+    dt: jax.Array[[*Batch, C]],
+    lam: jax.Array[[*Batch, C]],
+) -> tuple[jax.Array[[*Batch, C]], jax.Array[[*Batch, C]]]:
     """Build transformed source scale and correction for a single chunk."""
 
     if dt.shape != lam.shape:
@@ -34,10 +34,10 @@ def prepare_mamba3_scales(
     return src_scale, q_next
 
 
-def prepare_mamba3_chunked_scales(
-    dt: Float[Array, "... chunks chunk"],
-    lam: Float[Array, "... chunks chunk"],
-) -> tuple[Float[Array, "... chunks chunk"], Float[Array, "... chunks chunk"]]:
+def prepare_mamba3_chunked_scales[Batch: IntTuple, K: IntVar, C: IntVar](
+    dt: jax.Array[[*Batch, K, C]],
+    lam: jax.Array[[*Batch, K, C]],
+) -> tuple[jax.Array[[*Batch, K, C]], jax.Array[[*Batch, K, C]]]:
     """Build transformed source scale and correction across chunk boundaries."""
 
     if dt.shape != lam.shape:
@@ -48,19 +48,19 @@ def prepare_mamba3_chunked_scales(
     q = (1.0 - lam) * dt
     flat_q = q.reshape(q.shape[:-2] + (math.prod(q.shape[-2:]),))
     flat_q_next = jnp.concatenate([flat_q[..., 1:], jnp.zeros_like(flat_q[..., :1])], axis=-1)
-    q_next = flat_q_next.reshape(q.shape)
+    q_next: jax.Array[[*Batch, K, C]] = flat_q_next.reshape(q.shape)
     src_scale = lam * dt + q_next
     return src_scale, q_next
 
 
-def mamba3_intra_chunk_reference_batched(
-    a_log_cumsum: Float[Array, "groups chunk"],
-    src_scale: Float[Array, "groups chunk"],
-    out_correction: Float[Array, "groups chunk"],
-    b: Float[Array, "groups chunk state"],
-    c: Float[Array, "groups chunk state"],
-    x: Float[Array, "groups chunk value"],
-) -> Float[Array, "groups chunk value"]:
+def mamba3_intra_chunk_reference_batched[G: IntVar, C: IntVar, N: IntVar, P: IntVar](
+    a_log_cumsum: jax.Array[[G, C]],
+    src_scale: jax.Array[[G, C]],
+    out_correction: jax.Array[[G, C]],
+    b: jax.Array[[G, C, N]],
+    c: jax.Array[[G, C, N]],
+    x: jax.Array[[G, C, P]],
+) -> jax.Array[[G, C, P]]:
     """Reference intra-chunk contraction on the transformed Mamba-3 `g` state."""
 
     acc_dtype = jnp.float32
@@ -70,25 +70,25 @@ def mamba3_intra_chunk_reference_batched(
     return (y - correction).astype(x.dtype)
 
 
-def mamba3_chunk_state_reference_batched(
-    a_log_cumsum: Float[Array, "groups chunk"],
-    src_scale: Float[Array, "groups chunk"],
-    b: Float[Array, "groups chunk state"],
-    x: Float[Array, "groups chunk value"],
-) -> Float[Array, "groups value state"]:
+def mamba3_chunk_state_reference_batched[G: IntVar, C: IntVar, N: IntVar, P: IntVar](
+    a_log_cumsum: jax.Array[[G, C]],
+    src_scale: jax.Array[[G, C]],
+    b: jax.Array[[G, C, N]],
+    x: jax.Array[[G, C, P]],
+) -> jax.Array[[G, P, N]]:
     """Reference chunk-end accumulation for the carried transformed `g` state."""
 
     return ssd_chunk_state_reference_batched(a_log_cumsum, src_scale, b, x)
 
 
-def mamba3_chunked_forward_reference_batched(
-    a_log_cumsum: Float[Array, "groups chunks chunk"],
-    src_scale: Float[Array, "groups chunks chunk"],
-    out_correction: Float[Array, "groups chunks chunk"],
-    b: Float[Array, "groups chunks chunk state"],
-    c: Float[Array, "groups chunks chunk state"],
-    x: Float[Array, "groups chunks chunk value"],
-) -> tuple[Float[Array, "groups chunks chunk value"], Float[Array, "groups value state"]]:
+def mamba3_chunked_forward_reference_batched[G: IntVar, K: IntVar, C: IntVar, N: IntVar, P: IntVar](
+    a_log_cumsum: jax.Array[[G, K, C]],
+    src_scale: jax.Array[[G, K, C]],
+    out_correction: jax.Array[[G, K, C]],
+    b: jax.Array[[G, K, C, N]],
+    c: jax.Array[[G, K, C, N]],
+    x: jax.Array[[G, K, C, P]],
+) -> tuple[jax.Array[[G, K, C, P]], jax.Array[[G, P, N]]]:
     """Reference chunked Mamba-3 forward pass using the SSD chunk scaffolding."""
 
     local_output = jax.vmap(
@@ -104,14 +104,14 @@ def mamba3_chunked_forward_reference_batched(
     return ssd_chunked_from_local_blocks_reference_batched(a_log_cumsum, c, local_output, chunk_state)
 
 
-def mamba3_chunked_sequential_reference_batched(
-    a_log_cumsum: Float[Array, "groups chunks chunk"],
-    src_scale: Float[Array, "groups chunks chunk"],
-    out_correction: Float[Array, "groups chunks chunk"],
-    b: Float[Array, "groups chunks chunk state"],
-    c: Float[Array, "groups chunks chunk state"],
-    x: Float[Array, "groups chunks chunk value"],
-) -> tuple[Float[Array, "groups chunks chunk value"], Float[Array, "groups value state"]]:
+def mamba3_chunked_sequential_reference_batched[G: IntVar, K: IntVar, C: IntVar, N: IntVar, P: IntVar](
+    a_log_cumsum: jax.Array[[G, K, C]],
+    src_scale: jax.Array[[G, K, C]],
+    out_correction: jax.Array[[G, K, C]],
+    b: jax.Array[[G, K, C, N]],
+    c: jax.Array[[G, K, C, N]],
+    x: jax.Array[[G, K, C, P]],
+) -> tuple[jax.Array[[G, K, C, P]], jax.Array[[G, P, N]]]:
     """Sequential transformed-state oracle used to validate the `g_t` rewrite."""
 
     y, final_state = ssd_chunked_sequential_reference_batched(a_log_cumsum, src_scale, b, c, x)
@@ -121,14 +121,14 @@ def mamba3_chunked_sequential_reference_batched(
     return (y.astype(acc_dtype) - correction).astype(x.dtype), final_state
 
 
-def mamba3_direct_recurrence_reference_batched(
-    dt: Float[Array, "groups chunks chunk"],
-    lam: Float[Array, "groups chunks chunk"],
-    a: Float[Array, "groups chunks chunk"] | Float[Array, "groups chunks"],
-    b: Float[Array, "groups chunks chunk state"],
-    c: Float[Array, "groups chunks chunk state"],
-    x: Float[Array, "groups chunks chunk value"],
-) -> tuple[Float[Array, "groups chunks chunk value"], Float[Array, "groups value state"]]:
+def mamba3_direct_recurrence_reference_batched[G: IntVar, K: IntVar, C: IntVar, N: IntVar, P: IntVar](
+    dt: jax.Array[[G, K, C]],
+    lam: jax.Array[[G, K, C]],
+    a: jax.Array[[G, K, C]] | jax.Array[[G, K]],
+    b: jax.Array[[G, K, C, N]],
+    c: jax.Array[[G, K, C, N]],
+    x: jax.Array[[G, K, C, P]],
+) -> tuple[jax.Array[[G, K, C, P]], jax.Array[[G, P, N]]]:
     """Direct paper recurrence oracle on the native Mamba-3 parameters."""
 
     if dt.shape != lam.shape:
@@ -155,19 +155,17 @@ def mamba3_direct_recurrence_reference_batched(
     init_h = jnp.zeros((dt.shape[0], x.shape[-1], b.shape[-1]), dtype=acc_dtype)
     init_v = jnp.zeros_like(init_h)
 
-    def step(
-        carry: tuple[Float[Array, "groups value state"], Float[Array, "groups value state"]],
+    def step[G2: IntVar, N2: IntVar, P2: IntVar](
+        carry: tuple[jax.Array[[G2, P2, N2]], jax.Array[[G2, P2, N2]]],
         inputs: tuple[
-            Float[Array, "groups"],
-            Float[Array, "groups"],
-            Float[Array, "groups"],
-            Float[Array, "groups state"],
-            Float[Array, "groups state"],
-            Float[Array, "groups value"],
+            jax.Array[[G2]],
+            jax.Array[[G2]],
+            jax.Array[[G2]],
+            jax.Array[[G2, N2]],
+            jax.Array[[G2, N2]],
+            jax.Array[[G2, P2]],
         ],
-    ) -> tuple[
-        tuple[Float[Array, "groups value state"], Float[Array, "groups value state"]], Float[Array, "groups value"]
-    ]:
+    ) -> tuple[tuple[jax.Array[[G2, P2, N2]], jax.Array[[G2, P2, N2]]], jax.Array[[G2, P2]]]:
         h_prev, v_prev = carry
         alpha_t, beta_t, gamma_t, b_t, c_t, x_t = inputs
         v_t = x_t[:, :, None] * b_t[:, None, :]
@@ -180,11 +178,18 @@ def mamba3_direct_recurrence_reference_batched(
     return y.astype(x.dtype), final_h.astype(x.dtype)
 
 
-def mamba3_mimo_rank_expand(
-    base: Float[Array, "... value"],
-    rank_weights: Float[Array, "... value rank"],
-) -> Float[Array, "... value rank"]:
-    """Expand a per-value tensor into rank columns using lightweight rank scales."""
+def mamba3_mimo_rank_expand[Batch1: IntTuple, Batch2: IntTuple, P: IntVar, R: IntVar](
+    base: jax.Array[[*Batch1, P]],
+    rank_weights: jax.Array[[*Batch2, P, R]],
+) -> jax.Array[[*Batch1, P, R]]:
+    """Expand a per-value tensor into rank columns using lightweight rank scales.
+
+    `base` and `rank_weights` may carry different numbers of leading (batch) axes: any
+    leading axes present on `base` but absent from `rank_weights` are broadcast via
+    inserted singleton axes, so the two leading-axis tuples are only required to be
+    broadcast-compatible, not equal. Pyrefly cannot express that relationship, so
+    `Batch1` and `Batch2` are independent type parameters here.
+    """
 
     if base.ndim < 1 or rank_weights.ndim < 2:
         raise ValueError("Expected shapes `[..., P]` and `[..., P, R]` for rank expansion.")
@@ -192,23 +197,30 @@ def mamba3_mimo_rank_expand(
         raise ValueError(f"Rank weights must match the value dim, got {rank_weights.shape} for {base.shape}.")
     expand_singletons = (1,) * (base.ndim - rank_weights.ndim + 1)
     reshaped_weights = rank_weights.reshape(rank_weights.shape[:-2] + expand_singletons + rank_weights.shape[-2:])
+    # pyrefly: ignore[bad-return]  # `*` does not model broadcasting the `[..., None]` axis against R.
     return base[..., :, None] * reshaped_weights
 
 
-def mamba3_mimo_rank_expand_chunked(
-    base: Float[Array, "... chunk value"],
-    rank_weights: Float[Array, "... value rank"],
-) -> Float[Array, "... rank chunk value"]:
+def mamba3_mimo_rank_expand_chunked[Batch1: IntTuple, Batch2: IntTuple, C: IntVar, P: IntVar, R: IntVar](
+    base: jax.Array[[*Batch1, C, P]],
+    rank_weights: jax.Array[[*Batch2, P, R]],
+) -> jax.Array[[*Batch1, R, C, P]]:
     """Expand chunked tensors into rank-major form so `[chunk, value]` remains the dense inner tile."""
 
-    return jnp.moveaxis(mamba3_mimo_rank_expand(base, rank_weights), -1, -3)
+    expanded = mamba3_mimo_rank_expand(base, rank_weights)
+    result: jax.Array[[*Batch1, R, C, P]] = jnp.moveaxis(expanded, -1, -3)
+    return result
 
 
-def mamba3_mimo_rank_collapse(
-    ranked: Float[Array, "... value rank"],
-    rank_weights: Float[Array, "... value rank"],
-) -> Float[Array, "... value"]:
-    """Collapse rank columns back to the base value width with lightweight rank scales."""
+def mamba3_mimo_rank_collapse[Batch1: IntTuple, Batch2: IntTuple, P: IntVar, R: IntVar](
+    ranked: jax.Array[[*Batch1, P, R]],
+    rank_weights: jax.Array[[*Batch2, P, R]],
+) -> jax.Array[[*Batch1, P]]:
+    """Collapse rank columns back to the base value width with lightweight rank scales.
+
+    See `mamba3_mimo_rank_expand` for why `Batch1`/`Batch2` are independent: the two
+    leading-axis tuples only need to be broadcast-compatible, not equal.
+    """
 
     if ranked.ndim < 2 or rank_weights.ndim < 2:
         raise ValueError("Expected shapes `[..., P, R]` for rank collapse.")
@@ -218,37 +230,39 @@ def mamba3_mimo_rank_collapse(
         )
     collapse_singletons = (1,) * (ranked.ndim - rank_weights.ndim)
     reshaped_weights = rank_weights.reshape(rank_weights.shape[:-2] + collapse_singletons + rank_weights.shape[-2:])
-    return jnp.sum(ranked * reshaped_weights, axis=-1)
+    product: jax.Array[[*Batch1, P, R]] = ranked * reshaped_weights
+    return jnp.sum(product, axis=-1)
 
 
-def mamba3_mimo_rank_collapse_chunked(
-    ranked: Float[Array, "... rank chunk value"],
-    rank_weights: Float[Array, "... value rank"],
-) -> Float[Array, "... chunk value"]:
+def mamba3_mimo_rank_collapse_chunked[Batch1: IntTuple, Batch2: IntTuple, C: IntVar, P: IntVar, R: IntVar](
+    ranked: jax.Array[[*Batch1, R, C, P]],
+    rank_weights: jax.Array[[*Batch2, P, R]],
+) -> jax.Array[[*Batch1, C, P]]:
     """Collapse rank-major chunked tensors back to base width."""
 
-    return mamba3_mimo_rank_collapse(jnp.moveaxis(ranked, -3, -1), rank_weights)
+    moved: jax.Array[[*Batch1, C, P, R]] = jnp.moveaxis(ranked, -3, -1)
+    return mamba3_mimo_rank_collapse(moved, rank_weights)
 
 
-def mamba3_mimo_apply_gate_and_collapse_chunked(
-    y_ranked: Float[Array, "... rank chunk value"],
-    z_ranked: Float[Array, "... rank chunk value"],
-    out_rank_weights: Float[Array, "... value rank"],
-) -> Float[Array, "... chunk value"]:
+def mamba3_mimo_apply_gate_and_collapse_chunked[Batch1: IntTuple, Batch2: IntTuple, C: IntVar, P: IntVar, R: IntVar](
+    y_ranked: jax.Array[[*Batch1, R, C, P]],
+    z_ranked: jax.Array[[*Batch1, R, C, P]],
+    out_rank_weights: jax.Array[[*Batch2, P, R]],
+) -> jax.Array[[*Batch1, C, P]]:
     """Apply the paper's SiLU gating and collapse for rank-major chunked tensors."""
 
     gated = y_ranked.astype(jnp.float32) * jax.nn.silu(z_ranked.astype(jnp.float32))
     return mamba3_mimo_rank_collapse_chunked(gated, out_rank_weights.astype(jnp.float32)).astype(y_ranked.dtype)
 
 
-def mamba3_mimo_intra_chunk_reference_batched(
-    a_log_cumsum: Float[Array, "groups chunk"],
-    src_scale: Float[Array, "groups chunk"],
-    out_correction: Float[Array, "groups chunk"],
-    b: Float[Array, "groups chunk state rank"],
-    c: Float[Array, "groups chunk state rank"],
-    x: Float[Array, "groups rank chunk value"],
-) -> Float[Array, "groups rank chunk value"]:
+def mamba3_mimo_intra_chunk_reference_batched[G: IntVar, C: IntVar, N: IntVar, R: IntVar, P: IntVar](
+    a_log_cumsum: jax.Array[[G, C]],
+    src_scale: jax.Array[[G, C]],
+    out_correction: jax.Array[[G, C]],
+    b: jax.Array[[G, C, N, R]],
+    c: jax.Array[[G, C, N, R]],
+    x: jax.Array[[G, R, C, P]],
+) -> jax.Array[[G, R, C, P]]:
     """Reference intra-chunk MIMO contraction on the transformed Mamba-3 `g` state."""
 
     if a_log_cumsum.ndim != 2 or src_scale.shape != a_log_cumsum.shape or out_correction.shape != a_log_cumsum.shape:
@@ -299,12 +313,12 @@ def mamba3_mimo_intra_chunk_reference_batched(
     return (y - correction).astype(x.dtype)
 
 
-def mamba3_mimo_chunk_state_reference_batched(
-    a_log_cumsum: Float[Array, "groups chunk"],
-    src_scale: Float[Array, "groups chunk"],
-    b: Float[Array, "groups chunk state rank"],
-    x: Float[Array, "groups rank chunk value"],
-) -> Float[Array, "groups value state"]:
+def mamba3_mimo_chunk_state_reference_batched[G: IntVar, C: IntVar, N: IntVar, R: IntVar, P: IntVar](
+    a_log_cumsum: jax.Array[[G, C]],
+    src_scale: jax.Array[[G, C]],
+    b: jax.Array[[G, C, N, R]],
+    x: jax.Array[[G, R, C, P]],
+) -> jax.Array[[G, P, N]]:
     """Reference chunk-end accumulation for the carried transformed MIMO `g` state."""
 
     if a_log_cumsum.ndim != 2 or src_scale.shape != a_log_cumsum.shape:
@@ -331,12 +345,14 @@ def mamba3_mimo_chunk_state_reference_batched(
     ).astype(x.dtype)
 
 
-def mamba3_mimo_chunked_from_local_blocks_reference_batched(
-    a_log_cumsum: Float[Array, "groups chunks chunk"],
-    c: Float[Array, "groups chunks chunk state rank"],
-    local_output: Float[Array, "groups chunks rank chunk value"],
-    chunk_state: Float[Array, "groups chunks value state"],
-) -> tuple[Float[Array, "groups chunks rank chunk value"], Float[Array, "groups value state"]]:
+def mamba3_mimo_chunked_from_local_blocks_reference_batched[
+    G: IntVar, K: IntVar, C: IntVar, N: IntVar, R: IntVar, P: IntVar
+](
+    a_log_cumsum: jax.Array[[G, K, C]],
+    c: jax.Array[[G, K, C, N, R]],
+    local_output: jax.Array[[G, K, R, C, P]],
+    chunk_state: jax.Array[[G, K, P, N]],
+) -> tuple[jax.Array[[G, K, R, C, P]], jax.Array[[G, P, N]]]:
     """Combine local MIMO outputs with scanned cross-chunk prefix states."""
 
     if a_log_cumsum.ndim != 3 or c.ndim != 5 or local_output.ndim != 5 or chunk_state.ndim != 4:
@@ -354,14 +370,16 @@ def mamba3_mimo_chunked_from_local_blocks_reference_batched(
     return (local_output.astype(jnp.float32) + prefix_output).astype(local_output.dtype), final_state
 
 
-def mamba3_mimo_chunked_forward_ranked_reference_batched(
-    a_log_cumsum: Float[Array, "groups chunks chunk"],
-    src_scale: Float[Array, "groups chunks chunk"],
-    out_correction: Float[Array, "groups chunks chunk"],
-    b: Float[Array, "groups chunks chunk state rank"],
-    c: Float[Array, "groups chunks chunk state rank"],
-    x: Float[Array, "groups chunks rank chunk value"],
-) -> tuple[Float[Array, "groups chunks rank chunk value"], Float[Array, "groups value state"]]:
+def mamba3_mimo_chunked_forward_ranked_reference_batched[
+    G: IntVar, K: IntVar, C: IntVar, N: IntVar, R: IntVar, P: IntVar
+](
+    a_log_cumsum: jax.Array[[G, K, C]],
+    src_scale: jax.Array[[G, K, C]],
+    out_correction: jax.Array[[G, K, C]],
+    b: jax.Array[[G, K, C, N, R]],
+    c: jax.Array[[G, K, C, N, R]],
+    x: jax.Array[[G, K, R, C, P]],
+) -> tuple[jax.Array[[G, K, R, C, P]], jax.Array[[G, P, N]]]:
     """Reference chunked MIMO forward pass on rank-expanded tensors before gating/collapse."""
 
     local_output = jax.vmap(
@@ -377,14 +395,16 @@ def mamba3_mimo_chunked_forward_ranked_reference_batched(
     return mamba3_mimo_chunked_from_local_blocks_reference_batched(a_log_cumsum, c, local_output, chunk_state)
 
 
-def mamba3_mimo_chunked_sequential_ranked_reference_batched(
-    a_log_cumsum: Float[Array, "groups chunks chunk"],
-    src_scale: Float[Array, "groups chunks chunk"],
-    out_correction: Float[Array, "groups chunks chunk"],
-    b: Float[Array, "groups chunks chunk state rank"],
-    c: Float[Array, "groups chunks chunk state rank"],
-    x: Float[Array, "groups chunks rank chunk value"],
-) -> tuple[Float[Array, "groups chunks rank chunk value"], Float[Array, "groups value state"]]:
+def mamba3_mimo_chunked_sequential_ranked_reference_batched[
+    G: IntVar, K: IntVar, C: IntVar, N: IntVar, R: IntVar, P: IntVar
+](
+    a_log_cumsum: jax.Array[[G, K, C]],
+    src_scale: jax.Array[[G, K, C]],
+    out_correction: jax.Array[[G, K, C]],
+    b: jax.Array[[G, K, C, N, R]],
+    c: jax.Array[[G, K, C, N, R]],
+    x: jax.Array[[G, K, R, C, P]],
+) -> tuple[jax.Array[[G, K, R, C, P]], jax.Array[[G, P, N]]]:
     """Sequential transformed-state MIMO oracle used to validate the chunked decomposition."""
 
     if a_log_cumsum.ndim != 3 or src_scale.shape != a_log_cumsum.shape or out_correction.shape != a_log_cumsum.shape:
@@ -411,17 +431,17 @@ def mamba3_mimo_chunked_sequential_ranked_reference_batched(
 
     init_g = jnp.zeros((groups, x.shape[-1], b.shape[-2]), dtype=acc_dtype)
 
-    def step(
-        g_prev: Float[Array, "groups value state"],
+    def step[G2: IntVar, N2: IntVar, R2: IntVar, P2: IntVar](
+        g_prev: jax.Array[[G2, P2, N2]],
         inputs: tuple[
-            Float[Array, "groups"],
-            Float[Array, "groups"],
-            Float[Array, "groups"],
-            Float[Array, "groups state rank"],
-            Float[Array, "groups state rank"],
-            Float[Array, "groups rank value"],
+            jax.Array[[G2]],
+            jax.Array[[G2]],
+            jax.Array[[G2]],
+            jax.Array[[G2, N2, R2]],
+            jax.Array[[G2, N2, R2]],
+            jax.Array[[G2, R2, P2]],
         ],
-    ) -> tuple[Float[Array, "groups value state"], Float[Array, "groups rank value"]]:
+    ) -> tuple[jax.Array[[G2, P2, N2]], jax.Array[[G2, R2, P2]]]:
         alpha_t, src_scale_t, out_t, b_t, c_t, x_t = inputs
         v_t = jnp.einsum("gnu,gup->gpn", b_t, x_t, preferred_element_type=acc_dtype)
         g_t = alpha_t[:, None, None] * g_prev + src_scale_t[:, None, None] * v_t
@@ -439,14 +459,16 @@ def mamba3_mimo_chunked_sequential_ranked_reference_batched(
     return y.astype(x.dtype), final_g.astype(x.dtype)
 
 
-def mamba3_mimo_direct_recurrence_ranked_reference_batched(
-    dt: Float[Array, "groups chunks chunk"],
-    lam: Float[Array, "groups chunks chunk"],
-    a: Float[Array, "groups chunks chunk"] | Float[Array, "groups chunks"],
-    b: Float[Array, "groups chunks chunk state rank"],
-    c: Float[Array, "groups chunks chunk state rank"],
-    x: Float[Array, "groups chunks rank chunk value"],
-) -> tuple[Float[Array, "groups chunks rank chunk value"], Float[Array, "groups value state"]]:
+def mamba3_mimo_direct_recurrence_ranked_reference_batched[
+    G: IntVar, K: IntVar, C: IntVar, N: IntVar, R: IntVar, P: IntVar
+](
+    dt: jax.Array[[G, K, C]],
+    lam: jax.Array[[G, K, C]],
+    a: jax.Array[[G, K, C]] | jax.Array[[G, K]],
+    b: jax.Array[[G, K, C, N, R]],
+    c: jax.Array[[G, K, C, N, R]],
+    x: jax.Array[[G, K, R, C, P]],
+) -> tuple[jax.Array[[G, K, R, C, P]], jax.Array[[G, P, N]]]:
     """Direct paper recurrence oracle for rank-expanded MIMO inputs."""
 
     if dt.shape != lam.shape:
@@ -484,20 +506,17 @@ def mamba3_mimo_direct_recurrence_ranked_reference_batched(
     init_h = jnp.zeros((dt.shape[0], x.shape[-1], b.shape[-2]), dtype=acc_dtype)
     init_v = jnp.zeros_like(init_h)
 
-    def step(
-        carry: tuple[Float[Array, "groups value state"], Float[Array, "groups value state"]],
+    def step[G2: IntVar, N2: IntVar, R2: IntVar, P2: IntVar](
+        carry: tuple[jax.Array[[G2, P2, N2]], jax.Array[[G2, P2, N2]]],
         inputs: tuple[
-            Float[Array, "groups"],
-            Float[Array, "groups"],
-            Float[Array, "groups"],
-            Float[Array, "groups state rank"],
-            Float[Array, "groups state rank"],
-            Float[Array, "groups rank value"],
+            jax.Array[[G2]],
+            jax.Array[[G2]],
+            jax.Array[[G2]],
+            jax.Array[[G2, N2, R2]],
+            jax.Array[[G2, N2, R2]],
+            jax.Array[[G2, R2, P2]],
         ],
-    ) -> tuple[
-        tuple[Float[Array, "groups value state"], Float[Array, "groups value state"]],
-        Float[Array, "groups rank value"],
-    ]:
+    ) -> tuple[tuple[jax.Array[[G2, P2, N2]], jax.Array[[G2, P2, N2]]], jax.Array[[G2, R2, P2]]]:
         h_prev, v_prev = carry
         alpha_t, beta_t, gamma_t, b_t, c_t, x_t = inputs
         v_t = jnp.einsum("gnu,gup->gpn", b_t, x_t, preferred_element_type=acc_dtype)
@@ -514,18 +533,20 @@ def mamba3_mimo_direct_recurrence_ranked_reference_batched(
     return y.astype(x.dtype), final_h.astype(x.dtype)
 
 
-def mamba3_mimo_chunked_forward_reference_batched(
-    a_log_cumsum: Float[Array, "groups chunks chunk"],
-    src_scale: Float[Array, "groups chunks chunk"],
-    out_correction: Float[Array, "groups chunks chunk"],
-    b: Float[Array, "groups chunks chunk state rank"],
-    c: Float[Array, "groups chunks chunk state rank"],
-    x_base: Float[Array, "groups chunks chunk value"],
-    z_base: Float[Array, "groups chunks chunk value"],
-    w_x: Float[Array, "groups value rank"] | Float[Array, "value rank"],
-    w_z: Float[Array, "groups value rank"] | Float[Array, "value rank"],
-    w_o: Float[Array, "groups value rank"] | Float[Array, "value rank"],
-) -> tuple[Float[Array, "groups chunks chunk value"], Float[Array, "groups value state"]]:
+def mamba3_mimo_chunked_forward_reference_batched[
+    G: IntVar, K: IntVar, C: IntVar, N: IntVar, R: IntVar, P: IntVar, WBatch: IntTuple
+](
+    a_log_cumsum: jax.Array[[G, K, C]],
+    src_scale: jax.Array[[G, K, C]],
+    out_correction: jax.Array[[G, K, C]],
+    b: jax.Array[[G, K, C, N, R]],
+    c: jax.Array[[G, K, C, N, R]],
+    x_base: jax.Array[[G, K, C, P]],
+    z_base: jax.Array[[G, K, C, P]],
+    w_x: jax.Array[[*WBatch, P, R]],
+    w_z: jax.Array[[*WBatch, P, R]],
+    w_o: jax.Array[[*WBatch, P, R]],
+) -> tuple[jax.Array[[G, K, C, P]], jax.Array[[G, P, N]]]:
     """Reference chunked MIMO forward pass with lightweight rank expand/gate/collapse."""
 
     x_ranked = mamba3_mimo_rank_expand_chunked(x_base, w_x)
@@ -541,18 +562,20 @@ def mamba3_mimo_chunked_forward_reference_batched(
     return mamba3_mimo_apply_gate_and_collapse_chunked(y_ranked, z_ranked, w_o), final_state
 
 
-def mamba3_mimo_direct_recurrence_reference_batched(
-    dt: Float[Array, "groups chunks chunk"],
-    lam: Float[Array, "groups chunks chunk"],
-    a: Float[Array, "groups chunks chunk"] | Float[Array, "groups chunks"],
-    b: Float[Array, "groups chunks chunk state rank"],
-    c: Float[Array, "groups chunks chunk state rank"],
-    x_base: Float[Array, "groups chunks chunk value"],
-    z_base: Float[Array, "groups chunks chunk value"],
-    w_x: Float[Array, "groups value rank"] | Float[Array, "value rank"],
-    w_z: Float[Array, "groups value rank"] | Float[Array, "value rank"],
-    w_o: Float[Array, "groups value rank"] | Float[Array, "value rank"],
-) -> tuple[Float[Array, "groups chunks chunk value"], Float[Array, "groups value state"]]:
+def mamba3_mimo_direct_recurrence_reference_batched[
+    G: IntVar, K: IntVar, C: IntVar, N: IntVar, R: IntVar, P: IntVar, WBatch: IntTuple
+](
+    dt: jax.Array[[G, K, C]],
+    lam: jax.Array[[G, K, C]],
+    a: jax.Array[[G, K, C]] | jax.Array[[G, K]],
+    b: jax.Array[[G, K, C, N, R]],
+    c: jax.Array[[G, K, C, N, R]],
+    x_base: jax.Array[[G, K, C, P]],
+    z_base: jax.Array[[G, K, C, P]],
+    w_x: jax.Array[[*WBatch, P, R]],
+    w_z: jax.Array[[*WBatch, P, R]],
+    w_o: jax.Array[[*WBatch, P, R]],
+) -> tuple[jax.Array[[G, K, C, P]], jax.Array[[G, P, N]]]:
     """Direct paper recurrence oracle for the full lightweight-factorized MIMO path."""
 
     x_ranked = mamba3_mimo_rank_expand_chunked(x_base, w_x)

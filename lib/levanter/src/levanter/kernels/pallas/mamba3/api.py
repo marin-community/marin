@@ -10,7 +10,7 @@ from typing import Literal, TypeAlias, cast
 import jax
 import jax.numpy as jnp
 from jax.sharding import NamedSharding, PartitionSpec as P
-from jaxtyping import Array, Float
+from shape_extensions import Int, IntTuple, IntVar
 
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
 
@@ -79,6 +79,7 @@ def _merged_partition_entry(entries: Sequence[object]) -> str | tuple[str, ...] 
 
 
 def _reshape_merge_leading_axes(value: jax.Array, num_axes: int) -> jax.Array:
+    # `num_axes` is a runtime int, so the result's rank is unknown statically; this stays bare.
     merged = math.prod(value.shape[:num_axes]) if num_axes else 1
     out_sharding = None
     sharding = named_sharding_of(value)
@@ -94,6 +95,7 @@ def _reshape_restore_leading_axes(
     leading_shape: tuple[int, ...],
     leading_source: jax.Array,
 ) -> jax.Array:
+    # `leading_shape` has runtime length, so the restored rank is unknown statically; this stays bare.
     out_sharding = None
     source_sharding = named_sharding_of(leading_source)
     value_sharding = named_sharding_of(value)
@@ -106,14 +108,15 @@ def _reshape_restore_leading_axes(
     return jax.lax.reshape(value, (*leading_shape, *value.shape[1:]), out_sharding=out_sharding)
 
 
-def _flatten_intra_chunk_inputs(
-    a_log_cumsum: Float[Array, "... chunk"],
-    src_scale: Float[Array, "... chunk"],
-    out_correction: Float[Array, "... chunk"],
-    b: Float[Array, "... chunk state"],
-    c: Float[Array, "... chunk state"],
-    x: Float[Array, "... chunk value"],
+def _flatten_intra_chunk_inputs[Batch: IntTuple, C: IntVar, N: IntVar, P: IntVar](
+    a_log_cumsum: jax.Array[[*Batch, C]],
+    src_scale: jax.Array[[*Batch, C]],
+    out_correction: jax.Array[[*Batch, C]],
+    b: jax.Array[[*Batch, C, N]],
+    c: jax.Array[[*Batch, C, N]],
+    x: jax.Array[[*Batch, C, P]],
 ) -> tuple[tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array], tuple[int, ...]]:
+    # The outputs merge a runtime-length leading shape into one axis, so they stay bare.
     if a_log_cumsum.ndim < 1:
         raise ValueError(f"`a_log_cumsum` must be at least rank-1, got {a_log_cumsum.shape}.")
     if src_scale.shape != a_log_cumsum.shape or out_correction.shape != a_log_cumsum.shape:
@@ -138,16 +141,16 @@ def _flatten_intra_chunk_inputs(
     ), leading_shape
 
 
-def mamba3_intra_chunk(
-    a_log_cumsum: Float[Array, "... chunk"],
-    src_scale: Float[Array, "... chunk"],
-    out_correction: Float[Array, "... chunk"],
-    b: Float[Array, "... chunk state"],
-    c: Float[Array, "... chunk state"],
-    x: Float[Array, "... chunk value"],
+def mamba3_intra_chunk[Batch: IntTuple, C: IntVar, N: IntVar, P: IntVar](
+    a_log_cumsum: jax.Array[[*Batch, C]],
+    src_scale: jax.Array[[*Batch, C]],
+    out_correction: jax.Array[[*Batch, C]],
+    b: jax.Array[[*Batch, C, N]],
+    c: jax.Array[[*Batch, C, N]],
+    x: jax.Array[[*Batch, C, P]],
     *,
     implementation: Implementation | Sequence[Implementation] | None = None,
-) -> Float[Array, "... chunk value"]:
+) -> jax.Array[[*Batch, C, P]]:
     """Dispatch the quadratic intra-chunk Mamba-3 block to the requested backend."""
 
     flat_inputs, leading_shape = _flatten_intra_chunk_inputs(a_log_cumsum, src_scale, out_correction, b, c, x)
@@ -163,17 +166,20 @@ def mamba3_intra_chunk(
         if fn is None:
             raise ValueError(f"Unsupported Mamba-3 implementation: {impl}.")
         y = fn(*flat_inputs)
-        return _reshape_restore_leading_axes(y, leading_shape=leading_shape, leading_source=a_log_cumsum)
+        result: jax.Array[[*Batch, C, P]] = _reshape_restore_leading_axes(
+            y, leading_shape=leading_shape, leading_source=a_log_cumsum
+        )
+        return result
 
     raise ValueError("No Mamba-3 implementation was provided.")
 
 
-def mamba3_chunk_state(
-    a_log_cumsum: Float[Array, "... chunk"],
-    src_scale: Float[Array, "... chunk"],
-    b: Float[Array, "... chunk state"],
-    x: Float[Array, "... chunk value"],
-) -> Float[Array, "... value state"]:
+def mamba3_chunk_state[Batch: IntTuple, C: IntVar, N: IntVar, P: IntVar](
+    a_log_cumsum: jax.Array[[*Batch, C]],
+    src_scale: jax.Array[[*Batch, C]],
+    b: jax.Array[[*Batch, C, N]],
+    x: jax.Array[[*Batch, C, P]],
+) -> jax.Array[[*Batch, P, N]]:
     """Compute chunk-end transformed state accumulation."""
 
     if a_log_cumsum.ndim < 1:
@@ -193,19 +199,22 @@ def mamba3_chunk_state(
         _reshape_merge_leading_axes(b, len(leading_shape)),
         _reshape_merge_leading_axes(x, len(leading_shape)),
     )
-    return _reshape_restore_leading_axes(y, leading_shape=leading_shape, leading_source=a_log_cumsum)
+    result: jax.Array[[*Batch, P, N]] = _reshape_restore_leading_axes(
+        y, leading_shape=leading_shape, leading_source=a_log_cumsum
+    )
+    return result
 
 
-def mamba3_chunked_forward_from_transformed(
-    a_log_cumsum: Float[Array, "... chunks chunk"],
-    src_scale: Float[Array, "... chunks chunk"],
-    out_correction: Float[Array, "... chunks chunk"],
-    b: Float[Array, "... chunks chunk state"],
-    c: Float[Array, "... chunks chunk state"],
-    x: Float[Array, "... chunks chunk value"],
+def mamba3_chunked_forward_from_transformed[Batch: IntTuple, K: IntVar, C: IntVar, N: IntVar, P: IntVar](
+    a_log_cumsum: jax.Array[[*Batch, K, C]],
+    src_scale: jax.Array[[*Batch, K, C]],
+    out_correction: jax.Array[[*Batch, K, C]],
+    b: jax.Array[[*Batch, K, C, N]],
+    c: jax.Array[[*Batch, K, C, N]],
+    x: jax.Array[[*Batch, K, C, P]],
     *,
     implementation: Implementation | Sequence[Implementation] | None = None,
-) -> tuple[Float[Array, "... chunks chunk value"], Float[Array, "... value state"]]:
+) -> tuple[jax.Array[[*Batch, K, C, P]], jax.Array[[*Batch, P, N]]]:
     """Chunked Mamba-3 forward pass on transformed inputs."""
 
     if a_log_cumsum.ndim < 2 or src_scale.shape != a_log_cumsum.shape or out_correction.shape != a_log_cumsum.shape:
@@ -241,22 +250,25 @@ def mamba3_chunked_forward_from_transformed(
             flat_x,
         )
 
-    return (
-        _reshape_restore_leading_axes(y, leading_shape=leading_shape, leading_source=a_log_cumsum),
-        _reshape_restore_leading_axes(final_state, leading_shape=leading_shape, leading_source=x),
+    y_out: jax.Array[[*Batch, K, C, P]] = _reshape_restore_leading_axes(
+        y, leading_shape=leading_shape, leading_source=a_log_cumsum
     )
+    final_state_out: jax.Array[[*Batch, P, N]] = _reshape_restore_leading_axes(
+        final_state, leading_shape=leading_shape, leading_source=x
+    )
+    return y_out, final_state_out
 
 
-def mamba3_chunked_forward(
-    dt: Float[Array, "... chunks chunk"],
-    lam: Float[Array, "... chunks chunk"],
-    a: Float[Array, "... chunks chunk"] | Float[Array, "... chunks"],
-    b: Float[Array, "... chunks chunk state"],
-    c: Float[Array, "... chunks chunk state"],
-    x: Float[Array, "... chunks chunk value"],
+def mamba3_chunked_forward[Batch: IntTuple, K: IntVar, C: IntVar, N: IntVar, P: IntVar](
+    dt: jax.Array[[*Batch, K, C]],
+    lam: jax.Array[[*Batch, K, C]],
+    a: jax.Array[[*Batch, K, C]] | jax.Array[[*Batch, K]],
+    b: jax.Array[[*Batch, K, C, N]],
+    c: jax.Array[[*Batch, K, C, N]],
+    x: jax.Array[[*Batch, K, C, P]],
     *,
     implementation: Implementation | Sequence[Implementation] | None = None,
-) -> tuple[Float[Array, "... chunks chunk value"], Float[Array, "... value state"]]:
+) -> tuple[jax.Array[[*Batch, K, C, P]], jax.Array[[*Batch, P, N]]]:
     """Stable Mamba-3 entrypoint on native chunked inputs."""
 
     if implementation == "reference":
@@ -269,10 +281,13 @@ def mamba3_chunked_forward(
             _reshape_merge_leading_axes(c, len(leading_shape)),
             _reshape_merge_leading_axes(x, len(leading_shape)),
         )
-        return (
-            _reshape_restore_leading_axes(y, leading_shape=leading_shape, leading_source=dt),
-            _reshape_restore_leading_axes(final_state, leading_shape=leading_shape, leading_source=x),
+        y_out: jax.Array[[*Batch, K, C, P]] = _reshape_restore_leading_axes(
+            y, leading_shape=leading_shape, leading_source=dt
         )
+        final_state_out: jax.Array[[*Batch, P, N]] = _reshape_restore_leading_axes(
+            final_state, leading_shape=leading_shape, leading_source=x
+        )
+        return y_out, final_state_out
 
     src_scale, out_correction = prepare_mamba3_chunked_scales(dt, lam)
     a_log_cumsum = intra_chunk_log_alpha_cumsum(local_log_alpha(dt, a))
@@ -287,20 +302,22 @@ def mamba3_chunked_forward(
     )
 
 
-def mamba3_mimo_chunked_forward_from_transformed(
-    a_log_cumsum: Float[Array, "... chunks chunk"],
-    src_scale: Float[Array, "... chunks chunk"],
-    out_correction: Float[Array, "... chunks chunk"],
-    b: Float[Array, "... chunks chunk state rank"],
-    c: Float[Array, "... chunks chunk state rank"],
-    x_base: Float[Array, "... chunks chunk value"],
-    z_base: Float[Array, "... chunks chunk value"],
-    w_x: Float[Array, "... value rank"] | Float[Array, "value rank"],
-    w_z: Float[Array, "... value rank"] | Float[Array, "value rank"],
-    w_o: Float[Array, "... value rank"] | Float[Array, "value rank"],
+def mamba3_mimo_chunked_forward_from_transformed[
+    Batch: IntTuple, K: IntVar, C: IntVar, N: IntVar, R: IntVar, P: IntVar, WBatch: IntTuple
+](
+    a_log_cumsum: jax.Array[[*Batch, K, C]],
+    src_scale: jax.Array[[*Batch, K, C]],
+    out_correction: jax.Array[[*Batch, K, C]],
+    b: jax.Array[[*Batch, K, C, N, R]],
+    c: jax.Array[[*Batch, K, C, N, R]],
+    x_base: jax.Array[[*Batch, K, C, P]],
+    z_base: jax.Array[[*Batch, K, C, P]],
+    w_x: jax.Array[[*WBatch, P, R]],
+    w_z: jax.Array[[*WBatch, P, R]],
+    w_o: jax.Array[[*WBatch, P, R]],
     *,
     implementation: Implementation | Sequence[Implementation] | None = None,
-) -> tuple[Float[Array, "... chunks chunk value"], Float[Array, "... value state"]]:
+) -> tuple[jax.Array[[*Batch, K, C, P]], jax.Array[[*Batch, P, N]]]:
     """Chunked real-valued MIMO Mamba-3 forward pass on transformed schedules."""
 
     if implementation not in (None, "xla", "reference"):
@@ -345,26 +362,31 @@ def mamba3_mimo_chunked_forward_from_transformed(
             w_o,
         )
 
-    return (
-        _reshape_restore_leading_axes(y, leading_shape=leading_shape, leading_source=a_log_cumsum),
-        _reshape_restore_leading_axes(final_state, leading_shape=leading_shape, leading_source=x_base),
+    y_out: jax.Array[[*Batch, K, C, P]] = _reshape_restore_leading_axes(
+        y, leading_shape=leading_shape, leading_source=a_log_cumsum
     )
+    final_state_out: jax.Array[[*Batch, P, N]] = _reshape_restore_leading_axes(
+        final_state, leading_shape=leading_shape, leading_source=x_base
+    )
+    return y_out, final_state_out
 
 
-def mamba3_mimo_chunked_forward(
-    dt: Float[Array, "... chunks chunk"],
-    lam: Float[Array, "... chunks chunk"],
-    a: Float[Array, "... chunks chunk"] | Float[Array, "... chunks"],
-    b: Float[Array, "... chunks chunk state rank"],
-    c: Float[Array, "... chunks chunk state rank"],
-    x_base: Float[Array, "... chunks chunk value"],
-    z_base: Float[Array, "... chunks chunk value"],
-    w_x: Float[Array, "... value rank"] | Float[Array, "value rank"],
-    w_z: Float[Array, "... value rank"] | Float[Array, "value rank"],
-    w_o: Float[Array, "... value rank"] | Float[Array, "value rank"],
+def mamba3_mimo_chunked_forward[
+    Batch: IntTuple, K: IntVar, C: IntVar, N: IntVar, R: IntVar, P: IntVar, WBatch: IntTuple
+](
+    dt: jax.Array[[*Batch, K, C]],
+    lam: jax.Array[[*Batch, K, C]],
+    a: jax.Array[[*Batch, K, C]] | jax.Array[[*Batch, K]],
+    b: jax.Array[[*Batch, K, C, N, R]],
+    c: jax.Array[[*Batch, K, C, N, R]],
+    x_base: jax.Array[[*Batch, K, C, P]],
+    z_base: jax.Array[[*Batch, K, C, P]],
+    w_x: jax.Array[[*WBatch, P, R]],
+    w_z: jax.Array[[*WBatch, P, R]],
+    w_o: jax.Array[[*WBatch, P, R]],
     *,
     implementation: Implementation | Sequence[Implementation] | None = None,
-) -> tuple[Float[Array, "... chunks chunk value"], Float[Array, "... value state"]]:
+) -> tuple[jax.Array[[*Batch, K, C, P]], jax.Array[[*Batch, P, N]]]:
     """Stable MIMO Mamba-3 entrypoint on native chunked inputs."""
 
     if implementation == "reference":
@@ -381,10 +403,13 @@ def mamba3_mimo_chunked_forward(
             w_z,
             w_o,
         )
-        return (
-            _reshape_restore_leading_axes(y, leading_shape=leading_shape, leading_source=dt),
-            _reshape_restore_leading_axes(final_state, leading_shape=leading_shape, leading_source=x_base),
+        y_out: jax.Array[[*Batch, K, C, P]] = _reshape_restore_leading_axes(
+            y, leading_shape=leading_shape, leading_source=dt
         )
+        final_state_out: jax.Array[[*Batch, P, N]] = _reshape_restore_leading_axes(
+            final_state, leading_shape=leading_shape, leading_source=x_base
+        )
+        return y_out, final_state_out
 
     src_scale, out_correction = prepare_mamba3_chunked_scales(dt, lam)
     a_log_cumsum = intra_chunk_log_alpha_cumsum(local_log_alpha(dt, a))
@@ -403,10 +428,10 @@ def mamba3_mimo_chunked_forward(
     )
 
 
-def _validate_attentionish_mimo_inputs(
-    q: Float[Array, "batch seq rank qk_groups state"],
-    k: Float[Array, "batch seq rank qk_groups state"],
-    v: Float[Array, "batch seq heads value"],
+def _validate_attentionish_mimo_inputs[B: IntVar, S: IntVar, R: IntVar, QG: IntVar, N: IntVar, H: IntVar, P: IntVar](
+    q: jax.Array[[B, S, R, QG, N]],
+    k: jax.Array[[B, S, R, QG, N]],
+    v: jax.Array[[B, S, H, P]],
     *,
     chunk_size: int,
 ) -> tuple[int, int, int, int, int, int]:
@@ -425,10 +450,10 @@ def _validate_attentionish_mimo_inputs(
     return batch, seq_len, heads, rank, qk_groups, state_dim
 
 
-def _validate_attentionish_siso_inputs(
-    q: Float[Array, "batch seq heads state"],
-    k: Float[Array, "batch seq heads state"],
-    v: Float[Array, "batch seq heads value"],
+def _validate_attentionish_siso_inputs[B: IntVar, S: IntVar, H: IntVar, N: IntVar, P: IntVar](
+    q: jax.Array[[B, S, H, N]],
+    k: jax.Array[[B, S, H, N]],
+    v: jax.Array[[B, S, H, P]],
     *,
     chunk_size: int,
 ) -> tuple[int, int, int, int]:
@@ -453,52 +478,58 @@ def _require_none_or_zero(name: str, value: jax.Array | None) -> None:
         )
 
 
-def _reshape_attentionish_weights(
-    weights: Float[Array, "heads rank value"],
+def _reshape_attentionish_weights[B: IntVar, H: IntVar, R: IntVar, P: IntVar](
+    weights: jax.Array[[H, R, P]],
     *,
-    batch: int,
-) -> Float[Array, "batch heads value rank"]:
-    return jnp.broadcast_to(
+    batch: Int[B],
+) -> jax.Array[[B, H, P, R]]:
+    result: jax.Array[[B, H, P, R]] = jnp.broadcast_to(
         jnp.swapaxes(weights, -1, -2)[None, ...], (batch,) + (weights.shape[0], weights.shape[2], weights.shape[1])
     )
+    return result
 
 
-def _grouped_qk_to_chunked_state_rank(
-    tensor: Float[Array, "batch seq rank qk_groups state"],
+def _grouped_qk_to_chunked_state_rank[B: IntVar, S: IntVar, R: IntVar, QG: IntVar, N: IntVar, H: IntVar, C: IntVar](
+    tensor: jax.Array[[B, S, R, QG, N]],
     *,
-    num_heads: int,
-    chunk_size: int,
-) -> Float[Array, "batch heads chunks chunk state rank"]:
+    num_heads: Int[H],
+    chunk_size: Int[C],
+) -> jax.Array[[B, H, S // C, C, N, R]]:
     heads_per_group = num_heads // tensor.shape[3]
     by_head = tensor if tensor.shape[3] == num_heads else jnp.repeat(tensor, heads_per_group, axis=3)
     state_rank = by_head.transpose(0, 3, 1, 4, 2)
     num_chunks = tensor.shape[1] // chunk_size
-    return state_rank.reshape(tensor.shape[0], num_heads, num_chunks, chunk_size, tensor.shape[-1], tensor.shape[2])
-
-
-def _chunk_value_by_head(
-    tensor: Float[Array, "batch seq heads value"],
-    *,
-    chunk_size: int,
-) -> Float[Array, "batch heads chunks chunk value"]:
-    num_chunks = tensor.shape[1] // chunk_size
-    return tensor.reshape(tensor.shape[0], num_chunks, chunk_size, tensor.shape[2], tensor.shape[-1]).transpose(
-        0, 3, 1, 2, 4
+    result: jax.Array[[B, H, S // C, C, N, R]] = state_rank.reshape(
+        tensor.shape[0], num_heads, num_chunks, chunk_size, tensor.shape[-1], tensor.shape[2]
     )
+    return result
 
 
-def _chunk_state_by_head(
-    tensor: Float[Array, "batch seq heads state"],
+def _chunk_value_by_head[B: IntVar, S: IntVar, H: IntVar, P: IntVar, C: IntVar](
+    tensor: jax.Array[[B, S, H, P]],
     *,
-    chunk_size: int,
-) -> Float[Array, "batch heads chunks chunk state"]:
+    chunk_size: Int[C],
+) -> jax.Array[[B, H, S // C, C, P]]:
     num_chunks = tensor.shape[1] // chunk_size
-    return tensor.reshape(tensor.shape[0], num_chunks, chunk_size, tensor.shape[2], tensor.shape[-1]).transpose(
-        0, 3, 1, 2, 4
-    )
+    result: jax.Array[[B, H, S // C, C, P]] = tensor.reshape(
+        tensor.shape[0], num_chunks, chunk_size, tensor.shape[2], tensor.shape[-1]
+    ).transpose(0, 3, 1, 2, 4)
+    return result
 
 
-def _materialize_chunked_layout(tensor: jax.Array) -> jax.Array:
+def _chunk_state_by_head[B: IntVar, S: IntVar, H: IntVar, N: IntVar, C: IntVar](
+    tensor: jax.Array[[B, S, H, N]],
+    *,
+    chunk_size: Int[C],
+) -> jax.Array[[B, H, S // C, C, N]]:
+    num_chunks = tensor.shape[1] // chunk_size
+    result: jax.Array[[B, H, S // C, C, N]] = tensor.reshape(
+        tensor.shape[0], num_chunks, chunk_size, tensor.shape[2], tensor.shape[-1]
+    ).transpose(0, 3, 1, 2, 4)
+    return result
+
+
+def _materialize_chunked_layout[Shape: IntTuple](tensor: jax.Array[Shape]) -> jax.Array[Shape]:
     """Force a concrete chunk-major layout before entering the hot kernel."""
 
     return jnp.copy(tensor)
@@ -512,6 +543,7 @@ def _package_attentionish_outputs(
     return_final_state: bool,
     return_final_k: bool,
 ) -> jax.Array | tuple[jax.Array, ...]:
+    # The output arity depends on the two runtime flags, so no single static type fits; this stays bare.
     if return_final_state and return_final_k:
         return output, cast(jax.Array, final_state), cast(jax.Array, final_k)
     if return_final_state:
@@ -521,20 +553,20 @@ def _package_attentionish_outputs(
     return output
 
 
-def mamba3_attentionish_forward_from_transformed(
-    q: Float[Array, "batch seq heads state"],
-    k: Float[Array, "batch seq heads state"],
-    v: Float[Array, "batch seq heads value"],
+def mamba3_attentionish_forward_from_transformed[B: IntVar, S: IntVar, H: IntVar, N: IntVar, P: IntVar, Rot: IntVar](
+    q: jax.Array[[B, S, H, N]],
+    k: jax.Array[[B, S, H, N]],
+    v: jax.Array[[B, S, H, P]],
     *,
-    q_bias: Float[Array, "heads state"] | None = None,
-    k_bias: Float[Array, "heads state"] | None = None,
-    d: Float[Array, "heads"] | None = None,
-    angles: Float[Array, "batch seq heads rot"] | None = None,
-    da_cs: Float[Array, "batch heads seq"] | None = None,
-    da_cs_rev: Float[Array, "batch heads seq"] | None = None,
-    dt: Float[Array, "batch heads seq"] | None = None,
-    trap: Float[Array, "batch heads seq"] | None = None,
-    segsum: Float[Array, "batch heads chunks chunk chunk"] | None = None,
+    q_bias: jax.Array[[H, N]] | None = None,
+    k_bias: jax.Array[[H, N]] | None = None,
+    d: jax.Array[[H]] | None = None,
+    angles: jax.Array[[B, S, H, Rot]] | None = None,
+    da_cs: jax.Array[[B, H, S]] | None = None,
+    da_cs_rev: jax.Array[[B, H, S]] | None = None,
+    dt: jax.Array[[B, H, S]] | None = None,
+    trap: jax.Array[[B, H, S]] | None = None,
+    segsum: jax.Array | None = None,
     chunk_size: int,
     return_final_state: bool = False,
     return_final_k: bool = False,
@@ -649,20 +681,20 @@ def mamba3_attentionish_forward_from_transformed(
         )
 
 
-def mamba3_attentionish_forward(
-    q: Float[Array, "batch seq heads state"],
-    k: Float[Array, "batch seq heads state"],
-    v: Float[Array, "batch seq heads value"],
+def mamba3_attentionish_forward[B: IntVar, S: IntVar, H: IntVar, N: IntVar, P: IntVar, Rot: IntVar](
+    q: jax.Array[[B, S, H, N]],
+    k: jax.Array[[B, S, H, N]],
+    v: jax.Array[[B, S, H, P]],
     *,
-    q_bias: Float[Array, "heads state"] | None = None,
-    k_bias: Float[Array, "heads state"] | None = None,
-    d: Float[Array, "heads"] | None = None,
-    angles: Float[Array, "batch seq heads rot"] | None = None,
-    da_cs: Float[Array, "batch heads seq"] | None = None,
-    da_cs_rev: Float[Array, "batch heads seq"] | None = None,
-    dt: Float[Array, "batch heads seq"] | None = None,
-    trap: Float[Array, "batch heads seq"] | None = None,
-    segsum: Float[Array, "batch heads chunks chunk chunk"] | None = None,
+    q_bias: jax.Array[[H, N]] | None = None,
+    k_bias: jax.Array[[H, N]] | None = None,
+    d: jax.Array[[H]] | None = None,
+    angles: jax.Array[[B, S, H, Rot]] | None = None,
+    da_cs: jax.Array[[B, H, S]] | None = None,
+    da_cs_rev: jax.Array[[B, H, S]] | None = None,
+    dt: jax.Array[[B, H, S]] | None = None,
+    trap: jax.Array[[B, H, S]] | None = None,
+    segsum: jax.Array | None = None,
     chunk_size: int,
     return_final_state: bool = False,
     return_final_k: bool = False,
@@ -690,24 +722,26 @@ def mamba3_attentionish_forward(
     )
 
 
-def mamba3_mimo_attentionish_forward_from_transformed(
-    q: Float[Array, "batch seq rank qk_groups state"],
-    k: Float[Array, "batch seq rank qk_groups state"],
-    v: Float[Array, "batch seq heads value"],
-    mimo_v: Float[Array, "heads rank value"],
-    mimo_o: Float[Array, "heads rank value"],
+def mamba3_mimo_attentionish_forward_from_transformed[
+    B: IntVar, S: IntVar, R: IntVar, QG: IntVar, N: IntVar, H: IntVar, P: IntVar, Rot: IntVar
+](
+    q: jax.Array[[B, S, R, QG, N]],
+    k: jax.Array[[B, S, R, QG, N]],
+    v: jax.Array[[B, S, H, P]],
+    mimo_v: jax.Array[[H, R, P]],
+    mimo_o: jax.Array[[H, R, P]],
     *,
-    q_bias: Float[Array, "heads rank state"] | None = None,
-    k_bias: Float[Array, "heads rank state"] | None = None,
-    z: Float[Array, "batch seq heads value"] | None = None,
-    d: Float[Array, "heads"] | None = None,
-    mimo_z: Float[Array, "heads rank value"] | None = None,
-    angles: Float[Array, "batch seq heads rot"] | None = None,
-    da_cs: Float[Array, "batch heads seq"] | None = None,
-    da_cs_rev: Float[Array, "batch heads seq"] | None = None,
-    dt: Float[Array, "batch heads seq"] | None = None,
-    trap: Float[Array, "batch heads seq"] | None = None,
-    segsum: Float[Array, "batch heads chunks chunk chunk"] | None = None,
+    q_bias: jax.Array[[H, R, N]] | None = None,
+    k_bias: jax.Array[[H, R, N]] | None = None,
+    z: jax.Array[[B, S, H, P]] | None = None,
+    d: jax.Array[[H]] | None = None,
+    mimo_z: jax.Array[[H, R, P]] | None = None,
+    angles: jax.Array[[B, S, H, Rot]] | None = None,
+    da_cs: jax.Array[[B, H, S]] | None = None,
+    da_cs_rev: jax.Array[[B, H, S]] | None = None,
+    dt: jax.Array[[B, H, S]] | None = None,
+    trap: jax.Array[[B, H, S]] | None = None,
+    segsum: jax.Array | None = None,
     chunk_size: int,
     reduce_o: bool = True,
     return_final_state: bool = False,
@@ -857,24 +891,26 @@ def mamba3_mimo_attentionish_forward_from_transformed(
     )
 
 
-def mamba3_mimo_attentionish_forward(
-    q: Float[Array, "batch seq rank qk_groups state"],
-    k: Float[Array, "batch seq rank qk_groups state"],
-    v: Float[Array, "batch seq heads value"],
-    mimo_v: Float[Array, "heads rank value"],
-    mimo_o: Float[Array, "heads rank value"],
+def mamba3_mimo_attentionish_forward[
+    B: IntVar, S: IntVar, R: IntVar, QG: IntVar, N: IntVar, H: IntVar, P: IntVar, Rot: IntVar
+](
+    q: jax.Array[[B, S, R, QG, N]],
+    k: jax.Array[[B, S, R, QG, N]],
+    v: jax.Array[[B, S, H, P]],
+    mimo_v: jax.Array[[H, R, P]],
+    mimo_o: jax.Array[[H, R, P]],
     *,
-    q_bias: Float[Array, "heads rank state"] | None = None,
-    k_bias: Float[Array, "heads rank state"] | None = None,
-    z: Float[Array, "batch seq heads value"] | None = None,
-    d: Float[Array, "heads"] | None = None,
-    mimo_z: Float[Array, "heads rank value"] | None = None,
-    angles: Float[Array, "batch seq heads rot"] | None = None,
-    da_cs: Float[Array, "batch heads seq"] | None = None,
-    da_cs_rev: Float[Array, "batch heads seq"] | None = None,
-    dt: Float[Array, "batch heads seq"] | None = None,
-    trap: Float[Array, "batch heads seq"] | None = None,
-    segsum: Float[Array, "batch heads chunks chunk chunk"] | None = None,
+    q_bias: jax.Array[[H, R, N]] | None = None,
+    k_bias: jax.Array[[H, R, N]] | None = None,
+    z: jax.Array[[B, S, H, P]] | None = None,
+    d: jax.Array[[H]] | None = None,
+    mimo_z: jax.Array[[H, R, P]] | None = None,
+    angles: jax.Array[[B, S, H, Rot]] | None = None,
+    da_cs: jax.Array[[B, H, S]] | None = None,
+    da_cs_rev: jax.Array[[B, H, S]] | None = None,
+    dt: jax.Array[[B, H, S]] | None = None,
+    trap: jax.Array[[B, H, S]] | None = None,
+    segsum: jax.Array | None = None,
     chunk_size: int,
     reduce_o: bool = True,
     return_final_state: bool = False,
@@ -911,32 +947,43 @@ def mamba3_mimo_attentionish_forward(
     )
 
 
-def mamba3_hybrid_chunked_forward_from_transformed(
-    a_log_cumsum: Float[Array, "... chunks chunk"],
-    src_scale: Float[Array, "... chunks chunk"],
-    out_correction: Float[Array, "... chunks chunk"],
-    b: Float[Array, "..."],
-    c: Float[Array, "..."],
-    x: Float[Array, "... chunks chunk value"],
+def mamba3_hybrid_chunked_forward_from_transformed[
+    Batch: IntTuple, K: IntVar, C: IntVar, N: IntVar, R: IntVar, P: IntVar, WBatch: IntTuple
+](
+    a_log_cumsum: jax.Array[[*Batch, K, C]],
+    src_scale: jax.Array[[*Batch, K, C]],
+    out_correction: jax.Array[[*Batch, K, C]],
+    b: jax.Array,
+    c: jax.Array,
+    x: jax.Array[[*Batch, K, C, P]],
     *,
     mode: Mamba3Mode = "siso",
-    z: Float[Array, "... chunks chunk value"] | None = None,
-    w_x: Float[Array, "... value rank"] | Float[Array, "value rank"] | None = None,
-    w_z: Float[Array, "... value rank"] | Float[Array, "value rank"] | None = None,
-    w_o: Float[Array, "... value rank"] | Float[Array, "value rank"] | None = None,
+    z: jax.Array[[*Batch, K, C, P]] | None = None,
+    w_x: jax.Array[[*WBatch, P, R]] | None = None,
+    w_z: jax.Array[[*WBatch, P, R]] | None = None,
+    w_o: jax.Array[[*WBatch, P, R]] | None = None,
     implementation: Implementation | Sequence[Implementation] | None = None,
-) -> tuple[Float[Array, "... chunks chunk value"], Float[Array, "... value state"]]:
-    """Dispatch transformed Mamba-3 inputs to the stable SISO or MIMO API."""
+) -> tuple[jax.Array[[*Batch, K, C, P]], jax.Array[[*Batch, P, N]]]:
+    """Dispatch transformed Mamba-3 inputs to the stable SISO or MIMO API.
+
+    `b`/`c` carry either the SISO `[..., chunks, chunk, state]` shape or the MIMO
+    `[..., chunks, chunk, state, rank]` shape depending on `mode`, a rank difference
+    that is only known at runtime; they are left fully gradual here and pinned to the
+    mode-specific shape via an annotated local right before the dispatch call (`cast`
+    would evaluate the variadic `*Batch` subscript eagerly at import time and crash).
+    """
 
     if mode == "siso":
         if any(arg is not None for arg in (z, w_x, w_z, w_o)):
             raise ValueError("SISO hybrid mode does not accept MIMO-only arguments `z`, `w_x`, `w_z`, or `w_o`.")
+        b_siso: jax.Array[[*Batch, K, C, N]] = b
+        c_siso: jax.Array[[*Batch, K, C, N]] = c
         return mamba3_chunked_forward_from_transformed(
             a_log_cumsum,
             src_scale,
             out_correction,
-            cast(Float[Array, "... chunks chunk state"], b),
-            cast(Float[Array, "... chunks chunk state"], c),
+            b_siso,
+            c_siso,
             x,
             implementation=implementation,
         )
@@ -944,12 +991,14 @@ def mamba3_hybrid_chunked_forward_from_transformed(
     if mode == "mimo":
         if z is None or w_x is None or w_z is None or w_o is None:
             raise ValueError("MIMO hybrid mode requires `z`, `w_x`, `w_z`, and `w_o`.")
+        b_mimo: jax.Array[[*Batch, K, C, N, R]] = b
+        c_mimo: jax.Array[[*Batch, K, C, N, R]] = c
         return mamba3_mimo_chunked_forward_from_transformed(
             a_log_cumsum,
             src_scale,
             out_correction,
-            cast(Float[Array, "... chunks chunk state rank"], b),
-            cast(Float[Array, "... chunks chunk state rank"], c),
+            b_mimo,
+            c_mimo,
             x,
             z,
             w_x,
@@ -961,32 +1010,39 @@ def mamba3_hybrid_chunked_forward_from_transformed(
     raise ValueError(f"Unsupported hybrid Mamba-3 mode: {mode}.")
 
 
-def mamba3_hybrid_chunked_forward(
-    dt: Float[Array, "... chunks chunk"],
-    lam: Float[Array, "... chunks chunk"],
-    a: Float[Array, "... chunks chunk"] | Float[Array, "... chunks"],
-    b: Float[Array, "..."],
-    c: Float[Array, "..."],
-    x: Float[Array, "... chunks chunk value"],
+def mamba3_hybrid_chunked_forward[
+    Batch: IntTuple, K: IntVar, C: IntVar, N: IntVar, R: IntVar, P: IntVar, WBatch: IntTuple
+](
+    dt: jax.Array[[*Batch, K, C]],
+    lam: jax.Array[[*Batch, K, C]],
+    a: jax.Array[[*Batch, K, C]] | jax.Array[[*Batch, K]],
+    b: jax.Array,
+    c: jax.Array,
+    x: jax.Array[[*Batch, K, C, P]],
     *,
     mode: Mamba3Mode = "siso",
-    z: Float[Array, "... chunks chunk value"] | None = None,
-    w_x: Float[Array, "... value rank"] | Float[Array, "value rank"] | None = None,
-    w_z: Float[Array, "... value rank"] | Float[Array, "value rank"] | None = None,
-    w_o: Float[Array, "... value rank"] | Float[Array, "value rank"] | None = None,
+    z: jax.Array[[*Batch, K, C, P]] | None = None,
+    w_x: jax.Array[[*WBatch, P, R]] | None = None,
+    w_z: jax.Array[[*WBatch, P, R]] | None = None,
+    w_o: jax.Array[[*WBatch, P, R]] | None = None,
     implementation: Implementation | Sequence[Implementation] | None = None,
-) -> tuple[Float[Array, "... chunks chunk value"], Float[Array, "... value state"]]:
-    """Dispatch native Mamba-3 inputs to the stable SISO or MIMO API."""
+) -> tuple[jax.Array[[*Batch, K, C, P]], jax.Array[[*Batch, P, N]]]:
+    """Dispatch native Mamba-3 inputs to the stable SISO or MIMO API.
+
+    See `mamba3_hybrid_chunked_forward_from_transformed` for why `b`/`c` stay gradual.
+    """
 
     if mode == "siso":
         if any(arg is not None for arg in (z, w_x, w_z, w_o)):
             raise ValueError("SISO hybrid mode does not accept MIMO-only arguments `z`, `w_x`, `w_z`, or `w_o`.")
+        b_siso: jax.Array[[*Batch, K, C, N]] = b
+        c_siso: jax.Array[[*Batch, K, C, N]] = c
         return mamba3_chunked_forward(
             dt,
             lam,
             a,
-            cast(Float[Array, "... chunks chunk state"], b),
-            cast(Float[Array, "... chunks chunk state"], c),
+            b_siso,
+            c_siso,
             x,
             implementation=implementation,
         )
@@ -994,12 +1050,14 @@ def mamba3_hybrid_chunked_forward(
     if mode == "mimo":
         if z is None or w_x is None or w_z is None or w_o is None:
             raise ValueError("MIMO hybrid mode requires `z`, `w_x`, `w_z`, and `w_o`.")
+        b_mimo: jax.Array[[*Batch, K, C, N, R]] = b
+        c_mimo: jax.Array[[*Batch, K, C, N, R]] = c
         return mamba3_mimo_chunked_forward(
             dt,
             lam,
             a,
-            cast(Float[Array, "... chunks chunk state rank"], b),
-            cast(Float[Array, "... chunks chunk state rank"], c),
+            b_mimo,
+            c_mimo,
             x,
             z,
             w_x,

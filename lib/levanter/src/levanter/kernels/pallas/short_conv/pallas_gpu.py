@@ -91,6 +91,8 @@ against a float64 oracle instead. Setting the flag to ``False`` keeps a single f
 accumulator across taps: strictly more accurate, no longer bit-comparable.
 """
 
+from __future__ import annotations
+
 import contextlib
 import functools
 import math
@@ -98,7 +100,7 @@ import math
 import jax
 import jax.numpy as jnp
 from jax.experimental import pallas as pl
-from jaxtyping import Array, Float, Int
+from shape_extensions import IntVar
 
 from levanter.kernels.pallas.cost_estimate_utils import with_io_bytes_accessed
 
@@ -374,14 +376,14 @@ def _cost_estimate(body, primals, kernel_inputs_specs, kernel_outputs_specs):
     )
 
 
-def short_conv_pallas_fwd_local(
-    weight: Float[Array, "W C"],
-    x: Float[Array, "B S C"],
-    segment_ids: Int[Array, "B S"],
+def short_conv_pallas_fwd_local[B: IntVar, S: IntVar, C: IntVar, W: IntVar](
+    weight: jax.Array[[W, C]],
+    x: jax.Array[[B, S, C]],
+    segment_ids: jax.Array[[B, S]],
     *,
     block_sizes: ShortConvBlockSizes,
     exact_reference_rounding: bool,
-) -> Float[Array, "B S C"]:
+) -> jax.Array[[B, S, C]]:
     """Shard-local fused forward. Callers must have already entered a ``shard_map``."""
     batch, seq_len, channels = x.shape
     width = weight.shape[0]
@@ -420,15 +422,15 @@ def short_conv_pallas_fwd_local(
     return call(x, x_head, segment_ids, seg_head, weight)
 
 
-def short_conv_pallas_bwd_local(
-    weight: Float[Array, "W C"],
-    x: Float[Array, "B S C"],
-    segment_ids: Int[Array, "B S"],
-    dy: Float[Array, "B S C"],
+def short_conv_pallas_bwd_local[B: IntVar, S: IntVar, C: IntVar, W: IntVar, P: IntVar](
+    weight: jax.Array[[W, C]],
+    x: jax.Array[[B, S, C]],
+    segment_ids: jax.Array[[B, S]],
+    dy: jax.Array[[B, S, C]],
     *,
     block_sizes: ShortConvBlockSizes,
     exact_reference_rounding: bool,
-) -> tuple[Float[Array, "B S C"], Float[Array, "P W C"]]:
+) -> tuple[jax.Array[[B, S, C]], jax.Array[[P, W, C]]]:
     """Shard-local fused backward. Returns ``(dx, dw_partials)``.
 
     ``dw_partials`` is ``[batch * num_s_blocks, W, C]`` fp32; the caller sums axis 0.

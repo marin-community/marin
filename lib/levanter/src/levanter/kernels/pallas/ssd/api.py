@@ -6,7 +6,8 @@ from __future__ import annotations
 import math
 from typing import Literal, TypeAlias
 
-from jaxtyping import Array, Float
+import jax
+from shape_extensions import IntTuple, IntVar
 
 from .reference import (
     intra_chunk_log_alpha_cumsum,
@@ -28,19 +29,19 @@ IMPLEMENTATIONS = {
 _DEFAULT_IMPLEMENTATION: Implementation = "xla"
 
 
-def _flatten_intra_chunk_inputs(
-    a_log_cumsum: Float[Array, "... chunk"],
-    src_scale: Float[Array, "... chunk"],
-    b: Float[Array, "... chunk state"],
-    c: Float[Array, "... chunk state"],
-    x: Float[Array, "... chunk value"],
+def _flatten_intra_chunk_inputs[Batch: IntTuple, C: IntVar, N: IntVar, V: IntVar](
+    a_log_cumsum: jax.Array[[*Batch, C]],
+    src_scale: jax.Array[[*Batch, C]],
+    b: jax.Array[[*Batch, C, N]],
+    c: jax.Array[[*Batch, C, N]],
+    x: jax.Array[[*Batch, C, V]],
 ) -> tuple[
     tuple[
-        Float[Array, "groups chunk"],
-        Float[Array, "groups chunk"],
-        Float[Array, "groups chunk state"],
-        Float[Array, "groups chunk state"],
-        Float[Array, "groups chunk value"],
+        jax.Array,
+        jax.Array,
+        jax.Array,
+        jax.Array,
+        jax.Array,
     ],
     tuple[int, ...],
 ]:
@@ -69,15 +70,15 @@ def _flatten_intra_chunk_inputs(
     return flat_inputs, leading_shape
 
 
-def ssd_intra_chunk(
-    a_log_cumsum: Float[Array, "... chunk"],
-    src_scale: Float[Array, "... chunk"],
-    b: Float[Array, "... chunk state"],
-    c: Float[Array, "... chunk state"],
-    x: Float[Array, "... chunk value"],
+def ssd_intra_chunk[Batch: IntTuple, C: IntVar, N: IntVar, V: IntVar](
+    a_log_cumsum: jax.Array[[*Batch, C]],
+    src_scale: jax.Array[[*Batch, C]],
+    b: jax.Array[[*Batch, C, N]],
+    c: jax.Array[[*Batch, C, N]],
+    x: jax.Array[[*Batch, C, V]],
     *,
     implementation: Implementation | None = None,
-) -> Float[Array, "... chunk value"]:
+) -> jax.Array[[*Batch, C, V]]:
     """Dispatch the SSD intra-chunk block to the requested backend."""
 
     flat_inputs, leading_shape = _flatten_intra_chunk_inputs(a_log_cumsum, src_scale, b, c, x)
@@ -86,15 +87,16 @@ def ssd_intra_chunk(
     if fn is None:
         raise ValueError(f"Unsupported SSD implementation: {impl}.")
     y = fn(*flat_inputs)
+    # Reshaping onto the runtime `leading_shape` cannot be tied to `*Batch`; the declared return is trusted.
     return y.reshape(leading_shape + y.shape[-2:])
 
 
-def ssd_chunk_state(
-    a_log_cumsum: Float[Array, "... chunk"],
-    src_scale: Float[Array, "... chunk"],
-    b: Float[Array, "... chunk state"],
-    x: Float[Array, "... chunk value"],
-) -> Float[Array, "... value state"]:
+def ssd_chunk_state[Batch: IntTuple, C: IntVar, N: IntVar, V: IntVar](
+    a_log_cumsum: jax.Array[[*Batch, C]],
+    src_scale: jax.Array[[*Batch, C]],
+    b: jax.Array[[*Batch, C, N]],
+    x: jax.Array[[*Batch, C, V]],
+) -> jax.Array[[*Batch, V, N]]:
     """Compute chunk-end SSD state accumulation."""
 
     if a_log_cumsum.ndim < 1:
@@ -118,15 +120,15 @@ def ssd_chunk_state(
     return y.reshape(leading_shape + y.shape[-2:])
 
 
-def ssd_chunked_forward(
-    a_log_cumsum: Float[Array, "... chunks chunk"],
-    src_scale: Float[Array, "... chunks chunk"],
-    b: Float[Array, "... chunks chunk state"],
-    c: Float[Array, "... chunks chunk state"],
-    x: Float[Array, "... chunks chunk value"],
+def ssd_chunked_forward[Batch: IntTuple, K: IntVar, C: IntVar, N: IntVar, V: IntVar](
+    a_log_cumsum: jax.Array[[*Batch, K, C]],
+    src_scale: jax.Array[[*Batch, K, C]],
+    b: jax.Array[[*Batch, K, C, N]],
+    c: jax.Array[[*Batch, K, C, N]],
+    x: jax.Array[[*Batch, K, C, V]],
     *,
     implementation: Implementation | None = None,
-) -> tuple[Float[Array, "... chunks chunk value"], Float[Array, "... value state"]]:
+) -> tuple[jax.Array[[*Batch, K, C, V]], jax.Array[[*Batch, V, N]]]:
     """Chunked SSD forward pass with an XLA-first local block dispatch."""
 
     if a_log_cumsum.ndim < 2 or src_scale.shape != a_log_cumsum.shape:
@@ -150,7 +152,11 @@ def ssd_chunked_forward(
     else:
         raise ValueError(f"Unsupported SSD implementation: {impl}.")
 
-    return y.reshape(leading_shape + y.shape[-3:]), final_state.reshape(leading_shape + final_state.shape[-2:])
+    # As in `ssd_intra_chunk`, the reshapes onto `leading_shape` cannot be tied to `*Batch`.
+    return (
+        y.reshape(leading_shape + y.shape[-3:]),
+        final_state.reshape(leading_shape + final_state.shape[-2:]),
+    )
 
 
 __all__ = [
