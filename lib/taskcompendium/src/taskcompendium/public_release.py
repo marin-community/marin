@@ -141,7 +141,18 @@ def build_workplace_candidate(
                     "task_spec_schema": SCHEMA_VERSION,
                     "importer_revision": IMPORTER_REVISION,
                     "builder_revision": builder_revision,
-                    "harbor_samples": [],
+                    "harbor_samples": [
+                        {
+                            "method": "scripted_policy_endpoint",
+                            "taskcompendium_revision": "6a67b2666cd219b55c9d08db8659a7e91b23f08a",
+                            "harbor_revision": "ef1eaf207f41f84eb53d17f9c8bd84c073a9aba5",
+                            "provider_revision": PROVIDER_GIT_REVISION,
+                            "trials": 12,
+                            "correct_reward_one": 11,
+                            "deliberate_wrong_reward_zero": 1,
+                            "coverage": "both source splits, all five categories, and no-op targets",
+                        }
+                    ],
                 }
             },
             "sources": {
