@@ -91,6 +91,35 @@ def test_expert_mlp_forward_and_all_gradients_match_reference(tail_rows):
         _assert_bfloat16_close(got, want)
 
 
+def test_expert_mlp_backward_row_dot_is_the_output_scale_gradient():
+    _require_sm100()
+    sonic = importlib.import_module("levanter.grug._moe.sonic_cute")
+    rng = np.random.default_rng(11)
+    x = jnp.asarray(rng.normal(0, 0.2, (_NUM_TOKENS, 64)), dtype=jnp.bfloat16)
+    w13 = jnp.asarray(rng.normal(0, 0.2, (3, 64, 128)), dtype=jnp.bfloat16)
+    w2 = jnp.asarray(rng.normal(0, 0.2, (3, 64, 64)), dtype=jnp.bfloat16)
+    dy = jnp.asarray(rng.normal(0, 0.2, (_NUM_TOKENS, 64)), dtype=jnp.bfloat16)
+    cu = jnp.asarray(_CU_SEQLENS, dtype=jnp.int32)
+
+    @jax.jit
+    def run(x, w13, w2, dy):
+        y, residuals = sonic._expert_mlp_quack_wgrad_fwd(x, w13, w2, cu)
+        return (
+            y,
+            sonic._expert_mlp_quack_wgrad_backward(residuals, dy),
+            sonic._expert_mlp_quack_wgrad_bwd(residuals, dy),
+        )
+
+    y, (dx, dw13, dw2, row_dot), (dx_vjp, dw13_vjp, dw2_vjp, _cu_ct) = run(x, w13, w2, dy)
+
+    # The row dot is d/ds of <s * y, dy> for a per-row scale s, without reading y.
+    expected = np.sum(np.asarray(y, np.float32) * np.asarray(dy, np.float32), axis=-1)
+    _assert_bfloat16_close(row_dot, expected)
+    # The remaining outputs are the VJP's.
+    for got, want in zip((dx, dw13, dw2), (dx_vjp, dw13_vjp, dw2_vjp), strict=True):
+        np.testing.assert_array_equal(np.asarray(got), np.asarray(want))
+
+
 def test_muon_symmetric_gemm_matches_gram_matrix():
     _require_sm100()
     kernels = importlib.import_module("levanter.grug._moe.quack_symmetric_cute")

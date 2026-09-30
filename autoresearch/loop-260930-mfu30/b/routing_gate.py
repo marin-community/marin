@@ -38,13 +38,18 @@ def _load_frozen(name: str):
     return module
 
 
-# control: main f38da1173d. chain: main + inverse permutation + chained cotangents (c67ee1f965).
-# candidate: the branch's live module.
+# control: main f38da1173d. unfilled: inverse permutation + chained cotangents + unfilled transport
+# buffers (e612b34244). candidate: the branch's live module.
 VARIANTS = {
     "control": _load_frozen("control_ep_ragged_all_to_all")._moe_mlp_ep_ragged_a2a_local,
-    "chain": _load_frozen("chain_ep_ragged_all_to_all")._moe_mlp_ep_ragged_a2a_local,
+    "unfilled": _load_frozen("unfilled_ep_ragged_all_to_all")._moe_mlp_ep_ragged_a2a_local,
     "candidate": candidate_module._moe_mlp_ep_ragged_a2a_local,
 }
+# Outputs whose values must match main exactly. The routing-weight gradient is compared to rounding.
+EXACT_OUTPUTS = ("out", "dropped", "d_x", "d_w13", "d_w2")
+ROUNDED_OUTPUT = "d_weights"
+# bf16 carries 8 significand bits; allow a few ulps of the largest gradient.
+ROUNDED_MAX_REL_TOL = 2.0**-6
 
 
 def _mesh() -> Mesh:
@@ -136,14 +141,28 @@ def _compare(a, b):
         bu, bv = _bits(u), _bits(v)
         fu = np.asarray(jax.device_get(u), dtype=np.float32)
         fv = np.asarray(jax.device_get(v), dtype=np.float32)
+        diff = np.abs(fu - fv)
+        scale = float(np.max(np.abs(fu))) if fu.size else 0.0
+        nonzero = np.abs(fu) > 0
         result[name] = dict(
             bitwise_equal=bool(np.array_equal(bu, bv)),
             # Equal values, counting +0 and -0 as equal; NaN never compares equal.
             value_equal=bool(np.array_equal(fu, fv)),
-            max_abs_diff=float(np.max(np.abs(fu - fv))) if fu.size else 0.0,
+            max_abs_diff=float(np.max(diff)) if fu.size else 0.0,
+            # Largest difference relative to the largest reference magnitude.
+            max_rel_diff=float(np.max(diff)) / scale if scale else 0.0,
+            # Median elementwise relative difference over nonzero reference entries.
+            median_rel_diff=float(np.median(diff[nonzero] / np.abs(fu[nonzero]))) if nonzero.any() else 0.0,
+            fraction_equal=float(np.mean(fu == fv)) if fu.size else 1.0,
             finite=bool(np.isfinite(fu).all() and np.isfinite(fv).all()),
         )
     return result
+
+
+def _acceptable(comparison):
+    exact = all(comparison[k]["value_equal"] and comparison[k]["finite"] for k in EXACT_OUTPUTS)
+    rounded = comparison[ROUNDED_OUTPUT]
+    return exact and rounded["finite"] and rounded["max_rel_diff"] <= ROUNDED_MAX_REL_TOL
 
 
 def _time(compiled, inp, iters):
@@ -193,7 +212,7 @@ def main():
         treated = {v: compiled[v](*args_) for v in VARIANTS if v != "control"}
         exact = {v: _compare(control_a, out) for v, out in treated.items()}
         repeat = _compare(control_a, control_b)
-        ok = all(r["value_equal"] and r["finite"] for cmp in exact.values() for r in cmp.values())
+        ok = all(_acceptable(cmp) for cmp in exact.values())
         failures += not ok
         record = dict(
             case=case["name"],

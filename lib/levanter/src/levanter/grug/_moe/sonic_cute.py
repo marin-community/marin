@@ -128,13 +128,28 @@ def _expert_mlp_quack_wgrad_fwd(x_dispatch, w13_il, moe_w2, cu):
     return y, (x_dispatch, w13_il, moe_w2, gu, h, cu)
 
 
-def _expert_mlp_quack_wgrad_bwd(res, dy):
+def _expert_mlp_quack_wgrad_backward(res, dy):
+    """The backward of ``_expert_mlp_quack_wgrad``, plus each row's ``<y, dy>``.
+
+    ``y = h @ W2`` row by row, so ``<y, dy> = <h, dy @ W2^T> = <h, dh>``: the backward already
+    holds both factors and never needs ``y``. The dot accumulates in fp32. Rows past ``cu[-1]``
+    are unspecified in every row-indexed output.
+
+    Returns ``(dx, dw13_il, dw2, output_dot_cotangent)``.
+    """
     x_dispatch, w13_il, moe_w2, gu, h, cu = res
     dh = quack_grouped_gemm(dy, moe_w2, cu, b_major="k", **_QUACK_GROUPED_KW)
+    output_dot_cotangent = jnp.sum(dh.astype(jnp.float32) * h.astype(jnp.float32), axis=-1)
     dw2 = quack_grouped_wgrad(h, dy, cu, **_QUACK_WGRAD_KW)
     d_gu = _swiglu_gate_up_backward(gu, dh)
     dx = quack_grouped_gemm(d_gu, w13_il, cu, b_major="k", **_QUACK_GROUPED_KW)
     dw13_il = quack_grouped_wgrad(x_dispatch, d_gu, cu, **_QUACK_WGRAD_KW)
+    return dx, dw13_il, dw2, output_dot_cotangent
+
+
+def _expert_mlp_quack_wgrad_bwd(res, dy):
+    dx, dw13_il, dw2, _output_dot_cotangent = _expert_mlp_quack_wgrad_backward(res, dy)
+    cu = res[-1]
     # the int-typed routing arg gets a float0 zero cotangent
     cu_ct = np.zeros(cu.shape, dtype=jax.dtypes.float0)
     return dx, dw13_il, dw2, cu_ct
