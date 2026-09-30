@@ -143,6 +143,32 @@ def _census(hlo_text, big_shapes, verbose=False):
     return dict(counts)
 
 
+def _trace_copies(hlo_text):
+    """Print each copied buffer's producer and every consumer of the copy."""
+    lines = hlo_text.splitlines()
+    copies = {}
+    for line in lines:
+        m = re.search(r"%(copy\.\d+) = (\S+) copy\(%([\w.\-]+)\)", line)
+        if m and "triton_kernel_call" in m.group(3):
+            copies[m.group(1)] = m.group(3)
+    for copy_name, source in copies.items():
+        print(f"COPY {copy_name} of {source}", flush=True)
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith(f"%{source} =") or (
+                f"%{copy_name}" in stripped and not stripped.startswith(f"%{copy_name} =")
+            ):
+                print(f"    {stripped[:400]}", flush=True)
+        for line in lines:
+            stripped = line.strip()
+            if (
+                f"%{source}" in stripped
+                and not stripped.startswith(f"%{source} =")
+                and not stripped.startswith(f"%{copy_name} =")
+            ):
+                print(f"    other use: {stripped[:300]}", flush=True)
+
+
 def main():
     mesh = _mesh()
     shards = mesh.shape["expert"]
@@ -160,6 +186,8 @@ def main():
             jax.block_until_ready(compiled(*args))
             samples.append(time.perf_counter() - start)
         stats = compiled.memory_analysis()
+        if name == "triton_empty":
+            _trace_copies(text)
         print(
             json.dumps(
                 dict(
