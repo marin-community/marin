@@ -35,10 +35,10 @@ BATCH_AXES = ("replica_dcn", "data", "expert")
 TOKEN_SPEC = P(BATCH_AXES, None)
 
 
-def load_baseline(path):
-    spec = importlib.util.spec_from_file_location("hero_model_baseline", path)
+def load_model_file(path, name="hero_model_baseline"):
+    spec = importlib.util.spec_from_file_location(name, path)
     mod = importlib.util.module_from_spec(spec)
-    sys.modules["hero_model_baseline"] = mod
+    sys.modules[name] = mod
     spec.loader.exec_module(mod)
     return mod
 
@@ -121,7 +121,19 @@ def make_mask(mod, cfg):
     return long_mask.with_fa4_bounds(short_lb, valid)
 
 
-def kernel_summary(outdir, module_prefix):
+def hlo_shapes(hlo_text):
+    shapes = {}
+    for line in hlo_text.splitlines():
+        line = line.strip()
+        if " = " not in line:
+            continue
+        name, rest = line.split(" = ", 1)
+        name = name.replace("ROOT ", "").strip()
+        shapes[name] = rest.split(" ")[0][:60] if not rest.startswith("(") else rest[: rest.index(")") + 1][:90]
+    return shapes
+
+
+def kernel_summary(outdir, module_prefix, shapes=None):
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "loop-260930-mfu30"))
     from overlap import load, plane_events  # noqa: E402
 
@@ -134,7 +146,7 @@ def kernel_summary(outdir, module_prefix):
         if not (st.get("hlo_module") or "").startswith(module_prefix):
             continue
         hlo = st.get("hlo_op") or name
-        base = hlo.split(".")[0] if not hlo.startswith("custom-call") else name[:40]
+        base = f"{hlo} {shapes.get(hlo, '') if shapes else ''} {name[:34] if 'nvjet' in name or 'cublas' in name else ''}"
         by.setdefault(base, [0.0, 0])
         by[base][0] += (e - s) * 1e-9
         by[base][1] += 1
@@ -148,12 +160,14 @@ def main():
     ap.add_argument("--profile", default="")
     ap.add_argument("--check", action="store_true", help="compare loss and gradients between variants")
     ap.add_argument("--small", action="store_true", help="tiny shapes and reference attention (CPU smoke test)")
+    ap.add_argument("--variant", action="append", default=[], help="extra model source as name=path")
     args = ap.parse_args()
     global B, S
 
     mesh = Mesh(np.asarray(jax.devices()[:1]).reshape(1, 1, 1, 1, 1), AXES, axis_types=(AxisType.Explicit,) * 5)
     cand = importlib.import_module("experiments.grug.moe_hero_ep.model")
-    base = load_baseline(args.baseline)
+    base = load_model_file(args.baseline)
+    extra = [(v.split("=")[0], load_model_file(v.split("=")[1], f"hero_model_{v.split('=')[0]}")) for v in args.variant]
     cfg = HERO_MODEL
     if args.small:
         B, S = 2, 64
@@ -167,7 +181,7 @@ def main():
     with jax.set_mesh(mesh):
         x = reshard(jax.random.normal(jax.random.key(1), (B, S, cfg.hidden_dim), jnp.bfloat16), P(cand._BATCH_AXES, None, None))
         cot = reshard(jax.random.normal(jax.random.key(2), (B, S, cfg.hidden_dim), jnp.float32), P(cand._BATCH_AXES, None, None))
-        for name, mod in (("baseline", base), ("candidate", cand)):
+        for name, mod in (("baseline", base), ("candidate", cand), *extra):
             block = build_block(mod, cfg, jax.random.key(0))
             mask = make_mask(mod, cfg)
             step = make_step(mod, cfg)
@@ -194,12 +208,12 @@ def main():
                     out = step(block, x, cot, mask)
                 jax.block_until_ready(out)
                 jax.profiler.stop_trace()
-                by = kernel_summary(pdir, "jit_block_step")
+                by = kernel_summary(pdir, "jit_block_step", hlo_shapes(compiled.as_text()))
                 tot = sum(v[0] for v in by.values()) / 2
                 results[name]["kernel_ms"] = tot
                 results[name]["kernels"] = {k: (round(v[0] / 2, 3), v[1] // 2) for k, v in sorted(by.items(), key=lambda kv: -kv[1][0])}
                 print(f"{name:10s} kernel sum {tot:.2f} ms/step; top:", flush=True)
-                for k, (ms, n) in list(results[name]["kernels"].items())[:30]:
+                for k, (ms, n) in list(results[name]["kernels"].items())[:70]:
                     print(f"    {ms:8.3f} ms  n={n:3d}  {k}", flush=True)
             del out
     if args.check and args.small:

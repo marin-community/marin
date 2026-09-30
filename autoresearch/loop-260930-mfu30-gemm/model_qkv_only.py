@@ -1,3 +1,4 @@
+# Generated: candidate model with only the fused Q/K/V projection.
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
@@ -1219,8 +1220,8 @@ class Block(eqx.Module):
         token_valid = token_validity_from_attention_mask(mask, batch_size=x.shape[0], sequence_length=x.shape[1])
         mlp_out, router_stats = self.mlp(mlp_in, token_valid)
         if self.shared is not None:
-            for shared_out in shared_expert_outputs(self.shared, mlp_in):
-                mlp_out = mlp_out + shared_out
+            for shared_expert in self.shared:
+                mlp_out = mlp_out + shared_expert(mlp_in, activation=ActivationFunctionEnum.silu)
         if self.sconv_mlp is not None:
             mlp_out = self.sconv_mlp(mlp_out, sconv_segment_ids)
         x = x + mlp_out

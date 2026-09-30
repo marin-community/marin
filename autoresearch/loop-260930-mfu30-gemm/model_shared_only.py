@@ -1,3 +1,4 @@
+# Generated: candidate model with only the fused shared-expert gate/up projection.
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
@@ -546,14 +547,9 @@ class CausalSelfAttention(eqx.Module):
         # stay in it, the attention output returns to it, and `w_o` writes it.
         residual_seq_axis = _sequence_axis_of(x)
 
-        # Q, K and V share one projection GEMM. Its backward is one input-gradient GEMM that
-        # accumulates all three in fp32, instead of three full-width bf16 outputs that a separate
-        # fusion sums. The checkpoint keeps the three weights. The head gate stays a separate GEMM:
-        # its cotangent comes out of a reduction, and concatenating it with the others puts the
-        # whole cotangent concatenation on XLA's slow reduction emitter.
-        q_width, kv_width = self.w_q.shape[1], self.w_k.shape[1]
-        qkv = jnp.einsum("bsh,hd->bsd", x, jnp.concatenate([self.w_q, self.w_k, self.w_v], axis=1))
-        q_flat, k_flat, v_flat = jnp.split(qkv, [q_width, q_width + kv_width], axis=-1)
+        q_flat = jnp.einsum("bsh,hd->bsd", x, self.w_q)
+        k_flat = jnp.einsum("bsh,hd->bsd", x, self.w_k)
+        v_flat = jnp.einsum("bsh,hd->bsd", x, self.w_v)
         # SConv: depthwise causal conv after the K projection. segment_ids (packed-document
         # boundaries) come from the mask so the conv never mixes across a document boundary.
         _seg = mask.segment_ids if isinstance(mask, AttentionMask) else None
