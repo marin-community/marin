@@ -546,17 +546,9 @@ class CausalSelfAttention(eqx.Module):
         # stay in it, the attention output returns to it, and `w_o` writes it.
         residual_seq_axis = _sequence_axis_of(x)
 
-        # Q, K, V and the head gate share one projection GEMM. Its backward is one input-gradient
-        # GEMM that accumulates all four in fp32, instead of four full-width bf16 outputs that a
-        # separate fusion sums. The checkpoint keeps the four weights.
-        q_width, kv_width = self.w_q.shape[1], self.w_k.shape[1]
-        weight_spec = _partition_spec_of(self.w_q)
-        attn_gate = self.attn_gate if weight_spec is None else reshard(self.attn_gate, weight_spec)
-        projection_weights = jnp.concatenate([self.w_q, self.w_k, self.w_v, attn_gate], axis=1)
-        projected = jnp.einsum("bsh,hd->bsd", x, projection_weights)
-        q_flat, k_flat, v_flat, gate_logits = jnp.split(
-            projected, [q_width, q_width + kv_width, q_width + 2 * kv_width], axis=-1
-        )
+        q_flat = jnp.einsum("bsh,hd->bsd", x, self.w_q)
+        k_flat = jnp.einsum("bsh,hd->bsd", x, self.w_k)
+        v_flat = jnp.einsum("bsh,hd->bsd", x, self.w_v)
         # SConv: depthwise causal conv after the K projection. segment_ids (packed-document
         # boundaries) come from the mask so the conv never mixes across a document boundary.
         _seg = mask.segment_ids if isinstance(mask, AttentionMask) else None
@@ -669,7 +661,7 @@ class CausalSelfAttention(eqx.Module):
         v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
         attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
         # Headwise gating: sigmoid(x @ attn_gate) produces one scalar per head.
-        gate = 2 * jax.nn.sigmoid(gate_logits)[..., None]
+        gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
         attn_out = gate * attn_out
         # Merge heads into hidden dim while keeping model-axis sharding for w_o and the residual's
         # sequence layout: pinning the sequence to None here would all-gather it over context and
@@ -766,32 +758,6 @@ class DenseMLP(eqx.Module):
         # routed MoE output (MoEMLP reshards its routed result identically). See `_activation_spec`
         # for why the unflattened tensor cannot keep the fused token tuple.
         return reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s), _activation_spec(x))
-
-
-@named_call(name="DenseMLP")
-def shared_expert_outputs(experts: tuple[DenseMLP, ...], x: Float[Array, "B S D"]) -> list[Float[Array, "B S D"]]:
-    """Outputs of SiLU-gated shared experts that read the same input, with one input GEMM.
-
-    One GEMM over the concatenated gate and up weights of every expert replaces a gate and an up
-    GEMM per expert. Each output column is the same dot product as before, so the forward values
-    do not change. In the backward, the input gradient becomes one GEMM that accumulates every
-    projection in fp32, instead of one full-width bf16 output per projection summed by a separate
-    fusion. The down projections stay per expert, so the caller adds the outputs in the original
-    order. Parameters stay per expert.
-    """
-    width = experts[0].w_gate.shape[1]
-    b, s, _ = x.shape
-    x_flat = reshard(rearrange(x, "b s d -> (b s) d"), _token_spec())
-    gate_up_weights = jnp.concatenate([w for expert in experts for w in (expert.w_gate, expert.w_up)], axis=1)
-    gate_up = jnp.einsum("td,dm->tm", x_flat, gate_up_weights)
-    outputs = []
-    for i, expert in enumerate(experts):
-        gate = gate_up[:, 2 * i * width : (2 * i + 1) * width]
-        up = gate_up[:, (2 * i + 1) * width : (2 * i + 2) * width]
-        out_flat = jnp.einsum("tm,md->td", jax.nn.silu(gate) * up, expert.w_down, out_sharding=_token_spec())
-        # Same residual-layout restore as `DenseMLP.__call__`.
-        outputs.append(reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s), _activation_spec(x)))
-    return outputs
 
 
 def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str, jax.Array | SummaryStats]:
@@ -1222,8 +1188,8 @@ class Block(eqx.Module):
         token_valid = token_validity_from_attention_mask(mask, batch_size=x.shape[0], sequence_length=x.shape[1])
         mlp_out, router_stats = self.mlp(mlp_in, token_valid)
         if self.shared is not None:
-            for shared_out in shared_expert_outputs(self.shared, mlp_in):
-                mlp_out = mlp_out + shared_out
+            for shared_expert in self.shared:
+                mlp_out = mlp_out + shared_expert(mlp_in, activation=ActivationFunctionEnum.silu)
         if self.sconv_mlp is not None:
             mlp_out = self.sconv_mlp(mlp_out, sconv_segment_ids)
         x = x + mlp_out
