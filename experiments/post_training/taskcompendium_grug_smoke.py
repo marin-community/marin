@@ -46,7 +46,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 MODEL = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
 MODEL_REVISION = "b8c07f7df1df65525abbfdbcd1572318ba11c42f"
-TASKCOMPENDIUM_COMMIT = "9ed978f7cad76b00b31a6787b487a3b6c1cf0336"
+TASKCOMPENDIUM_COMMIT = "a979ffaab6f4a6a20329cfacbe6649c650127747"
 TASKCOMPENDIUM_REQUIREMENT = (
     "taskcompendium[harbor,workplace] @ "
     f"git+https://github.com/marin-community/marin.git@{TASKCOMPENDIUM_COMMIT}#subdirectory=lib/taskcompendium"
@@ -106,7 +106,7 @@ def write_task_packages(config: TaskPackagesConfig) -> None:
         TaskSpec,
         TextMessage,
     )
-    from taskcompendium.submission import AnswerFormat, SubmissionConvention  # noqa: PLC0415
+    from taskcompendium.submission import PlainText  # noqa: PLC0415
 
     if config.taskcompendium_commit != TASKCOMPENDIUM_COMMIT:
         raise ValueError("Task package builder requires the pinned TaskCompendium revision")
@@ -118,7 +118,7 @@ def write_task_packages(config: TaskPackagesConfig) -> None:
         environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.NUMBER,
     )
-    convention = SubmissionConvention(id="plain", answer_format=AnswerFormat.PLAIN)
+    convention = PlainText(id="plain")
     with urlopen(SOURCE_EXAMPLE_URL, timeout=30) as source:
         workplace, workplace_convention, workplace_binding = import_row(
             select_row_zero(source.read(SOURCE_EXAMPLE_MAX_BYTES + 1))
