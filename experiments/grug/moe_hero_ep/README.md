@@ -1,7 +1,8 @@
 # Grug MoE EP Hero
 
 This self-contained variant is the selected EP64 configuration for GB200 NVL72. Each
-data-parallel rack uses one 64-device expert mesh.
+data-parallel rack uses one 64-device expert mesh. The separate H100 pipeline prototype
+lives in [`moe_hero_pipeline`](../moe_hero_pipeline/README.md).
 
 ## Configuration
 
