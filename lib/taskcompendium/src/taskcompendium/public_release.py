@@ -29,6 +29,7 @@ from taskcompendium.models import SCHEMA_VERSION
 from taskcompendium.public_projection import public_task
 
 REPO_ID = "open-athena/taskcompendium-alpha-1"
+WORKPLACE_SPLITS: tuple[WorkplaceSplit, ...] = ("train", "validation")
 
 
 def _sha256(path: Path) -> str:
@@ -98,6 +99,72 @@ completed TaskTrove conversions and Harbor sample evidence for each included sou
 """
 
 
+def _manifest(
+    files: dict[str, dict[str, object]], row_counts: dict[WorkplaceSplit, int], builder_revision: str
+) -> dict[str, object]:
+    """Compute release provenance separately from writing release files."""
+    return {
+        "format_version": 1,
+        "visibility": "agent",
+        "repo_id": REPO_ID,
+        "builder_revision": builder_revision,
+        "public_record_version": 1,
+        "publication_ready": False,
+        "families": {
+            "nemo_workplace": {
+                "rows": sum(row_counts.values()),
+                "task_spec_schema": SCHEMA_VERSION,
+                "importer_revision": IMPORTER_REVISION,
+                "builder_revision": builder_revision,
+                "harbor_samples": [
+                    {
+                        "method": "scripted_policy_endpoint",
+                        "taskcompendium_revision": "6a67b2666cd219b55c9d08db8659a7e91b23f08a",
+                        "harbor_revision": "ef1eaf207f41f84eb53d17f9c8bd84c073a9aba5",
+                        "provider_revision": PROVIDER_GIT_REVISION,
+                        "trials": 12,
+                        "correct_reward_one": 11,
+                        "deliberate_wrong_reward_zero": 1,
+                        "coverage": "both source splits, all five categories, and no-op targets",
+                        "evidence_url": "https://github.com/marin-community/marin/pull/9523#issuecomment-5906493281",
+                    }
+                ],
+            }
+        },
+        "sources": {
+            "nemo_workplace": {
+                "dataset": DATASET,
+                "revision": DATASET_REVISION,
+                "license": "cc-by-4.0",
+                "attribution": "NVIDIA Corporation",
+                "importer_revision": IMPORTER_REVISION,
+                "action_interface": ACTION_INTERFACE,
+                "provider_revision": PROVIDER_GIT_REVISION,
+                "provider_implementation_revision": PROVIDER_REVISION,
+                "seed_sha256": SEED_SHA256,
+                "tools_sha256": TOOLS_SHA256,
+                "provider_binding": {
+                    "provider": (
+                        "python+git+https://github.com/marin-community/nemo_workplace@"
+                        f"{PROVIDER_GIT_REVISION}:nemo_workplace.provider:NemoWorkplaceProvider"
+                    ),
+                    "tools": list(workplace_environment_config().tool_providers["workplace"].tools),
+                },
+                "submission_convention": {"id": "state", "answer_format": "state", "provider": "workplace"},
+                "split_files": {
+                    split: {
+                        "path": f"{split}.jsonl",
+                        "sha256": DATASET_SPLIT_SHA256[split],
+                        "rows": DATASET_SPLIT_ROW_COUNTS[split],
+                    }
+                    for split in WORKPLACE_SPLITS
+                },
+            }
+        },
+        "data_files": files,
+    }
+
+
 def build_workplace_candidate(
     train_source: Path,
     validation_source: Path,
@@ -128,65 +195,7 @@ def build_workplace_candidate(
                 "sha256": _sha256(output),
                 "categories": categories,
             }
-        manifest: dict[str, object] = {
-            "format_version": 1,
-            "visibility": "agent",
-            "repo_id": REPO_ID,
-            "builder_revision": builder_revision,
-            "public_record_version": 1,
-            "publication_ready": False,
-            "families": {
-                "nemo_workplace": {
-                    "rows": sum(row_counts.values()),
-                    "task_spec_schema": SCHEMA_VERSION,
-                    "importer_revision": IMPORTER_REVISION,
-                    "builder_revision": builder_revision,
-                    "harbor_samples": [
-                        {
-                            "method": "scripted_policy_endpoint",
-                            "taskcompendium_revision": "6a67b2666cd219b55c9d08db8659a7e91b23f08a",
-                            "harbor_revision": "ef1eaf207f41f84eb53d17f9c8bd84c073a9aba5",
-                            "provider_revision": PROVIDER_GIT_REVISION,
-                            "trials": 12,
-                            "correct_reward_one": 11,
-                            "deliberate_wrong_reward_zero": 1,
-                            "coverage": "both source splits, all five categories, and no-op targets",
-                        }
-                    ],
-                }
-            },
-            "sources": {
-                "nemo_workplace": {
-                    "dataset": DATASET,
-                    "revision": DATASET_REVISION,
-                    "license": "cc-by-4.0",
-                    "attribution": "NVIDIA Corporation",
-                    "importer_revision": IMPORTER_REVISION,
-                    "action_interface": ACTION_INTERFACE,
-                    "provider_revision": PROVIDER_GIT_REVISION,
-                    "provider_implementation_revision": PROVIDER_REVISION,
-                    "seed_sha256": SEED_SHA256,
-                    "tools_sha256": TOOLS_SHA256,
-                    "provider_binding": {
-                        "provider": (
-                            "python+git+https://github.com/marin-community/nemo_workplace@"
-                            f"{PROVIDER_GIT_REVISION}:nemo_workplace.provider:NemoWorkplaceProvider"
-                        ),
-                        "tools": list(workplace_environment_config().tool_providers["workplace"].tools),
-                    },
-                    "submission_convention": {"id": "state", "answer_format": "state", "provider": "workplace"},
-                    "split_files": {
-                        split: {
-                            "path": f"{split}.jsonl",
-                            "sha256": DATASET_SPLIT_SHA256[split],
-                            "rows": DATASET_SPLIT_ROW_COUNTS[split],
-                        }
-                        for split in source_files
-                    },
-                }
-            },
-            "data_files": files,
-        }
+        manifest = _manifest(files, row_counts, builder_revision)
         (temporary / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
         (temporary / "README.md").write_text(_card(row_counts["train"], row_counts["validation"]))
         os.replace(temporary, destination)
