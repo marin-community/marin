@@ -14,8 +14,11 @@ A[M,K] @ B[E,K,2N]  -> (per expert group) -> SwiGLU -> PostAct[M,N]
 """
 from __future__ import annotations
 
+from typing import Literal, overload
+
 import jax
 import jax.numpy as jnp
+from shape_extensions import IntVar
 
 import cutlass
 import cutlass.cute as cute
@@ -103,10 +106,36 @@ def _build_launcher(
     return launcher
 
 
-def quack_gated_grouped_gemm(
-    x_sort,
-    w_gate_up,
-    cu_seqlens,
+@overload
+def quack_gated_grouped_gemm[M: IntVar, K: IntVar, E: IntVar, N2: IntVar](
+    x_sort: jax.Array[[M, K]],
+    w_gate_up: jax.Array[[E, K, N2]],
+    cu_seqlens: jax.Array[[int]],
+    *,
+    activation=...,
+    tile_mn=...,
+    cluster_mnk=...,
+    max_swizzle=...,
+    use_clc_persistence=...,
+    return_preact: Literal[False] = ...,
+) -> jax.Array[[M, N2 // 2]]: ...
+@overload
+def quack_gated_grouped_gemm[M: IntVar, K: IntVar, E: IntVar, N2: IntVar](
+    x_sort: jax.Array[[M, K]],
+    w_gate_up: jax.Array[[E, K, N2]],
+    cu_seqlens: jax.Array[[int]],
+    *,
+    activation=...,
+    tile_mn=...,
+    cluster_mnk=...,
+    max_swizzle=...,
+    use_clc_persistence=...,
+    return_preact: Literal[True],
+) -> tuple[jax.Array[[M, N2]], jax.Array[[M, N2 // 2]]]: ...
+def quack_gated_grouped_gemm[M: IntVar, K: IntVar, E: IntVar, N2: IntVar](
+    x_sort: jax.Array[[M, K]],
+    w_gate_up: jax.Array[[E, K, N2]],
+    cu_seqlens: jax.Array[[int]],
     *,
     activation="swiglu",
     tile_mn=(256, 128),
@@ -114,15 +143,16 @@ def quack_gated_grouped_gemm(
     max_swizzle=8,
     use_clc_persistence=False,
     return_preact=False,
-):
+) -> jax.Array[[M, N2 // 2]] | tuple[jax.Array[[M, N2]], jax.Array[[M, N2 // 2]]]:
     """Grouped SwiGLU expert GEMM via QuACK's SM100 kernel.
 
     x_sort: [M, K] tokens sorted by expert. w_gate_up: [E, K, 2N]. cu_seqlens: [E+1] int32.
-    Returns postact [M, N].
+    Returns postact [M, N]. `cutlass_call`'s result is unshaped, so the return type is
+    asserted from this contract rather than checked against the kernel.
     """
-    M, K = x_sort.shape
-    N2 = w_gate_up.shape[2]
-    N = N2 // 2
+    m, k = x_sort.shape
+    n2 = w_gate_up.shape[2]
+    n = n2 // 2
     a_dtype = _cute_dtype(x_sort.dtype)
     max_active_clusters = _max_active_clusters(cluster_mnk)
     launcher = _build_launcher(
@@ -146,8 +176,8 @@ def quack_gated_grouped_gemm(
     call = cutlass_call(
         launcher,
         output_shape_dtype=(
-            jax.ShapeDtypeStruct((M, N2), x_sort.dtype),
-            jax.ShapeDtypeStruct((M, N), x_sort.dtype),
+            jax.ShapeDtypeStruct((m, n2), x_sort.dtype),
+            jax.ShapeDtypeStruct((m, n), x_sort.dtype),
         ),
         input_spec=(a_spec, b_spec, cu_spec),
         output_spec=(d_spec, p_spec),
@@ -219,23 +249,24 @@ def _grouped_gemm_call(a, b, cu_seqlens, *, ragged_axis, a_spec, b_spec, d_spec,
     return call(a, b, cu_seqlens.astype(jnp.int32))
 
 
-def quack_grouped_gemm(
-    a,
-    w,
-    cu_seqlens,
+def quack_grouped_gemm[M: IntVar, K: IntVar](
+    a: jax.Array[[M, K]],
+    # `w`'s axis order ([E, K, N] or [E, N, K]) depends on the runtime `b_major`, so it stays bare.
+    w: jax.Array,
+    cu_seqlens: jax.Array[[int]],
     *,
     b_major="n",
     tile_mn=(256, 128),
     cluster_mnk=(2, 1, 1),
     max_swizzle=8,
     use_clc_persistence=False,
-):
+) -> jax.Array[[M, int]]:
     """Plain grouped GEMM a[M,K] @ w -> [M,N], grouped by cu_seqlens (varlen_m).
 
     b_major='n': w is [E,K,N] (n-major, mode (0,2,1)). b_major='k': w is [E,N,K]
     (k-major, identity mode) for transposed/backward contractions."""
-    M = a.shape[0]
-    N = w.shape[2] if b_major == "n" else w.shape[1]
+    m = a.shape[0]
+    n = w.shape[2] if b_major == "n" else w.shape[1]
     ts = cjax.TensorSpec
     return _grouped_gemm_call(
         a,
@@ -247,7 +278,7 @@ def quack_grouped_gemm(
             mode=(0, 2, 1) if b_major == "n" else (0, 1, 2), divisibility=(1, 1, _FEATURE_ALIGNMENT), static=False
         ),
         d_spec=ts(divisibility=(1, _FEATURE_ALIGNMENT), static=False),
-        out=jax.ShapeDtypeStruct((M, N), a.dtype),
+        out=jax.ShapeDtypeStruct((m, n), a.dtype),
         tile_mn=tile_mn,
         cluster_mnk=cluster_mnk,
         max_swizzle=max_swizzle,
@@ -255,16 +286,16 @@ def quack_grouped_gemm(
     )
 
 
-def quack_grouped_wgrad(
-    lhs,
-    rhs,
-    cu_seqlens,
+def quack_grouped_wgrad[Rows: IntVar, M: IntVar, N: IntVar](
+    lhs: jax.Array[[Rows, M]],
+    rhs: jax.Array[[Rows, N]],
+    cu_seqlens: jax.Array[[int]],
     *,
     tile_mn=(128, 128),
     cluster_mnk=(2, 1, 1),
     max_swizzle=8,
     use_clc_persistence=False,
-):
+) -> jax.Array[[int, M, N]]:
     """Per-expert ``lhs.T @ rhs`` over contiguous ragged row groups, on QuACK's varlen-k GEMM.
 
     ``lhs`` is [total_rows, M], ``rhs`` is [total_rows, N], and ``cu_seqlens`` [E+1] splits the

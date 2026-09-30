@@ -3,10 +3,12 @@
 
 """Local Grug MoE backend dispatch."""
 
+from __future__ import annotations
+
 from collections.abc import Callable
 
 import jax
-from jaxtyping import Array, Bool, Float, Int
+from shape_extensions import Int, IntVar
 
 from levanter.grug._moe.common import _LOCAL_MOE_IMPLEMENTATIONS, MoeImplementation
 from levanter.grug._moe.scatter import _moe_mlp_local_scatter
@@ -18,19 +20,19 @@ _MOE_LOCAL_FNS = {
 }
 
 
-def _moe_mlp_local(
-    x: Float[Array, "T H"],
-    selected_experts: Int[Array, "T K"],
-    combine_weights: Float[Array, "T K"],
-    token_valid: Bool[Array, "T"],
-    moe_w13: Float[Array, "E H I2"],
-    moe_w2: Float[Array, "E I H"],
+def _moe_mlp_local[T: IntVar, K: IntVar, H: IntVar, E: IntVar, I: IntVar, I2: IntVar](
+    x: jax.Array[[T, H]],
+    selected_experts: jax.Array[[T, K]],
+    combine_weights: jax.Array[[T, K]],
+    token_valid: jax.Array[[T]],
+    moe_w13: jax.Array[[E, H, I2]],
+    moe_w2: jax.Array[[E, I, H]],
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
-    num_experts: int,
+    num_experts: Int[E],
     implementation: MoeImplementation,
     expert_chunks: int = 1,
-) -> tuple[Float[Array, "T H"], Int[Array, ""]]:
+) -> tuple[jax.Array[[T, H]], jax.Array[[]]]:
     if implementation == "sonic_cute":
         if activation_fn is not jax.nn.silu:
             raise ValueError("sonic_cute requires SiLU because its QuACK kernel fuses SwiGLU")

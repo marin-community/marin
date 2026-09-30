@@ -9,6 +9,8 @@ https://github.com/Dao-AILab/sonic-moe/blob/cfbd65f39b980b85b878b3cccdacb09191e2
 SonicMoE is also Apache-2.0.
 """
 
+from __future__ import annotations
+
 from collections.abc import Callable
 import os
 
@@ -17,7 +19,7 @@ import jax.numpy as jnp
 from haliax.jax_utils import tree_checkpoint_name
 from haliax.nn.ragged_dot import ragged_dot
 from jax.typing import DTypeLike
-from jaxtyping import Array, Bool, Float, Int
+from shape_extensions import Int, IntVar
 
 from levanter.grug._moe.common import (
     _CHECKPOINT_DISPATCH_INPUT,
@@ -181,20 +183,20 @@ def _sonic_kernel_config(hidden_dim: int) -> tuple[int, int, int]:
     return block_h, block_k, num_warps
 
 
-def _sonic_fixed_k_offsets(*, tokens: int, topk: int) -> Int[Array, "Tp1"]:
+def _sonic_fixed_k_offsets[Tp1: IntVar](*, tokens: int, topk: int) -> jax.Array[[Tp1]]:
     return jnp.arange(0, tokens * topk + 1, topk, dtype=jnp.int32)
 
 
-def _sonic_gather_sum_impl(
-    dispatch_output: Float[Array, "M H"],
-    weights_flat: Float[Array, "M"],
-    positions_flat: Int[Array, "M"],
-    offsets: Int[Array, "Tp1"],
+def _sonic_gather_sum_impl[M: IntVar, H: IntVar, A: IntVar, Tp1: IntVar, T: IntVar](
+    dispatch_output: jax.Array[[M, H]],
+    weights_flat: jax.Array[[A]],
+    positions_flat: jax.Array[[A]],
+    offsets: jax.Array[[Tp1]],
     *,
-    tokens: int,
+    tokens: Int[T],
     topk: int,
     output_dtype: DTypeLike | None = None,
-) -> Float[Array, "T H"]:
+) -> jax.Array[[T, H]]:
     _require_sonic_deps()
     hidden_dim = dispatch_output.shape[1]
     block_h, block_k, num_warps = _sonic_kernel_config(hidden_dim)
@@ -226,18 +228,20 @@ def _sonic_gather_sum_impl(
     )
 
 
-def sonic_gather_sum_masked(
-    dispatch_output: Float[Array, "M H"],
-    dispatch_positions: Int[Array, "T K"],
-    combine_weights: Float[Array, "T K"],
+def sonic_gather_sum_masked[M: IntVar, H: IntVar, T: IntVar, K: IntVar](
+    dispatch_output: jax.Array[[M, H]],
+    dispatch_positions: jax.Array[[T, K]],
+    combine_weights: jax.Array[[T, K]],
     *,
     output_dtype: DTypeLike | None = None,
-) -> Float[Array, "T H"]:
+) -> jax.Array[[T, H]]:
     """Gather weighted rows and ignore positions outside ``dispatch_output``."""
     tokens, topk = combine_weights.shape
     valid = (dispatch_positions >= 0) & (dispatch_positions < dispatch_output.shape[0])
-    positions_flat = jnp.clip(dispatch_positions, 0, dispatch_output.shape[0] - 1).reshape(tokens * topk)
-    weights_flat = jnp.where(valid, combine_weights, 0).reshape(tokens * topk).astype(jnp.float32)
+    positions_flat: jax.Array[[T * K]] = jnp.clip(dispatch_positions, 0, dispatch_output.shape[0] - 1).reshape(
+        tokens * topk
+    )
+    weights_flat: jax.Array[[T * K]] = jnp.where(valid, combine_weights, 0).reshape(tokens * topk).astype(jnp.float32)
     offsets = _sonic_fixed_k_offsets(tokens=tokens, topk=topk)
     return _sonic_gather_sum_impl(
         dispatch_output,
@@ -250,16 +254,16 @@ def sonic_gather_sum_masked(
     )
 
 
-def _sonic_gather_sum_bwd_impl(
-    dout: Float[Array, "T H"],
-    dispatch_output: Float[Array, "M H"],
-    weights_flat: Float[Array, "M"],
-    positions_flat: Int[Array, "M"],
-    offsets: Int[Array, "Tp1"],
+def _sonic_gather_sum_bwd_impl[M: IntVar, H: IntVar, A: IntVar, Tp1: IntVar, T: IntVar](
+    dout: jax.Array[[T, H]],
+    dispatch_output: jax.Array[[M, H]],
+    weights_flat: jax.Array[[A]],
+    positions_flat: jax.Array[[A]],
+    offsets: jax.Array[[Tp1]],
     *,
     tokens: int,
     topk: int,
-) -> tuple[Float[Array, "M H"], Float[Array, "M"]]:
+) -> tuple[jax.Array[[M, H]], jax.Array[[A]]]:
     _require_sonic_deps()
     hidden_dim = dispatch_output.shape[1]
     block_h, _block_k, num_warps = _sonic_kernel_config(hidden_dim)
@@ -288,11 +292,11 @@ def _sonic_gather_sum_bwd_impl(
 
 
 @jax.custom_vjp
-def sonic_gather_sum(
-    dispatch_output: Float[Array, "M H"],
-    dispatch_positions: Int[Array, "T K"],
-    combine_weights: Float[Array, "T K"],
-) -> Float[Array, "T H"]:
+def sonic_gather_sum[M: IntVar, H: IntVar, T: IntVar, K: IntVar](
+    dispatch_output: jax.Array[[M, H]],
+    dispatch_positions: jax.Array[[T, K]],
+    combine_weights: jax.Array[[T, K]],
+) -> jax.Array[[T, H]]:
     tokens, topk = combine_weights.shape
     weights_flat = combine_weights.reshape(tokens * topk).astype(jnp.float32)
     positions_flat = dispatch_positions.reshape(tokens * topk).astype(jnp.int32)
@@ -307,11 +311,11 @@ def sonic_gather_sum(
     )
 
 
-def _sonic_gather_sum_fwd(
-    dispatch_output: Float[Array, "M H"],
-    dispatch_positions: Int[Array, "T K"],
-    combine_weights: Float[Array, "T K"],
-) -> tuple[Float[Array, "T H"], tuple[Float[Array, "M H"], Int[Array, "T K"], Float[Array, "T K"]]]:
+def _sonic_gather_sum_fwd[M: IntVar, H: IntVar, T: IntVar, K: IntVar](
+    dispatch_output: jax.Array[[M, H]],
+    dispatch_positions: jax.Array[[T, K]],
+    combine_weights: jax.Array[[T, K]],
+) -> tuple[jax.Array[[T, H]], tuple[jax.Array[[M, H]], jax.Array[[T, K]], jax.Array[[T, K]]]]:
     tokens, topk = combine_weights.shape
     weights_flat = combine_weights.reshape(tokens * topk).astype(jnp.float32)
     positions_flat = dispatch_positions.reshape(tokens * topk).astype(jnp.int32)
@@ -327,10 +331,10 @@ def _sonic_gather_sum_fwd(
     return out, (dispatch_output, dispatch_positions, combine_weights)
 
 
-def _sonic_gather_sum_bwd(
-    residuals: tuple[Float[Array, "M H"], Int[Array, "T K"], Float[Array, "T K"]],
-    dout: Float[Array, "T H"],
-) -> tuple[Float[Array, "M H"], None, Float[Array, "T K"]]:
+def _sonic_gather_sum_bwd[M: IntVar, H: IntVar, T: IntVar, K: IntVar](
+    residuals: tuple[jax.Array[[M, H]], jax.Array[[T, K]], jax.Array[[T, K]]],
+    dout: jax.Array[[T, H]],
+) -> tuple[jax.Array[[M, H]], None, jax.Array[[T, K]]]:
     dispatch_output, dispatch_positions, combine_weights = residuals
     tokens, topk = combine_weights.shape
     weights_flat = combine_weights.reshape(tokens * topk).astype(jnp.float32)
@@ -352,17 +356,17 @@ def _sonic_gather_sum_bwd(
 sonic_gather_sum.defvjp(_sonic_gather_sum_fwd, _sonic_gather_sum_bwd)
 
 
-def _moe_mlp_local_sonic(
-    x: Float[Array, "T H"],
-    selected_experts: Int[Array, "T K"],
-    combine_weights: Float[Array, "T K"],
-    token_valid: Bool[Array, "T"],
-    moe_w13: Float[Array, "E H I2"],
-    moe_w2: Float[Array, "E I H"],
+def _moe_mlp_local_sonic[T: IntVar, K: IntVar, H: IntVar, E: IntVar, I: IntVar, I2: IntVar](
+    x: jax.Array[[T, H]],
+    selected_experts: jax.Array[[T, K]],
+    combine_weights: jax.Array[[T, K]],
+    token_valid: jax.Array[[T]],
+    moe_w13: jax.Array[[E, H, I2]],
+    moe_w2: jax.Array[[E, I, H]],
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
-    num_experts: int,
-) -> tuple[Float[Array, "T H"], Int[Array, ""]]:
+    num_experts: Int[E],
+) -> tuple[jax.Array[[T, H]], jax.Array[[]]]:
     """Local raw-Sonic path: JAX grouped GEMMs plus Sonic Triton gather/combine."""
     token_ids_sort, dispatch_positions, group_sizes, _sorted_assignment_ids = (
         _prepare_moe_dispatch_indices_with_assignment_ids(
@@ -378,11 +382,16 @@ def _moe_mlp_local_sonic(
     with jax.named_scope("moe_up_down"):
         # Rows past the last group are unspecified kernel output; every consumer before the
         # gather-sum is row-local or group-bounded, so only `out_dispatch` needs zeroing.
-        w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13, group_sizes), _CHECKPOINT_EXPERT_HIDDEN)
+        w13_out: jax.Array[[T * K, I2]] = tree_checkpoint_name(
+            ragged_dot(x_dispatch, moe_w13, group_sizes), _CHECKPOINT_EXPERT_HIDDEN
+        )
         moe_dim = moe_w2.shape[1]
         gate, up = split_moe_w13_output(w13_out, intermediate_dim=moe_dim, interleaved=False)
         hidden = activation_fn(gate) * up
-        out_dispatch = _zero_inactive_grouped_rows(ragged_dot(hidden, moe_w2, group_sizes), cumulative_group_sizes)
+        out_dispatch: jax.Array[[T * K, H]] = _zero_inactive_grouped_rows(
+            ragged_dot(hidden, moe_w2, group_sizes), cumulative_group_sizes
+        )
+        # pyrefly: ignore[bad-argument-type]  # jax.custom_vjp erases sonic_gather_sum's generic signature.
         out = tree_checkpoint_name(
             sonic_gather_sum(out_dispatch, dispatch_positions, jnp.where(token_valid[:, None], combine_weights, 0)),
             _CHECKPOINT_MOE_OUTPUT,

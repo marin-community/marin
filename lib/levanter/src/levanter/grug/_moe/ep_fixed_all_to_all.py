@@ -3,12 +3,14 @@
 
 """Fixed-capacity all-to-all expert-parallel Grug MoE backend."""
 
+from __future__ import annotations
+
 import math
 from collections.abc import Callable
 
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Bool, Float, Int
+from shape_extensions import IntVar
 
 from haliax.jax_utils import tree_checkpoint_name
 from levanter.grug._moe.common import (
@@ -22,77 +24,97 @@ from levanter.grug._moe.ep_common import _ranks_within_groups
 
 
 @jax.custom_vjp
-def _dispatch_gather(
-    x_local: Float[Array, "Tlocal H"],
-    token_sources: Int[Array, " send"],
-    linear_indices: Int[Array, " assignments"],
-    keep: Array,
-) -> Float[Array, "send H"]:
-    """Gather dispatch rows with a backward gather that avoids scatter-add."""
+def _dispatch_gather[Tlocal: IntVar, H: IntVar](
+    x_local: jax.Array[[Tlocal, H]],
+    token_sources: jax.Array[[int]],
+    linear_indices: jax.Array[[int]],
+    keep: jax.Array[[int]],
+) -> jax.Array[[int, H]]:
+    """Gather dispatch rows with a backward gather that avoids scatter-add.
+
+    ``token_sources``/``keep`` are sized by the fixed send capacity and ``linear_indices``
+    by ``Tlocal * topk``; both are plain runtime capacities, so they stay unknown lengths.
+    """
     hidden_dim = x_local.shape[1]
     padded_x = jnp.concatenate([x_local, jnp.zeros((1, hidden_dim), x_local.dtype)], axis=0)
     return padded_x[token_sources]
 
 
-def _dispatch_gather_fwd(x_local, token_sources, linear_indices, keep):
+def _dispatch_gather_fwd[Tlocal: IntVar, H: IntVar](
+    x_local: jax.Array[[Tlocal, H]],
+    token_sources: jax.Array[[int]],
+    linear_indices: jax.Array[[int]],
+    keep: jax.Array[[int]],
+) -> tuple[jax.Array[[int, H]], tuple[jax.Array[[int]], jax.Array[[int]], int]]:
     send_x = _dispatch_gather(x_local, token_sources, linear_indices, keep)
     return send_x, (linear_indices, keep, x_local.shape[0])
 
 
-def _dispatch_gather_bwd(residual, cotangent):
+def _dispatch_gather_bwd[H: IntVar](
+    residual: tuple[jax.Array[[int]], jax.Array[[int]], int], cotangent: jax.Array[[int, H]]
+) -> tuple[jax.Array, None, None, None]:
     linear_indices, keep, tokens_per_shard = residual
     send_size, hidden_dim = cotangent.shape
     topk = linear_indices.shape[0] // tokens_per_shard
     grad_rows = cotangent[jnp.minimum(linear_indices, send_size - 1)]
     grad_rows = jnp.where(keep[:, None], grad_rows, 0).astype(jnp.float32)
-    grad_rows = grad_rows.reshape(tokens_per_shard, topk, hidden_dim)
-    return grad_rows.sum(axis=1).astype(cotangent.dtype), None, None, None
+    grad_rows_grouped: jax.Array[[int, int, H]] = grad_rows.reshape(tokens_per_shard, topk, hidden_dim)
+    return grad_rows_grouped.sum(axis=1).astype(cotangent.dtype), None, None, None
 
 
 _dispatch_gather.defvjp(_dispatch_gather_fwd, _dispatch_gather_bwd)
 
 
 @jax.custom_vjp
-def _combine_gather(
-    send_output: Float[Array, "send H"],
-    gather_indices: Int[Array, " assignments"],
-    keep: Array,
-    assignment_sources: Int[Array, " send"],
-) -> Float[Array, "assignments H"]:
+def _combine_gather[H: IntVar](
+    send_output: jax.Array[[int, H]],
+    gather_indices: jax.Array[[int]],
+    keep: jax.Array[[int]],
+    assignment_sources: jax.Array[[int]],
+) -> jax.Array[[int, H]]:
     """Restore assignment order with a backward gather from unique send slots."""
-    return jnp.where(keep[:, None], send_output[gather_indices], 0)
+    gathered: jax.Array[[int, H]] = send_output[gather_indices]
+    return jnp.where(keep[:, None], gathered, 0)
 
 
-def _combine_gather_fwd(send_output, gather_indices, keep, assignment_sources):
+def _combine_gather_fwd[H: IntVar](
+    send_output: jax.Array[[int, H]],
+    gather_indices: jax.Array[[int]],
+    keep: jax.Array[[int]],
+    assignment_sources: jax.Array[[int]],
+) -> tuple[jax.Array[[int, H]], tuple[jax.Array[[int]]]]:
     gathered = _combine_gather(send_output, gather_indices, keep, assignment_sources)
     return gathered, (assignment_sources,)
 
 
-def _combine_gather_bwd(residual, cotangent):
+def _combine_gather_bwd[H: IntVar](
+    residual: tuple[jax.Array[[int]]], cotangent: jax.Array[[int, H]]
+) -> tuple[jax.Array[[int, H]], None, None, None]:
     (assignment_sources,) = residual
     assignments_per_shard = cotangent.shape[0]
     valid = assignment_sources < assignments_per_shard
     sources = jnp.minimum(assignment_sources, assignments_per_shard - 1)
-    d_send_output = jnp.where(valid[:, None], cotangent[sources], 0).astype(cotangent.dtype)
+    gathered: jax.Array[[int, H]] = cotangent[sources]
+    d_send_output = jnp.where(valid[:, None], gathered, 0).astype(cotangent.dtype)
     return d_send_output, None, None, None
 
 
 _combine_gather.defvjp(_combine_gather_fwd, _combine_gather_bwd)
 
 
-def _moe_mlp_ep_fixed_a2a_local(
-    x_local: Float[Array, "Tlocal H"],
-    selected_experts_local: Int[Array, "Tlocal K"],
-    combine_weights_local: Float[Array, "Tlocal K"],
-    token_valid_local: Bool[Array, "Tlocal"],
-    moe_w13_local: Float[Array, "Elocal H I2"],
-    moe_w2_local: Float[Array, "Elocal I H"],
+def _moe_mlp_ep_fixed_a2a_local[Tlocal: IntVar, K: IntVar, H: IntVar, Elocal: IntVar, I: IntVar, I2: IntVar](
+    x_local: jax.Array[[Tlocal, H]],
+    selected_experts_local: jax.Array[[Tlocal, K]],
+    combine_weights_local: jax.Array[[Tlocal, K]],
+    token_valid_local: jax.Array[[Tlocal]],
+    moe_w13_local: jax.Array[[Elocal, H, I2]],
+    moe_w2_local: jax.Array[[Elocal, I, H]],
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
     capacity_factor: float,
     token_sharding_axes: tuple[str, ...],
-) -> tuple[Float[Array, "Tlocal H"], CapacityDrops]:
+) -> tuple[jax.Array[[Tlocal, H]], CapacityDrops]:
     """Run fixed-capacity all-to-all dispatch, expert MLPs, and combine.
 
     ``capacity_factor`` scales each fixed (sender shard, global expert) cell as

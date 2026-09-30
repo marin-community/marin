@@ -4936,202 +4936,6 @@
       "severity": "error"
     },
     {
-      "column": 27,
-      "path": "lib/levanter/src/levanter/grug/_moe/common.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 27,
-      "path": "lib/levanter/src/levanter/grug/_moe/common.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 55,
-      "path": "lib/levanter/src/levanter/grug/_moe/ep_common.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 24,
-      "path": "lib/levanter/src/levanter/grug/_moe/ep_common.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 32,
-      "path": "lib/levanter/src/levanter/grug/_moe/ep_common.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 26,
-      "path": "lib/levanter/src/levanter/grug/_moe/ep_common.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 30,
-      "path": "lib/levanter/src/levanter/grug/_moe/ep_deepep.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 38,
-      "path": "lib/levanter/src/levanter/grug/_moe/ep_deepep.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 13,
-      "path": "lib/levanter/src/levanter/grug/_moe/ep_deepep.py",
-      "name": "bad-argument-type",
-      "concise_description": "Argument `jax._array.Array` is not assignable to parameter `data` with type `jax._src.basearray.Array | builtins.bool | numpy.bool | complex | float | int | ndarray | number` in function `jax._src.ops.scatter.segment_sum`",
-      "severity": "error"
-    },
-    {
-      "column": 13,
-      "path": "lib/levanter/src/levanter/grug/_moe/ep_deepep.py",
-      "name": "bad-argument-type",
-      "concise_description": "Argument `jax._array.Array` is not assignable to parameter `segment_ids` with type `jax._src.basearray.Array | builtins.bool | numpy.bool | complex | float | int | ndarray | number` in function `jax._src.ops.scatter.segment_sum`",
-      "severity": "error"
-    },
-    {
-      "column": 47,
-      "path": "lib/levanter/src/levanter/grug/_moe/ep_deepep.py",
-      "name": "bad-argument-type",
-      "concise_description": "Argument `jax._src.basearray.Array` is not assignable to parameter `x` with type `jax._array.Array[@_] | bool | complex | float | int | ndarray[@_] | number` in function `jax.numpy.where`",
-      "severity": "error"
-    },
-    {
-      "column": 22,
-      "path": "lib/levanter/src/levanter/grug/_moe/ep_fixed_all_to_all.py",
-      "name": "unsupported-operation",
-      "concise_description": "`@` is not supported between `Array` and `Array`",
-      "severity": "error"
-    },
-    {
-      "column": 29,
-      "path": "lib/levanter/src/levanter/grug/_moe/ep_fixed_all_to_all.py",
-      "name": "unsupported-operation",
-      "concise_description": "`@` is not supported between `Array` and `Array`",
-      "severity": "error"
-    },
-    {
-      "column": 28,
-      "path": "lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 28,
-      "path": "lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 25,
-      "path": "lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 37,
-      "path": "lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 33,
-      "path": "lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 25,
-      "path": "lib/levanter/src/levanter/grug/_moe/ep_ring.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 14,
-      "path": "lib/levanter/src/levanter/grug/_moe/ep_ring.py",
-      "name": "bad-index",
-      "concise_description": "Too many indices for tensor: got 1, expected at most 0",
-      "severity": "error"
-    },
-    {
-      "column": 32,
-      "path": "lib/levanter/src/levanter/grug/_moe/ep_ring.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 26,
-      "path": "lib/levanter/src/levanter/grug/_moe/ep_ring.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 20,
-      "path": "lib/levanter/src/levanter/grug/_moe/sonic_cute.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
-      "severity": "error"
-    },
-    {
-      "column": 38,
-      "path": "lib/levanter/src/levanter/grug/_moe/sonic_cute.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: slice_sizes must have the same length as operand rank",
-      "severity": "error"
-    },
-    {
-      "column": 42,
-      "path": "lib/levanter/src/levanter/grug/_moe/sonic_cute.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: slice_sizes must have the same length as operand rank",
-      "severity": "error"
-    },
-    {
-      "column": 38,
-      "path": "lib/levanter/src/levanter/grug/_moe/sonic_cute.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: slice_sizes must have the same length as operand rank",
-      "severity": "error"
-    },
-    {
-      "column": 56,
-      "path": "lib/levanter/src/levanter/grug/_moe/sonic_cute.py",
-      "name": "bad-index",
-      "concise_description": "Cannot index scalar tensor (rank 0)",
-      "severity": "error"
-    },
-    {
-      "column": 51,
-      "path": "lib/levanter/src/levanter/grug/_moe/sonic_cute.py",
-      "name": "bad-argument-type",
-      "concise_description": "Argument `list[Array]` is not assignable to parameter `caps` with type `Sequence[int]` in function `levanter.grug._moe.common._chunk_capacity_drops`",
-      "severity": "error"
-    },
-    {
       "column": 24,
       "path": "lib/levanter/src/levanter/grug/attention/_core.py",
       "name": "unsupported-operation",
@@ -5401,14 +5205,14 @@
       "column": 65,
       "path": "lib/levanter/src/levanter/grug/grug_moe.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `P` is not assignable to parameter `sender_dropped` with type `Array` in function `levanter.grug._moe.common.CapacityDrops.__new__`",
+      "concise_description": "Argument `P` is not assignable to parameter `sender_dropped` with type `Array[[]]` in function `levanter.grug._moe.common.CapacityDrops.__new__`",
       "severity": "error"
     },
     {
       "column": 87,
       "path": "lib/levanter/src/levanter/grug/grug_moe.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `P` is not assignable to parameter `receiver_dropped` with type `Array` in function `levanter.grug._moe.common.CapacityDrops.__new__`",
+      "concise_description": "Argument `P` is not assignable to parameter `receiver_dropped` with type `Array[[]]` in function `levanter.grug._moe.common.CapacityDrops.__new__`",
       "severity": "error"
     },
     {

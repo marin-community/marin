@@ -3,48 +3,55 @@
 
 """Shared expert-parallel routing helpers for Grug MoE."""
 
+from __future__ import annotations
+
 from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Bool, Float, Int
+from shape_extensions import Int, IntTuple, IntVar
 
 
-def _sort_activations(inputs: Float[Array, "N *tail"], sort_indices: Int[Array, "N"]) -> Float[Array, "N *tail"]:
+def _sort_activations[N: IntVar, Tail: IntTuple](
+    inputs: jax.Array[[N, *Tail]], sort_indices: jax.Array[[N]]
+) -> jax.Array[[N, *Tail]]:
     if inputs.shape[0] != sort_indices.shape[0]:
         raise ValueError(f"Expected matching leading dims, got {inputs.shape[0]} and {sort_indices.shape[0]}")
+    # pyrefly: ignore[bad-return]  # jax.custom_vjp erases the wrapped function's generic signature.
     return _sort_activations_custom(inputs, sort_indices)
 
 
 @jax.custom_vjp
-def _sort_activations_custom(
-    inputs: Float[Array, "N *tail"], sort_indices: Int[Array, "N"]
-) -> Float[Array, "N *tail"]:
+def _sort_activations_custom[N: IntVar, Tail: IntTuple](
+    inputs: jax.Array[[N, *Tail]], sort_indices: jax.Array[[N]]
+) -> jax.Array[[N, *Tail]]:
     return inputs[sort_indices, ...]
 
 
-def _sort_activations_custom_fwd(
-    inputs: Float[Array, "N *tail"], sort_indices: Int[Array, "N"]
-) -> tuple[Float[Array, "N *tail"], Int[Array, "N"]]:
+def _sort_activations_custom_fwd[N: IntVar, Tail: IntTuple](
+    inputs: jax.Array[[N, *Tail]], sort_indices: jax.Array[[N]]
+) -> tuple[jax.Array[[N, *Tail]], jax.Array[[N]]]:
+    # pyrefly: ignore[bad-return]  # jax.custom_vjp erases the wrapped function's generic signature.
     return _sort_activations_custom(inputs, sort_indices), sort_indices
 
 
-def _sort_activations_custom_bwd(
-    residuals: Int[Array, "N"], grads: Float[Array, "N *tail"]
-) -> tuple[Float[Array, "N *tail"], None]:
+def _sort_activations_custom_bwd[N: IntVar, Tail: IntTuple](
+    residuals: jax.Array[[N]], grads: jax.Array[[N, *Tail]]
+) -> tuple[jax.Array[[N, *Tail]], None]:
     sort_indices = residuals
+    # pyrefly: ignore[bad-return]  # jax.custom_vjp erases the wrapped function's generic signature.
     return _sort_activations_custom(grads, jnp.argsort(sort_indices)), None
 
 
 _sort_activations_custom.defvjp(_sort_activations_custom_fwd, _sort_activations_custom_bwd)
 
 
-def _ranks_within_groups(
-    group_ids: Int[Array, "N"],
+def _ranks_within_groups[N: IntVar](
+    group_ids: jax.Array[[N]],
     *,
     num_groups: int,
-    valid: Bool[Array, "N"],
-) -> Int[Array, "N"]:
+    valid: jax.Array[[N]],
+) -> jax.Array[[N]]:
     """Return each valid item's zero-based group rank; invalid ranks are unspecified."""
     sortable_groups = jnp.where(valid, group_ids, num_groups)
     safe_groups = jnp.where(valid, group_ids, 0)
@@ -56,11 +63,11 @@ def _ranks_within_groups(
     return sorted_ranks[inverse_order]
 
 
-def _assignment_sources(
-    linear_indices: Int[Array, "N"],
+def _assignment_sources[N: IntVar, Send: IntVar](
+    linear_indices: jax.Array[[N]],
     *,
-    send_size: int,
-) -> Int[Array, "send"]:
+    send_size: Int[Send],
+) -> jax.Array[[Send]]:
     """Map each fixed send slot to its source assignment."""
     assignments = linear_indices.shape[0]
     return (
@@ -70,13 +77,13 @@ def _assignment_sources(
     )
 
 
-def _token_sources(
-    assignment_sources: Int[Array, "send"],
+def _token_sources[Send: IntVar](
+    assignment_sources: jax.Array[[Send]],
     *,
     assignments: int,
     topk: int,
     tokens: int,
-) -> Int[Array, "send"]:
+) -> jax.Array[[Send]]:
     """Map send slots to token rows and use the padding row for empty slots."""
     return jnp.where(
         assignment_sources < assignments,
@@ -85,18 +92,20 @@ def _token_sources(
     )
 
 
-def _prefix_cap_counts(counts: Int[Array, "*batch E"], *, capacity: int | Int[Array, ""]) -> Int[Array, "*batch E"]:
+def _prefix_cap_counts[Batch: IntTuple, E: IntVar](
+    counts: jax.Array[[*Batch, E]], *, capacity: int | jax.Array[[]]
+) -> jax.Array[[*Batch, E]]:
     """Allocate capacity in order along the last axis, independently for each batch."""
     starts = jnp.cumsum(counts, axis=-1, dtype=jnp.int32) - counts
     return jnp.minimum(counts, jnp.maximum(jnp.asarray(capacity, dtype=jnp.int32) - starts, 0))
 
 
-def _clip_receiver_group_sizes(
-    global_group_sizes: Int[Array, "S E"],
+def _clip_receiver_group_sizes[S: IntVar, E: IntVar](
+    global_group_sizes: jax.Array[[S, E]],
     *,
     local_expert_size: int,
-    receiver_capacity: int | Int[Array, ""],
-) -> Int[Array, "S E"]:
+    receiver_capacity: int | jax.Array[[]],
+) -> jax.Array[[S, E]]:
     """Clip sender->expert group sizes so each receiver shard stays within capacity."""
     num_senders = int(global_group_sizes.shape[0])
     num_experts = int(global_group_sizes.shape[1])
@@ -119,18 +128,24 @@ def _clip_receiver_group_sizes(
 
 
 class ExpertA2aParams(NamedTuple):
-    """Offset/size vectors for one direction of an expert-granular ``ragged_all_to_all``."""
+    """Offset/size vectors for one direction of an expert-granular ``ragged_all_to_all``.
 
-    input_offsets: Int[Array, "U"]
-    send_sizes: Int[Array, "U"]
-    output_offsets: Int[Array, "U"]
-    recv_sizes: Int[Array, "U"]
+    ``U = num_shards * local_expert_size`` (one update per (destination shard, local expert)),
+    but the value is reshaped/transposed through several arithmetic-derived, runtime-only
+    intermediate shapes below, so it is left as an unknown 1-D length rather than a symbolic
+    dimension.
+    """
+
+    input_offsets: jax.Array[[int]]
+    send_sizes: jax.Array[[int]]
+    output_offsets: jax.Array[[int]]
+    recv_sizes: jax.Array[[int]]
 
 
-def _expert_granular_a2a_params(
-    all_group_sizes: Int[Array, "S E"],
-    clipped_group_sizes: Int[Array, "S E"],
-    shard_id: Int[Array, ""],
+def _expert_granular_a2a_params[S: IntVar, E: IntVar](
+    all_group_sizes: jax.Array[[S, E]],
+    clipped_group_sizes: jax.Array[[S, E]],
+    shard_id: jax.Array[[]],
     *,
     local_expert_size: int,
 ) -> tuple[ExpertA2aParams, ExpertA2aParams]:

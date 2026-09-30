@@ -3,6 +3,8 @@
 
 """Fixed all-to-all with destination-pooled static waves."""
 
+from __future__ import annotations
+
 import math
 from collections.abc import Callable
 from functools import partial
@@ -10,7 +12,7 @@ from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Bool, Float, Int
+from shape_extensions import Int, IntVar
 
 from levanter.grug._moe.common import _assignment_validity, _scaled_capacity, CapacityDrops
 from levanter.grug._moe.ep_common import (
@@ -20,72 +22,75 @@ from levanter.grug._moe.ep_common import (
 )
 from levanter.grug._moe.sonic import sonic_gather_sum_available, sonic_gather_sum_masked
 
+# `_PooledDispatch`/`_PooledOutput` are not generic: their send, receive, and assignment axes are
+# fixed physical capacities, so the fields use unknown lengths rather than symbolic dimensions.
+
 
 class _PooledDispatch(NamedTuple):
-    compacted_x: Float[Array, "E R H"]
-    receiver_linear_indices: Int[Array, " received"]
-    receiver_keep: Array
-    sender_linear_indices: Int[Array, " assignments"]
-    sender_keep: Array
-    assignment_sources: Int[Array, " send"]
-    receiver_dropped: Int[Array, ""]
+    compacted_x: jax.Array[[int, int, int]]
+    receiver_linear_indices: jax.Array[[int]]
+    receiver_keep: jax.Array[[int]]
+    sender_linear_indices: jax.Array[[int]]
+    sender_keep: jax.Array[[int]]
+    assignment_sources: jax.Array[[int]]
+    receiver_dropped: jax.Array[[]]
 
 
 class _PooledOutput(NamedTuple):
-    compacted_output: Float[Array, "E R H"]
-    receiver_linear_indices: Int[Array, " received"]
-    receiver_keep: Array
-    sender_linear_indices: Int[Array, " assignments"]
-    sender_keep: Array
-    assignment_sources: Int[Array, " send"]
-    receiver_dropped: Int[Array, ""]
+    compacted_output: jax.Array[[int, int, int]]
+    receiver_linear_indices: jax.Array[[int]]
+    receiver_keep: jax.Array[[int]]
+    sender_linear_indices: jax.Array[[int]]
+    sender_keep: jax.Array[[int]]
+    assignment_sources: jax.Array[[int]]
+    receiver_dropped: jax.Array[[]]
 
 
-def _dispatch_gather_input_grad(
-    cotangent: Float[Array, "send H"],
-    linear_indices: Int[Array, " assignments"],
-    keep: Array,
-    tokens_per_shard: int,
-) -> Float[Array, "Tlocal H"]:
+def _dispatch_gather_input_grad[Tlocal: IntVar, H: IntVar](
+    cotangent: jax.Array[[int, H]],
+    linear_indices: jax.Array[[int]],
+    keep: jax.Array[[int]],
+    tokens_per_shard: Int[Tlocal],
+) -> jax.Array[[Tlocal, H]]:
     send_size, hidden_dim = cotangent.shape
     topk = linear_indices.shape[0] // tokens_per_shard
-    linear_indices = linear_indices.reshape(tokens_per_shard, topk)
-    keep = keep.reshape(tokens_per_shard, topk)
+    linear_indices_grouped: jax.Array[[Tlocal, int]] = linear_indices.reshape(tokens_per_shard, topk)
+    keep_grouped: jax.Array[[Tlocal, int]] = keep.reshape(tokens_per_shard, topk)
 
     if sonic_gather_sum_available():
-        return sonic_gather_sum_masked(cotangent, linear_indices, keep.astype(jnp.float32))
+        return sonic_gather_sum_masked(cotangent, linear_indices_grouped, keep_grouped.astype(jnp.float32))
 
     grad_x = jnp.zeros((tokens_per_shard, hidden_dim), dtype=jnp.float32)
 
     def add_route(route_index, grad_x):
-        rows = cotangent[jnp.minimum(linear_indices[:, route_index], send_size - 1)]
-        rows = jnp.where(keep[:, route_index, None], rows, 0).astype(jnp.float32)
+        rows = cotangent[jnp.minimum(linear_indices_grouped[:, route_index], send_size - 1)]
+        rows = jnp.where(keep_grouped[:, route_index, None], rows, 0).astype(jnp.float32)
         return grad_x + rows
 
     grad_x = jax.lax.fori_loop(0, topk, add_route, grad_x)
     return grad_x.astype(cotangent.dtype)
 
 
-def _combine_gather_sum_impl(
-    send_output: Float[Array, "send H"],
-    gather_indices: Int[Array, " assignments"],
-    keep: Array,
-    combine_weights: Float[Array, "Tlocal K"],
-) -> Float[Array, "Tlocal H"]:
+def _combine_gather_sum_impl[Tlocal: IntVar, K: IntVar, H: IntVar](
+    send_output: jax.Array[[int, H]],
+    gather_indices: jax.Array[[int]],
+    keep: jax.Array[[int]],
+    combine_weights: jax.Array[[Tlocal, K]],
+) -> jax.Array[[Tlocal, H]]:
     tokens_per_shard, topk = combine_weights.shape
     hidden_dim = send_output.shape[1]
-    gather_indices = gather_indices.reshape(tokens_per_shard, topk)
-    keep = keep.reshape(tokens_per_shard, topk)
+    gather_indices_grouped: jax.Array[[Tlocal, K]] = gather_indices.reshape(tokens_per_shard, topk)
+    keep_grouped: jax.Array[[Tlocal, K]] = keep.reshape(tokens_per_shard, topk)
 
     if sonic_gather_sum_available():
-        weights = jnp.where(keep, combine_weights, 0)
-        return sonic_gather_sum_masked(send_output, gather_indices, weights, output_dtype=jnp.float32)
+        weights = jnp.where(keep_grouped, combine_weights, 0)
+        return sonic_gather_sum_masked(send_output, gather_indices_grouped, weights, output_dtype=jnp.float32)
 
     out = jnp.zeros((tokens_per_shard, hidden_dim), dtype=jnp.float32)
 
     def add_route(route_index, out):
-        rows = send_output[jnp.minimum(gather_indices[:, route_index], send_output.shape[0] - 1)]
-        rows = jnp.where(keep[:, route_index, None], rows, 0)
+        rows = send_output[jnp.minimum(gather_indices_grouped[:, route_index], send_output.shape[0] - 1)]
+        rows = jnp.where(keep_grouped[:, route_index, None], rows, 0)
         weight = combine_weights[:, route_index, None].astype(jnp.float32)
         return out + rows.astype(jnp.float32) * weight
 
@@ -93,22 +98,34 @@ def _combine_gather_sum_impl(
 
 
 @jax.custom_vjp
-def _combine_gather_sum(
-    send_output: Float[Array, "send H"],
-    gather_indices: Int[Array, " assignments"],
-    keep: Array,
-    assignment_sources: Int[Array, " send"],
-    combine_weights: Float[Array, "Tlocal K"],
-) -> Float[Array, "Tlocal H"]:
+def _combine_gather_sum[Tlocal: IntVar, K: IntVar, H: IntVar](
+    send_output: jax.Array[[int, H]],
+    gather_indices: jax.Array[[int]],
+    keep: jax.Array[[int]],
+    assignment_sources: jax.Array[[int]],
+    combine_weights: jax.Array[[Tlocal, K]],
+) -> jax.Array[[Tlocal, H]]:
     return _combine_gather_sum_impl(send_output, gather_indices, keep, combine_weights)
 
 
-def _combine_gather_sum_fwd(send_output, gather_indices, keep, assignment_sources, combine_weights):
+def _combine_gather_sum_fwd[Tlocal: IntVar, K: IntVar, H: IntVar](
+    send_output: jax.Array[[int, H]],
+    gather_indices: jax.Array[[int]],
+    keep: jax.Array[[int]],
+    assignment_sources: jax.Array[[int]],
+    combine_weights: jax.Array[[Tlocal, K]],
+) -> tuple[
+    jax.Array[[Tlocal, H]],
+    tuple[jax.Array[[int, H]], jax.Array[[int]], jax.Array[[int]], jax.Array[[int]], jax.Array[[Tlocal, K]]],
+]:
     out = _combine_gather_sum_impl(send_output, gather_indices, keep, combine_weights)
     return out, (send_output, gather_indices, keep, assignment_sources, combine_weights)
 
 
-def _combine_gather_sum_bwd(residual, cotangent):
+def _combine_gather_sum_bwd[Tlocal: IntVar, K: IntVar, H: IntVar](
+    residual: tuple[jax.Array[[int, H]], jax.Array[[int]], jax.Array[[int]], jax.Array[[int]], jax.Array[[Tlocal, K]]],
+    cotangent: jax.Array[[Tlocal, H]],
+) -> tuple[jax.Array[[int, H]], None, None, None, jax.Array[[Tlocal, K]]]:
     send_output, gather_indices, keep, assignment_sources, combine_weights = residual
     tokens_per_shard, topk = combine_weights.shape
     assignments_per_shard = tokens_per_shard * topk
@@ -116,17 +133,18 @@ def _combine_gather_sum_bwd(residual, cotangent):
     sources = jnp.minimum(assignment_sources, assignments_per_shard - 1)
     source_tokens = sources // topk
     source_weights = combine_weights.reshape(-1)[sources].astype(jnp.float32)
-    d_send_output = cotangent[source_tokens].astype(jnp.float32) * source_weights[:, None]
-    d_send_output = jnp.where(valid[:, None], d_send_output, 0).astype(send_output.dtype)
+    gathered: jax.Array[[int, H]] = cotangent[source_tokens]
+    d_send_output_raw = gathered.astype(jnp.float32) * source_weights[:, None]
+    d_send_output = jnp.where(valid[:, None], d_send_output_raw, 0).astype(send_output.dtype)
 
-    gather_indices = gather_indices.reshape(tokens_per_shard, topk)
-    keep = keep.reshape(tokens_per_shard, topk)
+    gather_indices_grouped: jax.Array[[Tlocal, K]] = gather_indices.reshape(tokens_per_shard, topk)
+    keep_grouped: jax.Array[[Tlocal, K]] = keep.reshape(tokens_per_shard, topk)
     d_combine_weights = jnp.zeros_like(combine_weights)
 
     def set_route(route_index, d_combine_weights):
-        rows = send_output[jnp.minimum(gather_indices[:, route_index], send_output.shape[0] - 1)]
+        rows = send_output[jnp.minimum(gather_indices_grouped[:, route_index], send_output.shape[0] - 1)]
         d_weight = jnp.sum(cotangent.astype(jnp.float32) * rows.astype(jnp.float32), axis=1)
-        d_weight = jnp.where(keep[:, route_index], d_weight, 0).astype(combine_weights.dtype)
+        d_weight = jnp.where(keep_grouped[:, route_index], d_weight, 0).astype(combine_weights.dtype)
         return jax.lax.dynamic_update_slice_in_dim(
             d_combine_weights,
             d_weight[:, None],
@@ -141,12 +159,12 @@ def _combine_gather_sum_bwd(residual, cotangent):
 _combine_gather_sum.defvjp(_combine_gather_sum_fwd, _combine_gather_sum_bwd)
 
 
-def _compact_received_impl(
-    received_x: Float[Array, "N H"],
-    receiver_linear_indices: Int[Array, " N"],
+def _compact_received_impl[H: IntVar](
+    received_x: jax.Array[[int, H]],
+    receiver_linear_indices: jax.Array[[int]],
     local_experts: int,
     receiver_capacity: int,
-) -> Float[Array, "E R H"]:
+) -> jax.Array[[int, int, H]]:
     compact_size = local_experts * receiver_capacity
     compact_sources = _assignment_sources(receiver_linear_indices, send_size=compact_size)
     source_valid = compact_sources < received_x.shape[0]
@@ -156,13 +174,13 @@ def _compact_received_impl(
 
 
 @partial(jax.custom_vjp, nondiff_argnums=(3, 4))
-def _compact_received(
-    received_x: Float[Array, "N H"],
-    receiver_linear_indices: Int[Array, " N"],
-    receiver_keep: Array,
+def _compact_received[H: IntVar](
+    received_x: jax.Array[[int, H]],
+    receiver_linear_indices: jax.Array[[int]],
+    receiver_keep: jax.Array[[int]],
     local_experts: int,
     receiver_capacity: int,
-) -> Float[Array, "E R H"]:
+) -> jax.Array[[int, int, H]]:
     """Compact received rows with a one-to-one gather backward pass."""
     return _compact_received_impl(
         received_x,
@@ -172,13 +190,13 @@ def _compact_received(
     )
 
 
-def _compact_received_fwd(
-    received_x,
-    receiver_linear_indices,
-    receiver_keep,
-    local_experts,
-    receiver_capacity,
-):
+def _compact_received_fwd[H: IntVar](
+    received_x: jax.Array[[int, H]],
+    receiver_linear_indices: jax.Array[[int]],
+    receiver_keep: jax.Array[[int]],
+    local_experts: int,
+    receiver_capacity: int,
+) -> tuple[jax.Array[[int, int, H]], tuple[jax.Array[[int]], jax.Array[[int]], tuple[int, ...]]]:
     compacted_x = _compact_received_impl(
         received_x,
         receiver_linear_indices,
@@ -188,24 +206,29 @@ def _compact_received_fwd(
     return compacted_x, (receiver_linear_indices, receiver_keep, received_x.shape)
 
 
-def _compact_received_bwd(local_experts, receiver_capacity, residual, cotangent):
+def _compact_received_bwd[H: IntVar](
+    local_experts: int,
+    receiver_capacity: int,
+    residual: tuple[jax.Array[[int]], jax.Array[[int]], tuple[int, ...]],
+    cotangent: jax.Array[[int, int, H]],
+) -> tuple[jax.Array[[int, H]], None, None]:
     receiver_linear_indices, receiver_keep, received_shape = residual
     compact_size = local_experts * receiver_capacity
-    flat_cotangent = cotangent.reshape(compact_size, received_shape[1])
+    flat_cotangent: jax.Array[[int, H]] = cotangent.reshape(compact_size, received_shape[1])
     source_indices = jnp.minimum(receiver_linear_indices, compact_size - 1)
-    received_grad = flat_cotangent[source_indices]
-    received_grad = jnp.where(receiver_keep[:, None], received_grad, 0)
-    return received_grad, None, None
+    received_grad: jax.Array[[int, H]] = flat_cotangent[source_indices]
+    received_grad_masked = jnp.where(receiver_keep[:, None], received_grad, 0)
+    return received_grad_masked, None, None
 
 
 _compact_received.defvjp(_compact_received_fwd, _compact_received_bwd)
 
 
-def _pooled_dispatch_payload_impl(
-    x_local: Float[Array, "Tlocal H"],
-    header: Float[Array, "S M H"],
-    token_sources: Int[Array, " send"],
-) -> Float[Array, "S payload H"]:
+def _pooled_dispatch_payload_impl[Tlocal: IntVar, H: IntVar](
+    x_local: jax.Array[[Tlocal, H]],
+    header: jax.Array[[int, int, H]],
+    token_sources: jax.Array[[int]],
+) -> jax.Array[[int, int, H]]:
     expert_shards, metadata_rows, hidden_dim = header.shape
     pool_capacity = token_sources.shape[0] // expert_shards
     tokens_per_shard = x_local.shape[0]
@@ -228,25 +251,34 @@ def _pooled_dispatch_payload_impl(
 
 
 @jax.custom_vjp
-def _pooled_dispatch_payload(
-    x_local: Float[Array, "Tlocal H"],
-    header: Float[Array, "S M H"],
-    token_sources: Int[Array, " send"],
-    linear_indices: Int[Array, " assignments"],
-    keep: Array,
-) -> Float[Array, "S payload H"]:
+def _pooled_dispatch_payload[Tlocal: IntVar, H: IntVar](
+    x_local: jax.Array[[Tlocal, H]],
+    header: jax.Array[[int, int, H]],
+    token_sources: jax.Array[[int]],
+    linear_indices: jax.Array[[int]],
+    keep: jax.Array[[int]],
+) -> jax.Array[[int, int, H]]:
     """Build the header and activation payload with one output gather."""
     return _pooled_dispatch_payload_impl(x_local, header, token_sources)
 
 
-def _pooled_dispatch_payload_fwd(x_local, header, token_sources, linear_indices, keep):
+def _pooled_dispatch_payload_fwd[Tlocal: IntVar, H: IntVar](
+    x_local: jax.Array[[Tlocal, H]],
+    header: jax.Array[[int, int, H]],
+    token_sources: jax.Array[[int]],
+    linear_indices: jax.Array[[int]],
+    keep: jax.Array[[int]],
+) -> tuple[jax.Array[[int, int, H]], tuple[jax.Array[[int]], jax.Array[[int]], int, int]]:
     payload = _pooled_dispatch_payload_impl(x_local, header, token_sources)
     return payload, (linear_indices, keep, x_local.shape[0], header.shape[1])
 
 
-def _pooled_dispatch_payload_bwd(residual, cotangent):
+def _pooled_dispatch_payload_bwd[Tlocal: IntVar, H: IntVar](
+    residual: tuple[jax.Array[[int]], jax.Array[[int]], int, int],
+    cotangent: jax.Array[[int, int, H]],
+) -> tuple[jax.Array[[Tlocal, H]], None, None, None, None]:
     linear_indices, keep, tokens_per_shard, metadata_rows = residual
-    activation_cotangent = cotangent[:, metadata_rows:].reshape(-1, cotangent.shape[-1])
+    activation_cotangent: jax.Array[[int, H]] = cotangent[:, metadata_rows:].reshape(-1, cotangent.shape[-1])
     grad_x = _dispatch_gather_input_grad(activation_cotangent, linear_indices, keep, tokens_per_shard)
     return grad_x, None, None, None, None
 
@@ -254,33 +286,40 @@ def _pooled_dispatch_payload_bwd(residual, cotangent):
 _pooled_dispatch_payload.defvjp(_pooled_dispatch_payload_fwd, _pooled_dispatch_payload_bwd)
 
 
-def _expand_compacted_impl(
-    compacted_output: Float[Array, "E R H"],
-    receiver_linear_indices: Int[Array, " N"],
-    receiver_keep: Array,
-) -> Float[Array, "N H"]:
+def _expand_compacted_impl[H: IntVar](
+    compacted_output: jax.Array[[int, int, H]],
+    receiver_linear_indices: jax.Array[[int]],
+    receiver_keep: jax.Array[[int]],
+) -> jax.Array[[int, H]]:
     flat_output = compacted_output.reshape(-1, compacted_output.shape[-1])
     output_indices = jnp.minimum(receiver_linear_indices, flat_output.shape[0] - 1)
-    received_output = flat_output[output_indices]
+    received_output: jax.Array[[int, H]] = flat_output[output_indices]
     return jnp.where(receiver_keep[:, None], received_output, 0)
 
 
 @jax.custom_vjp
-def _expand_compacted(
-    compacted_output: Float[Array, "E R H"],
-    receiver_linear_indices: Int[Array, " N"],
-    receiver_keep: Array,
-) -> Float[Array, "N H"]:
+def _expand_compacted[H: IntVar](
+    compacted_output: jax.Array[[int, int, H]],
+    receiver_linear_indices: jax.Array[[int]],
+    receiver_keep: jax.Array[[int]],
+) -> jax.Array[[int, H]]:
     """Expand expert rows with a one-to-one set backward pass."""
     return _expand_compacted_impl(compacted_output, receiver_linear_indices, receiver_keep)
 
 
-def _expand_compacted_fwd(compacted_output, receiver_linear_indices, receiver_keep):
+def _expand_compacted_fwd[H: IntVar](
+    compacted_output: jax.Array[[int, int, H]],
+    receiver_linear_indices: jax.Array[[int]],
+    receiver_keep: jax.Array[[int]],
+) -> tuple[jax.Array[[int, H]], tuple[jax.Array[[int]], jax.Array[[int]], tuple[int, ...]]]:
     received_output = _expand_compacted_impl(compacted_output, receiver_linear_indices, receiver_keep)
     return received_output, (receiver_linear_indices, receiver_keep, compacted_output.shape)
 
 
-def _expand_compacted_bwd(residual, cotangent):
+def _expand_compacted_bwd[H: IntVar](
+    residual: tuple[jax.Array[[int]], jax.Array[[int]], tuple[int, ...]],
+    cotangent: jax.Array[[int, H]],
+) -> tuple[jax.Array[[int, int, H]], None, None]:
     receiver_linear_indices, receiver_keep, compacted_shape = residual
     compact_size = compacted_shape[0] * compacted_shape[1]
     compacted_grad = (
@@ -288,49 +327,50 @@ def _expand_compacted_bwd(residual, cotangent):
         .at[receiver_linear_indices]
         .set(jnp.where(receiver_keep[:, None], cotangent, 0), mode="drop")
     )
-    return compacted_grad[:compact_size].reshape(compacted_shape), None, None
+    result: jax.Array[[int, int, H]] = compacted_grad[:compact_size].reshape(compacted_shape)
+    return result, None, None
 
 
 _expand_compacted.defvjp(_expand_compacted_fwd, _expand_compacted_bwd)
 
 
 def _in_band_expert_header(
-    encoded_experts: Int[Array, " send"],
+    encoded_experts: jax.Array[[int]],
     *,
     expert_shards: int,
     pool_capacity: int,
     hidden_dim: int,
     dtype: jnp.dtype,
-) -> Float[Array, "S M H"]:
+) -> jax.Array[[int, int, int]]:
     """Pack static expert IDs into full-width rows for the activation collective."""
     metadata_rows = math.ceil(pool_capacity / hidden_dim)
     padded_size = metadata_rows * hidden_dim
-    encoded_experts = encoded_experts.reshape(expert_shards, pool_capacity)
+    encoded_experts_grouped: jax.Array[[int, int]] = encoded_experts.reshape(expert_shards, pool_capacity)
     padding = jnp.zeros((expert_shards, padded_size - pool_capacity), dtype=encoded_experts.dtype)
     return (
-        jnp.concatenate([encoded_experts, padding], axis=1)
+        jnp.concatenate([encoded_experts_grouped, padding], axis=1)
         .reshape(expert_shards, metadata_rows, hidden_dim)
         .astype(dtype)
     )
 
 
 def _receiver_ranks(
-    received_experts: Int[Array, " N"],
+    received_experts: jax.Array[[int]],
     *,
     local_experts: int,
-) -> Int[Array, " N"]:
+) -> jax.Array[[int]]:
     expert_indicators = jax.nn.one_hot(received_experts, local_experts, dtype=jnp.int32)
     inclusive_counts = jnp.cumsum(expert_indicators, axis=0, dtype=jnp.int32)
     return jnp.sum((inclusive_counts - 1) * expert_indicators, axis=1, dtype=jnp.int32)
 
 
 def _interleaved_receiver_ranks(
-    received_experts: Int[Array, " N"],
+    received_experts: jax.Array[[int]],
     *,
     local_experts: int,
     expert_shards: int,
     pool_capacity: int,
-) -> Int[Array, " N"]:
+) -> jax.Array[[int]]:
     """Per-expert receiver capacity ranks that fill capacity round-robin over source shards.
 
     The received buffer is source-shard-major (``[expert_shards, pool_capacity]``), so a plain cumsum
@@ -349,18 +389,18 @@ def _interleaved_receiver_ranks(
     return ranks.reshape(pool_capacity, expert_shards).T.reshape(-1)
 
 
-def _dispatch_pooled(
+def _dispatch_pooled[Tlocal: IntVar, H: IntVar](
     *,
-    x_local: Float[Array, "Tlocal H"],
-    local_expert_indices: Int[Array, " assignments"],
-    destination_shards: Int[Array, " assignments"],
-    pool_ranks: Int[Array, " assignments"],
-    sender_keep: Array,
+    x_local: jax.Array[[Tlocal, H]],
+    local_expert_indices: jax.Array[[int]],
+    destination_shards: jax.Array[[int]],
+    pool_ranks: jax.Array[[int]],
+    sender_keep: jax.Array[[int]],
     local_experts: int,
     expert_shards: int,
     pool_capacity: int,
     receiver_capacity: int,
-    receiver_limit: Int[Array, ""],
+    receiver_limit: jax.Array[[]],
     assignments_per_shard: int,
     topk: int,
 ) -> _PooledDispatch:
@@ -398,7 +438,8 @@ def _dispatch_pooled(
             sender_linear_indices,
             sender_keep,
         )
-        received_payload = jax.lax.all_to_all(
+        # `jax.custom_vjp` erases `_pooled_dispatch_payload`'s signature, so pin the received payload.
+        received_payload: jax.Array[[int, int, H]] = jax.lax.all_to_all(
             payload,
             "expert",
             split_axis=0,
@@ -406,8 +447,10 @@ def _dispatch_pooled(
             tiled=True,
         ).reshape(expert_shards, metadata_rows + pool_capacity, hidden_dim)
         received_header = received_payload[:, :metadata_rows]
-        received_x = received_payload[:, metadata_rows:].reshape(send_size, hidden_dim)
-        received_encoded_experts = received_header.reshape(expert_shards, -1)[:, :pool_capacity].reshape(send_size)
+        received_x: jax.Array[[int, H]] = received_payload[:, metadata_rows:].reshape(send_size, hidden_dim)
+        received_encoded_experts: jax.Array[[int]] = received_header.reshape(expert_shards, -1)[
+            :, :pool_capacity
+        ].reshape(send_size)
         received_experts = received_encoded_experts.astype(jnp.int32) - 1
 
         # Allocate receiver capacity round-robin over source shards (see `_interleaved_receiver_ranks`)
@@ -421,7 +464,7 @@ def _dispatch_pooled(
         receiver_valid = received_experts >= 0
         receiver_keep = receiver_valid & (receiver_ranks < receiver_limit)
         compact_size = local_experts * receiver_capacity
-        receiver_linear_indices = jnp.where(
+        receiver_linear_indices: jax.Array[[int]] = jnp.where(
             receiver_keep,
             received_experts * receiver_capacity + receiver_ranks,
             compact_size,
@@ -446,11 +489,11 @@ def _dispatch_pooled(
     )
 
 
-def _compute_pooled(
+def _compute_pooled[Elocal: IntVar, H: IntVar, I2: IntVar, I: IntVar](
     dispatch: _PooledDispatch,
     *,
-    moe_w13_local: Float[Array, "Elocal H I2"],
-    moe_w2_local: Float[Array, "Elocal I H"],
+    moe_w13_local: jax.Array[[Elocal, H, I2]],
+    moe_w2_local: jax.Array[[Elocal, I, H]],
     activation_fn: Callable[[jax.Array], jax.Array],
 ) -> _PooledOutput:
     with jax.named_scope("moe_up_down"):
@@ -470,13 +513,13 @@ def _compute_pooled(
     )
 
 
-def _combine_pooled(
+def _combine_pooled[Tlocal: IntVar, K: IntVar, H: IntVar](
     output: _PooledOutput,
     *,
-    combine_weights_local: Float[Array, "Tlocal K"],
+    combine_weights_local: jax.Array[[Tlocal, K]],
     expert_shards: int,
     pool_capacity: int,
-) -> Float[Array, "Tlocal H"]:
+) -> jax.Array[[Tlocal, H]]:
     send_size = expert_shards * pool_capacity
     hidden_dim = output.compacted_output.shape[-1]
     with jax.named_scope("combine"):
@@ -501,13 +544,15 @@ def _combine_pooled(
         )
 
 
-def _moe_mlp_ep_fixed_pooled_wave_a2a_local(
-    x_local: Float[Array, "Tlocal H"],
-    selected_experts_local: Int[Array, "Tlocal K"],
-    combine_weights_local: Float[Array, "Tlocal K"],
-    token_valid_local: Bool[Array, "Tlocal"],
-    moe_w13_local: Float[Array, "Elocal H I2"],
-    moe_w2_local: Float[Array, "Elocal I H"],
+def _moe_mlp_ep_fixed_pooled_wave_a2a_local[
+    Tlocal: IntVar, K: IntVar, H: IntVar, Elocal: IntVar, I: IntVar, I2: IntVar
+](
+    x_local: jax.Array[[Tlocal, H]],
+    selected_experts_local: jax.Array[[Tlocal, K]],
+    combine_weights_local: jax.Array[[Tlocal, K]],
+    token_valid_local: jax.Array[[Tlocal]],
+    moe_w13_local: jax.Array[[Elocal, H, I2]],
+    moe_w2_local: jax.Array[[Elocal, I, H]],
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
@@ -515,7 +560,7 @@ def _moe_mlp_ep_fixed_pooled_wave_a2a_local(
     token_sharding_axes: tuple[str, ...],
     transport_capacity_factor: float,
     num_expert_waves: int,
-) -> tuple[Float[Array, "Tlocal H"], CapacityDrops]:
+) -> tuple[jax.Array[[Tlocal, H]], CapacityDrops]:
     """Stripe each destination pool over fixed waves and report drops at each transport stage."""
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:

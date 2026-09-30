@@ -18,12 +18,14 @@ ragged all-to-all EP backend takes, so on the hero every grouped GEMM in the exp
 kernel family.
 """
 
+from __future__ import annotations
+
 import jax
 import jax.numpy as jnp
 import numpy as np
 from haliax.jax_utils import tree_checkpoint_name
 from haliax.nn.ragged_dot import ragged_dot
-from jaxtyping import Array, Bool, Float, Int
+from shape_extensions import Int, IntVar
 
 from levanter.grug._moe.common import (
     _CHECKPOINT_DISPATCH_INPUT,
@@ -70,7 +72,13 @@ _QUACK_WGRAD_KW: dict = dict(tile_mn=(256, 256), cluster_mnk=(2, 2, 1), use_clc_
 
 
 @jax.custom_vjp
-def _expert_mlp(x_dispatch, w13_il, moe_w2, group_sizes, cu):
+def _expert_mlp[A: IntVar, H: IntVar, Elocal: IntVar, I2: IntVar, I: IntVar](
+    x_dispatch: jax.Array[[A, H]],
+    w13_il: jax.Array[[Elocal, H, I2]],
+    moe_w2: jax.Array[[Elocal, I, H]],
+    group_sizes: jax.Array[[Elocal]],
+    cu: jax.Array[[int]],
+) -> jax.Array[[A, H]]:
     """y = down( swiglu( x @ w13_il ) ), grouped by experts. Activation-path GEMMs on QuACK.
 
     ``group_sizes``/``cu`` are traced int arrays passed as explicit args (not closed
@@ -78,16 +86,49 @@ def _expert_mlp(x_dispatch, w13_il, moe_w2, group_sizes, cu):
     """
     _gu, h = quack_gated_grouped_gemm(x_dispatch, w13_il, cu, return_preact=True)
     y = quack_grouped_gemm(h, moe_w2, cu, b_major="n")
+    # pyrefly: ignore[bad-return]  # quack_grouped_gemm's `w` is untyped, so the last dim comes back as `int`, not H.
     return _zero_inactive_grouped_rows(y, cu)
 
 
-def _expert_mlp_fwd(x_dispatch, w13_il, moe_w2, group_sizes, cu):
+def _expert_mlp_fwd[A: IntVar, H: IntVar, Elocal: IntVar, I2: IntVar, I: IntVar](
+    x_dispatch: jax.Array[[A, H]],
+    w13_il: jax.Array[[Elocal, H, I2]],
+    moe_w2: jax.Array[[Elocal, I, H]],
+    group_sizes: jax.Array[[Elocal]],
+    cu: jax.Array[[int]],
+) -> tuple[
+    jax.Array[[A, H]],
+    tuple[
+        jax.Array[[A, H]],
+        jax.Array[[Elocal, H, I2]],
+        jax.Array[[Elocal, I, H]],
+        jax.Array[[A, I2]],
+        jax.Array[[A, I]],
+        jax.Array[[Elocal]],
+        jax.Array[[int]],
+    ],
+]:
     gu, h = quack_gated_grouped_gemm(x_dispatch, w13_il, cu, return_preact=True)
     y = quack_grouped_gemm(h, moe_w2, cu, b_major="n")
+    # pyrefly: ignore[bad-return]  # quack_grouped_gemm's `w` is untyped; see `_expert_mlp`.
     return _zero_inactive_grouped_rows(y, cu), (x_dispatch, w13_il, moe_w2, gu, h, group_sizes, cu)
 
 
-def _expert_mlp_bwd(res, dy):
+def _expert_mlp_bwd[A: IntVar, H: IntVar, Elocal: IntVar, I2: IntVar, I: IntVar](
+    res: tuple[
+        jax.Array[[A, H]],
+        jax.Array[[Elocal, H, I2]],
+        jax.Array[[Elocal, I, H]],
+        jax.Array[[A, I2]],
+        jax.Array[[A, I]],
+        jax.Array[[Elocal]],
+        jax.Array[[int]],
+    ],
+    dy: jax.Array[[A, H]],
+) -> tuple[jax.Array, jax.Array, jax.Array, np.ndarray, np.ndarray]:
+    """`dw2`/`dw13_il` come back through `jax.vjp` over a lambda closing on `ragged_dot`, which
+    pyrefly cannot resolve to a concrete shape here, so they stay bare `jax.Array`.
+    """
     x_dispatch, w13_il, moe_w2, gu, h, group_sizes, cu = res
     # `dy` needs no tail mask: both consumers are bounded by `cu` (varlen-m GEMM, ragged_dot
     # weight-grad), and the combine transpose already zeroes rows past cu[-1] via w_dispatch == 0.
@@ -97,9 +138,10 @@ def _expert_mlp_bwd(res, dy):
     d_gu = _swiglu_gate_up_backward(gu, dh)
     # gate/up backward: dx via QuACK, dw13 via XLA weight-grad
     dx = quack_grouped_gemm(d_gu, w13_il, cu, b_major="k")
+    # pyrefly: ignore[bad-argument-type]  # quack_grouped_gemm's `w` is untyped; see `_expert_mlp`.
     dx = _zero_inactive_grouped_rows(dx, cu)
     (dw13_il,) = jax.vjp(lambda w: ragged_dot(x_dispatch, w, group_sizes), w13_il)[1](d_gu)
-    # int-typed routing args get float0 zero cotangents
+    # int-typed routing args get float0 zero cotangents (not jax.Array: numpy float0 sentinels)
     gs_ct = np.zeros(group_sizes.shape, dtype=jax.dtypes.float0)
     cu_ct = np.zeros(cu.shape, dtype=jax.dtypes.float0)
     return dx, dw13_il, dw2, gs_ct, cu_ct
@@ -109,7 +151,12 @@ _expert_mlp.defvjp(_expert_mlp_fwd, _expert_mlp_bwd)
 
 
 @jax.custom_vjp
-def _expert_mlp_quack_wgrad(x_dispatch, w13_il, moe_w2, cu):
+def _expert_mlp_quack_wgrad[A: IntVar, H: IntVar, Elocal: IntVar, I2: IntVar, I: IntVar](
+    x_dispatch: jax.Array[[A, H]],
+    w13_il: jax.Array[[Elocal, H, I2]],
+    moe_w2: jax.Array[[Elocal, I, H]],
+    cu: jax.Array[[int]],
+) -> jax.Array[[A, int]]:
     """``_expert_mlp`` with the two weight-gradient GEMMs on QuACK's varlen-k grouping.
 
     Every grouped GEMM here is driven by ``cu`` alone, so unlike ``_expert_mlp`` -- whose weight
@@ -122,20 +169,50 @@ def _expert_mlp_quack_wgrad(x_dispatch, w13_il, moe_w2, cu):
     return quack_grouped_gemm(h, moe_w2, cu, b_major="n", **_QUACK_GROUPED_KW)
 
 
-def _expert_mlp_quack_wgrad_fwd(x_dispatch, w13_il, moe_w2, cu):
+def _expert_mlp_quack_wgrad_fwd[A: IntVar, H: IntVar, Elocal: IntVar, I2: IntVar](
+    x_dispatch: jax.Array[[A, H]],
+    w13_il: jax.Array[[Elocal, H, I2]],
+    moe_w2: jax.Array[[Elocal, int, H]],
+    cu: jax.Array[[int]],
+) -> tuple[
+    jax.Array[[A, int]],
+    tuple[
+        jax.Array[[A, H]],
+        jax.Array[[Elocal, H, I2]],
+        jax.Array[[Elocal, int, H]],
+        jax.Array[[A, I2]],
+        jax.Array[[A, I2 // 2]],
+        jax.Array[[int]],
+    ],
+]:
     gu, h = quack_gated_grouped_gemm(x_dispatch, w13_il, cu, return_preact=True, **_QUACK_GATED_KW)
     y = quack_grouped_gemm(h, moe_w2, cu, b_major="n", **_QUACK_GROUPED_KW)
     return y, (x_dispatch, w13_il, moe_w2, gu, h, cu)
 
 
-def _expert_mlp_quack_wgrad_bwd(res, dy):
+def _expert_mlp_quack_wgrad_bwd[A: IntVar, H: IntVar, Elocal: IntVar, I2: IntVar](
+    res: tuple[
+        jax.Array[[A, H]],
+        jax.Array[[Elocal, H, I2]],
+        jax.Array[[Elocal, int, H]],
+        jax.Array[[A, I2]],
+        jax.Array[[A, I2 // 2]],
+        jax.Array[[int]],
+    ],
+    dy: jax.Array[[A, int]],
+) -> tuple[jax.Array, jax.Array, jax.Array, np.ndarray]:
+    """The weight-gradient GEMMs' `w`/output axes are untyped (their `b_major`/grouping-mode
+    layouts are runtime-branched, see `quack_grouped_gemm`/`quack_grouped_wgrad`), so `dx`,
+    `dw13_il`, and `dw2` stay bare `jax.Array` rather than the precise `Elocal`/`H`/`I2` shapes
+    they hold at runtime.
+    """
     x_dispatch, w13_il, moe_w2, gu, h, cu = res
     dh = quack_grouped_gemm(dy, moe_w2, cu, b_major="k", **_QUACK_GROUPED_KW)
     dw2 = quack_grouped_wgrad(h, dy, cu, **_QUACK_WGRAD_KW)
     d_gu = _swiglu_gate_up_backward(gu, dh)
     dx = quack_grouped_gemm(d_gu, w13_il, cu, b_major="k", **_QUACK_GROUPED_KW)
     dw13_il = quack_grouped_wgrad(x_dispatch, d_gu, cu, **_QUACK_WGRAD_KW)
-    # the int-typed routing arg gets a float0 zero cotangent
+    # the int-typed routing arg gets a float0 zero cotangent (not jax.Array: numpy sentinel)
     cu_ct = np.zeros(cu.shape, dtype=jax.dtypes.float0)
     return dx, dw13_il, dw2, cu_ct
 
@@ -143,16 +220,16 @@ def _expert_mlp_quack_wgrad_bwd(res, dy):
 _expert_mlp_quack_wgrad.defvjp(_expert_mlp_quack_wgrad_fwd, _expert_mlp_quack_wgrad_bwd)
 
 
-def _moe_mlp_local_sonic_cute(
-    x: Float[Array, "T H"],
-    selected_experts: Int[Array, "T K"],
-    combine_weights: Float[Array, "T K"],
-    token_valid: Bool[Array, "T"],
-    moe_w13: Float[Array, "E H I2"],
-    moe_w2: Float[Array, "E I H"],
+def _moe_mlp_local_sonic_cute[T: IntVar, K: IntVar, H: IntVar, E: IntVar, I: IntVar, I2: IntVar](
+    x: jax.Array[[T, H]],
+    selected_experts: jax.Array[[T, K]],
+    combine_weights: jax.Array[[T, K]],
+    token_valid: jax.Array[[T]],
+    moe_w13: jax.Array[[E, H, I2]],
+    moe_w2: jax.Array[[E, I, H]],
     *,
-    num_experts: int,
-) -> tuple[Float[Array, "T H"], Int[Array, ""]]:
+    num_experts: Int[E],
+) -> tuple[jax.Array[[T, H]], jax.Array[[]]]:
     x_dispatch, w_dispatch, token_dispatch, group_sizes = _prepare_moe_dispatch(
         x, selected_experts, combine_weights, token_valid, num_experts=num_experts
     )
@@ -171,18 +248,21 @@ def _moe_mlp_local_sonic_cute(
     return out, _zero_dropped_assignments()
 
 
-def _moe_mlp_local_sonic_cute_chunked(
-    x: Float[Array, "T H"],
-    selected_experts: Int[Array, "T K"],
-    combine_weights: Float[Array, "T K"],
-    token_valid: Bool[Array, "T"],
-    moe_w13_local: Float[Array, "E Hlocal I2"],
-    moe_w2_local: Float[Array, "E I Hlocal"],
+def _moe_mlp_local_sonic_cute_chunked[
+    T: IntVar, K: IntVar, H: IntVar, Hlocal: IntVar, E: IntVar, I: IntVar, I2: IntVar
+](
+    x: jax.Array[[T, H]],
+    selected_experts: jax.Array[[T, K]],
+    combine_weights: jax.Array[[T, K]],
+    token_valid: jax.Array[[T]],
+    # Each FSDP shard holds `H / data` of the hidden dim, so these use `Hlocal`, not `H`.
+    moe_w13_local: jax.Array[[E, Hlocal, I2]],
+    moe_w2_local: jax.Array[[E, I, Hlocal]],
     *,
-    num_experts: int,
+    num_experts: Int[E],
     chunk_sizes: tuple[int, ...],
     data_axis_name: str,
-) -> tuple[Float[Array, "T H"], Int[Array, ""]]:
+) -> tuple[jax.Array[[T, H]], jax.Array[[]]]:
     """Chunked variant that gathers only one chunk of the expert weights at a time.
 
     The FSDP weights arrive H-sharded over ``data_axis_name`` (``moe_w13_local`` is [E, H/data, 2I],
@@ -224,7 +304,8 @@ def _moe_mlp_local_sonic_cute_chunked(
         bounds.append(bounds[-1] + size)
     physical_caps = [total_assignments * size // num_experts for size in chunk_sizes]
     max_cap = max(physical_caps)
-    cu = jnp.concatenate([jnp.zeros((1,), jnp.int32), jnp.cumsum(group_sizes).astype(jnp.int32)])
+    # `jnp.concatenate` over a list drops the shape, so pin it.
+    cu: jax.Array[[int]] = jnp.concatenate([jnp.zeros((1,), jnp.int32), jnp.cumsum(group_sizes).astype(jnp.int32)])
     valid_assignments = cu[-1]
     logical_caps = [valid_assignments * size // num_experts for size in chunk_sizes]
 
@@ -232,9 +313,9 @@ def _moe_mlp_local_sonic_cute_chunked(
     # ``dynamic_slice(start=cu[lo], size=cap)`` never clamps its start index (which would silently
     # shift the window and misgroup rows). Padding carries zero combine weight, so it never
     # contributes to the output or its gradient.
-    x_pad = jnp.pad(x_dispatch, ((0, max_cap), (0, 0)))
-    w_pad = jnp.pad(w_dispatch, (0, max_cap))
-    token_pad = jnp.pad(token_dispatch, (0, max_cap))
+    x_pad: jax.Array[[int, H]] = jnp.pad(x_dispatch, ((0, max_cap), (0, 0)))
+    w_pad: jax.Array[[int]] = jnp.pad(w_dispatch, (0, max_cap))
+    token_pad: jax.Array[[int]] = jnp.pad(token_dispatch, (0, max_cap))
 
     out = jnp.zeros_like(x)
     for c, (cap, logical_cap) in enumerate(zip(physical_caps, logical_caps, strict=True)):

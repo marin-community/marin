@@ -3,12 +3,14 @@
 
 """Scatter-add local Grug MoE backend."""
 
+from __future__ import annotations
+
 from collections.abc import Callable
 
 import jax
 import jax.numpy as jnp
 from haliax.jax_utils import tree_checkpoint_name
-from jaxtyping import Array, Bool, Float, Int
+from shape_extensions import Int, IntVar
 
 from haliax.nn.ragged_dot import ragged_dot
 from levanter.grug._moe.common import (
@@ -22,17 +24,17 @@ from levanter.grug._moe.common import (
 )
 
 
-def _moe_mlp_local_scatter(
-    x: Float[Array, "T H"],
-    selected_experts: Int[Array, "T K"],
-    combine_weights: Float[Array, "T K"],
-    token_valid: Bool[Array, "T"],
-    moe_w13: Float[Array, "E H I2"],
-    moe_w2: Float[Array, "E I H"],
+def _moe_mlp_local_scatter[T: IntVar, K: IntVar, H: IntVar, E: IntVar, I: IntVar, I2: IntVar](
+    x: jax.Array[[T, H]],
+    selected_experts: jax.Array[[T, K]],
+    combine_weights: jax.Array[[T, K]],
+    token_valid: jax.Array[[T]],
+    moe_w13: jax.Array[[E, H, I2]],
+    moe_w2: jax.Array[[E, I, H]],
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
-    num_experts: int,
-) -> tuple[Float[Array, "T H"], Int[Array, ""]]:
+    num_experts: Int[E],
+) -> tuple[jax.Array[[T, H]], jax.Array[[]]]:
     """Local fallback MoE path: sorted grouped GMM then scatter-add combine."""
     x_dispatch, w_dispatch, token_dispatch, group_sizes = _prepare_moe_dispatch(
         x,
@@ -49,10 +51,13 @@ def _moe_mlp_local_scatter(
         # Rows past the last group are unspecified kernel output. Every consumer between the
         # two projections is row-local or group-bounded, so only the combine boundary below
         # needs zeroing (a zero weight times an unspecified row is not zero).
-        w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13, group_sizes), _CHECKPOINT_EXPERT_HIDDEN)
+        # haliax's `ragged_dot` is unshaped, so pin the result.
+        w13_out: jax.Array[[T * K, I2]] = tree_checkpoint_name(
+            ragged_dot(x_dispatch, moe_w13, group_sizes), _CHECKPOINT_EXPERT_HIDDEN
+        )
         moe_dim = moe_w2.shape[1]
         gate, up = split_moe_w13_output(w13_out, intermediate_dim=moe_dim, interleaved=False)
-        out_dispatch = tree_checkpoint_name(
+        out_dispatch: jax.Array[[T * K, H]] = tree_checkpoint_name(
             ragged_dot(activation_fn(gate) * up, moe_w2, group_sizes),
             _CHECKPOINT_DISPATCH_OUTPUT,
         )

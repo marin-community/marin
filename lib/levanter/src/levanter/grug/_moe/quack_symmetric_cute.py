@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import jax
 import jax.numpy as jnp
+from shape_extensions import IntVar
 
 import cutlass
 import cutlass.cute as cute
@@ -77,19 +78,19 @@ def _build_launcher(*, arch_family, a_dtype, mma_tiler_mnk, cluster_mnk, mac, ma
     return launcher
 
 
-def quack_symmetric_gemm(
-    X: jax.Array,
+def quack_symmetric_gemm[L: IntVar, M: IntVar, K: IntVar](
+    X: jax.Array[[L, M, K]],
     *,
     mma_tiler_mnk: tuple[int, int] | None = None,
     cluster_mnk: tuple[int, int, int] = _DEFAULT_CLUSTER,
     max_swizzle: int = _DEFAULT_SWIZZLE,
-) -> jax.Array:
+) -> jax.Array[[L, M, M]]:
     """Batched symmetric GEMM: ``X[L, M, K] -> X @ X^T [L, M, M]`` (full symmetric, bit-exact).
 
     ``X`` must be device-local (no cross-device sharding on any axis) and use batch-first
     ``[L, M, K]`` order. Call this function inside a shard map.
     """
-    L, M, K = X.shape
+    l, m, k = X.shape
     arch_family, default_mma_tiler = _symmetric_gemm_config(gpu_compute_capability())
     if mma_tiler_mnk is None:
         mma_tiler_mnk = default_mma_tiler
@@ -107,7 +108,7 @@ def quack_symmetric_gemm(
     spec = ts(divisibility=(1, 1, 8), static=False)
     call = cutlass_call(
         launcher,
-        output_shape_dtype=(jax.ShapeDtypeStruct((L, M, M), X.dtype),),
+        output_shape_dtype=(jax.ShapeDtypeStruct((l, m, m), X.dtype),),
         input_spec=(spec, spec),
         output_spec=(spec,),
         use_static_tensors=False,

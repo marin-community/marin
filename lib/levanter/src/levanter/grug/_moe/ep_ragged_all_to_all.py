@@ -19,6 +19,8 @@ Axis names used in the shape annotations:
     U       expert-granular transfers on the expert axis
 """
 
+from __future__ import annotations
+
 import functools
 import logging
 import math
@@ -28,7 +30,7 @@ from typing import Protocol
 
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Bool, Float, Int
+from shape_extensions import Int, IntVar
 
 from haliax.nn.ragged_dot import ragged_dot
 from levanter.grug._moe.common import _assignment_validity, _interleave_gate_up, _scaled_capacity, CapacityDrops
@@ -66,25 +68,25 @@ class _ExpertMlp(Protocol):
     unspecified, while segment-driven kernels can omit inactive rows.
     """
 
-    def __call__(
+    def __call__[C: IntVar, H: IntVar, Echunk: IntVar, I2: IntVar, I: IntVar](
         self,
-        x_dispatch: Float[Array, "C H"],
-        moe_w13_local: Float[Array, "Echunk H I2"],
-        moe_w2_local: Float[Array, "Echunk I H"],
-        physical_group_sizes: Int[Array, "Echunk"],
-        active_group_sizes: Int[Array, "Echunk"],
+        x_dispatch: jax.Array[[C, H]],
+        moe_w13_local: jax.Array[[Echunk, H, I2]],
+        moe_w2_local: jax.Array[[Echunk, I, H]],
+        physical_group_sizes: jax.Array[[Echunk]],
+        active_group_sizes: jax.Array[[Echunk]],
         activation_fn: Callable[[jax.Array], jax.Array],
-    ) -> Float[Array, "C H"]: ...
+    ) -> jax.Array[[C, H]]: ...
 
 
-def _ragged_dot_expert_mlp(
-    x_dispatch: Float[Array, "C H"],
-    moe_w13_local: Float[Array, "Echunk H I2"],
-    moe_w2_local: Float[Array, "Echunk I H"],
-    physical_group_sizes: Int[Array, "Echunk"],
-    active_group_sizes: Int[Array, "Echunk"],
+def _ragged_dot_expert_mlp[C: IntVar, H: IntVar, Echunk: IntVar, I2: IntVar, I: IntVar](
+    x_dispatch: jax.Array[[C, H]],
+    moe_w13_local: jax.Array[[Echunk, H, I2]],
+    moe_w2_local: jax.Array[[Echunk, I, H]],
+    physical_group_sizes: jax.Array[[Echunk]],
+    active_group_sizes: jax.Array[[Echunk]],
     activation_fn: Callable[[jax.Array], jax.Array],
-) -> Float[Array, "C H"]:
+) -> jax.Array[[C, H]]:
     """Portable expert MLP over XLA's `ragged_dot`, including static trailing rows."""
     del active_group_sizes
     w13_out = ragged_dot(x_dispatch, moe_w13_local, physical_group_sizes)
@@ -93,14 +95,14 @@ def _ragged_dot_expert_mlp(
     return ragged_dot(activation_fn(gate) * up, moe_w2_local, physical_group_sizes)
 
 
-def _cute_expert_mlp(
-    x_dispatch: Float[Array, "C H"],
-    moe_w13_local: Float[Array, "Echunk H I2"],
-    moe_w2_local: Float[Array, "Echunk I H"],
-    physical_group_sizes: Int[Array, "Echunk"],
-    active_group_sizes: Int[Array, "Echunk"],
+def _cute_expert_mlp[C: IntVar, H: IntVar, Echunk: IntVar, I2: IntVar, I: IntVar](
+    x_dispatch: jax.Array[[C, H]],
+    moe_w13_local: jax.Array[[Echunk, H, I2]],
+    moe_w2_local: jax.Array[[Echunk, I, H]],
+    physical_group_sizes: jax.Array[[Echunk]],
+    active_group_sizes: jax.Array[[Echunk]],
     activation_fn: Callable[[jax.Array], jax.Array],
-) -> Float[Array, "C H"]:
+) -> jax.Array[[C, H]]:
     """Expert MLP on QuACK's SM100 grouped GEMMs, activation path and weight gradients alike.
 
     The grouped kernels are driven by segment boundaries, so they take the active sizes and
@@ -152,14 +154,14 @@ def _select_expert_mlp(activation_fn: Callable[[jax.Array], jax.Array]) -> _Expe
     return _ragged_dot_expert_mlp
 
 
-def _unpermute_from_global_expert(
-    intermediate: Float[Array, "TK H"],
-    sorted_indices: Int[Array, "TK"],
-    combine_weights_local: Float[Array, "Tlocal K"],
+def _unpermute_from_global_expert[TK: IntVar, H: IntVar, Tlocal: IntVar, K: IntVar](
+    intermediate: jax.Array[[TK, H]],
+    sorted_indices: jax.Array[[TK]],
+    combine_weights_local: jax.Array[[Tlocal, K]],
     *,
-    tokens_per_shard: int,
-    topk: int,
-) -> Float[Array, "Tlocal H"]:
+    tokens_per_shard: Int[Tlocal],
+    topk: Int[K],
+) -> jax.Array[[Tlocal, H]]:
     """Weight each token's expert outputs by its routing weights and sum them."""
     positions = jnp.argsort(sorted_indices)
     if sonic_gather_sum_available():
@@ -168,18 +170,19 @@ def _unpermute_from_global_expert(
         # the output. It accumulates in fp32 like the einsum below and keeps the routing
         # weight in fp32 through the multiply, where the einsum has to cast it down to avoid
         # promoting the larger operand, so the two agree to a single rounding.
+        # pyrefly: ignore[bad-argument-type]  # jax.custom_vjp erases sonic_gather_sum's generic signature.
         return sonic_gather_sum(intermediate, positions.reshape(tokens_per_shard, topk), combine_weights_local)
     unsorted = _sort_activations(intermediate, positions)
-    reshaped = unsorted.reshape(tokens_per_shard, topk, -1)
+    reshaped: jax.Array[[Tlocal, K, int]] = unsorted.reshape(tokens_per_shard, topk, -1)
     return jnp.einsum(
         "tkd,tk->td", reshaped, combine_weights_local.astype(reshaped.dtype), preferred_element_type=jnp.float32
     )
 
 
 @functools.partial(jax.custom_vjp, nondiff_argnums=(2,))
-def _gather_dispatch_rows(
-    x_local: Float[Array, "Tlocal H"], sorted_indices: Int[Array, "TK"], topk: int
-) -> Float[Array, "TK H"]:
+def _gather_dispatch_rows[Tlocal: IntVar, H: IntVar, TK: IntVar](
+    x_local: jax.Array[[Tlocal, H]], sorted_indices: jax.Array[[TK]], topk: int
+) -> jax.Array[[TK, H]]:
     """Build the expert-sorted dispatch buffer with one gather.
 
     Equivalent to ``jnp.repeat(x_local, topk, axis=0)[sorted_indices]`` without
@@ -189,22 +192,25 @@ def _gather_dispatch_rows(
     return x_local[sorted_indices // topk]
 
 
-def _gather_dispatch_rows_fwd(
-    x_local: Float[Array, "Tlocal H"], sorted_indices: Int[Array, "TK"], topk: int
-) -> tuple[Float[Array, "TK H"], Int[Array, "TK"]]:
+def _gather_dispatch_rows_fwd[Tlocal: IntVar, H: IntVar, TK: IntVar](
+    x_local: jax.Array[[Tlocal, H]], sorted_indices: jax.Array[[TK]], topk: int
+) -> tuple[jax.Array[[TK, H]], jax.Array[[TK]]]:
+    # pyrefly: ignore[bad-return]  # functools.partial(jax.custom_vjp, ...) erases the generic signature.
     return _gather_dispatch_rows(x_local, sorted_indices, topk), sorted_indices
 
 
-def _gather_dispatch_rows_bwd(
-    topk: int, sorted_indices: Int[Array, "TK"], cotangent: Float[Array, "TK H"]
-) -> tuple[Float[Array, "Tlocal H"], None]:
+def _gather_dispatch_rows_bwd[Tlocal: IntVar, H: IntVar, TK: IntVar, K: IntVar](
+    topk: int, sorted_indices: jax.Array[[TK]], cotangent: jax.Array[[TK, H]]
+) -> tuple[jax.Array[[Tlocal, H]], None]:
     tokens_per_shard = sorted_indices.shape[0] // topk
-    positions = jnp.argsort(sorted_indices).reshape(tokens_per_shard, topk)
+    positions: jax.Array[[Tlocal, K]] = jnp.argsort(sorted_indices).reshape(tokens_per_shard, topk)
     if sonic_gather_sum_available():
         ones = jnp.ones((tokens_per_shard, topk), dtype=jnp.float32)
-        grad_x = sonic_gather_sum(cotangent, positions, ones)
+        # pyrefly: ignore[bad-assignment]  # jax.custom_vjp erases sonic_gather_sum's generic signature.
+        grad_x: jax.Array[[Tlocal, H]] = sonic_gather_sum(cotangent, positions, ones)
     else:
-        grad_x = jnp.sum(cotangent[positions], axis=1, dtype=jnp.float32)
+        # pyrefly: ignore[unsupported-operation]  # rank-2 fancy indexing falls back to rank 0.
+        grad_x: jax.Array[[Tlocal, H]] = jnp.sum(cotangent[positions], axis=1, dtype=jnp.float32)
     return grad_x.astype(cotangent.dtype), None
 
 
@@ -218,9 +224,9 @@ class _LoopLocalZeroSite(IntEnum):
     OUTPUT_PASSTHROUGH = auto()
 
 
-def _loop_local_zeros(
-    rows: int, hidden_dim: int, dtype, tie: Int[Array, "N"], site: _LoopLocalZeroSite
-) -> Float[Array, "rows H"]:
+def _loop_local_zeros[Rows: IntVar, H: IntVar](
+    rows: Int[Rows], hidden_dim: Int[H], dtype, tie: jax.Array[[int]], site: _LoopLocalZeroSite
+) -> jax.Array[[Rows, H]]:
     """Return an exact-zero output init for an in-place ``ragged_all_to_all``.
 
     A ``jnp.zeros`` init is a trace-time constant. XLA hoists it out of the layer loop and merges
@@ -239,12 +245,12 @@ def _loop_local_zeros(
 
 # JAX's transpose rule uses hoisted zero inits, so this wrapper reproduces it with loop-local buffers.
 @functools.partial(jax.custom_vjp, nondiff_argnums=(0,))
-def _ragged_a2a(
+def _ragged_a2a[R: IntVar, O: IntVar, H: IntVar](
     operand_rows: int,
-    operand: Float[Array, "R H"],
-    output_init: Float[Array, "O H"],
+    operand: jax.Array[[R, H]],
+    output_init: jax.Array[[O, H]],
     params: ExpertA2aParams,
-) -> Float[Array, "O H"]:
+) -> jax.Array[[O, H]]:
     """``ragged_all_to_all`` over the expert axis whose transpose builds its zero inits in the loop.
 
     ``operand_rows`` is ``operand.shape[0]``. The backward needs it and does not see the operand.
@@ -253,20 +259,21 @@ def _ragged_a2a(
     return jax.lax.ragged_all_to_all(operand, output_init, *params, axis_name="expert")
 
 
-def _ragged_a2a_fwd(
+def _ragged_a2a_fwd[R: IntVar, O: IntVar, H: IntVar](
     operand_rows: int,
-    operand: Float[Array, "R H"],
-    output_init: Float[Array, "O H"],
+    operand: jax.Array[[R, H]],
+    output_init: jax.Array[[O, H]],
     params: ExpertA2aParams,
-) -> tuple[Float[Array, "O H"], ExpertA2aParams]:
+) -> tuple[jax.Array[[O, H]], ExpertA2aParams]:
+    # pyrefly: ignore[bad-return]  # functools.partial(jax.custom_vjp, ...) erases the generic signature.
     return _ragged_a2a(operand_rows, operand, output_init, params), params
 
 
-def _ragged_a2a_bwd(
+def _ragged_a2a_bwd[R: IntVar, O: IntVar, H: IntVar](
     operand_rows: int,
     params: ExpertA2aParams,
-    cotangent: Float[Array, "O H"],
-) -> tuple[Float[Array, "R H"], Float[Array, "O H"], None]:
+    cotangent: jax.Array[[O, H]],
+) -> tuple[jax.Array[[R, H]], jax.Array[[O, H]], None]:
     hidden_dim = cotangent.shape[1]
     # Reverse the collective with exchanged offsets, matching JAX's transpose rule.
     exchanged_output_offsets = jax.lax.all_to_all(params.output_offsets, "expert", 0, 0, tiled=True)
@@ -303,19 +310,21 @@ def _ragged_a2a_bwd(
 _ragged_a2a.defvjp(_ragged_a2a_fwd, _ragged_a2a_bwd)
 
 
-def _moe_mlp_ep_ragged_a2a_local(
-    x_local: Float[Array, "Tlocal H"],
-    selected_experts_local: Int[Array, "Tlocal K"],
-    combine_weights_local: Float[Array, "Tlocal K"],
-    token_valid_local: Bool[Array, "Tlocal"],
-    moe_w13_local: Float[Array, "Elocal H I2"],
-    moe_w2_local: Float[Array, "Elocal I H"],
+def _moe_mlp_ep_ragged_a2a_local[
+    Tlocal: IntVar, K: IntVar, H: IntVar, Elocal: IntVar, I: IntVar, I2: IntVar, E: IntVar
+](
+    x_local: jax.Array[[Tlocal, H]],
+    selected_experts_local: jax.Array[[Tlocal, K]],
+    combine_weights_local: jax.Array[[Tlocal, K]],
+    token_valid_local: jax.Array[[Tlocal]],
+    moe_w13_local: jax.Array[[Elocal, H, I2]],
+    moe_w2_local: jax.Array[[Elocal, I, H]],
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
-    num_experts: int,
+    num_experts: Int[E],
     capacity_factor: float,
     token_sharding_axes: tuple[str, ...],
-) -> tuple[Float[Array, "Tlocal H"], CapacityDrops]:
+) -> tuple[jax.Array[[Tlocal, H]], CapacityDrops]:
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
         raise ValueError(
@@ -335,18 +344,23 @@ def _moe_mlp_ep_ragged_a2a_local(
     # collectives), so unchunked they pin [capacity, H] + [TK, H] per block window and the
     # hero step no longer fits next to NCCL's pools. Capacity splits evenly across chunks,
     # which also makes drop clipping per-chunk.
-    chunks = _EXPERT_CHUNKS if local_experts % _EXPERT_CHUNKS == 0 and _EXPERT_CHUNKS > 1 else 1
-    chunk_experts = local_experts // chunks
+    # Annotated `int`: pyrefly would infer `Literal[1] | Literal[2]` and make `chunk_experts` an
+    # `Elocal // 2 | Elocal` union.
+    chunks: int = _EXPERT_CHUNKS if local_experts % _EXPERT_CHUNKS == 0 and _EXPERT_CHUNKS > 1 else 1
+    chunk_experts: int = local_experts // chunks
     chunk_capacity = max(chunk_experts, int(math.ceil(physical_capacity / chunks)))
     hidden_dim = x_local.shape[1]
 
     with jax.named_scope("dispatch"):
         assignment_valid = _assignment_validity(token_valid_local, tokens=tokens_per_shard, topk=topk)
-        flat_selected = jnp.where(assignment_valid, selected_experts_local.reshape(-1), num_experts)  # [TK]
+        flat_selected: jax.Array[[Tlocal * K]] = jnp.where(
+            assignment_valid, selected_experts_local.reshape(-1), num_experts
+        )  # [TK]
         sorted_indices = jnp.argsort(flat_selected)  # [TK]
-        group_sizes = jnp.bincount(flat_selected, length=num_experts).astype(jnp.int32)  # [E]
+        group_sizes: jax.Array[[E]] = jnp.bincount(flat_selected, length=num_experts).astype(jnp.int32)  # [E]
         sorted_x = _gather_dispatch_rows(x_local, sorted_indices, topk)  # [TK, H]
-        all_group_sizes = jax.lax.all_gather(group_sizes, "expert")  # [S, E]
+        # `all_gather` drops the shape (the gathered size depends on the mesh axis); pin a fresh S dim.
+        all_group_sizes: jax.Array[[int, E]] = jax.lax.all_gather(group_sizes, "expert")  # [S, E]
         valid_assignments = jnp.sum(all_group_sizes, dtype=jnp.int32)
         logical_capacity = _scaled_capacity(
             valid_assignments,
@@ -369,7 +383,9 @@ def _moe_mlp_ep_ragged_a2a_local(
     accepted_local = jnp.zeros((), dtype=jnp.int32)
     for chunk_index in range(chunks):
         with jax.named_scope(f"moe_chunk_{chunk_index}"):
-            chunk_all_group_sizes = jnp.where(chunk_of_expert[None, :] == chunk_index, all_group_sizes, 0)  # [S, E]
+            chunk_all_group_sizes: jax.Array[[int, E]] = jnp.where(
+                chunk_of_expert[None, :] == chunk_index, all_group_sizes, 0
+            )  # [S, E]
             clipped_group_sizes = _clip_receiver_group_sizes(
                 chunk_all_group_sizes,
                 local_expert_size=local_experts,
@@ -400,7 +416,8 @@ def _moe_mlp_ep_ragged_a2a_local(
                 site=_LoopLocalZeroSite.DISPATCH_OUTPUT,
             )
             x_dispatch = _ragged_a2a(assignments_per_shard, chunk_source, dispatch_init, dispatch_params)  # [C, H]
-            active_all = jnp.sum(  # [Elocal]
+            # pyrefly: ignore[unsupported-operation]  # slice/scalar-array/slice indexing falls back to rank 0.
+            active_all: jax.Array[[int]] = jnp.sum(  # [Elocal]
                 clipped_group_sizes.reshape(ep_size, ep_size, local_experts)[:, shard_id, :], axis=0
             )
             active_group_sizes = active_all[
