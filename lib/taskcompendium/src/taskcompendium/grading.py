@@ -69,6 +69,7 @@ class SkippedVerifier(Verifier):
     reason: str
 
     def grade(self, attempt: GradingAttempt) -> GradeResult:
+        del attempt
         return GradeResult(Outcome.SKIPPED, None, self.reason)
 
 

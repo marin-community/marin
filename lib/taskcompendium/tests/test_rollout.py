@@ -60,6 +60,16 @@ class ReplayModel:
         return ModelTurn(self.messages[index], prompt, (20 + index,), (-0.5,), "stop")
 
 
+@dataclass
+class RecordingShellSimFactory:
+    machines: list = field(default_factory=list)
+
+    async def create(self, spec):
+        machine = await ShellSimMachineFactory().create(spec)
+        self.machines.append(machine)
+        return machine
+
+
 def arithmetic_task() -> TaskSpec:
     return TaskSpec(
         id="arithmetic",
@@ -198,13 +208,8 @@ async def test_failed_shell_grader_has_no_reward():
 
 
 async def test_agent_deadline_preserves_completed_tokens_and_closes_the_machine():
-    machines = []
-
-    class Factory:
-        async def create(self, spec):
-            machine = await ShellSimMachineFactory().create(spec)
-            machines.append(machine)
-            return machine
+    factory = RecordingShellSimFactory()
+    machines = factory.machines
 
     class StalledModel(ReplayModel):
         async def complete(self, request):
@@ -228,7 +233,7 @@ async def test_agent_deadline_preserves_completed_tokens_and_closes_the_machine(
     )
     task = file_task().model_copy(update={"agent_timeout": 1.0})
     with pytest.raises(RolloutInterrupted) as failure:
-        await engine(model, {EnvironmentKind.SHELLSIM: Factory()}).run(task)
+        await engine(model, {EnvironmentKind.SHELLSIM: factory}).run(task)
     assert isinstance(failure.value.__cause__, TimeoutError)
     assert failure.value.operation == RolloutOperation.MODEL
     rollout = failure.value.rollout
@@ -283,33 +288,23 @@ async def test_file_grader_preserves_priority_and_rejects_agent_scores(tmp_path,
 
 
 async def test_model_failure_releases_the_shellbox_machine():
-    machines = []
-
-    class Factory:
-        async def create(self, spec):
-            machine = await ShellSimMachineFactory().create(spec)
-            machines.append(machine)
-            return machine
+    factory = RecordingShellSimFactory()
+    machines = factory.machines
 
     class FailedModel:
         async def complete(self, request):
             raise ConnectionError("Inference endpoint unavailable")
 
     with pytest.raises(RolloutInterrupted) as failure:
-        await engine(FailedModel(), {EnvironmentKind.SHELLSIM: Factory()}).run(file_task())
+        await engine(FailedModel(), {EnvironmentKind.SHELLSIM: factory}).run(file_task())
     assert isinstance(failure.value.__cause__, ConnectionError)
     with pytest.raises(RuntimeError, match="closed"):
         await machines[0].run(Command(argv=("true",)))
 
 
 async def test_machine_setup_failure_releases_resources_and_retains_an_empty_record():
-    machines = []
-
-    class Factory:
-        async def create(self, spec):
-            machine = await ShellSimMachineFactory().create(spec)
-            machines.append(machine)
-            return machine
+    factory = RecordingShellSimFactory()
+    machines = factory.machines
 
     task = file_task().model_copy(
         update={
@@ -320,7 +315,7 @@ async def test_machine_setup_failure_releases_resources_and_retains_an_empty_rec
         }
     )
     with pytest.raises(RolloutInterrupted) as failure:
-        await engine(ReplayModel([]), {EnvironmentKind.SHELLSIM: Factory()}).run(task)
+        await engine(ReplayModel([]), {EnvironmentKind.SHELLSIM: factory}).run(task)
     assert failure.value.operation == RolloutOperation.START
     assert failure.value.rollout.task_id == task.id
     assert failure.value.rollout.grade.status == Outcome.UNAVAILABLE
@@ -493,15 +488,10 @@ async def test_separate_grader_receives_binary_artifacts_in_a_fresh_machine(tmp_
             {"role": "assistant", "content": "Completed."},
         ]
     )
-    machines = []
+    factory = RecordingShellSimFactory()
+    machines = factory.machines
 
-    class Factory:
-        async def create(self, spec):
-            machine = await ShellSimMachineFactory().create(spec)
-            machines.append(machine)
-            return machine
-
-    result = await engine(model, {EnvironmentKind.SHELLSIM: Factory()}).run(next(read_tasks(path)))
+    result = await engine(model, {EnvironmentKind.SHELLSIM: factory}).run(next(read_tasks(path)))
     assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, expected_reward)
     assert len(machines) == 2
     assert json.loads(model.requests[1].messages[-1]["content"])["exit_code"] == 0

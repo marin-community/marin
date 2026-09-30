@@ -6,8 +6,8 @@
 from collections.abc import Iterator, Mapping
 from typing import Any
 
-import fsspec
 import pyarrow.parquet as pq
+from rigging.filesystem.storage_path import StoragePath
 
 from taskcompendium.chat import chat_input
 from taskcompendium.environment import EnvironmentKind, EnvironmentSpec, ExternalVerifierSpec
@@ -46,7 +46,7 @@ def read_gym_tasks(
     environment_configs: Mapping[str, dict[str, Any]],
 ) -> Iterator[TaskSpec]:
     """Convert Parquet rows in bounded batches with explicit source provenance."""
-    with fsspec.open(path, "rb") as source:
+    with StoragePath(path).open("rb") as source:
         parquet = pq.ParquetFile(source)
         index = 0
         for batch in parquet.iter_batches(batch_size=PARQUET_BATCH_SIZE):

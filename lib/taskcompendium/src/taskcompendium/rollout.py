@@ -329,6 +329,7 @@ async def grade_rollout(
 
 
 async def _download_artifact(machine: Machine, artifact: VerifierArtifact, target: Path, timeout: float) -> bool:
+    """Download an artifact. Return false only when its missing-file policy permits omission."""
     kind = artifact.kind
     if kind == ArtifactKind.AUTO or artifact.missing == MissingArtifactPolicy.SKIP:
         result = await machine.run(
@@ -648,6 +649,40 @@ def _empty_rollout(task: TaskSpec) -> RolloutData:
     )
 
 
+async def _remove_stage_grader(stage: TaskStage, machine: Machine) -> None:
+    if stage.verifier.kind != VerifierKind.SHELL:
+        return
+    verifier = ShellVerifierSpec.model_validate_json(stage.verifier.parameters_json)
+    if verifier.environment is not None:
+        return
+    paths = [file.path for file in verifier.files]
+    if isinstance(verifier.reward, FileReward):
+        paths.extend(file.path for file in verifier.reward.files)
+    if not paths:
+        return
+    result = await machine.run(Command(("rm", "-f", *paths), user="0", timeout=verifier.timeout))
+    if result.exit_code != 0:
+        raise RuntimeError("Cannot remove private stage verifier files")
+
+
+def _combined_stage_grade(grades: list[GradeResult], strategy: StageRewardStrategy) -> GradeResult:
+    final = grades[-1]
+    if strategy == StageRewardStrategy.FINAL:
+        return final
+    valid = [(grade, grade.reward) for grade in grades if grade.status == Outcome.GRADED and grade.reward is not None]
+    if not valid:
+        return final
+    reward = sum(value for _, value in valid) / len(valid)
+    components = [grade.diagnostics.get("rewards", {"reward": value}) for grade, value in valid]
+    rewards = {key: sum(values.get(key, 0.0) for values in components) / len(valid) for key in set().union(*components)}
+    return GradeResult(
+        Outcome.GRADED,
+        reward,
+        passed=reward > 0,
+        diagnostics={**final.diagnostics, "rewards": rewards},
+    )
+
+
 class ShellboxRolloutEngine:
     """Generate exact-token rollouts with one isolated machine for each task."""
 
@@ -732,16 +767,7 @@ class ShellboxRolloutEngine:
                 interruption = error
             finally:
                 await session.close()
-                if stage.verifier.kind == VerifierKind.SHELL:
-                    verifier = ShellVerifierSpec.model_validate_json(stage.verifier.parameters_json)
-                    if verifier.environment is None:
-                        paths = [file.path for file in verifier.files]
-                        if isinstance(verifier.reward, FileReward):
-                            paths.extend(file.path for file in verifier.reward.files)
-                        if paths:
-                            result = await machine.run(Command(("rm", "-f", *paths), user="0", timeout=verifier.timeout))
-                            if result.exit_code != 0:
-                                raise RuntimeError("Cannot remove private stage verifier files")
+                await _remove_stage_grader(stage, machine)
             grade = record.grade
             grades.append(grade)
             stage_names.append(stage.name)
@@ -769,24 +795,7 @@ class ShellboxRolloutEngine:
             if interruption is not None:
                 break
         assert record is not None
-        final = grades[-1]
-        if specification.strategy == StageRewardStrategy.MEAN:
-            valid = [
-                (grade, grade.reward) for grade in grades if grade.status == Outcome.GRADED and grade.reward is not None
-            ]
-            if valid:
-                reward = sum(value for _, value in valid) / len(valid)
-                components = [grade.diagnostics.get("rewards", {"reward": value}) for grade, value in valid]
-                rewards = {
-                    key: sum(values.get(key, 0.0) for values in components) / len(valid)
-                    for key in set().union(*components)
-                }
-                final = GradeResult(
-                    Outcome.GRADED,
-                    reward,
-                    passed=reward > 0,
-                    diagnostics={**grades[-1].diagnostics, "rewards": rewards},
-                )
+        final = _combined_stage_grade(grades, specification.strategy)
         if last_graded_step is not None and final.status == Outcome.GRADED:
             steps = list(record.steps)
             last = steps[last_graded_step]

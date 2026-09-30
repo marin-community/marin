@@ -29,7 +29,8 @@ operations independently of model inference.
 `taskcompendium.parquet.write_tasks(path, tasks)` writes a Parquet file with one
 `task_spec` string column. Each value is a serialized `TaskSpec`.
 `read_tasks(path)` reads bounded batches and validates the schema and verifier.
-The path can use an installed fsspec filesystem.
+Paths use Rigging's guarded filesystem access, including transfer budgets and
+backend timeouts.
 
 The Parquet file contains private grading inputs. The model request contains the
 public conversation, submission instructions, and tool definitions.

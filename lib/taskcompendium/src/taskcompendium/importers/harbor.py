@@ -47,6 +47,8 @@ from taskcompendium.models import (
 
 ARTIFACTS_PATH = "/logs/artifacts"
 REWARD_PATH = "/logs/verifier"
+AGENT_LOG_PATH = "/logs/agent"
+GRADER_PATH = "/tests/test.sh"
 
 
 def _directory_files(directory: Path, target: str) -> tuple[EnvironmentFile, ...]:
@@ -93,12 +95,12 @@ def _environment(config: EnvironmentConfig, context: Path, files: tuple[Environm
         healthcheck=None if config.healthcheck is None else _healthcheck(config.healthcheck, None),
         setup=(
             EnvironmentCommand(
-                argv=("mkdir", "-p", ARTIFACTS_PATH, REWARD_PATH, "/logs/agent"),
+                argv=("mkdir", "-p", ARTIFACTS_PATH, REWARD_PATH, AGENT_LOG_PATH),
                 timeout=config.build_timeout_sec,
                 user="0",
             ),
             EnvironmentCommand(
-                argv=("chmod", "777", ARTIFACTS_PATH, REWARD_PATH, "/logs/agent"),
+                argv=("chmod", "777", ARTIFACTS_PATH, REWARD_PATH, AGENT_LOG_PATH),
                 timeout=config.build_timeout_sec,
                 user="0",
             ),
@@ -133,13 +135,13 @@ def _shell_verifier(config: TaskConfig, directory: Path, tests: Path) -> Verifie
         )
         # A separate Harbor verifier image owns /tests, including its entrypoint.
         private_files = ()
-    elif "/tests/test.sh" not in private_by_path:
+    elif GRADER_PATH not in private_by_path:
         raise ValueError("A shared Harbor verifier requires tests/test.sh")
     artifact_configs = [ArtifactConfig(source=item) if isinstance(item, str) else item for item in config.artifacts]
     if not any(artifact.source.rstrip("/") == ARTIFACTS_PATH for artifact in artifact_configs):
         artifact_configs.append(ArtifactConfig(source=ARTIFACTS_PATH))
     verifier = ShellVerifierSpec(
-        argv=("bash", "/tests/test.sh"),
+        argv=("bash", GRADER_PATH),
         files=private_files,
         timeout=config.verifier.timeout_sec,
         env=config.verifier.env,

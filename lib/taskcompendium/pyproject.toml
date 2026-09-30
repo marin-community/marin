@@ -7,7 +7,14 @@ name = "taskcompendium"
 version = "0.1.0"
 description = "Task schemas, private grading, and Shellbox rollouts"
 requires-python = ">=3.12"
-dependencies = ["pydantic>=2.9", "tasktrove-verify", "marin-shellbox", "harbor-config", "pyarrow>=17", "fsspec>=2024.6"]
+dependencies = [
+    "pydantic>=2.9",
+    "tasktrove-verify",
+    "marin-shellbox",
+    "harbor-config",
+    "pyarrow>=17",
+    "marin-rigging>=0.2.123.dev35633925924",
+]
 
 [project.optional-dependencies]
 harbor = ["harbor"]
@@ -16,6 +23,9 @@ harbor = ["harbor"]
 test = ["pytest>=8.3", "pytest-asyncio", "pytest-timeout", "marin-shellbox[shellsim]"]
 
 [tool.uv.workspace]
+
+[tool.uv]
+prerelease = "allow"
 
 [tool.uv.sources]
 harbor-config = { url = "https://github.com/marin-community/harbor/releases/download/harbor-config-952a005353273590631b8f970f4664a121710b32/harbor_config-0.1.0-py3-none-any.whl" }

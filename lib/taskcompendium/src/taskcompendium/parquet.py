@@ -6,9 +6,9 @@
 from collections.abc import Iterator
 from itertools import islice
 
-import fsspec
 import pyarrow as pa
 import pyarrow.parquet as pq
+from rigging.filesystem.storage_path import StoragePath
 
 from taskcompendium.models import TaskSpec
 from taskcompendium.verifier_registry import validate_task_verifiers
@@ -19,7 +19,7 @@ PARQUET_BATCH_SIZE = 1024
 
 def read_tasks(path: str) -> Iterator[TaskSpec]:
     """Read tasks in bounded batches and validate their private grader configuration."""
-    with fsspec.open(path, "rb") as source:
+    with StoragePath(path).open("rb") as source:
         parquet = pq.ParquetFile(source)
         if parquet.schema_arrow.names != TASK_SCHEMA.names:
             raise ValueError("Task Parquet requires exactly one task_spec column")
@@ -32,7 +32,7 @@ def read_tasks(path: str) -> Iterator[TaskSpec]:
 
 def write_tasks(path: str, tasks: Iterator[TaskSpec]) -> None:
     """Write tasks without a dataset-sized in-memory table."""
-    with fsspec.open(path, "wb") as destination, pq.ParquetWriter(destination, TASK_SCHEMA) as writer:
+    with StoragePath(path).open("wb") as destination, pq.ParquetWriter(destination, TASK_SCHEMA) as writer:
         while batch := list(islice(tasks, PARQUET_BATCH_SIZE)):
             for task in batch:
                 validate_task_verifiers(task)
