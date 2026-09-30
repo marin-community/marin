@@ -25,6 +25,7 @@ import json
 import pathlib
 import re
 import statistics
+import sys
 import time
 from collections import Counter
 
@@ -224,7 +225,9 @@ def main():
     big_shapes = (f"[{TOKENS_PER_SHARD * TOPK},{HIDDEN}]", f"[{chunk_capacity},{HIDDEN}]")
     small_shapes = (f"[{TOKENS_PER_SHARD * TOPK},1]", f"[{chunk_capacity},1]")
     inp = _inputs(mesh)
-    compiled = {name: _build(mesh, inp, *spec) for name, spec in VARIANTS.items()}
+    # Each executable holds its own NCCL symmetric buffers, so compile only the variants asked for.
+    selected = sys.argv[1:] or list(VARIANTS)
+    compiled = {name: _build(mesh, inp, *VARIANTS[name]) for name in selected}
     results = {}
     for name, (exe, args) in compiled.items():
         stats = exe.memory_analysis()
@@ -246,7 +249,7 @@ def main():
         json.dumps(dict(gradients_vs_control={n: _compare(results["control"], r) for n, r in results.items()})),
         flush=True,
     )
-    names = list(VARIANTS)
+    names = list(compiled)
     times = {name: [] for name in names}
     for rotation in range(len(names)):
         for name in names[rotation:] + names[:rotation]:
