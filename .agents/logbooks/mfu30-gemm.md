@@ -50,10 +50,11 @@ average power rose and the median SM clock fell. NVML clock-event reason during 
 
 Single-GPU microbenchmark `m30c-gemmbench-02` (GB200x4 spare node, GPU 0 active, bf16 N(0,1) operands,
 XLA's default cuBLAS path): burst (5 calls after 1 s idle) 1.65-1.81 PF/s; sustained (5 s loop, last
-half) 1.40-1.55 PF/s at 1190-1450 MHz and ~1170 W, reason SW power cap. Clock-normalized to 2062 MHz the
-large GEMMs run at 2.3-2.4 PF/s, i.e. >= 93% of peak at the clock they get. In situ the same kernels reach
-1.5-1.7 PF/s (real data, interleaved lower-power phases). The kernels are not the limit; the 1200 W cap
-sets the clock during GEMM phases.
+half) 1.40-1.55 PF/s at 1190-1450 MHz (mean of 50 ms NVML samples) and ~1170 W, reason SW power cap.
+Rate tracks the sampled clock: scaled to 2062 MHz it lands at or slightly above the zero-operand rate
+below, so the kernels lose nothing beyond the clock. In situ the same kernels reach 1.5-1.7 PF/s (real
+data, interleaved lower-power phases). The kernels are not the limit; the 1200 W cap sets the clock
+during GEMM phases.
 
 Operand data sets the power. Same kernels, sustained 4 s loops (PF/s, SM clock):
 
@@ -80,6 +81,32 @@ fused QKV forward 4,899 us vs Q + 2 x K/V 5,018 us (-2.4%) [3,270 vs 3,401, -3.9
 gate/up as one N=12288 GEMM 6,492 vs 4 x 1,661 = 6,644 us (-2.3%); both down projections as one K=6144
 GEMM 3,318 vs 2 x 1,671 = 3,342 us (-0.7%). Before concat/slice costs, QKV fusion is worth ~0.02 s/step
 and shared-MLP fusion ~0.03 s/step. H-C2 and H-C3 are below the campaign's detection threshold.
+
+Kernel selection is not a lever (sustained N(0,1), same 8 configs): `--xla_gpu_enable_cublaslt=false`
+matches the default within 2%; Triton only (`--xla_gpu_cublas_fallback=false`) is 8-20% slower;
+`--xla_gpu_autotune_level=0` picks kernels 2-100x slower. All four GPUs of the node running concurrently
+lose another ~6% (1.32-1.45 PF/s); a 30 s loop matches the 5 s one (1.494 PF/s), so the 5 s window is
+steady state.
+
+## M30C-004 Verdict and campaign implications (2026-09-30)
+
+H-C1: the ceiling is power, not the kernel. The nvjet kernels XLA picks run at 2.1-2.3 PF/s (83-92% of
+spec) when the operands draw little power. With realistic operands every hero GEMM holds the GPU at its
+1200 W cap and the SM clock drops to 1200-1600 MHz. In situ they average 1.5-1.7 PF/s, above the N(0,1)
+steady state because lower-power phases interleave. H-C2/H-C3 (fusion): -0.7% to -3.9% of the fused GEMMs'
+time, ~0.02-0.03 s/step each before concat/slice costs. H-C4 (contention): SM partitioning by the
+transport's register footprint, no GEMM-side lever. No rack job was submitted; nothing in this direction
+clears the 0.15 MFU acceptance bar. Remaining GEMM-side upside: <= 0.05 s/step.
+
+For the campaign:
+- The ~9 s/step of tensor-core kernels (cuBLAS 4.7, QuACK 3.5, FA4 0.8) cannot get faster by kernel
+  work under the fidelity rules. Only fewer FLOPs (remat) or lower energy per FLOP (fp8, excluded) move it.
+- The 30% target has to come from non-tensor time: exposed collectives, exposed host copies, idle, and
+  memory-bound passes. Memory-bound kernels are not clock-limited, so removing a pass saves its full time
+  and also lowers the energy near adjacent GEMMs.
+- Removing idle next to GEMM phases gives some time back to power: GEMMs slow by ~0.45 PF/s per unit of
+  tensor-busy fraction over the preceding 50 ms. A rough allowance is 10-15% of the removed time.
+- Mean power on the rank-0 node is ~1115 W at 28.4% MFU; 30% will push it toward the 1200 W cap.
 
 (`m30c-gemmbench-01` was invalid: an np.float64 scale promoted operand B to f32, so it timed TF32-class
 GEMMs at ~0.8 PF/s. Cancelled and fixed in `gemm_bench.py`.)
