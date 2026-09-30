@@ -26,10 +26,17 @@ from .pallas_gpu import (
     short_conv_shapes_supported,
 )
 from .reference import short_conv_reference
+from .triton_gpu import (
+    CHUNK as TRITON_CHUNK,
+    short_conv_triton_bwd_local,
+    short_conv_triton_fwd_local,
+    triton_short_conv_available,
+    triton_short_conv_shapes_supported,
+)
 
 logger = logging.getLogger(__name__)
 
-Implementation: TypeAlias = Literal["reference", "pallas_gpu"]
+Implementation: TypeAlias = Literal["reference", "pallas_gpu", "triton_gpu"]
 
 #: Mesh axes the activation batch is sharded over in the grug MoE models. The kernel is
 #: shard-local along every one of them. The sequence may be sharded over one further axis
@@ -133,6 +140,44 @@ def _short_conv_pallas_local_bwd(block_sizes, exact_reference_rounding, residual
 
 
 _short_conv_pallas_local.defvjp(_short_conv_pallas_local_fwd, _short_conv_pallas_local_bwd)
+
+
+@functools.partial(jax.custom_vjp, nondiff_argnums=(3,))
+def _short_conv_triton_local(
+    weight: Float[Array, "W C"],
+    x: Float[Array, "B S C"],
+    segment_ids: Int[Array, "B S"],
+    exact_reference_rounding: bool,
+) -> Float[Array, "B S C"]:
+    return short_conv_triton_fwd_local(weight, x, segment_ids, exact_reference_rounding=exact_reference_rounding)
+
+
+def _short_conv_triton_local_fwd(weight, x, segment_ids, exact_reference_rounding):
+    out = short_conv_triton_fwd_local(weight, x, segment_ids, exact_reference_rounding=exact_reference_rounding)
+    return out, (weight, x, segment_ids)
+
+
+def _short_conv_triton_local_bwd(exact_reference_rounding, residuals, dy):
+    weight, x, segment_ids = residuals
+    dx, dw_partials = short_conv_triton_bwd_local(
+        weight, x, segment_ids, dy, exact_reference_rounding=exact_reference_rounding
+    )
+    return jnp.sum(dw_partials, axis=0).astype(weight.dtype), dx, None
+
+
+_short_conv_triton_local.defvjp(_short_conv_triton_local_fwd, _short_conv_triton_local_bwd)
+
+
+def _triton_local_call(
+    weight: jax.Array,
+    x: jax.Array,
+    segment_ids: jax.Array | None,
+    *,
+    exact_reference_rounding: bool,
+) -> jax.Array:
+    if segment_ids is None:
+        segment_ids = jnp.zeros(x.shape[:2], jnp.int32)
+    return _short_conv_triton_local(weight, x, segment_ids, exact_reference_rounding)
 
 
 def _sequence_shard_axis(array: jax.Array, mesh) -> str | None:
@@ -272,6 +317,8 @@ def short_conv(
       segment_ids: ``[batch, seq_len]`` packed-document ids, or None for an unpacked batch.
       implementation: a single name (fail fast if unsupported) or an ordered sequence to
         try in turn. Defaults to the Pallas kernel on GPU, the reference elsewhere.
+        "triton_gpu" streams the sequence with the taps carried in registers (kernel size 4
+        only); it reads each tensor once where the Pallas kernel re-reads it per tap.
       block_sizes: GPU tile configuration.
       exact_reference_rounding: keep the reference's per-op bf16 rounding, which makes the
         forward and, with the sequence whole, ``dx`` bit-identical to ``short_conv_reference``.
@@ -324,6 +371,22 @@ def short_conv(
             if seq_axis is None:
                 return short_conv_reference(weight, x, segment_ids)
             return sharded(local_call=short_conv_reference, padded_local_seq=local_seq + halo)
+        if name == "triton_gpu":
+            triton_local_seq = _round_up(local_seq + halo, TRITON_CHUNK) if seq_axis else local_seq
+            if not triton_short_conv_available():
+                reason = "Triton backend unavailable or not running on a GPU"
+            else:
+                reason = triton_short_conv_shapes_supported(weight.shape, (x.shape[0], triton_local_seq, x.shape[2]))
+            if reason is not None:
+                if explicit_single:
+                    raise RuntimeError(f"short_conv implementation 'triton_gpu' is unusable: {reason}")
+                errors.append(f"triton_gpu: {reason}")
+                warnings.warn(f"short_conv falling back from 'triton_gpu' ({reason})", stacklevel=2)
+                continue
+            return sharded(
+                local_call=functools.partial(_triton_local_call, exact_reference_rounding=exact_reference_rounding),
+                padded_local_seq=triton_local_seq,
+            )
         if name != "pallas_gpu":
             raise ValueError(f"Unknown short_conv implementation {name!r}")
 
