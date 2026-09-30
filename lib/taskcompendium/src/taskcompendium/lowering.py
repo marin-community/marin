@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
@@ -23,12 +23,13 @@ from taskcompendium.submission import (
     ProviderState,
     SubmissionConvention,
     render_instruction,
-    submission_compatible,
+    submission_compatibility,
 )
 from taskcompendium.tool_provider import ProviderIdentity, tool_schema_sha256
 from taskcompendium.verifier_registry import validate_verifier
 
 ENVIRONMENT_DIR = "environment"
+SHA256_DIGEST_PATTERN = r"^[0-9a-f]{64}$"
 SPECIFICATION_FILE = "specification.json"
 SUBMISSION_CONVENTION_FILE = "submission_convention.json"
 ENVIRONMENT_CONFIG_FILE = "environment_config.json"
@@ -40,11 +41,11 @@ class ToolBinding(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     action_interface: str = Field(min_length=1)
-    seed_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    seed_sha256: str = Field(pattern=SHA256_DIGEST_PATTERN)
     provider_revision: str = Field(min_length=1)
     runtime: ContainerService
-    tools: tuple[str, ...] = Field(min_length=1)
-    tools_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    tools: tuple[Annotated[str, Field(min_length=1)], ...] = Field(min_length=1)
+    tools_sha256: str = Field(pattern=SHA256_DIGEST_PATTERN)
     tool_definitions: tuple[dict[str, Any], ...]
     state_available: bool
 
@@ -128,7 +129,7 @@ def compatible_lowerings(
     return tuple(
         LoweringCandidate(convention, environment_config)
         for convention in convention_library
-        if submission_compatible(specification, convention).compatible
+        if submission_compatibility(specification, convention).compatible
         for environment_config in environment_configs
         if is_compatible_lowering(specification, convention, environment_config)
     )
@@ -255,7 +256,7 @@ def lower_to_harbor(
 ) -> Path:
     """Write one custom-verifier task; launch agent selection remains separate."""
     validate_environment_config(specification, convention, environment_config)
-    compatibility = submission_compatible(specification, convention)
+    compatibility = submission_compatibility(specification, convention)
     if not compatibility.compatible:
         raise ValueError(f"Submission convention is incompatible: {'; '.join(compatibility.reasons)}")
     validate_submission_tools(specification, convention, environment_config)
