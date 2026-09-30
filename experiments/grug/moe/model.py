@@ -7,6 +7,8 @@ Architecture: QB-routed MoE with GatedNorm, XSA, sigmoid combine weights.
 No load-balancing loss; router z-loss only. All layers are MoE (no dense layers).
 """
 
+from __future__ import annotations
+
 import dataclasses
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -20,7 +22,7 @@ from haliax.jax_utils import named_call
 from jax import core, random
 from jax.sharding import NamedSharding, get_abstract_mesh, reshard
 from jax.sharding import PartitionSpec as P
-from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray
+from jaxtyping import PRNGKeyArray
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.grug.attention import (
     AttentionMask,
@@ -46,6 +48,7 @@ from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import Pembed_vocab, Plm_head, _mesh_axis_size, unshard
 from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
+from shape_extensions import Int, IntTuple, IntVar
 from transformers import PretrainedConfig as HfConfig
 
 _GATED_NORM_RANK = 128
@@ -157,7 +160,7 @@ class GrugModelConfig:
         return Axis("embed", self.hidden_dim)
 
     @property
-    def model_type(self) -> type["Transformer"]:
+    def model_type(self) -> type[Transformer]:
         return Transformer
 
     @property
@@ -170,14 +173,14 @@ class GrugModelConfig:
             )
         return self.hidden_dim // self.num_heads
 
-    def build(self, Vocab: Axis, *, key: PRNGKeyArray) -> "Transformer":
+    def build(self, Vocab: Axis, *, key: PRNGKeyArray) -> Transformer:
         cfg = self if Vocab.size == self.vocab_size else dataclasses.replace(self, vocab_size=Vocab.size)
         return Transformer.init(cfg, key=key)
 
     def hf_checkpoint_converter(
         self,
         ref_checkpoint: str | None = None,
-    ) -> HFCheckpointConverter["GrugModelConfig"]:  # type: ignore[type-var]
+    ) -> HFCheckpointConverter[GrugModelConfig]:  # type: ignore[type-var]
         return HFCheckpointConverter(
             self.__class__,
             reference_checkpoint=ref_checkpoint,
@@ -186,7 +189,7 @@ class GrugModelConfig:
         )
 
     @classmethod
-    def from_hf_config(cls, hf_config: HfConfig) -> "GrugModelConfig":
+    def from_hf_config(cls, hf_config: HfConfig) -> GrugModelConfig:
         rope = RotaryConfig(theta=float(_hf_config_attr(hf_config, ("rope_theta",), 10000.0)))
         return cls(
             vocab_size=int(_hf_config_attr(hf_config, ("vocab_size",))),
@@ -255,42 +258,56 @@ def rms_norm(x: jax.Array, eps: float = 1e-6) -> jax.Array:
     return (x * jax.lax.rsqrt(variance + eps)).astype(x.dtype)
 
 
-class CausalSelfAttention(eqx.Module):
-    w_q: Float[Array, "D NH"]
-    w_k: Float[Array, "D MH"]
-    w_v: Float[Array, "D MH"]
-    w_o: Float[Array, "NH D"]
-    attn_gate: Float[Array, "D N"]
+class CausalSelfAttention[D: IntVar, QProj: IntVar, KVProj: IntVar](eqx.Module):
+    """Generic over the model dim and the packed q/kv projection widths.
+
+    pyrefly cannot relate the per-head split in ``__call__`` to the packed dims, so it is annotated directly.
+    """
+
+    w_q: jax.Array[[D, QProj]]
+    w_k: jax.Array[[D, KVProj]]
+    w_v: jax.Array[[D, KVProj]]
+    w_o: jax.Array[[QProj, D]]
+    attn_gate: jax.Array[[D, int]]
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
-    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "CausalSelfAttention":
+    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> CausalSelfAttention[D, QProj, KVProj]:
         k_q, k_k, k_v, k_o = random.split(key, 4)
-        d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, cfg.inferred_head_dim
+        d: Int[D] = cfg.hidden_dim
+        n, m, h = cfg.num_heads, cfg.num_kv_heads, cfg.inferred_head_dim
+        q_proj: Int[QProj] = n * h
+        kv_proj: Int[KVProj] = m * h
         return CausalSelfAttention(
-            w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), P("data", "model")),
-            w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), P("data", "model")),
-            w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), P("data", "model")),
-            w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", "data")),
+            w_q=reshard(_init_weight(k_q, (d, q_proj), cfg.initializer_std), P("data", "model")),
+            w_k=reshard(_init_weight(k_k, (d, kv_proj), cfg.initializer_std), P("data", "model")),
+            w_v=reshard(_init_weight(k_v, (d, kv_proj), cfg.initializer_std), P("data", "model")),
+            w_o=reshard(_init_weight(k_o, (q_proj, d), cfg.initializer_std), P("model", "data")),
             attn_gate=reshard(jnp.zeros((d, n)), P(None, None)),
             cfg=cfg,
         )
 
     @named_call
-    def __call__(
+    def __call__[B: IntVar, S: IntVar, Hq: IntVar, Hkv: IntVar, Hd: IntVar](
         self,
-        x: Float[Array, "B S D"],
+        x: jax.Array[[B, S, D]],
         mask: AttentionMask | jax.Array,
         use_pko: bool = False,
         disable_rope: bool = False,
-    ) -> Float[Array, "B S D"]:
-        head_dim = self.cfg.inferred_head_dim
+    ) -> jax.Array[[B, S, D]]:
+        head_dim: Int[Hd] = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
         batch_spec = _batch_spec()
 
-        q = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_q), "... (n d) -> ... n d", d=head_dim)
-        k = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_k), "... (m d) -> ... m d", d=head_dim)
-        v = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_v), "... (m d) -> ... m d", d=head_dim)
+        q: jax.Array[[B, S, Hq, Hd]] = rearrange(
+            jnp.einsum("bsh,hd->bsd", x, self.w_q), "... (n d) -> ... n d", d=head_dim
+        )
+        k: jax.Array[[B, S, Hkv, Hd]] = rearrange(
+            jnp.einsum("bsh,hd->bsd", x, self.w_k), "... (m d) -> ... m d", d=head_dim
+        )
+        v: jax.Array[[B, S, Hkv, Hd]] = rearrange(
+            jnp.einsum("bsh,hd->bsd", x, self.w_v), "... (m d) -> ... m d", d=head_dim
+        )
 
         # Shift the second half of K's head_dim back by one position so the
         # query at position i sees K[i] on head_dim[:half] but K[i-1] on
@@ -333,7 +350,7 @@ class CausalSelfAttention(eqx.Module):
             q = jnp.concatenate([q_rot, q[..., half:]], axis=-1)
             k = jnp.concatenate([k_rot, k[..., half:]], axis=-1)
         q = q * self.cfg.qk_mult
-        attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
+        attn_out: jax.Array[[B, S, Hq, Hd]] = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
         # GPU XSA with GQA can give attn_out a backend-specific head sharding;
         # match v to that dynamic sharding before the per-head projection math.
@@ -345,27 +362,27 @@ class CausalSelfAttention(eqx.Module):
         attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
         # Headwise gating: sigmoid(x @ attn_gate) produces one scalar per head.
         gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
-        attn_out = gate * attn_out
+        gated_out = gate * attn_out
         # Merge heads into hidden dim while keeping model-axis sharding for w_o.
-        attn_out = jnp.reshape(
-            attn_out,
-            (*attn_out.shape[:-2], attn_out.shape[-2] * attn_out.shape[-1]),
+        attn_out_flat: jax.Array[[B, S, QProj]] = jnp.reshape(
+            gated_out,
+            (*gated_out.shape[:-2], gated_out.shape[-2] * gated_out.shape[-1]),
             out_sharding=P(_BATCH_AXES, None, "model"),
         )
-        return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec)
+        return jnp.einsum("bsh,hd->bsd", attn_out_flat, self.w_o, out_sharding=batch_spec)
 
 
-class RMSNorm(eqx.Module):
-    weight: jax.Array
+class RMSNorm[D: IntVar](eqx.Module):
+    weight: jax.Array[[D]]
     eps: float = eqx.field(static=True)
 
     @staticmethod
-    def init(dim: int, eps: float) -> "RMSNorm":
+    def init(dim: Int[D], eps: float) -> RMSNorm[D]:
         return RMSNorm(weight=jnp.ones((dim,), dtype=jnp.float32), eps=eps)
 
     @named_call
-    def __call__(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
-        weight = unshard(self.weight)
+    def __call__[Batch: IntTuple](self, x: jax.Array[[*Batch, D]]) -> jax.Array[[*Batch, D]]:
+        weight: jax.Array[[D]] = unshard(self.weight)
         dtype = x.dtype
         x = x.astype(jnp.float32)
         variance = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
@@ -373,15 +390,15 @@ class RMSNorm(eqx.Module):
         return (normed * weight).astype(dtype)
 
 
-class GatedNorm(eqx.Module):
+class GatedNorm[D: IntVar](eqx.Module):
     """Learnable per-dimension gating. Compensates for AdamH's bounded activation norms.
     See https://arxiv.org/abs/2601.22966v1"""
 
-    w_down: jax.Array
-    w_up: jax.Array
+    w_down: jax.Array[[D, int]]
+    w_up: jax.Array[[int, D]]
 
     @staticmethod
-    def init(hidden_dim: int, initializer_std: float, *, key: PRNGKeyArray) -> "GatedNorm":
+    def init(hidden_dim: Int[D], initializer_std: float, *, key: PRNGKeyArray) -> GatedNorm[D]:
         k_down, k_up = random.split(key)
         return GatedNorm(
             w_down=reshard(_init_weight(k_down, (hidden_dim, _GATED_NORM_RANK), initializer_std), P(None, None)),
@@ -389,7 +406,7 @@ class GatedNorm(eqx.Module):
         )
 
     @named_call
-    def __call__(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
+    def __call__[Batch: IntTuple](self, x: jax.Array[[*Batch, D]]) -> jax.Array[[*Batch, D]]:
         gate_hidden = jnp.einsum("...d,dr->...r", x, self.w_down)
         # TODO: silu activation here isn't explored, just cargo-culted from Qwen. Likely low-hanging ablation fruit
         # (e.g. compare no activation, relu, etc.).
@@ -398,13 +415,15 @@ class GatedNorm(eqx.Module):
         return x * gate.astype(x.dtype)
 
 
-class DenseMLP(eqx.Module):
-    w_gate: jax.Array
-    w_up: jax.Array
-    w_down: jax.Array
+class DenseMLP[D: IntVar, F: IntVar](eqx.Module):
+    w_gate: jax.Array[[D, F]]
+    w_up: jax.Array[[D, F]]
+    w_down: jax.Array[[F, D]]
 
     @staticmethod
-    def init(hidden_dim: int, intermediate_dim: int, initializer_std: float, *, key: PRNGKeyArray) -> "DenseMLP":
+    def init(
+        hidden_dim: Int[D], intermediate_dim: Int[F], initializer_std: float, *, key: PRNGKeyArray
+    ) -> DenseMLP[D, F]:
         k_gate, k_up, k_down = random.split(key, 3)
         return DenseMLP(
             w_gate=reshard(_init_weight(k_gate, (hidden_dim, intermediate_dim), initializer_std), P("data", "model")),
@@ -413,12 +432,12 @@ class DenseMLP(eqx.Module):
         )
 
     @named_call
-    def __call__(
+    def __call__[B: IntVar, S: IntVar](
         self,
-        x: Float[Array, "B S D"],
+        x: jax.Array[[B, S, D]],
         *,
         activation: MoeActivation = ActivationFunctionEnum.silu,
-    ) -> Float[Array, "B S D"]:
+    ) -> jax.Array[[B, S, D]]:
         if isinstance(activation, ActivationFunctionEnum):
             activation_fn = activation.to_jax_fn()
         else:
@@ -506,7 +525,7 @@ class MoEMLP(eqx.Module):
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
-    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "MoEMLP":
+    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> MoEMLP:
         k_router, k_expert = random.split(key, 2)
         mesh = get_abstract_mesh()
         expert_axis_size = _mesh_axis_size(mesh, "expert")
@@ -535,11 +554,11 @@ class MoEMLP(eqx.Module):
         )
 
     @named_call
-    def __call__(
+    def __call__[B: IntVar, S: IntVar, D: IntVar](
         self,
-        x: Float[Array, "B S D"],
-        token_valid: Bool[Array, "B S"],
-    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+        x: jax.Array[[B, S, D]],
+        token_valid: jax.Array[[B, S]],
+    ) -> tuple[jax.Array[[B, S, D]], dict[str, jax.Array]]:
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
         token_valid_flat = rearrange(token_valid, "b s -> (b s)")
@@ -568,7 +587,7 @@ class Block(eqx.Module):
     shared: DenseMLP | None
 
     @staticmethod
-    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Block":
+    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> Block:
         attn_key, mlp_key, shared_key, gn_attn_key, gn_mlp_key = random.split(key, 5)
         shared = None
         if cfg.shared_expert_intermediate_dim > 0:
@@ -586,13 +605,13 @@ class Block(eqx.Module):
         )
 
     @named_call
-    def __call__(
+    def __call__[B: IntVar, S: IntVar, D: IntVar](
         self,
-        x: Float[Array, "B S D"],
+        x: jax.Array[[B, S, D]],
         mask: AttentionMask | jax.Array,
         use_pko: bool = False,
         disable_rope: bool = False,
-    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+    ) -> tuple[jax.Array[[B, S, D]], dict[str, jax.Array]]:
         with jax.named_scope("attention"):
             attn_in = self.attn_gated_norm(self.rms_attn(x))
             x = x + self.attn(attn_in, mask, use_pko=use_pko, disable_rope=disable_rope)
@@ -623,7 +642,7 @@ class Transformer(eqx.Module):
         config: GrugModelConfig | None = None,
         *,
         key: PRNGKeyArray,
-    ) -> "Transformer":
+    ) -> Transformer:
         if isinstance(cfg_or_vocab, Axis):
             if config is None:
                 raise ValueError("config must be provided when initializing with a Vocab axis")
@@ -659,11 +678,11 @@ class Transformer(eqx.Module):
         return Axis("vocab", self.config.vocab_size)
 
     @named_call
-    def __call__(
+    def __call__[B: IntVar, S: IntVar, D: IntVar](
         self,
-        token_ids: Int[Array, "B S"],
+        token_ids: jax.Array[[B, S]],
         mask: AttentionMask | jax.Array | None = None,
-    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+    ) -> tuple[jax.Array[[B, S, D]], dict[str, jax.Array]]:
         if mask is None:
             mask = AttentionMask.causal()
 
@@ -708,11 +727,11 @@ class Transformer(eqx.Module):
         return hidden, router_metrics
 
     @named_call
-    def logits(
+    def logits[B: IntVar, S: IntVar, V: IntVar](
         self,
-        token_ids: Int[Array, "B S"],
+        token_ids: jax.Array[[B, S]],
         mask: AttentionMask | jax.Array | None = None,
-    ) -> Float[Array, "B S V"]:
+    ) -> jax.Array[[B, S, V]]:
         batch_spec = _batch_spec()
         hidden, _ = self(token_ids, mask=mask)
         return jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=batch_spec)
@@ -720,10 +739,10 @@ class Transformer(eqx.Module):
     def to_state_dict(self, prefix: str | None = None) -> dict[str, jax.Array]:
         return grugmoe_inference_state_dict(self, prefix=prefix)
 
-    def next_token_loss(
+    def next_token_loss[B: IntVar, S: IntVar](
         self,
-        token_ids: Int[Array, "B S"],
-        loss_weight: Float[Array, "B S"],
+        token_ids: jax.Array[[B, S]],
+        loss_weight: jax.Array[[B, S]],
         *,
         mask: AttentionMask | jax.Array | None = None,
         reduction: str = "mean",
@@ -762,7 +781,8 @@ class Transformer(eqx.Module):
         return loss
 
 
-def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> Float[Array, "..."]:
+def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> jax.Array:
+    # `shape` is an untyped tuple, so pyrefly cannot infer the result's rank.
     return std * random.truncated_normal(key, -3, 3, shape)
 
 

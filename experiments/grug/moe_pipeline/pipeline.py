@@ -22,12 +22,12 @@ from haliax.jax_utils import named_call
 from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from jax.tree_util import register_dataclass
-from jaxtyping import Array, Float, Int
 from levanter.data.text.examples import GrugLmExample
 from levanter.grug.attention import AttentionMask
 from levanter.grug.grug_moe import MOE_REMAT_SAVE_NAMES
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.pipeline import evenly_partition_layers
+from shape_extensions import IntVar
 
 from experiments.grug.moe_pipeline.model import (
     BATCH_AXES,
@@ -132,18 +132,18 @@ class GrugMoePipelineStage(eqx.Module):
     end_layer: int = eqx.field(static=True)
 
     @named_call
-    def embed(self, token_ids: Int[Array, "B S"]) -> Float[Array, "B S D"]:
+    def embed[B: IntVar, S: IntVar, D: IntVar](self, token_ids: jax.Array[[B, S]]) -> jax.Array[[B, S, D]]:
         if self.token_embed is None or self.embed_norm is None or self.embed_gated_norm is None:
             raise ValueError("only stage 0 owns the token embedding")
         hidden = self.token_embed.at[token_ids].get(out_sharding=P(BATCH_AXES))
         return self.embed_gated_norm(self.embed_norm(hidden))
 
     @named_call
-    def run_blocks(
+    def run_blocks[B: IntVar, S: IntVar, D: IntVar](
         self,
-        hidden: Float[Array, "B S D"],
+        hidden: jax.Array[[B, S, D]],
         mask: AttentionMask | jax.Array | None,
-    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+    ) -> tuple[jax.Array[[B, S, D]], dict[str, jax.Array]]:
         if mask is None:
             mask = AttentionMask.causal()
 
@@ -173,17 +173,17 @@ class GrugMoePipelineStage(eqx.Module):
         return hidden, _stack_router_metrics(block_metrics)
 
     @named_call
-    def finish(self, hidden: Float[Array, "B S D"]) -> Float[Array, "B S D"]:
+    def finish[B: IntVar, S: IntVar, D: IntVar](self, hidden: jax.Array[[B, S, D]]) -> jax.Array[[B, S, D]]:
         if self.final_norm is None or self.final_gated_norm is None:
             raise ValueError("only the final stage owns the final norms")
         return self.final_gated_norm(self.final_norm(hidden))
 
     @named_call
-    def cross_entropy_loss(
+    def cross_entropy_loss[B: IntVar, S: IntVar, D: IntVar](
         self,
-        hidden: Float[Array, "B S D"],
-        token_ids: Int[Array, "B S"],
-        loss_weight: Float[Array, "B S"],
+        hidden: jax.Array[[B, S, D]],
+        token_ids: jax.Array[[B, S]],
+        loss_weight: jax.Array[[B, S]],
         *,
         logsumexp_weight: float | None,
         reduction: str = "mean",

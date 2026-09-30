@@ -5,12 +5,14 @@
 across devices once after the layer scan, and summarize them for logging. All logging-only -- none
 of this feeds the training loss."""
 
+from __future__ import annotations
+
 import jax
 import jax.numpy as jnp
 import jax.scipy as jsp
 from jax.sharding import PartitionSpec as P
-from jaxtyping import Array, Float, Int
 from levanter.tracker.histogram import Histogram, SummaryStats
+from shape_extensions import IntVar
 
 try:
     from jax.shard_map import shard_map
@@ -18,10 +20,10 @@ except ModuleNotFoundError:
     from jax.experimental.shard_map import shard_map
 
 
-def local_routing_stats(
-    selected_experts: Int[Array, "T K"],
-    router_probs: Float[Array, "T E"],
-    router_logits: Float[Array, "T E"],
+def local_routing_stats[T: IntVar, K: IntVar, E: IntVar](
+    selected_experts: jax.Array[[T, K]],
+    router_probs: jax.Array[[T, E]],
+    router_logits: jax.Array[[T, E]],
     mesh: jax.sharding.AbstractMesh,
     *,
     num_experts: int,

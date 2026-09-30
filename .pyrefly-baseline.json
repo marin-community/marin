@@ -1,20 +1,6 @@
 {
   "errors": [
     {
-      "column": 28,
-      "path": "experiments/grug/base/model.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 25,
-      "path": "experiments/grug/base/model.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
-      "severity": "error"
-    },
-    {
       "column": 17,
       "path": "experiments/grug/base/train.py",
       "name": "bad-argument-type",
@@ -32,14 +18,14 @@
       "column": 71,
       "path": "experiments/grug/base/train.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `Transformer` is not assignable to parameter `params` with type `Array | Iterable[ArrayTree] | Mapping[Any, ArrayTree] | numpy.bool | ndarray | number | None` in function `optax._src.base.TransformUpdateFn.__call__`",
+      "concise_description": "Argument `Transformer[int, int, int, int, int]` is not assignable to parameter `params` with type `Array | Iterable[ArrayTree] | Mapping[Any, ArrayTree] | numpy.bool | ndarray | number | None` in function `optax._src.base.TransformUpdateFn.__call__`",
       "severity": "error"
     },
     {
       "column": 38,
       "path": "experiments/grug/base/train.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `Transformer` is not assignable to parameter `params` with type `Array | Iterable[ArrayTree] | Mapping[Any, ArrayTree] | numpy.bool | ndarray | number` in function `optax._src.update.apply_updates`",
+      "concise_description": "Argument `Transformer[int, int, int, int, int]` is not assignable to parameter `params` with type `Array | Iterable[ArrayTree] | Mapping[Any, ArrayTree] | numpy.bool | ndarray | number` in function `optax._src.update.apply_updates`",
       "severity": "error"
     },
     {
@@ -53,7 +39,7 @@
       "column": 20,
       "path": "experiments/grug/base/train.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `Array | Iterable[ArrayTree] | Mapping[Any, ArrayTree] | numpy.bool | ndarray | number` is not assignable to parameter `params` with type `Transformer` in function `GrugTrainState.__replace__`",
+      "concise_description": "Argument `Array | Iterable[ArrayTree] | Mapping[Any, ArrayTree] | numpy.bool | ndarray | number` is not assignable to parameter `params` with type `Transformer[int, int, int, int, int]` in function `GrugTrainState.__replace__`",
       "severity": "error"
     },
     {
@@ -148,34 +134,6 @@
       "severity": "error"
     },
     {
-      "column": 29,
-      "path": "experiments/grug/fast_track/grugmuon_stacked.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 25,
-      "path": "experiments/grug/fast_track/grugmuon_stacked.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 25,
-      "path": "experiments/grug/fast_track/grugmuon_stacked.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 17,
-      "path": "experiments/grug/fast_track/grugmuon_stacked.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
-      "severity": "error"
-    },
-    {
       "column": 12,
       "path": "experiments/grug/fast_track/launch.py",
       "name": "unsupported-operation",
@@ -201,41 +159,6 @@
       "path": "experiments/grug/fast_track/model.py",
       "name": "unsupported-operation",
       "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 28,
-      "path": "experiments/grug/fast_track/model.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 55,
-      "path": "experiments/grug/fast_track/model.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 44,
-      "path": "experiments/grug/fast_track/model.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: indices and arr must have the same number of dimensions",
-      "severity": "error"
-    },
-    {
-      "column": 24,
-      "path": "experiments/grug/fast_track/model.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 25,
-      "path": "experiments/grug/fast_track/model.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
       "severity": "error"
     },
     {
@@ -631,13 +554,6 @@
       "severity": "error"
     },
     {
-      "column": 28,
-      "path": "experiments/grug/moe/model.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
       "column": 36,
       "path": "experiments/grug/moe/model.py",
       "name": "unsupported-operation",
@@ -649,13 +565,6 @@
       "path": "experiments/grug/moe/model.py",
       "name": "bad-assignment",
       "concise_description": "`Array | None` is not assignable to dict value type `Array | SummaryStats`",
-      "severity": "error"
-    },
-    {
-      "column": 25,
-      "path": "experiments/grug/moe/model.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
       "severity": "error"
     },
     {
@@ -1971,14 +1880,14 @@
       "column": 20,
       "path": "experiments/grug/moe_pipeline/checkpoint.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `RMSNorm | None` is not assignable to parameter `embed_norm` with type `RMSNorm` in function `experiments.grug.moe_pipeline.model.Transformer.__init__`",
+      "concise_description": "Argument `RMSNorm[int] | None` is not assignable to parameter `embed_norm` with type `RMSNorm[int]` in function `experiments.grug.moe_pipeline.model.Transformer.__init__`",
       "severity": "error"
     },
     {
       "column": 26,
       "path": "experiments/grug/moe_pipeline/checkpoint.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `GatedNorm | None` is not assignable to parameter `embed_gated_norm` with type `GatedNorm` in function `experiments.grug.moe_pipeline.model.Transformer.__init__`",
+      "concise_description": "Argument `GatedNorm[int] | None` is not assignable to parameter `embed_gated_norm` with type `GatedNorm[int]` in function `experiments.grug.moe_pipeline.model.Transformer.__init__`",
       "severity": "error"
     },
     {
@@ -1992,14 +1901,14 @@
       "column": 20,
       "path": "experiments/grug/moe_pipeline/checkpoint.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `RMSNorm | None` is not assignable to parameter `final_norm` with type `RMSNorm` in function `experiments.grug.moe_pipeline.model.Transformer.__init__`",
+      "concise_description": "Argument `RMSNorm[int] | None` is not assignable to parameter `final_norm` with type `RMSNorm[int]` in function `experiments.grug.moe_pipeline.model.Transformer.__init__`",
       "severity": "error"
     },
     {
       "column": 26,
       "path": "experiments/grug/moe_pipeline/checkpoint.py",
       "name": "bad-argument-type",
-      "concise_description": "Argument `GatedNorm | None` is not assignable to parameter `final_gated_norm` with type `GatedNorm` in function `experiments.grug.moe_pipeline.model.Transformer.__init__`",
+      "concise_description": "Argument `GatedNorm[int] | None` is not assignable to parameter `final_gated_norm` with type `GatedNorm[int]` in function `experiments.grug.moe_pipeline.model.Transformer.__init__`",
       "severity": "error"
     },
     {
@@ -2178,13 +2087,6 @@
       "severity": "error"
     },
     {
-      "column": 25,
-      "path": "experiments/grug/moe_pipeline/model.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
-      "severity": "error"
-    },
-    {
       "column": 71,
       "path": "experiments/grug/moe_pipeline/model.py",
       "name": "unsupported-operation",
@@ -2203,13 +2105,6 @@
       "path": "experiments/grug/moe_pipeline/pipeline.py",
       "name": "missing-import",
       "concise_description": "Cannot find module `jaxpp.experimental`",
-      "severity": "error"
-    },
-    {
-      "column": 25,
-      "path": "experiments/grug/moe_pipeline/pipeline.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
       "severity": "error"
     },
     {

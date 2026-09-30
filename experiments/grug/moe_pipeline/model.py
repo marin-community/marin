@@ -7,6 +7,8 @@ Architecture: QB-routed MoE with GatedNorm, XSA, sigmoid combine weights.
 No load-balancing loss; router z-loss only. All layers are MoE (no dense layers).
 """
 
+from __future__ import annotations
+
 import dataclasses
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -18,7 +20,7 @@ from haliax import Axis
 from haliax.jax_utils import named_call
 from jax import random
 from jax.sharding import reshard
-from jaxtyping import Array, Float, Int, PRNGKeyArray
+from jaxtyping import PRNGKeyArray
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.grug.attention import (
     AttentionMask,
@@ -37,6 +39,7 @@ from levanter.grug.grug_moe import (
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import Pembed_vocab, Plm_head
 from levanter.tracker.histogram import SummaryStats
+from shape_extensions import IntVar
 from transformers import PretrainedConfig as HfConfig
 
 from experiments.grug.moe.model import _BATCH_AXES as BATCH_AXES  # noqa: F401
@@ -125,7 +128,7 @@ class GrugModelConfig:
         return Axis("embed", self.hidden_dim)
 
     @property
-    def model_type(self) -> type["Transformer"]:
+    def model_type(self) -> type[Transformer]:
         return Transformer
 
     @property
@@ -138,14 +141,14 @@ class GrugModelConfig:
             )
         return self.hidden_dim // self.num_heads
 
-    def build(self, Vocab: Axis, *, key: PRNGKeyArray) -> "Transformer":
+    def build(self, Vocab: Axis, *, key: PRNGKeyArray) -> Transformer:
         cfg = self if Vocab.size == self.vocab_size else dataclasses.replace(self, vocab_size=Vocab.size)
         return Transformer.init(cfg, key=key)
 
     def hf_checkpoint_converter(
         self,
         ref_checkpoint: str | None = None,
-    ) -> HFCheckpointConverter["GrugModelConfig"]:  # type: ignore[type-var]
+    ) -> HFCheckpointConverter[GrugModelConfig]:  # type: ignore[type-var]
         return HFCheckpointConverter(
             self.__class__,
             reference_checkpoint=ref_checkpoint,
@@ -154,7 +157,7 @@ class GrugModelConfig:
         )
 
     @classmethod
-    def from_hf_config(cls, hf_config: HfConfig) -> "GrugModelConfig":
+    def from_hf_config(cls, hf_config: HfConfig) -> GrugModelConfig:
         rope = RotaryConfig(theta=float(_hf_config_attr(hf_config, ("rope_theta",), 10000.0)))
         return cls(
             vocab_size=int(_hf_config_attr(hf_config, ("vocab_size",))),
@@ -233,7 +236,7 @@ class Transformer(eqx.Module):
         config: GrugModelConfig | None = None,
         *,
         key: PRNGKeyArray,
-    ) -> "Transformer":
+    ) -> Transformer:
         if isinstance(cfg_or_vocab, Axis):
             if config is None:
                 raise ValueError("config must be provided when initializing with a Vocab axis")
@@ -269,11 +272,11 @@ class Transformer(eqx.Module):
         return Axis("vocab", self.config.vocab_size)
 
     @named_call
-    def __call__(
+    def __call__[B: IntVar, S: IntVar, D: IntVar](
         self,
-        token_ids: Int[Array, "B S"],
+        token_ids: jax.Array[[B, S]],
         mask: AttentionMask | jax.Array | None = None,
-    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+    ) -> tuple[jax.Array[[B, S, D]], dict[str, jax.Array]]:
         if mask is None:
             mask = AttentionMask.causal()
 
@@ -319,11 +322,11 @@ class Transformer(eqx.Module):
         return hidden, router_metrics
 
     @named_call
-    def logits(
+    def logits[B: IntVar, S: IntVar, V: IntVar](
         self,
-        token_ids: Int[Array, "B S"],
+        token_ids: jax.Array[[B, S]],
         mask: AttentionMask | jax.Array | None = None,
-    ) -> Float[Array, "B S V"]:
+    ) -> jax.Array[[B, S, V]]:
         batch_spec = _batch_spec()
         hidden, _ = self(token_ids, mask=mask)
         return jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=batch_spec)
@@ -331,10 +334,10 @@ class Transformer(eqx.Module):
     def to_state_dict(self, prefix: str | None = None) -> dict[str, jax.Array]:
         return grugmoe_inference_state_dict(self, prefix=prefix)
 
-    def next_token_loss(
+    def next_token_loss[B: IntVar, S: IntVar](
         self,
-        token_ids: Int[Array, "B S"],
-        loss_weight: Float[Array, "B S"],
+        token_ids: jax.Array[[B, S]],
+        loss_weight: jax.Array[[B, S]],
         *,
         mask: AttentionMask | jax.Array | None = None,
         reduction: str = "mean",
