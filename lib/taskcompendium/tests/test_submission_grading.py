@@ -1,10 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Submission extraction and grading across the provider-state boundary."""
+"""Typed submissions and private grading without an execution provider."""
+
+from typing import Literal
 
 import pytest
-from pydantic import TypeAdapter
+from pydantic import PrivateAttr, TypeAdapter
 
 from taskcompendium.grading import Outcome, exact_answer, structured_exact
 from taskcompendium.models import (
@@ -15,30 +17,36 @@ from taskcompendium.models import (
     Source,
     TaskSpec,
     TextMessage,
+    VerifierKind,
+    VerifierSpec,
 )
-from taskcompendium.submission import GradingAttempt, JsonAnswer, ProviderState, SubmissionConvention
-from taskcompendium.verifier_registry import grade_answer
+from taskcompendium.submission import (
+    AnswerFormat,
+    GradingAttempt,
+    JsonAnswer,
+    PlainText,
+    StateSubmission,
+    SubmissionConvention,
+    TextSubmission,
+)
+from taskcompendium.verifier_registry import grade_answer, resolve_verifier
 
 
-class MutableState:
-    def __init__(self, state, second_state=None):
-        self.state = state
-        self.second_state = second_state
-        self.reads = 0
-
-    def canonical_state(self):
-        self.reads += 1
-        return self.state if self.reads == 1 else self.second_state
-
-
-def _task(expected):
+def _task(verifier, answer_type=AnswerType.TEXT):
     return TaskSpec(
-        id="structured-state",
-        context=ConversationInput(events=(TextMessage(role="user", content="Update the records."),)),
+        id="submission-grading",
+        context=ConversationInput(events=(TextMessage(role="user", content="Complete the task."),)),
         environment_requirements=EnvironmentRequirements(),
-        answer_type=AnswerType.STATE,
-        verifier=structured_exact(expected),
+        answer_type=answer_type,
+        verifier=verifier,
         source=Source(dataset="test", revision="1", row="0", importer_revision="1"),
+    )
+
+
+def _attempt(task, content):
+    return GradingAttempt(
+        conversation=ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=content))),
+        workspace=object(),
     )
 
 
@@ -48,55 +56,41 @@ def _task(expected):
         ({"nested": {"right": [1, True, "x"], "left": None}}, 1.0),
         ({"nested": {"right": [True, True, "x"], "left": None}}, 0.0),
         ({"nested": {"right": [True, 1, "x"], "left": None}}, 0.0),
+        ({"nested": {"right": [1, True, "x", 2], "left": None}}, 0.0),
     ],
 )
-async def test_provider_state_uses_generic_type_strict_structured_grading(actual, reward):
-    expected = {"nested": {"left": None, "right": [1, True, "x"]}}
-    environment = MutableState(actual, second_state={"unexpected": "second read"})
-    convention = TypeAdapter(SubmissionConvention).validate_json(
-        ProviderState(id="state", provider="workplace").model_dump_json()
-    )
-    task = _task(expected)
-    trace = ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content="Done.")))
-
-    result = await grade_answer(task, convention, GradingAttempt(trace, {"workplace": environment}, object()))
-
+async def test_structured_exact_compares_json_types_and_order(actual, reward):
+    task = _task(structured_exact({"nested": {"left": None, "right": [1, True, "x"]}}), AnswerType.STATE)
+    result = await resolve_verifier(task.verifier).grade(StateSubmission(actual), attempt=_attempt(task, "Done."))
     assert (result.status, result.reward) == (Outcome.GRADED, reward)
-    assert environment.reads == 1
 
 
-async def test_exact_answer_grades_string_provider_state():
-    task = _task("complete").model_copy(update={"verifier": exact_answer(("complete",))})
-    trace = ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content="Done.")))
+class ChangingText(PlainText):
+    answer_format: Literal[AnswerFormat.PLAIN] = AnswerFormat.PLAIN
+    _submitted: bool = PrivateAttr(default=False)
 
-    result = await grade_answer(
-        task,
-        ProviderState(id="state", provider="workplace"),
-        GradingAttempt(trace, {"workplace": MutableState("complete")}, object()),
-    )
+    async def extract(self, attempt: GradingAttempt) -> TextSubmission:
+        value = "different" if self._submitted else "first"
+        self._submitted = True
+        return TextSubmission(value)
 
+
+async def test_verifier_grades_the_single_extracted_submission():
+    task = _task(exact_answer(("first",)))
+    result = await grade_answer(task, ChangingText(id="changing"), _attempt(task, "Done."))
     assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
 
 
-async def test_provider_state_failure_does_not_score_zero():
-    task = _task({"files": []})
-    trace = ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content="Done.")))
-
-    with pytest.raises(KeyError, match="workplace"):
-        await grade_answer(task, ProviderState(id="state", provider="workplace"), GradingAttempt(trace, {}, object()))
-
-    with pytest.raises(TypeError, match="not JSON compatible"):
-        await grade_answer(
-            task,
-            ProviderState(id="state", provider="workplace"),
-            GradingAttempt(trace, {"workplace": MutableState({1: "bad key"})}, object()),
-        )
+async def test_serialized_json_convention_extracts_answer_and_scores_invalid_submission():
+    task = _task(exact_answer(("yes",)))
+    convention = TypeAdapter(SubmissionConvention).validate_json(JsonAnswer(id="json").model_dump_json())
+    valid = await grade_answer(task, convention, _attempt(task, '{"answer":"yes"}'))
+    invalid = await grade_answer(task, convention, _attempt(task, '{"answer":'))
+    assert (valid.status, valid.reward) == (Outcome.GRADED, 1.0)
+    assert (invalid.status, invalid.reward) == (Outcome.SUBMISSION_FAILURE, 0.0)
 
 
-async def test_invalid_agent_submission_uses_explicit_zero_reward_policy():
-    task = _task({}).model_copy(update={"answer_type": AnswerType.TEXT, "verifier": exact_answer(("yes",))})
-    trace = ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content='{"answer":')))
-
-    result = await grade_answer(task, JsonAnswer(id="json"), GradingAttempt(trace, {}, object()))
-
-    assert (result.status, result.reward) == (Outcome.SUBMISSION_FAILURE, 0.0)
+async def test_invalid_private_verifier_is_not_scored_as_agent_failure():
+    task = _task(VerifierSpec(kind=VerifierKind.EXACT_ANSWER, parameters_json="{}"))
+    with pytest.raises(ValueError, match="Invalid 'exact' verifier parameters"):
+        await grade_answer(task, JsonAnswer(id="json"), _attempt(task, '{"answer":'))

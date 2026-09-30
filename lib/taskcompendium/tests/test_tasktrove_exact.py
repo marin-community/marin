@@ -29,7 +29,6 @@ def _attempt(specification, response: str):
     return GradingAttempt(
         ConversationTrace(events=(*specification.context.events, TextMessage(role="assistant", content=response))),
         {},
-        object(),
     )
 
 
