@@ -206,6 +206,10 @@ def test_report_recovers_same_weight_modes_paired_intervals_and_drift(tmp_path, 
     assert report["comparisons"]["fp32_head_vs_generation"]["metrics"]["abs_p99"] == pytest.approx(0.03)
     assert report["paired_improvements"]["fp32_head"]["abs_p99"]["ci95"] == pytest.approx([0.07, 0.07])
     assert report["prefill_reference"] == "vllm.rescore@0"
+    # The second re-read differs from the first on each answer's last token, so half the tokens are stable.
+    assert report["vllm_stable_token_fraction"] == 0.5
+    assert report["comparisons"]["native_vs_reread_stable"]["metrics"]["tokens"] == 4
+    assert "router_replay_filtered" in report["paired_vs_reread_stable"]["reread_replay"]
     prefill = report["comparisons"]["native_vs_reread"]
     assert prefill["reference"] == "vllm.rescore@0"
     assert prefill["metrics"]["abs_mean"] == pytest.approx(0.1)

@@ -430,8 +430,37 @@ def _paired_intervals(
             ]
         )
         point = comparisons[baseline]["metrics"][metric] - comparisons[candidate]["metrics"][metric]
-        paired[metric] = {"baseline_minus_candidate": float(point), "ci95": np.percentile(draws, [2.5, 97.5]).tolist()}
+        # Draws without a scorable token are NaN and carry no information about the difference.
+        paired[metric] = {
+            "baseline_minus_candidate": float(point),
+            "ci95": np.nanpercentile(draws, [2.5, 97.5]).tolist(),
+        }
     return paired
+
+
+def _vllm_stable_masks(probes: list[ProbeRow], scores: dict[str, dict[str, ScoreRow]]) -> list[list[bool]] | None:
+    """Loss masks limited to tokens where every update-0 cache-off vLLM re-read is bit-identical.
+
+    vLLM's re-read is not reproducible on every token; these tokens isolate the trainer's own mismatch.
+    Returns ``None`` when the archive holds fewer than two re-reads.
+    """
+    names = [
+        name
+        for name in (
+            _rescore_scoring(0),
+            _vllm_scoring(RESCORE_AGAIN_SCORER, 0, CACHE_OFF),
+            _vllm_scoring(FROZEN_RESCORE_SCORER, 0, CACHE_OFF),
+        )
+        if name in scores
+    ]
+    if len(names) < 2:
+        return None
+    masks = []
+    for row in probes:
+        values = [np.asarray(scores[name][row.sample_id].logprobs, dtype=np.float32) for name in names]
+        stable = np.all([value == values[0] for value in values[1:]], axis=0)
+        masks.append((np.asarray(row.loss_mask, dtype=np.bool_) & stable).tolist())
+    return masks
 
 
 def _reference_distribution(reference: str, prefill: str | None) -> str:
@@ -477,6 +506,8 @@ def analyze_archive(uri: str, *, bootstrap_draws: int = BOOTSTRAP_DRAWS) -> dict
         "comparisons": {},
         "paired_improvements": {},
         "paired_vs_reread": {},
+        "paired_vs_reread_stable": {},
+        "vllm_stable_token_fraction": None,
         "route_diagnostics": {},
         "route_diagnostics_vs_reread": {},
         "reread_route_agreement": {},
@@ -527,6 +558,38 @@ def analyze_archive(uri: str, *, bootstrap_draws: int = BOOTSTRAP_DRAWS) -> dict
             }
         sampled_metrics[label] = bootstrap.draws
 
+    stable_masks = _vllm_stable_masks(probes, scores) if prefill is not None else None
+    if stable_masks is not None and any(any(mask) for mask in stable_masks):
+        scored = sum(sum(row.loss_mask) for row in probes)
+        report["vllm_stable_token_fraction"] = sum(sum(mask) for mask in stable_masks) / scored
+        for mode in _update_zero_trainer_modes(scores):
+            target_name = _trainer_scoring(0, mode)
+            rows = ComparisonRows(
+                target=[scores[target_name][row.sample_id].logprobs for row in probes],
+                reference=[scores[prefill][row.sample_id].logprobs for row in probes],
+                masks=stable_masks,
+            )
+            point = rows.metrics(list(range(len(probes))))
+
+            # A resample can draw only prompts with no stable token; it contributes no interval draw.
+            def calculate(indices, *, rows=rows, keys=tuple(point)):
+                if not any(any(rows.masks[index]) for index in indices):
+                    return dict.fromkeys(keys, math.nan)
+                return rows.metrics(indices)
+
+            bootstrap = prompt_cluster_bootstrap(
+                prompt_ids, calculate, seed=manifest.bootstrap_seed, draws=bootstrap_draws
+            )
+            label = f"{mode}_vs_reread_stable"
+            report["comparisons"][label] = {
+                "target": target_name,
+                "reference": prefill,
+                "metrics": bootstrap.point,
+                "ci95": bootstrap.intervals,
+                "reference_distribution": "prefill_re_read_vllm_stable_tokens",
+            }
+            sampled_metrics[label] = bootstrap.draws
+
     baseline = "implementation_mismatch"
     for mode in _trainer_modes(scores):
         variant = f"{mode}_vs_generation"
@@ -552,6 +615,17 @@ def analyze_archive(uri: str, *, bootstrap_draws: int = BOOTSTRAP_DRAWS) -> dict
                 "regresses": any(item["ci95"][1] < 0 for item in paired.values()),
             }
         report["paired_vs_reread"][kept_mode] = candidates
+    kept_stable = f"{kept_mode}_vs_reread_stable"
+    if kept_stable in sampled_metrics:
+        candidates = {}
+        for mode in _update_zero_trainer_modes(scores):
+            if mode == kept_mode:
+                continue
+            paired = _paired_intervals(
+                report["comparisons"], sampled_metrics, kept_stable, f"{mode}_vs_reread_stable", KEEP_RULE_METRICS
+            )
+            candidates[mode] = {"metrics": paired, "regresses": any(item["ci95"][1] < 0 for item in paired.values())}
+        report["paired_vs_reread_stable"][kept_mode] = candidates
 
     if "implementation_mismatch" in sampled_metrics:
         baseline_stats = report["comparisons"]["implementation_mismatch"]["metrics"]
@@ -834,15 +908,24 @@ def render_markdown(report: dict) -> str:
                 f"{_display_interval(effect['ci95'])} |"
             )
         lines.append("")
-    for kept, candidates in report["paired_vs_reread"].items():
+    paired_tables = [(kept, candidates, "") for kept, candidates in report["paired_vs_reread"].items()] + [
+        (
+            kept,
+            candidates,
+            f" Only tokens where every vLLM re-read is bit-identical count "
+            f"({_display_metric(report['vllm_stable_token_fraction'], percent_digits=1)} of scored tokens).",
+        )
+        for kept, candidates in report["paired_vs_reread_stable"].items()
+    ]
+    for kept, candidates, scope in paired_tables:
         headers = " | ".join(f"{METRIC_TITLES[metric]} | 95% paired CI" for metric in KEEP_RULE_METRICS)
         lines.extend(
             [
-                f"## Prefill metric: `{kept}` minus candidate",
+                f"## Prefill metric{' on vLLM-stable tokens' if scope else ''}: `{kept}` minus candidate",
                 "",
                 f"Both sides are scored against `{report['prefill_reference']}`. "
                 f"Positive means the candidate is closer to the re-read than `{kept}`. "
-                "A candidate regresses when any interval lies entirely below zero.",
+                f"A candidate regresses when any interval lies entirely below zero.{scope}",
                 "",
                 f"| Candidate | {headers} | regresses |",
                 "|---|" + "---:|---:|" * len(KEEP_RULE_METRICS) + "---|",
