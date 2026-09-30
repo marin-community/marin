@@ -30,7 +30,7 @@ Launch one arm from the targeted-SFT workspace with:
 
 ```bash
 cd /Users/benfeuer/Documents/experiments/active/targeted-sft
-RL_SWEEP_ARM=loop1_length02 bash configs/launch_glm53_rlvr1_marin.sh
+RL_VERSION=2026.09.29.19 RL_SWEEP_ARM=loop1_length02 bash configs/launch_glm53_rlvr1_marin.sh
 ```
 
 Replace `loop1_length02` with any arm name in the table. Each arm writes to
