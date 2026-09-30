@@ -135,6 +135,7 @@ def tiny_grug_recipe(
     settings: ProbeSettings,
     *,
     warmup: bool,
+    trainer_modes: tuple[str, ...] = REPLAY_MODES,
 ) -> str:
     """Render one role-independent training recipe for the selected arm."""
     config = {
@@ -178,7 +179,7 @@ def tiny_grug_recipe(
         },
         "data": {"kind": "parquet", "train_data": [], "val_data": []},
     }
-    probe = probe_block(settings)
+    probe = probe_block(settings, trainer_modes=trainer_modes)
     probe["trainer"]["mismatch_probe"]["enabled"] = not warmup
     config = merge({}, config, probe)
     return yaml.safe_dump(config, sort_keys=False)
@@ -192,6 +193,7 @@ def build_arms(
     data_uri: str,
     fixture_version: str,
     warmup: bool,
+    trainer_modes: tuple[str, ...] = REPLAY_MODES,
 ) -> dict[str, ArtifactStep[SkyRLRun]]:
     """Build separate training artifacts for arms sharing model and data inputs."""
     model = ArtifactStep.adopt(
@@ -242,6 +244,7 @@ def build_arms(
                     arm,
                     settings,
                     warmup=warmup,
+                    trainer_modes=trainer_modes,
                 ),
                 runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
                 model=ArtifactHfModel(
@@ -276,6 +279,7 @@ def build_arms(
 @click.option("--score-after-update", "updates", multiple=True, type=int, default=(0, 1, 2))
 @click.option("--keep-fraction", type=float, default=0.5, show_default=True)
 @click.option("--rescore-prefix-cache", "cache_mode", type=click.Choice(("off", "on", "both")), default="off")
+@click.option("--trainer-mode", "trainer_modes", multiple=True, default=REPLAY_MODES, show_default=True)
 @rl_build_options
 def main(
     arm_names: tuple[str, ...],
@@ -291,6 +295,7 @@ def main(
     updates: tuple[int, ...],
     keep_fraction: float,
     cache_mode: str,
+    trainer_modes: tuple[str, ...],
 ) -> dict[str, ArtifactStep[SkyRLRun]]:
     settings = ProbeSettings(
         seed=seed,
@@ -309,6 +314,7 @@ def main(
         data_uri=data_uri,
         fixture_version=fixture_version,
         warmup=warmup,
+        trainer_modes=trainer_modes,
     )
 
 
