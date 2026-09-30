@@ -34,6 +34,7 @@ _PUBLIC_SPEC_FIELDS = frozenset(
         "answer_type",
         "verifier",
         "source",
+        "tags",
         "schema_version",
     }
 )
@@ -74,7 +75,6 @@ def public_task(
     convention: SubmissionConvention,
     environment: HarborEnvironmentConfig,
     *,
-    tags: tuple[str, ...],
     source_category: str | None = None,
 ) -> PublicTask:
     """Select only reviewed public fields from a private task and its binding."""
@@ -88,7 +88,11 @@ def public_task(
         raise ValueError("Submission convention cannot carry the task answer type")
     if set(environment.tool_providers) != set(specification.tool_providers):
         raise ValueError("Selected tool bindings do not match task requirements")
-    if any(not tag for tag in tags):
+    for name, requirement in specification.tool_providers.items():
+        binding = environment.tool_providers[name]
+        if binding.action_interface != requirement.action_interface or binding.seed_sha256 != requirement.seed_sha256:
+            raise ValueError("Selected tool binding interface or seed differs from task requirements")
+    if any(not tag for tag in specification.tags):
         raise ValueError("Source tags must be nonempty")
     return PublicTask(
         id=specification.id,
@@ -99,6 +103,6 @@ def public_task(
         answer_type=specification.answer_type,
         source=specification.source,
         submission_instruction=submission_instruction(convention),
-        tags=tags,
+        tags=specification.tags,
         source_category=source_category,
     )

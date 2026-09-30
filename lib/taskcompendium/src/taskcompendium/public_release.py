@@ -53,7 +53,6 @@ def _write_workplace_split(source_path: Path, destination: Path, split: Workplac
                 task.specification,
                 task.convention,
                 task.environment_config,
-                tags=(),  # The Workplace source has categories but no tags field.
                 source_category=category,
             )
             stream.write(record.model_dump_json() + "\n")

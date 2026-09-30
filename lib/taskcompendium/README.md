@@ -198,6 +198,43 @@ uv run --project lib/taskcompendium --extra workplace \
   --builder-revision <full-marin-commit-sha>
 ```
 
+### Mixed public candidate
+
+`taskcompendium.mixed_release` assembles accepted public cohorts into separate
+`workplace` and `tasktrove_clean` Hugging Face configurations. Its JSON input is
+an array of `CohortInput` records. Each record pins the input JSONL digest and
+accepted row count, source assets, source-data revision, TaskSpec schema and
+builder revisions, license attribution and source-card revision, change notice,
+and a Harbor sample with a linked trial record. The manifest records source
+row counts separately from accepted and exported rows. Every included cohort
+must have source proof, rights, and Harbor evidence; unsupported or held cohorts
+are excluded from the input array.
+
+Workplace inputs use `record_format="public_task"` and the two JSONL files
+produced above. The builder derives each row's digest from its split-local
+`Source.row` value. TaskTrove Clean inputs use
+`record_format="accepted_public_record"`: each JSONL row wraps a validated
+`PublicTask` in `{"task": ..., "source_proof": ...}`. The proof records the
+source row ID, the input file and immutable object pin, and the task archive's
+path and SHA256. A trusted caller must join the regional acceptance ledger to
+the public candidate rows by unique imported task ID to produce these wrappers.
+The private ledger and full TaskSpecs are not release inputs. A missing
+`record_version` on a regional public candidate is normalized to version 1 by
+`PublicTask`; extra fields, including verifier fields, fail validation.
+
+```bash
+uv run --project lib/taskcompendium --extra workplace \
+  python -m taskcompendium.mixed_release \
+  --cohorts /tmp/accepted-public-cohorts.json \
+  --output /tmp/taskcompendium-mixed-candidate \
+  --builder-revision <full-marin-commit-sha>
+```
+
+The local assembly writes `data/<config>/<cohort>.jsonl`, `manifest.json`, and
+`README.md`. It never uploads to the Hub and sets `publication_ready=false`.
+The release is held until every selected source has accepted row IDs, pinned
+source and archive proof, verified rights, and a representative Harbor trial.
+
 The candidate is not publication-ready. The mixed release requires measured TaskTrove conversions, per-source license and tag preservation, and a Harbor sample from every included source. Keep source files and output outside the Marin checkout. No Hugging Face repository is created by this command.
 
 Run the package tests from the repository root:
