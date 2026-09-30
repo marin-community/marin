@@ -8,6 +8,7 @@ import importlib
 import inspect
 import json
 import shutil
+import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
@@ -17,12 +18,12 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 from taskcompendium.models import SCHEMA_VERSION, AnswerType, TaskSpec
+from taskcompendium.path_validation import validate_relative_file_paths
 from taskcompendium.provider_sources import (
     PROVIDER_SOURCES_DIR,
     import_staged_provider,
     parse_git_provider,
     stage_git_provider,
-    validate_git_provider_checkout,
 )
 from taskcompendium.submission import (
     ANSWER_CALL_NAME,
@@ -87,8 +88,9 @@ class HarborEnvironmentConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_bindings(self) -> "HarborEnvironmentConfig":
-        if any(not name for name in self.tool_providers):
-            raise ValueError("Tool provider names must be nonempty")
+        validate_relative_file_paths(self.tool_providers)
+        if any("/" in name for name in self.tool_providers):
+            raise ValueError("Tool provider names must be single path components")
         tool_names = [name for binding in self.tool_providers.values() for name in binding.tools]
         if len(set(tool_names)) != len(tool_names):
             raise ValueError("Tool names must be unique across providers")
@@ -216,7 +218,7 @@ def select_lowerings(
     raise ValueError(f"Unknown selection policy: {policy}")
 
 
-def _required_state_provider(
+def _validate_provider_requirements(
     specification: TaskSpec, convention: SubmissionConvention, environment_config: HarborEnvironmentConfig
 ) -> str | None:
     """Validate host-chat requirements and locate a provider-state submission."""
@@ -253,17 +255,19 @@ def validate_environment_candidate(
     environment_config: HarborEnvironmentConfig,
     trusted_provider_sources: dict[str, Path] | None,
 ) -> None:
-    """Check a candidate's requirements and local Git checkouts before export."""
-    state_provider = _required_state_provider(specification, convention, environment_config)
-    for name, binding in environment_config.tool_providers.items():
-        if parse_git_provider(binding.provider) is not None:
+    """Check requirements and pinned provider implementations before selection."""
+    _validate_provider_requirements(specification, convention, environment_config)
+    with tempfile.TemporaryDirectory(prefix="taskcompendium-candidate-") as temporary:
+        sources: dict[str, Path] = {}
+        for name, binding in environment_config.tool_providers.items():
+            if parse_git_provider(binding.provider) is None:
+                continue
             if trusted_provider_sources is None or name not in trusted_provider_sources:
                 raise ValueError(f"Git provider requires a trusted source checkout: {name}")
-            validate_git_provider_checkout(binding.provider, trusted_provider_sources[name])
-            continue
-        validate_provider_surface(binding)
-        if name == state_provider and not callable(getattr(provider_class(binding), "canonical_state", None)):
-            raise ValueError("State task requires canonical provider state")
+            source = Path(temporary) / name
+            stage_git_provider(binding.provider, trusted_provider_sources[name], source)
+            sources[name] = source
+        validate_environment_config(specification, convention, environment_config, provider_sources=sources)
 
 
 def validate_environment_config(
@@ -274,7 +278,7 @@ def validate_environment_config(
     provider_sources: dict[str, Path] | None = None,
 ) -> None:
     """Check all selected provider implementations against their pinned surfaces."""
-    state_provider = _required_state_provider(specification, convention, environment_config)
+    state_provider = _validate_provider_requirements(specification, convention, environment_config)
     for name, binding in environment_config.tool_providers.items():
         source = provider_sources[name] if provider_sources is not None and name in provider_sources else None
         validate_provider_surface(binding, source)
@@ -288,6 +292,8 @@ def validate_submission_tools(
     environment_config: HarborEnvironmentConfig,
 ) -> None:
     """Keep terminal submission functions distinct from executable provider tools."""
+    if environment_config.tool_providers and specification.final_tools.tool_choice == "none":
+        raise ValueError("Provider tools conflict with final tool_choice=none")
     terminal_names = {function.name for function in specification.final_tools.functions}
     if convention.answer_format == AnswerFormat.ANSWER_CALL:
         terminal_names.add(ANSWER_CALL_NAME)
