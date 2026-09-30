@@ -308,15 +308,13 @@ def _convert_metrics_to_wandb_loggable(metrics: typing.Mapping[str, Any]) -> dic
     (building ``wandb.Histogram`` as needed) and passes every other value through
     :func:`_convert_value_to_loggable_rec`.
 
-    Every ``jax.Array`` leaf starts its device-to-host copy before any value is
-    read, so each read waits on a transfer already in flight. Without this, each
-    scalar pays a full blocking copy, which dominates logging time for payloads
-    with thousands of per-layer values.
-
     Pure conversion: no wandb run state is touched. Safe to call on the producer
     thread before handing off to a :class:`BackgroundTracker` worker, and
     idempotent when called a second time on an already-flat dict.
     """
+    # Start every device-to-host copy before reading any value. Otherwise each scalar
+    # pays a full blocking copy, which dominates logging time for payloads with
+    # thousands of per-layer values.
     for leaf in jax.tree.leaves(dict(metrics)):
         if isinstance(leaf, jax.Array):
             leaf.copy_to_host_async()
@@ -568,7 +566,7 @@ class WandbConfig(TrackerConfig):
             ),
             # Only the primary process sends anything to W&B. A suppressed tracker still
             # materializes log payloads on the calling thread, keeping device work
-            # symmetric across hosts (#5415), and has no I/O to move to a worker. A
+            # symmetric across hosts, and has no I/O to move to a worker. A
             # background wrapper would also make non-primary hosts stage (copy) large
             # profile artifacts they discard.
             enabled=self.background and is_primary_process,
