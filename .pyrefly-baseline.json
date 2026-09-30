@@ -8842,41 +8842,6 @@
       "severity": "error"
     },
     {
-      "column": 28,
-      "path": "lib/marin/src/marin/testing/inference/snowball_checkpoint.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 29,
-      "path": "lib/marin/src/marin/testing/moe/ragged_ep.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 32,
-      "path": "lib/marin/src/marin/testing/moe/ragged_ep.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: einsum: operand 0 expected rank 3, got 0",
-      "severity": "error"
-    },
-    {
-      "column": 40,
-      "path": "lib/marin/src/marin/testing/moe/ragged_ep.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: indices and arr must have the same number of dimensions",
-      "severity": "error"
-    },
-    {
-      "column": 22,
-      "path": "lib/marin/src/marin/testing/moe/ragged_ep.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
       "column": 69,
       "path": "lib/marin/src/marin/training/training.py",
       "name": "bad-argument-type",

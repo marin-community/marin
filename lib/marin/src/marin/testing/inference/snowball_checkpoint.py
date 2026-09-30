@@ -3,6 +3,8 @@
 
 """Checkpoint loading for the vendored Snowball training model."""
 
+from __future__ import annotations
+
 import json
 from typing import Any
 
@@ -12,6 +14,7 @@ import jax
 import jax.numpy as jnp
 from levanter.checkpoint import load_checkpoint as load_levanter_checkpoint
 from rigging.filesystem.storage_path import StoragePath
+from shape_extensions import IntVar
 
 # The vendored experiment path is the immutable training source for Snowball.
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig as VendoredGrugModelConfig
@@ -27,10 +30,10 @@ def decode_vendored_config(executor_info: dict[str, Any]) -> VendoredGrugModelCo
     return draccus.decode(VendoredGrugModelConfig, executor_info["config"]["model"])
 
 
-def load_checkpoint(
+def load_checkpoint[L: IntVar, E: IntVar](
     config: VendoredGrugModelConfig,
     mesh: jax.sharding.Mesh,
-) -> tuple[VendoredTransformer, jax.Array]:
+) -> tuple[VendoredTransformer, jax.Array[[L, E]]]:
     template = eqx.filter_eval_shape(VendoredTransformer.init, config, key=jax.random.PRNGKey(0))
     checkpoint_state = load_levanter_checkpoint(
         {
@@ -44,7 +47,9 @@ def load_checkpoint(
     return checkpoint_state["params"], checkpoint_state["pending_qb_betas"]
 
 
-def apply_pending_qb_betas(model: VendoredTransformer, pending_qb_betas: jax.Array) -> VendoredTransformer:
+def apply_pending_qb_betas[L: IntVar, E: IntVar](
+    model: VendoredTransformer, pending_qb_betas: jax.Array[[L, E]]
+) -> VendoredTransformer:
     assert model.stacked_blocks is not None
     # Mirrors train._apply_qb_betas without importing the training entrypoint.
     router_bias = -pending_qb_betas

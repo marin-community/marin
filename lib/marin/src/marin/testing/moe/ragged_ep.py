@@ -18,6 +18,8 @@ The second case is the one worth having. The hero trains with assignments being 
 check that only ever runs dropless leaves the surviving-set arithmetic untested.
 """
 
+from __future__ import annotations
+
 import dataclasses
 import json
 import logging
@@ -41,6 +43,7 @@ from levanter.grug._moe.ep_ragged_all_to_all import (
 from levanter.grug.grug_moe import moe_mlp
 from pydantic import BaseModel
 from rigging.filesystem.storage_path import StoragePath
+from shape_extensions import Int, IntVar
 
 from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
@@ -195,7 +198,13 @@ def _make_ep_mesh() -> Mesh:
     )
 
 
-def _inputs(key, tokens, *, skew):
+def _inputs[T: IntVar](key: jax.Array, tokens: Int[T], *, skew: bool) -> tuple[
+    jax.Array[[T, 64]],  # x: [tokens, HIDDEN_DIM]
+    jax.Array[[T, 2]],  # selected: [tokens, TOPK]
+    jax.Array[[T, 2]],  # combine_weights: [tokens, TOPK]
+    jax.Array[[8, 64, 192]],  # w13: [NUM_EXPERTS, HIDDEN_DIM, 2 * INTERMEDIATE_DIM]
+    jax.Array[[8, 96, 64]],  # w2: [NUM_EXPERTS, INTERMEDIATE_DIM, HIDDEN_DIM]
+]:
     k_x, k_sel, k_cw, k_w13, k_w2 = jax.random.split(key, 5)
     x = jax.random.normal(k_x, (tokens, HIDDEN_DIM), dtype=jnp.bfloat16)
     bias = jnp.array([3.0, 2.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0]) if skew else jnp.zeros((NUM_EXPERTS,))
@@ -257,7 +266,13 @@ def _keep_mask(selected: np.ndarray, tokens_per_shard: int, capacity_factor: flo
     return keep
 
 
-def _dense_reference(x, selected, combine_weights, w13, w2):
+def _dense_reference[T: IntVar](
+    x: jax.Array[[T, 64]],
+    selected: jax.Array[[T, 2]],
+    combine_weights: jax.Array[[T, 2]],
+    w13: jax.Array[[8, 64, 192]],
+    w2: jax.Array[[8, 96, 64]],
+) -> tuple[np.ndarray, tuple[jax.Array[[T, 64]], jax.Array[[8, 64, 192]], jax.Array[[8, 96, 64]]]]:
     """Exact fp32 dense MoE with the same scalar loss: forward output and gradients.
 
     Uses replicated fp32 jnp ops (no capacity, no transport), so it is exact up to fp32
@@ -266,12 +281,12 @@ def _dense_reference(x, selected, combine_weights, w13, w2):
     sel = jnp.asarray(selected)
     cw = jnp.asarray(combine_weights).astype(jnp.float32)
 
-    def loss(xf, w13f, w2f):
-        hidden = jnp.einsum("th,ehi->tei", xf, w13f)
+    def loss(xf: jax.Array[[T, 64]], w13f: jax.Array[[8, 64, 192]], w2f: jax.Array[[8, 96, 64]]):
+        hidden: jax.Array[[T, 8, 192]] = jnp.einsum("th,ehi->tei", xf, w13f)
         gate, up = hidden[..., :INTERMEDIATE_DIM], hidden[..., INTERMEDIATE_DIM:]
-        per_expert = jnp.einsum("tei,eih->teh", jax.nn.silu(gate) * up, w2f)
-        per_route = jnp.take_along_axis(per_expert, sel[..., None], axis=1)
-        out = jnp.sum(per_route * cw[..., None], axis=1)
+        per_expert: jax.Array[[T, 8, 64]] = jnp.einsum("tei,eih->teh", jax.nn.silu(gate) * up, w2f)
+        per_route: jax.Array[[T, 2, 64]] = jnp.take_along_axis(per_expert, sel[..., None], axis=1)
+        out: jax.Array[[T, 64]] = jnp.sum(per_route * cw[..., None], axis=1)
         return jnp.sum(out * out), out
 
     (_l, out), grads = jax.value_and_grad(loss, argnums=(0, 1, 2), has_aux=True)(

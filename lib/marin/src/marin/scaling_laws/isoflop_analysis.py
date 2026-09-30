@@ -17,6 +17,8 @@ Key functions:
 - predict_optimal_config(): Predict optimal training config for a target budget
 """
 
+from __future__ import annotations
+
 import logging
 import math
 from collections.abc import Iterator
@@ -26,6 +28,7 @@ from typing import NamedTuple, Protocol
 import jax.numpy as jnp
 from jaxopt import ScipyMinimize
 from levanter.optim.config import OptimizerConfig
+from shape_extensions import IntVar
 
 logger = logging.getLogger(__name__)
 
@@ -233,7 +236,9 @@ def round_flops_to_bucket(flops: float, base: float = 1.1) -> float:
     return base ** round(k)
 
 
-def robust_quad_logx(x: jnp.ndarray, y: jnp.ndarray, delta: float = 1.0) -> tuple[float, float, float]:
+def robust_quad_logx[N: IntVar](
+    x: jnp.ndarray[[N]], y: jnp.ndarray[[N]], delta: float = 1.0
+) -> tuple[float, float, float]:
     """Fit a robust quadratic in log10(x) space using Huber loss.
 
     Log10 space is used because sweeps are defined in powers of 10 (scientific
