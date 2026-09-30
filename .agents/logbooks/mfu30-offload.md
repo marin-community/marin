@@ -49,10 +49,9 @@ Evidence in the baseline HLO: 143 `*.remat*` instructions, 84 of them in the bac
 per layer. Trace cost: **0.633 s/step on the compute stream** (0.630 in the backward body; 0.227 of it is
 the sync all-gather remat, mostly rank-skew wait; 0.11 overlaps collectives).
 
-The LHS is unaffected by the flag: its `MemoryPressureTracker` already skips non-default memory spaces,
-but it does count the live device entry parameters against a limit that has already subtracted them, so
-its temp budget is `(147.4 - 35.1) x 0.85 - 35.1 = 60.4 GiB` against a 67.5 GiB arena. Only the remat
-clones should go.
+The LHS is unaffected by the flag: its `MemoryPressureTracker` skips non-default memory spaces and entry
+parameters (`ShouldSkipBufferAllocations`), so its temp budget is `(147.4 - 35.1) x 0.85 = 95.5 GiB`
+against a 67.5 GiB arena and does not bind. Only the remat clones should go.
 
 H-A4: `XLA_FLAGS=--xla_gpu_enable_host_memory_offloading=true`. Prediction: remat count -> ~0, compute
 stream -0.4 s, step -0.3 to -0.5 s, arena +5-10 GiB (peak ~110 GiB). Numerics unchanged (remat recomputes
@@ -95,3 +94,32 @@ themselves. Revised H-A4 prediction: -0.25 to -0.45 s/step (+0.5 to +0.9 MFU). H
 copies) scales to ~0.28-0.30 s. Headroom budget: H-A4 (+5-10 GiB arena) and H-A1 (+38.55 GiB
 persistent) compete for the same ~35 GiB below the 0.75 threshold; any remat-reducing lever from other
 agents also draws on it.
+
+## M30A-007 H-A4 correctness review, prebuilt arms, headroom budget (2026-09-30)
+
+Flag scope at `708c3a4ec79c`: `xla_gpu_enable_host_memory_offloading` is read only in
+`gpu_compiler.cc` `CreateHloAnalysisOpts` / `CreateRematOpts`, both consumed only by the post-schedule
+`HloRematerialization` in `RunPostSchedulingPipelines` (after LHS and copy insertion). HostOffloader,
+memory-space propagation, the host-transfer asyncifier and the LHS never read it. Remat only inserts clones
+before uses; it cannot move the existing carry `dynamic-slice-done` relative to its consumer, and the
+collective overlap limit stays forced to 1. One side effect: the flag also enables remat's host-offload
+mode, whose cost model uses HBM bandwidth for host transfers, so if remat still binds in the device-only
+view it would prefer inserting post-schedule host copies. Engagement gate: zero `Remat via offload` lines
+in the logs; if any appear, treat the arm as a different treatment.
+
+Fidelity gate vs `mhep-ctx4k-s0-20260930`: loss at 180000 equal (restore and forward are untouched by
+remat); 180001-180003 within the ~1e-4 C-C band from the August loop; `moe/drop_fraction` ~3.3e-5 and
+`train/router/load_balancing_loss` in family through 180059.
+
+Prebuilt (scratchpad `mfu30a/`): `arm2_hmo_pipe.sh` (H-A4 + `--xla_gpu_enable_pipelined_host_offloading`,
+collective_pipeliner VLOG) and `arm3_resident.sh` (`--no-offload-opt-state`, fraction, slop, optional
+H-A4). The LHS skips entry parameters, so H-A1's slop only has to restore the 95.5 GiB temp budget:
+`(147.4 - 73.65) x s = 95.5` gives s = 129. Slop 85 would cut the budget to 62.7 GiB, under the 63.5 GiB
+backward need, and make remat (host-counted) cut ~33 GiB more.
+
+Headroom: the pool can reach ~0.81 x 184.3 = 149 GiB while leaving ~6.5 GiB outside it (collective
+buffers 18.9 + NCCL/cuBLAS/context ~9.6 GiB). Peak today 103.1, so ~46 GiB exists at 0.81 and ~35 at
+0.75. Costs: H-A4 +5-10 GiB for ~0.35 s (~50 ms/GiB); H-A1 +34.6 GiB at the backward peak (38.55
+persistent minus the 4 GiB optimizer-phase arena excess) for ~0.29 s (~8 ms/GiB); carry prefetch ~+9 GiB
+(August) for <=0.2 s. Reservation: 10 GiB for H-A4 first. Anything from C that reduces remat should beat
+~8 ms/GiB to outrank H-A1; H-A1 goes only if >=35 GiB remains after H-A4 and C, at fraction 0.80-0.81.
