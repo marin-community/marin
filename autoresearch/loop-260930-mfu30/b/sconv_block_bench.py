@@ -150,11 +150,11 @@ def sconv_kernel_ms(outdir, steps):
             continue
         if not (st.get("hlo_module") or "").startswith("jit_step"):
             continue
-        step_total += (e - s) * 1e-6
+        step_total += (e - s) * 1e-9
         if "short_conv" in name:
-            total += (e - s) * 1e-6
+            total += (e - s) * 1e-9
             names.setdefault(name[:60], [0.0, 0])
-            names[name[:60]][0] += (e - s) * 1e-6 / steps
+            names[name[:60]][0] += (e - s) * 1e-9 / steps
             names[name[:60]][1] += 1
     return total / steps, step_total / steps, {k: (round(v[0], 3), v[1] // steps) for k, v in names.items()}
 
@@ -192,6 +192,11 @@ def main():
             out = exe(block, x, cot, mask)
             grads[impl] = (float(out[0]), jax.tree.map(np.asarray, out[1]))
             compiled[impl] = (exe, block, mask)
+            if impl == VARIANTS[0]:
+                # A second run of the same executable: leaves that differ here are run-to-run
+                # nondeterminism (e.g. atomics in the attention backward), not the short conv.
+                out = exe(block, x, cot, mask)
+                grads["repeat"] = (float(out[0]), jax.tree.map(np.asarray, out[1]))
             del out
         for _ in range(args.reps):
             for impl in VARIANTS:
@@ -221,19 +226,29 @@ def main():
                 print(f"{impl:11s} short-conv kernels {sconv_ms:.3f} ms/step of {kernel_ms:.3f}: {names}", flush=True)
     for impl in VARIANTS:
         results[impl]["step_ms_median"] = float(np.median(results[impl]["step_ms"]))
+
+    def leaf_diffs(ga, gb):
+        diffs = {}
+        for (path, a), (_, b) in zip(
+            jax.tree_util.tree_leaves_with_path(ga), jax.tree_util.tree_leaves_with_path(gb), strict=True
+        ):
+            a32, b32 = a.astype(np.float32), b.astype(np.float32)
+            if np.array_equal(a32, b32):
+                continue
+            rms = float(np.sqrt(np.mean(a32**2))) or 1.0
+            diffs[jax.tree_util.keystr(path)] = float(np.sqrt(np.mean((a32 - b32) ** 2)) / rms)
+        return diffs
+
     (la, ga), (lb, gb) = grads["pallas_gpu"], grads["triton_gpu"]
-    diffs = {}
-    for (path, a), (_, b) in zip(
-        jax.tree_util.tree_leaves_with_path(ga), jax.tree_util.tree_leaves_with_path(gb), strict=True
-    ):
-        a32, b32 = a.astype(np.float32), b.astype(np.float32)
-        if np.array_equal(a32, b32):
-            continue
-        rms = float(np.sqrt(np.mean(a32**2))) or 1.0
-        diffs[jax.tree_util.keystr(path)] = float(np.sqrt(np.mean((a32 - b32) ** 2)) / rms)
+    diffs = leaf_diffs(ga, gb)
+    repeat_diffs = leaf_diffs(ga, grads["repeat"][1])
     print(f"loss pallas {la:.8e} triton {lb:.8e} equal {la == lb}")
-    print("gradient leaves that differ (rel-rms):", json.dumps(diffs))
-    print("RESULT", json.dumps(dict(results=results, loss_equal=la == lb, grad_diffs=diffs)))
+    print("gradient leaves that differ, pallas vs triton (rel-rms):", json.dumps(diffs))
+    print("gradient leaves that differ, pallas vs pallas rerun (rel-rms):", json.dumps(repeat_diffs))
+    print(
+        "RESULT",
+        json.dumps(dict(results=results, loss_equal=la == lb, grad_diffs=diffs, rerun_grad_diffs=repeat_diffs)),
+    )
 
 
 if __name__ == "__main__":

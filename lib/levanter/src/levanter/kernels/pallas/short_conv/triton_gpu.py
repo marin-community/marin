@@ -54,12 +54,14 @@ class TritonShortConvTiles:
       max_channel_block: channels per program, halved until it divides the channel count.
       num_warps: warps per program.
       num_stages: Triton software-pipelining depth of the row loop.
+      rows_per_step: rows loaded together before any is stored, 4 or 8.
     """
 
     chunk: int
     max_channel_block: int
     num_warps: int
     num_stages: int
+    rows_per_step: int
 
     def channel_block(self, channels: int) -> int | None:
         block = self.max_channel_block
@@ -70,8 +72,8 @@ class TritonShortConvTiles:
         return None
 
 
-FORWARD_TILES = TritonShortConvTiles(chunk=64, max_channel_block=1024, num_warps=4, num_stages=1)
-BACKWARD_TILES = TritonShortConvTiles(chunk=64, max_channel_block=1024, num_warps=4, num_stages=1)
+FORWARD_TILES = TritonShortConvTiles(chunk=64, max_channel_block=1024, num_warps=4, num_stages=1, rows_per_step=4)
+BACKWARD_TILES = TritonShortConvTiles(chunk=64, max_channel_block=1024, num_warps=4, num_stages=1, rows_per_step=4)
 #: The local sequence length must be a multiple of this.
 SEQUENCE_MULTIPLE = math.lcm(FORWARD_TILES.chunk, BACKWARD_TILES.chunk)
 
@@ -152,6 +154,49 @@ if triton is not None and tl is not None:
         return acc.to(dtype)
 
     @triton.jit
+    def _load_rows(base, row, channels: tl.constexpr, cols):
+        """Rows ``row..row+3`` of a ``[S, C]`` slab, all in range."""
+        xa = tl.load(base + row.to(tl.int64) * channels + cols)
+        xb = tl.load(base + (row + 1).to(tl.int64) * channels + cols)
+        xc = tl.load(base + (row + 2).to(tl.int64) * channels + cols)
+        xd = tl.load(base + (row + 3).to(tl.int64) * channels + cols)
+        return xa, xb, xc, xd
+
+    @triton.jit
+    def _load_rows_masked(base, row, seq_len: tl.constexpr, channels: tl.constexpr, cols):
+        """Rows ``row..row+3``, zero past the sequence end."""
+        xa = _row(base, row, seq_len, channels, cols)
+        xb = _row(base, row + 1, seq_len, channels, cols)
+        xc = _row(base, row + 2, seq_len, channels, cols)
+        xd = _row(base, row + 3, seq_len, channels, cols)
+        return xa, xb, xc, xd
+
+    @triton.jit
+    def _load_segs(seg_base, row, seq_len: tl.constexpr):
+        return (
+            _seg(seg_base, row, seq_len),
+            _seg(seg_base, row + 1, seq_len),
+            _seg(seg_base, row + 2, seq_len),
+            _seg(seg_base, row + 3, seq_len),
+        )
+
+    @triton.jit
+    def _fwd_rows(
+        out_base, t, channels: tl.constexpr, cols, xa, sa, xb, sb, xc, sc, xd, sd, x1, s1, x2, s2, x3, s3,
+        w0, w1, w2, w3, dtype: tl.constexpr, exact: tl.constexpr,
+    ):  # fmt: skip
+        """Stores output rows ``t..t+3``; returns the ring (x and segment ids at t+3, t+2, t+1)."""
+        ya = _conv_row(xa, sa, x1, s1, x2, s2, x3, s3, w0, w1, w2, w3, dtype, exact)
+        yb = _conv_row(xb, sb, xa, sa, x1, s1, x2, s2, w0, w1, w2, w3, dtype, exact)
+        yc = _conv_row(xc, sc, xb, sb, xa, sa, x1, s1, w0, w1, w2, w3, dtype, exact)
+        yd = _conv_row(xd, sd, xc, sc, xb, sb, xa, sa, w0, w1, w2, w3, dtype, exact)
+        tl.store(out_base + t.to(tl.int64) * channels + cols, ya)
+        tl.store(out_base + (t + 1).to(tl.int64) * channels + cols, yb)
+        tl.store(out_base + (t + 2).to(tl.int64) * channels + cols, yc)
+        tl.store(out_base + (t + 3).to(tl.int64) * channels + cols, yd)
+        return xd, sd, xc, sc, xb, sb
+
+    @triton.jit
     def _short_conv_fwd_kernel(
         x_ptr,
         seg_ptr,
@@ -161,6 +206,7 @@ if triton is not None and tl is not None:
         channels: tl.constexpr,
         chunk: tl.constexpr,
         block_c: tl.constexpr,
+        rows_per_step: tl.constexpr,
         exact: tl.constexpr,
     ):
         dtype = out_ptr.dtype.element_ty
@@ -182,28 +228,23 @@ if triton is not None and tl is not None:
         s1 = _seg(seg_base, start - 1, seq_len)
         s2 = _seg(seg_base, start - 2, seq_len)
         s3 = _seg(seg_base, start - 3, seq_len)
-        for offset in range(0, chunk, 4):
+        for offset in range(0, chunk, rows_per_step):
             t = start + offset
-            # All four rows' loads before any store, so they are in flight together.
-            xa = tl.load(x_base + t.to(tl.int64) * channels + cols)
-            xb = tl.load(x_base + (t + 1).to(tl.int64) * channels + cols)
-            xc = tl.load(x_base + (t + 2).to(tl.int64) * channels + cols)
-            xd = tl.load(x_base + (t + 3).to(tl.int64) * channels + cols)
-            sa = tl.load(seg_base + t)
-            sb = tl.load(seg_base + t + 1)
-            sc = tl.load(seg_base + t + 2)
-            sd = tl.load(seg_base + t + 3)
-            ya = _conv_row(xa, sa, x1, s1, x2, s2, x3, s3, w0, w1, w2, w3, dtype, exact)
-            yb = _conv_row(xb, sb, xa, sa, x1, s1, x2, s2, w0, w1, w2, w3, dtype, exact)
-            yc = _conv_row(xc, sc, xb, sb, xa, sa, x1, s1, w0, w1, w2, w3, dtype, exact)
-            yd = _conv_row(xd, sd, xc, sc, xb, sb, xa, sa, w0, w1, w2, w3, dtype, exact)
-            tl.store(out_base + t.to(tl.int64) * channels + cols, ya)
-            tl.store(out_base + (t + 1).to(tl.int64) * channels + cols, yb)
-            tl.store(out_base + (t + 2).to(tl.int64) * channels + cols, yc)
-            tl.store(out_base + (t + 3).to(tl.int64) * channels + cols, yd)
-            x1, s1 = xd, sd
-            x2, s2 = xc, sc
-            x3, s3 = xb, sb
+            # Every row of the step is loaded before any store, so the loads are in flight together.
+            xa, xb, xc, xd = _load_rows(x_base, t, channels, cols)
+            sa, sb, sc, sd = _load_segs(seg_base, t, seq_len)
+            if rows_per_step == 8:
+                xe, xf, xg, xh = _load_rows(x_base, t + 4, channels, cols)
+                se, sf, sg, sh = _load_segs(seg_base, t + 4, seq_len)
+            x1, s1, x2, s2, x3, s3 = _fwd_rows(
+                out_base, t, channels, cols, xa, sa, xb, sb, xc, sc, xd, sd, x1, s1, x2, s2, x3, s3,
+                w0, w1, w2, w3, dtype, exact,
+            )  # fmt: skip
+            if rows_per_step == 8:
+                x1, s1, x2, s2, x3, s3 = _fwd_rows(
+                    out_base, t + 4, channels, cols, xe, se, xf, sf, xg, sg, xh, sh, x1, s1, x2, s2, x3, s3,
+                    w0, w1, w2, w3, dtype, exact,
+                )  # fmt: skip
 
     @triton.jit
     def _dx_row(d0, s0, d1, s1, d2, s2, d3, s3, w0, w1, w2, w3, dtype: tl.constexpr, exact: tl.constexpr):
@@ -222,6 +263,49 @@ if triton is not None and tl is not None:
         return tl.where(seg_prev == seg_cur, x_prev, 0.0).to(tl.float32)
 
     @triton.jit
+    def _bwd_rows(
+        dx_base, r, channels: tl.constexpr, cols, e0, se0, e1, se1, e2, se2, e3, se3, xa, xb, xc, xd,
+        xb1, sb1, xb2, sb2, xb3, sb3, d0, sd0, d1, sd1, d2, sd2, dw0, dw1, dw2, dw3,
+        w0, w1, w2, w3, dtype: tl.constexpr, exact: tl.constexpr,
+    ):  # fmt: skip
+        """Stores dx rows ``r..r+3`` and accumulates their dw terms.
+
+        Takes x at ``r..r+3`` and dy at ``r+3..r+6``; the ring carries x at ``r-1..r-3`` and dy at
+        ``r..r+2`` with segment ids. Returns the ring advanced by four rows and the accumulators.
+        """
+        # Segment ids of rows r..r+3 are sd0, sd1, sd2, se0.
+        gxa = _dx_row(d0, sd0, d1, sd1, d2, sd2, e0, se0, w0, w1, w2, w3, dtype, exact)
+        gxb = _dx_row(d1, sd1, d2, sd2, e0, se0, e1, se1, w0, w1, w2, w3, dtype, exact)
+        gxc = _dx_row(d2, sd2, e0, se0, e1, se1, e2, se2, w0, w1, w2, w3, dtype, exact)
+        gxd = _dx_row(e0, se0, e1, se1, e2, se2, e3, se3, w0, w1, w2, w3, dtype, exact)
+        tl.store(dx_base + r.to(tl.int64) * channels + cols, gxa)
+        tl.store(dx_base + (r + 1).to(tl.int64) * channels + cols, gxb)
+        tl.store(dx_base + (r + 2).to(tl.int64) * channels + cols, gxc)
+        tl.store(dx_base + (r + 3).to(tl.int64) * channels + cols, gxd)
+        # dw: fp32 sums of dy[u] times the shifted, masked x, rows u = r..r+3 in order.
+        g = d0.to(tl.float32)
+        dw0 += g * xa.to(tl.float32)
+        dw1 += g * _masked(xb1, sb1, sd0)
+        dw2 += g * _masked(xb2, sb2, sd0)
+        dw3 += g * _masked(xb3, sb3, sd0)
+        g = d1.to(tl.float32)
+        dw0 += g * xb.to(tl.float32)
+        dw1 += g * _masked(xa, sd0, sd1)
+        dw2 += g * _masked(xb1, sb1, sd1)
+        dw3 += g * _masked(xb2, sb2, sd1)
+        g = d2.to(tl.float32)
+        dw0 += g * xc.to(tl.float32)
+        dw1 += g * _masked(xb, sd1, sd2)
+        dw2 += g * _masked(xa, sd0, sd2)
+        dw3 += g * _masked(xb1, sb1, sd2)
+        g = e0.to(tl.float32)
+        dw0 += g * xd.to(tl.float32)
+        dw1 += g * _masked(xc, sd2, se0)
+        dw2 += g * _masked(xb, sd1, se0)
+        dw3 += g * _masked(xa, sd0, se0)
+        return xd, se0, xc, sd2, xb, sd1, e1, se1, e2, se2, e3, se3, dw0, dw1, dw2, dw3
+
+    @triton.jit
     def _short_conv_bwd_kernel(
         x_ptr,
         seg_ptr,
@@ -233,6 +317,7 @@ if triton is not None and tl is not None:
         channels: tl.constexpr,
         chunk: tl.constexpr,
         block_c: tl.constexpr,
+        rows_per_step: tl.constexpr,
         exact: tl.constexpr,
     ):
         dtype = dx_ptr.dtype.element_ty
@@ -266,57 +351,28 @@ if triton is not None and tl is not None:
         dw1 = tl.zeros([block_c], dtype=tl.float32)
         dw2 = tl.zeros([block_c], dtype=tl.float32)
         dw3 = tl.zeros([block_c], dtype=tl.float32)
-        for offset in range(0, chunk, 4):
+        for offset in range(0, chunk, rows_per_step):
             r = start + offset
-            # Rows r..r+3: x at r..r+3 and dy at r+3..r+6, all loaded before any store.
-            e0 = _row(dy_base, r + 3, seq_len, channels, cols)
-            e1 = _row(dy_base, r + 4, seq_len, channels, cols)
-            e2 = _row(dy_base, r + 5, seq_len, channels, cols)
-            e3 = _row(dy_base, r + 6, seq_len, channels, cols)
-            se0 = _seg(seg_base, r + 3, seq_len)
-            se1 = _seg(seg_base, r + 4, seq_len)
-            se2 = _seg(seg_base, r + 5, seq_len)
-            se3 = _seg(seg_base, r + 6, seq_len)
-            xa = tl.load(x_base + r.to(tl.int64) * channels + cols)
-            xb = tl.load(x_base + (r + 1).to(tl.int64) * channels + cols)
-            xc = tl.load(x_base + (r + 2).to(tl.int64) * channels + cols)
-            xd = tl.load(x_base + (r + 3).to(tl.int64) * channels + cols)
-            # Segment ids of rows r..r+3 are sd0, sd1, sd2, se0.
-            gxa = _dx_row(d0, sd0, d1, sd1, d2, sd2, e0, se0, w0, w1, w2, w3, dtype, exact)
-            gxb = _dx_row(d1, sd1, d2, sd2, e0, se0, e1, se1, w0, w1, w2, w3, dtype, exact)
-            gxc = _dx_row(d2, sd2, e0, se0, e1, se1, e2, se2, w0, w1, w2, w3, dtype, exact)
-            gxd = _dx_row(e0, se0, e1, se1, e2, se2, e3, se3, w0, w1, w2, w3, dtype, exact)
-            tl.store(dx_base + r.to(tl.int64) * channels + cols, gxa)
-            tl.store(dx_base + (r + 1).to(tl.int64) * channels + cols, gxb)
-            tl.store(dx_base + (r + 2).to(tl.int64) * channels + cols, gxc)
-            tl.store(dx_base + (r + 3).to(tl.int64) * channels + cols, gxd)
-            # dw: fp32 sums of dy[u] times the shifted, masked x, rows u = r..r+3 in order.
-            g = d0.to(tl.float32)
-            dw0 += g * xa.to(tl.float32)
-            dw1 += g * _masked(xb1, sb1, sd0)
-            dw2 += g * _masked(xb2, sb2, sd0)
-            dw3 += g * _masked(xb3, sb3, sd0)
-            g = d1.to(tl.float32)
-            dw0 += g * xb.to(tl.float32)
-            dw1 += g * _masked(xa, sd0, sd1)
-            dw2 += g * _masked(xb1, sb1, sd1)
-            dw3 += g * _masked(xb2, sb2, sd1)
-            g = d2.to(tl.float32)
-            dw0 += g * xc.to(tl.float32)
-            dw1 += g * _masked(xb, sd1, sd2)
-            dw2 += g * _masked(xa, sd0, sd2)
-            dw3 += g * _masked(xb1, sb1, sd2)
-            g = e0.to(tl.float32)
-            dw0 += g * xd.to(tl.float32)
-            dw1 += g * _masked(xc, sd2, se0)
-            dw2 += g * _masked(xb, sd1, se0)
-            dw3 += g * _masked(xa, sd0, se0)
-            xb1, sb1 = xd, se0
-            xb2, sb2 = xc, sd2
-            xb3, sb3 = xb, sd1
-            d0, sd0 = e1, se1
-            d1, sd1 = e2, se2
-            d2, sd2 = e3, se3
+            # Rows r..r+3 need x at r..r+3 and dy at r+3..r+6; every row of the step is loaded
+            # before any store.
+            e0, e1, e2, e3 = _load_rows_masked(dy_base, r + 3, seq_len, channels, cols)
+            se0, se1, se2, se3 = _load_segs(seg_base, r + 3, seq_len)
+            xa, xb, xc, xd = _load_rows(x_base, r, channels, cols)
+            if rows_per_step == 8:
+                e4, e5, e6, e7 = _load_rows_masked(dy_base, r + 7, seq_len, channels, cols)
+                se4, se5, se6, se7 = _load_segs(seg_base, r + 7, seq_len)
+                xe, xf, xg, xh = _load_rows(x_base, r + 4, channels, cols)
+            xb1, sb1, xb2, sb2, xb3, sb3, d0, sd0, d1, sd1, d2, sd2, dw0, dw1, dw2, dw3 = _bwd_rows(
+                dx_base, r, channels, cols, e0, se0, e1, se1, e2, se2, e3, se3, xa, xb, xc, xd,
+                xb1, sb1, xb2, sb2, xb3, sb3, d0, sd0, d1, sd1, d2, sd2, dw0, dw1, dw2, dw3,
+                w0, w1, w2, w3, dtype, exact,
+            )  # fmt: skip
+            if rows_per_step == 8:
+                xb1, sb1, xb2, sb2, xb3, sb3, d0, sd0, d1, sd1, d2, sd2, dw0, dw1, dw2, dw3 = _bwd_rows(
+                    dx_base, r + 4, channels, cols, e4, se4, e5, se5, e6, se6, e7, se7, xe, xf, xg, xh,
+                    xb1, sb1, xb2, sb2, xb3, sb3, d0, sd0, d1, sd1, d2, sd2, dw0, dw1, dw2, dw3,
+                    w0, w1, w2, w3, dtype, exact,
+                )  # fmt: skip
         partial = dw_ptr + (batch * (seq_len // chunk) + chunk_id) * 4 * channels
         tl.store(partial + cols, dw0)
         tl.store(partial + channels + cols, dw1)
@@ -332,6 +388,7 @@ def _launch_kwargs(x: jax.Array, tiles: TritonShortConvTiles, exact: bool) -> di
     batch, seq_len, channels = x.shape
     block_c = tiles.channel_block(channels)
     assert block_c is not None and seq_len % tiles.chunk == 0, (x.shape, tiles)
+    assert tiles.rows_per_step in (4, 8) and tiles.chunk % tiles.rows_per_step == 0, tiles
     return dict(
         grid=(channels // block_c, seq_len // tiles.chunk, batch),
         num_warps=tiles.num_warps,
@@ -340,6 +397,7 @@ def _launch_kwargs(x: jax.Array, tiles: TritonShortConvTiles, exact: bool) -> di
         channels=channels,
         chunk=tiles.chunk,
         block_c=block_c,
+        rows_per_step=tiles.rows_per_step,
         exact=exact,
     )
 

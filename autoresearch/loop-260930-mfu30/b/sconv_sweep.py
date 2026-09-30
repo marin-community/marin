@@ -20,6 +20,7 @@ import time
 import jax
 import jax.numpy as jnp
 import numpy as np
+from levanter.kernels.pallas.short_conv import short_conv, short_conv_reference
 from levanter.kernels.pallas.short_conv.triton_gpu import (
     TritonShortConvTiles,
     short_conv_triton_bwd_local,
@@ -50,13 +51,32 @@ def _forward_chain(tiles):
 
 def _backward_chain(tiles):
     def run(weight, x, seg, dy):
-        acc = jnp.float32(0)
+        dw = jnp.zeros(weight.shape, jnp.float32)
         for _ in range(CHAIN):
             dy, partials = short_conv_triton_bwd_local(weight, x, seg, dy, exact_reference_rounding=True, tiles=tiles)
-            acc = acc + partials[0, 0, 0]
-        return dy, acc
+            dw = dw + jnp.sum(partials, axis=0)
+        return dy, dw
 
     return jax.jit(run)
+
+
+def _api_chains(implementation):
+    """Forward and backward chains through `short_conv` itself (dw reduction included)."""
+
+    def fwd(weight, x, seg):
+        for _ in range(CHAIN):
+            x = short_conv(weight, x, seg, implementation=implementation)
+        return x
+
+    def bwd(weight, x, seg, dy):
+        _, pullback = jax.vjp(lambda w, xx: short_conv(w, xx, seg, implementation=implementation), weight, x)
+        dw = jnp.zeros(weight.shape, jnp.float32)
+        for _ in range(CHAIN):
+            step_dw, dy = pullback(dy)
+            dw = dw + step_dw.astype(jnp.float32)
+        return dy, dw
+
+    return jax.jit(fwd), jax.jit(bwd)
 
 
 def _calibration_ms(x, dy):
@@ -64,12 +84,12 @@ def _calibration_ms(x, dy):
 
     def two_pass(x):
         for _ in range(CHAIN):
-            x = x * jnp.bfloat16(0.5)
+            x = jax.lax.optimization_barrier(x * jnp.bfloat16(0.5))
         return x
 
     def three_pass(x, dy):
         for _ in range(CHAIN):
-            dy = x * dy
+            dy = jax.lax.optimization_barrier(x * dy)
         return dy
 
     return _time(jax.jit(two_pass), x), _time(jax.jit(three_pass), x, dy)
@@ -80,11 +100,11 @@ def main():
     parser.add_argument("--quick", action="store_true")
     args = parser.parse_args()
     if args.quick:
-        grid = [TritonShortConvTiles(64, 1024, 4, 1), TritonShortConvTiles(128, 512, 4, 2)]
+        grid = [TritonShortConvTiles(64, 1024, 4, 1, 4), TritonShortConvTiles(128, 512, 4, 1, 8)]
     else:
         grid = [
-            TritonShortConvTiles(chunk, block, warps, stages)
-            for chunk, block, warps, stages in itertools.product((32, 64, 128, 256), (256, 512, 1024), (2, 4, 8), (1,))
+            TritonShortConvTiles(chunk, block, warps, 1, rows)
+            for chunk, block, warps, rows in itertools.product((32, 64, 128, 256), (256, 512, 1024), (2, 4, 8), (4, 8))
             if block // (32 * warps) in (2, 4, 8)
         ]
     rng = np.random.default_rng(0)
@@ -112,12 +132,42 @@ def main():
             ),
             flush=True,
         )
+        for implementation in ("pallas_gpu", "triton_gpu"):
+            fwd, bwd = _api_chains(implementation)
+            api_fwd_ms, api_bwd_ms = _time(fwd, weight, x, seg), _time(bwd, weight, x, seg, dy)
+            print(
+                json.dumps(
+                    dict(channels=channels, api=implementation, fwd_ms=round(api_fwd_ms, 4), bwd_ms=round(api_bwd_ms, 4))
+                ),
+                flush=True,
+            )
+        ref_out = jax.jit(short_conv_reference)(weight, x, seg)
+        _, ref_pull = jax.vjp(lambda w, xx: short_conv_reference(w, xx, seg), weight, x)
+        ref_dw, ref_dx = jax.jit(ref_pull)(dy)
+        ref_dw = np.asarray(ref_dw, np.float32)
         rows = []
         for tiles in grid:
             record = dict(
-                channels=channels, tiles=[tiles.chunk, tiles.max_channel_block, tiles.num_warps, tiles.num_stages]
+                channels=channels,
+                tiles=[tiles.chunk, tiles.max_channel_block, tiles.num_warps, tiles.num_stages, tiles.rows_per_step],
             )
             try:
+                out = jax.jit(
+                    lambda w, xx, s, t=tiles: short_conv_triton_fwd_local(
+                        w, xx, s, exact_reference_rounding=True, tiles=t
+                    )
+                )(weight, x, seg)
+                dx, partials = jax.jit(
+                    lambda w, xx, s, g, t=tiles: short_conv_triton_bwd_local(
+                        w, xx, s, g, exact_reference_rounding=True, tiles=t
+                    )
+                )(weight, x, seg, dy)
+                dw = np.asarray(jnp.sum(partials, axis=0).astype(weight.dtype), np.float32)
+                record.update(
+                    out_bitwise=bool(np.array_equal(np.asarray(out), np.asarray(ref_out))),
+                    dx_bitwise=bool(np.array_equal(np.asarray(dx), np.asarray(ref_dx))),
+                    dw_rel=float(np.max(np.abs(dw - ref_dw)) / np.max(np.abs(ref_dw))),
+                )
                 fwd_ms = _time(_forward_chain(tiles), weight, x, seg)
                 partial_bytes = batch * (seq // tiles.chunk) * 4 * channels * 4
                 bwd_ms = _time(_backward_chain(tiles), weight, x, seg, dy)
