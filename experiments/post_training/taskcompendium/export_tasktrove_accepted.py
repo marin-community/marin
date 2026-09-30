@@ -171,6 +171,7 @@ def export_accepted_records(
         raise ValueError(f"TaskTrove candidate proof audit failed: {audit['validation_errors']}")
 
     counters: Counter[tuple[str, str, str, str, str, str, str, str]] = Counter()
+    disposition_counts: Counter[str] = Counter()
     tag_dispositions: Counter[tuple[str, str, str, str, str, str, str, str, str]] = Counter()
     rejection_reasons: Counter[tuple[str, str, str, str, str, str, str]] = Counter()
     math_sample_pointers: dict[tuple[str, str, str, str, str], list[dict[str, Any]]] = {}
@@ -241,6 +242,7 @@ def export_accepted_records(
                     template_id = str(row.get("template_id") or "<missing>")
                     reason = str(row.get("reason") or "<none>")
                     counters[(source, split, mode, family, converter, template_id, disposition, reason)] += 1
+                    disposition_counts[disposition] += 1
                     if disposition == "rejected":
                         rejection_reasons[(source, mode, family, converter, template_id, reason, split)] += 1
                         sample_key = (source, mode, family, converter, reason)
@@ -521,6 +523,10 @@ def export_accepted_records(
                 counters.items()
             )
         ],
+        "input_rows_total": sum(counters.values()),
+        "input_rows_by_disposition": [
+            {"disposition": disposition, "rows": count} for disposition, count in sorted(disposition_counts.items())
+        ],
         "input_rows_by_source_split_mode_family_converter_tag_disposition": [
             {
                 "source": source,
@@ -616,7 +622,7 @@ def main() -> None:
     ingest_prefix = StoragePath(output_uri)
     manifest_path = ingest_prefix / "ingestion-manifest.json"
     ingestion_manifest = json.loads(manifest_path.read_bytes())
-    export_accepted_records(
+    report = export_accepted_records(
         ingest_prefix / "ingestion-ledger.parquet",
         ingest_prefix / "private-catalog.parquet",
         ingest_prefix / "public-candidates.jsonl",
@@ -625,6 +631,40 @@ def main() -> None:
         ingestion_manifest=ingestion_manifest,
         builder_revision=builder_revision,
     )
+    summary = {
+        "status": report["status"],
+        "release_uri": report["release_uri"],
+        "release_revision": report["release_revision"],
+        "source_manifest_sha256": report["source_manifest_sha256"],
+        "ingestion_manifest_uri": report["ingestion_manifest_uri"],
+        "audit_manifest_uri": report["manifest_uri"],
+        "input_ledger_sha256": report["input_ledger_sha256"],
+        "private_catalog_sha256": report["private_catalog_sha256"],
+        "input_candidate_sha256": report["input_candidate_sha256"],
+        "input_proof_sha256": report["input_proof_sha256"],
+        "input_rows_total": report["input_rows_total"],
+        "input_rows_by_disposition": report["input_rows_by_disposition"],
+        "ledger_bytes_hashed": report["ledger_bytes_hashed"],
+        "private_catalog_bytes_hashed": report["private_catalog_bytes_hashed"],
+        "candidate_sha256_verified": report["candidate_sha256_verified"],
+        "proof_sha256_verified": report["proof_sha256_verified"],
+        "archive_payload_bytes_read": report["archive_payload_bytes_read"],
+        "private_task_specifications_loaded": report["private_task_specifications_loaded"],
+        "accepted_rows_by_source": report["accepted_rows_by_source"],
+        "rights_rejected_rows_by_source_reason": report["rights_rejected_rows_by_source_reason"],
+        "rights_terms_by_source_mode_family_converter": report["rights_terms_by_source_mode_family_converter"],
+        "input_rows_by_source_split_mode_family_converter_disposition": report[
+            "input_rows_by_source_split_mode_family_converter_disposition"
+        ],
+        "input_rows_by_source_split_mode_family_converter_tag_disposition": report[
+            "input_rows_by_source_split_mode_family_converter_tag_disposition"
+        ],
+        "rejected_math_sample_pointers": report["rejected_math_sample_pointers"],
+        "source_split_policy": report["source_split_policy"],
+    }
+    output_directory = Path(os.environ["IRIS_OUTPUT_DIR"])
+    output_directory.mkdir(parents=True, exist_ok=True)
+    (output_directory / "audit-summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
 
 
 if __name__ == "__main__":
