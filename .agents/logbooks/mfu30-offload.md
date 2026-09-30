@@ -56,3 +56,29 @@ H-A4: `XLA_FLAGS=--xla_gpu_enable_host_memory_offloading=true`. Prediction: rema
 stream -0.4 s, step -0.3 to -0.5 s, arena +5-10 GiB (peak ~110 GiB). Numerics unchanged (remat recomputes
 identical values). Engagement: TF_CPP remat logs (dispatch.py now forwards `TF_CPP_*`) and the profile's
 `*.remat*` kernel count.
+
+## M30A-003 Rack arm m30a-hmo-01 submitted (2026-09-30 11:03 PT)
+
+`/mwittmann/m30a-hmo-01-coord`, port 33100, `XLA_FLAGS=--xla_gpu_enable_host_memory_offloading=true`,
+`TF_CPP_MIN_LOG_LEVEL=0 TF_CPP_VMODULE=hlo_rematerialization=1`, profiled 180021-180023, seed 0, stop
+180060. Branch commit `f600de5d8e` (program identical to main apart from the flag). Gated in Kueue at
+submission. Reads: first-step loss vs `mhep-ctx4k-s0-20260930`, remat log lines (limit, peak, count), the
+profile's `*.remat*` kernels, median MFU over 180005-180059 minus the profiled steps, `memory/peak_gib`.
+
+## M30A-004 PGLE does not hide the optimizer D2H (2026-09-30)
+
+Re-read the PR #9481 PGLE trace `overlap80-t21-pgle-rep2-144k` (another session's scratchpad) with the
+toolkit. Under PGLE the first momentum H2D moves into the backward (copy-start.44 at 3.6 s) and hides,
+but the three momentum D2H copies stay at the end of the step and stay exposed (~0.2 s), and the forward
+carry D2H becomes exposed (~0.1-0.17 s) where main hides it. XLA remat still costs 0.35 s/step there.
+So PGLE and H-A4 are complementary, and the end-of-step D2H needs removal (H-A1) or a code-level
+reorder, not a better latency estimate.
+
+## M30A-005 H-A1 knob
+
+`launch_diagnostics --no-offload-opt-state` (default unchanged). Memory plan waits for the H-A4 remat
+logs, which print the real scheduler/remat limit. With `base = 0.8 x 184.3 = 147.4 GiB`, H-A1 raises
+device I/O to 73.65 GiB, so keeping the LHS/remat limit at the baseline ~95.5 GiB needs
+`--xla_gpu_memory_limit_slop_factor=129`, and the ~137.7 GiB peak needs
+`XLA_PYTHON_CLIENT_MEM_FRACTION=0.78` (143.8 GiB pool, ~12 GiB outside for NCCL/cuBLAS/context).
+H-A1 and H-A4 compete for the same headroom: stacked, the peak lands near 145-148 GiB.

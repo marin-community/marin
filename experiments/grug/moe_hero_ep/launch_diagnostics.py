@@ -108,6 +108,7 @@ def build_diagnostic_run(
     restore_from: str | None = None,
     moe_implementation: str | None = None,
     master_param_mode: MasterParamMode = HERO_MASTER_PARAM_MODE,
+    offload_opt_state: bool = True,
     processes_per_task: int = HERO_PROCESSES_PER_TASK,
     eval_every: int = 0,
     gc_interval: int | None = None,
@@ -230,7 +231,10 @@ def build_diagnostic_run(
         master_param_mode=master_param_mode,
     )
     grug_trainer = dataclasses.replace(
-        grug_trainer, context_axis_size=context_axis_size, expert_axis_size=expert_axis_size
+        grug_trainer,
+        context_axis_size=context_axis_size,
+        expert_axis_size=expert_axis_size,
+        offload_opt_state=offload_opt_state,
     )
     train_resources = ResourceConfig.with_gpu(
         "GB200",
@@ -488,6 +492,12 @@ def build_diagnostic_run(
     help="Steps between gradient and parameter norm logs. 0 disables norm logging.",
 )
 @click.option(
+    "--offload-opt-state/--no-offload-opt-state",
+    default=True,
+    show_default=True,
+    help="Keep the MuonH optimizer state on pinned host between steps (the hero default) or on device.",
+)
+@click.option(
     "--watch-mode",
     type=click.Choice([mode.value for mode in WatchMode]),
     default=WatchMode.INLINE.value,
@@ -558,6 +568,7 @@ def main(
     latent_dim: int | None,
     moe_implementation: str | None,
     master_params: str,
+    offload_opt_state: bool,
     processes_per_task: int,
     save_checkpoints: bool,
     checkpoint_minutes: float,
@@ -595,6 +606,7 @@ def main(
         restore_from=restore_from,
         moe_implementation=moe_implementation,
         master_param_mode=MasterParamMode(master_params),
+        offload_opt_state=offload_opt_state,
         processes_per_task=processes_per_task,
         save_checkpoints=save_checkpoints,
         checkpoint_interval=timedelta(minutes=checkpoint_minutes),
