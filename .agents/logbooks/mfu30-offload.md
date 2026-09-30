@@ -152,3 +152,22 @@ warmup with no later drift, so arms score 180011-180059 (profiled 180021-180023 
 -0.81 s. Stack note: PR #9481's "re-gather hero attention weights in the backward pass" targets the same
 XLA-remat sync all-gathers H-A4 removes; the hmo-02 analysis must list which `all-gather*.remat` clones
 disappear so the stack knows whether it still needs that commit.
+
+## M30A-011 Carry prefetch prepared on top of the stack (2026-09-30)
+
+Prebuilt `mfu30a/arm2_on_stack.sh <NN> <port> <fraction> "<stack flags>" -- <stack switches>` (scratchpad).
+It checks the current `origin/research/mcwitt/mfu30-stack` tip out into A's own worktree
+(`~/projects/marin.mfu30-offload-stack`, branch `research/mcwitt/mfu30-offload-stack`) and submits through the
+stack's `arm.sh` with the stack flags plus `--xla_gpu_enable_pipelined_host_offloading=true`, a trace, and
+`hlo_rematerialization,collective_pipeliner` VLOGs (the stack's `dispatch.py` already forwards `TF_CPP_*`).
+Dry run at `8eff7b8ec4` builds the expected command.
+
+Pairing and order: the control is the stack arm with the same commit, flags and switches minus the
+pipelining flag. The flag renames instructions, so it must be decided before the PGLE build. Memory: the
+stack peak is ~103 + 18 (D's saved routed output) + H-A4 5-10 - E/unfilled savings; August measured +9 GiB
+for pipelined offload, so read the stack arm's `memory/peak_gib` first and set the fraction so that
+peak + 9 stays >= 4 GiB under fraction x 184.3 (0.78 gives 143.8 GiB). Risks: the pass also sinks the
+forward carry D2H by an iteration (hidden on main today); it may fail to pipeline the reload through D's
+barriers (engagement: `collective_pipeliner` "Transforming"/pipelined-while lines plus the reload's
+position in the trace); #8317 family is covered by the forced overlap limit 1 plus the loss check against
+the paired stack arm.
