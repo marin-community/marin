@@ -357,3 +357,16 @@ pipelined forward of a1d699e67e; values identical).
   recomputed down projection (by design; the hero is QuACK). The model smoke checks finiteness and norm
   parity, not the GPU-level drop of the QuACK down GEMM; my layer scan (`m30b-gate-epi-02`) covers that.
 - No blocking issues found.
+
+## M30B-020 Short-conv pricing (baseline trace; no build)
+
+Per layer: SConv after the K projection (C=1536, attributed to attention), after the attention output and after
+the MoE branch output (C=6144, [16, 4096, 6144] bf16 = 0.805 GB per tensor). Short-conv scope, s/step: forward
+0.043 (two 6144 kernels, 0.46 ms each), remat 0.025 (one), backward 0.119 (two, 1.24-1.34 ms each). The kernel's own
+docstring measures 3.0 HBM passes forward (floor 2) and 6.7 backward (floor 3): Pallas Triton cannot slice a
+register tile, so each of the W=4 taps is an overlapping reload. At the floor and ~6.5 TB/s: backward 0.37 ms
+per call (-0.87 ms x 96 = -0.083 s/step), forward 0.25 ms (-0.22 ms x 144 = -0.032 s/step). A causal-conv1d-style
+CUDA/CuTe kernel with an SMEM/register ring carry (segment-id resets, fp32 dw partials) is worth ~0.08-0.11
+s/step; a Triton rewrite cannot get there for the reason the docstring gives. Also available: summing the three
+addends of the MoE-branch input (W_up + two shared down projections) inside the conv's load saves one pass,
+~0.02 s/step.
