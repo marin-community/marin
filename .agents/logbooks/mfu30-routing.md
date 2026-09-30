@@ -255,3 +255,15 @@ router balancing/QB statistics stay in family through 180059. Attribution: D+fla
 Correctness constraint of D (record in any landing PR): the backward's all-to-alls no longer depend on the
 recomputed forward's, so D requires a collective overlap limit of 1. ce112504f1 forces it for every ragged
 run, which changes non-hero ragged configurations that inherited the default limit (4).
+
+## M30B-014 PR #9481 transport folded into `_routed_experts` (a1d699e67e)
+
+- Mirror parameters: the backward sends each transport's cotangent along its mirror transfer (reverse
+  return along `dispatch_params`, reverse dispatch and the row-dot return along `return_params`) and drops
+  `_reverse_ragged_a2a`'s two offset all-to-alls. #9481's test that the two parameter sets are each
+  other's transpose is included.
+- Pipelined chunks: plans first, dispatch chunk 0, then in chunk c dispatch c+1 behind
+  `barrier((sorted_x, x_dispatch_c))` and hold chunk c's return behind `barrier((out_c, next_x_dispatch))`,
+  keeping only `out_c` from the second barrier so the recompute can still drop the return and down GEMM.
+- Not on the D arm; for C's stack. Gate `m30b-gate-fold-01` (variants control / unfilled / stack = C's port of
+  #9481 on A+B+C / sonic = D / candidate = D + fold).
