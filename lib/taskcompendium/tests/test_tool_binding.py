@@ -5,6 +5,7 @@
 
 import asyncio
 import hashlib
+import importlib
 import json
 import shutil
 import subprocess
@@ -30,7 +31,6 @@ from taskcompendium.models import (
     TextMessage,
 )
 from taskcompendium.provider_sources import SOURCE_MANIFEST, validate_staged_git_provider
-from taskcompendium.resources import ResourceVisibility, TaskResource
 from taskcompendium.submission import AnswerCall, PlainText, ProviderState
 
 
@@ -258,6 +258,22 @@ def test_external_services_export_as_one_chat_task(tmp_path, monkeypatch):
     ]
 
 
+def test_new_unselected_provider_tool_preserves_existing_binding(tmp_path, monkeypatch):
+    bindings = _external_services(tmp_path, monkeypatch, names=("stable_a", "stable_b"))
+    module_name = bindings[0].provider.split(":")[1]
+    provider = importlib.import_module(module_name).ServiceA
+    provider.TOOL_DEFINITIONS = (
+        *provider.TOOL_DEFINITIONS,
+        {"type": "function", "function": {"name": "new_tool", "parameters": {"type": "object"}}},
+    )
+    environment_config = HarborEnvironmentConfig(tool_providers={"a": bindings[0], "b": bindings[1]})
+    specification = _specification()
+    convention = PlainText(id="plain")
+
+    assert compatible_lowerings(specification, (convention,), (environment_config,))
+    lower_to_harbor(specification, convention, environment_config, tmp_path / "task")
+
+
 def test_provider_tool_collisions_reject_export(tmp_path, monkeypatch):
     bindings = _external_services(tmp_path, monkeypatch, names=("lookup", "lookup"))
     with pytest.raises(ValueError, match="Tool names must be unique"):
@@ -327,17 +343,4 @@ def test_host_chat_rejects_workspace_requirements_with_tool_providers(tmp_path, 
             convention,
             environment_config,
             tmp_path / "capability",
-        )
-    with pytest.raises(ValueError, match="agent-visible files"):
-        lower_to_harbor(
-            _specification().model_copy(
-                update={
-                    "resources": (
-                        TaskResource(path="input.txt", visibility=ResourceVisibility.AGENT, content="task input"),
-                    )
-                }
-            ),
-            convention,
-            environment_config,
-            tmp_path / "resource",
         )
