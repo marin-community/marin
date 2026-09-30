@@ -6,13 +6,13 @@ Training and evaluation tasks arrive with different prompt formats, answer rules
 
 The current implementation exports Harbor tasks for text, number, native-action, and state results. A task can require several named, versioned action interfaces. File results have no submission convention in this package.
 
-The NeMo Workplace row 0 import supplies the first Python tool provider. State grading is separate from tool selection: a tool-backed task can also submit a text or number answer.
+The NeMo Workplace row 0 import supplies the first container tool service. State grading is separate from tool selection: a tool-backed task can also submit a text or number answer.
 
 ## What does it contain?
 
 - **Task specs** describe the source problem, required capabilities, the kind of result, and how to verify it.
 - **Submission conventions** describe how to ask for and extract a result, such as a plain answer, a JSON object, or a final function call.
-- **Harbor environment configurations** select direct chat or one or more importable tool providers.
+- **Harbor environment configurations** select direct chat or one or more container tool services.
 - **Lowering tools** find compatible convention and environment configuration pairs, select a pair, and export a runnable Harbor task package.
 - **A Harbor adapter** sends the conversation to an OpenAI-compatible endpoint, dispatches tool calls across turns, and records the result.
 
@@ -68,15 +68,17 @@ With the `answer_call` convention, the chat agent adds `submit_answer(answer: st
 
 ### Tool providers and workspace
 
-`TaskSpec.tool_providers` names the action interfaces and immutable seeds a task needs. `HarborEnvironmentConfig.tool_providers` binds those names to implementations and pinned tool schemas. A trial can use several providers; their function names must be unique and must not collide with terminal submission functions. A provider can use an installed `python:module:Class` import or a pinned external source such as `python+git+https://github.com/marin-community/nemo_workplace@<full-commit-sha>:nemo_workplace.provider:NemoWorkplaceProvider`. The Git commit pin is distinct from the provider's own `provider_revision`. MCP bindings are not implemented yet.
+`TaskSpec.tool_providers` names the action interfaces and immutable seeds a task needs. `HarborEnvironmentConfig.tool_providers` binds those names to digest-pinned container images, commands, and declared tool schemas. A trial can use several providers; function names must be unique and must not collide with terminal submission functions.
 
-For a Git provider, the trusted export caller supplies its local checkout through `trusted_provider_sources={"workplace": checkout_path}`. TaskCompendium verifies the checkout and packages its tracked source with the exported task. Harbor runs the provider from that snapshot without fetching source during the trial. The provider's Python dependencies must be installed in the runtime.
+The caller builds or pulls each image before export. `lower_to_harbor` checks its local OCI labels against the declared interface, seed, implementation revision, and complete schema digest. The exported task stores only the binding manifest. It contains no provider source checkout. Trial startup uses `docker run --pull never` and verifies the running service's identity and schemas again. Provider code runs inside the container, with no network, host mounts, Linux capabilities, or writable root filesystem. A bounded temporary filesystem is available at `/tmp`.
+
+Each provider process serves JSON-lines requests with `id`, `method`, and `params` fields, returning the same ID and either `result` or `error`. `initialize` checks the immutable identity and returns schemas; `call` dispatches one action with its model call ID; `state` retrieves authoritative JSON-compatible state. Requests are serialized and never retried. The provider persists across tool turns and is destroyed after the trial. Wire requests, responses, failures, and bounded diagnostics are retained in `provider-<name>.jsonl`. Full MCP interoperability is outside this initial transport.
 
 Tool providers expose callable actions. `environment_requirements` separately describes workspace capabilities such as filesystem and shell access. The host chat runtime cannot satisfy those requirements. A workspace runtime must supply them; declaring a capability on a tool provider does not create a workspace.
 
 ### Files and state
 
-`answer_type=file` names a file result; this package has no file submission convention. `answer_type=state` names the resulting environment state, which can include changes outside a filesystem. `ProviderState(provider="workplace")` selects the 'workplace' provider's state via its `canonical_state()` method. This method returns a JSON-compatible value. The grader then compares this to the expected state. The final assistant message ends the interaction.
+`answer_type=file` names a file result; this package has no file submission convention. `answer_type=state` names the resulting environment state, which can include changes outside a filesystem. `ProviderState(provider="workplace")` selects the 'workplace' provider's state via its async `canonical_state()` method. This method retrieves a JSON-compatible value. The grader then compares this to the expected state. The final assistant message ends the interaction.
 
 ## What can we import?
 
@@ -174,15 +176,16 @@ The package tests use `tests/harbor_replay.py` to feed fixed HTTP responses thro
 
 ### NeMo Workplace Assistant
 
-`taskcompendium.importers.nemo_workplace.import_dataset_split(source, split, provider_source)` imports every row from the pinned `train.jsonl` and `validation.jsonl` files in [NVIDIA's NeMo Workplace Assistant dataset](https://huggingface.co/datasets/nvidia/Nemotron-RL-agent-workplace_assistant/tree/c86a908379e0a361a573c395e175d3c1aa128e6c): 1,255 train rows and 545 validation rows, for 1,800 total. A trusted caller supplies the raw split bytes. The importer checks each whole-file SHA256, row count, and split-local ID range, then records the split, row ID, and raw row SHA256 in task provenance. `select_rows` and `import_row` also support all five rows in the [pinned NeMo Gym example file](https://github.com/NVIDIA-NeMo/Gym/blob/1e668906d2e69a9e8ee9aaafc60050a4025d9688/resources_servers/workplace_assistant/data/example.jsonl).
+`taskcompendium.importers.nemo_workplace.import_dataset_split(source, split, provider_source, runtime)` imports every row from the pinned `train.jsonl` and `validation.jsonl` files in [NVIDIA's NeMo Workplace Assistant dataset](https://huggingface.co/datasets/nvidia/Nemotron-RL-agent-workplace_assistant/tree/c86a908379e0a361a573c395e175d3c1aa128e6c): 1,255 train rows and 545 validation rows, for 1,800 total. A trusted caller supplies the raw split bytes. The importer checks each whole-file SHA256, row count, and split-local ID range, then records the split, row ID, and raw row SHA256 in task provenance. `select_rows` and `import_row` also support all five rows in the [pinned NeMo Gym example file](https://github.com/NVIDIA-NeMo/Gym/blob/1e668906d2e69a9e8ee9aaafc60050a4025d9688/resources_servers/workplace_assistant/data/example.jsonl).
 
-The `workplace` binding pins `NemoWorkplaceProvider` in the [external provider repository](https://github.com/marin-community/nemo_workplace/tree/27b39001312617403021635f0492e120abc2cd34), its 27 tool schemas, and its immutable CSV seed. A trusted caller supplies a clean checkout of that commit and calls `stage_git_provider(PROVIDER, checkout, provider_source)` before importing. The importer loads this verified snapshot through the Git provider loader; no installed `nemo_workplace` package is required. `workplace_environment_config(provider_source)` loads only the tool binding. Pass the clean checkout to `lower_to_harbor` as `trusted_provider_sources={"workplace": checkout}` when exporting. Trials use the exported snapshot without fetching the repository.
+The `workplace` binding pins the service image, its 27 tool schemas, and its immutable CSV seed. The [external provider repository](https://github.com/marin-community/nemo_workplace) builds the image and preserves the NVIDIA license and source attribution. Its server command is `python -m nemo_workplace.server`.
 
-For example, after checking out the pinned provider commit and downloading `train.jsonl` from the pinned dataset revision:
+The importer uses a verified provider checkout to independently construct private expected state during preparation. That implementation is never imported in the Harbor launch or export path. A caller supplies the separately built service image through `ContainerService(image="<repository>@sha256:<manifest-digest>", command=("python", "-m", "nemo_workplace.server"))` when importing. `workplace_environment_config(provider_source, runtime)` loads only the selected binding.
 
 ```python
 from pathlib import Path
 
+from taskcompendium.container_service import ContainerService
 from taskcompendium.importers.nemo_workplace import PROVIDER, import_dataset_split
 from taskcompendium.lowering import lower_to_harbor
 from taskcompendium.provider_sources import stage_git_provider
@@ -190,18 +193,16 @@ from taskcompendium.provider_sources import stage_git_provider
 checkout = Path("/path/to/nemo_workplace")
 provider_source = Path("/path/to/new-provider-snapshot")
 stage_git_provider(PROVIDER, checkout, provider_source)
-imports = import_dataset_split(Path("train.jsonl").read_bytes(), "train", provider_source)
-specification, convention, binding = imports[0]
-lower_to_harbor(
-    specification,
-    convention,
-    binding,
-    Path("/path/to/new-harbor-task"),
-    trusted_provider_sources={"workplace": checkout},
+runtime = ContainerService(
+    image="<repository>@sha256:<manifest-digest>",
+    command=("python", "-m", "nemo_workplace.server"),
 )
+imports = import_dataset_split(Path("train.jsonl").read_bytes(), "train", provider_source, runtime)
+specification, convention, binding = imports[0]
+lower_to_harbor(specification, convention, binding, Path("/path/to/new-harbor-task"))
 ```
 
-Both destination directories must be new. Install the provider's runtime dependencies in the import and trial environment; the pinned provider requires `pandas>=2.2`, included in this package's test group.
+The image must be staged on the Docker host before export and launch. The preparation environment requires the pinned provider's pandas dependency; trial dependencies are packaged in the image. No source or image fetch happens during a trial.
 
 The private `structured_exact` verifier compares final provider state with a target constructed by applying each row's gold action list to a fresh seed. Empty action lists define unchanged-state targets. `ProviderState(provider="workplace")` retrieves canonical state without receiving the expected value. The model sees only the source request and the provider's tools; the final message ends the trial. Tool errors become observations, so a later valid call can recover. To reproduce the source request, set `ChatLaunch(temperature=1.0, parallel_tool_calls=False)`.
 
@@ -215,4 +216,12 @@ uv run --project lib/taskcompendium --extra harbor --group test pytest lib/taskc
 # Type-check the package from its own project directory after installing its dependencies.
 cd lib/taskcompendium
 uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check
+```
+
+Real container-backed Workplace Harbor tests require an already staged service image:
+
+```bash
+uv run --project lib/taskcompendium --extra harbor --group test pytest \
+  lib/taskcompendium/tests/test_nemo_workplace.py -m docker \
+  --provider-image='<repository>@sha256:<manifest-digest>'
 ```

@@ -16,6 +16,7 @@ import json
 import os
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any, Protocol, cast, runtime_checkable
 
 from harbor.agents.base import BaseAgent
@@ -25,6 +26,7 @@ from harbor.models.agent.context import AgentContext
 from harbor.models.verifier.result import VerifierResult
 from harbor.verifier.base import BaseVerifier
 
+from taskcompendium.container_service import ContainerToolProvider
 from taskcompendium.grading import GradeResult, Outcome
 from taskcompendium.harbor.protocol import assistant_message, chat_conversation
 from taskcompendium.lowering import (
@@ -32,7 +34,6 @@ from taskcompendium.lowering import (
     SPECIFICATION_FILE,
     SUBMISSION_CONVENTION_FILE,
     ToolBinding,
-    provider_class,
     read_environment_config,
     read_specification,
     read_submission_convention,
@@ -40,7 +41,6 @@ from taskcompendium.lowering import (
     validate_provider_surface,
 )
 from taskcompendium.models import AssistantToolCalls, ConversationToolCall, ConversationTrace
-from taskcompendium.provider_sources import PROVIDER_SOURCES_DIR, parse_git_provider
 from taskcompendium.submission import GradingAttempt
 from taskcompendium.verifier_registry import grade_answer
 
@@ -104,19 +104,15 @@ class CompositeToolEnvironment(BaseEnvironment):
         self.tool_owners: dict[str, str] = {}
         super().__init__(*args, **kwargs)
         for name, binding in self.bindings.items():
-            source = (
-                self.environment_dir / PROVIDER_SOURCES_DIR / name
-                if parse_git_provider(binding.provider) is not None
-                else None
+            validate_provider_surface(binding)
+            self.providers[name] = ContainerToolProvider(
+                runtime=binding.runtime,
+                action_interface=binding.action_interface,
+                seed_sha256=binding.seed_sha256,
+                provider_revision=binding.provider_revision,
+                tool_definitions=list(binding.tool_definitions),
+                trace_path=Path(str(self.trial_paths.agent_dir / f"provider-{name}.jsonl")),
             )
-            validate_provider_surface(binding, source)
-            provider_type = provider_class(binding, source)
-            if issubclass(provider_type, BaseEnvironment):
-                raise TypeError(f"Tool provider {name!r} must not be a Harbor environment")
-            provider = provider_type(**self.provider_kwargs(binding))
-            if not isinstance(provider, ToolProvider):
-                raise TypeError(f"Provider {name!r} does not expose tool methods")
-            self.providers[name] = provider
 
     @staticmethod
     def type() -> str:
@@ -129,9 +125,6 @@ class CompositeToolEnvironment(BaseEnvironment):
     def _validate_definition(self) -> None:
         # Harbor requires this hook; provider bindings are validated before the trial starts.
         pass
-
-    def provider_kwargs(self, binding: ToolBinding) -> dict[str, Any]:
-        return {"seed_sha256": binding.seed_sha256, "action_interface": binding.action_interface}
 
     async def start(self, force_build: bool) -> None:
         started: list[ManagedToolProvider] = []

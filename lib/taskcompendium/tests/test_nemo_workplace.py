@@ -1,467 +1,138 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pinned Workplace import and mutable provider behavior."""
+"""A pinned Workplace row imported into a real container-backed Harbor trial."""
 
 import asyncio
-import hashlib
 import json
 import subprocess
-from collections.abc import Iterator
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from threading import Lock, Thread
-from urllib.request import urlopen
+from threading import Thread
 
 import pytest
 
-from taskcompendium.grading import exact_answer
+from taskcompendium.container_service import ContainerService
 from taskcompendium.harbor.runner import ChatLaunch, run_trial
 from taskcompendium.importers.nemo_workplace import (
-    DATASET_REVISION,
-    DATASET_SPLIT_ROW_COUNTS,
-    DATASET_SPLIT_SHA256,
     PROVIDER,
     PROVIDER_GIT_REVISION,
     PROVIDER_REPOSITORY,
-    ROW_SHA256,
-    ROW_SHA256_BY_ID,
-    SOURCE_EXAMPLE_MAX_BYTES,
-    SOURCE_EXAMPLE_SHA256,
-    SOURCE_EXAMPLE_URL,
-    import_dataset_split,
     import_row,
-    select_row_zero,
-    select_rows,
-    workplace_environment_config,
 )
-from taskcompendium.lowering import lower_to_harbor, provider_class
-from taskcompendium.models import AnswerType, ConversationInput, ConversationTrace, TaskSpec, TextMessage, VerifierKind
+from taskcompendium.lowering import lower_to_harbor
+from taskcompendium.models import ConversationTrace, ToolResult
 from taskcompendium.provider_sources import stage_git_provider
-from taskcompendium.submission import GradingAttempt, PlainText, SubmissionConvention
-from taskcompendium.verifier_registry import grade_answer
+
+ROW = Path(__file__).parent / "fixtures/nemo/workplace-row0.jsonl"
 
 
 @pytest.fixture(scope="module")
-def source_example() -> bytes:
-    """Resolve the pinned upstream source in trusted test setup, before trials."""
-    with urlopen(SOURCE_EXAMPLE_URL, timeout=30) as response:
-        return response.read(SOURCE_EXAMPLE_MAX_BYTES + 1)
+def provider_source(tmp_path_factory):
+    checkout = tmp_path_factory.mktemp("workplace-source") / "source"
+    subprocess.run(("git", "clone", "--quiet", PROVIDER_REPOSITORY, str(checkout)), check=True)
+    subprocess.run(("git", "-C", str(checkout), "checkout", "--quiet", PROVIDER_GIT_REVISION), check=True)
+    snapshot = tmp_path_factory.mktemp("workplace-snapshot") / "provider"
+    stage_git_provider(PROVIDER, checkout, snapshot)
+    return snapshot
 
 
 @pytest.fixture(scope="module")
-def source_row(source_example: bytes) -> bytes:
-    return select_row_zero(source_example)
-
-
-@pytest.fixture(scope="module")
-def trusted_provider_checkout(tmp_path_factory) -> Path:
-    """Resolve the pinned source once, before any exported Harbor trial starts."""
-    checkout = tmp_path_factory.mktemp("workplace-source") / "nemo_workplace"
-    subprocess.run(["git", "clone", "--quiet", PROVIDER_REPOSITORY, str(checkout)], check=True)
-    subprocess.run(["git", "-C", str(checkout), "checkout", "--quiet", "--detach", PROVIDER_GIT_REVISION], check=True)
-    return checkout
-
-
-@pytest.fixture(scope="module")
-def provider_source(tmp_path_factory, trusted_provider_checkout) -> Path:
-    source = tmp_path_factory.mktemp("workplace-snapshot") / "provider"
-    stage_git_provider(PROVIDER, trusted_provider_checkout, source)
-    return source
-
-
-@pytest.fixture(scope="module")
-def workplace_provider(provider_source):
-    binding = workplace_environment_config(provider_source).tool_providers["workplace"]
-    return provider_class(binding, provider_source)
+def workplace_runtime(request):
+    image = request.config.getoption("provider_image")
+    if image is None:
+        raise ValueError("Docker Workplace tests require --provider-image=<repository@sha256:digest>")
+    return ContainerService(image=image, command=("python", "-m", "nemo_workplace.server"))
 
 
 @contextmanager
-def _serve_endpoint(endpoint: type[BaseHTTPRequestHandler]) -> Iterator[ThreadingHTTPServer]:
-    server = ThreadingHTTPServer(("127.0.0.1", 0), endpoint)
+def policy(actions):
+    class Endpoint(BaseHTTPRequestHandler):
+        def do_POST(self):
+            request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            observations = sum(message["role"] == "tool" for message in request["messages"])
+            if observations < len(actions):
+                action = actions[observations]
+                message = {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": f"call-{observations}",
+                            "type": "function",
+                            "function": action,
+                        }
+                    ],
+                }
+            else:
+                message = {"role": "assistant", "content": "Done."}
+            payload = json.dumps({"choices": [{"message": message}]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, format_string, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Endpoint)
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        yield server
+        yield f"http://127.0.0.1:{server.server_port}"
     finally:
         server.shutdown()
         server.server_close()
         thread.join()
 
 
-def _send_completion(handler: BaseHTTPRequestHandler, message: dict) -> None:
-    body = json.dumps({"choices": [{"message": message}]}).encode()
-    handler.send_response(200)
-    handler.send_header("Content-Type", "application/json")
-    handler.send_header("Content-Length", str(len(body)))
-    handler.end_headers()
-    handler.wfile.write(body)
-
-
-def _provider(workplace_provider):
-    return workplace_provider(seed_sha256=workplace_provider.SEED_SHA256)
-
-
-def _source(data: bytes) -> tuple[bytes, dict]:
-    return data, json.loads(data)
-
-
-async def _reward(specification: TaskSpec, convention: SubmissionConvention, provider) -> float:
-    conversation = ConversationTrace(
-        events=(*specification.context.events, TextMessage(role="assistant", content="Done."))
-    )
-    result = await grade_answer(
-        specification,
-        convention,
-        GradingAttempt(conversation=conversation, tool_providers={"workplace": provider}, workspace=None),
-    )
-    assert result.reward is not None
-    return result.reward
-
-
-def test_workplace_import_pins_row_tool_surface_and_private_state(
-    source_example: bytes, source_row: bytes, provider_source
+@pytest.mark.docker
+@pytest.mark.parametrize("mode,reward", (("correct", 1.0), ("wrong", 0.0), ("noop", 0.0), ("recovery", 1.0)))
+async def test_workplace_import_container_harbor_state_outcomes(
+    tmp_path, provider_source, workplace_runtime, mode, reward
 ):
-    assert hashlib.sha256(source_example).hexdigest() == SOURCE_EXAMPLE_SHA256
-    assert hashlib.sha256(source_row).hexdigest() == ROW_SHA256
-    data, row = _source(source_row)
-    specification, convention, binding = import_row(data, provider_source)
-    provider = binding.tool_providers["workplace"]
-    assert specification.source.revision == DATASET_REVISION
-    assert specification.answer_type.value == convention.answer_format.value == "state"
-    assert convention.provider == "workplace"
-    assert specification.verifier.kind == VerifierKind.STRUCTURED_EXACT
-    assert len(provider.tools) == len(row["responses_create_params"]["tools"]) == 27
-    visible = specification.context.model_dump_json()
-    assert [(event.role, event.content) for event in specification.context.events] == [
-        (message["role"], message["content"]) for message in row["responses_create_params"]["input"]
-    ]
-    assert "ground_truth" not in visible
-    assert provider.provider.endswith(f"@{PROVIDER_GIT_REVISION}:nemo_workplace.provider:NemoWorkplaceProvider")
-
-
-def test_workplace_import_converts_every_pinned_example_row(source_example: bytes, provider_source):
-    rows = select_rows(source_example)
-    imports = [import_row(row, provider_source) for row in rows]
-    specifications = [item.specification for item in imports]
-
-    assert [spec.source.row for spec in specifications] == ["0", "1", "2", "3", "4"]
-    assert [spec.id for spec in specifications] == [f"nemo-workplace-{row_id}" for row_id in range(5)]
-    assert all(spec.answer_type is AnswerType.STATE for spec in specifications)
-    assert all(spec.verifier.kind is VerifierKind.STRUCTURED_EXACT for spec in specifications)
-    assert all("ground_truth" not in spec.model_dump_json() for spec in specifications)
-
-
-async def test_workplace_import_gradeable_empty_ground_truth_split_row(
-    monkeypatch, source_row: bytes, provider_source, workplace_provider
-):
-    row = json.loads(source_row)
-    row["category"] = "workplace_assistant_analytics"
-    row["ground_truth"] = []
-    data = (json.dumps(row, separators=(",", ":")) + "\n").encode()
-    monkeypatch.setitem(DATASET_SPLIT_ROW_COUNTS, "train", 1)
-    monkeypatch.setitem(DATASET_SPLIT_SHA256, "train", hashlib.sha256(data).hexdigest())
-
-    (workplace_import,) = import_dataset_split(data, "train", provider_source)
-    specification, convention, _ = workplace_import
-    provider = _provider(workplace_provider)
-
-    assert specification.id == "nemo-workplace-train-0"
-    assert specification.source.row == f"train:0:{hashlib.sha256(data).hexdigest()}"
-    assert await _reward(specification, convention, provider) == 1.0
-
-
-def test_workplace_import_rejects_unpinned_row_and_changed_tools(
-    monkeypatch, source_example: bytes, source_row: bytes, provider_source
-):
-    data, row = _source(source_row)
-    with pytest.raises(ValueError, match="pinned digest"):
-        select_row_zero(source_example + b" ")
-    with pytest.raises(ValueError, match="size limit"):
-        select_row_zero(b" " * (SOURCE_EXAMPLE_MAX_BYTES + 1))
-    with pytest.raises(ValueError, match="pinned raw digest"):
-        import_row(data + b" ", provider_source)
-    row["responses_create_params"]["tools"][0]["name"] = "wrong_tool"
-    changed = json.dumps(row).encode()
-    monkeypatch.setitem(ROW_SHA256_BY_ID, 0, hashlib.sha256(changed).hexdigest())
-    with pytest.raises(ValueError, match="pinned provider"):
-        import_row(changed, provider_source)
-
-
-async def test_workplace_success_wrong_and_noop_state(source_row: bytes, provider_source, workplace_provider):
-    _, row = _source(source_row)
-    specification, convention, _ = import_row(source_row, provider_source)
-    gold = row["ground_truth"]
-    success, wrong, noop = (_provider(workplace_provider) for _ in range(3))
-    action = gold[0]
-    await success.dispatch_action(action["name"], action["arguments"], "call-1")
-    await wrong.dispatch_action(
-        action["name"],
-        '{"email_id":"00000057","body":"Thanks for the update - I will not follow up."}',
-        "call-1",
-    )
-    await noop.dispatch_action(
-        "email_get_email_information_by_id", '{"email_id":"00000057","field":"subject"}', "call-1"
-    )
-    assert await _reward(specification, convention, success) == 1.0
-    assert await _reward(specification, convention, wrong) == 0.0
-    assert await _reward(specification, convention, noop) == 0.0
-
-
-async def test_workplace_tool_error_recovers_and_retains_call_order(
-    source_row: bytes, provider_source, workplace_provider
-):
-    _, row = _source(source_row)
-    specification, convention, _ = import_row(source_row, provider_source)
-    action = row["ground_truth"][0]
-    provider = _provider(workplace_provider)
-    error = await provider.dispatch_action(action["name"], '{"email_id":"00000057","unknown":"x"}', "call-bad")
-    success = await provider.dispatch_action(action["name"], action["arguments"], "call-good")
-    assert [entry.call_id for entry in provider.trace] == ["call-bad", "call-good"]
-    assert [entry.output for entry in provider.trace] == [error, success]
-    assert await _reward(specification, convention, provider) == 1.0
-
-
-async def test_workplace_concurrent_trials_start_from_fresh_seed(source_row: bytes, provider_source, workplace_provider):
-    _, row = _source(source_row)
-    specification, convention, _ = import_row(source_row, provider_source)
-    action = row["ground_truth"][0]
-    first, second = _provider(workplace_provider), _provider(workplace_provider)
-    await asyncio.gather(
-        first.dispatch_action(action["name"], action["arguments"], "first"),
-        second.dispatch_action(
-            "email_get_email_information_by_id", '{"email_id":"00000057","field":"subject"}', "second"
-        ),
-    )
-    assert (await _reward(specification, convention, first), await _reward(specification, convention, second)) == (
-        1.0,
-        0.0,
-    )
-
-
-async def test_workplace_harbor_scripted_endpoint_recovers_after_tool_error(
-    tmp_path, trusted_provider_checkout, source_row: bytes, provider_source
-):
-    data, row = _source(source_row)
-    specification, convention, binding = import_row(data, provider_source)
-    task_dir = lower_to_harbor(
-        specification,
-        convention,
-        binding,
-        tmp_path / "task",
-        trusted_provider_sources={"workplace": trusted_provider_checkout},
-    )
-    gold = row["ground_truth"][0]
-    calls = [
-        ('{"email_id":"00000057","unknown":"x"}', "bad"),
-        (gold["arguments"], "good"),
-    ]
-    requests = []
-
-    class Endpoint(BaseHTTPRequestHandler):
-        def log_message(self, *_args):
-            pass
-
-        def do_POST(self):
-            payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-            requests.append(payload)
-            if len(requests) <= len(calls):
-                arguments, label = calls[len(requests) - 1]
-                message = {
-                    "role": "assistant",
-                    "content": None,
-                    "tool_calls": [
-                        {
-                            "id": f"call-{label}",
-                            "type": "function",
-                            "function": {"name": gold["name"], "arguments": arguments},
-                        }
-                    ],
-                }
-            else:
-                message = {"role": "assistant", "content": "Done."}
-            _send_completion(self, message)
-
-    with _serve_endpoint(Endpoint) as server:
+    raw = ROW.read_bytes()
+    specification, convention, config = import_row(raw, provider_source, workplace_runtime)
+    actions = json.loads(raw)["ground_truth"]
+    if mode == "noop":
+        actions = []
+    elif mode == "wrong":
+        actions = actions[:-1]
+    elif mode == "recovery":
+        actions = [{"name": actions[0]["name"], "arguments": "{}"}, *actions]
+    task = lower_to_harbor(specification, convention, config, tmp_path / "task")
+    with policy(actions) as endpoint:
         result = await run_trial(
-            task_dir,
-            binding,
-            ChatLaunch(
-                model="fixture",
-                api_base=f"http://127.0.0.1:{server.server_port}/v1",
-                temperature=1.0,
-                parallel_tool_calls=False,
-                max_turns=4,
-            ),
-            tmp_path / "trials",
-            "workplace",
+            task, config, ChatLaunch(model="scripted", api_base=endpoint), tmp_path / "trials", "run"
         )
-    assert result.exception_info is None, result.exception_info
-    assert result.verifier_result.rewards == {"reward": 1.0}
-    assert len(requests) == 3
-    assert len(requests[0]["tools"]) == 27
-    assert all(request["temperature"] == 1.0 and request["parallel_tool_calls"] is False for request in requests)
-    assert requests[1]["messages"][-1]["tool_call_id"] == "call-bad"
-    assert requests[2]["messages"][-1]["tool_call_id"] == "call-good"
-    assert "ground_truth" not in json.dumps(requests)
-    metadata = result.agent_result.metadata
-    assert len(metadata["tool_definitions"]) == 27
-    assert [action["call_id"] for action in metadata["tools"]] == ["call-bad", "call-good"]
-    assert [action["observation"] for action in metadata["tools"]] == [
-        requests[1]["messages"][-1]["content"],
-        requests[2]["messages"][-1]["content"],
+    assert result.exception_info is None
+    assert result.verifier_result.rewards == {"reward": reward}
+    trace = ConversationTrace.model_validate_json((tmp_path / "trials/run/agent/submission.json").read_text())
+    assert [event.call_id for event in trace.events if isinstance(event, ToolResult)] == [
+        f"call-{i}" for i in range(len(actions))
     ]
-    assert [message["role"] for message in metadata["all_messages"]] == [
-        "system",
-        "user",
-        "user",
-        "assistant",
-        "tool",
-        "assistant",
-        "tool",
-        "assistant",
+    provider_trace = [
+        json.loads(line) for line in (tmp_path / "trials/run/agent/provider-workplace.jsonl").read_text().splitlines()
     ]
+    assert [
+        event["request"]["params"]["call_id"]
+        for event in provider_trace
+        if event.get("request", {}).get("method") == "call"
+    ] == [f"call-{i}" for i in range(len(actions))]
+    assert not list((task / "environment").iterdir())
 
 
-async def test_workplace_chat_tools_can_answer_text_from_observation(
-    tmp_path, trusted_provider_checkout, source_row: bytes, provider_source
-):
-    imported, _, binding = import_row(source_row, provider_source)
-    subject = "Task Update on Develop prototype for report generation"
-    specification = TaskSpec(
-        id="workplace-subject-answer",
-        context=ConversationInput(
-            events=(TextMessage(role="user", content="Use the available tools to find the subject of email 00000057."),)
-        ),
-        verifier=exact_answer(subject),
-        source=imported.source,
-        environment_requirements=imported.environment_requirements,
-        tool_providers=imported.tool_providers,
-        answer_type=AnswerType.TEXT,
-    )
-    convention = PlainText(id="plain")
-    task_dir = lower_to_harbor(
-        specification,
-        convention,
-        binding,
-        tmp_path / "task",
-        trusted_provider_sources={"workplace": trusted_provider_checkout},
-    )
-    requests = []
-
-    class Endpoint(BaseHTTPRequestHandler):
-        def log_message(self, *_args):
-            pass
-
-        def do_POST(self):
-            payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-            requests.append(payload)
-            if len(requests) == 1:
-                message = {
-                    "role": "assistant",
-                    "content": None,
-                    "tool_calls": [
-                        {
-                            "id": "call-subject",
-                            "type": "function",
-                            "function": {
-                                "name": "email_get_email_information_by_id",
-                                "arguments": '{"email_id":"00000057","field":"subject"}',
-                            },
-                        }
-                    ],
-                }
-            else:
-                observation = json.loads(payload["messages"][-1]["content"])
-                message = {"role": "assistant", "content": observation["output"]["subject"]}
-            _send_completion(self, message)
-
-    with _serve_endpoint(Endpoint) as server:
-        result = await run_trial(
-            task_dir,
-            binding,
-            ChatLaunch(
-                model="fixture",
-                api_base=f"http://127.0.0.1:{server.server_port}/v1",
-                temperature=1.0,
-                parallel_tool_calls=False,
-                max_turns=2,
-            ),
-            tmp_path / "trials",
-            "subject",
+@pytest.mark.docker
+async def test_workplace_concurrent_and_fresh_harbor_trials_are_isolated(tmp_path, provider_source, workplace_runtime):
+    raw = ROW.read_bytes()
+    specification, convention, config = import_row(raw, provider_source, workplace_runtime)
+    task = lower_to_harbor(specification, convention, config, tmp_path / "task")
+    with policy(json.loads(raw)["ground_truth"]) as endpoint:
+        launch = ChatLaunch(model="scripted", api_base=endpoint)
+        results = await asyncio.gather(
+            *(run_trial(task, config, launch, tmp_path / "trials", f"trial-{i}") for i in range(2))
         )
-    assert result.exception_info is None, result.exception_info
-    assert result.verifier_result.rewards == {"reward": 1.0}
-    assert len(requests) == 2
-    assert len(requests[0]["tools"]) == 27
-    assert requests[1]["messages"][-1]["tool_call_id"] == "call-subject"
-    assert result.agent_result.metadata["assistant_final"]["content"] == subject
-
-
-async def test_workplace_harbor_trials_are_fresh_and_concurrent(
-    tmp_path, trusted_provider_checkout, source_row: bytes, provider_source
-):
-    specification, convention, binding = import_row(source_row, provider_source)
-    task_dir = lower_to_harbor(
-        specification,
-        convention,
-        binding,
-        tmp_path / "task",
-        trusted_provider_sources={"workplace": trusted_provider_checkout},
-    )
-    gold = json.loads(source_row)["ground_truth"][0]
-    turns: dict[str, int] = {}
-    lock = Lock()
-
-    class Endpoint(BaseHTTPRequestHandler):
-        def log_message(self, *_args):
-            pass
-
-        def do_POST(self):
-            payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-            model = payload["model"]
-            with lock:
-                turns[model] = turns.get(model, 0) + 1
-                turn = turns[model]
-            if turn == 1:
-                if model.startswith("good"):
-                    name, arguments = gold["name"], gold["arguments"]
-                else:
-                    name, arguments = "email_get_email_information_by_id", '{"email_id":"00000057","field":"subject"}'
-                message = {
-                    "role": "assistant",
-                    "content": None,
-                    "tool_calls": [
-                        {
-                            "id": f"{model}-call",
-                            "type": "function",
-                            "function": {"name": name, "arguments": arguments},
-                        }
-                    ],
-                }
-            else:
-                message = {"role": "assistant", "content": "Done."}
-            _send_completion(self, message)
-
-    with _serve_endpoint(Endpoint) as server:
-
-        async def trial(model: str):
-            launch = ChatLaunch(
-                model=model,
-                api_base=f"http://127.0.0.1:{server.server_port}/v1",
-                temperature=1.0,
-                parallel_tool_calls=False,
-                max_turns=3,
-            )
-            return await run_trial(task_dir, binding, launch, tmp_path / "trials", model)
-
-        good, noop = await asyncio.gather(trial("good-1"), trial("noop"))
-        good_again = await trial("good-2")
-
-    assert all(result.exception_info is None for result in (good, noop, good_again))
-    assert [result.verifier_result.rewards for result in (good, noop, good_again)] == [
-        {"reward": 1.0},
-        {"reward": 0.0},
-        {"reward": 1.0},
-    ]
+        results.append(await run_trial(task, config, launch, tmp_path / "trials", "fresh"))
+    assert [result.exception_info for result in results] == [None] * 3
+    assert [result.verifier_result.rewards for result in results] == [{"reward": 1.0}] * 3

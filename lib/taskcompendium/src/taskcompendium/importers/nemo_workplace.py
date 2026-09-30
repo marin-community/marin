@@ -10,6 +10,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Literal, NamedTuple
 
+from taskcompendium.container_service import ContainerService
 from taskcompendium.grading import structured_exact
 from taskcompendium.lowering import HarborEnvironmentConfig, ToolBinding
 from taskcompendium.models import (
@@ -26,7 +27,7 @@ from taskcompendium.submission import ProviderState, SubmissionConvention
 
 DATASET = "nvidia/Nemotron-RL-agent-workplace_assistant"
 DATASET_REVISION = "c86a908379e0a361a573c395e175d3c1aa128e6c"
-IMPORTER_REVISION = "taskcompendium-nemo-workplace-v7"
+IMPORTER_REVISION = "taskcompendium-nemo-workplace-v8"
 DATASET_SPLIT_URL = f"https://huggingface.co/datasets/{DATASET}/resolve/{DATASET_REVISION}"
 DATASET_SPLIT_MAX_BYTES = 32 * 1024 * 1024
 DATASET_SPLIT_ROW_COUNTS = {"train": 1255, "validation": 545}
@@ -136,19 +137,21 @@ def _provider_module(provider_source: Path) -> ModuleType:
     return importlib.import_module(provider.__module__)
 
 
-def workplace_environment_config(provider_source: Path) -> HarborEnvironmentConfig:
+def workplace_environment_config(provider_source: Path, runtime: ContainerService) -> HarborEnvironmentConfig:
     """Load the Workplace tool binding from a verified provider snapshot."""
-    return _environment_config(_provider_module(provider_source))
+    return _environment_config(_provider_module(provider_source), runtime)
 
 
-def _environment_config(provider: ModuleType) -> HarborEnvironmentConfig:
+def _environment_config(provider: ModuleType, runtime: ContainerService) -> HarborEnvironmentConfig:
     """Select the source provider and its immutable tool surface."""
     return HarborEnvironmentConfig(
         tool_providers={
             PROVIDER_NAME: ToolBinding(
                 action_interface=provider.ACTION_INTERFACE,
                 seed_sha256=provider.SEED_SHA256,
-                provider=PROVIDER,
+                runtime=runtime,
+                tool_definitions=tuple(provider.TOOL_DEFINITIONS),
+                state_available=True,
                 provider_revision=provider.PROVIDER_REVISION,
                 tools_sha256=provider.TOOLS_SHA256,
                 tools=tuple(item["function"]["name"] for item in provider.TOOL_DEFINITIONS),
@@ -185,7 +188,7 @@ def _gold(value: Any) -> list[dict[str, str]]:
     return actions
 
 
-def import_row(data: bytes, provider_source: Path) -> WorkplaceImport:
+def import_row(data: bytes, provider_source: Path, runtime: ContainerService) -> WorkplaceImport:
     """Import the raw row after checking its digest, source tools, and seed."""
     row = json.loads(data)
     if not isinstance(row, dict):
@@ -199,10 +202,12 @@ def import_row(data: bytes, provider_source: Path) -> WorkplaceImport:
     provider = _provider_module(provider_source)
     if provider._seed_digest() != provider.SEED_SHA256:
         raise ValueError("Workplace seed differs from its pinned digest")
-    return _import_row(row, provider, source_row=str(row_id), task_id=f"nemo-workplace-{row_id}")
+    return _import_row(row, provider, runtime, source_row=str(row_id), task_id=f"nemo-workplace-{row_id}")
 
 
-def import_dataset_split(source: bytes, split: WorkplaceSplit, provider_source: Path) -> tuple[WorkplaceImport, ...]:
+def import_dataset_split(
+    source: bytes, split: WorkplaceSplit, provider_source: Path, runtime: ContainerService
+) -> tuple[WorkplaceImport, ...]:
     """Convert every row in one pinned NeMo Workplace dataset split."""
     selected = select_dataset_rows(source, split)
     provider = _provider_module(provider_source)
@@ -218,6 +223,7 @@ def import_dataset_split(source: bytes, split: WorkplaceSplit, provider_source: 
                 _import_row(
                     row,
                     provider,
+                    runtime,
                     source_row=f"{split}:{row_id}:{row_sha256}",
                     task_id=f"nemo-workplace-{split}-{row_id}",
                 )
@@ -227,7 +233,9 @@ def import_dataset_split(source: bytes, split: WorkplaceSplit, provider_source: 
     return tuple(imports)
 
 
-def _import_row(row: dict[str, Any], provider: ModuleType, *, source_row: str, task_id: str) -> WorkplaceImport:
+def _import_row(
+    row: dict[str, Any], provider: ModuleType, runtime: ContainerService, *, source_row: str, task_id: str
+) -> WorkplaceImport:
     """Build a TaskSpec from a row already verified against a pinned source."""
     if row.get("environment_name") != "workplace_assistant" or row.get("category") not in SOURCE_CATEGORIES:
         raise ValueError("Workplace source routing metadata differs")
@@ -260,5 +268,5 @@ def _import_row(row: dict[str, Any], provider: ModuleType, *, source_row: str, t
         answer_type=AnswerType.STATE,
     )
     return WorkplaceImport(
-        specification, ProviderState(id="state", provider=PROVIDER_NAME), _environment_config(provider)
+        specification, ProviderState(id="state", provider=PROVIDER_NAME), _environment_config(provider, runtime)
     )

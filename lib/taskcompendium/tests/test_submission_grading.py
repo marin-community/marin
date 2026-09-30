@@ -26,7 +26,7 @@ class MutableState:
         self.second_state = second_state
         self.reads = 0
 
-    def canonical_state(self):
+    async def canonical_state(self):
         self.reads += 1
         return self.state if self.reads == 1 else self.second_state
 

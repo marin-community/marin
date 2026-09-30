@@ -88,7 +88,7 @@ class SubmissionFailure(ValueError):
 
 @runtime_checkable
 class StateReadable(Protocol):
-    def canonical_state(self) -> JsonValue: ...
+    async def canonical_state(self) -> JsonValue: ...
 
 
 class Convention(BaseModel, ABC):
@@ -191,7 +191,7 @@ class ProviderState(Convention):
         provider = attempt.tool_providers[self.provider]
         if not isinstance(provider, StateReadable):
             raise TypeError(f"Provider {self.provider!r} does not expose canonical state")
-        state = provider.canonical_state()
+        state = await provider.canonical_state()
         _validate_json_state(state)
         return StateSubmission(json.loads(json.dumps(state, allow_nan=False)))
 

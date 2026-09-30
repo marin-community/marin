@@ -6,7 +6,6 @@
 import hashlib
 import json
 from io import BytesIO
-from typing import ClassVar
 
 import pytest
 from harbor.models.task.config import EnvironmentConfig
@@ -33,6 +32,8 @@ from taskcompendium.models import (
 from taskcompendium.submission import AnswerCall, FinalAction, PlainText, ProviderState
 from taskcompendium.verifiers.predicted_action import predicted_action_verifier
 
+from .conftest import container_runtime
+
 
 def _definition(name: str) -> dict:
     return {
@@ -57,33 +58,12 @@ class AlphaProvider:
     PROVIDER_REVISION = "alpha-1"
     TOOL_DEFINITIONS = (_definition("increment_alpha"),)
 
-    def __init__(self, *, seed_sha256: str, action_interface: str):
-        if (seed_sha256, action_interface) != (self.SEED_SHA256, self.ACTION_INTERFACE):
-            raise ValueError("Alpha binding differs")
-        self.value = 0
-
-    async def native_tool_definitions(self) -> list[dict]:
-        return list(self.TOOL_DEFINITIONS)
-
-    async def dispatch_action(self, name: str, arguments: str, call_id: str) -> str:
-        assert name == "increment_alpha"
-        self.value += 1
-        return json.dumps({"value": self.value})
-
-    def canonical_state(self) -> int:
-        return self.value
-
 
 class BetaProvider(AlphaProvider):
     ACTION_INTERFACE = "beta:v1"
     SEED_SHA256 = "b" * 64
     PROVIDER_REVISION = "beta-1"
     TOOL_DEFINITIONS = (_definition("increment_beta"),)
-
-    async def dispatch_action(self, name: str, arguments: str, call_id: str) -> str:
-        assert name == "increment_beta"
-        self.value += 1
-        return json.dumps({"value": self.value})
 
 
 class ExpandedAlphaProvider(AlphaProvider):
@@ -94,43 +74,20 @@ class ExpandedAlphaProvider(AlphaProvider):
 class BrokenStateProvider(BetaProvider):
     PROVIDER_REVISION = "beta-broken"
 
-    def canonical_state(self) -> int:
-        raise RuntimeError("state unavailable")
-
-
-class ManagedProvider(AlphaProvider):
-    ACTION_INTERFACE = "managed:v1"
-    SEED_SHA256 = "f" * 64
-    PROVIDER_REVISION = "managed-1"
-    TOOL_DEFINITIONS = (_definition("managed_tool"),)
-    events: ClassVar[list[str]] = []
-
-    async def start(self) -> None:
-        self.events.append("managed-start")
-
-    async def stop(self) -> None:
-        self.events.append("managed-stop")
-
-
-class FailingProvider(ManagedProvider):
-    ACTION_INTERFACE = "failing:v1"
-    SEED_SHA256 = "e" * 64
-    PROVIDER_REVISION = "failing-1"
-    TOOL_DEFINITIONS = (_definition("fail_tool"),)
-
-    async def start(self) -> None:
-        self.events.append("failing-start")
-        raise RuntimeError("provider failed to start")
-
-    async def stop(self) -> None:
-        self.events.append("failing-stop")
-
 
 def _binding(provider: type[AlphaProvider]) -> ToolBinding:
     return ToolBinding(
         action_interface=provider.ACTION_INTERFACE,
         seed_sha256=provider.SEED_SHA256,
-        provider=f"python:{__name__}:{provider.__name__}",
+        runtime=container_runtime(
+            provider.ACTION_INTERFACE,
+            provider.SEED_SHA256,
+            provider.PROVIDER_REVISION,
+            provider.TOOL_DEFINITIONS,
+            broken_state=provider is BrokenStateProvider,
+        ),
+        tool_definitions=tuple(provider.TOOL_DEFINITIONS),
+        state_available=True,
         provider_revision=provider.PROVIDER_REVISION,
         tools=(provider.TOOL_DEFINITIONS[0]["function"]["name"],),
         tools_sha256=_digest(provider.TOOL_DEFINITIONS),
@@ -176,7 +133,7 @@ def _call(name: str, call_id: str, arguments: str = "{}") -> dict:
     return {"id": call_id, "type": "function", "function": {"name": name, "arguments": arguments}}
 
 
-async def test_two_providers_dispatch_and_grade_named_state(tmp_path, monkeypatch):
+async def test_two_providers_dispatch_and_grade_named_state(tmp_path, monkeypatch, service_processes):
     binding = HarborEnvironmentConfig(tool_providers={"alpha": _binding(AlphaProvider), "beta": _binding(BetaProvider)})
     task = lower_to_harbor(
         _specification(AnswerType.STATE),
@@ -220,7 +177,9 @@ async def test_two_providers_dispatch_and_grade_named_state(tmp_path, monkeypatc
 
 
 @pytest.mark.parametrize("beta_calls,expected_reward", [(0, 0.0), (2, 0.0)])
-async def test_provider_state_noop_and_wrong_result_score_zero(tmp_path, monkeypatch, beta_calls, expected_reward):
+async def test_provider_state_noop_and_wrong_result_score_zero(
+    tmp_path, monkeypatch, beta_calls, expected_reward, service_processes
+):
     binding = HarborEnvironmentConfig(tool_providers={"alpha": _binding(AlphaProvider), "beta": _binding(BetaProvider)})
     task = lower_to_harbor(
         _specification(AnswerType.STATE), ProviderState(id="state", provider="beta"), binding, tmp_path / "task"
@@ -244,7 +203,7 @@ async def test_provider_state_noop_and_wrong_result_score_zero(tmp_path, monkeyp
     assert outcome["status"] == "graded"
 
 
-async def test_unavailable_provider_state_remains_ungraded(tmp_path, monkeypatch):
+async def test_unavailable_provider_state_remains_ungraded(tmp_path, monkeypatch, service_processes):
     binding = HarborEnvironmentConfig(
         tool_providers={"alpha": _binding(AlphaProvider), "beta": _binding(BrokenStateProvider)}
     )
@@ -266,11 +225,18 @@ async def test_unavailable_provider_state_remains_ungraded(tmp_path, monkeypatch
     assert outcome["reward"] is None
 
 
-async def test_added_provider_tool_does_not_change_bound_surface(tmp_path, monkeypatch):
+async def test_added_provider_tool_does_not_change_bound_surface(tmp_path, monkeypatch, service_processes):
     alpha = ToolBinding(
         action_interface=ExpandedAlphaProvider.ACTION_INTERFACE,
         seed_sha256=ExpandedAlphaProvider.SEED_SHA256,
-        provider=f"python:{__name__}:ExpandedAlphaProvider",
+        runtime=container_runtime(
+            ExpandedAlphaProvider.ACTION_INTERFACE,
+            ExpandedAlphaProvider.SEED_SHA256,
+            ExpandedAlphaProvider.PROVIDER_REVISION,
+            ExpandedAlphaProvider.TOOL_DEFINITIONS,
+        ),
+        tool_definitions=tuple(ExpandedAlphaProvider.TOOL_DEFINITIONS),
+        state_available=True,
         provider_revision=ExpandedAlphaProvider.PROVIDER_REVISION,
         tools=("increment_alpha",),
         tools_sha256=_digest(AlphaProvider.TOOL_DEFINITIONS),
@@ -297,7 +263,7 @@ async def test_added_provider_tool_does_not_change_bound_surface(tmp_path, monke
     assert [tool["function"]["name"] for tool in requests[0]["tools"]] == ["increment_alpha", "increment_beta"]
 
 
-async def test_provider_call_can_precede_terminal_answer_call(tmp_path, monkeypatch):
+async def test_provider_call_can_precede_terminal_answer_call(tmp_path, monkeypatch, service_processes):
     binding = HarborEnvironmentConfig(tool_providers={"alpha": _binding(AlphaProvider), "beta": _binding(BetaProvider)})
     task = lower_to_harbor(
         _specification(AnswerType.TEXT),
@@ -337,7 +303,7 @@ async def test_provider_call_can_precede_terminal_answer_call(tmp_path, monkeypa
     assert submission.events[-1].calls[0].call_id == "final"
 
 
-async def test_provider_call_can_precede_source_final_action(tmp_path, monkeypatch):
+async def test_provider_call_can_precede_source_final_action(tmp_path, monkeypatch, service_processes):
     binding = HarborEnvironmentConfig(tool_providers={"alpha": _binding(AlphaProvider), "beta": _binding(BetaProvider)})
     task = lower_to_harbor(
         _specification(AnswerType.NATIVE_ACTION),
@@ -376,7 +342,6 @@ async def test_composite_keeps_workspace_operations_outside_tool_providers(tmp_p
         trial_paths=TrialPaths(UPath(tmp_path / "trial")),
         task_env_config=EnvironmentConfig(),
         tool_providers={
-            "managed": _binding(ManagedProvider).model_dump(mode="json"),
             "alpha": _binding(AlphaProvider).model_dump(mode="json"),
         },
     )
@@ -386,23 +351,3 @@ async def test_composite_keeps_workspace_operations_outside_tool_providers(tmp_p
         await composite.upload_dir(tmp_path / "source", "/workspace")
 
     assert result.stdout == "/app\n"
-
-
-async def test_composite_cleans_started_providers_after_start_failure(tmp_path):
-    ManagedProvider.events = []
-    composite = CompositeToolEnvironment(
-        environment_dir=tmp_path,
-        environment_name="task",
-        session_id="trial",
-        trial_paths=TrialPaths(UPath(tmp_path / "trial")),
-        task_env_config=EnvironmentConfig(),
-        tool_providers={
-            "managed": _binding(ManagedProvider).model_dump(mode="json"),
-            "failing": _binding(FailingProvider).model_dump(mode="json"),
-        },
-    )
-
-    with pytest.raises(RuntimeError, match="provider failed to start"):
-        await composite.start(False)
-
-    assert ManagedProvider.events == ["managed-start", "failing-start", "failing-stop", "managed-stop"]

@@ -21,7 +21,6 @@ from taskcompendium.lowering import (
     validate_environment_config,
     validate_submission_tools,
 )
-from taskcompendium.provider_sources import PROVIDER_SOURCES_DIR, parse_git_provider, validate_staged_git_provider
 from taskcompendium.submission import chat_request, submission_compatible
 
 DEFAULT_CHAT_TIMEOUT = 120
@@ -54,14 +53,7 @@ async def run_trial(
         raise ValueError("Launch environment configuration differs from the exported task")
     specification = read_specification(task_dir / SPECIFICATION_FILE)
     convention = read_submission_convention(task_dir / SUBMISSION_CONVENTION_FILE)
-    provider_sources = {
-        name: task_dir / "environment" / PROVIDER_SOURCES_DIR / name
-        for name, binding in environment_config.tool_providers.items()
-        if parse_git_provider(binding.provider) is not None
-    }
-    for name, source in provider_sources.items():
-        validate_staged_git_provider(environment_config.tool_providers[name].provider, source)
-    validate_environment_config(specification, convention, environment_config, provider_sources=provider_sources)
+    validate_environment_config(specification, convention, environment_config)
     compatibility = submission_compatible(specification, convention)
     if not compatibility.compatible:
         raise ValueError(f"Submission convention differs from task contract: {'; '.join(compatibility.reasons)}")
