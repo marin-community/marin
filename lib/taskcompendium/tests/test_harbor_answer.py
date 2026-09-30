@@ -29,11 +29,11 @@ from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     ConversationTrace,
+    EnvironmentRequirements,
+    FinalTools,
     FunctionDefinition,
     Source,
-    TaskRequirements,
     TaskSpec,
-    TaskTools,
     TextMessage,
     VerifierKind,
     VerifierSpec,
@@ -100,7 +100,7 @@ def specification() -> TaskSpec:
     return TaskSpec(
         id="arithmetic-7-plus-5",
         context=ConversationInput(events=(TextMessage(role="user", content="What is 7 + 5?"),)),
-        requirements=TaskRequirements(),
+        environment_requirements=EnvironmentRequirements(),
         answer_type=AnswerType.NUMBER,
         verifier=numeric_answer(12.0, tolerance_abs=0.0, tolerance_rel=0.0),
         source=Source(dataset="hand-authored", revision="2026-09-16", row="arithmetic-7-plus-5", importer_revision="1"),
@@ -312,7 +312,7 @@ async def test_answer_submission_preserves_advertised_tools_and_policy(
 ):
     specification = specification.model_copy(
         update={
-            "tools": TaskTools(
+            "final_tools": FinalTools(
                 functions=(FunctionDefinition(name="lookup", parameters={"type": "object"}),),
                 tool_choice=tool_choice,
                 parallel_tool_calls=True,
@@ -361,7 +361,7 @@ def test_lowering_rejects_submission_policy_conflicts(
 ):
     specification = specification.model_copy(
         update={
-            "tools": TaskTools(
+            "final_tools": FinalTools(
                 functions=(FunctionDefinition(name=function_name, parameters={"type": "object"}),),
                 tool_choice=tool_choice,
             )
@@ -376,7 +376,9 @@ def test_lowering_rejects_submission_policy_conflicts(
 
 
 def test_direct_chat_rejects_unsatisfied_requirements(tmp_path, specification):
-    specification = specification.model_copy(update={"requirements": TaskRequirements(capabilities=("filesystem",))})
+    specification = specification.model_copy(
+        update={"environment_requirements": EnvironmentRequirements(capabilities=("filesystem",))}
+    )
 
     with pytest.raises(ValueError, match="cannot satisfy"):
         lower_to_harbor(

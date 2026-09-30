@@ -26,6 +26,7 @@ import tempfile
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+from typing import Any
 
 import click
 import yaml
@@ -90,12 +91,15 @@ class PolicySpec:
     tokenizer_revision: str
     model_relative_path: str
     enable_thinking: bool | None
-    # Host memory for every training and engine task.
+    # Host memory for every training and engine task. The Snowball export
+    # streams ~134GB of bf16 shards through host buffers on load (per node,
+    # policy and engine alike); 128GB of host RAM OOM-killed its first smoke.
     task_memory: str
     # Evaluation serving profile: GPUs and host memory per serving instance,
     # engine data parallelism, and model-specific vLLM flags and sampling
     # kwargs.
     serve_gpus: int
+    trainer_config: dict[str, Any]
     serve_memory: str | None = None
     serve_data_parallel_size: int | None = None
     serve_vllm_extra_args: tuple[str, ...] = ()
@@ -115,6 +119,16 @@ QWEN_POLICY = PolicySpec(
     enable_thinking=False,
     task_memory="128GB",
     serve_gpus=1,
+    trainer_config={
+        "strategy": "megatron",
+        "megatron_config": {
+            "tensor_model_parallel_size": 1,
+            "pipeline_model_parallel_size": 1,
+            "context_parallel_size": 1,
+            "expert_model_parallel_size": 1,
+            "expert_tensor_parallel_size": 1,
+        },
+    },
 )
 
 # Adopted in place from the exports prefix (~134GB referenced, not copied).
@@ -146,6 +160,16 @@ SNOWBALL_POLICY = PolicySpec(
     # and curb thinking loops with a light repetition penalty.
     serve_gen_kwargs=(("skip_special_tokens", "false"), ("repetition_penalty", "1.1")),
     adopted_model=SNOWBALL_MODEL,
+    trainer_config={
+        "strategy": "megatron",
+        "megatron_config": {
+            "tensor_model_parallel_size": 1,
+            "pipeline_model_parallel_size": 2,
+            "context_parallel_size": 1,
+            "expert_model_parallel_size": GPUS_PER_NODE,
+            "expert_tensor_parallel_size": 1,
+        },
+    },
 )
 POLICIES = {policy.label: policy for policy in (QWEN_POLICY, SNOWBALL_POLICY)}
 
@@ -539,7 +563,7 @@ environment:
   env_class: gsm8k
 
 trainer:
-  strategy: megatron
+  strategy: {policy.trainer_config["strategy"]}
   flash_attn: true
   use_sample_packing: false
   algorithm:
@@ -578,13 +602,7 @@ data:
 """
     )
     trainer = config["trainer"]
-    megatron_config = {
-        "tensor_model_parallel_size": 1,
-        "pipeline_model_parallel_size": 2 if policy is SNOWBALL_POLICY else 1,
-        "context_parallel_size": 1,
-        "expert_model_parallel_size": GPUS_PER_NODE if policy is SNOWBALL_POLICY else 1,
-        "expert_tensor_parallel_size": 1,
-    }
+    megatron_config = policy.trainer_config["megatron_config"].copy()
     trainer["policy"]["megatron_config"] = megatron_config
     trainer["ref"] = {"megatron_config": megatron_config.copy()}
     if policy is SNOWBALL_POLICY:
