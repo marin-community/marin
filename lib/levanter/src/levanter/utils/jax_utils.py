@@ -33,7 +33,8 @@ T = TypeVar("T", bound=PyTree)
 L = TypeVar("L")
 
 
-def jnp_to_python(a: jnp.ndarray):
+def jnp_to_python(a: jax.Array) -> bool | complex | float | int | list:
+    # `a`'s rank selects the branch (scalar/size-1 vs. general), so it stays bare.
     if isinstance(a, (float, int)):
         return float(a)
     elif a.shape == () or a.shape == (1,):

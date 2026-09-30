@@ -41,6 +41,8 @@ By default, NAMO/NAMO-D use the reference Newton-Schulz triplet via
 for experimentation.
 """
 
+from __future__ import annotations
+
 import dataclasses
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -50,7 +52,7 @@ import jax
 import jax.numpy as jnp
 import optax
 from optax import tree_utils as otu
-from jaxtyping import Array, Float
+from shape_extensions import IntTuple, IntVar
 
 import haliax
 from haliax.nn import Linear
@@ -261,7 +263,9 @@ class ScaleByNamoDState(NamedTuple):
     v: optax.Updates
 
 
-def _clamp_to_mean(col_scale: Float[Array, "... cols"], clamp_c: float) -> Float[Array, "... cols"]:
+def _clamp_to_mean[Batch: IntTuple, C: IntVar](
+    col_scale: jax.Array[[*Batch, C]], clamp_c: float
+) -> jax.Array[[*Batch, C]]:
     if not (0.0 < float(clamp_c) <= 1.0):
         return col_scale
 
@@ -272,22 +276,24 @@ def _clamp_to_mean(col_scale: Float[Array, "... cols"], clamp_c: float) -> Float
     return jnp.clip(col_scale, floor, ceil)
 
 
-def _orthogonalize_batched(
-    matrix: Float[Array, "... rows cols"],
+def _orthogonalize_batched[Batch: IntTuple, M: IntVar, N: IntVar](
+    matrix: jax.Array[[*Batch, M, N]],
     *,
     steps: int,
     muon_eps: float,
     coefficient_type: CoefficientType,
-) -> Float[Array, "... rows cols"]:
+) -> jax.Array[[*Batch, M, N]]:
     """Apply Newton-Schulz orthogonalization to [..., m, n] tensors."""
     if matrix.ndim == 2:
+        # pyrefly: ignore[bad-argument-type, bad-return]  # rank check above doesn't narrow Batch to ()
         return zeropower_via_newtonschulz5(matrix, steps=steps, eps=muon_eps, coefficient_type=coefficient_type)
 
     flat = matrix.reshape((-1, matrix.shape[-2], matrix.shape[-1]))
     flat_orth = jax.vmap(
         lambda m: zeropower_via_newtonschulz5(m, steps=steps, eps=muon_eps, coefficient_type=coefficient_type)
     )(flat)
-    return flat_orth.reshape(matrix.shape)
+    result: jax.Array[[*Batch, M, N]] = flat_orth.reshape(matrix.shape)
+    return result
 
 
 def scale_with_namo(

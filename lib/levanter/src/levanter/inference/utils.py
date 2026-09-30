@@ -1,10 +1,14 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import haliax as hax
 import haliax.haxtyping as ht
+import jax
 import jax.numpy as jnp
 from haliax import NamedArray
+from shape_extensions import IntVar
 
 INVALID = 2_000_000
 
@@ -61,7 +65,7 @@ def is_stop_signal(tail_tokens: ht.i32[NamedArray, "position"], stop_sequences: 
     return hax.any(valid_stop_sequences & count_match)
 
 
-def purge_raw(array: jnp.ndarray, mask, max_nnz=None, invalid=INVALID) -> jnp.ndarray:
+def purge_raw[N: IntVar](array: jax.Array[[N]], mask: jax.Array[[N]], max_nnz=None, invalid=INVALID) -> jax.Array:
     """
     Set elements of the array to `invalid` where the `mask` is True and slides the rest to the front.
 
@@ -105,7 +109,7 @@ def purge(array: NamedArray, mask: NamedArray, invalid=INVALID) -> NamedArray:
     return hax.named(new_values, array.axes)
 
 
-def get_unique_in_order(array, **kwargs):
+def get_unique_in_order[N: IntVar](array: jax.Array[[N]], **kwargs) -> tuple[jax.Array, jax.Array]:
     """
     Finds unique elements in a JAX array, preserving the order of first appearance.
 

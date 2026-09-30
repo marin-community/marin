@@ -1,6 +1,8 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import string
 from dataclasses import dataclass
 from functools import partial
@@ -19,6 +21,7 @@ from optax._src import base, transform
 from optax._src.combine import chain
 from optax._src.numerics import safe_int32_increment
 from optax._src.utils import canonicalize_dtype
+from shape_extensions import IntVar
 
 from levanter.optim._block_partition import (
     BlockPartitioner,
@@ -1008,7 +1011,8 @@ def _init_Q_exprs(
     scale,
     dim_diag,
     dtype,
-    existing_Q=None,
+    # `existing_Q=True` means "return the exprs without allocating Q" (see the early return below).
+    existing_Q: Optional[List[jax.Array]] | bool = None,
     precond_sharding=None,
     param_sharding=None,
 ):
@@ -1103,7 +1107,7 @@ def _init_Q_exprs(
     return Q, (exprA, exprGs, exprP), sharding_out
 
 
-def _norm_lower_bound(A: jax.Array):
+def _norm_lower_bound[N: IntVar](A: jax.Array[[N, N]]) -> jax.Array:
     """Returns a cheap lower bound for the spectral norm of A.
 
     Numerical results on random matrices with a wide range of distributions and
@@ -1126,7 +1130,7 @@ def _norm_lower_bound(A: jax.Array):
     return jnp.where(max_abs > 0, calc(A), max_abs)
 
 
-def _solve_triangular_right(X, A):
+def _solve_triangular_right[K: IntVar](X: jax.Array, A: jax.Array[[K, K]]) -> jax.Array:
     """Compute X @ inv(A).
 
     A triangular solve has roughly the same complexity as a matmul.
@@ -1143,6 +1147,7 @@ def _solve_triangular_right(X, A):
     solve_fn = partial(jax.lax.linalg.triangular_solve, left_side=False, lower=False)
     for _ in range(leading_dims):
         solve_fn = vmap(solve_fn, in_axes=(None, 0))
+    # pyrefly: ignore[unsupported-operation]  # X's rank depends on the caller, so it is bare (rank 0 to pyrefly).
     solution = solve_fn(A, X)
 
     if X_ndim < 2:
@@ -1150,7 +1155,7 @@ def _solve_triangular_right(X, A):
     return solution
 
 
-def _conjB(Q, G, V):
+def _conjB(Q: list[jax.Array], G: jax.Array, V: jax.Array) -> jax.Array:
     """Compute conjB."""
     order = G.ndim
     p = list(range(order))
@@ -1162,7 +1167,9 @@ def _conjB(Q, G, V):
     return conjB
 
 
-def _update_precond(Q, G, conjB, exprs, precond_lr, qs_sharding, params_sharding):
+def _update_precond(
+    Q: list[jax.Array], G: jax.Array, conjB: jax.Array, exprs, precond_lr, qs_sharding, params_sharding
+) -> list[jax.Array]:
     """Compute A and update Q."""
     exprA, exprGs, _ = exprs
 
@@ -1191,13 +1198,13 @@ def _update_precond(Q, G, conjB, exprs, precond_lr, qs_sharding, params_sharding
     return [_update_single_q(i, q) for i, q in enumerate(Q)]
 
 
-def _precond_grad(Q, G, exprs):
+def _precond_grad(Q: list[jax.Array], G: jax.Array, exprs) -> jax.Array:
     """Precondition gradient G with preconditioner Q."""
     exprP = exprs[-1]
     return jnp.einsum(exprP, *Q, *Q, G)
 
 
-def _add_tiny(x):
+def _add_tiny(x: jax.Array) -> jax.Array:
     return x + jnp.finfo(x.dtype).tiny
 
 

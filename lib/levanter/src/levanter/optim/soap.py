@@ -1,6 +1,8 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from functools import partial
 from itertools import chain
@@ -14,8 +16,8 @@ import optax
 import optax.tree_utils as otu
 from chex import Numeric
 from jax.sharding import PartitionSpec
-from jaxtyping import Array
 from optax import GradientTransformation, Updates
+from shape_extensions import IntTuple
 from optax._src.utils import canonicalize_dtype
 
 from levanter.optim._block_partition import (
@@ -682,11 +684,11 @@ def scale_by_soap(
 
 
 def update_preconditioner(
-    grad: Array,
-    GG: List[Union[Array, None]],
+    grad: jax.Array,
+    GG: List[Union[jax.Array, None]],
     beta: float,
     precision: jax.lax.PrecisionLike = jax.lax.Precision.HIGHEST,
-) -> List[Union[Array, None]]:
+) -> List[Union[jax.Array, None]]:
     if grad.ndim == 1:
         return [lerp(GG[0], jnp.matmul(grad[:, None], grad[None, :], precision=precision), 1 - beta)]  # type: ignore
 
@@ -707,10 +709,10 @@ def update_preconditioner(
 
 
 def project(
-    grad: Array,
-    Q: List[Union[Array, None]],
+    grad: jax.Array,
+    Q: List[Union[jax.Array, None]],
     precision: jax.lax.PrecisionLike = jax.lax.Precision.HIGHEST,
-) -> Array:
+) -> jax.Array:
     for mat in Q:
         if mat is not None:  # noqa: SIM108
             grad = jnp.tensordot(
@@ -727,10 +729,10 @@ def project(
 
 
 def project_back(
-    grad: Array,
-    Q: List[Union[Array, None]],
+    grad: jax.Array,
+    Q: List[Union[jax.Array, None]],
     precision: jax.lax.PrecisionLike = jax.lax.Precision.HIGHEST,
-) -> Array:
+) -> jax.Array:
     for mat in Q:
         if mat is not None:  # noqa: SIM108
             grad = jnp.tensordot(
@@ -745,8 +747,8 @@ def project_back(
     return grad
 
 
-def get_orthogonal_matrix(GG: List[Union[Array, None]], epsilon: float) -> List[Union[Array, None]]:
-    Q: List[Union[Array, None]] = []
+def get_orthogonal_matrix(GG: List[Union[jax.Array, None]], epsilon: float) -> List[Union[jax.Array, None]]:
+    Q: List[Union[jax.Array, None]] = []
     for gg in GG:
         if gg is None:
             Q.append(None)
@@ -757,14 +759,14 @@ def get_orthogonal_matrix(GG: List[Union[Array, None]], epsilon: float) -> List[
 
 
 def get_orthogonal_matrix_QR(
-    GG: List[Union[Array, None]],
-    Q: List[Union[Array, None]],
-    exp_avg_sq: Array,
+    GG: List[Union[jax.Array, None]],
+    Q: List[Union[jax.Array, None]],
+    exp_avg_sq: jax.Array,
     precond_dtype: Optional[Union[str, jnp.dtype]],
     mu_dtype: Optional[Union[str, jnp.dtype]],
     precision: jax.lax.PrecisionLike = jax.lax.Precision.HIGHEST,
-) -> tuple[List[Union[Array, None]], Array]:
-    final_Q: List[Union[Array, None]] = []
+) -> tuple[List[Union[jax.Array, None]], jax.Array]:
+    final_Q: List[Union[jax.Array, None]] = []
     for ind, (m, o) in enumerate(zip(GG, Q)):
         if m is None or o is None:
             final_Q.append(None)
@@ -784,16 +786,16 @@ def get_orthogonal_matrix_QR(
         Q_new, _ = jnp.linalg.qr(power_iter)
         final_Q.append(Q_new)
     # tree_cast only rewrites leaf dtypes; the pytree structure (and thus the declared types) is preserved.
-    final_Q = cast(List[Union[Array, None]], otu.tree_cast(final_Q, precond_dtype))
-    exp_avg_sq = cast(Array, otu.tree_cast(exp_avg_sq, mu_dtype))
+    final_Q = cast(List[Union[jax.Array, None]], otu.tree_cast(final_Q, precond_dtype))
+    exp_avg_sq = cast(jax.Array, otu.tree_cast(exp_avg_sq, mu_dtype))
     return final_Q, exp_avg_sq
 
 
-def lerp(
-    start: Array,
-    end: Array,
+def lerp[S: IntTuple](
+    start: jax.Array[[*S]],
+    end: jax.Array[[*S]],
     weight: Numeric,
-):
+) -> jax.Array[[*S]]:
     return start + weight * (end - start)
 
 

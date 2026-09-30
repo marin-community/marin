@@ -1,6 +1,8 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import dataclasses
 from typing import Any, Callable, Literal, TypeVar
 
@@ -13,6 +15,7 @@ from jax.sharding import PartitionSpec
 from jaxtyping import PyTree
 from optax import GradientTransformation, GradientTransformationExtraArgs
 from optax._src.base import init_empty_state
+from shape_extensions import IntTuple, IntVar
 
 import haliax as hax
 from haliax.nn import Linear
@@ -241,7 +244,9 @@ NEWTON_SCHULZ_COEFFICIENTS = {
 }
 
 
-def zeropower_via_newtonschulz5(X, steps: int = 5, eps: float = 1e-7, coefficient_type: CoefficientType = "quintic"):
+def zeropower_via_newtonschulz5[M: IntVar, N: IntVar](
+    X: jax.Array[[M, N]], steps: int = 5, eps: float = 1e-7, coefficient_type: CoefficientType = "quintic"
+) -> jax.Array[[M, N]]:
     """
     Newton-Schulz iteration to compute the zeroth power / orthogonalization of X.
 
@@ -263,12 +268,14 @@ def zeropower_via_newtonschulz5(X, steps: int = 5, eps: float = 1e-7, coefficien
     # Get coefficients for the specified type
     coeffs = NEWTON_SCHULZ_COEFFICIENTS[coefficient_type]
 
-    X /= jnp.linalg.norm(X) + eps  # Ensure top singular value <= 1
+    # `work` pins only the rank: [M, N] would reject the transposed [N, M] rebinding below, and a bare
+    # array would default to rank 0 and break the `@` matmuls.
+    work: jax.Array[[int, int]] = X / (jnp.linalg.norm(X) + eps)  # Ensure top singular value <= 1
     transpose = False
 
     # Transpose if needed to optimize computation
-    if X.shape[0] > X.shape[1]:
-        X = X.T
+    if work.shape[0] > work.shape[1]:
+        work = work.T
         transpose = True
 
     # Apply sharding constraint if we're in a distributed setting
@@ -279,29 +286,32 @@ def zeropower_via_newtonschulz5(X, steps: int = 5, eps: float = 1e-7, coefficien
     # It would be even smarter to stack similar layers together, but that would require more even more work
     # Let's call this good enough until we think it's not good enough
     if not jax.sharding.get_abstract_mesh().empty:
-        X = jax.lax.with_sharding_constraint(X, PartitionSpec(None, ("data", "model")))
+        work = jax.lax.with_sharding_constraint(work, PartitionSpec(None, ("data", "model")))
 
     # Perform Newton-Schulz iterations
     for i in range(steps):
         # Use coefficients cyclically if we have multiple sets
         a, b, c = coeffs[i % len(coeffs)]
 
-        A = X @ X.T
+        A = work @ work.T
         # doesn't seem to be necessary, so leaving it out. When I used inspect_sharding it was a problem, but I dunno
         # A = jax.lax.with_sharding_constraint(A, PartitionSpec(None, None))  # ensure it's desharded
         B = b * A + c * A @ A
-        X = a * X + B @ X
+        work = a * work + B @ work
 
     if transpose:
-        X = X.T
+        work = work.T
 
-    return X
+    result: jax.Array[[M, N]] = work
+    return result
 
 
 _NORM_FLOOR = 1e-10
 
 
-def norm_preserving_update(param, update, learning_rate: jax.Array | float):
+def norm_preserving_update[S: IntTuple](
+    param: jax.Array[[*S]] | None, update: jax.Array[[*S]], learning_rate: jax.Array | float
+) -> jax.Array[[*S]] | None:
     """Return an Optax update that preserves matrix parameter norms.
 
     Rank-2 parameters use one Frobenius norm. Higher-rank parameters are treated

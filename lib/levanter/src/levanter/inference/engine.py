@@ -1,5 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
+from __future__ import annotations
+
 
 import dataclasses
 import functools
@@ -305,8 +307,8 @@ class GenState(eqx.Module):
 @functools.partial(jax.jit, donate_argnums=0)
 def _clone_sequence(
     state,
-    parent_local_id: jnp.ndarray,
-    child_local_id: jnp.ndarray | None = None,
+    parent_local_id: jax.Array[[]],
+    child_local_id: jax.Array[[]] | None = None,
     *,
     seq_params: SeqDecodingParams | None = None,
 ) -> tuple["GenState", int]:

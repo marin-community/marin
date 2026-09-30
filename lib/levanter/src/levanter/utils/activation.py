@@ -1,12 +1,15 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import typing
 from enum import StrEnum
 from functools import partial
 
 import jax
 import jax.numpy as jnp
+from shape_extensions import IntTuple
 
 import haliax as hax
 import haliax.nn as hnn
@@ -17,11 +20,11 @@ ActivationFunction = typing.Callable[[_A], _A]
 JaxActivationFunction = typing.Callable[[jax.Array], jax.Array]
 
 
-def _quick_gelu_jax(x: jax.Array) -> jax.Array:
+def _quick_gelu_jax[S: IntTuple](x: jax.Array[[*S]]) -> jax.Array[[*S]]:
     return x * jax.nn.sigmoid(1.702 * x)
 
 
-def _relu2_jax(x: jax.Array) -> jax.Array:
+def _relu2_jax[S: IntTuple](x: jax.Array[[*S]]) -> jax.Array[[*S]]:
     return jnp.square(jax.nn.relu(x))
 
 

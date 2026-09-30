@@ -19,6 +19,8 @@ imported from ``levanter`` due to the dependency direction). A parity harness on
 guards against drift.
 """
 
+from __future__ import annotations
+
 import dataclasses
 from dataclasses import dataclass
 from typing import Any, Optional, Type
@@ -32,7 +34,8 @@ from jax import core, random
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 from jax.sharding import get_abstract_mesh, reshard
-from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray
+from jaxtyping import PRNGKeyArray
+from shape_extensions import IntTuple, IntVar
 
 import haliax as hax
 from haliax import Axis, NamedArray
@@ -158,7 +161,7 @@ def _token_spec() -> P:
     return P((*_BATCH_AXES, context) if context is not None else _BATCH_AXES)
 
 
-def _reshard_sequence(x: jax.Array, axis: str | None) -> jax.Array:
+def _reshard_sequence[Batch: IntTuple](x: jax.Array[[*Batch]], axis: str | None) -> jax.Array[[*Batch]]:
     sharding = jax.typeof(x).sharding if isinstance(x, core.Tracer) else x.sharding
     if not isinstance(sharding, NamedSharding):
         return x
@@ -166,7 +169,7 @@ def _reshard_sequence(x: jax.Array, axis: str | None) -> jax.Array:
     return reshard(x, P(spec[0], axis, *spec[2:]))
 
 
-def _activation_reshard(x: jax.Array) -> jax.Array:
+def _activation_reshard[Batch: IntTuple](x: jax.Array[[*Batch]]) -> jax.Array[[*Batch]]:
     return reshard(x, _activation_spec())
 
 
@@ -183,11 +186,14 @@ class GrugMoeHfConfig(HfConfig):
     model_type = GRUG_MOE_MODEL_TYPE
 
 
-def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> Float[Array, "..."]:
+def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> jax.Array:
+    # `shape` is an untyped tuple, so pyrefly cannot infer the result's rank.
     return std * random.truncated_normal(key, -3, 3, shape)
 
 
-def rms_norm(x: jax.Array, eps: float = _QK_RMS_NORM_EPS) -> jax.Array:
+def rms_norm[Batch: IntTuple, D: IntVar](
+    x: jax.Array[[*Batch, D]], eps: float = _QK_RMS_NORM_EPS
+) -> jax.Array[[*Batch, D]]:
     """Non-parametric RMS norm over the last dimension (used on Q/K, eps=1e-6)."""
     variance = jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1, keepdims=True)
     return (x * jax.lax.rsqrt(variance + eps)).astype(x.dtype)
@@ -378,20 +384,20 @@ class RMSNorm(eqx.Module):
         return RMSNorm(weight=jnp.ones((dim,), dtype=jnp.float32), eps=eps)
 
     @named_call
-    def __call__(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
+    def __call__[Batch: IntTuple, D: IntVar](self, x: jax.Array[[*Batch, D]]) -> jax.Array[[*Batch, D]]:
         weight = unshard(self.weight)
         dtype = x.dtype
-        x = x.astype(jnp.float32)
-        variance = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
-        normed = x * jax.lax.rsqrt(variance + self.eps)
+        x32 = x.astype(jnp.float32)
+        variance = jnp.mean(jnp.square(x32), axis=-1, keepdims=True)
+        normed = x32 * jax.lax.rsqrt(variance + self.eps)
         return (normed * weight).astype(dtype)
 
 
 class GatedNorm(eqx.Module):
     """Learnable per-dimension gating (rank-128 low-rank gate on the RMS-normed input)."""
 
-    w_down: jax.Array
-    w_up: jax.Array
+    w_down: jax.Array[[int, int]]
+    w_up: jax.Array[[int, int]]
 
     @staticmethod
     def init(hidden_dim: int, initializer_std: float, *, key: PRNGKeyArray) -> "GatedNorm":
@@ -402,10 +408,15 @@ class GatedNorm(eqx.Module):
         )
 
     @named_call
-    def __call__(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
-        gate_hidden = jnp.einsum("...d,dr->...r", x, self.w_down)
+    def __call__[Batch: IntTuple, D: IntVar, R: IntVar](self, x: jax.Array[[*Batch, D]]) -> jax.Array[[*Batch, D]]:
+        # The fields' plain-`int` dims do not unify with x's D; rebinding them to D/R lets the einsums check.
+        w_down: jax.Array[[D, R]] = self.w_down
+        w_up: jax.Array[[R, D]] = self.w_up
+        gate_hidden: jax.Array[[*Batch, R]] = jnp.einsum("...d,dr->...r", x, w_down)
         gate_hidden = jax.nn.silu(gate_hidden)
-        gate = jax.nn.sigmoid(jnp.einsum("...r,rd->...d", gate_hidden, self.w_up))
+        # Bind the einsum first: sigmoid over a nested einsum call loses the inferred shape.
+        gate_logits: jax.Array[[*Batch, D]] = jnp.einsum("...r,rd->...d", gate_hidden, w_up)
+        gate = jax.nn.sigmoid(gate_logits)
         return x * gate.astype(x.dtype)
 
 
@@ -416,11 +427,13 @@ class SnowballAttention(eqx.Module):
     run sliding-window with half-RoPE. PKO is disabled in the June recipe, so it is not implemented.
     """
 
-    w_q: Float[Array, "D NH"]
-    w_k: Float[Array, "D MH"]
-    w_v: Float[Array, "D MH"]
-    w_o: Float[Array, "NH D"]
-    attn_gate: Float[Array, "D N"]
+    # Only each field's rank is pinned: tying dims across fields (w_q's D == w_k's D) would need the
+    # class to be generic over D/NH/MH, which `__call__` does not need.
+    w_q: jax.Array[[int, int]]
+    w_k: jax.Array[[int, int]]
+    w_v: jax.Array[[int, int]]
+    w_o: jax.Array[[int, int]]
+    attn_gate: jax.Array[[int, int]]
     cfg: SnowballConfig = eqx.field(static=True)
 
     @staticmethod
@@ -437,12 +450,12 @@ class SnowballAttention(eqx.Module):
         )
 
     @named_call
-    def __call__(
+    def __call__[B: IntVar, S: IntVar, D: IntVar](
         self,
-        x: Float[Array, "B S D"],
+        x: jax.Array[[B, S, D]],
         mask: AttentionMask,
         disable_rope: bool = False,
-    ) -> Float[Array, "B S D"]:
+    ) -> jax.Array[[B, S, D]]:
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
 
@@ -490,7 +503,7 @@ class SnowballAttention(eqx.Module):
         return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=_activation_spec())
 
 
-def _partition_match(aligned_v: jax.Array, attn_out: jax.Array) -> jax.Array:
+def _partition_match[S: IntTuple](aligned_v: jax.Array[[*S]], attn_out: jax.Array[[*S]]) -> jax.Array[[*S]]:
     """Match aligned_v's sharding to attn_out (backend attention can pick its own head sharding)."""
     sharding = jax.typeof(attn_out).sharding if isinstance(attn_out, core.Tracer) else attn_out.sharding
     if isinstance(sharding, NamedSharding):
@@ -521,13 +534,16 @@ class DenseMLP(eqx.Module):
         )
 
     @named_call
-    def __call__(self, x: Float[Array, "B S D"]) -> Float[Array, "B S D"]:
+    def __call__[B: IntVar, S: IntVar, D: IntVar](self, x: jax.Array[[B, S, D]]) -> jax.Array[[B, S, D]]:
         b, s, _ = x.shape
-        x_flat = rearrange(x, "b s d -> (b s) d")
+        x_flat: jax.Array[[int, D]] = rearrange(x, "b s d -> (b s) d")
         gate = jnp.einsum("td,dm->tm", x_flat, self.w_gate)
         up = jnp.einsum("td,dm->tm", x_flat, self.w_up)
-        out_flat = jnp.einsum("tm,md->td", jax.nn.silu(gate) * up, self.w_down, out_sharding=_token_spec())
-        return _activation_reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s))
+        out_flat: jax.Array[[int, D]] = jnp.einsum(
+            "tm,md->td", jax.nn.silu(gate) * up, self.w_down, out_sharding=_token_spec()
+        )
+        out: jax.Array[[B, S, D]] = rearrange(out_flat, "(b s) d -> b s d", b=b, s=s)
+        return _activation_reshard(out)
 
 
 class SnowballMoEMLP(eqx.Module):
@@ -568,23 +584,27 @@ class SnowballMoEMLP(eqx.Module):
         )
 
     @named_call
-    def __call__(self, x: Float[Array, "B S D"]) -> Float[Array, "B S D"]:
+    def __call__[B: IntVar, S: IntVar, D: IntVar, T: IntVar, E: IntVar, K: IntVar](
+        self, x: jax.Array[[B, S, D]]
+    ) -> jax.Array[[B, S, D]]:
         b, s, _ = x.shape
-        x_flat = rearrange(x, "b s d -> (b s) d")
-        router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
+        x_flat: jax.Array[[T, D]] = rearrange(x, "b s d -> (b s) d")
+        router_logits: jax.Array[[T, E]] = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(
+            jnp.float32
+        )
         # router_bias is [E]; replicate it (like the norm weights) so the add keeps the expert axis
         # unsharded. A safetensors load auto-shards [E] over `data` when E % data == 0, which would
         # otherwise make router_logits + router_bias illegally sharded on multi-device meshes.
         biased_logits = router_logits + unshard(self.router_bias)
         # Select top-(K+1) on biased logits; the (K+1)-th is only the QB threshold (unused at inference).
-        _topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.cfg.num_experts_per_token + 1)
-        selected_experts = selected_experts[:, :-1]
+        _topk_logits, selected_experts_kp1 = jax.lax.top_k(biased_logits, self.cfg.num_experts_per_token + 1)
+        selected_experts: jax.Array[[T, K]] = selected_experts_kp1[:, :-1]
         # Sigmoid combine weights on UNbiased logits for the selected experts, renormed to sum to 2.5.
-        unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
+        unbiased_topk: jax.Array[[T, K]] = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
         combine_weights_f = jax.nn.sigmoid(unbiased_topk)
         denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
         combine_weights_f = combine_weights_f * (_ROUTING_RENORM_SUM / (denom + 1e-9))
-        combine_weights = combine_weights_f.astype(x.dtype)
+        combine_weights: jax.Array[[T, K]] = combine_weights_f.astype(x.dtype)
 
         routed_flat = self.expert_mlp(
             x_flat,
@@ -593,7 +613,7 @@ class SnowballMoEMLP(eqx.Module):
             mesh=get_abstract_mesh(),
             report_capacity_overflow=False,
         )
-        routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
+        routed: jax.Array[[B, S, D]] = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         return _activation_reshard(routed)
 
 
@@ -622,13 +642,13 @@ class SnowballBlock(eqx.Module):
         )
 
     @named_call
-    def __call__(
+    def __call__[B: IntVar, S: IntVar, D: IntVar](
         self,
-        x: Float[Array, "B S D"],
+        x: jax.Array[[B, S, D]],
         short_mask: AttentionMask,
         long_mask: AttentionMask,
-        use_long: Bool[Array, ""],
-    ) -> Float[Array, "B S D"]:
+        use_long: jax.Array[[]],
+    ) -> jax.Array[[B, S, D]]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
         # ``lax.cond`` keeps a uniform per-layer body so the transformer can scan the layers:
         # long layers use the full causal mask and disable RoPE (NoPE); short layers use the
@@ -677,7 +697,9 @@ class SnowballTransformer(eqx.Module):
         )
 
     @named_call
-    def __call__(self, token_ids: Int[Array, "B S"], mask: Optional[AttentionMask] = None) -> Float[Array, "B S D"]:
+    def __call__[B: IntVar, S: IntVar, D: IntVar](
+        self, token_ids: jax.Array[[B, S]], mask: Optional[AttentionMask] = None
+    ) -> jax.Array[[B, S, D]]:
         cfg = self.config
         if mask is None:
             mask = AttentionMask.causal()
@@ -686,7 +708,7 @@ class SnowballTransformer(eqx.Module):
         long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
 
         token_ids = reshard(token_ids, P(_BATCH_AXES, _context_axis()))
-        hidden = self.token_embed.at[token_ids].get(out_sharding=_activation_spec())
+        hidden: jax.Array[[B, S, D]] = self.token_embed.at[token_ids].get(out_sharding=_activation_spec())
         hidden = self.embed_gated_norm(self.embed_norm(hidden))
 
         # Scan the layers instead of a Python loop so XLA plans HBM for ONE layer's MoE expert
@@ -698,7 +720,7 @@ class SnowballTransformer(eqx.Module):
         idx = jnp.arange(num_blocks)
         long_schedule = ((idx % 4) == 3) | (idx == num_blocks - 1)
 
-        def _scan_layer(carry: Float[Array, "B S D"], layer_and_flag) -> tuple[Float[Array, "B S D"], None]:
+        def _scan_layer(carry: jax.Array[[B, S, D]], layer_and_flag) -> tuple[jax.Array[[B, S, D]], None]:
             layer, use_long = layer_and_flag
             return layer(carry, short_mask, long_mask, use_long), None
 
@@ -777,6 +799,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
 
 
 def _resize_axis(arr: jax.Array, axis: int, new_size: int, std: float, key) -> jax.Array:
+    # `axis` and `new_size` are runtime values the shape DSL cannot express, so this stays bare.
     old = arr.shape[axis]
     if new_size == old:
         return arr
@@ -798,7 +821,7 @@ def _with_prefix(prefix: Optional[str], name: str) -> str:
     return name if prefix is None else f"{prefix}.{name}"
 
 
-def _T(value: jax.Array) -> jax.Array:
+def _T[Batch: IntTuple, M: IntVar, N: IntVar](value: jax.Array[[*Batch, M, N]]) -> jax.Array[[*Batch, N, M]]:
     return jnp.swapaxes(value, -1, -2)
 
 
@@ -984,10 +1007,12 @@ _EXPERT_DOWN_SPEC = P("expert", "model", _FSDP_AXES)
 
 
 def _reshard_replicated(arr: jax.Array) -> jax.Array:
+    # `_reshard_for_init` is unshaped on both ends, so no shape survives the call.
     return _reshard_for_init(arr, P(None, None))
 
 
 def _reshard(arr: jax.Array, spec: P) -> jax.Array:
+    # Unshaped for the same reason as `_reshard_replicated`.
     return _reshard_for_init(arr, spec)
 
 

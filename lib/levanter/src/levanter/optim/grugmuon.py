@@ -9,6 +9,8 @@ All 2D arrays are routed to Muon, except those whose path contains
 'embed', 'lm_head', or 'output' (case-insensitive), which use AdamW.
 """
 
+from __future__ import annotations
+
 import math
 from dataclasses import dataclass
 from functools import partial
@@ -19,6 +21,7 @@ import optax
 from jax.sharding import PartitionSpec
 from jax.sharding import reshard
 from optax import tree_utils as otu
+from shape_extensions import IntVar
 
 from levanter.optim.config import OptimizerConfig
 from levanter.optim.muon import MuonConfig, ScaleByMuonState
@@ -30,7 +33,7 @@ STACK_BATCH_SHARDED = "stack_batch_sharded"
 ORTHOGONALIZATION_LAYOUTS = (VMAP_REPLICATED, STACK_BATCH_SHARDED)
 
 
-def _target_sharding(array) -> jax.sharding.Sharding | None:
+def _target_sharding(array: jax.Array | None) -> jax.sharding.Sharding | None:
     if array is None or not hasattr(array, "shape"):
         return None
 
@@ -42,7 +45,7 @@ def _target_sharding(array) -> jax.sharding.Sharding | None:
     return getattr(aval, "sharding", None)
 
 
-def _batch_sharded_stack_target_pspec(array) -> PartitionSpec | None:
+def _batch_sharded_stack_target_pspec(array: jax.Array | None) -> PartitionSpec | None:
     if array is None or not hasattr(array, "shape") or array.ndim != 3:
         return None
 
@@ -267,13 +270,13 @@ def _match_update_sharding():
     return optax.GradientTransformation(init_fn, update_fn)
 
 
-def _zeropower_via_newtonschulz_replicated(
-    X: jax.Array,
+def _zeropower_via_newtonschulz_replicated[M: IntVar, N: IntVar](
+    X: jax.Array[[M, N]],
     steps: int = 5,
     eps: float = 1e-7,
     coefficient_type: CoefficientType = "quintic",
     target_pspec: PartitionSpec | None = None,
-) -> jax.Array:
+) -> jax.Array[[M, N]]:
     """Legacy Grug Muon orthogonalization that fully replicates each matrix.
 
     Replicates the array across devices before iterating to avoid sharding
@@ -281,76 +284,77 @@ def _zeropower_via_newtonschulz_replicated(
     restoring the final parameter layout. Kept for A/B benchmarking.
     """
     P = PartitionSpec
-    assert X.ndim == 2
     del target_pspec  # Kept for signature parity with the other Newton-Schulz helpers.
 
+    # `work` pins only the rank: rebinding an [M, N] local to its [N, M] transpose below is a type error.
     # Run NS in bf16 to halve all-gather bytes and double matmul throughput;
     # cast back to the param dtype on exit so optimizer state stays fp32.
     orig_dtype = X.dtype
-    X = X.astype(jnp.bfloat16)
+    work: jax.Array[[int, int]] = X.astype(jnp.bfloat16)
 
     coeffs = NEWTON_SCHULZ_COEFFICIENTS[coefficient_type]
     has_mesh = not jax.sharding.get_abstract_mesh().empty
     if has_mesh:
-        X = reshard(X, P(None, None))
-    X = X / (jnp.linalg.norm(X) + eps)
+        work = reshard(work, P(None, None))
+    work = work / (jnp.linalg.norm(work) + eps)
 
     transpose = False
-    if X.shape[0] > X.shape[1]:
-        X = X.T
+    if work.shape[0] > work.shape[1]:
+        work = work.T
         transpose = True
 
     for i in range(steps):
         a, b, c = coeffs[i % len(coeffs)]
         out_sharding = P(None, None) if has_mesh else None
-        A = jnp.einsum("ik,jk->ij", X, X, out_sharding=out_sharding)
+        A = jnp.einsum("ik,jk->ij", work, work, out_sharding=out_sharding)
         B = b * A + c * jnp.einsum("ik,kj->ij", A, A, out_sharding=out_sharding)
-        X = a * X + jnp.einsum("ik,kj->ij", B, X, out_sharding=out_sharding)
+        work = a * work + jnp.einsum("ik,kj->ij", B, work, out_sharding=out_sharding)
 
     if transpose:
-        X = X.T
+        work = work.T
 
-    return X.astype(orig_dtype)
+    result: jax.Array[[M, N]] = work
+    return result.astype(orig_dtype)
 
 
-def _zeropower_via_newtonschulz_batched_stack_sharded(
-    X: jax.Array,
+def _zeropower_via_newtonschulz_batched_stack_sharded[L: IntVar, M: IntVar, N: IntVar](
+    X: jax.Array[[L, M, N]],
     steps: int = 5,
     eps: float = 1e-7,
     coefficient_type: CoefficientType = "quintic",
     target_pspec: PartitionSpec | None = None,
-) -> jax.Array:
+) -> jax.Array[[L, M, N]]:
     """Run Newton-Schulz on a stacked batch of matrices with only the batch axis sharded."""
-    assert X.ndim == 3
-
+    # `work` pins only the rank, as in `_zeropower_via_newtonschulz_replicated`.
     # Run NS in bf16 to halve all-gather bytes and double matmul throughput;
     # cast back to the param dtype on exit so optimizer state stays fp32.
     orig_dtype = X.dtype
-    X = X.astype(jnp.bfloat16)
+    work: jax.Array[[int, int, int]] = X.astype(jnp.bfloat16)
 
     coeffs = NEWTON_SCHULZ_COEFFICIENTS[coefficient_type]
     has_mesh = not jax.sharding.get_abstract_mesh().empty
-    X = X / (jnp.linalg.norm(X, axis=(-2, -1), keepdims=True) + eps)
+    work = work / (jnp.linalg.norm(work, axis=(-2, -1), keepdims=True) + eps)
 
     transpose = False
-    if X.shape[-2] > X.shape[-1]:
-        X = jnp.swapaxes(X, -1, -2)
+    if work.shape[-2] > work.shape[-1]:
+        work = jnp.swapaxes(work, -1, -2)
         transpose = True
 
     if target_pspec is None:
-        target_pspec = _batch_sharded_stack_target_pspec(X)
+        target_pspec = _batch_sharded_stack_target_pspec(work)
 
     if has_mesh and target_pspec is not None:
-        X = reshard(X, target_pspec)
+        work = reshard(work, target_pspec)
 
     X_out_sharding = target_pspec if (has_mesh and target_pspec is not None) else None
     for i in range(steps):
         a, b, c = coeffs[i % len(coeffs)]
-        A = jnp.einsum("...ik,...jk->...ij", X, X, out_sharding=X_out_sharding)
+        A = jnp.einsum("...ik,...jk->...ij", work, work, out_sharding=X_out_sharding)
         B = b * A + c * jnp.einsum("...ik,...kj->...ij", A, A, out_sharding=X_out_sharding)
-        X = a * X + jnp.einsum("...ik,...kj->...ij", B, X, out_sharding=X_out_sharding)
+        work = a * work + jnp.einsum("...ik,...kj->...ij", B, work, out_sharding=X_out_sharding)
 
     if transpose:
-        X = jnp.swapaxes(X, -1, -2)
+        work = jnp.swapaxes(work, -1, -2)
 
-    return X.astype(orig_dtype)
+    result: jax.Array[[L, M, N]] = work
+    return result.astype(orig_dtype)

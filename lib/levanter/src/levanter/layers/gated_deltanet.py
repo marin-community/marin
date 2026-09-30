@@ -35,6 +35,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 from jax import lax
+from shape_extensions import IntVar
 
 import haliax as hax
 import haliax.nn as hnn
@@ -59,9 +60,9 @@ def _l2norm(x: NamedArray, axis: hax.AxisSelector, eps: float = 1e-6) -> NamedAr
 # ---------- depthwise conv: positional (lax) helpers with named wrappers ----------
 
 
-def _causal_depthwise_conv1d_full(
-    x_ncl: jnp.ndarray, w_ck: jnp.ndarray, bias_c: Optional[jnp.ndarray] = None
-) -> jnp.ndarray:
+def _causal_depthwise_conv1d_full[N: IntVar, C: IntVar, L: IntVar, K: IntVar](
+    x_ncl: jax.Array[[N, C, L]], w_ck: jax.Array[[C, K]], bias_c: Optional[jax.Array[[C]]] = None
+) -> jax.Array[[N, C, L]]:
     """Depthwise 1D convolution with *causal* semantics (left padding).
 
     Shapes:
@@ -75,33 +76,34 @@ def _causal_depthwise_conv1d_full(
     - rhs (w):    O=0, I=1, H=2  (we inject a singleton I=1 for depthwise)
     - out:        N=0, C=1, H=2
     """
-    N, C, L = x_ncl.shape
-    K = w_ck.shape[-1]
+    # Lowercase locals: the shape's N/C/L would otherwise shadow this function's N/C/L type params.
+    n, c, l = x_ncl.shape
+    k = w_ck.shape[-1]
     # pad x on the left with K-1 zeros so that output length == L ("causal")
-    x_pad = jnp.pad(x_ncl, ((0, 0), (0, 0), (K - 1, 0)))
+    x_pad = jnp.pad(x_ncl, ((0, 0), (0, 0), (k - 1, 0)))
     w_oik = w_ck[:, None, :]  # (C, 1, K) → O=C, I=1, K
-    y = lax.conv_general_dilated(
+    y: jax.Array[[N, C, L]] = lax.conv_general_dilated(
         lhs=x_pad,
         rhs=w_oik,
         window_strides=(1,),
         padding="VALID",
         dimension_numbers=("NCH", "OIH", "NCH"),
-        feature_group_count=C,  # depthwise
+        feature_group_count=c,  # depthwise
         precision=lax.Precision.HIGHEST,
         preferred_element_type=jnp.float32,
     )
     if bias_c is not None:
         y = y + bias_c[:, None]
-    y = jax.nn.silu(y)
-    return y
+    result: jax.Array[[N, C, L]] = jax.nn.silu(y)
+    return result
 
 
-def _causal_depthwise_conv1d_update(
-    x_ncl_1: jnp.ndarray,  # (N, C, 1)
-    w_ck: jnp.ndarray,  # (C, K)
-    bias_c: Optional[jnp.ndarray],
-    prev_state_nck: jnp.ndarray,  # (N, C, K)
-) -> tuple[jnp.ndarray, jnp.ndarray]:
+def _causal_depthwise_conv1d_update[N: IntVar, C: IntVar, K: IntVar](
+    x_ncl_1: jax.Array[[N, C, 1]],
+    w_ck: jax.Array[[C, K]],
+    bias_c: Optional[jax.Array[[C]]],
+    prev_state_nck: jax.Array[[N, C, K]],
+) -> tuple[jax.Array[[N, C, 1]], jax.Array[[N, C, K]]]:
     """Single-step streaming update for the causal depthwise conv.
 
     Args:
@@ -127,12 +129,12 @@ def _causal_depthwise_conv1d_update(
         precision=lax.Precision.HIGHEST,
         preferred_element_type=jnp.float32,
     )
-    y = y2[..., -1:]  # (N, C, 1): the newest output sample
+    y: jax.Array[[N, C, 1]] = y2[..., -1:]  # (N, C, 1): the newest output sample
     if bias_c is not None:
         y = y + bias_c[:, None]
-    y = jax.nn.silu(y)
-    new_state = jnp.concatenate([prev_state_nck[..., 1:], x_ncl_1], axis=-1)
-    return y, new_state
+    result: jax.Array[[N, C, 1]] = jax.nn.silu(y)
+    new_state: jax.Array[[N, C, K]] = jnp.concatenate([prev_state_nck[..., 1:], x_ncl_1], axis=-1)
+    return result, new_state
 
 
 # ---------- Gated RMSNorm with external gate ----------
@@ -253,10 +255,11 @@ def recurrent_gated_delta_rule(
     g: NamedArray,  # [batch, position, heads] (log-decay; α = exp(g))
     beta: NamedArray,  # [batch, position, heads] (β ∈ (0,1))
     *,
-    initial_state: Optional[jnp.ndarray] = None,  # (B, H, dk, dv)
+    # (B, H, dk, dv): sizes of NamedArray axes the shape DSL cannot see, so only the rank is pinned.
+    initial_state: Optional[jax.Array[[int, int, int, int]]] = None,
     output_final_state: bool = False,
     use_qk_l2norm_in_kernel: bool = True,
-) -> Tuple[NamedArray, Optional[jnp.ndarray]]:
+) -> Tuple[NamedArray, Optional[jax.Array[[int, int, int, int]]]]:
     """Sequential (decode) GDN kernel
 
     For each t:
@@ -365,10 +368,11 @@ def chunk_gated_delta_rule(
     beta: NamedArray,  # [batch, position, heads]  (β)
     *,
     chunk_size: int = 64,
-    initial_state: Optional[jnp.ndarray] = None,  # (B,H,dk,dv)
+    # (B, H, dk, dv); only the rank is pinned, as in recurrent_gated_delta_rule.
+    initial_state: Optional[jax.Array[[int, int, int, int]]] = None,
     output_final_state: bool = False,
     use_qk_l2norm_in_kernel: bool = True,
-) -> tuple[NamedArray, Optional[jnp.ndarray]]:
+) -> tuple[NamedArray, Optional[jax.Array[[int, int, int, int]]]]:
     """Chunkwise-parallel GDN (DeltaNet UT/WY extended with decay).
 
     High-level sketch (per head):
@@ -706,8 +710,10 @@ class GatedDeltaNet(eqx.Module):
         inference: bool = True,
         chunk_size: int = 64,
         attention_mask: Optional[NamedArray] = None,
-        decode_state: Optional[Tuple[jnp.ndarray, jnp.ndarray]] = None,  # (conv_state, S_state)
-    ) -> Tuple[NamedArray, Optional[Tuple[jnp.ndarray, jnp.ndarray]]]:
+        # (conv_state, S_state): conv_state is (N, Channels, K), S_state is (B, VHeads, d_k, d_v).
+        # Only the ranks are pinned; the sizes come from NamedArray axes.
+        decode_state: Optional[Tuple[jax.Array[[int, int, int]], jax.Array[[int, int, int, int]]]] = None,
+    ) -> Tuple[NamedArray, Optional[Tuple[jax.Array[[int, int, int]], jax.Array[[int, int, int, int]]]]]:
         """Run the full GDN token mixer.
 
         Args:
@@ -844,7 +850,7 @@ class GatedDeltaNet(eqx.Module):
         y_out = self.out_proj(y_norm.astype(x.dtype))
 
         # State packing for streaming
-        new_state: Optional[Tuple[jnp.ndarray, jnp.ndarray]] = None
+        new_state: Optional[Tuple[jax.Array[[int, int, int]], jax.Array[[int, int, int, int]]]] = None
         if inference and (new_conv_state is not None) and (S_new is not None):
             new_state = (new_conv_state, S_new)
         return y_out, new_state

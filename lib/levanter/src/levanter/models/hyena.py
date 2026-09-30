@@ -15,6 +15,8 @@ Current diffences from the official impl:
   single block.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Callable, Optional, Sequence
 
@@ -23,6 +25,7 @@ import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 from jaxtyping import PRNGKeyArray
+from shape_extensions import IntTuple, IntVar
 
 import haliax
 import haliax as hax
@@ -323,20 +326,25 @@ class Sin(eqx.Module):
         return hax.sin(self.freq * x)
 
 
-def fft_conv(u: jax.Array, k: jax.Array) -> jax.Array:
+def fft_conv[Batch: IntTuple, S: IntVar, C: IntVar](
+    u: jax.Array[[*Batch, S, C]], k: jax.Array[[*Batch, S, C]]
+) -> jax.Array[[*Batch, S, C]]:
     """JAX implementation of FFT convolution."""
     seqlen = u.shape[-2]
     fft_size = 2 * seqlen
 
     # FFT supports only float32 or float64.
-    u_f = jnp.fft.rfft(jnp.astype(u, jnp.float32), n=fft_size, axis=-2)
-    k_f = jnp.fft.rfft(jnp.astype(k, jnp.float32), n=fft_size, axis=-2) / fft_size
+    u32: jax.Array[[*Batch, S, C]] = jnp.astype(u, jnp.float32)
+    k32: jax.Array[[*Batch, S, C]] = jnp.astype(k, jnp.float32)
+    u_f: jax.Array[[*Batch, int, C]] = jnp.fft.rfft(u32, n=fft_size, axis=-2)
+    k_f: jax.Array[[*Batch, int, C]] = jnp.fft.rfft(k32, n=fft_size, axis=-2) / fft_size
 
     # Perform convolution in frequency domain
     y_f = u_f * k_f
-    y = jnp.fft.irfft(y_f, n=fft_size, axis=-2)[..., :seqlen, :]
+    y: jax.Array[[*Batch, S, C]] = jnp.fft.irfft(y_f, n=fft_size, axis=-2)[..., :seqlen, :]
 
-    return jnp.astype(y, u.dtype)
+    result: jax.Array[[*Batch, S, C]] = jnp.astype(y, u.dtype)
+    return result
 
 
 class HyenaFilter(eqx.Module):

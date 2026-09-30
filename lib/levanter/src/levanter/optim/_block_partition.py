@@ -9,12 +9,15 @@ the blocks so a single ``vmap`` covers them. The partitioner is adapted from
 distributed_shampoo.
 """
 
+from __future__ import annotations
+
 import jax
 import numpy as np
 from jax import numpy as jnp
 from jax import vmap
 from jax.lax import with_sharding_constraint
 from jax.sharding import PartitionSpec
+from shape_extensions import IntTuple
 
 import haliax as hax
 
@@ -193,7 +196,8 @@ def merge_small_dimensions(
     )
 
 
-def pad_and_stack_matrices(array_list, block_size):
+def pad_and_stack_matrices(array_list: list[jax.Array], block_size) -> jax.Array:
+    # The arrays' rank depends on the caller's block shape (scalars included), so they stay bare.
     # Handle scalar arrays by adding a dummy dimension
     is_scalar = len(array_list[0].shape) == 0
     if is_scalar:
@@ -212,7 +216,11 @@ def pad_and_stack_matrices(array_list, block_size):
     return stacked
 
 
-def unstack_and_unpad_matrices(stacked_array, original_shapes):
+def unstack_and_unpad_matrices[Rest: IntTuple](
+    stacked_array: jax.Array[[int, *Rest]], original_shapes
+) -> tuple[jax.Array, ...]:
+    # Pin the leading stack dim so the split below does not see a rank-0 bare array; the per-block
+    # rank depends on the caller.
     # Handle scalar arrays
     is_scalar = len(original_shapes[0]) == 0
 

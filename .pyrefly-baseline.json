@@ -5846,13 +5846,6 @@
       "severity": "error"
     },
     {
-      "column": 20,
-      "path": "lib/levanter/src/levanter/layers/gated_deltanet.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: pad_width does not match array shape",
-      "severity": "error"
-    },
-    {
       "column": 28,
       "path": "lib/levanter/src/levanter/layers/gated_deltanet.py",
       "name": "unsupported-operation",
@@ -6357,13 +6350,6 @@
       "severity": "error"
     },
     {
-      "column": 22,
-      "path": "lib/levanter/src/levanter/models/hyena.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: FFT requires at least 1-D array",
-      "severity": "error"
-    },
-    {
       "column": 53,
       "path": "lib/levanter/src/levanter/models/llama.py",
       "name": "bad-argument-type",
@@ -6686,13 +6672,6 @@
       "severity": "error"
     },
     {
-      "column": 24,
-      "path": "lib/levanter/src/levanter/models/snowball.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
       "column": 32,
       "path": "lib/levanter/src/levanter/models/snowball.py",
       "name": "bad-argument-type",
@@ -6763,13 +6742,6 @@
       "severity": "error"
     },
     {
-      "column": 28,
-      "path": "lib/levanter/src/levanter/models/snowball.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
       "column": 22,
       "path": "lib/levanter/src/levanter/models/snowball.py",
       "name": "unsupported-operation",
@@ -6778,41 +6750,6 @@
     },
     {
       "column": 28,
-      "path": "lib/levanter/src/levanter/models/snowball.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 30,
-      "path": "lib/levanter/src/levanter/models/snowball.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: einsum: operand 0 expected rank 2, got 0",
-      "severity": "error"
-    },
-    {
-      "column": 55,
-      "path": "lib/levanter/src/levanter/models/snowball.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 44,
-      "path": "lib/levanter/src/levanter/models/snowball.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: indices and arr must have the same number of dimensions",
-      "severity": "error"
-    },
-    {
-      "column": 24,
-      "path": "lib/levanter/src/levanter/models/snowball.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 24,
       "path": "lib/levanter/src/levanter/models/snowball.py",
       "name": "unsupported-operation",
       "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
@@ -7019,27 +6956,6 @@
       "path": "lib/levanter/src/levanter/optim/grugmuon.py",
       "name": "bad-argument-type",
       "concise_description": "Argument `str | Unknown` is not assignable to parameter `coefficient_type` with type `Literal['aol', 'polar_express', 'quintic', 'simple']` in function `_zeropower_via_newtonschulz_batched_stack_sharded`",
-      "severity": "error"
-    },
-    {
-      "column": 29,
-      "path": "lib/levanter/src/levanter/optim/grugmuon.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 25,
-      "path": "lib/levanter/src/levanter/optim/grugmuon.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 25,
-      "path": "lib/levanter/src/levanter/optim/grugmuon.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
       "severity": "error"
     },
     {
@@ -7253,13 +7169,6 @@
       "severity": "error"
     },
     {
-      "column": 23,
-      "path": "lib/levanter/src/levanter/optim/namo.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
       "column": 44,
       "path": "lib/levanter/src/levanter/optim/namo.py",
       "name": "unsupported-operation",
@@ -7282,20 +7191,6 @@
     },
     {
       "column": 41,
-      "path": "lib/levanter/src/levanter/optim/namo.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 49,
-      "path": "lib/levanter/src/levanter/optim/namo.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 101,
       "path": "lib/levanter/src/levanter/optim/namo.py",
       "name": "unsupported-operation",
       "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
@@ -7435,7 +7330,7 @@
       "severity": "error"
     },
     {
-      "column": 60,
+      "column": 64,
       "path": "lib/levanter/src/levanter/optim/soap.py",
       "name": "bad-argument-type",
       "concise_description": "Argument `list[Array | None]` is not assignable to parameter `tree` with type `Array | Iterable[ArrayTree] | Mapping[Any, ArrayTree] | numpy.bool | ndarray | number` in function `optax.tree_utils._casting.tree_cast`",
@@ -7445,7 +7340,7 @@
       "column": 20,
       "path": "lib/levanter/src/levanter/optim/soap.py",
       "name": "unsupported-operation",
-      "concise_description": "`*` is not supported between `numpy.bool` and `Array`",
+      "concise_description": "`*` is not supported between `numpy.bool` and `Array[S]`",
       "severity": "error"
     },
     {
