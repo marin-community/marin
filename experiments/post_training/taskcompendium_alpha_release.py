@@ -341,6 +341,13 @@ def _write_assembly_report(
     shutil.copy2(ready / "README.md", output / "README.md")
 
 
+def _retain_audit_trials(root: Path, output: Path) -> None:
+    for trials in (root / "audit").rglob("trials"):
+        destination = output / "audit" / trials.relative_to(root / "audit")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(trials, destination, dirs_exist_ok=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Assemble the regional TaskCompendium alpha-1 public artifact")
     parser.add_argument("--output-prefix", required=True, help="New regional S3 prefix for public-only release files")
@@ -357,17 +364,20 @@ def main() -> None:
         root = Path(directory)
         provider_source = root / "provider"
         stage_git_provider(PROVIDER, args.workplace_provider_checkout, provider_source)
-        cohorts = _stage_cohorts(root, args.builder_revision, provider_source)
-        ready, candidate_sha256 = _build_ready_artifact(
-            root,
-            cohorts,
-            args.builder_revision,
-            args.rights_review_url,
-            provider_source,
-            args.workplace_provider_checkout,
-        )
-        uploaded = _upload_regional(ready, args.output_prefix)
-        _write_assembly_report(ready, args.output_prefix, candidate_sha256, uploaded, output)
+        try:
+            cohorts = _stage_cohorts(root, args.builder_revision, provider_source)
+            ready, candidate_sha256 = _build_ready_artifact(
+                root,
+                cohorts,
+                args.builder_revision,
+                args.rights_review_url,
+                provider_source,
+                args.workplace_provider_checkout,
+            )
+            uploaded = _upload_regional(ready, args.output_prefix)
+            _write_assembly_report(ready, args.output_prefix, candidate_sha256, uploaded, output)
+        finally:
+            _retain_audit_trials(root, output)
 
 
 if __name__ == "__main__":

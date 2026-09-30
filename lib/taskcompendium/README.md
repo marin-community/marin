@@ -145,7 +145,10 @@ reconstructed demo rows: correct and wrong outcomes for Workplace train,
 Workplace validation, MCQA, and Prism math. MCQA uses `answer_type=text` and its
 actual `mcq` verifier. The manifest records these gates and exact source, parsed,
 accepted, and exported counts. Private catalogs, ledger, source files, provider
-snapshots, and trial traces remain outside the release.
+snapshots, and trial traces remain outside the release. Audit trial trajectories,
+actions, observations, and verifier/infra failure files are retained in the private
+Iris output archive on success or failure; lowered tasks and provider snapshots
+are excluded from that trace copy.
 
 After rights review, `taskcompendium-finalize-release` creates a separate artifact
 with `publication_ready=true`. Its `ReleaseReview` binds the candidate manifest
