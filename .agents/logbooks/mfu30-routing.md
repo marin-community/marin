@@ -110,7 +110,7 @@ custom-call output cannot be cloned, so the clone and the original share it and 
 
 ## M30B-007 Candidate C gate: exact, no fills, +1.5-3% per MoE layer over B (2026-09-30)
 
-Job `/mwittmann/m30b-gate-unfilled-01` (GB200x4, hero env), branch 2c.. (candidate C).
+Job `/mwittmann/m30b-gate-unfilled-01` (GB200x4, hero env), candidate C at e612b34244.
 
 - Routing gate, all six cases (drops, padding, one-hot, hero shapes): candidate C is bitwise equal to main
   in the output, drop count and all four gradients. Main repeatable.
