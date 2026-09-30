@@ -5,11 +5,13 @@
 
 The training callback writes these rows; Marin's report reads the same models.
 Scorings add rows to ``scores`` instead of columns, so new trainer modes do not
-change the table contract. Route tensors and bf16 activations carry explicit
+change the table contract. Route tensors carry explicit
 shape and dtype beside their bytes to preserve exact values through Parquet.
 """
 
 from __future__ import annotations
+
+from enum import StrEnum
 
 import pyarrow as pa
 from pydantic import BaseModel, model_validator
@@ -18,11 +20,15 @@ from finestore.layout import OnConflict
 from finestore.schema import arrow_schema
 from finestore.store import DataStore
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 PROBE_TABLE = "probe"
 SCORES_TABLE = "scores"
-LAYERS_TABLE = "layers"
 MANIFEST_TABLE = "manifest"
+
+
+def _validate_tensor_fields(data: bytes | None, shape: list[int] | None, dtype: str | None, label: str) -> None:
+    if (data is None) != (shape is None) or (data is None) != (dtype is None):
+        raise ValueError(f"{label} requires bytes, shape and dtype together")
 
 
 class ProbeRow(BaseModel):
@@ -48,16 +54,15 @@ class ProbeRow(BaseModel):
     route_valid_mask: list[list[bool]] | None = None
 
     @model_validator(mode="after")
-    def validate_token_lengths(self) -> ProbeRow:
+    def validate_token_and_route_layout(self) -> ProbeRow:
         response_length = len(self.vllm_output_ids)
         if any(
             len(values) != response_length for values in (self.trainer_input_ids, self.response_mask, self.loss_mask)
         ):
             raise ValueError("probe response IDs and masks must have the same length")
-        if (self.routed_experts is None) != (self.routed_experts_shape is None):
-            raise ValueError("probe routes require both bytes and shape")
-        if (self.routed_experts is None) != (self.routed_experts_dtype is None):
-            raise ValueError("probe routes require both bytes and dtype")
+        _validate_tensor_fields(
+            self.routed_experts, self.routed_experts_shape, self.routed_experts_dtype, "probe routes"
+        )
         if (self.routed_experts is None) != (self.route_valid_mask is None):
             raise ValueError("probe routes require an explicit token-and-layer validity mask")
         if self.routed_experts_shape is not None and self.route_valid_mask is not None:
@@ -78,7 +83,8 @@ class ScoreRow(BaseModel):
     schema_version: int = SCHEMA_VERSION
     probe_hash: str
     sample_id: str
-    scoring: str
+    scorer: str
+    mode: str = ""
     update: int
     weights_hash: str
     cache_mode: str | None = None
@@ -91,27 +97,17 @@ class ScoreRow(BaseModel):
 
     @model_validator(mode="after")
     def validate_route_shape(self) -> ScoreRow:
-        if (self.expert_choices is None) != (self.expert_choices_shape is None):
-            raise ValueError("scorer route observations require both bytes and shape")
-        if (self.expert_choices is None) != (self.expert_choices_dtype is None):
-            raise ValueError("scorer route observations require both bytes and dtype")
+        _validate_tensor_fields(
+            self.expert_choices, self.expert_choices_shape, self.expert_choices_dtype, "scorer routes"
+        )
         if self.replacement_mask is not None and self.expert_choices is None:
             raise ValueError("replacement mask requires scorer route observations")
         return self
 
 
-class LayerRow(BaseModel):
-    """One layer's raw activation bytes and their token mapping."""
-
-    schema_version: int = SCHEMA_VERSION
-    probe_hash: str
-    sample_id: str
-    scoring: str
-    layer: int
-    output_bytes: bytes
-    shape: list[int]
-    dtype: str
-    token_positions: list[int]
+class ArchiveStatus(StrEnum):
+    BUILDING = "building"
+    COMPLETE = "complete"
 
 
 class ManifestRow(BaseModel):
@@ -119,10 +115,14 @@ class ManifestRow(BaseModel):
 
     schema_version: int = SCHEMA_VERSION
     archive: str
-    status: str
+    status: ArchiveStatus
     probe_hash: str
     starting_weights_hash: str
     source_probe_archive: str | None = None
+    tokenizer_fingerprint: str
+    starting_global_step: int
+    scored_updates: list[int]
+    scored_global_steps: list[int]
     architecture: str
     vllm_enforce_eager: bool
     optimizer_steps_per_update: int
@@ -140,14 +140,12 @@ class ManifestRow(BaseModel):
 ROW_MODELS: dict[str, type[BaseModel]] = {
     PROBE_TABLE: ProbeRow,
     SCORES_TABLE: ScoreRow,
-    LAYERS_TABLE: LayerRow,
     MANIFEST_TABLE: ManifestRow,
 }
 
 PRIMARY_KEYS: dict[str, tuple[str, ...]] = {
     PROBE_TABLE: ("probe_hash", "sample_id"),
-    SCORES_TABLE: ("probe_hash", "sample_id", "scoring"),
-    LAYERS_TABLE: ("probe_hash", "sample_id", "scoring", "layer"),
+    SCORES_TABLE: ("probe_hash", "sample_id", "scorer", "update", "mode", "cache_mode"),
     MANIFEST_TABLE: ("archive",),
 }
 
@@ -162,7 +160,7 @@ def mismatch_schema(table: str) -> pa.Schema:
 
 
 def register_mismatch_tables(store: DataStore) -> None:
-    """Register the four tables with their exact keys and Arrow contracts."""
+    """Register the three tables with their exact keys and Arrow contracts."""
     for table, primary_key in PRIMARY_KEYS.items():
         store.table(
             table,
