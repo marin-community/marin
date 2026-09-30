@@ -36,7 +36,7 @@ def test_each_expert_ignores_its_own_router_direction():
 
 def test_orthogonal_reads_run_and_change_the_model():
     mesh, plain = t._model()
-    _, ortho = t._model(expert_router_orthogonal=True)
+    _, ortho = t._model(expert_router_orthogonal="full")
     tokens = _tokens()
     with jax.set_mesh(mesh):
         a, b = np.asarray(_forward(plain, tokens)), np.asarray(_forward(ortho, tokens))
@@ -55,3 +55,17 @@ def test_mlp_router_starts_as_the_linear_router_and_learns():
             eqx.filter_grad(lambda m: m.next_token_loss(tokens, jnp.ones(tokens.shape, jnp.float32)))
         )(mlp_router)
     assert float(jnp.abs(grads.kda_blocks.stacked.mlp.router_mlp_b).sum()) > 0
+
+
+def test_learned_fraction_starts_as_the_plain_model_and_learns():
+    mesh, plain = t._model()
+    _, learned = t._model(expert_router_orthogonal="learned")
+    tokens = _tokens()
+    with jax.set_mesh(mesh):
+        np.testing.assert_allclose(
+            np.asarray(_forward(learned, tokens)), np.asarray(_forward(plain, tokens)), rtol=1e-5, atol=1e-5
+        )
+        grads = eqx.filter_jit(
+            eqx.filter_grad(lambda m: m.next_token_loss(tokens, jnp.ones(tokens.shape, jnp.float32)))
+        )(learned)
+    assert float(jnp.abs(grads.kda_blocks.stacked.mlp.expert_router_alpha).sum()) > 0

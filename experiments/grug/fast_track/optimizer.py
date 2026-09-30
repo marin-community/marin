@@ -1562,7 +1562,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             if path_lower.endswith(".value_embed") and self.value_embed_lr_mult != 1.0:
                 return "value_embed"
             if ".rel_pos." in path_lower or re.search(
-                r"(?:^|\.)(value_embed|ve_lambda|ve_gate|xsa_scale|xsa_gate|head_mix|ssmax_scale|shared_gate|laurel_[ab]_\w+|ple_up|moe_out_gate_[wb]|bigram_gate_[wb]|bigram_gate_[ab]_lr|trigram_gate_[wb]|trigram_gate_[ab]_lr|bank_scale|router_logit_scale|expert_output_gain|bias_\w+|dyt_alpha|dyt_beta|qk_mult|diff_lambda|diff_lambda_init|vres_lambda|rot_scale|null_const_[vw]|comba_d|v_filter_[wb]|gamma|ngram_stat_gate_[wb]|ngram_stat_up|forget_gate_[wb]|lm_head_bias|router_tok_[ab]|router_tie_alpha|router_hist_w|router_mlp_[ab])$",
+                r"(?:^|\.)(value_embed|ve_lambda|ve_gate|xsa_scale|xsa_gate|head_mix|ssmax_scale|shared_gate|laurel_[ab]_\w+|ple_up|moe_out_gate_[wb]|bigram_gate_[wb]|bigram_gate_[ab]_lr|trigram_gate_[wb]|trigram_gate_[ab]_lr|bank_scale|router_logit_scale|expert_output_gain|bias_\w+|dyt_alpha|dyt_beta|qk_mult|diff_lambda|diff_lambda_init|vres_lambda|rot_scale|null_const_[vw]|comba_d|v_filter_[wb]|gamma|ngram_stat_gate_[wb]|ngram_stat_up|forget_gate_[wb]|lm_head_bias|router_tok_[ab]|router_tie_alpha|router_hist_w|router_mlp_[ab]|expert_router_alpha)$",
                 path_lower,
             ):
                 return "adam"
