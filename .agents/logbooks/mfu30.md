@@ -312,3 +312,18 @@ control. A candidate passes if its pointwise loss divergence from the control ov
 that band (max |d| and mean d, no larger one-signed drift), and drops / balancing loss stay in family.
 Exact-equality smoke checks (loss at 180000 == 1.261413) apply only to bitwise-forward arms (A's flag,
 B's A+B+C and D).
+
+## M30-015 Agent B: Triton short-conv kernel (2026-09-30)
+
+`sconv_implementation=triton_gpu` (raw Triton via jax_triton; per-chunk register carry of 3 rows +
+segment ids; fp32 dw partials summed by the API; inline PTX `mul.rn/add.rn.bf16x2` to stop LLVM contracting
+into bf16 FMA). Tuned tiles (commit 5d64137a67): forward chunk 32 / 1024 channels / 4 warps / 8 rows;
+backward chunk 128 / 256 / 4 / 8 (register-bound). All 112 sweep rows are bitwise on out and dx. Per call
+(ms, Pallas -> Triton, floor): [16,4096,6144] fwd 0.437 -> 0.262 (0.242), bwd 1.065 -> 0.480 (0.350);
+[16,4096,1536] fwd 0.119 -> 0.082 (0.073), bwd 0.295 -> 0.151 (0.099). Hero Block on one GB200
+(`m30b-sconv-block-02`): short-conv time/layer 4.39 -> 2.20 ms, block step 121.9 -> 120.3 ms, temp
+-0.6 GiB, loss bitwise; ~-0.105 s/step estimated. Determinism: Pallas-vs-Triton gradient differences
+match Pallas-vs-Pallas rerun differences (~1e-5 rel-rms in attention weights, x, sconv_k), so the
+**attention backward is run-to-run nondeterministic** and same-code hero runs are not bitwise. The only
+Triton-specific difference is sconv dw at 1.7e-7 (summation order). Patch for the stack:
+`b/sconv_on_stack.patch` (9303d20b97); C adds it behind the switch for the final program.
