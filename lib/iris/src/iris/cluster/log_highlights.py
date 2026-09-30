@@ -99,13 +99,13 @@ def extract_failure_highlights(lines: Iterable[str], max_lines: int = _DEFAULT_M
     a barrier-timeout error commonly repeats once per straggler — then keeps
     lines matching common failure vocabulary (tracebacks, fatal errors,
     OOM/eviction/timeout signals). Falls back to the de-noised tail when no
-    line matches, so the result is never empty for a non-empty input.
+    line matches.
 
     Matching ignores a leading multi-GPU rank tag; the returned lines keep it,
     so the reader still sees which rank produced each one.
 
-    Returns at most ``max_lines`` lines, keeping the most recent ones. Consumes
-    the input in one pass with memory bounded by ``max_lines``.
+    Returns at most ``max_lines`` lines, keeping the most recent ones. A
+    nonpositive ``max_lines`` returns an empty list.
     """
     if max_lines <= 0:
         return []
