@@ -189,7 +189,7 @@ class SubmissionCompatibility:
         return not self.reasons
 
 
-def submission_compatible(specification: TaskSpec, convention: SubmissionConvention) -> SubmissionCompatibility:
+def submission_compatibility(specification: TaskSpec, convention: SubmissionConvention) -> SubmissionCompatibility:
     """Explain which parts of the task a submission convention cannot carry."""
     if not convention.supports(specification.answer_type):
         return SubmissionCompatibility(
@@ -224,7 +224,7 @@ def submission_instruction(convention: SubmissionConvention) -> str:
 def render_instruction(specification: TaskSpec, convention: SubmissionConvention) -> str:
     """Return Harbor instruction text for the selected convention."""
     context = specification.context
-    compatibility = submission_compatible(specification, convention)
+    compatibility = submission_compatibility(specification, convention)
     if not compatibility.compatible:
         raise ValueError(f"Submission convention {convention.id!r} is incompatible: {'; '.join(compatibility.reasons)}")
     if convention.answer_format == AnswerFormat.FINAL_ACTION:
@@ -263,7 +263,7 @@ def conversation_messages(context: ConversationInput) -> list[dict[str, Any]]:
 
 def chat_request(specification: TaskSpec, convention: SubmissionConvention) -> dict[str, Any]:
     """Prepare the conversation and tools for the selected submission convention."""
-    compatibility = submission_compatible(specification, convention)
+    compatibility = submission_compatibility(specification, convention)
     if not compatibility.compatible:
         raise ValueError(f"Submission convention is incompatible: {'; '.join(compatibility.reasons)}")
     messages = conversation_messages(specification.context)

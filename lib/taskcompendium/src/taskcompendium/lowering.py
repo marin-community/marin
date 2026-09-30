@@ -13,7 +13,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, TypeAdapter, model_validator
 
 from taskcompendium.models import SCHEMA_VERSION, TaskSpec
-from taskcompendium.submission import SubmissionConvention, render_instruction, submission_compatible
+from taskcompendium.submission import SubmissionConvention, render_instruction, submission_compatibility
 from taskcompendium.verifier_registry import validate_verifier
 
 DIRECT_CHAT_ENVIRONMENT = "direct_chat"
@@ -64,7 +64,7 @@ def compatible_lowerings(
     return tuple(
         LoweringCandidate(convention, environment_config)
         for convention in convention_library
-        if submission_compatible(specification, convention).compatible
+        if submission_compatibility(specification, convention).compatible
         for environment_config in environment_configs
     )
 
