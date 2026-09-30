@@ -27,7 +27,12 @@ from experiments.post_training.taskcompendium.records import public_task_record
 SOURCE_NAMES = {
     "laion__nemotron-gym-knowledge-mcqa-v2": "mcqa",
     "laion__nemo-prism-math-v3": "prism",
+    "laion__nemotron-gym-math-openmathreasoning-v2": "openmath",
 }
+PROJECTED_SOURCES = (
+    "laion__nemotron-gym-knowledge-mcqa-v2",
+    "laion__nemo-prism-math-v3",
+)
 LEDGER_JOIN_COLUMNS = (
     "input_split",
     "input_file",
@@ -189,7 +194,8 @@ async def main() -> None:
     workdir.mkdir()
     manifest = json.loads((StoragePath(projection_uri) / "manifest.json").read_bytes())
     outcomes = []
-    for source_subset, name in SOURCE_NAMES.items():
+    for source_subset in PROJECTED_SOURCES:
+        name = SOURCE_NAMES[source_subset]
         groups = [
             group
             for group in manifest["outputs"].values()
