@@ -23,10 +23,11 @@ COHORTS = {
 
 def _first_line(path: StoragePath) -> bytes:
     with path.open("rb") as opened:
-        line = opened.readline(MAX_WRAPPER_BYTES + 1)
-    if not line.endswith(b"\n") or len(line) > MAX_WRAPPER_BYTES:
+        bounded = opened.read(MAX_WRAPPER_BYTES + 1)
+    newline_index = bounded.find(b"\n")
+    if newline_index < 0 or newline_index + 1 > MAX_WRAPPER_BYTES:
         raise ValueError("Accepted TaskTrove wrapper line is missing or exceeds its size limit")
-    return line
+    return bounded[: newline_index + 1]
 
 
 def main() -> None:
