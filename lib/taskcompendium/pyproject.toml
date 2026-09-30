@@ -11,6 +11,7 @@ dependencies = ["pydantic>=2.0", "tasktrove-verify"]
 
 [project.optional-dependencies]
 harbor = ["harbor"]
+math = ["tasktrove-verify[answer]"]
 
 [dependency-groups]
 test = ["pytest>=8.3", "pytest-asyncio", "pytest-timeout"]

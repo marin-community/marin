@@ -38,12 +38,15 @@ def _timeout() -> int | None:
     return TIMEOUT if threading.current_thread() is threading.main_thread() else None
 
 
-def _parse(text: str) -> list:
+def _parse(text: str, extraction_config: list | None = None) -> list:
     """math-verify's parse of ``text`` as a LaTeX expression, else of the text as written."""
-    from math_verify import parse  # noqa: PLC0415
+    from math_verify import ExprExtractionConfig, LatexExtractionConfig, parse  # noqa: PLC0415
 
     timeout = _timeout()
-    return parse(f"${strip_math_delimiters(text)}$", parsing_timeout=timeout) or parse(text, parsing_timeout=timeout)
+    config = extraction_config if extraction_config is not None else [LatexExtractionConfig(), ExprExtractionConfig()]
+    return parse(f"${strip_math_delimiters(text)}$", extraction_config=config, parsing_timeout=timeout) or parse(
+        text, extraction_config=config, parsing_timeout=timeout
+    )
 
 
 def _verify(expected: object, candidate: object, allow_set_relation_comp: bool = False) -> bool:
@@ -96,13 +99,17 @@ def _members_match(expected: list[list], candidate: list[list]) -> bool:
     )
 
 
-def _grade_symbolic(spec: MathSpec, workspace: Path) -> Reward:
+def grade_math_candidate(spec: MathSpec, text: str | None) -> Reward:
+    """Score mathematical answer text with the shared extraction and comparison rules.
+
+    Invalid references raise ``InvalidTask``; absent or malformed candidates score zero.
+    ``None`` denotes missing output from a file-based submission.
+    """
     is_list = spec.math_type is MathType.LIST
     expected = _parsed_members(spec.expected) if is_list else [_parse(spec.expected)]
     if not all(_is_expression(member) for member in expected):
         raise InvalidTask(f"math-verify cannot parse expected {spec.expected!r}")
 
-    text = read_output(spec, workspace)
     if text is None:
         return scored(0.0, reason="no_output")
     boxed = extract_boxed(text)
@@ -116,6 +123,32 @@ def _grade_symbolic(spec: MathSpec, workspace: Path) -> Reward:
     else:
         match = _verify(expected[0], parsed[0], allow_set_relation_comp=spec.math_type in SET_TYPES)
     return scored(float(bool(match)), extracted=candidate, expected=spec.expected)
+
+
+def is_finite_real_scalar(spec: MathSpec) -> bool:
+    """Whether the reference denotes exactly one finite real numeric expression.
+
+    Scalar labels alone do not establish this: coordinate pairs, equations, and
+    expressions containing variables are excluded by the parsed expression's properties.
+    Unparsable or ambiguous references return false. Missing optional dependencies
+    raise import errors.
+    """
+    from latex2sympy2_extended import NormalizationConfig  # noqa: PLC0415
+    from math_verify import LatexExtractionConfig  # noqa: PLC0415
+    from sympy import Expr  # noqa: PLC0415
+
+    if spec.math_type is not MathType.SCALAR:
+        return False
+    # Eligibility must not repair incomplete operators or discard malformed syntax.
+    normalization = NormalizationConfig(
+        basic_latex=True, units=False, malformed_operators=False, nits=False, boxed="none", equations=False
+    )
+    parsed = _parse(spec.expected, [LatexExtractionConfig(normalization_config=normalization)])
+    expressions = [item for item in parsed if not isinstance(item, str)]
+    if len(expressions) != 1 or not isinstance(expressions[0], Expr):
+        return False
+    expression = expressions[0]
+    return expression.is_number is True and expression.is_real is True and expression.is_finite is True
 
 
 def _last_number(text: str) -> float | None:
@@ -150,4 +183,4 @@ def _grade_numeric(spec: NumericSpec, workspace: Path) -> Reward:
 def grade(spec: MathSpec | NumericSpec, tests_dir: Path, workspace: Path) -> Reward:
     if isinstance(spec, NumericSpec):
         return _grade_numeric(spec, workspace)
-    return _grade_symbolic(spec, workspace)
+    return grade_math_candidate(spec, read_output(spec, workspace))

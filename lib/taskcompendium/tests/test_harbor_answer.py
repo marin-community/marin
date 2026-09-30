@@ -13,6 +13,7 @@ from threading import Thread
 
 import pytest
 from harbor.models.task.task import Task
+from tasktrove_verify.spec import MathType
 
 from taskcompendium.grading import exact_answer, numeric_answer
 from taskcompendium.harbor.runner import ChatLaunch, run_trial
@@ -47,6 +48,7 @@ from taskcompendium.submission import (
     submission_compatible,
 )
 from taskcompendium.verifier_registry import grade_answer
+from taskcompendium.verifiers.mathematical import mathematical_answer
 
 from .harbor_replay import run_replay_trial
 
@@ -262,6 +264,7 @@ async def test_chat_records_incompatible_tool_call_for_convention_extraction(tmp
     "answer_type,verifier,response",
     [
         (AnswerType.TEXT, exact_answer("12"), "12"),
+        (AnswerType.NUMBER, mathematical_answer("13/2", MathType.SCALAR), "6.5"),
         (AnswerType.NUMBER, numeric_answer(12.0, tolerance_abs=0.0, tolerance_rel=0.0), "12.0"),
     ],
 )
