@@ -262,9 +262,7 @@ def gated_rms_norm_pallas_fwd_local(
         compiler_params=_compiler_params(block_sizes.out_num_warps, block_sizes.out_num_stages),
         interpret=_FORCE_INTERPRET,
         cost_estimate=with_io_bytes_accessed(
-            pl.estimate_cost(
-                functools.partial(gated_rms_norm_reference, eps=eps), x, norm_weight, w_down, w_up
-            ),
+            pl.estimate_cost(functools.partial(gated_rms_norm_reference, eps=eps), x, norm_weight, w_down, w_up),
             kernel_inputs_specs=(x, norm_weight, rstd_shape, h_shape, w_up),
             kernel_outputs_specs=(out_shape, gate_shape),
         ),

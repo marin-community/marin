@@ -183,3 +183,18 @@ kernel was slower (0.83-1.09 ms). Pallas Triton on SM100 stays at ~3 TB/s on the
 kernels (the short-conv kernel sees the same), so the fused forward does not beat XLA with the
 Triton-GEMM flag. Best case at roofline (3.2 GB/call at 6.5 TB/s, ~0.5 ms) would save ~0.5
 ms/call x 192 calls = ~0.1 s/step over the flag, and needs a TMA-based (CuTe DSL) kernel.
+
+Block benchmark, one layer fwd+bwd with remat, 3 reps each (job `m30c-flags-01`, ms per layer,
+rep sd ~0.6): baseline 128.09; `--xla_gpu_enable_triton_gemm=false` 126.95 (-1.14); fused norm
+126.82 (-1.27); fused norm + flag 126.32 (-1.77); `--xla_gpu_dot_merger_threshold_mb=448` 129.16
+(+1.07, rejected); dot merger + flag 128.04. The flag and the kernel overlap (both remove the
+sigmoid pass). Fused norm lowers compiled temp memory 1.5 GiB. End-to-end CPU check (2-layer
+model, 4-device mesh, interpret mode, f32): loss identical and every gradient leaf within 1e-4
+relative except the router's, which is ~1e-11 in both. Lint clean after `infra/pre-commit.py`.
+
+Rack arm `m30c-grnflag-01` (job `/mwittmann/m30c-grnflag-01-coord`, port 33301, submitted
+2026-09-30 12:35 PT from `37e3db7b87`; later commits are lint-only): fused norm
+(`--gated-norm-implementation pallas_gpu`) + `XLA_FLAGS=--xla_gpu_enable_triton_gemm=false`,
+seed 0, steps 180000-180060, profiled 180021-180023. Expected -0.06 to -0.09 s/step (+0.12 to
++0.19 MFU) against `mhep-ctx4k-s0-20260930` (28.255 median over 180011-180059). Loss differs from
+the control at bf16 rounding level from the first step (the forward is not bitwise).

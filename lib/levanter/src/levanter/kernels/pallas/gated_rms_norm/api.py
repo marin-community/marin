@@ -83,7 +83,12 @@ def gated_rms_norm_bwd(
     rstd_col = rstd[:, None]
     dx = rstd_col * dnormed - xf * (rstd_col * rstd_col * rstd_col) * drstd * (1.0 / x.shape[-1])
     dnorm_weight = jnp.sum(dy * normed, axis=0)
-    return dx.astype(dtype), dnorm_weight.astype(norm_weight.dtype), dw_down.astype(w_down.dtype), dw_up.astype(w_up.dtype)
+    return (
+        dx.astype(dtype),
+        dnorm_weight.astype(norm_weight.dtype),
+        dw_down.astype(w_down.dtype),
+        dw_up.astype(w_up.dtype),
+    )
 
 
 # JAX must not differentiate through a pallas_call; the backward is written out above.
@@ -101,7 +106,8 @@ def _gated_rms_norm_pallas_local_fwd(x, norm_weight, w_down, w_up, eps, block_si
 
 
 def _gated_rms_norm_pallas_local_bwd(eps, block_sizes, residuals, dout):
-    return gated_rms_norm_bwd(*residuals, dout)
+    x, norm_weight, w_down, w_up, gate, gate_hidden, rstd = residuals
+    return gated_rms_norm_bwd(x, norm_weight, w_down, w_up, gate, gate_hidden, rstd, dout)
 
 
 _gated_rms_norm_pallas_local.defvjp(_gated_rms_norm_pallas_local_fwd, _gated_rms_norm_pallas_local_bwd)

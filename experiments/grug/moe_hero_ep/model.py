@@ -59,9 +59,9 @@ from levanter.grug.grug_moe import (
 )
 from levanter.grug.loss import BlockSizes, fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import unshard
-from levanter.kernels.pallas.short_conv import short_conv
 from levanter.kernels.pallas.gated_rms_norm import Implementation as GatedRmsNormImplementation
 from levanter.kernels.pallas.gated_rms_norm import gated_rms_norm
+from levanter.kernels.pallas.short_conv import short_conv
 from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 from transformers import PretrainedConfig as HfConfig
