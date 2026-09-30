@@ -241,6 +241,10 @@ def test_difficulty_comparison_uses_saved_counts_and_hides_ineligible_measuremen
         ("judge_verifier_protocol", "current"),
         ("judge_verifier_missing_settings", "invalid"),
         ("judge_verifier_thinking_enabled", "invalid"),
+        ("checklist_judge_protocol", "current"),
+        ("checklist_judge_missing_settings", "invalid"),
+        ("checklist_judge_wrong_model", "invalid"),
+        ("checklist_judge_wrong_source", "invalid"),
         ("old_protocol", "historical"),
     ],
 )
@@ -325,11 +329,42 @@ def test_current_difficulty_does_not_accept_legacy_model_roles_or_unmatched_budg
                     "relay_script_sha256": "a" * 64,
                 }
             }
+    elif change in (
+        "checklist_judge_protocol",
+        "checklist_judge_missing_settings",
+        "checklist_judge_wrong_model",
+        "checklist_judge_wrong_source",
+    ):
+        report["protocol"]["id"] = "atlas-difficulty-v4-checklist-judge"
+        report["atlas_id"] = (
+            "Task Trove:laion__nemotron-gym-safety-v3"
+            if change != "checklist_judge_wrong_source"
+            else "Task Trove:laion__unrelated-v1"
+        )
+        if change != "checklist_judge_missing_settings":
+            report["verifier_configuration"] = {
+                "tasktrove_judge": {
+                    "model": (
+                        "deepseek-ai/DeepSeek-V4-Pro-0813"
+                        if change != "checklist_judge_wrong_model"
+                        else "Qwen/Qwen3.5-9B"
+                    ),
+                    "provider": "Together",
+                    "base_url": "https://api.together.xyz/v1",
+                    "api_key_reference": "${TOGETHER_API_KEY}",
+                    "chat_template_kwargs": {},
+                    "substitution_reason": "OpenAI credits exhausted; the source verifier leaves model blank.",
+                }
+            }
     elif change == "old_protocol":
         report["protocol"]["id"] = "atlas-difficulty-v2-65k16k"
     row = source_with_review(
         {
-            "payload": {"id": "MarinSkyRL:math", "dataset_revision": "data1", "verifier_revision": "code1"},
+            "payload": {
+                "id": report.get("atlas_id", "MarinSkyRL:math"),
+                "dataset_revision": "data1",
+                "verifier_revision": "code1",
+            },
             "quality": "good",
             "difficulty": "Small / Large / Hosted comparison",
             "difficulty_report": json.dumps(report),

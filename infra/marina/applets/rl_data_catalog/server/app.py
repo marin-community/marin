@@ -34,6 +34,12 @@ from .verifier_policy import migrate_verifier_policy
 logger = logging.getLogger(__name__)
 DIFFICULTY_PROTOCOL = "atlas-difficulty-v3-65k16k-qwen-recommended-nonthinking"
 JUDGE_VERIFIER_DIFFICULTY_PROTOCOL = "atlas-difficulty-v4-judge-verifier-nonthinking"
+CHECKLIST_JUDGE_DIFFICULTY_PROTOCOL = "atlas-difficulty-v4-checklist-judge"
+CHECKLIST_JUDGE_SOURCES = {
+    "Task Trove:laion__nemotron-gym-safety-v3",
+    "Task Trove:laion__stackexchange-overflow-sandboxes-verified-v2",
+    "Task Trove:laion__stackexchange-unix-sandboxes-verified-v2",
+}
 DIFFICULTY_MODELS = {
     "small": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
     "large": "Qwen/Qwen3.5-122B-A10B",
@@ -56,7 +62,11 @@ def difficulty_protocol_status(report: dict[str, Any]) -> tuple[str, str]:
     """Distinguish matched current measurements from retained historical runs."""
     protocol = report.get("protocol") or {}
     protocol_id = protocol.get("id")
-    if protocol_id not in (DIFFICULTY_PROTOCOL, JUDGE_VERIFIER_DIFFICULTY_PROTOCOL):
+    if protocol_id not in (
+        DIFFICULTY_PROTOCOL,
+        JUDGE_VERIFIER_DIFFICULTY_PROTOCOL,
+        CHECKLIST_JUDGE_DIFFICULTY_PROTOCOL,
+    ):
         return "historical", "Earlier model identities or generation budgets; retained as historical evidence."
     if protocol_id == JUDGE_VERIFIER_DIFFICULTY_PROTOCOL:
         judge = (report.get("verifier_configuration") or {}).get("tasktrove_judge") or {}
@@ -67,6 +77,18 @@ def difficulty_protocol_status(report: dict[str, Any]) -> tuple[str, str]:
             or not judge.get("relay_script_sha256")
         ):
             return "invalid", "The TaskTrove verifier judge lacks the recorded non-thinking Qwen3.5-9B configuration."
+    if protocol_id == CHECKLIST_JUDGE_DIFFICULTY_PROTOCOL:
+        judge = (report.get("verifier_configuration") or {}).get("tasktrove_judge") or {}
+        if (
+            report.get("atlas_id") not in CHECKLIST_JUDGE_SOURCES
+            or judge.get("model") != "deepseek-ai/DeepSeek-V4-Pro-0813"
+            or judge.get("provider") != "Together"
+            or judge.get("base_url") != "https://api.together.xyz/v1"
+            or judge.get("api_key_reference") != "${TOGETHER_API_KEY}"
+            or judge.get("chat_template_kwargs") != {}
+            or not judge.get("substitution_reason")
+        ):
+            return "invalid", "The TaskTrove checklist judge lacks its recorded Together configuration."
     if any(protocol.get(key) != value for key, value in DIFFICULTY_LIMITS.items()):
         return "invalid", "The recorded context or output limits do not match the current protocol."
     models = report["models"]
@@ -91,6 +113,8 @@ def difficulty_protocol_status(report: dict[str, Any]) -> tuple[str, str]:
     note = "Matched Small, Large and Hosted models at 65,536 context and 16,384 output tokens."
     if protocol_id == JUDGE_VERIFIER_DIFFICULTY_PROTOCOL:
         note += " The native TaskTrove verifier used Qwen3.5-9B with thinking disabled."
+    if protocol_id == CHECKLIST_JUDGE_DIFFICULTY_PROTOCOL:
+        note += " The native TaskTrove checklist verifier used DeepSeek-V4-Pro through Together."
     return "current", note
 
 
