@@ -85,16 +85,27 @@ def test_streaming_ingest_records_every_row_and_keeps_verifiers_private(tmp_path
             "tags": ["qa", "mcq", "broken"],
             "task_binary": b"not a tar archive",
         },
+        {
+            "path": "unselected-numeric.tar.gz",
+            "source": "other-numeric",
+            "family": "numeric-answer",
+            "template_id": "numeric-template",
+            "converter": "numeric-converter",
+            "mode": "numeric",
+            "route": "sft",
+            "tags": ["numeric", "synthetic"],
+            "task_binary": b"not imported by the MCQ-only pass",
+        },
     ]
     pq.write_table(pa.Table.from_pylist(rows), release / "tasks/part-00000.parquet")
     monkeypatch.setattr(ingest_tasktrove, "configure_coreweave_s3", lambda: None)
     monkeypatch.setattr(ingest_tasktrove, "PUBLIC_CANDIDATE_COHORTS", {SOURCE: "mcq"})
     report = ingest_tasktrove.ingest(str(release), str(tmp_path / "durable-output"), tmp_path / "iris-output")
 
-    assert report["input_rows_processed"] == 3
+    assert report["input_rows_processed"] == 4
     assert report["counts"]["imported"] == 1
     assert report["counts"]["out_of_scope"] == 1
-    assert report["counts"]["rejected"] == 1
+    assert report["counts"]["rejected"] == 2
     assert report["accepted_counts"] == {
         "converter:nemotron_mcqa": 1,
         "family:qa-short-answer": 1,
@@ -104,7 +115,7 @@ def test_streaming_ingest_records_every_row_and_keeps_verifiers_private(tmp_path
     output = tmp_path / "durable-output"
     ledger = pq.read_table(output / "ingestion-ledger.parquet").to_pylist()
     catalog = pq.read_table(output / "private-catalog.parquet").to_pylist()
-    assert [row["disposition"] for row in ledger] == ["imported", "out-of-scope", "rejected"]
+    assert [row["disposition"] for row in ledger] == ["imported", "out-of-scope", "rejected", "rejected"]
     assert len(catalog) == 1
     assert catalog[0]["tags"] == ["qa", "mcq", "synthetic"]
     assert "expected" in catalog[0]["specification_json"]
@@ -116,6 +127,7 @@ def test_streaming_ingest_records_every_row_and_keeps_verifiers_private(tmp_path
     assert ledger[2]["tags"] == ["qa", "mcq", "broken"]
     assert ledger[2]["mode"] == "mcq"
     assert "Invalid TaskTrove archive container" in ledger[2]["reason"]
+    assert ledger[3]["tags"] == ["numeric", "synthetic"]
     assert report["public_candidate_projection_materialized"] is True
     assert report["public_projection_published"] is False
     assert report["public_candidate_counts"] == {f"source:{SOURCE}": 1, "mode:mcq": 1}
@@ -130,3 +142,20 @@ def test_streaming_ingest_records_every_row_and_keeps_verifiers_private(tmp_path
     assert report["public_candidate_proof_count"] == 1
     assert "expected" not in json.dumps(candidate)
     assert (tmp_path / "iris-output/ingestion-summary.json").exists()
+
+    math_report = ingest_tasktrove.ingest(
+        str(release),
+        str(tmp_path / "math-output"),
+        tmp_path / "math-iris-output",
+        target_modes=frozenset({"mcq"}),
+    )
+    math_ledger = pq.read_table(tmp_path / "math-output/ingestion-ledger.parquet").to_pylist()
+    assert math_report["selection"]["target_modes"] == ["mcq"]
+    assert math_report["input_rows_processed"] == len(rows)
+    assert math_report["counts"]["imported"] == 1
+    assert math_report["counts"]["rejected"] == 1
+    assert math_report["counts"]["out_of_scope"] == 2
+    assert math_report["candidate_archive_bytes_parsed"] == len(rows[0]["task_binary"]) + len(rows[2]["task_binary"])
+    assert math_report["archive_payload_bytes_materialized"] > math_report["candidate_archive_bytes_parsed"]
+    assert [row["disposition"] for row in math_ledger] == ["imported", "out-of-scope", "rejected", "out-of-scope"]
+    assert "mode not selected" in math_ledger[3]["reason"]

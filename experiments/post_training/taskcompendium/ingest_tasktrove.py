@@ -134,10 +134,20 @@ def _convert(row: dict[str, Any], release_uri: str, release_revision: str) -> Co
     return ConvertedTask(specification, archive.archive_sha256, json.dumps(source_metadata, sort_keys=True))
 
 
-def ingest(release_uri: str, output_uri: str, output_dir: Path, *, limit: int | None = None) -> dict[str, Any]:
+def ingest(
+    release_uri: str,
+    output_uri: str,
+    output_dir: Path,
+    *,
+    limit: int | None = None,
+    target_modes: frozenset[str] | None = None,
+) -> dict[str, Any]:
     """Stream both release splits, preserving one ledger row per input row."""
     if limit is not None and limit < 1:
         raise ValueError("limit must be positive")
+    selected_modes = SUPPORTED_MODES if target_modes is None else target_modes
+    if not selected_modes or selected_modes - SUPPORTED_MODES:
+        raise ValueError(f"Target modes must be a nonempty subset of {sorted(SUPPORTED_MODES)}")
     configure_coreweave_s3()
     release = StoragePath(release_uri)
     manifest_bytes = (release / "manifest.json").read_bytes()
@@ -247,7 +257,7 @@ def ingest(release_uri: str, output_uri: str, output_dir: Path, *, limit: int | 
                                 stop = True
                                 break
                             metadata_rows = metadata_rows[:remaining]
-                        read_archives = any(row.get("mode") in SUPPORTED_MODES for row in metadata_rows)
+                        read_archives = any(row.get("mode") in selected_modes for row in metadata_rows)
                         archive_batches = (
                             parquet.iter_batches(row_groups=[row_group], columns=["task_binary"], batch_size=128)
                             if read_archives and "task_binary" in available
@@ -275,6 +285,10 @@ def ingest(release_uri: str, output_uri: str, output_dir: Path, *, limit: int | 
                                 if mode not in SUPPORTED_MODES:
                                     disposition = Disposition.OUT_OF_SCOPE
                                     reason = f"unsupported mode: {mode or '<missing>'}"
+                                    counts["out_of_scope"] += 1
+                                elif mode not in selected_modes:
+                                    disposition = Disposition.OUT_OF_SCOPE
+                                    reason = f"mode not selected for this pass: {mode}"
                                     counts["out_of_scope"] += 1
                                 else:
                                     try:
@@ -471,7 +485,12 @@ def ingest(release_uri: str, output_uri: str, output_dir: Path, *, limit: int | 
             "tags",
             "source_category",
         ],
-        "selection": {"limit": limit, "supported_modes": sorted(SUPPORTED_MODES), "splits": list(SPLITS)},
+        "selection": {
+            "limit": limit,
+            "supported_modes": sorted(SUPPORTED_MODES),
+            "target_modes": sorted(selected_modes),
+            "splits": list(SPLITS),
+        },
     }
     artifact_paths = {"private_catalog": catalog_path, "ledger": ledger_path}
     if candidate_handle is not None:
@@ -531,12 +550,23 @@ def main() -> None:
     release_uri = os.environ.get("TASKTROVE_RELEASE_URI", RELEASE_URI)
     output_dir = Path(os.environ["IRIS_OUTPUT_DIR"])
     limit = int(os.environ["TASKTROVE_INGEST_LIMIT"]) if os.environ.get("TASKTROVE_INGEST_LIMIT") else None
+    target_modes = (
+        frozenset(value.strip() for value in os.environ["TASKTROVE_INGEST_MODES"].split(",") if value.strip())
+        if os.environ.get("TASKTROVE_INGEST_MODES")
+        else None
+    )
     runtime_limit = int(os.environ.get("TASKTROVE_INGEST_RUNTIME_SECONDS", "840"))
     signal.signal(signal.SIGTERM, stop_at_runtime_limit)
     signal.signal(signal.SIGALRM, stop_at_runtime_limit)
     signal.setitimer(signal.ITIMER_REAL, runtime_limit)
     try:
-        report = ingest(release_uri, os.environ["TASKTROVE_OUTPUT_URI"], output_dir, limit=limit)
+        report = ingest(
+            release_uri,
+            os.environ["TASKTROVE_OUTPUT_URI"],
+            output_dir,
+            limit=limit,
+            target_modes=target_modes,
+        )
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
     print(
