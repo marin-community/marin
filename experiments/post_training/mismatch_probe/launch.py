@@ -78,6 +78,7 @@ def probe_block(settings: ProbeSettings) -> dict:
     """Render fixed-token collection settings for a synchronous Megatron recipe."""
     return {
         "trainer": {
+            "policy": {"megatron_config": {"moe_router_replay": True}},
             "mismatch_probe": {
                 "enabled": True,
                 "prompts": {"count": settings.prompt_count, "samples_per_prompt": settings.samples_per_prompt},
@@ -88,7 +89,7 @@ def probe_block(settings: ProbeSettings) -> dict:
                 "extra_trainer_modes": ["router_replay", "router_replay_filtered"],
                 "filtered_replay": {"keep_fraction": settings.keep_fraction},
                 "rescore_prefix_cache": settings.cache_mode,
-            }
+            },
         },
         "generator": {
             "require_exact_chat_transport": True,
@@ -145,7 +146,6 @@ def tiny_grug_recipe(
                     "pipeline_model_parallel_size": 1,
                     "context_parallel_size": 1,
                     "expert_model_parallel_size": 1,
-                    "moe_router_replay": True,
                 },
             },
         },
@@ -155,27 +155,13 @@ def tiny_grug_recipe(
             "run_engines_locally": True,
             "weight_sync_backend": "nccl",
             "gpu_memory_utilization": 0.35,
-            "enable_prefix_caching": settings.cache_mode != "off",
-            "require_exact_chat_transport": True,
             "chat_template": {"source": "name", "name_or_path": "qwen2_5_with_generation_tag_simplified"},
-            "engine_init_kwargs": {
-                "enable_return_routed_experts": True,
-                "logprobs_mode": "processed_logprobs",
-                "generation_config": "vllm",
-            },
-            "sampling_params": {
-                "temperature": 1.0,
-                "top_p": 1.0,
-                "top_k": -1,
-                "min_p": 0.0,
-                "repetition_penalty": 1.0,
-                "logprobs": 0,
-            },
         },
         "data": {"kind": "parquet", "train_data": [], "val_data": []},
     }
-    if not warmup:
-        config = OmegaConf.to_container(OmegaConf.merge(config, probe_block(settings)), resolve=True)
+    probe = probe_block(settings)
+    probe["trainer"]["mismatch_probe"]["enabled"] = not warmup
+    config = OmegaConf.to_container(OmegaConf.merge(config, probe), resolve=True)
     return yaml.safe_dump(config, sort_keys=False)
 
 

@@ -21,13 +21,17 @@ from experiments.post_training.mismatch_probe.metrics import (
     prompt_cluster_bootstrap,
 )
 
+GENERATION_SCORER = "vllm.generate"
+RESCORE_SCORER = "vllm.rescore"
+TRAINER_SCORER = "trainer"
+UPDATE_PREFIX = "update@"
+
 ANALYSIS_VERSION = 2
 HEADLINE_METRICS = ("abs_p99", "k3", "share_beyond_2x")
-REPLAY_MODES = ("router_replay", "router_replay_filtered")
 NATIVE_MODE = "native"
 BOOTSTRAP_DRAWS = 1000
-GENERATION_SCORING = "vllm.generate@0"
-TRAINER_SCORING_PREFIX = "trainer@"
+GENERATION_SCORING = f"{GENERATION_SCORER}@0"
+TRAINER_SCORING_PREFIX = f"{TRAINER_SCORER}@"
 
 
 def _trainer_scoring(update: int, mode: str) -> str:
@@ -79,9 +83,9 @@ def _comparison_rows(
 
 
 def _score_label(row: ScoreRow) -> str:
-    if row.scorer == "trainer":
+    if row.scorer == TRAINER_SCORER:
         return _trainer_scoring(row.update, row.mode)
-    if row.scorer == "vllm.rescore":
+    if row.scorer == RESCORE_SCORER:
         return _rescore_scoring(row.update, row.cache_mode)
     return f"{row.scorer}@{row.update}"
 
@@ -137,6 +141,17 @@ def _require_same_weights_if_same_update(
         raise ValueError(f"comparison {label} scores different weights at update {target_row.update}")
 
 
+def _trainer_modes(scores: dict[str, dict[str, ScoreRow]]) -> list[str]:
+    return sorted(
+        {
+            row.mode
+            for rows in scores.values()
+            for row in rows.values()
+            if row.scorer == TRAINER_SCORER and row.mode not in {NATIVE_MODE, "repeat"}
+        }
+    )
+
+
 def _comparison_definitions(scores: dict[str, dict[str, ScoreRow]]) -> dict[str, tuple[str, str]]:
     names = set(scores)
     comparisons: dict[str, tuple[str, str]] = {}
@@ -151,7 +166,7 @@ def _comparison_definitions(scores: dict[str, dict[str, ScoreRow]]) -> dict[str,
 
     add("implementation_mismatch", NATIVE_SCORING, GENERATION_SCORING)
     add("trainer_floor", _trainer_scoring(0, "repeat"), NATIVE_SCORING)
-    for mode in REPLAY_MODES:
+    for mode in _trainer_modes(scores):
         add(f"{mode}_vs_generation", _trainer_scoring(0, mode), GENERATION_SCORING)
     updates = sorted({row.update for rows in scores.values() for row in rows.values() if row.update > 0})
     for update in updates:
@@ -159,7 +174,7 @@ def _comparison_definitions(scores: dict[str, dict[str, ScoreRow]]) -> dict[str,
         add(f"observed_gap_after_{update}", _trainer_scoring(update, NATIVE_MODE), GENERATION_SCORING)
         add(f"vllm_drift_after_{update}", reread(update), reread(0))
         add(f"mismatch_after_{update}", _trainer_scoring(update, NATIVE_MODE), reread(update))
-        for mode in REPLAY_MODES:
+        for mode in _trainer_modes(scores):
             add(f"{mode}_after_{update}", _trainer_scoring(update, mode), reread(update))
     return comparisons
 
@@ -208,7 +223,7 @@ def _route_diagnostics(probes: list[ProbeRow], scores: dict[str, dict[str, Score
     if any(row.routed_experts is None for row in probes):
         return result
     for name, sample_scores in scores.items():
-        if any(score.scorer != "trainer" or score.expert_choices is None for score in sample_scores.values()):
+        if any(score.scorer != TRAINER_SCORER or score.expert_choices is None for score in sample_scores.values()):
             continue
         counts, matches = _route_counts(probes, sample_scores)
         bootstrap = prompt_cluster_bootstrap(
@@ -238,7 +253,7 @@ def _timing_values(archive: ArchiveData) -> dict[str, float]:
         if isinstance(seconds, (float, int))
     }
     for update, metrics in json.loads(archive.manifest.step_metrics_json).items():
-        if not update.startswith("update@") or not isinstance(metrics, dict):
+        if not update.startswith(UPDATE_PREFIX) or not isinstance(metrics, dict):
             continue
         for name, seconds in metrics.get("step_timings", {}).items():
             if isinstance(seconds, (float, int)):
@@ -304,7 +319,7 @@ def analyze_archive(uri: str, *, bootstrap_draws: int = BOOTSTRAP_DRAWS) -> dict
         sampled_metrics[label] = bootstrap.draws
 
     baseline = "implementation_mismatch"
-    for mode in REPLAY_MODES:
+    for mode in _trainer_modes(scores):
         variant = f"{mode}_vs_generation"
         if baseline not in sampled_metrics or variant not in sampled_metrics:
             continue
@@ -381,10 +396,10 @@ def compare_archives(
     if left.manifest.probe_hash != right.manifest.probe_hash:
         raise ValueError("configuration A/B requires the same frozen probe hash")
     left_cache_modes = {
-        score.cache_mode for rows in left.scores.values() for score in rows.values() if score.scorer == "vllm.rescore"
+        score.cache_mode for rows in left.scores.values() for score in rows.values() if score.scorer == RESCORE_SCORER
     }
     right_cache_modes = {
-        score.cache_mode for rows in right.scores.values() for score in rows.values() if score.scorer == "vllm.rescore"
+        score.cache_mode for rows in right.scores.values() for score in rows.values() if score.scorer == RESCORE_SCORER
     }
     if left_cache_modes != right_cache_modes:
         raise ValueError("configuration A/B requires the same prefix-cache modes")
@@ -445,7 +460,7 @@ def compare_archives(
     if all(row.routed_experts is not None for row in left.probes + aligned_right_probes):
         for name in sorted(left.scores.keys() & right.scores.keys()):
             if any(
-                score.scorer != "trainer" or score.expert_choices is None
+                score.scorer != TRAINER_SCORER or score.expert_choices is None
                 for score in list(left.scores[name].values()) + list(right.scores[name].values())
             ):
                 continue
@@ -619,7 +634,7 @@ def render_markdown(report: dict) -> str:
     step_timings = [
         (step, name, value)
         for step, metrics in sorted(report["step_metrics"].items())
-        if isinstance(metrics, dict) and step.startswith("update@")
+        if isinstance(metrics, dict) and step.startswith(UPDATE_PREFIX)
         for name, value in sorted(metrics.get("step_timings", {}).items())
         if isinstance(value, (int, float))
     ]
@@ -668,7 +683,7 @@ def render_archive_comparison(comparison: dict) -> str:
             "",
             "## Route changes",
             "",
-            "| Scorer | Layer | Right minus left expert agreement | 95% paired CI |",
+            "| Scorer | Layer | Right minus left agreement (pp) | 95% paired CI (pp) |",
             "|---|---|---:|---:|",
         ]
     )
@@ -676,8 +691,8 @@ def render_archive_comparison(comparison: dict) -> str:
         for key, value in item["right_minus_left"].items():
             layer = "all" if key == "set_agreement" else key.split("/", 1)[0]
             lines.append(
-                f"| {name} | {layer} | {_display_metric(value, percent_digits=1)} | "
-                f"{_display_interval(item['ci95'].get(key), percent_digits=1)} |"
+                f"| {name} | {layer} | {_display_metric(value * 100)} | "
+                f"{_display_interval([bound * 100 for bound in item['ci95'][key]] if key in item['ci95'] else None)} |"
             )
     return "\n".join(lines) + "\n"
 

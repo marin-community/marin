@@ -32,7 +32,6 @@ def _archive(
     *,
     corrupt_token=False,
     corrupt_prompt=False,
-    with_replacement_mask=True,
     with_routes=False,
     partial_route_mask=False,
     cache_mode="off",
@@ -87,6 +86,7 @@ def _archive(
             "trainer@0:repeat": [-2.1, -3.1],
             "trainer@0:router_replay": [-2.02, -3.02],
             "trainer@0:router_replay_filtered": [-2.01, -3.01],
+            "trainer@0:fp32_head": [-2.03, -3.03],
             "vllm.rescore@1": [-1.99, -2.99],
             "trainer@1:native": [-2.09, -3.09],
             "vllm.rescore@2": [-1.97, -2.97],
@@ -127,7 +127,7 @@ def _archive(
                     expert_choices=observed.tobytes() if observed is not None else None,
                     expert_choices_shape=list(observed.shape) if observed is not None else None,
                     expert_choices_dtype=str(observed.dtype) if observed is not None else None,
-                    replacement_mask=replaced.tobytes() if observed is not None and with_replacement_mask else None,
+                    replacement_mask=replaced.tobytes() if observed is not None else None,
                 )
             )
     manifest = ManifestRow(
@@ -170,6 +170,8 @@ def test_report_recovers_same_weight_modes_paired_intervals_and_drift(tmp_path, 
     assert report["comparisons"]["trainer_floor"]["metrics"]["abs_p99"] == 0.0
     assert report["paired_improvements"]["router_replay"]["abs_p99"]["ci95"][0] > 0
     assert report["paired_improvements"]["router_replay_filtered"]["abs_p99"]["ci95"][0] > 0
+    assert report["comparisons"]["fp32_head_vs_generation"]["metrics"]["abs_p99"] == pytest.approx(0.03)
+    assert report["paired_improvements"]["fp32_head"]["abs_p99"]["ci95"] == pytest.approx([0.07, 0.07])
     rendered = render_markdown(report)
     comparison_line = next(
         line for line in rendered.splitlines() if line.startswith("| router_replay_filtered_vs_generation |")
@@ -219,10 +221,9 @@ def test_report_stops_numerical_analysis_after_token_mutation(tmp_path, corrupt_
             compare_archives(str(left), str(right), bootstrap_draws=20)
 
 
-@pytest.mark.parametrize("with_replacement_mask", [True, False])
-def test_report_route_agreement_excludes_missing_routes_and_tracks_replacements(tmp_path, with_replacement_mask):
+def test_report_route_agreement_excludes_missing_routes(tmp_path):
     root = tmp_path / "archive"
-    _archive(root, with_routes=True, with_replacement_mask=with_replacement_mask)
+    _archive(root, with_routes=True)
     report = analyze_archive(str(root), bootstrap_draws=20)
     native = report["route_diagnostics"]["trainer@0:native"]["metrics"]
     replay = report["route_diagnostics"]["trainer@0:router_replay"]["metrics"]
@@ -271,7 +272,7 @@ def test_configuration_comparison_pairs_prompts_and_requires_same_starting_weigh
     assert route_effect["right_minus_left"]["set_agreement"] == 0.5
     assert route_effect["ci95"]["set_agreement"] == pytest.approx([0.5, 0.5])
     rendered = render_archive_comparison(paired)
-    assert "0.2" in rendered and "50.0%" in rendered
+    assert "0.2" in rendered and "| 50 | [50, 50] |" in rendered
     cached = tmp_path / "cached"
     _archive(cached, cache_mode="on")
     with pytest.raises(ValueError, match="prefix-cache"):

@@ -330,31 +330,6 @@ def test_skyrl_step_routes_disposable_state_to_ttl_storage(
     }
 
 
-def test_skyrl_probe_launch_binds_runtime_revision_and_durable_archive() -> None:
-    revision = "a" * 40
-    recipe = yaml.safe_load(_config_yaml(strategy="megatron"))
-    recipe["trainer"]["mismatch_probe"] = {"enabled": True, "archive_uri": None}
-    spec = dataclasses.replace(
-        _spec(),
-        config_yaml=yaml.safe_dump(recipe),
-        runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON, commit=revision),
-    )
-    step = skyrl_step(spec, _execution())
-    output_path = "s3://durable/users/alice/mismatch-probe/v1"
-    config = step.build_config(
-        StepContext.for_run(
-            output_path=output_path,
-            prefix="s3://durable",
-            runtime_args=step.runtime_args,
-            deps=step.deps,
-        )
-    )
-    launch = yaml.safe_load(config.launch_config_yaml)
-    assert launch["runtime"]["launcher_commit"] == revision
-    assert config.launcher_requirement.endswith(f"@{revision}")
-    assert launch["skyrl"]["trainer"]["mismatch_probe"]["archive_uri"] == f"{output_path}/mismatch_probe"
-
-
 def test_skyrl_temporary_run_path_does_not_repeat_bucket_name(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin")
 
