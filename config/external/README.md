@@ -6,8 +6,8 @@ isolated runtime environments.
 The Evalchemy, Harbor, and MarinSkyRL uv projects are excluded from the root
 workspace so their dependency graphs do not have to resolve with Marin's
 training and serving dependencies. Each `pyproject.toml` follows the external
-repository's `main` branch, and its adjacent `uv.lock` records the exact commit
-Marin uses.
+repository by branch or immutable revision, and its adjacent `uv.lock` records
+the exact commit Marin uses.
 
 `vllm/gpu.toml` records the promoted CUDA release, Torch backend, and
 architecture-specific wheel URLs and SHA-256 digests. It is updated from the

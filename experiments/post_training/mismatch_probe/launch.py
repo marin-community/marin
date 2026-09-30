@@ -29,7 +29,7 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 from marin.training.training import LevanterCheckpoint
-from omegaconf import OmegaConf
+from mergedeep import merge
 
 from experiments.post_training.curriculum_rl.launch import PolicySpec
 
@@ -161,7 +161,7 @@ def tiny_grug_recipe(
     }
     probe = probe_block(settings)
     probe["trainer"]["mismatch_probe"]["enabled"] = not warmup
-    config = OmegaConf.to_container(OmegaConf.merge(config, probe), resolve=True)
+    config = merge({}, config, probe)
     return yaml.safe_dump(config, sort_keys=False)
 
 
