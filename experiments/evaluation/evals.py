@@ -26,6 +26,7 @@ from marin.evaluation.harbor.runner import HarborExecutor
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.records import EvalchemyJudgeRef, EvalchemyRef, EvalRef, EvalTaskRef, HarborRef
 from marin.evaluation.runner import EvalExecutor
+from marin.evaluation.serving_config import resolved_serve_config
 from marin.external_dependencies import EVALCHEMY
 from rigging.secrets import SecretSpec
 
@@ -206,13 +207,20 @@ class GraphWalksDefinition:
         )
 
     def executor_for(self, model: ModelConfig, limit: int | None) -> GraphWalksExecutor:
-        max_model_len = model.serve.max_model_len
+        max_model_len = resolved_serve_config(model).max_model_len
         if max_model_len is None:
             raise ValueError("GraphWalks requires an explicit model serving context length")
         max_output_tokens = model.generation.max_gen_toks
         if max_output_tokens is None:
-            return GraphWalksExecutor(max_model_len=max_model_len, limit=limit)
-        return GraphWalksExecutor(max_model_len=max_model_len, max_output_tokens=max_output_tokens, limit=limit)
+            return GraphWalksExecutor(
+                max_model_len=max_model_len, tokenizer_revision=model.effective_tokenizer_revision, limit=limit
+            )
+        return GraphWalksExecutor(
+            max_model_len=max_model_len,
+            max_output_tokens=max_output_tokens,
+            tokenizer_revision=model.effective_tokenizer_revision,
+            limit=limit,
+        )
 
     @property
     def runtime_descriptor(self) -> str:

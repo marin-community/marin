@@ -106,7 +106,7 @@ class GraphWalksGrade:
 
 def extract_answer(response: str) -> tuple[list[str], bool]:
     """Extract the last-line answer and report whether parsing failed."""
-    line = response.split("\n")[-1]
+    line = response.rstrip().split("\n")[-1]
     if _FINAL_ANSWER_PREFIX not in line:
         return [], True
     match = _FINAL_ANSWER.search(line)
@@ -258,6 +258,7 @@ class GraphWalksExecutor:
 
     max_model_len: int
     max_output_tokens: int = 131072
+    tokenizer_revision: str | None = None
     limit: int | None = None
 
     def __call__(
@@ -283,7 +284,9 @@ class GraphWalksExecutor:
         from datasets import load_dataset  # noqa: PLC0415
         from transformers import AutoTokenizer  # noqa: PLC0415
 
-        tokenizer = AutoTokenizer.from_pretrained(session.model.tokenizer, trust_remote_code=True)
+        tokenizer = AutoTokenizer.from_pretrained(
+            session.model.tokenizer, revision=self.tokenizer_revision, trust_remote_code=True
+        )
         dataset = load_dataset(GRAPHWALKS_DATASET, split="train", revision=GRAPHWALKS_REVISION)
         selection = self._select_examples(cast(Sequence[_GraphWalksRow], dataset), cast(_TokenCounter, tokenizer))
         return self._evaluate(selection, session, output_dir)

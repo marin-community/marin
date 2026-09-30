@@ -34,6 +34,12 @@ def test_graphwalks_requires_answer_on_last_line():
     assert grade.scores["exact_match"] == 0.0
 
 
+def test_graphwalks_accepts_final_answer_followed_by_whitespace():
+    grade = grade_answer("Reasoning\nFinal Answer: [a]\n  \n", ("a",))
+    assert grade.extracted == ["a"]
+    assert grade.scores["f1"] == 1.0
+
+
 @pytest.mark.parametrize("drop_connection", [False, True])
 @pytest.mark.parametrize("mapped_tokens", [False, True])
 def test_graphwalks_records_scored_sample_and_context_coverage(tmp_path, monkeypatch, drop_connection, mapped_tokens):
