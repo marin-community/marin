@@ -73,6 +73,7 @@ from experiments.grug.fast_track.model import (
     tie_routers,
     write_ngram_stats,
 )
+from experiments.grug.fast_track.muon_probe import MuonProbe
 from experiments.grug.fast_track.optimizer import magma_metrics, optimizer_diagnostics
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
@@ -260,6 +261,10 @@ class GrugTrainerConfig:
     # average their gradients: the same update with 1/k of the activation memory, at some speed cost. MoE
     # capacity and routing statistics then apply per microbatch. 1: off.
     grad_accum_microbatches: int = 1
+    # Muon probe (``muon_probe.py``): at this step, measure how reliable each captured matrix's singular directions
+    # are on held-out data and along the next steps; writes ``<muon_probe_path>/muon_probe_step<N>.npz``.
+    muon_probe_step: int | None = None
+    muon_probe_path: str | None = None
 
     # Grug builds its own compact (replica_dcn, data, expert, model) mesh instead of using
     # the Trainer's logical axis mapping; `data` absorbs whatever these two leave free.
@@ -986,6 +991,8 @@ def _make_grad_capture_step(mp: jmp.Policy, *, z_loss_weight: float):
 
 
 _captured_params = jax.jit(capture_matrices)
+# Probe batches start this many steps past the run's last step (disjoint from the training data).
+_MUON_PROBE_DATA_OFFSET = 1000
 
 
 def _make_diagnostic_watch_step(mp: jmp.Policy, *, z_loss_weight: float, watch_config: WatchConfig):
@@ -1611,6 +1618,18 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 raise ValueError("grad_capture_starts needs grad_capture_path")
             grad_capture_step = _make_grad_capture_step(trainer.mp, z_loss_weight=config.trainer.z_loss_weight)
             capture_writer = CaptureWriter(config.trainer.grad_capture_path)
+        muon_probe = None
+        if config.trainer.muon_probe_step is not None:
+            if config.trainer.muon_probe_path is None:
+                raise ValueError("muon_probe_step needs muon_probe_path")
+            probe_gradients = _make_grad_capture_step(trainer.mp, z_loss_weight=config.trainer.z_loss_weight)
+            # Probe batches come from past the run's end, so the run's own data order is untouched.
+            muon_probe = MuonProbe(
+                config.trainer.muon_probe_step,
+                config.trainer.muon_probe_path,
+                _captured_params,
+                iter(train_loader.iter_from_step(trainer.num_train_steps + _MUON_PROBE_DATA_OFFSET)),
+            )
         batch_source = train_loader.iter_from_step(int(state.step))
         iterator = LoadingTimeTrackerIterator(batch_source)
 
@@ -1742,6 +1761,16 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     loop_active = None if grow_step is None else int(state.step) >= grow_step
                     # The router tie release likewise switches programs once (plus a host-side param rewrite below).
                     router_tie_active = _router_ties_active(config.model, current_step)
+                    if muon_probe is not None:
+                        pending_betas = state.pending_qb_betas
+                        muon_probe.before_step(
+                            current_step,
+                            state.params,
+                            state.step,
+                            lambda p, b, st, betas=pending_betas, la=loop_active, rt=router_tie_active: probe_gradients(
+                                p, b, betas, st, loop_active=la, router_tie_active=rt
+                            ),
+                        )
                     captured_before = None
                     if grad_capture_step is not None and current_step in grad_capture_due:
                         # Before the step: the train step donates the state.
