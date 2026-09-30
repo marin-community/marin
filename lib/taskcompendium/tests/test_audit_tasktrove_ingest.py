@@ -5,9 +5,8 @@ import json
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from rigging.filesystem.storage_path import StoragePath
-
 from experiments.post_training.taskcompendium.audit_tasktrove_ingest import audit_artifacts
+from rigging.filesystem.storage_path import StoragePath
 
 
 def _public_record(task_id: str) -> dict:

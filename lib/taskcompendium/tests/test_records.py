@@ -3,10 +3,10 @@
 
 import json
 
+from experiments.post_training.taskcompendium.records import catalog_record, public_task_record
+
 from taskcompendium.models import AnswerType, ConversationInput, EnvironmentRequirements, Source, TaskSpec, TextMessage
 from taskcompendium.verifiers.multiple_choice import multiple_choice_answer
-
-from experiments.post_training.taskcompendium.records import catalog_record, public_task_record
 
 
 def test_catalog_and_public_projection_preserve_tags_and_isolate_verifier():

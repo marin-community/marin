@@ -7,7 +7,6 @@ import tarfile
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-
 from experiments.post_training.taskcompendium import ingest_tasktrove
 
 SOURCE = "synthetic__mcqa-demo"
