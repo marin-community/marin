@@ -7,7 +7,9 @@ import hashlib
 import json
 import tarfile
 from io import BytesIO
+from types import SimpleNamespace
 
+import pytest
 import reasoning_gym
 from tasktrove_verify.grade import grade as source_grade
 from tasktrove_verify.spec import ReasoningGymSpec
@@ -116,3 +118,48 @@ async def test_imported_entry_matches_source_grader_and_harbor(tmp_path):
     verifier_parameters = json.loads(specification.verifier.parameters_json)
     assert entry["metadata"]["private_marker"] not in prompt
     assert entry["metadata"]["private_marker"] in json.dumps(verifier_parameters)
+
+
+async def test_reasoning_gym_scorer_failure_propagates(monkeypatch):
+    _, specification, _ = _imported()
+    convention = PlainText(id="plain")
+    attempt = GradingAttempt(
+        ConversationTrace(events=(*specification.context.events, TextMessage(role="assistant", content="answer"))),
+        {},
+        object(),
+    )
+
+    def get_score_answer_fn(dataset):
+        def score_answer(candidate, entry):
+            raise RuntimeError("synthetic scorer failure")
+
+        return score_answer
+
+    monkeypatch.setattr(
+        "taskcompendium.verifiers.reasoning_gym.import_module",
+        lambda name: SimpleNamespace(get_score_answer_fn=get_score_answer_fn),
+    )
+
+    with pytest.raises(RuntimeError, match="synthetic scorer failure"):
+        await grade_answer(specification, convention, attempt)
+
+
+@pytest.mark.parametrize(
+    "score,error",
+    [(True, TypeError), (float("nan"), ValueError), (-0.1, ValueError), (1.1, ValueError)],
+)
+async def test_reasoning_gym_rejects_invalid_scorer_results(monkeypatch, score, error):
+    _, specification, _ = _imported()
+    convention = PlainText(id="plain")
+    attempt = GradingAttempt(
+        ConversationTrace(events=(*specification.context.events, TextMessage(role="assistant", content="answer"))),
+        {},
+        object(),
+    )
+    monkeypatch.setattr(
+        "taskcompendium.verifiers.reasoning_gym.import_module",
+        lambda name: SimpleNamespace(get_score_answer_fn=lambda dataset: lambda candidate, entry: score),
+    )
+
+    with pytest.raises(error, match="Reasoning Gym scorer"):
+        await grade_answer(specification, convention, attempt)

@@ -4,6 +4,7 @@
 """Grade text answers with the source Reasoning Gym scorer."""
 
 from importlib import import_module
+from math import isfinite
 
 from pydantic import JsonValue, model_validator
 
@@ -43,14 +44,13 @@ class ReasoningGymAnswerVerifier(Verifier):
             score_answer = reasoning_gym.get_score_answer_fn(self.dataset)
         except ValueError as error:
             raise ValueError(f"Unknown Reasoning Gym dataset {self.dataset!r}") from error
-        try:
-            # reasoning-gym annotates this bound scorer as Callable[[], float], but it accepts answer and entry.
-            # pyrefly: ignore[bad-argument-count]
-            score = score_answer(candidate, self.entry)
-        except Exception as error:
-            return GradeResult(Outcome.GRADED, 0.0, f"{type(error).__name__}: {error}")
-        if not isinstance(score, int | float):
+        # reasoning-gym annotates this bound scorer as Callable[[], float], but it accepts answer and entry.
+        # pyrefly: ignore[bad-argument-count]
+        score = score_answer(candidate, self.entry)
+        if isinstance(score, bool) or not isinstance(score, int | float):
             raise TypeError(f"Reasoning Gym scorer returned {type(score).__name__}")
+        if not isfinite(score) or not 0 <= score <= 1:
+            raise ValueError(f"Reasoning Gym scorer returned a score outside [0, 1]: {score!r}")
         return GradeResult(Outcome.GRADED, float(score))
 
 
