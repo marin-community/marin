@@ -92,6 +92,19 @@ def test_file_set_does_not_republish_files_fetched_at_open(tmp_path):
     assert (reloaded / "a").read_bytes() == b"one"
 
 
+def test_file_set_publishes_only_files_added_after_open(tmp_path):
+    """A long-lived local cache keeps its history local: only files created after open reach a new root."""
+    root = str(tmp_path / "remote")
+    local = tmp_path / "local"
+    (local / "old").mkdir(parents=True)
+    (local / "old" / "earlier-job.textproto").write_bytes(b"old")
+    writer = FineStoreDirectory(root, str(local), flush_interval=3600)
+    (local / "new.textproto").write_bytes(b"new")
+    writer.close()
+
+    assert fetch_file_set(root, str(tmp_path / "reloaded")) == {"new.textproto"}
+
+
 def test_file_set_rejects_unsafe_committed_paths(tmp_path):
     root = str(tmp_path / "remote")
     with DataStore.open(root, writer_id="malicious") as store:

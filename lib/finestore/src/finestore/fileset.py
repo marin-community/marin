@@ -56,6 +56,10 @@ def fetch_file_set(root: str, local: str) -> set[str]:
 class FineStoreDirectory:
     """Mirror new files from a local directory as atomic FineStore file-set commits.
 
+    Only files that appear after construction are published: files fetched from ``root`` and files already in
+    ``local`` at open count as known. A long-lived local cache (such as a node's XLA autotune directory) then
+    uploads only what this process adds, instead of re-publishing its whole history into every new ``root``.
+
     Periodic synchronization is best-effort. Call :meth:`close` when the final
     files must be published; interpreter shutdown gives the final sync a bounded
     drain window.
@@ -73,7 +77,7 @@ class FineStoreDirectory:
         self._root = root
         self._local = pathlib.Path(local)
         self._local.mkdir(parents=True, exist_ok=True)
-        self._known = fetch_file_set(self._root, local)
+        self._known = fetch_file_set(self._root, local) | self._present()
         self._store = DataStore.open(self._root)
         self._flush_interval = flush_interval
         self._max_batch_data_bytes = max_batch_data_bytes
@@ -86,10 +90,13 @@ class FineStoreDirectory:
         self._thread.start()
         atexit.register(self._close_at_exit)
 
+    def _present(self) -> set[str]:
+        return {path.relative_to(self._local).as_posix() for path in self._local.rglob("*") if path.is_file()}
+
     def flush(self) -> None:
         """Publish files added since the last sync in target-bounded multi-file transactions."""
         with self._flush_lock:
-            present = {path.relative_to(self._local).as_posix() for path in self._local.rglob("*") if path.is_file()}
+            present = self._present()
             pending = sorted(present - self._known)
             if not pending:
                 return
