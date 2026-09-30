@@ -3,28 +3,30 @@
 
 """Import the TaskTrove Clean calendar scheduling scripts."""
 
-import base64
 import hashlib
 import json
 import math
 import tomllib
 from pathlib import Path
+from types import MappingProxyType
 
 from tasktrove_verify.spec import DEFAULT_WORKSPACE, ScriptSpec, parse_spec
 
 from taskcompendium.importers.tasktrove.convert import METADATA_TABLE, TASK_MANIFEST
 from taskcompendium.importers.tasktrove.models import TaskArchive
 from taskcompendium.models import AnswerType, ConversationInput, EnvironmentRequirements, TaskSpec, TextMessage
-from taskcompendium.verifiers.script import NetworkPolicy, PrivateResource, ScriptVerifier, script_verifier
+from taskcompendium.verifiers.script import NetworkPolicy, ScriptVerifier, embedded_resource, script_verifier
 
 CHECKER = "agent_calendar_checker.py"
 DATA = "expected_events.json"
 IMPORTER_REVISION = "taskcompendium-tasktrove-calendar-v0.1"
 RUNTIME_GRACE_SECONDS = 10.0
-SOURCES = {
-    "laion__nemotron-gym-agent-calendar-v2": ("tool-use", "agent_calendar"),
-    "laion__nemotron-gym-instruction-following-calendar-v3": ("instruction-following", "nemotron_if_structured"),
-}
+SOURCES = MappingProxyType(
+    {
+        "laion__nemotron-gym-agent-calendar-v2": ("tool-use", "agent_calendar"),
+        "laion__nemotron-gym-instruction-following-calendar-v3": ("instruction-following", "nemotron_if_structured"),
+    }
+)
 _OUTPUT_INSTRUCTION = (
     "You are scheduling events on a calendar. Read the conversation below and "
     "write your final calendar as a JSON list to `/app/answer.txt`. Each event "
@@ -38,15 +40,6 @@ _FINAL_ANSWER_INSTRUCTION = _OUTPUT_INSTRUCTION.replace(
     "write your final calendar as a JSON list in your final response.",
 )
 _ADAPTER = Path(__file__).with_name("calendar_adapter.py")
-
-
-def _resource(path: str, content: bytes, *, executable: bool = False) -> PrivateResource:
-    return PrivateResource(
-        path=path,
-        sha256=hashlib.sha256(content).hexdigest(),
-        embedded_base64=base64.b64encode(content).decode("ascii"),
-        executable=executable,
-    )
 
 
 def _valid_expected_events(value: object) -> bool:
@@ -122,9 +115,9 @@ def import_task(archive: TaskArchive, *, runtime_image: str) -> TaskSpec:
         timeout_seconds=source_contract.timeout + RUNTIME_GRACE_SECONDS,
         runtime_image=runtime_image,
         resources=(
-            _resource("grade.py", _ADAPTER.read_bytes(), executable=True),
-            _resource("source_checker.py", checker),
-            _resource(DATA, expected_events),
+            embedded_resource("grade.py", _ADAPTER.read_bytes(), executable=True),
+            embedded_resource("source_checker.py", checker),
+            embedded_resource(DATA, expected_events),
         ),
         network_policy=NetworkPolicy.DISABLED,
     )

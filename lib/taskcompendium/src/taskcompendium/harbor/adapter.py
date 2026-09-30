@@ -218,7 +218,7 @@ class ReplayAgent(BaseAgent):
 
 
 class SemanticVerifier(BaseVerifier):
-    """Grade the submitted answer against the task's private reference."""
+    """Grade the final submission with the task's private verifier."""
 
     async def verify(self) -> VerifierResult:
         script_task = False

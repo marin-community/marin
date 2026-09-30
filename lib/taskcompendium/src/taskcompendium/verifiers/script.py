@@ -95,6 +95,16 @@ class NetworkPolicy(StrEnum):
     ENABLED = "enabled"
 
 
+def embedded_resource(path: str, content: bytes, *, executable: bool = False) -> PrivateResource:
+    """Pin embedded private file content by its SHA256 digest."""
+    return PrivateResource(
+        path=path,
+        sha256=hashlib.sha256(content).hexdigest(),
+        embedded_base64=base64.b64encode(content).decode("ascii"),
+        executable=executable,
+    )
+
+
 class ScriptVerifier(BaseModel):
     """Source-independent, pinned inputs for one isolated script grader."""
 
