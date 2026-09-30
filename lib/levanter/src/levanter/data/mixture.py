@@ -143,7 +143,12 @@ class MixtureDataset(AsyncDataset[T]):
     def _compute_expected_counts_per_block(self, weights: dict[str, float], block_size: int):
         _expected_values_per_block = np.zeros(len(self.datasets), dtype=np.int32)
         for i, dsname in enumerate(self.dataset_index):
-            _expected_values_per_block[i] = weights.get(dsname, 0) * block_size
+            expected = weights.get(dsname, 0) * block_size
+            nearest_integer = round(expected)
+            # Exact integer block counts can land just below an integer after weight normalization.
+            _expected_values_per_block[i] = (
+                nearest_integer if abs(expected - nearest_integer) < 1e-9 else int(expected)
+            )
 
         # handle remainder by adding to the largest dataset
         largest_dataset = np.argmax(_expected_values_per_block)

@@ -102,6 +102,7 @@ def _sft_components(
     allocations: Mapping[str, int],
     *,
     sft_fraction: float,
+    block_size: int = MIXTURE_BLOCK_SIZE,
     pooled_sources: set[str] | None = None,
 ) -> tuple[dict[str, DatasetComponentBase], dict[str, float]]:
     missing = sorted(set(allocations) - set(stores))
@@ -116,7 +117,7 @@ def _sft_components(
     weights: dict[str, float] = {}
     pooled: dict[str, DatasetComponent] = {}
     pooled_weight = 0.0
-    minimum_weight = MIN_SAMPLES_PER_BLOCK / MIXTURE_BLOCK_SIZE
+    minimum_weight = MIN_SAMPLES_PER_BLOCK / block_size
     for name, allocated_tokens in sorted(allocations.items()):
         store = stores[name]
         if store.tokenizer != TOKENIZER:
@@ -150,10 +151,58 @@ def _sft_components(
         components[SFT_POOLED_COMPONENT] = ConcatDatasetComponent(children=pooled)
         weights[SFT_POOLED_COMPONENT] = pooled_weight
 
-    zero_count = [name for name, weight in weights.items() if int(weight * MIXTURE_BLOCK_SIZE) == 0]
+    zero_count = [name for name, weight in weights.items() if int(weight * block_size) == 0]
     if zero_count:
         raise ValueError(f"SFT components round to zero examples per mixture block: {zero_count}")
     return components, weights
+
+
+def _one_epoch_weights(
+    components: Mapping[str, DatasetComponentBase],
+    allocations: Mapping[str, int],
+    replay_weights: Mapping[str, float],
+    *,
+    block_size: int,
+    run_sequences: int,
+) -> list[tuple[int, dict[str, float]]]:
+    """Spread each SFT source's packed examples evenly across complete mixture blocks."""
+    if run_sequences % block_size:
+        raise ValueError("One-epoch source mixing requires complete mixture blocks")
+    if block_size % BATCH:
+        raise ValueError("Mixture block boundaries must fall on training steps")
+    num_blocks = run_sequences // block_size
+    sft_counts: dict[str, int] = {}
+    for name, component in components.items():
+        if name == SFT_POOLED_COMPONENT:
+            assert isinstance(component, ConcatDatasetComponent)
+            sft_counts[name] = sum(allocations[child] // CONTEXT for child in component.children)
+        elif name.startswith(SFT_COMPONENT_PREFIX):
+            sft_counts[name] = allocations[name.removeprefix(SFT_COMPONENT_PREFIX)] // CONTEXT
+    if any(count < num_blocks for count in sft_counts.values()):
+        raise ValueError("Each SFT component needs at least one example per mixture block")
+    if any(tokens % CONTEXT for tokens in allocations.values()):
+        raise ValueError("One-epoch allocations must contain whole packed examples")
+
+    replay_total_weight = sum(replay_weights.values())
+    schedule = []
+    for block in range(num_blocks):
+        counts = {
+            name: ((block + 1) * length // num_blocks) - (block * length // num_blocks)
+            for name, length in sft_counts.items()
+        }
+        replay_draws = block_size - sum(counts.values())
+        replay_targets = {name: replay_draws * weight / replay_total_weight for name, weight in replay_weights.items()}
+        replay_counts = {name: max(1, int(target)) for name, target in replay_targets.items()}
+        remainder = replay_draws - sum(replay_counts.values())
+        if remainder < 0:
+            raise ValueError("Replay components do not fit in the mixture block")
+        largest_remainders = sorted(replay_targets, key=lambda name: replay_targets[name] % 1, reverse=True)
+        for name in largest_remainders[:remainder]:
+            replay_counts[name] += 1
+        counts.update(replay_counts)
+        assert sum(counts.values()) == block_size
+        schedule.append((block * block_size // BATCH, {name: count / block_size for name, count in counts.items()}))
+    return schedule
 
 
 def data_config(steps: int, stores_manifest: str, *, mix_path: Path = MIX_PATH) -> tuple[LmDataConfig, int]:
@@ -166,8 +215,17 @@ def data_config(steps: int, stores_manifest: str, *, mix_path: Path = MIX_PATH) 
         raise ValueError(f"Step count must match the fixed {plan['steps']}-step allocation")
     if plan["batch_size"] != BATCH or plan["context_length"] != CONTEXT:
         raise ValueError("SFT allocation was prepared for a different batch size or context length")
+    block_size = int(plan.get("mixture_block_size", MIXTURE_BLOCK_SIZE))
     allocations = {name: int(tokens) for name, tokens in plan["allocations_tokens"].items()}
-    pooled_sources = set(plan["pooled_sources"]) if "pooled_sources" in plan else None
+    if plan.get("block_schedule") == "one_epoch":
+        if steps * BATCH % block_size:
+            raise ValueError("One-epoch source mixing requires complete mixture blocks")
+        if missing := sorted(allocations.keys() - stores.keys()):
+            raise ValueError(f"Missing token stores for selected SFT sources: {missing}")
+        num_blocks = steps * BATCH // block_size
+        pooled_sources = {name for name in allocations if stores[name].packed_sequences < num_blocks}
+    else:
+        pooled_sources = set(plan["pooled_sources"]) if "pooled_sources" in plan else None
     if pooled_sources is not None and not pooled_sources <= allocations.keys():
         raise ValueError("Pooled SFT sources must be included in the allocation")
     if any(tokens <= 0 for tokens in allocations.values()):
@@ -180,7 +238,9 @@ def data_config(steps: int, stores_manifest: str, *, mix_path: Path = MIX_PATH) 
     expected_sft_tokens = int(steps * BATCH * CONTEXT * sft_fraction)
     if plan["sft_token_budget"] != expected_sft_tokens:
         raise ValueError(f"SFT allocation has {plan['sft_token_budget']} tokens, expected {expected_sft_tokens}")
-    components, weights = _sft_components(stores, allocations, sft_fraction=sft_fraction, pooled_sources=pooled_sources)
+    components, weights = _sft_components(
+        stores, allocations, sft_fraction=sft_fraction, block_size=block_size, pooled_sources=pooled_sources
+    )
 
     replay = json.loads(Path(__file__).with_name("replay_skew8.json").read_text())
     replay_tail = {}
@@ -193,13 +253,13 @@ def data_config(steps: int, stores_manifest: str, *, mix_path: Path = MIX_PATH) 
                     source=None, cache_dir=path, format=TextLmDatasetFormat(), flat_cache=True
                 )
         share = (1.0 - sft_fraction) * record["weight"]
-        if share * MIXTURE_BLOCK_SIZE < MIN_SAMPLES_PER_BLOCK:
+        if share * block_size < MIN_SAMPLES_PER_BLOCK:
             replay_tail.update({name + "/" + key: child for key, child in children.items()})
             replay_tail_weight += share
         else:
             components[PRETRAIN_COMPONENT_PREFIX + name] = ConcatDatasetComponent(children=children)
             weights[PRETRAIN_COMPONENT_PREFIX + name] = share
-    if replay_tail and replay_tail_weight * MIXTURE_BLOCK_SIZE < MIN_SAMPLES_PER_BLOCK:
+    if replay_tail and replay_tail_weight * block_size < MIN_SAMPLES_PER_BLOCK:
         smallest = min((key for key in weights if key.startswith(PRETRAIN_COMPONENT_PREFIX)), key=weights.__getitem__)
         smallest_component = components.pop(smallest)
         assert isinstance(smallest_component, ConcatDatasetComponent)
@@ -208,21 +268,31 @@ def data_config(steps: int, stores_manifest: str, *, mix_path: Path = MIX_PATH) 
     if replay_tail:
         components[PRETRAIN_COMPONENT_PREFIX + "pooled"] = ConcatDatasetComponent(children=replay_tail)
         weights[PRETRAIN_COMPONENT_PREFIX + "pooled"] = replay_tail_weight
-    if "block_counts" in plan:
+    if plan.get("block_schedule") == "one_epoch":
+        if any(allocations[name] != stores[name].packed_sequences * CONTEXT for name in allocations):
+            raise ValueError("One-epoch source mixing requires full packed-store allocations")
+        replay_weights = {name: weight for name, weight in weights.items() if name.startswith(PRETRAIN_COMPONENT_PREFIX)}
+        weights = _one_epoch_weights(
+            components, allocations, replay_weights, block_size=block_size, run_sequences=steps * BATCH
+        )
+    elif "block_counts" in plan:
         block_counts = {name: int(count) for name, count in plan["block_counts"].items()}
         if set(block_counts) != set(components) or any(count <= 0 for count in block_counts.values()):
             raise ValueError("Block counts must cover every positive-weight mixture component")
-        if sum(block_counts.values()) != MIXTURE_BLOCK_SIZE:
+        if sum(block_counts.values()) != block_size:
             raise ValueError("Block counts must sum to the mixture block size")
-        weights = {name: block_counts[name] / MIXTURE_BLOCK_SIZE for name in components}
-    assert math.isclose(sum(weights.values()), 1.0)
-    replay_weight = sum(v for k, v in weights.items() if k.startswith(PRETRAIN_COMPONENT_PREFIX))
-    if "block_counts" in plan:
-        assert abs(replay_weight - (1.0 - sft_fraction)) <= 1 / MIXTURE_BLOCK_SIZE
-    else:
-        assert math.isclose(replay_weight, 1.0 - sft_fraction)
-    if any(int(weight * MIXTURE_BLOCK_SIZE) == 0 for weight in weights.values()):
-        raise ValueError("Mixture contains a component that rounds to zero")
+        weights = {name: block_counts[name] / block_size for name in components}
+    weight_stages = weights if isinstance(weights, list) else [(0, weights)]
+    for _, stage_weights in weight_stages:
+        assert math.isclose(sum(stage_weights.values()), 1.0)
+        if any(round(weight * block_size) == 0 for weight in stage_weights.values()):
+            raise ValueError("Mixture contains a component that rounds to zero")
+    if not isinstance(weights, list):
+        replay_weight = sum(v for k, v in weights.items() if k.startswith(PRETRAIN_COMPONENT_PREFIX))
+        if "block_counts" in plan:
+            assert abs(replay_weight - (1.0 - sft_fraction)) <= 1 / block_size
+        else:
+            assert math.isclose(replay_weight, 1.0 - sft_fraction)
     logger.info(
         "%d-step mixture: %d SFT sources, %d top-level SFT components, %.3fB allocated SFT tokens",
         steps,
@@ -239,7 +309,7 @@ def data_config(steps: int, stores_manifest: str, *, mix_path: Path = MIX_PATH) 
             auto_build_caches=False,
             shuffle=True,
             block_cross_document_attention=True,
-            mixture_block_size=MIXTURE_BLOCK_SIZE,
+            mixture_block_size=block_size,
             stop_strategy=StopStrategy.RESTART_STRATEGY,
         ),
         steps,

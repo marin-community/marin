@@ -153,17 +153,19 @@ def build_train_dataset(
 
 def verify_data_epochs(train_dataset: MixtureDataset[GrugLmExample], run_sequences: int, max_data_epochs: int) -> None:
     """Check the exact planned source draws, including the final partial mixture block."""
-    if max_data_epochs < 1 or len(train_dataset.weight_stages) != 1:
-        raise ValueError("Epoch limits require a positive limit and a fixed mixture")
+    if max_data_epochs < 1:
+        raise ValueError("Epoch limits require a positive limit")
 
     full_blocks, remainder = divmod(run_sequences, train_dataset.block_size)
-    per_block = train_dataset._counts_per_block_per_stage[0]
-    partial_counts = np.zeros(len(train_dataset.dataset_index), dtype=np.int64)
+    planned_counts = np.zeros(len(train_dataset.dataset_index), dtype=np.int64)
+    for block in range(full_blocks):
+        stage = train_dataset._get_stage_for_block(block)
+        planned_counts += train_dataset._counts_per_block_per_stage[stage]
     if remainder:
         partial_ids = train_dataset._get_block(full_blocks)[:remainder] >> 16
-        partial_counts = np.bincount(partial_ids, minlength=len(train_dataset.dataset_index))
+        planned_counts += np.bincount(partial_ids, minlength=len(train_dataset.dataset_index))
     for index, name in enumerate(train_dataset.dataset_index):
-        planned = full_blocks * int(per_block[index]) + int(partial_counts[index])
+        planned = int(planned_counts[index])
         available = len(train_dataset.datasets[name].as_sync_dataset())
         if planned > max_data_epochs * available:
             raise ValueError(f"{name}: planned {planned} sequences exceeds {available} per epoch")
