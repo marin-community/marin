@@ -131,7 +131,6 @@ class CompositeToolEnvironment(BaseEnvironment):
         pass
 
     def provider_kwargs(self, binding: ToolBinding) -> dict[str, Any]:
-        """Supply constructor arguments for a provider bound to this environment."""
         return {"seed_sha256": binding.seed_sha256, "action_interface": binding.action_interface}
 
     async def start(self, force_build: bool) -> None:
@@ -329,8 +328,8 @@ class SemanticVerifier(BaseVerifier):
             root = self.task.paths.task_dir
             specification = read_specification(root / SPECIFICATION_FILE)
             convention = read_submission_convention(root / SUBMISSION_CONVENTION_FILE)
-            response_path = self.trial_paths.agent_dir / SUBMISSION_FILE
-            conversation = ConversationTrace.model_validate_json(response_path.read_text())
+            submission_path = self.trial_paths.agent_dir / SUBMISSION_FILE
+            conversation = ConversationTrace.model_validate_json(submission_path.read_text())
             if not isinstance(self.environment, CompositeToolEnvironment):
                 raise TypeError("Chat verification requires a composite Harbor environment")
             attempt = GradingAttempt(
