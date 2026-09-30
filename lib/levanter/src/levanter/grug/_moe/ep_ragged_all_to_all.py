@@ -497,11 +497,6 @@ def _routed_experts_bwd(layout, residuals, out_cotangent):
         sorted_weights = weights_f32.reshape(-1)[routing.sorted_indices]
         token_cotangent = out_cotangent[routing.sorted_indices // layout.topk].astype(jnp.float32)
         returned_cotangent = (token_cotangent * sorted_weights[:, None]).astype(out_cotangent.dtype)  # [TK, H]
-    # Hold the backward transports until the recompute has dispatched its last chunk. Nothing
-    # else orders them: the backward no longer reads the recomputed return. With more than one
-    # collective in flight, a backward transport overlapping a recomputed dispatch gave
-    # run-to-run different gradients on GB200.
-    returned_cotangent, _ = jax.lax.optimization_barrier((returned_cotangent, chunk_residuals[-1].expert_mlp))
 
     dispatch_cotangent = _transport_buffer(
         assignments,
