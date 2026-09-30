@@ -555,6 +555,15 @@ class GrugModelConfig:
     attn_res_layer_backward: AttnResLayerBackward = AttnResLayerBackward.RECOMPUTE
     latent_orthogonal_init: bool = False
     router_history: bool = False
+    expert_router_orthogonal: bool = False
+    """Each routed expert ignores its own router direction: ``w_up`` (and ``w_gate``) of expert e are projected off
+    ``u_e = normalize(r_e @ W_down)``, the latent image of its router column (``_orthogonalize_expert_reads``). Every
+    token routed to e shares a large component along ``r_e``; removing it lets the expert spend its neurons on how
+    the arriving tokens differ, and decouples router alignment from the expert's activations (``u_e`` is
+    stop-gradient). Needs the LatentMoE projection and a full-rank linear router."""
+    router_mlp_hidden: int = 0
+    """A tiny MLP router added to the linear one: ``logits += silu(x @ W_a) @ W_b`` with this many hidden neurons
+    (``W_b`` zero-init, so it starts as the linear router). 0: off."""
     """HERO-MoE (arXiv 2609.32581): each router adds ``(rho * H) @ W_R`` to its logits, where ``H`` holds the earlier
     layers' detached router softmax distributions and ``W_R`` (``Transformer.router_hist_w``) is learned. ``rho``
     RMS-matches ``H`` to the (normed) router input and scales by ``sqrt(n_prev / (L - 1))``. Needs ``attn_res`` (the
@@ -2697,6 +2706,8 @@ class MoEMLP(eqx.Module):
     null_const_v: Float[Array, "C L"] | None
     null_const_w: Float[Array, "C L 2"] | None
     w_latent_down: jax.Array | None
+    router_mlp_a: jax.Array | None
+    router_mlp_b: jax.Array | None
     latent_norm: LearnedRMSNorm | None
     w_latent_up: jax.Array | None
     latent_out_norm: LearnedRMSNorm | None
@@ -2752,6 +2763,14 @@ class MoEMLP(eqx.Module):
             ),
             router_bias=jnp.zeros((e,)),
             router_tok_b=jnp.zeros((cfg.router_token_bias_rank, e)) if cfg.router_token_bias_rank else None,
+            router_mlp_a=(
+                reshard(_init_weight(random.fold_in(k_router, 1), (d, cfg.router_mlp_hidden), cfg.initializer_std), P())
+                if cfg.router_mlp_hidden
+                else None
+            ),
+            router_mlp_b=(
+                reshard(jnp.zeros((cfg.router_mlp_hidden, e), jnp.float32), P()) if cfg.router_mlp_hidden else None
+            ),
             w_latent_down=(
                 None
                 if latent is None or (selects and not cfg.latent_select_plus_proj)
@@ -3018,6 +3037,16 @@ class MoEMLP(eqx.Module):
             router_logits = jnp.einsum("tr,re->te", z.astype(jnp.float32), self.router_up.astype(jnp.float32))
         else:
             router_logits = projected[0].astype(jnp.float32)
+        if self.router_mlp_a is not None and self.router_mlp_b is not None:
+            hidden = jax.nn.silu(
+                jnp.einsum("td,dh->th", x_flat.astype(jnp.float32), self.router_mlp_a.astype(jnp.float32))
+            )
+            router_logits = router_logits + jnp.einsum(
+                "th,he->te",
+                hidden,
+                self.router_mlp_b.astype(jnp.float32),
+                out_sharding=_partition_spec_of(router_logits),
+            )
         if self.router_logit_scale is not None:
             router_logits = router_logits * self.router_logit_scale.astype(jnp.float32)
         if self.router_tok_b is not None:
@@ -3155,6 +3184,9 @@ class MoEMLP(eqx.Module):
         bank_mlps = [self.expert_mlp] if self.expert_mlp_b is None else [self.expert_mlp, self.expert_mlp_b]
         if self.cfg.expert_read_subset:
             bank_mlps = [_mask_expert_reads(em, self.cfg) for em in bank_mlps]
+        if self.cfg.expert_router_orthogonal:
+            assert self.router is not None and self.w_latent_down is not None and len(bank_mlps) == 1
+            bank_mlps = [_orthogonalize_expert_reads(bank_mlps[0], self.router, self.w_latent_down)]
         real_selected, real_weights, null_out = selected_experts, combine_weights, None
         if self.cfg.num_null_experts:
             real_selected, real_weights, null_out = self._split_null_slots(
@@ -4053,6 +4085,27 @@ def _expert_read_mask(cfg: "GrugModelConfig", num_experts: int, in_dim: int) -> 
         ranks = jax.vmap(lambda k: jnp.argsort(random.permutation(k, in_dim)))(keys)
         mask = ranks < width
     return mask.astype(jnp.float32)[:, :, None]
+
+
+def _orthogonalize_expert_reads(em: MoEExpertMlp, router: jax.Array, w_latent_down: jax.Array) -> MoEExpertMlp:
+    """Project each expert's input rows off its router direction's latent image (``expert_router_orthogonal``):
+    ``W_e <- (I - u_e u_e^T) W_e`` with ``u_e = normalize(router[:, e] @ w_latent_down)``, stop-gradient."""
+    directions = jnp.einsum(
+        "de,dl->el", router.astype(jnp.float32), w_latent_down.astype(jnp.float32), out_sharding=P(None, None)
+    )
+    directions = directions / (jnp.linalg.norm(directions, axis=-1, keepdims=True) + 1e-9)
+    directions = jax.lax.stop_gradient(directions[: em.w_up.shape[0]])
+
+    def project(w: jax.Array) -> jax.Array:
+        spec = _padded_spec(w)
+        u = reshard(directions, P(spec[0], spec[1]))
+        along = jnp.einsum("el,elo->eo", u, w.astype(jnp.float32), out_sharding=P(spec[0], spec[2]))
+        return (w.astype(jnp.float32) - u[:, :, None] * along[:, None, :]).astype(w.dtype)
+
+    em = eqx.tree_at(lambda m: m.w_up, em, project(em.w_up))
+    if em.w_gate is not None:
+        em = eqx.tree_at(lambda m: m.w_gate, em, project(em.w_gate))
+    return em
 
 
 def _mask_expert_reads(em: MoEExpertMlp, cfg: "GrugModelConfig") -> MoEExpertMlp:
@@ -5818,6 +5871,8 @@ class Transformer(eqx.Module):
         allowed = {"q", "k", "v", "mlp", "mlp_shared", "mlp_routed", "mlp_router"}
         if set(cfg.attn_res_sum_inputs) - allowed:
             raise ValueError(f"attn_res_sum_inputs must be a subset of {sorted(allowed)}, got {cfg.attn_res_sum_inputs}")
+        if cfg.expert_router_orthogonal and (cfg.router_rank or cfg.latent_dim is None or cfg.moe_bank2_experts):
+            raise ValueError("expert_router_orthogonal needs a full-rank linear router, a LatentMoE and one expert bank")
         if cfg.router_history and (not cfg.attn_res or cfg.loop_grow_step is not None or cfg.dense_mlp):
             raise ValueError("router_history needs attn_res, a MoE and no looped growth")
         if cfg.attn_res_full and cfg.attn_res_layer_backward != AttnResLayerBackward.SAVE:
