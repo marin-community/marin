@@ -33,9 +33,10 @@ from taskcompendium.submission import (
     render_instruction,
     submission_compatibility,
 )
-from taskcompendium.tool_provider import ToolProviderFactory
+from taskcompendium.tool_provider import ToolProviderFactory, tool_schema_sha256
 from taskcompendium.verifier_registry import validate_verifier
 
+SHA256_DIGEST_PATTERN = r"^[0-9a-f]{64}$"
 SPECIFICATION_FILE = "specification.json"
 SUBMISSION_CONVENTION_FILE = "submission_convention.json"
 ENVIRONMENT_CONFIG_FILE = "environment_config.json"
@@ -53,14 +54,14 @@ class ToolBinding(BaseModel):
 
     # Versioned action contract, such as "nemo_workplace:v1".
     action_interface: str = Field(min_length=1)
-    seed_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    seed_sha256: str = Field(pattern=SHA256_DIGEST_PATTERN)
     # Python class locator selected by the code that prepares and launches tasks.
     provider: str
     # Immutable implementation revision expected at export and launch.
     provider_revision: str = Field(min_length=1)
     # Ordered names of functions selected from the provider for this task.
     tools: tuple[Annotated[str, Field(min_length=1)], ...] = Field(min_length=1)
-    tools_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    tools_sha256: str = Field(pattern=SHA256_DIGEST_PATTERN)
 
     @model_validator(mode="after")
     def validate_binding(self) -> "ToolBinding":
@@ -138,9 +139,7 @@ def validate_provider_surface(binding: ToolBinding, provider_source: Path | None
         if getattr(provider, field) != expected:
             raise ValueError(f"Provider {field} differs from Harbor binding")
     definitions = selected_tool_definitions(provider.TOOL_DEFINITIONS, binding.tools)
-    digest = hashlib.sha256(
-        json.dumps(definitions, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
-    ).hexdigest()
+    digest = tool_schema_sha256(definitions)
     if digest != binding.tools_sha256:
         raise ValueError("Provider tool schemas differ from Harbor binding")
 
