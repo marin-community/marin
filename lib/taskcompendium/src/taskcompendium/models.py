@@ -3,7 +3,6 @@
 
 """Private semantics for one deterministic task and its final submission."""
 
-import re
 from dataclasses import dataclass
 from enum import StrEnum
 from math import isfinite
@@ -11,10 +10,9 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
-from taskcompendium.resources import TaskResource, validate_resource_paths
+from taskcompendium.resources import SHA256_PATTERN, TaskResource, validate_resource_paths
 
 SCHEMA_VERSION = "0.12"
-SHA256_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
 
 
 class AnswerType(StrEnum):
