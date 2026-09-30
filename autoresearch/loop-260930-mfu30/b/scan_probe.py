@@ -72,11 +72,13 @@ def _build(mesh, init_fn):
     )
 
     def layer(x, ws):
-        w13_l, w2_l = ws
+        w13_l, w2_l, shift = ws
         ragged._loop_local_zeros = init_fn
+        # Routing varies per layer, as in the model, so nothing routing-derived is loop invariant.
+        layer_selected = (selected + shift) % experts
         out = grug_moe.moe_mlp(
             x,
-            selected,
+            layer_selected,
             weights,
             w13_l,
             w2_l,
@@ -88,7 +90,8 @@ def _build(mesh, init_fn):
         return x + out.astype(x.dtype), None
 
     def loss(x, w13, w2):
-        y, _ = jax.lax.scan(jax.checkpoint(layer), x, (w13, w2))
+        shifts = jnp.arange(LAYERS, dtype=jnp.int32)
+        y, _ = jax.lax.scan(jax.checkpoint(layer), x, (w13, w2, shifts))
         return jnp.sum(y.astype(jnp.float32))
 
     with jax.set_mesh(mesh):
