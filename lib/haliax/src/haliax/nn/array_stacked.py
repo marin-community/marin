@@ -2,6 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import functools
 from typing import Any, Callable, Generic, Self, Sequence, TypeVar
 
@@ -305,7 +307,8 @@ def _layer_in_axes(tree: Any, num_layers: int) -> Any:
 
 
 def _scan_layers(
-    fn: Callable[[CarryT, jax.Array], tuple[CarryT, OutputT_co]],
+    # `jax.lax.scan` feeds `fn` one 0-d slice of `indices` per step.
+    fn: Callable[[CarryT, jax.Array[[]]], tuple[CarryT, OutputT_co]],
     init: CarryT,
     *,
     num_layers: int,

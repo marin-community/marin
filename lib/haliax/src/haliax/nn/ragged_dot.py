@@ -2,6 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import functools
 import logging
 import os
@@ -10,6 +12,7 @@ from typing import Callable, Literal, TypeAlias
 
 import jax
 import jax.numpy as jnp
+from shape_extensions import IntVar
 
 from haliax.partitioning import ResourceAxis
 
@@ -91,7 +94,9 @@ def _megablox_tiling(m: int, k: int, n: int) -> tuple[int, int, int]:
     return min(m, tile_size[0]), min(k, tile_size[1]), min(n, tile_size[2])
 
 
-def _ragged_dot_megablox_impl(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
+def _ragged_dot_megablox_impl[T: IntVar, I: IntVar, O: IntVar, G: IntVar](
+    lhs: jax.Array[[T, I]], rhs: jax.Array[[G, I, O]], group_sizes: jax.Array[[G]]
+) -> jax.Array[[T, O]]:
     if _gmm_megablox is None:
         raise NotImplementedError("megablox GMM is not available (TPU-only)")
     return _gmm_megablox(
@@ -194,7 +199,9 @@ def _triton_default_matmul(m: int, k: int, n: int, num_groups: int, dtype) -> Ca
     )
 
 
-def _triton_default_pallas_call(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
+def _triton_default_pallas_call[T: IntVar, I: IntVar, O: IntVar, G: IntVar](
+    lhs: jax.Array[[T, I]], rhs: jax.Array[[G, I, O]], group_sizes: jax.Array[[G]]
+) -> jax.Array[[T, O]]:
     """Raw Pallas-Triton grouped matmul for the default ragged-dot layout."""
     m, k = lhs.shape
     num_groups, _, n = rhs.shape
@@ -277,12 +284,16 @@ def _triton_ragged_contracting_dim_matmul(k: int, m: int, n: int, dtype) -> Call
     return jax.vmap(one_group, in_axes=(None, None, 0, 0))
 
 
-def _triton_ragged_contracting_dim_pallas_call(
-    lhs: jax.Array,
-    rhs: jax.Array,
-    group_sizes: jax.Array,
-) -> jax.Array:
-    """Raw Pallas-Triton grouped matmul for drhs-style ragged contraction."""
+def _triton_ragged_contracting_dim_pallas_call[T: IntVar, I: IntVar, O: IntVar, G: IntVar](
+    lhs: jax.Array[[T, I]],
+    rhs: jax.Array[[T, O]],
+    group_sizes: jax.Array[[G]],
+) -> jax.Array[[G, I, O]]:
+    """Raw Pallas-Triton grouped matmul for drhs-style ragged contraction.
+
+    ``lhs``/``rhs`` share their leading (ragged/contracting) dimension; the
+    output stacks one ``[I, O]`` matmul per group.
+    """
     k, m = lhs.shape
     _, n = rhs.shape
     cum_rows = jnp.cumulative_sum(group_sizes, include_initial=True)
@@ -314,6 +325,8 @@ _DRHS_DIM_NUMS = jax.lax.RaggedDotDimensionNumbers(
 
 
 def _triton_pallas_call(
+    # The roles of `lhs`/`rhs` depend on `ragged_dot_dimension_numbers` (forward vs. gradient
+    # calls), so no single shape signature fits; kept unshaped.
     lhs: jax.Array,
     rhs: jax.Array,
     group_sizes: jax.Array,
@@ -330,7 +343,9 @@ def _triton_pallas_call(
 
 
 @functools.partial(jax.custom_vjp, nondiff_argnums=())
-def _ragged_dot_triton_impl(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
+def _ragged_dot_triton_impl[T: IntVar, I: IntVar, O: IntVar, G: IntVar](
+    lhs: jax.Array[[T, I]], rhs: jax.Array[[G, I, O]], group_sizes: jax.Array[[G]]
+) -> jax.Array[[T, O]]:
     """Pallas-Triton grouped matmul with explicit backward pass.
 
     Uses custom_vjp so JAX never tries to autodiff directly through pallas_call.
@@ -342,19 +357,24 @@ def _ragged_dot_triton_impl(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Arr
     return _triton_pallas_call(lhs, rhs, group_sizes)
 
 
-def _ragged_dot_triton_fwd(lhs, rhs, group_sizes):
+def _ragged_dot_triton_fwd[T: IntVar, I: IntVar, O: IntVar, G: IntVar](
+    lhs: jax.Array[[T, I]], rhs: jax.Array[[G, I, O]], group_sizes: jax.Array[[G]]
+) -> tuple[jax.Array[[T, O]], tuple[jax.Array[[T, I]], jax.Array[[G, I, O]], jax.Array[[G]]]]:
     out = _triton_pallas_call(lhs, rhs, group_sizes)
     return out, (lhs, rhs, group_sizes)
 
 
-def _ragged_dot_triton_bwd(residuals, dout):
+def _ragged_dot_triton_bwd[T: IntVar, I: IntVar, O: IntVar, G: IntVar](
+    residuals: tuple[jax.Array[[T, I]], jax.Array[[G, I, O]], jax.Array[[G]]],
+    dout: jax.Array[[T, O]],
+) -> tuple[jax.Array[[T, I]], jax.Array[[G, I, O]], None]:
     lhs, rhs, group_sizes = residuals
 
     # dlhs[M,K] = dout[M,N] @ rhs[G,K,N]^T
-    dlhs = _triton_pallas_call(dout, rhs, group_sizes, _DLHS_DIM_NUMS)
+    dlhs: jax.Array[[T, I]] = _triton_pallas_call(dout, rhs, group_sizes, _DLHS_DIM_NUMS)
 
     # drhs[G,K,N] = lhs[M,K]^T @ dout[M,N]
-    drhs = _triton_pallas_call(lhs, dout, group_sizes, _DRHS_DIM_NUMS)
+    drhs: jax.Array[[G, I, O]] = _triton_pallas_call(lhs, dout, group_sizes, _DRHS_DIM_NUMS)
 
     return dlhs, drhs, None  # None for group_sizes (integer, no gradient)
 
@@ -362,7 +382,9 @@ def _ragged_dot_triton_bwd(residuals, dout):
 _ragged_dot_triton_impl.defvjp(_ragged_dot_triton_fwd, _ragged_dot_triton_bwd)
 
 
-def _ragged_dot_xla_impl(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
+def _ragged_dot_xla_impl[T: IntVar, I: IntVar, O: IntVar, G: IntVar](
+    lhs: jax.Array[[T, I]], rhs: jax.Array[[G, I, O]], group_sizes: jax.Array[[G]]
+) -> jax.Array[[T, O]]:
     return jax.lax.ragged_dot_general(
         lhs=lhs,
         rhs=rhs,
@@ -395,7 +417,9 @@ def _preferred_implementations(implementation: Implementation) -> tuple[Implemen
     return ("xla",)
 
 
-def _run_impl(name: Implementation, lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
+def _run_impl[T: IntVar, I: IntVar, O: IntVar, G: IntVar](
+    name: Implementation, lhs: jax.Array[[T, I]], rhs: jax.Array[[G, I, O]], group_sizes: jax.Array[[G]]
+) -> jax.Array[[T, O]]:
     if name == "megablox":
         return _ragged_dot_megablox_impl(lhs, rhs, group_sizes)
     if name == "triton":
@@ -405,13 +429,13 @@ def _run_impl(name: Implementation, lhs: jax.Array, rhs: jax.Array, group_sizes:
     raise ValueError(f"Unknown ragged_dot implementation: {name}")
 
 
-def ragged_dot(
-    lhs_: jax.Array,
-    rhs_: jax.Array,
-    group_sizes_: jax.Array,
+def ragged_dot[T: IntVar, I: IntVar, O: IntVar, G: IntVar](
+    lhs_: jax.Array[[T, I]],
+    rhs_: jax.Array[[G, I, O]],
+    group_sizes_: jax.Array[[G]],
     ar: bool = False,
     implementation: Implementation = "auto",
-) -> jax.Array:
+) -> jax.Array[[T, O]]:
     """Grouped matrix multiply with backend-dispatched ragged dot implementations.
 
     Args:
@@ -427,15 +451,17 @@ def ragged_dot(
         A [tokens, out] array.
     """
     hs_shape = lhs_.shape
+    # The padded copy gets a new name: rebinding the `[T, I]`-typed `lhs_` to it is a type error.
+    lhs = lhs_
     if hs_shape[0] % 512:
         pad_length = 512 - hs_shape[0] % 512
-        lhs_ = jax.lax.pad(lhs_, jnp.zeros((), dtype=lhs_.dtype), [(0, pad_length, 0), (0, 0, 0)])
+        lhs = jax.lax.pad(lhs_, jnp.zeros((), dtype=lhs_.dtype), [(0, pad_length, 0), (0, 0, 0)])
 
     out = None
 
     for impl in _preferred_implementations(implementation):
         try:
-            out = _run_impl(impl, lhs_, rhs_, group_sizes_)
+            out = _run_impl(impl, lhs, rhs_, group_sizes_)
             break
         except _AUTO_FALLBACK_EXCEPTIONS as exc:
             if implementation == "auto" and impl != "xla":
@@ -458,7 +484,8 @@ def ragged_dot(
     if hs_shape[0] % 512:
         out = out[: hs_shape[0]]
 
-    return out
+    result: jax.Array[[T, O]] = out
+    return result
 
 
 __all__ = ["Implementation", "ragged_dot"]

@@ -2,14 +2,18 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import itertools
 import warnings
 from functools import partial
 
+import jax
 import numpy as np
 from jax import custom_vjp, lax
 from jax import numpy as jnp
 from jax.typing import DTypeLike
+from shape_extensions import IntVar
 
 # All of this is copy paste from flax/linen/fp8_ops.py
 # (Until we get to the module)
@@ -61,7 +65,7 @@ def compute_scale(amax, scale, fp8_max, margin=0):
     return 1.0 / sf
 
 
-def compute_amax_history(x, amax_history):
+def compute_amax_history[H: IntVar](x: jax.Array, amax_history: jax.Array[[H]]) -> jax.Array[[H]]:
     amax_update = jnp.max(jnp.abs(x)).astype(amax_history.dtype)
     new_history = jnp.roll(amax_history, shift=-1, axis=0).at[0].set(amax_update)
     return new_history
@@ -88,7 +92,7 @@ def compute_amax_history(x, amax_history):
 # ---------------------------------------------------------------------------
 
 
-def update_fp8_meta(x, q_dtype, scale, amax_history):
+def update_fp8_meta[H: IntVar](x: jax.Array, q_dtype, scale: jax.Array, amax_history: jax.Array[[H]]):
     """Compute the next-step scale and rolled amax history (without quantizing `x`)."""
     dtype_max = get_fp8_max(q_dtype, jnp.float32)
     amax_from_history = jnp.max(amax_history, axis=0)
