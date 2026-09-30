@@ -62,7 +62,7 @@ def _archive_bytes() -> tuple[bytes, dict]:
 def _imported():
     data, entry = _archive_bytes()
     archive = read_archive(data, TASKTROVE_SOURCE, TASKTROVE_PATH, RELEASE_URI, RELEASE_REVISION)
-    return archive, import_task(archive), entry
+    return import_task(archive), entry
 
 
 def test_import_rewrites_prompt_preserves_tags_and_archive_digest():
@@ -83,7 +83,7 @@ def test_import_rewrites_prompt_preserves_tags_and_archive_digest():
 
 
 async def test_imported_entry_matches_source_grader_and_harbor(tmp_path):
-    archive, specification, entry = _imported()
+    specification, entry = _imported()
     contract = ReasoningGymSpec(dataset="course_schedule")
     score_answer = reasoning_gym.get_score_answer_fn("course_schedule")
     correct = entry["answer"]
@@ -112,7 +112,6 @@ async def test_imported_entry_matches_source_grader_and_harbor(tmp_path):
         assert outcome == {"status": "graded", "reward": expected, "error": None}
         assert score_answer(candidate, entry) == outcome["reward"]
 
-    assert archive.archive_sha256
     prompt = specification.context.events[0].content
     verifier_parameters = json.loads(specification.verifier.parameters_json)
     assert entry["metadata"]["private_marker"] not in prompt
@@ -120,7 +119,7 @@ async def test_imported_entry_matches_source_grader_and_harbor(tmp_path):
 
 
 async def test_reasoning_gym_scorer_failure_propagates(monkeypatch):
-    _, specification, _ = _imported()
+    specification, _ = _imported()
     convention = PlainText(id="plain")
     attempt = GradingAttempt(
         ConversationTrace(events=(*specification.context.events, TextMessage(role="assistant", content="answer"))),
@@ -147,7 +146,7 @@ async def test_reasoning_gym_scorer_failure_propagates(monkeypatch):
     [(True, TypeError), (float("nan"), ValueError), (-0.1, ValueError), (1.1, ValueError)],
 )
 async def test_reasoning_gym_rejects_invalid_scorer_results(monkeypatch, score, error):
-    _, specification, _ = _imported()
+    specification, _ = _imported()
     convention = PlainText(id="plain")
     attempt = GradingAttempt(
         ConversationTrace(events=(*specification.context.events, TextMessage(role="assistant", content="answer"))),
