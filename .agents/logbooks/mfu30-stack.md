@@ -87,3 +87,26 @@ collective overlap limit 1; B forces limit 1 for ragged runs, and the hero offlo
 C's loss/lm_head item (job `m30c-ce-01`, hero CE at [65536, 6144] x 128256, fanout on GB200x4): production
 tiles 331-335 ms fwd+bwd; best larger vocab tiles 320 ms (backward v 8192 or 16384), i.e. <= 0.012 s/step.
 Closed.
+
+## Rebuild on B's D + mirror + E (2026-09-30)
+
+The stack moved to B's lineage. Old head `d4c62b5a5c` (my hand ports of #9481's transport commits on B's
+A+B+C) is superseded; the branch was force-pushed.
+
+- `research/mcwitt/mfu30-stack` @ `8eff7b8ec4` = B `12643e682c` (A+B+C, D expert-side router gradient with
+  the routed output saved, #9481's mirror parameters folded into `_routed_experts`, E dswiglu epilogue,
+  sequential chunks) + merge of the campaign branch + C's fused gated norm + #9481's attention re-gather,
+  MLP-weight prefetch, QB-after-MLP and `pgle_profile.py` + tools. `lib/levanter/src/levanter/grug/_moe/`
+  is identical to B's `12643e682c`.
+- `research/mcwitt/mfu30-stack-pipelined` @ `7393a9ae26` (worktree `~/projects/marin.mfu30-stack-pipe`) =
+  the same + B's pipelined forward `64909b24d0`.
+- #9481's model commits against D: the MLP-weight prefetch ties the gathered latent/shared weights to
+  `mlp_in` with a forward-only barrier; D's saved routed output is downstream of the expert MLP, so the
+  recompute still needs `mlp_in` and still sees the prefetch. The QB barrier ties `s_minus_alpha` to the
+  whole MoE output; QB statistics are not differentiated, so the recompute drops the barrier and does not
+  pull back the down GEMM or the return that D removed. The attention re-gather is an inner checkpoint
+  and independent of the MoE policy.
+- CPU: hero model tests 72 passed; MoE + gated norm tests 82 passed, 10 skipped (GPU-only).
+- GPU gates (GB200x4, hero env): `m30c-stackgate-03` (sequential), `m30c-stackgate-pipe-01` (pipelined):
+  B's module gate plus `stack/model_smoke.py`, a 4-layer EP4 hero model with the ragged backend, carry
+  offload (saving the routed output), #9481's model commits, and the fused norm on and off.
