@@ -34,10 +34,11 @@ from taskcompendium.importers.nemo_workplace import (
     import_row,
     select_row_zero,
     select_rows,
+    workplace_environment_config,
 )
-from taskcompendium.lowering import lower_to_harbor
+from taskcompendium.lowering import lower_to_harbor, provider_class
 from taskcompendium.models import AnswerType, ConversationInput, ConversationTrace, TaskSpec, TextMessage, VerifierKind
-from taskcompendium.provider_sources import import_staged_provider, stage_git_provider
+from taskcompendium.provider_sources import stage_git_provider
 from taskcompendium.submission import GradingAttempt, PlainText, SubmissionConvention
 from taskcompendium.verifier_registry import grade_answer
 
@@ -72,7 +73,8 @@ def provider_source(tmp_path_factory, trusted_provider_checkout) -> Path:
 
 @pytest.fixture(scope="module")
 def workplace_provider(provider_source):
-    return import_staged_provider(PROVIDER, provider_source)
+    binding = workplace_environment_config(provider_source).tool_providers["workplace"]
+    return provider_class(binding, provider_source)
 
 
 @contextmanager
