@@ -29,7 +29,6 @@ PENDING_QB_BETAS_KEY = "pending_qb_betas"
 class RestoredWeights:
     model: Transformer
     weights_key: str
-    pending_qb_betas: jax.Array
 
 
 def metadata_hash(metadata: dict) -> str:
@@ -79,4 +78,4 @@ def restore_weights(
     jax.block_until_ready(state)
     logger.info("Checkpoint arrays ready; apply pending router bias")
     pending = cast(jax.Array, state[PENDING_QB_BETAS_KEY])
-    return RestoredWeights(apply_qb_betas(cast(Transformer, state[weights_key]), pending), weights_key, pending)
+    return RestoredWeights(apply_qb_betas(cast(Transformer, state[weights_key]), pending), weights_key)

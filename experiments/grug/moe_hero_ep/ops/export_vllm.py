@@ -189,13 +189,10 @@ def export(config: ExportConfig) -> None:
         restored = restore_weights(config.checkpoint, config.metadata_digest, config.model, mesh)
         weights_key = restored.weights_key
         authoritative_dtypes = sorted({str(x.dtype) for x in jax.tree.leaves(restored.model) if eqx.is_inexact_array(x)})
-        pending = jax.sharding.reshard(restored.pending_qb_betas, P())
-        jax.block_until_ready(pending)
-        pending_hash = hashlib.sha256(np.asarray(pending).tobytes()).hexdigest() if jax.process_index() == 0 else None
         # restore_weights already applied the pending QB update to authoritative weights.
         model = jax.tree.map(lambda x: x.astype(jnp.bfloat16) if eqx.is_inexact_array(x) else x, restored.model)
         jax.block_until_ready(model)
-        del restored, pending
+        del restored
         gc.collect()
         state_dict = grugmoe_inference_state_dict(model)
         groups: dict[str, list[str]] = {}
@@ -246,7 +243,6 @@ def export(config: ExportConfig) -> None:
                     "authoritative_weight_dtypes": authoritative_dtypes,
                     "effective_weight_dtype": "bfloat16",
                     "pending_qb_rule": "applied once by restore_weights before BF16 conversion",
-                    "pending_qb_betas_sha256": pending_hash,
                     "tensor_count": len(weight_map),
                     "total_safetensors_bytes": sum(record.bytes for record in records),
                     "shards": [asdict(record) for record in records],
