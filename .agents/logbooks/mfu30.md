@@ -197,3 +197,19 @@ Single-GPU hero-layer benchmark (real `Block.__call__`, stand-in routed experts,
 no in-run drift here, unlike the from-step-0 gcab runs (which also read higher, 28.3-28.5). **Gap to 30%
 at this checkpoint: 13.892 -> 13.084 s = -0.81 s/step.** Scoring window changed to 180011-180059 (median;
 the warmup only adds noise).
+
+## M30-008 Agent C: fused RMSNorm+GatedNorm forward kernel (2026-09-30)
+
+Pallas-Triton kernel `lib/levanter/src/levanter/kernels/pallas/gated_rms_norm/` with a custom_vjp backward
+that never materializes y; switch `GrugModelConfig.gated_norm_implementation` /
+`launch_diagnostics --gated-norm-implementation pallas_gpu`; parameters unchanged. GB200 correctness at
+[16,4096,6144] rank-128 plus padded/odd shapes: output and x / norm-weight / w_down / w_up gradients have
+the same error vs f32 as the bf16 XLA reference (ratio 0.99-1.03); max diff 1 bf16 ulp. Temp memory -1.5
+GiB per layer. Speed is capped by Pallas-Triton at 2.8-3.2 TB/s: isolated forward 1.046 ms vs XLA 1.21
+(1.005 with triton_gemm off). Block benchmark per layer fwd+bwd: flag -1.14 ms, kernel -1.27, kernel+flag
+-1.77 (not additive; both remove the sigmoid pass), dot merger +1.07 (rejected). Arm `m30c-grnflag-01`
+(kernel + `--xla_gpu_enable_triton_gemm=false`, source 37e3db7b87) queued; predicted -0.06 to -0.09
+s/step. Loss will differ at rounding level, so it needs a C-C rerun. Further kernel work (CuTe TMA
+forward ~0.1 s, fused backward ~0.1, short-conv backward ~0.08) is deferred. C now owns stacking + PGLE:
+branch `research/mcwitt/mfu30-stack`, PR #9481 conflicts with B's transport changes, trace -> profile ->
+scored rerun.
