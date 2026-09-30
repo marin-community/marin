@@ -5,11 +5,13 @@
 
 The training callback writes these rows; Marin's report reads the same models.
 Scorings add rows to ``scores`` instead of columns, so new trainer modes do not
-change the table contract. Route tensors and bf16 activations carry explicit
+change the table contract. Route tensors carry explicit
 shape and dtype beside their bytes to preserve exact values through Parquet.
 """
 
 from __future__ import annotations
+
+from enum import StrEnum
 
 import pyarrow as pa
 from pydantic import BaseModel, model_validator
@@ -18,10 +20,9 @@ from finestore.layout import OnConflict
 from finestore.schema import arrow_schema
 from finestore.store import DataStore
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 PROBE_TABLE = "probe"
 SCORES_TABLE = "scores"
-LAYERS_TABLE = "layers"
 MANIFEST_TABLE = "manifest"
 
 
@@ -78,7 +79,8 @@ class ScoreRow(BaseModel):
     schema_version: int = SCHEMA_VERSION
     probe_hash: str
     sample_id: str
-    scoring: str
+    scorer: str
+    mode: str = ""
     update: int
     weights_hash: str
     cache_mode: str | None = None
@@ -100,18 +102,9 @@ class ScoreRow(BaseModel):
         return self
 
 
-class LayerRow(BaseModel):
-    """One layer's raw activation bytes and their token mapping."""
-
-    schema_version: int = SCHEMA_VERSION
-    probe_hash: str
-    sample_id: str
-    scoring: str
-    layer: int
-    output_bytes: bytes
-    shape: list[int]
-    dtype: str
-    token_positions: list[int]
+class ArchiveStatus(StrEnum):
+    BUILDING = "building"
+    COMPLETE = "complete"
 
 
 class ManifestRow(BaseModel):
@@ -119,10 +112,14 @@ class ManifestRow(BaseModel):
 
     schema_version: int = SCHEMA_VERSION
     archive: str
-    status: str
+    status: ArchiveStatus
     probe_hash: str
     starting_weights_hash: str
     source_probe_archive: str | None = None
+    tokenizer_fingerprint: str
+    starting_global_step: int
+    scored_updates: list[int]
+    scored_global_steps: list[int]
     architecture: str
     vllm_enforce_eager: bool
     optimizer_steps_per_update: int
@@ -140,14 +137,12 @@ class ManifestRow(BaseModel):
 ROW_MODELS: dict[str, type[BaseModel]] = {
     PROBE_TABLE: ProbeRow,
     SCORES_TABLE: ScoreRow,
-    LAYERS_TABLE: LayerRow,
     MANIFEST_TABLE: ManifestRow,
 }
 
 PRIMARY_KEYS: dict[str, tuple[str, ...]] = {
     PROBE_TABLE: ("probe_hash", "sample_id"),
-    SCORES_TABLE: ("probe_hash", "sample_id", "scoring"),
-    LAYERS_TABLE: ("probe_hash", "sample_id", "scoring", "layer"),
+    SCORES_TABLE: ("probe_hash", "sample_id", "scorer", "update", "mode", "cache_mode"),
     MANIFEST_TABLE: ("archive",),
 }
 
@@ -162,7 +157,7 @@ def mismatch_schema(table: str) -> pa.Schema:
 
 
 def register_mismatch_tables(store: DataStore) -> None:
-    """Register the four tables with their exact keys and Arrow contracts."""
+    """Register the three tables with their exact keys and Arrow contracts."""
     for table, primary_key in PRIMARY_KEYS.items():
         store.table(
             table,

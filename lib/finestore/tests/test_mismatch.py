@@ -7,12 +7,11 @@ import json
 
 import pyarrow as pa
 import pytest
-from finestore.mismatch import (
-    LAYERS_TABLE,
+from finestore.mismatch_probe import (
     MANIFEST_TABLE,
     PROBE_TABLE,
     SCORES_TABLE,
-    LayerRow,
+    ArchiveStatus,
     ManifestRow,
     ProbeRow,
     ScoreRow,
@@ -48,7 +47,8 @@ def test_mismatch_archive_round_trip_retains_tokens_routes_float32_scores_and_co
     score = ScoreRow(
         probe_hash="hash",
         sample_id="sample-0",
-        scoring="trainer@0:native",
+        scorer="trainer",
+        mode="native",
         update=0,
         weights_hash="weights",
         logprobs=[-0.125, -2.75],
@@ -57,21 +57,20 @@ def test_mismatch_archive_round_trip_retains_tokens_routes_float32_scores_and_co
         expert_choices_dtype="uint8",
         replacement_mask=b"\x00\x01\x00\x00",
     )
-    layer = LayerRow(
-        probe_hash="hash",
-        sample_id="sample-0",
-        scoring="trainer@0:native",
-        layer=0,
-        output_bytes=b"\x00\x3c\x00\x40",
-        shape=[2, 1],
-        dtype="bfloat16-little-endian",
-        token_positions=[2, 3],
-    )
+    scores = [
+        score,
+        score.model_copy(update={"update": 1, "weights_hash": "updated"}),
+        score.model_copy(update={"mode": "router_replay"}),
+    ]
     manifest = ManifestRow(
         archive=root,
-        status="building",
+        status=ArchiveStatus.BUILDING,
         probe_hash="hash",
         starting_weights_hash="weights",
+        tokenizer_fingerprint="toy-tokenizer",
+        starting_global_step=7,
+        scored_updates=[0, 1, 2],
+        scored_global_steps=[7, 8, 9],
         architecture="GrugMoeForCausalLM",
         vllm_enforce_eager=False,
         optimizer_steps_per_update=1,
@@ -91,25 +90,24 @@ def test_mismatch_archive_round_trip_retains_tokens_routes_float32_scores_and_co
         with store.transaction() as transaction:
             for table, row in (
                 (PROBE_TABLE, probe),
-                (SCORES_TABLE, score),
-                (LAYERS_TABLE, layer),
                 (MANIFEST_TABLE, manifest),
             ):
                 transaction.table(table).add(row.model_dump())
+            for row in scores:
+                transaction.table(SCORES_TABLE).add(row.model_dump())
         with store.transaction() as transaction:
-            transaction.table(MANIFEST_TABLE).add(manifest.model_copy(update={"status": "complete"}).model_dump())
+            transaction.table(MANIFEST_TABLE).add(
+                manifest.model_copy(update={"status": ArchiveStatus.COMPLETE}).model_dump()
+            )
 
     view = ReadView(root)
     observed_probe = ProbeRow.model_validate(view.scan(PROBE_TABLE).to_pylist()[0])
-    observed_score = ScoreRow.model_validate(view.scan(SCORES_TABLE).to_pylist()[0])
-    observed_layer = LayerRow.model_validate(view.scan(LAYERS_TABLE).to_pylist()[0])
+    observed_scores = [ScoreRow.model_validate(row) for row in view.scan(SCORES_TABLE).to_pylist()]
     observed_manifest = ManifestRow.model_validate(view.scan(MANIFEST_TABLE).to_pylist()[0])
 
     assert observed_probe == probe
-    assert observed_score == score
-    assert observed_layer == layer
-    assert observed_manifest.status == "complete"
+    assert sorted(observed_scores, key=lambda row: (row.update, row.mode)) == sorted(
+        scores, key=lambda row: (row.update, row.mode)
+    )
+    assert observed_manifest == manifest.model_copy(update={"status": ArchiveStatus.COMPLETE})
     assert view.scan(SCORES_TABLE).schema.field("logprobs").type == pa.list_(pa.float32())
-    assert view.scan(SCORES_TABLE, columns=["probe_hash", "sample_id", "logprobs"]).to_pylist() == [
-        {"probe_hash": "hash", "sample_id": "sample-0", "logprobs": [-0.125, -2.75]}
-    ]
