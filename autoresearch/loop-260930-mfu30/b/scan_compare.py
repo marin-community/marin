@@ -67,6 +67,8 @@ VARIANTS = {
     "stack": (_load_frozen("stack_ep_ragged_all_to_all")._moe_mlp_ep_ragged_a2a_local, None, _BACKWARD),
     # unfilled + expert-side routing-weight gradient (ce112504f1).
     "sonic": (_load_frozen("sonic_ep_ragged_all_to_all")._moe_mlp_ep_ragged_a2a_local, _SAVE_OUTPUT, _BACKWARD),
+    # sonic + #9481's mirror transpose parameters only.
+    "mirror": (_load_frozen("mirror_ep_ragged_all_to_all")._moe_mlp_ep_ragged_a2a_local, _SAVE_OUTPUT, _BACKWARD),
     "candidate": (candidate_module._moe_mlp_ep_ragged_a2a_local, _SAVE_OUTPUT, _BACKWARD),
 }
 
