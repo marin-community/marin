@@ -94,7 +94,6 @@ trainer:
   restore_dataloader_state: true
   hf_save_interval: -1
   rollout_buffer:
-    resume_policy: regenerate
     max_staleness_steps: 2
     # Preserve the previous trainer's commit-order admission policy.
     batch_policy: rolling
@@ -160,7 +159,6 @@ environment:
     nemotron_ultra:
       sandbox:
         host: snowball-nemo-skills-sandbox.iris.svc.cluster.local
-        replica_service: snowball-nemo-skills-sandbox-replicas.iris.svc.cluster.local
         port: 6000
       judges:
         general:
