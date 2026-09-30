@@ -41,7 +41,12 @@ def test_mismatch_archive_round_trip_retains_tokens_routes_float32_scores_and_co
         routed_experts_shape=[2, 1, 2],
         routed_experts_dtype="uint8",
         route_valid_mask=[[True], [False]],
+        prompt_routed_experts=b"\x01\x02\x04\x05",
+        prompt_routed_experts_shape=[2, 1, 2],
+        prompt_routed_experts_dtype="uint8",
     )
+    with pytest.raises(ValueError, match="prompt routes must match"):
+        ProbeRow.model_validate(probe.model_dump() | {"prompt_routed_experts_shape": [1, 1, 2]})
     with pytest.raises(ValueError, match="route validity must match"):
         ProbeRow.model_validate(probe.model_dump() | {"routed_experts": b"\x00\x03", "routed_experts_shape": [1, 1, 2]})
     score = ScoreRow(

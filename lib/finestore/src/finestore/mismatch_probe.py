@@ -52,6 +52,9 @@ class ProbeRow(BaseModel):
     routed_experts_shape: list[int] | None = None
     routed_experts_dtype: str | None = None
     route_valid_mask: list[list[bool]] | None = None
+    prompt_routed_experts: bytes | None = None
+    prompt_routed_experts_shape: list[int] | None = None
+    prompt_routed_experts_dtype: str | None = None
 
     @model_validator(mode="after")
     def validate_token_and_route_layout(self) -> ProbeRow:
@@ -74,6 +77,21 @@ class ProbeRow(BaseModel):
                 raise ValueError("probe route validity must match [response, layer, expert] routes")
             if any(len(token_layers) != self.routed_experts_shape[1] for token_layers in self.route_valid_mask):
                 raise ValueError("probe route validity must cover every captured layer")
+        _validate_tensor_fields(
+            self.prompt_routed_experts,
+            self.prompt_routed_experts_shape,
+            self.prompt_routed_experts_dtype,
+            "probe prompt routes",
+        )
+        if self.prompt_routed_experts_shape is not None:
+            if self.routed_experts_shape is None:
+                raise ValueError("probe prompt routes require response routes")
+            if (
+                len(self.prompt_routed_experts_shape) != 3
+                or self.prompt_routed_experts_shape[0] != len(self.trainer_prompt_ids)
+                or self.prompt_routed_experts_shape[1:] != self.routed_experts_shape[1:]
+            ):
+                raise ValueError("probe prompt routes must match [prompt, layer, expert] with the response geometry")
         return self
 
 
