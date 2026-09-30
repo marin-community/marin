@@ -45,6 +45,7 @@ def _archive(
     forward_seconds=0.1,
     matching_native_routes=False,
     missing_route_layer=False,
+    frozen_reread=False,
 ):
     rows = []
     scores = []
@@ -55,6 +56,19 @@ def _archive(
         captured = np.array([[[1, 2], [2, 3]], [[1, 2], [2, 3]]], dtype=np.uint8)
         if missing_route_layer:
             captured[:, 0] = 0
+        # Re-read routes cover the two prompt inputs and response token 0; response token 1 is never an input.
+        reread_routes = np.array([[[1, 2], [2, 3]]] * 3, dtype=np.uint8)
+        reread_routes[2] = [[[1, 2], [2, 3]], [[1, 2], [2, 3]], [[1, 2], [3, 4]], [[0, 1], [2, 3]]][position]
+        again_routes = reread_routes.copy()
+        if position == 3:
+            again_routes[2, 1] = [4, 5]
+        frozen_routes = reread_routes.copy()
+        frozen_routes[2] = [[0, 1], [2, 3]]
+        vllm_routes = {
+            "vllm.rescore@0": reread_routes,
+            "vllm.rescore_again@0": again_routes,
+            "vllm.rescore_frozen@0": frozen_routes,
+        }
         rows.append(
             ProbeRow(
                 probe_hash=probe_hash,
@@ -85,6 +99,7 @@ def _archive(
         values = {
             "vllm.generate@0": [-3.0, -4.0] if invalid_generation else [-2.0, -3.0],
             "vllm.rescore@0": [-2.0, -3.0],
+            "vllm.rescore_again@0": [-2.0, -3.004],
             "trainer@0:native": [-2.1, -3.1],
             "trainer@0:repeat": [-2.1, -3.1],
             "trainer@0:native_again": [-2.1, -3.1],
@@ -93,11 +108,17 @@ def _archive(
             "trainer@0:router_replay_response": [-2.05, -3.05],
             "trainer@0:router_replay_filtered": [-2.01, -3.01],
             "trainer@0:fp32_head": [-2.03, -3.03],
+            "trainer@0:reread_replay": [-2.02, -3.02],
+            "trainer@0:repeat_reread_replay": [-2.02, -3.02],
+            # Closer to the re-read than the kept stack on prompt p0 and farther on p1.
+            "trainer@0:prompt_dependent": [-2.01, -3.01] if position < 2 else [-2.03, -3.03],
             "vllm.rescore@1": [-1.99, -2.99],
             "trainer@1:native": [-2.09, -3.09],
             "vllm.rescore@2": [-1.97, -2.97],
             "trainer@2:native": [-2.07, -3.07],
         }
+        if frozen_reread:
+            values["vllm.rescore_frozen@0"] = [-1.99, -2.99]
         if cache_mode == "on":
             values = {
                 f"{name}:on" if name.startswith("vllm.rescore@") else name: scores for name, scores in values.items()
@@ -116,13 +137,16 @@ def _archive(
             if observed is not None and ":router_replay_filtered" in name:
                 observed[1, 0] = [0, 1]
                 replaced[1, 0] = [True, True]
+            if observed is not None and name.endswith("reread_replay"):
+                observed[0] = vllm_routes["vllm.rescore_frozen@0" if frozen_reread else "vllm.rescore@0"][2]
+            routes = observed if observed is not None else vllm_routes.get(name) if with_routes else None
             scores.append(
                 ScoreRow(
                     probe_hash=probe_hash,
                     sample_id=sample,
                     scorer="trainer" if name.startswith("trainer@") else name.split("@", 1)[0],
                     mode=name.split(":", 1)[1] if name.startswith("trainer@") else "",
-                    cache_mode=("on" if name.endswith(":on") else "off") if name.startswith("vllm.rescore@") else None,
+                    cache_mode=("on" if name.endswith(":on") else "off") if name.startswith("vllm.rescore") else None,
                     update=update,
                     weights_hash=(
                         reread_weight_override
@@ -130,9 +154,9 @@ def _archive(
                         else f"{weight_tag}{update}"
                     ),
                     logprobs=logprobs,
-                    expert_choices=observed.tobytes() if observed is not None else None,
-                    expert_choices_shape=list(observed.shape) if observed is not None else None,
-                    expert_choices_dtype=str(observed.dtype) if observed is not None else None,
+                    expert_choices=routes.tobytes() if routes is not None else None,
+                    expert_choices_shape=list(routes.shape) if routes is not None else None,
+                    expert_choices_dtype=str(routes.dtype) if routes is not None else None,
                     replacement_mask=replaced.tobytes() if observed is not None else None,
                 )
             )
@@ -181,6 +205,29 @@ def test_report_recovers_same_weight_modes_paired_intervals_and_drift(tmp_path, 
     assert report["paired_improvements"]["router_replay_filtered"]["abs_p99"]["ci95"][0] > 0
     assert report["comparisons"]["fp32_head_vs_generation"]["metrics"]["abs_p99"] == pytest.approx(0.03)
     assert report["paired_improvements"]["fp32_head"]["abs_p99"]["ci95"] == pytest.approx([0.07, 0.07])
+    assert report["prefill_reference"] == "vllm.rescore@0"
+    prefill = report["comparisons"]["native_vs_reread"]
+    assert prefill["reference"] == "vllm.rescore@0"
+    assert prefill["metrics"]["abs_mean"] == pytest.approx(0.1)
+    assert report["comparisons"]["repeat_vs_reread"]["metrics"]["abs_mean"] == pytest.approx(0.1)
+    assert report["comparisons"]["reread_replay_vs_reread"]["metrics"]["abs_mean"] == pytest.approx(0.02)
+    noise = report["comparisons"]["reread_noise"]["metrics"]
+    assert noise["abs_mean"] == pytest.approx(0.002, rel=1e-3)
+    assert noise["byte_equal_fraction"] == 0.5
+    assert "reread_vs_frozen" not in report["comparisons"]
+    kept = report["paired_vs_reread"]["reread_replay"]
+    assert "reread_replay" not in kept
+    # Native sits 0.1 from the re-read against the kept stack's 0.02, so it is worse on every metric.
+    assert kept["native"]["metrics"]["abs_mean"]["ci95"] == pytest.approx([-0.08, -0.08], rel=1e-3)
+    assert kept["native"]["metrics"]["k3"]["ci95"][1] < 0
+    assert kept["native"]["regresses"] is True
+    assert kept["router_replay_filtered"]["metrics"]["abs_p99"]["ci95"] == pytest.approx([0.01, 0.01], rel=1e-3)
+    assert kept["router_replay_filtered"]["regresses"] is False
+    assert kept["repeat_reread_replay"]["metrics"]["abs_mean"]["ci95"] == [0.0, 0.0]
+    assert kept["repeat_reread_replay"]["regresses"] is False
+    straddling = kept["prompt_dependent"]["metrics"]["abs_mean"]["ci95"]
+    assert straddling[0] == pytest.approx(-0.01, rel=1e-3) and straddling[1] == pytest.approx(0.01, rel=1e-3)
+    assert kept["prompt_dependent"]["regresses"] is False
     rendered = render_markdown(report)
     comparison_line = next(
         line for line in rendered.splitlines() if line.startswith("| router_replay_filtered_vs_generation |")
@@ -188,6 +235,24 @@ def test_report_recovers_same_weight_modes_paired_intervals_and_drift(tmp_path, 
     assert float(comparison_line.split("|")[2].strip()) == pytest.approx(
         report["comparisons"]["router_replay_filtered_vs_generation"]["metrics"]["abs_p99"], abs=0.005
     )
+    kept_section = rendered.split("## Prefill metric: `reread_replay` minus candidate", 1)[1].split("\n## ", 1)[0]
+    regression_rows = {
+        line.split("|")[1].strip(): line.split("|")[-2].strip()
+        for line in kept_section.splitlines()
+        if line.startswith("| ")
+    }
+    assert regression_rows["native"] == "**yes**" and regression_rows["router_replay_filtered"] == "no"
+
+    frozen_root = tmp_path / "frozen"
+    _archive(frozen_root, frozen_reread=True)
+    frozen = analyze_archive(str(frozen_root), bootstrap_draws=20)
+    assert frozen["prefill_reference"] == "vllm.rescore_frozen@0"
+    assert frozen["comparisons"]["native_vs_reread"]["reference"] == "vllm.rescore_frozen@0"
+    assert frozen["comparisons"]["native_vs_reread"]["metrics"]["abs_mean"] == pytest.approx(0.11)
+    assert frozen["comparisons"]["reread_vs_frozen"]["metrics"]["abs_mean"] == pytest.approx(0.01)
+    assert frozen["paired_vs_reread"]["reread_replay"]["native"]["metrics"]["abs_mean"][
+        "baseline_minus_candidate"
+    ] == pytest.approx(-0.08)
     snapshot = ReadView(str(root))
     expected_token = str(snapshot.token)
     advanced = False
@@ -230,7 +295,7 @@ def test_report_stops_numerical_analysis_after_token_mutation(tmp_path, corrupt_
             compare_archives(str(left), str(right), bootstrap_draws=20)
 
 
-def test_report_route_agreement_excludes_missing_routes(tmp_path):
+def test_report_route_agreement_against_generation_and_reread(tmp_path):
     root = tmp_path / "archive"
     _archive(root, with_routes=True)
     report = analyze_archive(str(root), bootstrap_draws=20)
@@ -240,6 +305,39 @@ def test_report_route_agreement_excludes_missing_routes(tmp_path):
     assert native["set_agreement"] == 0.5
     assert replay["set_agreement"] == 1.0
     assert filtered["set_agreement"] == 0.75
+
+    # Response token 0 is the only response input: native differs from the re-read at layer 0 in three
+    # samples and at layer 1 in one; generation-route replay differs at layer 1 once and at layer 0 once.
+    reread = report["route_diagnostics_vs_reread"]
+    native_reread = reread["trainer@0:native"]
+    assert native_reread["reference"] == "vllm.rescore@0"
+    assert native_reread["layers"]["0"]["metrics"]["set_agreement"] == 0.25
+    assert native_reread["layers"]["1"]["metrics"]["set_agreement"] == 0.75
+    assert native_reread["first_disagreeing_layer"] == {
+        "tokens": 4,
+        "no_disagreement": 1,
+        "layers": {"0": 3, "1": 0},
+    }
+    assert reread["trainer@0:router_replay"]["first_disagreeing_layer"] == {
+        "tokens": 4,
+        "no_disagreement": 2,
+        "layers": {"0": 1, "1": 1},
+    }
+    assert reread["trainer@0:reread_replay"]["metrics"]["set_agreement"] == 1.0
+    assert report["comparisons"]["native_vs_reread"]["route_set_agreement"]["value"] == 0.5
+    noise = report["reread_route_agreement"]["reread_noise"]
+    assert noise["layers"]["0"]["metrics"]["set_agreement"] == 1.0
+    assert noise["layers"]["1"]["metrics"]["set_agreement"] == pytest.approx(11 / 12)
+    rendered = render_markdown(report)
+    assert "| trainer@0:native | 0 | 3 | 75.0% |" in rendered
+
+    frozen_root = tmp_path / "frozen"
+    _archive(frozen_root, with_routes=True, frozen_reread=True)
+    frozen = analyze_archive(str(frozen_root), bootstrap_draws=20)
+    frozen_native = frozen["route_diagnostics_vs_reread"]["trainer@0:native"]
+    assert frozen_native["reference"] == "vllm.rescore_frozen@0"
+    assert frozen_native["first_disagreeing_layer"]["no_disagreement"] == 4
+    assert frozen["reread_route_agreement"]["reread_vs_frozen"]["metrics"]["set_agreement"] == pytest.approx(20 / 24)
     output = tmp_path / "figures"
     output.mkdir()
     write_plots(report, output)

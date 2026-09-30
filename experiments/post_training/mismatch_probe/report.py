@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+from collections.abc import Collection
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,14 +24,32 @@ from experiments.post_training.mismatch_probe.metrics import (
 
 GENERATION_SCORER = "vllm.generate"
 RESCORE_SCORER = "vllm.rescore"
+# A second cache-off re-read in the same job: vLLM's own run-to-run floor.
+RESCORE_AGAIN_SCORER = "vllm.rescore_again"
+# A reused source archive's update-0 cache-off re-read, copied verbatim as the frozen prefill reference.
+FROZEN_RESCORE_SCORER = "vllm.rescore_frozen"
 TRAINER_SCORER = "trainer"
 UPDATE_PREFIX = "update@"
+CACHE_OFF = "off"
 
-ANALYSIS_VERSION = 2
-HEADLINE_METRICS = ("abs_p99", "k3", "share_beyond_2x")
+ANALYSIS_VERSION = 3
+HEADLINE_METRICS = ("abs_p99", "k3", "abs_mean", "share_beyond_2x", "byte_equal_fraction")
+PERCENT_METRICS = frozenset({"share_beyond_2x", "byte_equal_fraction"})
+METRIC_TITLES = {
+    "abs_p99": "p99 abs Δ",
+    "k3": "k3",
+    "abs_mean": "mean abs Δ",
+    "share_beyond_2x": "beyond 2x",
+    "byte_equal_fraction": "byte-equal",
+}
+# Metrics on which a candidate must not be worse than the kept stack on the prefill metric.
+KEEP_RULE_METRICS = ("abs_mean", "abs_p99", "k3")
 NATIVE_MODE = "native"
+REREAD_REPLAY_MODE = "reread_replay"
 BOOTSTRAP_DRAWS = 1000
 GENERATION_SCORING = f"{GENERATION_SCORER}@0"
+RESCORE_AGAIN_SCORING = f"{RESCORE_AGAIN_SCORER}@0"
+FROZEN_RESCORE_SCORING = f"{FROZEN_RESCORE_SCORER}@0"
 TRAINER_SCORING_PREFIX = f"{TRAINER_SCORER}@"
 
 
@@ -38,11 +57,17 @@ def _trainer_scoring(update: int, mode: str) -> str:
     return f"{TRAINER_SCORING_PREFIX}{update}:{mode}"
 
 
-def _rescore_scoring(update: int, cache_mode: str = "off") -> str:
-    return f"vllm.rescore@{update}" if cache_mode == "off" else f"vllm.rescore@{update}:{cache_mode}"
+def _vllm_scoring(scorer: str, update: int, cache_mode: str | None) -> str:
+    label = f"{scorer}@{update}"
+    return label if cache_mode in (None, CACHE_OFF) else f"{label}:{cache_mode}"
+
+
+def _rescore_scoring(update: int, cache_mode: str = CACHE_OFF) -> str:
+    return _vllm_scoring(RESCORE_SCORER, update, cache_mode)
 
 
 NATIVE_SCORING = _trainer_scoring(0, NATIVE_MODE)
+RESCORE_SCORING = _rescore_scoring(0)
 
 
 @dataclass(frozen=True)
@@ -85,9 +110,7 @@ def _comparison_rows(
 def _score_label(row: ScoreRow) -> str:
     if row.scorer == TRAINER_SCORER:
         return _trainer_scoring(row.update, row.mode)
-    if row.scorer == RESCORE_SCORER:
-        return _rescore_scoring(row.update, row.cache_mode)
-    return f"{row.scorer}@{row.update}"
+    return _vllm_scoring(row.scorer, row.update, row.cache_mode)
 
 
 def load_archive(uri: str) -> ArchiveData:
@@ -152,6 +175,25 @@ def _trainer_modes(scores: dict[str, dict[str, ScoreRow]]) -> list[str]:
     )
 
 
+def _update_zero_trainer_modes(scores: dict[str, dict[str, ScoreRow]]) -> list[str]:
+    return sorted(
+        {
+            row.mode
+            for rows in scores.values()
+            for row in rows.values()
+            if row.scorer == TRAINER_SCORER and row.update == 0
+        }
+    )
+
+
+def _prefill_reference(names: Collection[str]) -> str | None:
+    """Return the frozen source re-read when the job reuses a probe, else this job's cache-off re-read."""
+    for label in (FROZEN_RESCORE_SCORING, RESCORE_SCORING):
+        if label in names:
+            return label
+    return None
+
+
 def _comparison_definitions(scores: dict[str, dict[str, ScoreRow]]) -> dict[str, tuple[str, str]]:
     names = set(scores)
     comparisons: dict[str, tuple[str, str]] = {}
@@ -171,6 +213,12 @@ def _comparison_definitions(scores: dict[str, dict[str, ScoreRow]]) -> dict[str,
     add("prompt_replay_effect", _trainer_scoring(0, "router_replay"), _trainer_scoring(0, "router_replay_response"))
     for mode in _trainer_modes(scores):
         add(f"{mode}_vs_generation", _trainer_scoring(0, mode), GENERATION_SCORING)
+    prefill = _prefill_reference(names)
+    if prefill is not None:
+        for mode in _update_zero_trainer_modes(scores):
+            add(f"{mode}_vs_reread", _trainer_scoring(0, mode), prefill)
+    add("reread_noise", RESCORE_AGAIN_SCORING, RESCORE_SCORING)
+    add("reread_vs_frozen", RESCORE_SCORING, FROZEN_RESCORE_SCORING)
     updates = sorted({row.update for rows in scores.values() for row in rows.values() if row.update > 0})
     for update in updates:
         add(f"trainer_drift_after_{update}", _trainer_scoring(update, NATIVE_MODE), NATIVE_SCORING)
@@ -192,6 +240,18 @@ def _finite_json(value):
     return value
 
 
+def _decoded_routes(score: ScoreRow) -> np.ndarray:
+    return np.frombuffer(score.expert_choices, dtype=score.expert_choices_dtype).reshape(score.expert_choices_shape)
+
+
+def _same_expert_sets(left: np.ndarray, right: np.ndarray) -> np.ndarray:
+    return (np.sort(left, axis=-1) == np.sort(right, axis=-1)).all(axis=-1)
+
+
+def _has_routes(sample_scores: dict[str, ScoreRow]) -> bool:
+    return all(score.expert_choices is not None for score in sample_scores.values())
+
+
 def _route_counts(probes: list[ProbeRow], sample_scores: dict[str, ScoreRow]) -> tuple[np.ndarray, np.ndarray]:
     counts, matches = [], []
     for probe in probes:
@@ -201,13 +261,66 @@ def _route_counts(probes: list[ProbeRow], sample_scores: dict[str, ScoreRow]) ->
         score = sample_scores[probe.sample_id]
         if score.expert_choices_shape != list(source.shape):
             raise ValueError(f"route observation shape differs from capture for {probe.sample_id}")
-        actual = np.frombuffer(score.expert_choices, dtype=score.expert_choices_dtype).reshape(source.shape)
+        actual = _decoded_routes(score)
         valid = np.asarray(probe.route_valid_mask, dtype=np.bool_) & np.asarray(probe.loss_mask, dtype=np.bool_)[:, None]
         if np.any(actual[valid] < 0):
             raise ValueError(f"missing trainer route observation for {probe.sample_id}")
-        equal = (np.sort(source, axis=-1) == np.sort(actual, axis=-1)).all(axis=-1)
+        equal = _same_expert_sets(source, actual)
         counts.append(valid.sum(axis=0))
         matches.append((equal & valid).sum(axis=0))
+    return np.asarray(counts), np.asarray(matches)
+
+
+def _reread_routes(score: ScoreRow, probe: ProbeRow) -> np.ndarray:
+    """Decode a re-read's ``[prompt + response - 1, layer, expert]`` routes, one row per input position."""
+    routes = _decoded_routes(score)
+    positions = len(probe.prompt_token_ids) + len(probe.vllm_output_ids) - 1
+    if routes.ndim != 3 or routes.shape[0] != positions:
+        raise ValueError(f"re-read routes for {probe.sample_id} do not cover prompt and response inputs")
+    return routes
+
+
+def _reread_response_route_counts(
+    probes: list[ProbeRow], trainer_scores: dict[str, ScoreRow], reread_scores: dict[str, ScoreRow]
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Count per-layer expert-set matches on response inputs and each token's first disagreeing layer.
+
+    Re-read rows ``P .. P + R - 2`` hold response tokens ``0 .. R - 2`` as inputs, the indexing of the
+    trainer's ``[R, layer, expert]`` observations; the final response token is never an input.
+    The last column of the first-disagreement counts holds tokens whose sets agree at every layer.
+    """
+    counts, matches, first = [], [], []
+    for probe in probes:
+        reread = _reread_routes(reread_scores[probe.sample_id], probe)
+        prompt_length, response_length = len(probe.prompt_token_ids), len(probe.vllm_output_ids)
+        layers = reread.shape[1]
+        score = trainer_scores[probe.sample_id]
+        if score.expert_choices_shape != [response_length, *reread.shape[1:]]:
+            raise ValueError(f"trainer route observation shape differs from the re-read for {probe.sample_id}")
+        actual = _decoded_routes(score)[: response_length - 1]
+        valid = np.asarray(probe.loss_mask[: response_length - 1], dtype=np.bool_)
+        if np.any(actual[valid] < 0):
+            raise ValueError(f"missing trainer route observation for {probe.sample_id}")
+        disagreeing = ~_same_expert_sets(reread[prompt_length:], actual)[valid]
+        first_layer = np.where(disagreeing.any(axis=1), disagreeing.argmax(axis=1), layers)
+        counts.append(np.full(layers, int(valid.sum())))
+        matches.append((~disagreeing).sum(axis=0))
+        first.append(np.bincount(first_layer, minlength=layers + 1))
+    return np.asarray(counts), np.asarray(matches), np.asarray(first)
+
+
+def _vllm_route_counts(
+    probes: list[ProbeRow], target_scores: dict[str, ScoreRow], reference_scores: dict[str, ScoreRow]
+) -> tuple[np.ndarray, np.ndarray]:
+    """Count per-layer expert-set matches between two re-reads at every input position."""
+    counts, matches = [], []
+    for probe in probes:
+        target = _reread_routes(target_scores[probe.sample_id], probe)
+        reference = _reread_routes(reference_scores[probe.sample_id], probe)
+        if target.shape != reference.shape:
+            raise ValueError(f"re-read route shapes differ for {probe.sample_id}")
+        counts.append(np.full(target.shape[1], target.shape[0]))
+        matches.append(_same_expert_sets(target, reference).sum(axis=0))
     return np.asarray(counts), np.asarray(matches)
 
 
@@ -220,33 +333,113 @@ def _route_statistics(indices: list[int], counts: np.ndarray, matches: np.ndarra
     return values
 
 
+def _route_agreement(probes: list[ProbeRow], counts: np.ndarray, matches: np.ndarray, seed: int, draws: int) -> dict:
+    bootstrap = prompt_cluster_bootstrap(
+        [row.prompt_id for row in probes],
+        lambda indices: _route_statistics(indices, counts, matches),
+        seed=seed,
+        draws=draws,
+    )
+    return {
+        "metrics": {"set_agreement": bootstrap.point["set_agreement"]},
+        "ci95": {"set_agreement": bootstrap.intervals.get("set_agreement")},
+        "layers": {
+            str(layer): {
+                "metrics": {"set_agreement": bootstrap.point[f"layer_{layer}/set_agreement"]},
+                "ci95": {"set_agreement": bootstrap.intervals.get(f"layer_{layer}/set_agreement")},
+            }
+            for layer in range(counts.shape[1])
+        },
+    }
+
+
 def _route_diagnostics(probes: list[ProbeRow], scores: dict[str, dict[str, ScoreRow]], seed: int, draws: int) -> dict:
     """Compare expert sets on captured, unmasked token-and-layer rows."""
     result = {}
     if any(row.routed_experts is None for row in probes):
         return result
     for name, sample_scores in scores.items():
-        if any(score.scorer != TRAINER_SCORER or score.expert_choices is None for score in sample_scores.values()):
+        if any(score.scorer != TRAINER_SCORER for score in sample_scores.values()) or not _has_routes(sample_scores):
             continue
         counts, matches = _route_counts(probes, sample_scores)
-        bootstrap = prompt_cluster_bootstrap(
-            [row.prompt_id for row in probes],
-            lambda indices, counts=counts, matches=matches: _route_statistics(indices, counts, matches),
-            seed=seed,
-            draws=draws,
-        )
+        result[name] = _route_agreement(probes, counts, matches, seed, draws)
+    return result
+
+
+def _reread_route_diagnostics(
+    probes: list[ProbeRow], scores: dict[str, dict[str, ScoreRow]], seed: int, draws: int
+) -> dict:
+    """Compare each update-0 trainer mode's response routes with the prefill reference's routes."""
+    result = {}
+    reference = _prefill_reference(scores)
+    if reference is None or not _has_routes(scores[reference]):
+        return result
+    for mode in _update_zero_trainer_modes(scores):
+        name = _trainer_scoring(0, mode)
+        if not _has_routes(scores[name]):
+            continue
+        counts, matches, first = _reread_response_route_counts(probes, scores[name], scores[reference])
+        totals = first.sum(axis=0)
         result[name] = {
-            "metrics": {"set_agreement": bootstrap.point["set_agreement"]},
-            "ci95": {"set_agreement": bootstrap.intervals.get("set_agreement")},
-            "layers": {
-                str(layer): {
-                    "metrics": {"set_agreement": bootstrap.point[f"layer_{layer}/set_agreement"]},
-                    "ci95": {"set_agreement": bootstrap.intervals.get(f"layer_{layer}/set_agreement")},
-                }
-                for layer in range(counts.shape[1])
+            "reference": reference,
+            **_route_agreement(probes, counts, matches, seed, draws),
+            "first_disagreeing_layer": {
+                "tokens": int(totals.sum()),
+                "no_disagreement": int(totals[-1]),
+                "layers": {str(layer): int(count) for layer, count in enumerate(totals[:-1])},
             },
         }
     return result
+
+
+def _vllm_route_diagnostics(
+    probes: list[ProbeRow], scores: dict[str, dict[str, ScoreRow]], seed: int, draws: int
+) -> dict:
+    """Compare vLLM re-read routes with each other at every prompt and response input position."""
+    result = {}
+    for label, target, reference in (
+        ("reread_noise", RESCORE_AGAIN_SCORING, RESCORE_SCORING),
+        ("reread_vs_frozen", RESCORE_SCORING, FROZEN_RESCORE_SCORING),
+    ):
+        if target not in scores or reference not in scores:
+            continue
+        if not (_has_routes(scores[target]) and _has_routes(scores[reference])):
+            continue
+        counts, matches = _vllm_route_counts(probes, scores[target], scores[reference])
+        result[label] = {
+            "target": target,
+            "reference": reference,
+            **_route_agreement(probes, counts, matches, seed, draws),
+        }
+    return result
+
+
+def _paired_intervals(
+    comparisons: dict, sampled_metrics: dict, baseline: str, candidate: str, metrics: tuple[str, ...]
+) -> dict[str, dict]:
+    """Return baseline minus candidate per metric with a paired 95% interval.
+
+    Both comparisons resample the same prompt clusters with the same seed, so draw ``i`` pairs them.
+    """
+    paired = {}
+    for metric in metrics:
+        draws = np.asarray(
+            [
+                left[metric] - right[metric]
+                for left, right in zip(sampled_metrics[baseline], sampled_metrics[candidate], strict=True)
+            ]
+        )
+        point = comparisons[baseline]["metrics"][metric] - comparisons[candidate]["metrics"][metric]
+        paired[metric] = {"baseline_minus_candidate": float(point), "ci95": np.percentile(draws, [2.5, 97.5]).tolist()}
+    return paired
+
+
+def _reference_distribution(reference: str, prefill: str | None) -> str:
+    if reference == GENERATION_SCORING:
+        return "generation"
+    if reference == prefill:
+        return "prefill_re_read"
+    return "diagnostic_re_read_or_trainer"
 
 
 def _timing_values(archive: ArchiveData) -> dict[str, float]:
@@ -280,9 +473,13 @@ def analyze_archive(uri: str, *, bootstrap_draws: int = BOOTSTRAP_DRAWS) -> dict
         "input_commit_token": archive.commit_token,
         "bootstrap": {"seed": manifest.bootstrap_seed, "draws": bootstrap_draws, "cluster": "prompt_id"},
         "token_identity": identity,
+        "prefill_reference": _prefill_reference(scores),
         "comparisons": {},
         "paired_improvements": {},
+        "paired_vs_reread": {},
         "route_diagnostics": {},
+        "route_diagnostics_vs_reread": {},
+        "reread_route_agreement": {},
         "checks": {},
         "timing": json.loads(manifest.timing_json),
         "step_metrics": json.loads(manifest.step_metrics_json),
@@ -292,7 +489,12 @@ def analyze_archive(uri: str, *, bootstrap_draws: int = BOOTSTRAP_DRAWS) -> dict
         return _finite_json(report)
 
     report["route_diagnostics"] = _route_diagnostics(probes, scores, manifest.bootstrap_seed, bootstrap_draws)
+    report["route_diagnostics_vs_reread"] = _reread_route_diagnostics(
+        probes, scores, manifest.bootstrap_seed, bootstrap_draws
+    )
+    report["reread_route_agreement"] = _vllm_route_diagnostics(probes, scores, manifest.bootstrap_seed, bootstrap_draws)
 
+    prefill = report["prefill_reference"]
     prompt_ids = [row.prompt_id for row in probes]
     definitions = _comparison_definitions(scores)
     sampled_metrics = {}
@@ -309,15 +511,19 @@ def analyze_archive(uri: str, *, bootstrap_draws: int = BOOTSTRAP_DRAWS) -> dict
             "reference": reference_name,
             "metrics": bootstrap.point,
             "ci95": bootstrap.intervals,
-            "reference_distribution": (
-                "generation" if reference_name == GENERATION_SCORING else "diagnostic_re_read_or_trainer"
-            ),
+            "reference_distribution": _reference_distribution(reference_name, prefill),
         }
-        if target_name in report["route_diagnostics"]:
-            route = report["route_diagnostics"][target_name]
+        if label in report["reread_route_agreement"]:
+            route, route_reference = report["reread_route_agreement"][label], "re-read"
+        elif reference_name == prefill:
+            route, route_reference = report["route_diagnostics_vs_reread"].get(target_name), "re-read"
+        else:
+            route, route_reference = report["route_diagnostics"].get(target_name), "generation"
+        if route is not None:
             report["comparisons"][label]["route_set_agreement"] = {
                 "value": route["metrics"]["set_agreement"],
                 "ci95": route["ci95"].get("set_agreement"),
+                "routes": route_reference,
             }
         sampled_metrics[label] = bootstrap.draws
 
@@ -326,19 +532,26 @@ def analyze_archive(uri: str, *, bootstrap_draws: int = BOOTSTRAP_DRAWS) -> dict
         variant = f"{mode}_vs_generation"
         if baseline not in sampled_metrics or variant not in sampled_metrics:
             continue
-        paired = {}
-        for metric in HEADLINE_METRICS:
-            draws = np.asarray(
-                [
-                    left[metric] - right[metric]
-                    for left, right in zip(sampled_metrics[baseline], sampled_metrics[variant], strict=True)
-                ]
+        report["paired_improvements"][mode] = _paired_intervals(
+            report["comparisons"], sampled_metrics, baseline, variant, HEADLINE_METRICS
+        )
+
+    kept_mode = REREAD_REPLAY_MODE if f"{REREAD_REPLAY_MODE}_vs_reread" in sampled_metrics else NATIVE_MODE
+    kept = f"{kept_mode}_vs_reread"
+    if kept in sampled_metrics:
+        candidates = {}
+        for mode in _update_zero_trainer_modes(scores):
+            if mode == kept_mode:
+                continue
+            paired = _paired_intervals(
+                report["comparisons"], sampled_metrics, kept, f"{mode}_vs_reread", KEEP_RULE_METRICS
             )
-            point = (
-                report["comparisons"][baseline]["metrics"][metric] - report["comparisons"][variant]["metrics"][metric]
-            )
-            paired[metric] = {"native_minus_mode": float(point), "ci95": np.percentile(draws, [2.5, 97.5]).tolist()}
-        report["paired_improvements"][mode] = paired
+            candidates[mode] = {
+                "metrics": paired,
+                # Worse than the kept stack: some interval of kept minus candidate lies entirely below zero.
+                "regresses": any(item["ci95"][1] < 0 for item in paired.values()),
+            }
+        report["paired_vs_reread"][kept_mode] = candidates
 
     if "implementation_mismatch" in sampled_metrics:
         baseline_stats = report["comparisons"]["implementation_mismatch"]["metrics"]
@@ -536,6 +749,10 @@ def _display_interval(value, *, percent_digits: int | None = None, scale: float 
     )
 
 
+def _percent_digits(metric: str) -> int | None:
+    return 3 if metric in PERCENT_METRICS else None
+
+
 def render_markdown(report: dict) -> str:
     identity = report["token_identity"]
     lines = [
@@ -556,17 +773,22 @@ def render_markdown(report: dict) -> str:
         details = json.dumps(check, sort_keys=True) if isinstance(check, dict) else ""
         lines.append(f"| {name} | {status} | {details} |")
     lines.append("")
+    if report["prefill_reference"] is not None:
+        lines.extend([f"Prefill reference: `{report['prefill_reference']}`.", ""])
     if report["comparisons"]:
+        headers = " | ".join(f"{METRIC_TITLES[metric]} | 95% CI" for metric in HEADLINE_METRICS)
         lines.extend(
             [
                 "Δ is target minus reference log probability on masked response tokens. "
                 "P99 is the 99th percentile of its absolute value.",
                 "Replay uses routes captured during the original generation; later updates measure stale-route replay.",
+                "Route agreement is against the re-read's routes for comparisons with a re-read reference "
+                "and against generation routes otherwise.",
                 f"95% intervals resample whole prompts {report['bootstrap']['draws']} times "
                 f"with seed {report['bootstrap']['seed']}.",
                 "",
-                "| Comparison | p99 abs Δ | 95% CI | k3 | 95% CI | beyond 2x | 95% CI | route agreement | 95% CI |",
-                "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+                f"| Comparison | {headers} | route agreement | 95% CI |",
+                "|---|" + "---:|---:|" * len(HEADLINE_METRICS) + "---:|---:|",
             ]
         )
         for name, item in report["comparisons"].items():
@@ -574,12 +796,12 @@ def render_markdown(report: dict) -> str:
             route = item.get("route_set_agreement")
             route_text = "-" if route is None else _display_metric(route["value"], percent_digits=1)
             route_ci = "-" if route is None else _display_interval(route["ci95"], percent_digits=1)
-            lines.append(
-                f"| {name} | {_display_metric(metrics['abs_p99'])} | {_display_interval(ci.get('abs_p99'))} | "
-                f"{_display_metric(metrics['k3'])} | {_display_interval(ci.get('k3'))} | "
-                f"{_display_metric(metrics['share_beyond_2x'], percent_digits=3)} | "
-                f"{_display_interval(ci.get('share_beyond_2x'), percent_digits=3)} | {route_text} | {route_ci} |"
+            cells = " | ".join(
+                f"{_display_metric(metrics[metric], percent_digits=_percent_digits(metric))} | "
+                f"{_display_interval(ci.get(metric), percent_digits=_percent_digits(metric))}"
+                for metric in HEADLINE_METRICS
             )
+            lines.append(f"| {name} | {cells} | {route_text} | {route_ci} |")
         lines.extend(
             [
                 "",
@@ -599,7 +821,7 @@ def render_markdown(report: dict) -> str:
                 "",
                 "## Paired trainer-mode improvements",
                 "",
-                "Positive native minus mode means a smaller mismatch in that mode.",
+                "Positive native minus mode means a smaller mismatch in that mode against generation.",
                 "",
                 "| Mode | p99 improvement | 95% paired CI |",
                 "|---|---:|---:|",
@@ -608,19 +830,66 @@ def render_markdown(report: dict) -> str:
         for mode, item in report["paired_improvements"].items():
             effect = item["abs_p99"]
             lines.append(
-                f"| {mode} | {_display_metric(effect['native_minus_mode'])} | {_display_interval(effect['ci95'])} |"
+                f"| {mode} | {_display_metric(effect['baseline_minus_candidate'])} | "
+                f"{_display_interval(effect['ci95'])} |"
             )
         lines.append("")
-    if report["route_diagnostics"]:
+    for kept, candidates in report["paired_vs_reread"].items():
+        headers = " | ".join(f"{METRIC_TITLES[metric]} | 95% paired CI" for metric in KEEP_RULE_METRICS)
         lines.extend(
-            ["## Routes by layer", "", "| Scorer | Layer | Expert-set agreement | 95% CI |", "|---|---:|---:|---:|"]
+            [
+                f"## Prefill metric: `{kept}` minus candidate",
+                "",
+                f"Both sides are scored against `{report['prefill_reference']}`. "
+                f"Positive means the candidate is closer to the re-read than `{kept}`. "
+                "A candidate regresses when any interval lies entirely below zero.",
+                "",
+                f"| Candidate | {headers} | regresses |",
+                "|---|" + "---:|---:|" * len(KEEP_RULE_METRICS) + "---|",
+            ]
         )
-        for name, item in report["route_diagnostics"].items():
-            for layer, details in item["layers"].items():
+        for mode, item in candidates.items():
+            cells = " | ".join(
+                f"{_display_metric(item['metrics'][metric]['baseline_minus_candidate'])} | "
+                f"{_display_interval(item['metrics'][metric]['ci95'])}"
+                for metric in KEEP_RULE_METRICS
+            )
+            lines.append(f"| {mode} | {cells} | {'**yes**' if item['regresses'] else 'no'} |")
+        lines.append("")
+    for title, routes in (
+        ("Routes by layer against generation", report["route_diagnostics"]),
+        ("Routes by layer against the re-read (response inputs)", report["route_diagnostics_vs_reread"]),
+        ("vLLM re-read route agreement (all inputs)", report["reread_route_agreement"]),
+    ):
+        if not routes:
+            continue
+        lines.extend([f"## {title}", "", "| Scorer | Layer | Expert-set agreement | 95% CI |", "|---|---:|---:|---:|"])
+        for name, item in routes.items():
+            layers = [("all", item), *item["layers"].items()]
+            for layer, details in layers:
                 lines.append(
                     f"| {name} | {layer} | {_display_metric(details['metrics']['set_agreement'], percent_digits=1)} | "
                     f"{_display_interval(details['ci95'].get('set_agreement'), percent_digits=1)} |"
                 )
+        lines.append("")
+    if report["route_diagnostics_vs_reread"]:
+        lines.extend(
+            [
+                "## First disagreeing layer against the re-read",
+                "",
+                "For each masked response input, the lowest layer whose expert set differs from the re-read's.",
+                "",
+                "| Scorer | First disagreeing layer | tokens | share |",
+                "|---|---:|---:|---:|",
+            ]
+        )
+        for name, item in report["route_diagnostics_vs_reread"].items():
+            histogram = item["first_disagreeing_layer"]
+            bins = [(layer, count) for layer, count in histogram["layers"].items() if count]
+            bins.append(("none", histogram["no_disagreement"]))
+            for layer, count in bins:
+                share = count / histogram["tokens"] if histogram["tokens"] else math.nan
+                lines.append(f"| {name} | {layer} | {count} | {_display_metric(share, percent_digits=1)} |")
         lines.append("")
     if report["timing"]:
         lines.extend(
