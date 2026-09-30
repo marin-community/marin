@@ -140,7 +140,7 @@ function savedEvidence(title, path) {
   });
 }
 function difficultyRun(model, identityPath, record) {
-  const section = fold(`${model.measurement_status === "current" ? "Current" : model.measurement_status === "invalid" ? "Protocol mismatch" : "Historical"} · ${AtlasDifficulty.modelLabel(model)}`, () => {
+  const section = fold(`${model.measurement_status === "current" ? "" : model.measurement_status === "invalid" ? "Protocol mismatch · " : "Historical · "}${AtlasDifficulty.modelLabel(model)}`, () => {
     const content = node("div", undefined, "review-card-content difficulty-settings");
     content.append(AtlasDifficulty.comparison([model]));
     const interval = model.wilson_95 ? `${(100 * model.wilson_95[0]).toFixed(1)}–${(100 * model.wilson_95[1]).toFixed(1)}%` : "Not recorded";
@@ -210,7 +210,7 @@ function difficultyRun(model, identityPath, record) {
   return section;
 }
 function difficultyReport(report, display, record, reportPath) {
-  return fold(`${display.status === "current" ? "Current" : display.status === "invalid" ? "Invalid protocol" : "Historical"} difficulty · model solve rates and saved attempts`, () => {
+  return fold(`${display.status === "current" ? "Difficulty" : display.status === "invalid" ? "Invalid protocol difficulty" : "Historical difficulty"} · model solve rates and saved attempts`, () => {
     const content = node("div", undefined, "review-card-content");
     content.append(node("p", `${report.sampling.task_count} shared tasks · ${report.sampling.method} · split ${report.split}`, "formatted-prose"), AtlasDifficulty.comparison(display.models, display));
     content.append(node("p", "Longer bars mean more tasks solved. Open a model to inspect its exact settings, attempts, and native verifier outputs. Unverified attempts are excluded from the solve rate.", "review-byline"));
