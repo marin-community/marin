@@ -84,9 +84,36 @@ Each op below returns an unshaped (`Array`), unknown (`Unknown` or `Any`), or wi
   - They pin `pyrefly-shape-extensions==0.0.0`, so we install all four from git at a pinned commit.
   - What is the plan for published, versioned stubs, and for shape types in a stable pyrefly release? Is the `Array[[...]]` syntax stable enough to adopt now?
 
+## Annotating haliax (named axes)
+
+Most of Marin's model code, including every levanter model, is written against haliax `NamedArray`: a `jax.Array` plus a tuple of `Axis(name, size)` values. Operations select and broadcast axes by name and may reorder the underlying array:
+- `hax.dot(a, b, axis="embed")` contracts `embed` and returns the remaining axes of both operands.
+- `rename`, `split`, `flatten_axes` and `rearrange` change axis names.
+
+Positional `IntTuple` shapes cannot describe this. The type-level DSL cannot compute on names either: its values are `Int`, `IntTuple` and `IntTuples`, and strings appear only as literal flags such as an `einsum` spec. haliax is our library, so we would annotate its source directly. What is missing is support in the type system.
+
+As we understand it, annotating haliax would need:
+1. **An axis type.** `Axis[Literal["embed"], D]`, where `Axis("embed", n)` infers the literal name and binds `D` from `n` the way `n: Int[N]` does today.
+2. **A name-keyed shape.** `NamedArray[...]` would carry (name, size) entries, with type-level rules for:
+   - lookup, removal and union by name, for `dot` and reductions
+   - `rename`
+   - split and merge, for `flatten_axes` and unflattening
+   - broadcasting to a target set of axes
+3. **Order-insensitive assignability.** `NamedArray` over `(batch, embed)` should satisfy a parameter declared over `(embed, batch)`. Physical order would matter only where the positional array is exposed.
+4. **Open shapes.** haxtyping's `"batch embed ..."` means "at least these axes, others anywhere".
+5. **Unique names.** haliax rejects duplicate axis names at runtime.
+6. **A bridge to positional shapes.** `NamedArray.array` and `hax.named(array, axes)` would convert between named and positional shapes, so kernels called on `.array` stay checked.
+
+Questions:
+- **Reuse DataFrame support?** Pyrefly already tracks named, typed DataFrame columns through `select`, `rename`, `drop` and `join`. It also has exact and open schema contracts: `Annotated[pl.DataFrame, Schema]`, and the same with a trailing `...`. That is close to what named axes need, with axis sizes where DataFrames have dtypes. The DataFrame support is built into the checker. Could it generalize to a user-declared named-axis array type? Or would a name-keyed value type in `@type_shape_dsl_function` be the more likely route?
+- **Who ships the rules?** Could a library like haliax ship its own named-axis rules, as the JAX stubs do for positional shapes, or would each library need support built into the checker?
+- **Names-only first?** Most Marin axis sizes come from configuration (`Axis("embed", cfg.hidden_dim)`), so their sizes would be plain `int`, and names would carry most of the value. Would a mode that checks names and treats sizes as unknown be simpler to support first?
+
+haliax already raises on axis-name mismatches while JAX traces a function. Static checking would mainly move those errors earlier: into the editor, and before a slow compile or cluster launch.
+
 ## Direction
 
 - **dtype.** The stubs model shapes only. Converting from jaxtyping dropped 255 non-float markers: 212 `Int` (expert ids, offsets, group sizes, labels), 42 `Bool` (masks) and 1 `Key`. Wrapping native shapes in jaxtyping markers, as `Int[jax.Array[[T, K]], "..."]`, keeps the dtype as documentation, and Pyrefly still checks the shape. Is dtype modeling (`Array[Shape, DType]`) planned, and which spelling should a codebase use until then?
 - **Sharding.** A `shard_map` body sees per-shard shapes, such as the global token count divided by the expert-mesh size, but nothing ties them to the caller's global shapes. Recent Marin failures came from inconsistent or incorrectly inferred sharding specs: [#8467](https://github.com/marin-community/marin/pull/8467), [#8861](https://github.com/marin-community/marin/issues/8861) and [#8911](https://github.com/marin-community/marin/issues/8911). What would sharding in types need from users?
-- **Named axes.** Most of Marin's model code uses haliax `NamedArray`, whose axes are identified by name and can be reordered freely. Positional shapes cannot describe it. Is anything planned for name-keyed shapes?
+- **Named axes.** See [Annotating haliax](#annotating-haliax-named-axes).
 - **Migration style.** Native annotations or `@static_jaxtyping` for a codebase moving off jaxtyping? We chose native because it allows `H * D` and `Int[N]` binding, and because Marin does not run jaxtyping's runtime checker.
