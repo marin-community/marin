@@ -122,15 +122,22 @@ def make_mask(mod, cfg):
 
 
 def hlo_shapes(hlo_text):
-    shapes = {}
+    """Map HLO instruction name -> "out <- operands" shape string (GEMMs show their operands)."""
+    defs = {}
     for line in hlo_text.splitlines():
-        line = line.strip()
+        line = line.strip().replace("ROOT ", "")
         if " = " not in line:
             continue
         name, rest = line.split(" = ", 1)
-        name = name.replace("ROOT ", "").strip()
-        shapes[name] = rest.split(" ")[0][:60] if not rest.startswith("(") else rest[: rest.index(")") + 1][:90]
-    return shapes
+        name = name.lstrip("%").strip()
+        shape = rest[: rest.index(")") + 1] if rest.startswith("(") else rest.split(" ")[0]
+        args = rest.split("(", 2)[-1].split(")")[0] if "custom-call(" in rest else ""
+        defs[name] = (shape, [a.strip().lstrip("%") for a in args.split(",") if a.strip()])
+    out = {}
+    for name, (shape, args) in defs.items():
+        ops = " ".join(defs[a][0][:28] for a in args[:2] if a in defs)
+        out[name] = f"{shape[:60]}" + (f" <- {ops}" if ops else "")
+    return out
 
 
 def kernel_summary(outdir, module_prefix, shapes=None):

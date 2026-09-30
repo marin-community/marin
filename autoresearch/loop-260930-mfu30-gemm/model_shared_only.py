@@ -776,11 +776,14 @@ def shared_expert_outputs(experts: tuple[DenseMLP, ...], x: Float[Array, "B S D"
     b, s, _ = x.shape
     x_flat = reshard(rearrange(x, "b s d -> (b s) d"), _token_spec())
     gate_up_weights = jnp.concatenate([w for expert in experts for w in (expert.w_gate, expert.w_up)], axis=1)
-    gate_up = jnp.einsum("td,dm->tm", x_flat, gate_up_weights)
+    # `split` rather than slicing: its transpose is one concatenate, where slices transpose to
+    # zero-padded tensors that the backward then adds.
+    gate_up = jnp.split(
+        jnp.einsum("td,dm->tm", x_flat, gate_up_weights), [width * i for i in range(1, 2 * len(experts))], axis=-1
+    )
     outputs = []
     for i, expert in enumerate(experts):
-        gate = gate_up[:, 2 * i * width : (2 * i + 1) * width]
-        up = gate_up[:, (2 * i + 1) * width : (2 * i + 2) * width]
+        gate, up = gate_up[2 * i], gate_up[2 * i + 1]
         out_flat = jnp.einsum("tm,md->td", jax.nn.silu(gate) * up, expert.w_down, out_sharding=_token_spec())
         # Same residual-layout restore as `DenseMLP.__call__`.
         outputs.append(reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s), _activation_spec(x)))
