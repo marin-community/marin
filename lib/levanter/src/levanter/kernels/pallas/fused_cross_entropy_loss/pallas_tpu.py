@@ -6,6 +6,9 @@
 # Levanter's API and add optional logsumexp penalty, logit soft-cap, and
 # external loss weighting support.
 
+from __future__ import annotations
+
+from collections.abc import Callable
 from functools import lru_cache, partial
 import math
 from typing import Optional
@@ -15,7 +18,7 @@ from jax._src import ad_util
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import tpu as pltpu
 import jax.numpy as jnp
-from jaxtyping import Array, Float, Int
+from shape_extensions import Int, IntTuple, IntVar
 
 from .config import BlockSizes
 from .tuned_block_sizes import infer_xla_v_block_size
@@ -32,15 +35,15 @@ NUM_LANES = 128
 _BWD_USE_XLA_STREAMING_ENV = "LEVANTER_PALLAS_TPU_BWD_USE_XLA_STREAMING_BENCH"
 
 
-def _forward_lse_cost_reference(
-    x: jax.Array,
-    w: jax.Array,
+def _forward_lse_cost_reference[B: IntVar, H: IntVar, V: IntVar](
+    x: jax.Array[[B, H]],
+    w: jax.Array[[H, V]],
     *,
     dtype: jnp.dtype | None,
     logit_soft_cap: float | None,
     precision: jax.lax.PrecisionLike,
-) -> jax.Array:
-    logits = jax.lax.dot_general(
+) -> jax.Array[[B]]:
+    logits: jax.Array[[B, V]] = jax.lax.dot_general(
         x,
         w,
         (((1,), (0,)), ((), ())),
@@ -52,9 +55,9 @@ def _forward_lse_cost_reference(
     return jax.nn.logsumexp(logits, axis=-1)
 
 
-def _fwd_cost_estimate(
-    x: jax.Array,
-    w: jax.Array,
+def _fwd_cost_estimate[B: IntVar, H: IntVar, V: IntVar](
+    x: jax.Array[[B, H]],
+    w: jax.Array[[H, V]],
     *,
     dtype: jnp.dtype | None,
     logit_soft_cap: float | None,
@@ -77,17 +80,17 @@ def _fwd_cost_estimate(
     )
 
 
-def _apply_logit_soft_cap(logits: jax.Array, logit_soft_cap: Optional[float]) -> jax.Array:
+def _apply_logit_soft_cap[S: IntTuple](logits: jax.Array[S], logit_soft_cap: Optional[float]) -> jax.Array[S]:
     if logit_soft_cap is None:
         return logits
     return jnp.tanh(logits / logit_soft_cap) * logit_soft_cap
 
 
-def _labels_one_hot_emulated(
-    labels_adjusted: jax.Array,
-    num_classes: int,
+def _labels_one_hot_emulated[B: IntVar, N: IntVar](
+    labels_adjusted: jax.Array[[B]],
+    num_classes: Int[N],
     dtype: jnp.dtype,
-) -> jax.Array:
+) -> jax.Array[[B, N]]:
     labels_adjusted = labels_adjusted.astype(jnp.int32)
     in_block = (labels_adjusted >= 0) & (labels_adjusted < num_classes)
     safe_labels = jnp.where(in_block, labels_adjusted, -1)
@@ -95,10 +98,10 @@ def _labels_one_hot_emulated(
     return (cols == safe_labels[:, None]).astype(dtype)
 
 
-def _validate_inputs(
-    x: Float[Array, "B H"],
-    labels: Int[Array, "B"],
-    w: Float[Array, "H V"],
+def _validate_inputs[B: IntVar, H: IntVar, V: IntVar](
+    x: jax.Array[[B, H]],
+    labels: jax.Array[[B]],
+    w: jax.Array[[H, V]],
     block_sizes: BlockSizes,
     *,
     require_label_layout: bool = True,
@@ -251,16 +254,16 @@ def linear_softmax_lse_forward_fori_pallas_kernel(
         lse_ref[...] = (jnp.log(l_scratch_ref[...]) + m_scratch_ref[...]).astype(lse_ref.dtype)
 
 
-def _linear_softmax_lse_forward_fori(
-    x: Float[Array, "B H"],
-    w: Float[Array, "H V"],
+def _linear_softmax_lse_forward_fori[B: IntVar, H: IntVar, V: IntVar](
+    x: jax.Array[[B, H]],
+    w: jax.Array[[H, V]],
     *,
     block_sizes: BlockSizes,
     dtype: Optional[jnp.dtype],
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
     v_outer_mult: int,
-) -> Float[Array, "B"]:
+) -> jax.Array[[B]]:
     """Streaming LSE path with full-H dot and a fori-loop over V subtile blocks."""
     h_dim = x.shape[-1]
     v_dim = w.shape[1]
@@ -331,17 +334,17 @@ def _linear_softmax_lse_forward_fori(
     jax.jit,
     static_argnames=["block_sizes", "dtype", "logit_soft_cap", "precision", "return_argmax"],
 )
-def linear_softmax_cross_entropy_loss_fwd_pallas_mosaic_tpu(
-    x: Float[Array, "B H"],
-    labels: Int[Array, "B"],
-    w: Float[Array, "H V"],
+def linear_softmax_cross_entropy_loss_fwd_pallas_mosaic_tpu[B: IntVar, H: IntVar, V: IntVar](
+    x: jax.Array[[B, H]],
+    labels: jax.Array[[B]],
+    w: jax.Array[[H, V]],
     *,
     block_sizes: BlockSizes,
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
     return_argmax: bool = False,
-) -> tuple[Float[Array, "B"], Float[Array, "B"]] | tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:
+) -> tuple[jax.Array[[B]], jax.Array[[B]]]:
     """Forward Pallas kernel wrapper (per-example loss + logsumexp)."""
     _validate_inputs(x, labels, w, block_sizes, require_label_layout=False)
     if return_argmax:
@@ -369,27 +372,27 @@ def linear_softmax_cross_entropy_loss_fwd_pallas_mosaic_tpu(
     return loss, lse
 
 
-def _linear_softmax_cross_entropy_loss_bwd_xla_delta_supertile(
-    dout_loss: Float[Array, "B"],
-    dout_loss_plus_lse: Float[Array, "B"],
-    lse: Float[Array, "B"],
-    x: Float[Array, "B H"],
-    labels: Int[Array, "B"],
-    w_supertile: Float[Array, "H Vt"],
+def _linear_softmax_cross_entropy_loss_bwd_xla_delta_supertile[B: IntVar, H: IntVar, Vt: IntVar](
+    dout_loss: jax.Array[[B]],
+    dout_loss_plus_lse: jax.Array[[B]],
+    lse: jax.Array[[B]],
+    x: jax.Array[[B, H]],
+    labels: jax.Array[[B]],
+    w_supertile: jax.Array[[H, Vt]],
     *,
-    v_start: Int[Array, ""],
+    v_start: jax.Array[[]],
     v_dim: int,
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
-) -> Float[Array, "B Vt"]:
+) -> jax.Array[[B, Vt]]:
     """XLA-structured delta producer for the default split softmax+matmul backward."""
     softmax_v_block_size = w_supertile.shape[1]
     labels_i32 = labels.astype(jnp.int32)
     cols = v_start + jnp.arange(softmax_v_block_size, dtype=labels.dtype)
     valid_cols = cols < v_dim
 
-    logits = jax.lax.dot_general(
+    logits: jax.Array[[B, Vt]] = jax.lax.dot_general(
         x,
         w_supertile,
         (((1,), (0,)), ((), ())),
@@ -427,19 +430,19 @@ def _linear_softmax_cross_entropy_loss_bwd_xla_delta_supertile(
         "precision",
     ],
 )
-def _linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_split_softmax_matmul(
-    dout_loss: Float[Array, "B"],
-    dout_lse: Float[Array, "B"],
-    lse: Float[Array, "B"],
-    x: Float[Array, "B H"],
-    labels: Int[Array, "B"],
-    w: Float[Array, "H V"],
+def _linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_split_softmax_matmul[B: IntVar, H: IntVar, V: IntVar](
+    dout_loss: jax.Array[[B]],
+    dout_lse: jax.Array[[B]],
+    lse: jax.Array[[B]],
+    x: jax.Array[[B, H]],
+    labels: jax.Array[[B]],
+    w: jax.Array[[H, V]],
     *,
     block_sizes: BlockSizes,
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
-) -> tuple[Float[Array, "B H"], Float[Array, "H V"]]:
+) -> tuple[jax.Array[[B, H]], jax.Array[[H, V]]]:
     """Default split backward path: XLA delta producer + matmul consumers."""
     _validate_inputs(x, labels, w, block_sizes)
     b_dim, h_dim = x.shape
@@ -515,19 +518,19 @@ def _linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_split_softmax_matmu
         "precision",
     ],
 )
-def _linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_combined(
-    dout_loss: Float[Array, "B"],
-    dout_lse: Float[Array, "B"],
-    lse: Float[Array, "B"],
-    x: Float[Array, "B H"],
-    labels: Int[Array, "B"],
-    w: Float[Array, "H V"],
+def _linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_combined[B: IntVar, H: IntVar, V: IntVar](
+    dout_loss: jax.Array[[B]],
+    dout_lse: jax.Array[[B]],
+    lse: jax.Array[[B]],
+    x: jax.Array[[B, H]],
+    labels: jax.Array[[B]],
+    w: jax.Array[[H, V]],
     *,
     block_sizes: BlockSizes,
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
-) -> tuple[Float[Array, "B H"], Float[Array, "H V"]]:
+) -> tuple[jax.Array[[B, H]], jax.Array[[H, V]]]:
     """Backward Pallas kernel wrapper (combined dx/dw)."""
     _validate_inputs(x, labels, w, block_sizes)
     return _linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_split_softmax_matmul(
@@ -553,19 +556,19 @@ def _linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_combined(
         "precision",
     ],
 )
-def linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu(
-    dout_loss: Float[Array, "B"],
-    dout_lse: Float[Array, "B"],
-    lse: Float[Array, "B"],
-    x: Float[Array, "B H"],
-    labels: Int[Array, "B"],
-    w: Float[Array, "H V"],
+def linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu[B: IntVar, H: IntVar, V: IntVar](
+    dout_loss: jax.Array[[B]],
+    dout_lse: jax.Array[[B]],
+    lse: jax.Array[[B]],
+    x: jax.Array[[B, H]],
+    labels: jax.Array[[B]],
+    w: jax.Array[[H, V]],
     *,
     block_sizes: BlockSizes,
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
-) -> tuple[Float[Array, "B H"], Float[Array, "H V"]]:
+) -> tuple[jax.Array[[B, H]], jax.Array[[H, V]]]:
     return _linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_combined(
         dout_loss,
         dout_lse,
@@ -599,7 +602,8 @@ def _make_custom_vjp(
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
     use_bwd_xla_streaming: bool,
-):
+) -> Callable[[jax.Array, jax.Array, jax.Array], tuple[jax.Array, jax.Array]]:
+    # The returned custom_vjp is cached and reused across (B, H, V) shapes, so its parameters stay bare.
     block_sizes = BlockSizes(
         b_block_size=b_block_size,
         h_block_size=h_block_size,
@@ -666,17 +670,17 @@ def _make_custom_vjp(
     return _fn
 
 
-def linear_softmax_cross_entropy_loss_pallas(
-    x: Float[Array, "B H"],
-    labels: Int[Array, "B"],
-    w: Float[Array, "H V"],
+def linear_softmax_cross_entropy_loss_pallas[B: IntVar, H: IntVar, V: IntVar](
+    x: jax.Array[[B, H]],
+    labels: jax.Array[[B]],
+    w: jax.Array[[H, V]],
     *,
     block_sizes: BlockSizes,
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
     return_argmax: bool = False,
-) -> tuple[Float[Array, "B"], Float[Array, "B"]] | tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:
+) -> tuple[jax.Array[[B]], jax.Array[[B]]]:
     """Pallas implementation returning (loss, lse) per example."""
     if return_argmax:
         raise PallasUnsupportedError("Pallas backend does not support return_argmax. Use XLA for return_argmax=True.")

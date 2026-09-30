@@ -1,5 +1,6 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
+from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from functools import lru_cache, partial
@@ -16,7 +17,7 @@ import jax
 import jax.numpy as jnp
 import jaxlib
 from jax._src.mesh import get_concrete_mesh
-from jaxtyping import Array, Float, Int
+from shape_extensions import IntVar
 from finestore.cache import PersistentKvCache
 from rigging.cache import (
     combined_content_hash,
@@ -664,7 +665,9 @@ def _autotune_block_sizes_on_miss(
     return best
 
 
-def _validate_inputs(x: jax.Array, labels: jax.Array, w: jax.Array) -> None:
+def _validate_inputs[B: IntVar, H: IntVar, V: IntVar](
+    x: jax.Array[[B, H]], labels: jax.Array[[B]], w: jax.Array[[H, V]]
+) -> None:
     if x.ndim != 2:
         raise ValueError(f"x must be rank-2 [B, H], got shape {x.shape}.")
     if labels.ndim != 1:
@@ -679,12 +682,12 @@ def _validate_inputs(x: jax.Array, labels: jax.Array, w: jax.Array) -> None:
         raise ValueError(f"labels must be integer dtype, got {labels.dtype}.")
 
 
-def _resolve_block_sizes(
+def _resolve_block_sizes[B: IntVar, H: IntVar, V: IntVar](
     block_size: Optional[int],
     block_sizes: Optional[BlockSizes],
     *,
-    x: jax.Array,
-    w: jax.Array,
+    x: jax.Array[[B, H]],
+    w: jax.Array[[H, V]],
     dtype: Optional[jnp.dtype],
 ) -> BlockSizes:
     if block_sizes is None:
@@ -699,7 +702,9 @@ def _resolve_block_sizes(
     return block_sizes
 
 
-def _apply_reduction(loss: jax.Array, reduction: Reduction, weight: Optional[jax.Array]) -> jax.Array:
+def _apply_reduction[B: IntVar](
+    loss: jax.Array[[B]], reduction: Reduction, weight: Optional[jax.Array[[B]]]
+) -> jax.Array:
     if weight is not None:
         weight = weight.astype(loss.dtype)
         loss = loss * weight
@@ -717,13 +722,13 @@ def _apply_reduction(loss: jax.Array, reduction: Reduction, weight: Optional[jax
 
 
 @overload
-def fused_cross_entropy_loss_and_logsumexp_penalty(
-    x: Float[Array, "B H"],
-    labels: Int[Array, "B"],
-    w: Float[Array, "H V"],
+def fused_cross_entropy_loss_and_logsumexp_penalty[B: IntVar, H: IntVar, V: IntVar](
+    x: jax.Array[[B, H]],
+    labels: jax.Array[[B]],
+    w: jax.Array[[H, V]],
     *,
     reduction: Reduction = "mean",
-    weight: Optional[Float[Array, "B"]] = None,
+    weight: Optional[jax.Array[[B]]] = None,
     logsumexp_weight: Optional[float] = 0.0,
     block_size: Optional[int] = None,
     block_sizes: Optional[BlockSizes] = None,
@@ -736,13 +741,13 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
 
 
 @overload
-def fused_cross_entropy_loss_and_logsumexp_penalty(
-    x: Float[Array, "B H"],
-    labels: Int[Array, "B"],
-    w: Float[Array, "H V"],
+def fused_cross_entropy_loss_and_logsumexp_penalty[B: IntVar, H: IntVar, V: IntVar](
+    x: jax.Array[[B, H]],
+    labels: jax.Array[[B]],
+    w: jax.Array[[H, V]],
     *,
     reduction: Reduction = "mean",
-    weight: Optional[Float[Array, "B"]] = None,
+    weight: Optional[jax.Array[[B]]] = None,
     logsumexp_weight: Optional[float] = 0.0,
     block_size: Optional[int] = None,
     block_sizes: Optional[BlockSizes] = None,
@@ -754,13 +759,13 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
 ) -> tuple[jax.Array, jax.Array]: ...
 
 
-def fused_cross_entropy_loss_and_logsumexp_penalty(
-    x: Float[Array, "B H"],
-    labels: Int[Array, "B"],
-    w: Float[Array, "H V"],
+def fused_cross_entropy_loss_and_logsumexp_penalty[B: IntVar, H: IntVar, V: IntVar](
+    x: jax.Array[[B, H]],
+    labels: jax.Array[[B]],
+    w: jax.Array[[H, V]],
     *,
     reduction: Reduction = "mean",
-    weight: Optional[Float[Array, "B"]] = None,
+    weight: Optional[jax.Array[[B]]] = None,
     logsumexp_weight: Optional[float] = 0.0,
     block_size: Optional[int] = None,
     block_sizes: Optional[BlockSizes] = None,

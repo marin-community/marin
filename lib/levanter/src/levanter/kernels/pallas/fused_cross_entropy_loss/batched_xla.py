@@ -4,11 +4,11 @@
 from __future__ import annotations
 
 from functools import partial
-from typing import NamedTuple, Optional
+from typing import Literal, NamedTuple, Optional, overload
 
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Float, Int
+from shape_extensions import IntVar
 
 from .config import BlockSizes, max_weight_tile_bytes_for_device
 from .reference import linear_softmax_cross_entropy_loss_reference
@@ -55,9 +55,9 @@ def _max_h_tiles_for_device(device_kind: str) -> Optional[int]:
     return None
 
 
-def _should_use_gb10_full_matmul_fallback(
-    x: Float[Array, "B H"],
-    w: Float[Array, "H V"],
+def _should_use_gb10_full_matmul_fallback[B: IntVar, H: IntVar, V: IntVar](
+    x: jax.Array[[B, H]],
+    w: jax.Array[[H, V]],
 ) -> bool:
     device_kind = _device_kind()
     if "gb10" not in device_kind:
@@ -90,19 +90,19 @@ class BatchedXlaUnsupportedError(NotImplementedError):
     """Raised when the GPU fused cross-entropy backend cannot be used."""
 
 
-class _CustomBackwardResidual(NamedTuple):
-    x: jax.Array
-    labels: jax.Array
-    w: jax.Array
-    lse: jax.Array
+class _CustomBackwardResidual[B: IntVar, H: IntVar, V: IntVar](NamedTuple):
+    x: jax.Array[[B, H]]
+    labels: jax.Array[[B]]
+    w: jax.Array[[H, V]]
+    lse: jax.Array[[B]]
     full_vocab_b_block: int | None
     backward_v_block: int
 
 
-def _validate_inputs(
-    x: Float[Array, "B H"],
-    labels: Int[Array, "B"],
-    w: Float[Array, "H V"],
+def _validate_inputs[B: IntVar, H: IntVar, V: IntVar](
+    x: jax.Array[[B, H]],
+    labels: jax.Array[[B]],
+    w: jax.Array[[H, V]],
     block_sizes: BlockSizes,
 ) -> None:
     _validate_input_contract(x, labels, w)
@@ -125,10 +125,10 @@ def _validate_inputs(
         raise BatchedXlaUnsupportedError("h_block_size must be a multiple of 16 on GPU.")
 
 
-def _validate_input_contract(
-    x: Float[Array, "B H"],
-    labels: Int[Array, "B"],
-    w: Float[Array, "H V"],
+def _validate_input_contract[B: IntVar, H: IntVar, V: IntVar](
+    x: jax.Array[[B, H]],
+    labels: jax.Array[[B]],
+    w: jax.Array[[H, V]],
 ) -> None:
     if jax.default_backend() != "gpu":
         raise BatchedXlaUnsupportedError("Batched XLA fused cross-entropy requires GPU backend.")
@@ -212,10 +212,10 @@ def _validate_launch_feasibility(
         "return_argmax",
     ],
 )
-def _linear_softmax_cross_entropy_loss_batched_xla_fa_style_streaming(
-    x: Float[Array, "B H"],
-    labels: Int[Array, "B"],
-    w: Float[Array, "H V"],
+def _linear_softmax_cross_entropy_loss_batched_xla_fa_style_streaming[B: IntVar, H: IntVar, V: IntVar](
+    x: jax.Array[[B, H]],
+    labels: jax.Array[[B]],
+    w: jax.Array[[H, V]],
     *,
     b_block_size: int,
     v_dim: int,
@@ -227,17 +227,14 @@ def _linear_softmax_cross_entropy_loss_batched_xla_fa_style_streaming(
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
     return_argmax: bool = False,
-) -> (
-    tuple[Float[Array, "NB BB"], Float[Array, "NB BB"]]
-    | tuple[Float[Array, "NB BB"], Float[Array, "NB BB"], Int[Array, "NB BB"]]
-):
+) -> tuple[jax.Array, jax.Array] | tuple[jax.Array, jax.Array, jax.Array]:
     """FlashAttention-style forward streaming reduction over vocab tiles."""
     h_pad = x.shape[1]
 
     x_blocks = x.reshape((num_b_blocks, b_block_size, h_pad))
     label_blocks = labels.reshape((num_b_blocks, b_block_size)).astype(jnp.int32)
 
-    def block_forward(x_block: Float[Array, "BB H"], labels_block: Int[Array, "BB"]):
+    def block_forward(x_block: jax.Array, labels_block: jax.Array):
         valid_rows = labels_block >= 0
         running_m = jnp.full((b_block_size,), -jnp.inf, dtype=jnp.float32)
         running_l = jnp.zeros((b_block_size,), dtype=jnp.float32)
@@ -303,16 +300,16 @@ def _linear_softmax_cross_entropy_loss_batched_xla_fa_style_streaming(
 
 
 @partial(jax.jit, static_argnames=["b_block_size", "dtype", "logit_soft_cap", "precision"])
-def _linear_softmax_cross_entropy_loss_full_vocab_b_tiled(
-    x: Float[Array, "B H"],
-    labels: Int[Array, "B"],
-    w: Float[Array, "H V"],
+def _linear_softmax_cross_entropy_loss_full_vocab_b_tiled[B: IntVar, H: IntVar, V: IntVar](
+    x: jax.Array[[B, H]],
+    labels: jax.Array[[B]],
+    w: jax.Array[[H, V]],
     *,
     b_block_size: int,
     dtype: Optional[jnp.dtype],
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
-) -> tuple[Float[Array, "B"], Float[Array, "B"]]:
+) -> tuple[jax.Array[[B]], jax.Array[[B]]]:
     """Return per-example loss and logsumexp with bounded peak logits memory."""
     b_dim, h_dim = x.shape
     v_dim = w.shape[1]
@@ -355,9 +352,9 @@ def _linear_softmax_cross_entropy_loss_full_vocab_b_tiled(
     return loss[:b_dim], lse[:b_dim]
 
 
-def _h100_full_vocab_b_tiled_block_size(
-    x: Float[Array, "B H"],
-    w: Float[Array, "H V"],
+def _h100_full_vocab_b_tiled_block_size[B: IntVar, H: IntVar, V: IntVar](
+    x: jax.Array[[B, H]],
+    w: jax.Array[[H, V]],
     *,
     return_argmax: bool = False,
 ) -> int | None:
@@ -378,6 +375,34 @@ def _h100_full_vocab_b_tiled_block_size(
     return _H100_FULL_VOCAB_B_TILED_BLOCK_SIZE
 
 
+@overload
+def _linear_softmax_cross_entropy_loss_batched_xla_impl[B: IntVar, H: IntVar, V: IntVar](
+    x: jax.Array[[B, H]],
+    labels: jax.Array[[B]],
+    w: jax.Array[[H, V]],
+    *,
+    block_sizes: BlockSizes | None = None,
+    dtype: Optional[jnp.dtype] = jnp.float32,
+    logit_soft_cap: Optional[float] = None,
+    precision: jax.lax.PrecisionLike = jax.lax.Precision.HIGHEST,
+    return_argmax: Literal[False] = False,
+) -> tuple[jax.Array[[B]], jax.Array[[B]]]: ...
+
+
+@overload
+def _linear_softmax_cross_entropy_loss_batched_xla_impl[B: IntVar, H: IntVar, V: IntVar](
+    x: jax.Array[[B, H]],
+    labels: jax.Array[[B]],
+    w: jax.Array[[H, V]],
+    *,
+    block_sizes: BlockSizes | None = None,
+    dtype: Optional[jnp.dtype] = jnp.float32,
+    logit_soft_cap: Optional[float] = None,
+    precision: jax.lax.PrecisionLike = jax.lax.Precision.HIGHEST,
+    return_argmax: Literal[True],
+) -> tuple[jax.Array[[B]], jax.Array[[B]], jax.Array[[B]]]: ...
+
+
 @partial(
     jax.jit,
     static_argnames=[
@@ -388,17 +413,17 @@ def _h100_full_vocab_b_tiled_block_size(
         "return_argmax",
     ],
 )
-def _linear_softmax_cross_entropy_loss_batched_xla_impl(
-    x: Float[Array, "B H"],
-    labels: Int[Array, "B"],
-    w: Float[Array, "H V"],
+def _linear_softmax_cross_entropy_loss_batched_xla_impl[B: IntVar, H: IntVar, V: IntVar](
+    x: jax.Array[[B, H]],
+    labels: jax.Array[[B]],
+    w: jax.Array[[H, V]],
     *,
     block_sizes: BlockSizes | None = None,
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = jax.lax.Precision.HIGHEST,
     return_argmax: bool = False,
-) -> tuple[Float[Array, "B"], Float[Array, "B"]] | tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:
+) -> tuple[jax.Array[[B]], jax.Array[[B]]] | tuple[jax.Array[[B]], jax.Array[[B]], jax.Array[[B]]]:
     """Batched XLA implementation returning per-example loss and logsumexp."""
     device_kind = _device_kind()
     is_gb10_bf16 = "gb10" in device_kind and x.dtype == jnp.bfloat16 and w.dtype == jnp.bfloat16
@@ -505,9 +530,9 @@ def _linear_softmax_cross_entropy_loss_batched_xla_impl(
     return out_loss[:b_dim], out_lse[:b_dim]
 
 
-def _gb10_custom_backward_v_block_size(
-    x: Float[Array, "B H"],
-    w: Float[Array, "H V"],
+def _gb10_custom_backward_v_block_size[B: IntVar, H: IntVar, V: IntVar](
+    x: jax.Array[[B, H]],
+    w: jax.Array[[H, V]],
 ) -> int | None:
     device_kind = _device_kind()
     is_gb10_bf16 = "gb10" in device_kind and x.dtype == jnp.bfloat16 and w.dtype == jnp.bfloat16
@@ -524,9 +549,9 @@ def _gb10_custom_backward_v_block_size(
     return None
 
 
-def _custom_backward_v_block_size(
-    x: Float[Array, "B H"],
-    w: Float[Array, "H V"],
+def _custom_backward_v_block_size[B: IntVar, H: IntVar, V: IntVar](
+    x: jax.Array[[B, H]],
+    w: jax.Array[[H, V]],
     block_sizes: BlockSizes | None,
 ) -> int:
     gb10_tuned = _gb10_custom_backward_v_block_size(x, w)
@@ -538,18 +563,18 @@ def _custom_backward_v_block_size(
 
 
 @partial(jax.jit, static_argnames=["b_block_size", "logit_soft_cap", "precision"])
-def _backward_b_tiled_from_lse(
-    x: Float[Array, "B H"],
-    labels: Int[Array, "B"],
-    w: Float[Array, "H V"],
-    lse: Float[Array, "B"],
-    g_loss: Float[Array, "B"],
-    g_lse: Float[Array, "B"],
+def _backward_b_tiled_from_lse[B: IntVar, H: IntVar, V: IntVar](
+    x: jax.Array[[B, H]],
+    labels: jax.Array[[B]],
+    w: jax.Array[[H, V]],
+    lse: jax.Array[[B]],
+    g_loss: jax.Array[[B]],
+    g_lse: jax.Array[[B]],
     *,
     b_block_size: int,
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
-) -> tuple[Float[Array, "B H"], Float[Array, "H V"]]:
+) -> tuple[jax.Array[[B, H]], jax.Array[[H, V]]]:
     """Return input and weight gradients from saved forward logsumexp."""
     b_dim, h_dim = x.shape
     v_dim = w.shape[1]
@@ -619,18 +644,18 @@ def _backward_b_tiled_from_lse(
 
 
 @partial(jax.jit, static_argnames=["v_block_size", "logit_soft_cap", "precision"])
-def _backward_streaming_from_lse(
-    x: Float[Array, "B H"],
-    labels: Int[Array, "B"],
-    w: Float[Array, "H V"],
-    lse: Float[Array, "B"],
-    g_loss: Float[Array, "B"],
-    g_lse: Float[Array, "B"],
+def _backward_streaming_from_lse[B: IntVar, H: IntVar, V: IntVar](
+    x: jax.Array[[B, H]],
+    labels: jax.Array[[B]],
+    w: jax.Array[[H, V]],
+    lse: jax.Array[[B]],
+    g_loss: jax.Array[[B]],
+    g_lse: jax.Array[[B]],
     *,
     v_block_size: int,
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
-) -> tuple[Float[Array, "B H"], Float[Array, "H V"]]:
+) -> tuple[jax.Array[[B, H]], jax.Array[[H, V]]]:
     """Streaming backward pass over vocab blocks using saved LSE."""
     b_dim, h_dim = x.shape
     v_dim = w.shape[1]
@@ -703,15 +728,15 @@ def _backward_streaming_from_lse(
 
 
 @partial(jax.custom_vjp, nondiff_argnums=(3, 4, 5, 6))
-def _linear_softmax_cross_entropy_loss_batched_xla_with_custom_backward(
-    x: Float[Array, "B H"],
-    labels: Int[Array, "B"],
-    w: Float[Array, "H V"],
+def _linear_softmax_cross_entropy_loss_batched_xla_with_custom_backward[B: IntVar, H: IntVar, V: IntVar](
+    x: jax.Array[[B, H]],
+    labels: jax.Array[[B]],
+    w: jax.Array[[H, V]],
     block_sizes: BlockSizes | None,
     dtype: Optional[jnp.dtype],
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
-) -> tuple[Float[Array, "B"], Float[Array, "B"]]:
+) -> tuple[jax.Array[[B]], jax.Array[[B]]]:
     return _linear_softmax_cross_entropy_loss_batched_xla_impl(
         x,
         labels,
@@ -723,15 +748,15 @@ def _linear_softmax_cross_entropy_loss_batched_xla_with_custom_backward(
     )
 
 
-def _linear_softmax_cross_entropy_loss_batched_xla_with_custom_backward_fwd(
-    x: Float[Array, "B H"],
-    labels: Int[Array, "B"],
-    w: Float[Array, "H V"],
+def _linear_softmax_cross_entropy_loss_batched_xla_with_custom_backward_fwd[B: IntVar, H: IntVar, V: IntVar](
+    x: jax.Array[[B, H]],
+    labels: jax.Array[[B]],
+    w: jax.Array[[H, V]],
     block_sizes: BlockSizes | None,
     dtype: Optional[jnp.dtype],
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
-):
+) -> tuple[tuple[jax.Array[[B]], jax.Array[[B]]], _CustomBackwardResidual[B, H, V]]:
     loss, lse = _linear_softmax_cross_entropy_loss_batched_xla_impl(
         x,
         labels,
@@ -756,14 +781,14 @@ def _linear_softmax_cross_entropy_loss_batched_xla_with_custom_backward_fwd(
     return (loss, lse), residual
 
 
-def _linear_softmax_cross_entropy_loss_batched_xla_with_custom_backward_bwd(
+def _linear_softmax_cross_entropy_loss_batched_xla_with_custom_backward_bwd[B: IntVar, H: IntVar, V: IntVar](
     block_sizes: BlockSizes | None,
     dtype: Optional[jnp.dtype],
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
-    residuals,
-    output_cotangent,
-):
+    residuals: _CustomBackwardResidual[B, H, V],
+    output_cotangent: tuple[jax.Array[[B]], jax.Array[[B]]],
+) -> tuple[jax.Array[[B, H]], None, jax.Array[[H, V]]]:
     g_loss, g_lse = output_cotangent
 
     if residuals.full_vocab_b_block is not None:
@@ -810,17 +835,17 @@ _linear_softmax_cross_entropy_loss_batched_xla_with_custom_backward.defvjp(
         "return_argmax",
     ],
 )
-def _linear_softmax_cross_entropy_loss_batched_xla_dispatch(
-    x: Float[Array, "B H"],
-    labels: Int[Array, "B"],
-    w: Float[Array, "H V"],
+def _linear_softmax_cross_entropy_loss_batched_xla_dispatch[B: IntVar, H: IntVar, V: IntVar](
+    x: jax.Array[[B, H]],
+    labels: jax.Array[[B]],
+    w: jax.Array[[H, V]],
     *,
     block_sizes: BlockSizes | None = None,
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = jax.lax.Precision.HIGHEST,
     return_argmax: bool = False,
-) -> tuple[Float[Array, "B"], Float[Array, "B"]] | tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:
+) -> tuple[jax.Array[[B]], jax.Array[[B]]] | tuple[jax.Array[[B]], jax.Array[[B]], jax.Array[[B]]]:
     if return_argmax:
         return _linear_softmax_cross_entropy_loss_batched_xla_impl(
             x,
@@ -843,17 +868,45 @@ def _linear_softmax_cross_entropy_loss_batched_xla_dispatch(
     )
 
 
-def linear_softmax_cross_entropy_loss_batched_xla(
-    x: Float[Array, "B H"],
-    labels: Int[Array, "B"],
-    w: Float[Array, "H V"],
+@overload
+def linear_softmax_cross_entropy_loss_batched_xla[B: IntVar, H: IntVar, V: IntVar](
+    x: jax.Array[[B, H]],
+    labels: jax.Array[[B]],
+    w: jax.Array[[H, V]],
+    *,
+    block_sizes: BlockSizes | None = None,
+    dtype: Optional[jnp.dtype] = jnp.float32,
+    logit_soft_cap: Optional[float] = None,
+    precision: jax.lax.PrecisionLike = jax.lax.Precision.HIGHEST,
+    return_argmax: Literal[False] = False,
+) -> tuple[jax.Array[[B]], jax.Array[[B]]]: ...
+
+
+@overload
+def linear_softmax_cross_entropy_loss_batched_xla[B: IntVar, H: IntVar, V: IntVar](
+    x: jax.Array[[B, H]],
+    labels: jax.Array[[B]],
+    w: jax.Array[[H, V]],
+    *,
+    block_sizes: BlockSizes | None = None,
+    dtype: Optional[jnp.dtype] = jnp.float32,
+    logit_soft_cap: Optional[float] = None,
+    precision: jax.lax.PrecisionLike = jax.lax.Precision.HIGHEST,
+    return_argmax: Literal[True],
+) -> tuple[jax.Array[[B]], jax.Array[[B]], jax.Array[[B]]]: ...
+
+
+def linear_softmax_cross_entropy_loss_batched_xla[B: IntVar, H: IntVar, V: IntVar](
+    x: jax.Array[[B, H]],
+    labels: jax.Array[[B]],
+    w: jax.Array[[H, V]],
     *,
     block_sizes: BlockSizes | None = None,
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = jax.lax.Precision.HIGHEST,
     return_argmax: bool = False,
-) -> tuple[Float[Array, "B"], Float[Array, "B"]] | tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:
+) -> tuple[jax.Array[[B]], jax.Array[[B]]] | tuple[jax.Array[[B]], jax.Array[[B]], jax.Array[[B]]]:
     device_kind = _device_kind()
     is_gb10_bf16 = "gb10" in device_kind and x.dtype == jnp.bfloat16 and w.dtype == jnp.bfloat16
     if "gb10" in device_kind and not is_gb10_bf16:

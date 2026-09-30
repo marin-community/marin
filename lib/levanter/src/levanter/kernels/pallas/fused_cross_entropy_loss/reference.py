@@ -1,22 +1,23 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
+from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional, overload
 
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Float, Int
+from shape_extensions import IntTuple, IntVar
 
 
-def _tpu_exp(x: jax.Array) -> jax.Array:
+def _tpu_exp[S: IntTuple](x: jax.Array[S]) -> jax.Array[S]:
     return jax.lax.exp(x, accuracy=jax.lax.AccuracyMode.HIGHEST)
 
 
-def _cross_entropy_exp(x: jax.Array) -> jax.Array:
+def _cross_entropy_exp[S: IntTuple](x: jax.Array[S]) -> jax.Array[S]:
     return jax.lax.platform_dependent(x, tpu=_tpu_exp, default=jnp.exp)
 
 
-def _tpu_logsumexp(logits: jax.Array) -> jax.Array:
+def _tpu_logsumexp[B: IntVar, V: IntVar](logits: jax.Array[[B, V]]) -> jax.Array[[B]]:
     # Default TPU logarithms can introduce ~1e-4 errors in FP32 cross-entropy.
     maximum = jnp.max(logits, axis=-1)
     maximum = jax.lax.stop_gradient(jnp.where(jnp.isfinite(maximum), maximum, 0))
@@ -24,16 +25,16 @@ def _tpu_logsumexp(logits: jax.Array) -> jax.Array:
     return maximum + jax.lax.log(total, accuracy=jax.lax.AccuracyMode.HIGHEST)
 
 
-def _default_logsumexp(logits: jax.Array) -> jax.Array:
+def _default_logsumexp[B: IntVar, V: IntVar](logits: jax.Array[[B, V]]) -> jax.Array[[B]]:
     return jax.nn.logsumexp(logits, axis=-1)
 
 
-def _cross_entropy_logsumexp(logits: jax.Array) -> jax.Array:
+def _cross_entropy_logsumexp[B: IntVar, V: IntVar](logits: jax.Array[[B, V]]) -> jax.Array[[B]]:
     return jax.lax.platform_dependent(logits, tpu=_tpu_logsumexp, default=_default_logsumexp)
 
 
 @jax.custom_jvp
-def _tpu_logaddexp(left: jax.Array, right: jax.Array) -> jax.Array:
+def _tpu_logaddexp[S: IntTuple](left: jax.Array[S], right: jax.Array[S]) -> jax.Array[S]:
     maximum = jnp.maximum(left, right)
     delta = left - right
     correction = jax.lax.log1p(_tpu_exp(-jnp.abs(delta)), accuracy=jax.lax.AccuracyMode.HIGHEST)
@@ -53,27 +54,57 @@ def _tpu_logaddexp_jvp(primals, tangents):
     return result, tangent
 
 
-def _cross_entropy_logaddexp(left: jax.Array, right: jax.Array) -> jax.Array:
+def _cross_entropy_logaddexp[S: IntTuple](left: jax.Array[S], right: jax.Array[S]) -> jax.Array[S]:
     return jax.lax.platform_dependent(left, right, tpu=_tpu_logaddexp, default=jnp.logaddexp)
 
 
-def _apply_logit_soft_cap(logits: Float[Array, "B V"], logit_soft_cap: Optional[float]) -> Float[Array, "B V"]:
+def _apply_logit_soft_cap[B: IntVar, V: IntVar](
+    logits: jax.Array[[B, V]], logit_soft_cap: Optional[float]
+) -> jax.Array[[B, V]]:
     if logit_soft_cap is None:
         return logits
     return jnp.tanh(logits / logit_soft_cap) * logit_soft_cap
 
 
-def linear_softmax_cross_entropy_loss_reference(
-    x: Float[Array, "B H"],
-    labels: Int[Array, "B"],
-    w: Float[Array, "H V"],
+@overload
+def linear_softmax_cross_entropy_loss_reference[B: IntVar, H: IntVar, V: IntVar](
+    x: jax.Array[[B, H]],
+    labels: jax.Array[[B]],
+    w: jax.Array[[H, V]],
+    *,
+    dtype: Optional[jnp.dtype] = jnp.float32,
+    logit_soft_cap: Optional[float] = None,
+    precision: jax.lax.PrecisionLike = None,
+    block_sizes: Optional[object] = None,
+    return_argmax: Literal[False] = False,
+) -> tuple[jax.Array[[B]], jax.Array[[B]]]: ...
+
+
+@overload
+def linear_softmax_cross_entropy_loss_reference[B: IntVar, H: IntVar, V: IntVar](
+    x: jax.Array[[B, H]],
+    labels: jax.Array[[B]],
+    w: jax.Array[[H, V]],
+    *,
+    dtype: Optional[jnp.dtype] = jnp.float32,
+    logit_soft_cap: Optional[float] = None,
+    precision: jax.lax.PrecisionLike = None,
+    block_sizes: Optional[object] = None,
+    return_argmax: Literal[True],
+) -> tuple[jax.Array[[B]], jax.Array[[B]], jax.Array[[B]]]: ...
+
+
+def linear_softmax_cross_entropy_loss_reference[B: IntVar, H: IntVar, V: IntVar](
+    x: jax.Array[[B, H]],
+    labels: jax.Array[[B]],
+    w: jax.Array[[H, V]],
     *,
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
     block_sizes: Optional[object] = None,
     return_argmax: bool = False,
-) -> tuple[Float[Array, "B"], Float[Array, "B"]] | tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:
+) -> tuple[jax.Array[[B]], jax.Array[[B]]] | tuple[jax.Array[[B]], jax.Array[[B]], jax.Array[[B]]]:
     """Reference loss + logsumexp for linear softmax cross-entropy.
 
     Args:
@@ -90,7 +121,7 @@ def linear_softmax_cross_entropy_loss_reference(
         lse: [B] logsumexp of logits.
     """
     del block_sizes  # unused in reference implementation
-    logits = jax.lax.dot_general(
+    logits: jax.Array[[B, V]] = jax.lax.dot_general(
         x,
         w,
         (((1,), (0,)), ((), ())),
@@ -110,17 +141,45 @@ def linear_softmax_cross_entropy_loss_reference(
     return loss, lse
 
 
-def linear_softmax_cross_entropy_loss_streaming(
-    x: Float[Array, "B H"],
-    labels: Int[Array, "B"],
-    w: Float[Array, "H V"],
+@overload
+def linear_softmax_cross_entropy_loss_streaming[B: IntVar, H: IntVar, V: IntVar](
+    x: jax.Array[[B, H]],
+    labels: jax.Array[[B]],
+    w: jax.Array[[H, V]],
+    *,
+    block_size: int,
+    dtype: Optional[jnp.dtype] = jnp.float32,
+    logit_soft_cap: Optional[float] = None,
+    precision: jax.lax.PrecisionLike = None,
+    return_argmax: Literal[False] = False,
+) -> tuple[jax.Array[[B]], jax.Array[[B]]]: ...
+
+
+@overload
+def linear_softmax_cross_entropy_loss_streaming[B: IntVar, H: IntVar, V: IntVar](
+    x: jax.Array[[B, H]],
+    labels: jax.Array[[B]],
+    w: jax.Array[[H, V]],
+    *,
+    block_size: int,
+    dtype: Optional[jnp.dtype] = jnp.float32,
+    logit_soft_cap: Optional[float] = None,
+    precision: jax.lax.PrecisionLike = None,
+    return_argmax: Literal[True],
+) -> tuple[jax.Array[[B]], jax.Array[[B]], jax.Array[[B]]]: ...
+
+
+def linear_softmax_cross_entropy_loss_streaming[B: IntVar, H: IntVar, V: IntVar](
+    x: jax.Array[[B, H]],
+    labels: jax.Array[[B]],
+    w: jax.Array[[H, V]],
     *,
     block_size: int,
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
     return_argmax: bool = False,
-) -> tuple[Float[Array, "B"], Float[Array, "B"]] | tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:
+) -> tuple[jax.Array[[B]], jax.Array[[B]]] | tuple[jax.Array[[B]], jax.Array[[B]], jax.Array[[B]]]:
     """Streaming reference loss + logsumexp without materializing logits."""
 
     if block_size <= 0:
