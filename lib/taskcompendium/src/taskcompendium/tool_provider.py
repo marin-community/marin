@@ -3,8 +3,17 @@
 
 """Tool services composed into a trial environment."""
 
+import hashlib
+import json
 from collections.abc import Sequence
 from typing import Any, Protocol, runtime_checkable
+
+
+def tool_schema_sha256(definitions: Sequence[dict[str, Any]]) -> str:
+    """Hash the ordered OpenAI-compatible schemas in their canonical JSON form."""
+    return hashlib.sha256(
+        json.dumps(list(definitions), sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    ).hexdigest()
 
 
 @runtime_checkable
