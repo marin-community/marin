@@ -5,7 +5,7 @@
 
 from tasktrove_verify.spec import ExactSpec, parse_spec
 
-from taskcompendium.grading import exact_answer
+from taskcompendium.grading import ExactAnswerOrder, exact_answer
 from taskcompendium.importers.tasktrove.convert import import_metadata, task_id
 from taskcompendium.importers.tasktrove.models import TaskArchive
 from taskcompendium.models import AnswerType, ConversationInput, EnvironmentRequirements, TaskSpec, TextMessage
@@ -40,7 +40,7 @@ def import_task(archive: TaskArchive) -> TaskSpec:
         contract.expected,
         ignore_case=contract.ignore_case,
         collapse_whitespace=contract.ignore_whitespace,
-        ordered=contract.ordered,
+        ordering=ExactAnswerOrder.ORDERED if contract.ordered else ExactAnswerOrder.UNORDERED,
     )
     return TaskSpec(
         id=task_id(archive),

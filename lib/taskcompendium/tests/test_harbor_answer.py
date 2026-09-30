@@ -18,6 +18,7 @@ from tasktrove_verify.spec import MathType
 from taskcompendium.grading import exact_answer, numeric_answer
 from taskcompendium.harbor.runner import ChatLaunch, run_trial
 from taskcompendium.lowering import (
+    DIRECT_CHAT_ENVIRONMENT,
     HarborEnvironmentConfig,
     SelectionPolicy,
     compatible_lowerings,
@@ -44,7 +45,6 @@ from taskcompendium.submission import (
     JsonAnswer,
     PlainText,
     SubmissionConvention,
-    submission_compatible,
 )
 from taskcompendium.verifier_registry import grade_answer
 from taskcompendium.verifiers.mathematical import mathematical_answer
@@ -193,7 +193,6 @@ async def test_numeric_answer_uses_explicit_tolerance(specification, response, r
             conversation=ConversationTrace(
                 events=(*specification.context.events, TextMessage(role="assistant", content=response))
             ),
-            tool_providers={},
             workspace=object(),
         ),
     )
@@ -389,7 +388,7 @@ def test_direct_chat_rejects_unsatisfied_requirements(tmp_path, specification):
             "Invalid 'exact' verifier parameters",
         ),
         (
-            VerifierSpec(kind=VerifierKind.EXACT_ANSWER, parameters_json='{"expected": ["12"], "extra": true}'),
+            VerifierSpec(kind=VerifierKind.EXACT_ANSWER, parameters_json='{"expected": "12", "extra": true}'),
             "Invalid 'exact' verifier parameters",
         ),
     ],
@@ -425,7 +424,7 @@ def test_exported_specification_resolves_verifier_in_fresh_process(tmp_path, spe
         "result = asyncio.run(grade_answer(specification, "
         "read_submission_convention(root / 'submission_convention.json'), "
         "GradingAttempt(ConversationTrace(events=(*specification.context.events, "
-        "TextMessage(role='assistant', content='12'))), {}, object()))); "
+        "TextMessage(role='assistant', content='12'))), object()))); "
         "print(json.dumps({'status': result.status, 'reward': result.reward}))"
     )
 
@@ -455,7 +454,6 @@ def test_file_result_cannot_use_text_submission_convention(tmp_path, specificati
     specification = specification.model_copy(update={"answer_type": AnswerType.FILE})
     convention = PlainText(id="plain")
 
-    assert submission_compatible(specification, convention).reasons == ("plain cannot carry file",)
     assert compatible_lowerings(specification, (convention,), (HarborEnvironmentConfig(),)) == ()
     with pytest.raises(ValueError, match="incompatible: plain cannot carry file"):
         lower_to_harbor(specification, convention, HarborEnvironmentConfig(), tmp_path / "task")
@@ -477,6 +475,11 @@ def test_selection_policies_use_compatible_conventions(specification):
         select_lowerings(candidates, SelectionPolicy.SAMPLE, rng_key=key)[0].convention.id for key in range(16)
     }
     assert sampled_ids == {candidate.convention.id for candidate in candidates}
+    assert select_lowerings(candidates, SelectionPolicy.FIRST, required_environment=DIRECT_CHAT_ENVIRONMENT) == (
+        candidates[0],
+    )
+    with pytest.raises(ValueError, match="No compatible lowerings for environment 'shellsim'"):
+        select_lowerings(candidates, SelectionPolicy.FIRST, required_environment="shellsim")
 
 
 async def test_chat_trial_resolves_key_at_runtime_without_persisting_it(

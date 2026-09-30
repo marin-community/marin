@@ -40,7 +40,6 @@ async def test_hand_authored_multiple_choice_answer(response, reward):
         convention,
         GradingAttempt(
             ConversationTrace(events=(*specification.context.events, TextMessage(role="assistant", content=response))),
-            {},
             object(),
         ),
     )

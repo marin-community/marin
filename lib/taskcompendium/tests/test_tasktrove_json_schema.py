@@ -22,7 +22,6 @@ from .tasktrove_json_schema_fixtures import json_schema_archive
 def _attempt(specification, response: str):
     return GradingAttempt(
         ConversationTrace(events=(*specification.context.events, TextMessage(role="assistant", content=response))),
-        {},
         object(),
     )
 
