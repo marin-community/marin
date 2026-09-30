@@ -265,16 +265,10 @@ def test_taskcompendium_change_selects_isolated_suite(tmp_path: Path) -> None:
     assert selection.matrix == []
     assert selection.suites == ["taskcompendium-unit"]
 
-    write(
-        tmp_path,
-        "experiments/post_training/taskcompendium/tests/test_ingest_tasktrove.py",
-        "def test_ingest():\n    assert True\n",
-    )
-    experiment_test = select_changed_tests(
-        ["experiments/post_training/taskcompendium/tests/test_ingest_tasktrove.py"], tmp_path
-    )
-    assert experiment_test.matrix == []
-    assert experiment_test.suites == ["taskcompendium-unit"]
+    write(tmp_path, "experiments/post_training/taskcompendium/ingest_tasktrove.py", "def ingest():\n    pass\n")
+    experiment_source = select_changed_tests(["experiments/post_training/taskcompendium/ingest_tasktrove.py"], tmp_path)
+    assert experiment_source.matrix == []
+    assert experiment_source.suites == ["taskcompendium-unit"]
 
     full_selection = select_changed_tests([], tmp_path, run_all_tests=True)
     assert "taskcompendium-unit" in full_selection.suites

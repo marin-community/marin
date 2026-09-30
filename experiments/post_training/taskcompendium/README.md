@@ -35,4 +35,12 @@ After an ingestion run has status `complete`, run `audit_tasktrove_ingest.py` in
 python -m experiments.post_training.taskcompendium.audit_tasktrove_ingest
 ```
 
+After the audit passes, `export_tasktrove_accepted.py` performs a metadata-only join of the ledger, candidates, proof rows, and private catalog rights metadata. It verifies their hashes, immutable input-object pins, and unique row-level joins; reports dispositions by source, split, mode, family, converter, and original tag; and records the distinct rights/attribution values present in the exact candidate cohorts. Examples contain only the source path and archive digest. It places all rows on a packaging-clearance hold, so it currently writes zero accepted public wrappers. This is deliberate: source-card review is still pending for the distinct catalog terms and lineage of each cohort. It uses `tasks` as the proposed public `train` split and excludes `sft/`; the task manifest is checked for explicit holdouts. Run it in the data-region Iris cluster:
+
+```bash
+python -m experiments.post_training.taskcompendium.export_tasktrove_accepted
+```
+
+The resulting prefix is a private audit artifact, not a release. No rights-cleared public wrapper is produced by this version. Packaging must bind a reviewed clearance to each exact subset/converter/template cohort, validate the typed schema, and complete bulk-output Harbor trials before enabling any wrapper export. The audit never reads verifier specifications, gold answers, or archive bytes.
+
 The default internal runtime cap is 840 seconds (`TASKTROVE_INGEST_RUNTIME_SECONDS`). If the scan reaches that cap or hits an unexpected input/storage error, the runner closes its Parquet writers, writes an `ingestion-manifest.json` with `status: partial` and completed-row counts, then exits with an error. The ledger count is the completed prefix; a partial run never implies full-release counts.

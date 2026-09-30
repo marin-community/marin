@@ -160,9 +160,6 @@ EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
         ".github/workflows/unified-unit.yaml",
     ),
 }
-EXTRA_SUITE_TEST_DIRS: dict[str, tuple[str, ...]] = {
-    "taskcompendium-unit": ("experiments/post_training/taskcompendium/tests",),
-}
 
 LEVANTER_ACCELERATOR_TRIGGERS: tuple[str, ...] = (
     "lib/levanter/",
@@ -344,12 +341,6 @@ def _test_tree(scope: str, repo_root: Path) -> dict[str, Path]:
     tree: dict[str, Path] = {}
     for directory in TEST_DIRS[scope]:
         for py in (repo_root / directory).rglob("*.py"):
-            if scope == "marin" and any(
-                str(py.relative_to(repo_root)).startswith(f"{extra_directory}/")
-                for directories in EXTRA_SUITE_TEST_DIRS.values()
-                for extra_directory in directories
-            ):
-                continue
             module = path_to_module(py, repo_root)
             if module:
                 tree[module] = py
@@ -471,12 +462,6 @@ def classify(
 
         for scope in SCOPES:
             if any(filepath.startswith(f"{directory}/") for directory in TEST_DIRS[scope]):
-                if scope == "marin" and any(
-                    filepath.startswith(f"{extra_directory}/")
-                    for directories in EXTRA_SUITE_TEST_DIRS.values()
-                    for extra_directory in directories
-                ):
-                    continue
                 # Experiments contain source and tests. Ordinary source changes select
                 # dependent tests through the import graph.
                 filename = PurePosixPath(filepath).name
