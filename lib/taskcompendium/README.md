@@ -209,17 +209,20 @@ The [dataset card at the pinned revision](https://huggingface.co/datasets/nvidia
 
 ### Public alpha candidate
 
-`taskcompendium.public_release` writes an agent-visible Workplace candidate to a local directory. It accepts the two pinned Hugging Face JSONL files through a trusted caller, verifies their digests and row counts, and writes `data/train.jsonl`, `data/validation.jsonl`, `manifest.json`, and `README.md`. Each data record is an explicit projection of the private spec: conversation, answer type, environment and provider requirements, final tool definitions, source provenance, ordered source tags, source category, and the final submission instruction. The verifier, expected state, gold actions, provider binding, and convention configuration stay out of data records. The manifest pins the runtime binding and source checksums. A change to the `TaskSpec` field set fails export until the projection is reviewed.
+`taskcompendium.public_release` writes an agent-visible Workplace candidate to a local directory. It accepts the two pinned Hugging Face JSONL files and a verified provider snapshot through a trusted caller, verifies their digests and row counts, and writes `data/train.jsonl`, `data/validation.jsonl`, `manifest.json`, and `README.md`. Each data record is an explicit projection of the private spec: conversation, answer type, environment and provider requirements, final tool definitions, source provenance, ordered source tags, source category, and the final submission instruction. The verifier, expected state, gold actions, provider binding, and convention configuration stay out of data records. The manifest pins the runtime binding and source checksums loaded from that snapshot. The CLI stages a clean, pinned provider checkout before importing and keeps the snapshot outside the public output. A change to the `TaskSpec` field set fails export until the projection is reviewed.
 
 ```bash
 hf download nvidia/Nemotron-RL-agent-workplace_assistant \
   train.jsonl validation.jsonl --type dataset \
   --revision c86a908379e0a361a573c395e175d3c1aa128e6c \
   --local-dir /tmp/taskcompendium-alpha-source
-uv run --project lib/taskcompendium --extra workplace \
+git clone https://github.com/marin-community/nemo_workplace /tmp/taskcompendium-workplace-provider
+git -C /tmp/taskcompendium-workplace-provider checkout --detach 27b39001312617403021635f0492e120abc2cd34
+uv run --project lib/taskcompendium --with 'pandas>=2.2' \
   python -m taskcompendium.public_release \
   --workplace-train /tmp/taskcompendium-alpha-source/train.jsonl \
   --workplace-validation /tmp/taskcompendium-alpha-source/validation.jsonl \
+  --workplace-provider-checkout /tmp/taskcompendium-workplace-provider \
   --output /tmp/taskcompendium-alpha-candidate \
   --builder-revision <full-marin-commit-sha>
 ```

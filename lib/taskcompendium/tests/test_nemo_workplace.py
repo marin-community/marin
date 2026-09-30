@@ -39,6 +39,7 @@ from taskcompendium.importers.nemo_workplace import (
 from taskcompendium.lowering import lower_to_harbor, provider_class
 from taskcompendium.models import AnswerType, ConversationInput, ConversationTrace, TaskSpec, TextMessage, VerifierKind
 from taskcompendium.provider_sources import stage_git_provider
+from taskcompendium.public_release import build_workplace_candidate
 from taskcompendium.submission import GradingAttempt, PlainText, SubmissionConvention
 from taskcompendium.verifier_registry import grade_answer
 
@@ -151,6 +152,45 @@ def test_workplace_import_converts_every_pinned_example_row(source_example: byte
     assert all(spec.answer_type is AnswerType.STATE for spec in specifications)
     assert all(spec.verifier.kind is VerifierKind.STRUCTURED_EXACT for spec in specifications)
     assert all("ground_truth" not in spec.model_dump_json() for spec in specifications)
+
+
+def test_workplace_candidate_exports_public_rows_from_provider_snapshot(
+    monkeypatch, tmp_path, source_row: bytes, provider_source
+):
+    digest = hashlib.sha256(source_row).hexdigest()
+    sources = {}
+    for split in ("train", "validation"):
+        monkeypatch.setitem(DATASET_SPLIT_ROW_COUNTS, split, 1)
+        monkeypatch.setitem(DATASET_SPLIT_SHA256, split, digest)
+        sources[split] = tmp_path / f"{split}.jsonl"
+        sources[split].write_bytes(source_row)
+    output = build_workplace_candidate(
+        sources["train"],
+        sources["validation"],
+        tmp_path / "candidate",
+        provider_source=provider_source,
+        builder_revision="a" * 40,
+    )
+    manifest = json.loads((output / "manifest.json").read_text())
+    provider = manifest["sources"]["nemo_workplace"]
+    assert provider["provider_binding"]["provider"] == PROVIDER
+    assert len(provider["provider_binding"]["tools"]) == 27
+    for split in ("train", "validation"):
+        data = (output / "data" / f"{split}.jsonl").read_bytes()
+        record = json.loads(data)
+        assert record["id"] == f"nemo-workplace-{split}-0"
+        assert record["tool_providers"]["workplace"] == {
+            "action_interface": provider["action_interface"],
+            "seed_sha256": provider["seed_sha256"],
+        }
+        assert manifest["data_files"][split]["sha256"] == hashlib.sha256(data).hexdigest()
+        assert "ground_truth" not in record and "verifier" not in record
+    assert {str(path.relative_to(output)) for path in output.rglob("*") if path.is_file()} == {
+        "data/train.jsonl",
+        "data/validation.jsonl",
+        "manifest.json",
+        "README.md",
+    }
 
 
 async def test_workplace_import_gradeable_empty_ground_truth_split_row(

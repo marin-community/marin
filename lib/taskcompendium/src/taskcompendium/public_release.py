@@ -12,20 +12,22 @@ import tempfile
 from collections import Counter
 from pathlib import Path
 
-from nemo_workplace.provider import ACTION_INTERFACE, PROVIDER_REVISION, SEED_SHA256, TOOLS_SHA256
 from taskcompendium.importers.nemo_workplace import (
     DATASET,
     DATASET_REVISION,
     DATASET_SPLIT_ROW_COUNTS,
     DATASET_SPLIT_SHA256,
     IMPORTER_REVISION,
+    PROVIDER,
     PROVIDER_GIT_REVISION,
     WorkplaceSplit,
     import_dataset_split,
     select_dataset_rows,
     workplace_environment_config,
 )
+from taskcompendium.lowering import ToolBinding
 from taskcompendium.models import SCHEMA_VERSION
+from taskcompendium.provider_sources import stage_git_provider
 from taskcompendium.public_projection import public_task
 
 REPO_ID = "open-athena/taskcompendium-alpha-1"
@@ -40,10 +42,12 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _write_workplace_split(source_path: Path, destination: Path, split: WorkplaceSplit) -> tuple[int, dict[str, int]]:
+def _write_workplace_split(
+    source_path: Path, destination: Path, split: WorkplaceSplit, provider_source: Path
+) -> tuple[int, dict[str, int]]:
     source = source_path.read_bytes()
     selected = select_dataset_rows(source, split)
-    imported = import_dataset_split(source, split)
+    imported = import_dataset_split(source, split, provider_source)
     categories: Counter[str] = Counter()
     with destination.open("w", encoding="utf-8", newline="\n") as stream:
         for raw_row, task in zip(selected, imported, strict=True):
@@ -100,7 +104,10 @@ completed TaskTrove conversions and Harbor sample evidence for each included sou
 
 
 def _manifest(
-    files: dict[str, dict[str, object]], row_counts: dict[WorkplaceSplit, int], builder_revision: str
+    files: dict[str, dict[str, object]],
+    row_counts: dict[WorkplaceSplit, int],
+    builder_revision: str,
+    provider: ToolBinding,
 ) -> dict[str, object]:
     """Compute release provenance separately from writing release files."""
     return {
@@ -138,17 +145,14 @@ def _manifest(
                 "license": "cc-by-4.0",
                 "attribution": "NVIDIA Corporation",
                 "importer_revision": IMPORTER_REVISION,
-                "action_interface": ACTION_INTERFACE,
+                "action_interface": provider.action_interface,
                 "provider_revision": PROVIDER_GIT_REVISION,
-                "provider_implementation_revision": PROVIDER_REVISION,
-                "seed_sha256": SEED_SHA256,
-                "tools_sha256": TOOLS_SHA256,
+                "provider_implementation_revision": provider.provider_revision,
+                "seed_sha256": provider.seed_sha256,
+                "tools_sha256": provider.tools_sha256,
                 "provider_binding": {
-                    "provider": (
-                        "python+git+https://github.com/marin-community/nemo_workplace@"
-                        f"{PROVIDER_GIT_REVISION}:nemo_workplace.provider:NemoWorkplaceProvider"
-                    ),
-                    "tools": list(workplace_environment_config().tool_providers["workplace"].tools),
+                    "provider": provider.provider,
+                    "tools": list(provider.tools),
                 },
                 "submission_convention": {"id": "state", "answer_format": "state", "provider": "workplace"},
                 "split_files": {
@@ -170,6 +174,7 @@ def build_workplace_candidate(
     validation_source: Path,
     destination: Path,
     *,
+    provider_source: Path,
     builder_revision: str,
 ) -> Path:
     """Write a deterministic public Workplace candidate from trusted pinned files."""
@@ -178,6 +183,7 @@ def build_workplace_candidate(
     if destination.exists():
         raise FileExistsError(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
+    provider = workplace_environment_config(provider_source).tool_providers["workplace"]
     temporary = Path(tempfile.mkdtemp(prefix=f".{destination.name}-", dir=destination.parent))
     try:
         data = temporary / "data"
@@ -187,7 +193,7 @@ def build_workplace_candidate(
         row_counts: dict[WorkplaceSplit, int] = {}
         for split, path in source_files.items():
             output = data / f"{split}.jsonl"
-            rows, categories = _write_workplace_split(path, output, split)
+            rows, categories = _write_workplace_split(path, output, split, provider_source)
             row_counts[split] = rows
             files[split] = {
                 "path": f"data/{split}.jsonl",
@@ -195,7 +201,7 @@ def build_workplace_candidate(
                 "sha256": _sha256(output),
                 "categories": categories,
             }
-        manifest = _manifest(files, row_counts, builder_revision)
+        manifest = _manifest(files, row_counts, builder_revision, provider)
         (temporary / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
         (temporary / "README.md").write_text(_card(row_counts["train"], row_counts["validation"]))
         os.replace(temporary, destination)
@@ -209,15 +215,20 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Build a local, agent-visible TaskCompendium alpha candidate")
     parser.add_argument("--workplace-train", type=Path, required=True)
     parser.add_argument("--workplace-validation", type=Path, required=True)
+    parser.add_argument("--workplace-provider-checkout", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--builder-revision", required=True)
     arguments = parser.parse_args()
-    build_workplace_candidate(
-        arguments.workplace_train,
-        arguments.workplace_validation,
-        arguments.output,
-        builder_revision=arguments.builder_revision,
-    )
+    with tempfile.TemporaryDirectory(prefix="taskcompendium-workplace-provider-") as directory:
+        provider_source = Path(directory) / "provider"
+        stage_git_provider(PROVIDER, arguments.workplace_provider_checkout, provider_source)
+        build_workplace_candidate(
+            arguments.workplace_train,
+            arguments.workplace_validation,
+            arguments.output,
+            provider_source=provider_source,
+            builder_revision=arguments.builder_revision,
+        )
 
 
 if __name__ == "__main__":
