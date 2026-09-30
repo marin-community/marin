@@ -2147,6 +2147,9 @@ harbor = [
 math = [
     { name = "tasktrove-verify", extra = ["answer"] },
 ]
+schema = [
+    { name = "tasktrove-verify", extra = ["schema"] },
+]
 
 [package.dev-dependencies]
 test = [
@@ -2161,8 +2164,9 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.0" },
     { name = "tasktrove-verify", editable = "../tasktrove-verify" },
     { name = "tasktrove-verify", extras = ["answer"], marker = "extra == 'math'", editable = "../tasktrove-verify" },
+    { name = "tasktrove-verify", extras = ["schema"], marker = "extra == 'schema'", editable = "../tasktrove-verify" },
 ]
-provides-extras = ["harbor", "math"]
+provides-extras = ["harbor", "math", "schema"]
 
 [package.metadata.requires-dev]
 test = [
@@ -2183,6 +2187,10 @@ dependencies = [
 answer = [
     { name = "math-verify" },
     { name = "sympy" },
+]
+schema = [
+    { name = "jsonschema" },
+    { name = "pyyaml" },
 ]
 
 [package.metadata]

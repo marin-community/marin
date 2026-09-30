@@ -12,6 +12,7 @@ from taskcompendium.grading import (
     ExactAnswerVerifier,
     ExactListVerifier,
     GradeResult,
+    JsonSchemaVerifier,
     NumericAnswerVerifier,
     Outcome,
     StructuredExactVerifier,
@@ -32,6 +33,7 @@ VERIFIERS: Mapping[VerifierKind, type[Verifier]] = MappingProxyType(
     {
         VerifierKind.EXACT_ANSWER: ExactAnswerVerifier,
         VerifierKind.EXACT_LIST_ANSWER: ExactListVerifier,
+        VerifierKind.JSON_SCHEMA: JsonSchemaVerifier,
         VerifierKind.STRUCTURED_EXACT: StructuredExactVerifier,
         VerifierKind.PREDICTED_ACTION: PredictedActionVerifier,
         VerifierKind.NUMERIC_ANSWER: NumericAnswerVerifier,

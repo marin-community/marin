@@ -30,6 +30,7 @@ class VerifierKind(StrEnum):
 
     EXACT_ANSWER = "exact"
     EXACT_LIST_ANSWER = "exact_list"
+    JSON_SCHEMA = "json-schema"
     STRUCTURED_EXACT = "structured_exact"
     PREDICTED_ACTION = "predicted_action"
     NUMERIC_ANSWER = "numeric"

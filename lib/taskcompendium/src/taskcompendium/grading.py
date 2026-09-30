@@ -12,7 +12,7 @@ from tasktrove_verify.grade import InvalidTask, numeric_tolerance
 from tasktrove_verify.modes.extract import extract_boxed
 from tasktrove_verify.modes.grade_exact import grade_exact_candidate
 from tasktrove_verify.modes.grade_math import grade_numeric_candidate
-from tasktrove_verify.spec import ExactSpec, NumericSpec
+from tasktrove_verify.spec import ExactSpec, NumericSpec, SchemaFormat
 
 from taskcompendium.models import VerifierKind, VerifierSpec
 from taskcompendium.submission import (
@@ -103,6 +103,37 @@ class ExactListVerifier(Verifier):
         return GradeResult(Outcome.GRADED, grade_exact_candidate(contract, candidate).reward)
 
 
+class JsonSchemaVerifier(Verifier):
+    """Accept a text document validated by a private JSON Schema."""
+
+    schema_definition: dict[str, JsonValue]
+    format: SchemaFormat
+
+    @model_validator(mode="after")
+    def validate_schema(self) -> "JsonSchemaVerifier":
+        from jsonschema.validators import validator_for  # noqa: PLC0415
+
+        validator_for(self.schema_definition).check_schema(self.schema_definition)
+        return self
+
+    async def grade(
+        self, submission: Submission, *, specification: VerifierSpec, attempt: GradingAttempt
+    ) -> GradeResult:
+        if not isinstance(submission, TextSubmission):
+            raise TypeError("JSON-schema verifier requires a text submission")
+        import yaml  # noqa: PLC0415
+        from jsonschema.validators import validator_for  # noqa: PLC0415
+        from tasktrove_verify.modes.extract import unwrap_fence  # noqa: PLC0415
+        from tasktrove_verify.modes.grade_json_schema import parse_candidate  # noqa: PLC0415
+
+        try:
+            candidate = parse_candidate(unwrap_fence(submission.value), self.format)
+        except (ValueError, TypeError, yaml.YAMLError):
+            return GradeResult(Outcome.GRADED, 0.0)
+        validator = validator_for(self.schema_definition)(self.schema_definition)
+        return GradeResult(Outcome.GRADED, float(validator.is_valid(candidate)))
+
+
 class NumericAnswerVerifier(Verifier):
     """Compare a submitted number with explicit absolute and relative tolerances."""
 
@@ -189,6 +220,12 @@ def exact_list_answer(
         ordered=ordered,
     )
     return VerifierSpec(kind=VerifierKind.EXACT_LIST_ANSWER, parameters_json=verifier.model_dump_json())
+
+
+def json_schema_answer(schema: dict[str, JsonValue], schema_format: SchemaFormat) -> VerifierSpec:
+    """Construct a private verifier that accepts instances satisfying the schema."""
+    verifier = JsonSchemaVerifier(schema_definition=schema, format=schema_format)
+    return VerifierSpec(kind=VerifierKind.JSON_SCHEMA, parameters_json=verifier.model_dump_json())
 
 
 def numeric_answer(expected: float, tolerance_abs: float, tolerance_rel: float) -> VerifierSpec:

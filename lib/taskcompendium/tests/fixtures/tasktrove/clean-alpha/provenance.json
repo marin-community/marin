@@ -16,6 +16,19 @@
       "row_index": 113,
       "archive_sha256": "2fa5479915b7aebc0d45149ae8b00db6ea32d1f858cda9820dcf832c071e7b71",
       "redistribution_status": "source-level rights review pending"
+    },
+    {
+      "source": "laion__nemotron-gym-structured-outputs-v4",
+      "source_path": "if-structured-v2-de1c220b495c.tar.gz",
+      "row_index": 7289,
+      "archive_sha256": "6b60bfe0a6da6c8f33f16a49be62dc74e88d2d72cdeeec158af9afe9ebabf7da",
+      "upstream_dataset": "nvidia/Nemotron-RL-Instruction-Following-Structured-Outputs-v2",
+      "license_card_revision": "b0187e1802944a6dd01560f74d124ce9c19fe0e8",
+      "license_source": "https://huggingface.co/datasets/nvidia/Nemotron-RL-Instruction-Following-Structured-Outputs-v2",
+      "license": "CC-BY-4.0",
+      "content_type": "synthetic",
+      "attribution": "NVIDIA Nemotron-RL-Instruction-Following-Structured-Outputs-v2; modified by TaskTrove Clean normalization and TaskCompendium import.",
+      "redistribution_status": "cleared for public alpha"
     }
   ]
 }
