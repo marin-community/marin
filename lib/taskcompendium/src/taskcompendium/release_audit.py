@@ -12,6 +12,7 @@ from threading import Thread
 from typing import Any
 
 from taskcompendium.harbor.runner import ChatLaunch, run_trial
+from taskcompendium.importers.nemo_predicted_action import canonical_sha256
 from taskcompendium.importers.nemo_workplace import PROVIDER, workplace_environment_config
 from taskcompendium.lowering import HarborEnvironmentConfig, lower_to_harbor, selected_tool_definitions
 from taskcompendium.mixed_release import PublishedRow, published_task
@@ -131,10 +132,12 @@ async def audit_demonstration(
                 expected = json.loads(provider.expected_state_json(actions))
                 if row.verifier.kind is not VerifierKind.STRUCTURED_EXACT:
                     raise ValueError("Workplace demonstration lost its structured state verifier")
-                if json.loads(row.verifier.parameters_json) != {"expected": expected}:
+                if canonical_sha256(json.loads(row.verifier.parameters_json)) != canonical_sha256(
+                    {"expected": expected}
+                ):
                     raise ValueError("Published Workplace verifier differs from source canonical state")
                 matches += 1
-                if sample is None and expected != seed:
+                if sample is None and canonical_sha256({"state": expected}) != canonical_sha256({"state": seed}):
                     sample = (row, actions)
         if sample is None:
             raise ValueError("Workplace split has no state-changing reconstruction sample")

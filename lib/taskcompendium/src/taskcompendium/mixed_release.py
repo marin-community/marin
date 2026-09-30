@@ -85,7 +85,6 @@ class PublishedRow(TaskSpec):
 
 
 def published_task(row: PublishedRow) -> TaskSpec:
-    """Reconstruct the task definition carried by one demonstration row."""
     return TaskSpec.model_validate(row.model_dump(exclude={"record_version", "source_category", "provenance"}))
 
 

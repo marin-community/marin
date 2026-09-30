@@ -286,7 +286,7 @@ def _upload_regional(source: Path, destination: str) -> dict[str, str]:
         if not path.is_file():
             continue
         relative = path.relative_to(source).as_posix()
-        uri = f"{destination.rstrip('/')}/{relative}"
+        uri = str(StoragePath(destination) / relative)
         with path.open("rb") as input_stream, StoragePath(uri).open("wb") as output_stream:
             shutil.copyfileobj(input_stream, output_stream, length=1024 * 1024)
         uploaded[relative] = sha256_file(path)
@@ -351,7 +351,7 @@ def main() -> None:
     output = Path(os.environ["IRIS_OUTPUT_DIR"])
     if not args.output_prefix.startswith(RELEASE_PREFIX) or args.output_prefix.rstrip("/") == RELEASE_PREFIX.rstrip("/"):
         raise ValueError("Output must be a new regional TaskCompendium release prefix")
-    if StoragePath(f"{args.output_prefix.rstrip('/')}/manifest.json").exists():
+    if (StoragePath(args.output_prefix) / "manifest.json").exists():
         raise FileExistsError(f"Regional release already exists: {args.output_prefix}")
     with tempfile.TemporaryDirectory(prefix="taskcompendium-alpha-") as directory:
         root = Path(directory)

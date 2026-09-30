@@ -5,6 +5,7 @@
 
 import asyncio
 import hashlib
+import importlib
 import json
 import subprocess
 from collections.abc import Iterator
@@ -17,7 +18,7 @@ from urllib.request import urlopen
 import pytest
 from tasktrove_verify.spec import MathType
 
-from taskcompendium.grading import exact_answer
+from taskcompendium.grading import exact_answer, structured_exact
 from taskcompendium.harbor.runner import ChatLaunch, run_trial
 from taskcompendium.importers.nemo_workplace import (
     DATASET_REVISION,
@@ -40,7 +41,7 @@ from taskcompendium.importers.nemo_workplace import (
 from taskcompendium.lowering import lower_to_harbor, provider_class
 from taskcompendium.mixed_release import PublishedRow, SourceProof
 from taskcompendium.models import AnswerType, ConversationInput, ConversationTrace, TaskSpec, TextMessage, VerifierKind
-from taskcompendium.provider_sources import stage_git_provider
+from taskcompendium.provider_sources import import_staged_provider, stage_git_provider
 from taskcompendium.public_release import build_workplace_candidate
 from taskcompendium.release_audit import audit_demonstration
 from taskcompendium.submission import GradingAttempt, PlainText, SubmissionConvention
@@ -560,3 +561,32 @@ async def test_demonstration_gate_grades_reconstructed_workplace_and_answer_rows
         "tasktrove_clean/mcqa": [1.0, 0.0],
         "tasktrove_clean/prism_math": [1.0, 0.0],
     }
+
+
+@pytest.mark.parametrize("corrupted", [True, 1.0])
+async def test_demo_audit_rejects_boolean_and_float_state_coercion(
+    monkeypatch, tmp_path, source_row: bytes, provider_source, trusted_provider_checkout, corrupted
+):
+    provider = import_staged_provider(PROVIDER, provider_source)
+    module = importlib.import_module(provider.__module__)
+    monkeypatch.setattr(module, "expected_state_json", lambda actions: '{"value":1}')
+    imported = import_row(source_row, provider_source)
+    digest = hashlib.sha256(source_row).hexdigest()
+    task = imported.specification.model_copy(
+        update={
+            "source": imported.specification.source.model_copy(update={"row": f"train:0:{digest}"}),
+            "verifier": structured_exact({"value": corrupted}),
+        }
+    )
+    row = PublishedRow(
+        **task.model_dump(),
+        provenance=SourceProof(
+            source_row=task.source.row, input_file="train.jsonl", input_object_pin="sha256:" + digest
+        ),
+    )
+    ready = tmp_path / "ready"
+    (ready / "data/workplace").mkdir(parents=True)
+    (ready / "data/workplace/train.jsonl").write_text(row.model_dump_json() + "\n")
+    (tmp_path / "train.jsonl").write_bytes(source_row)
+    with pytest.raises(ValueError, match="source canonical state"):
+        await audit_demonstration(ready, tmp_path, provider_source, trusted_provider_checkout)

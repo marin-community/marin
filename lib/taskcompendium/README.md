@@ -97,9 +97,17 @@ are relative and regional bucket names are omitted. The demo includes reference
 answers and expected state. `public_task` remains the runtime projection that
 excludes grader data from model input.
 
-The cohort JSON is an array of `CohortInput` objects with pinned input hashes,
+The cohort JSON is an array of [`CohortInput`](src/taskcompendium/mixed_release.py)
+objects with pinned input hashes,
 accepted counts, source assets, attribution, rights review, and Harbor evidence.
-TaskTrove inputs also require `CatalogJoinEvidence`. The regional alpha builder
+Each `input_path` names a local JSONL file of `AcceptedTaskRecord` objects, not
+an upstream dataset file. TaskTrove inputs also require `CatalogJoinEvidence`.
+The accepted projection contains the rights-reviewed task IDs and agent input;
+the ingestion ledger records imported IDs and immutable source/archive pins;
+the private catalog holds the complete historical TaskSpecs and verifiers.
+The regional builder computes `CatalogJoinEvidence` only after the following
+checks, using the [catalog boundary](src/taskcompendium/catalog_release.py) and
+[current TaskSpec schema](src/taskcompendium/models.py). The regional alpha builder
 joins accepted projection IDs to unique imported ledger IDs and complete catalog
 IDs. It checks source identity, ordered tags, archive and object pins, and every
 overlapping projection field before exporting. The pinned catalog uses schema
@@ -271,7 +279,11 @@ The private `structured_exact` verifier compares final provider state with a tar
 
 The [dataset card at the pinned revision](https://huggingface.co/datasets/nvidia/Nemotron-RL-agent-workplace_assistant/blob/c86a908379e0a361a573c395e175d3c1aa128e6c/README.md) identifies CC BY 4.0 and NVIDIA Corporation as the owner. It reports 1,260 records; the pinned split files contain 1,800 rows. Imports of Hub rows must retain that attribution and license. The external provider repository separately carries NVIDIA's code, seed files, Apache 2.0 license, and attribution from the [pinned NeMo Gym source](https://github.com/NVIDIA-NeMo/Gym/blob/1e668906d2e69a9e8ee9aaafc60050a4025d9688/resources_servers/workplace_assistant/README.md). Source rows and gold action lists are excluded from exported model context; expected state remains private verifier configuration.
 
-### Public alpha candidate
+### Export agent input for Workplace
+
+This command exports stripped agent-input records with submission instructions.
+Use the complete demonstration builder above for runnable tasks with verifiers
+and reference state. The two outputs have different contracts.
 
 `taskcompendium.public_release` writes an agent-visible Workplace candidate to a local directory. It accepts the two pinned Hugging Face JSONL files and a verified provider snapshot through a trusted caller, verifies their digests and row counts, and writes `data/train.jsonl`, `data/validation.jsonl`, `manifest.json`, and `README.md`. Each data record is an explicit projection of the private spec: conversation, answer type, environment and provider requirements, final tool definitions, source provenance, ordered source tags, source category, and the final submission instruction. The verifier, expected state, gold actions, provider binding, and convention configuration stay out of data records. The manifest pins the runtime binding and source checksums loaded from that snapshot. The CLI stages a clean, pinned provider checkout before importing and keeps the snapshot outside the public output. A change to the `TaskSpec` field set fails export until the projection is reviewed.
 

@@ -51,7 +51,7 @@ def _verify_hub_file(repo_id: str, revision: str, path: str, expected_sha256: st
 def _stage_release(
     source_prefix: str, local: Path, manifest_sha256: str, readme_sha256: str
 ) -> dict[str, dict[str, Any]]:
-    _copy_and_verify(f"{source_prefix}/manifest.json", local / "manifest.json", manifest_sha256)
+    _copy_and_verify(str(StoragePath(source_prefix) / "manifest.json"), local / "manifest.json", manifest_sha256)
     manifest = json.loads((local / "manifest.json").read_text())
     if (
         manifest["repo_id"] != REPO_ID
@@ -81,9 +81,9 @@ def _stage_release(
         for path, entry in data_files.items()
     ):
         raise ValueError("Reviewed release row counts changed")
-    _copy_and_verify(f"{source_prefix}/README.md", local / "README.md", readme_sha256)
+    _copy_and_verify(str(StoragePath(source_prefix) / "README.md"), local / "README.md", readme_sha256)
     for path, entry in data_files.items():
-        _copy_and_verify(f"{source_prefix}/{path}", local / path, entry["sha256"], EXPECTED_ROWS[path])
+        _copy_and_verify(str(StoragePath(source_prefix) / path), local / path, entry["sha256"], EXPECTED_ROWS[path])
         with (local / path).open(encoding="utf-8") as stream:
             for line in stream:
                 row = PublishedRow.model_validate_json(line)
@@ -161,7 +161,7 @@ def main() -> None:
         raise ValueError("Base revision must be a full Git commit")
     with tempfile.TemporaryDirectory(prefix="taskcompendium-alpha-upload-") as directory:
         local = Path(directory)
-        data_files = _stage_release(args.source_prefix.rstrip("/"), local, args.manifest_sha256, args.readme_sha256)
+        data_files = _stage_release(args.source_prefix, local, args.manifest_sha256, args.readme_sha256)
         _, revision = _upload_update(local, args.base_revision)
         _verify_public_update(revision, data_files, args.manifest_sha256, args.readme_sha256)
         _write_publication_summary(revision, data_files, args.manifest_sha256, args.readme_sha256, output)
