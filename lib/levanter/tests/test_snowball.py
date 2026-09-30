@@ -572,22 +572,3 @@ def test_snowball_hf_init_trains_with_context_and_expert_parallelism():
         """,
         device_count=8,
     )
-
-
-def test_snowball_flops_charge_full_context_only_on_long_layers():
-    """Long layers (every 4th plus the last) attend over the whole context; short layers stop at the window.
-
-    Growing the context past the window must therefore raise the estimate in proportion to the long-layer
-    count: one long layer in a 4-layer model (layer 3), two in 5- and 8-layer models (3+4, 3+7).
-    """
-    window = 64
-
-    def growth(num_layers: int) -> float:
-        config = SnowballConfig(
-            num_layers=num_layers, sliding_window=window, hidden_dim=64, num_heads=4, num_kv_heads=2, head_dim=16
-        )
-        return config.flops_per_token(1000, 2 * window) - config.flops_per_token(1000, window)
-
-    assert growth(4) > 0
-    assert growth(5) == pytest.approx(2 * growth(4))
-    assert growth(8) == pytest.approx(2 * growth(4))

@@ -48,6 +48,7 @@ from levanter.models.snowball import SnowballConfig
 from levanter.optim.config import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import StepInfo, Trainer, TrainerConfig
+from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.mesh import MeshConfig
 
 logger = logging.getLogger("train_snowball_synthetic")
@@ -82,8 +83,34 @@ PRESETS = {
     "medium": Preset(dataclasses.replace(FULL, num_layers=4), 1024, "p=f32,c=bfloat16"),
     "full": Preset(FULL, 4096, "p=f32,c=bfloat16"),
 }
+# SnowballTransformer runs full-causal attention on every 4th layer and the last one; the rest are windowed.
+LONG_LAYER_STRIDE = 4
 # Steps 0 and 1 are excluded from the summary: step 0 compiles, and the trainer runs per-step hooks from step 2.
 FIRST_TIMED_STEP = 2
+
+
+def snowball_flops_per_token(cfg: SnowballConfig, vocab_size: int, seq_len: int) -> float:
+    """Forward FLOPs per token, charging full-context attention only on Snowball's long layers."""
+    num_long_layers = sum(
+        1 for i in range(cfg.num_layers) if i % LONG_LAYER_STRIDE == LONG_LAYER_STRIDE - 1 or i == cfg.num_layers - 1
+    )
+    return lm_flops_per_token(
+        hidden_dim=cfg.hidden_dim,
+        intermediate_dim=cfg.intermediate_dim,
+        num_layers=cfg.num_layers,
+        num_kv_heads=cfg.num_kv_heads,
+        num_heads=cfg.num_heads,
+        head_dim=cfg.inferred_head_dim,
+        seq_len=seq_len,
+        vocab_size=vocab_size,
+        glu=True,
+        num_experts=cfg.num_experts,
+        num_experts_per_tok=cfg.num_experts_per_token,
+        num_shared_experts=1,
+        shared_intermediate_dim=cfg.shared_expert_intermediate_dim,
+        sliding_window=cfg.sliding_window,
+        num_global_layers=num_long_layers,
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -198,7 +225,7 @@ def main() -> None:
         Pos = model_cfg.max_Pos.resize(seq_len)
         Vocab = Axis("vocab", model_cfg.vocab_size)
         model_key, training_key = jrandom.split(jrandom.PRNGKey(trainer_cfg.seed))
-        flops_per_example = 3 * model_cfg.flops_per_token(Vocab.size, Pos.size) * Pos.size
+        flops_per_example = 3 * snowball_flops_per_token(model_cfg, Vocab.size, Pos.size) * Pos.size
 
         trainer.add_hook(callbacks.pbar_logger(total=args.steps), every=1)
         trainer.add_hook(callbacks.log_step_info(args.steps, trainer_cfg.batch_schedule), every=1)

@@ -60,7 +60,6 @@ from levanter.grug.sharding import (
 from levanter.layers.attention import AttentionMask as LmHeadAttentionMask
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.utils.activation import ActivationFunctionEnum
-from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.logging import silence_transformer_nag
 
 
@@ -137,8 +136,6 @@ def validate_single_name_config(serialized: dict, config: Any) -> None:
 _GATED_NORM_RANK = 128
 _ROUTING_RENORM_SUM = 2.5
 _EP_CAPACITY_FACTOR = 1.0
-# Long (full-causal, NoPE) layers are every 4th layer plus the last one.
-_LONG_LAYER_STRIDE = 4
 _QK_RMS_NORM_EPS = 1e-6  # q/k rms_norm uses the function default 1e-6, NOT layer_norm_eps
 # June 67B qk_mult (YaRN mscale 1.3*(0.1*ln(65536/8192)+1)); used as the field default and the
 # from_hf_config fallback so the two never drift. Real grug_moe exports always carry qk_mult.
@@ -267,25 +264,6 @@ class SnowballConfig(HFCompatConfig):
         # over raw Grug PartitionSpecs, which only lower under an AxisType.Explicit mesh.
         return True
 
-    def flops_per_token(self, vocab_size: int, context_length: int) -> float:
-        return lm_flops_per_token(
-            hidden_dim=self.hidden_dim,
-            intermediate_dim=self.intermediate_dim,
-            num_layers=self.num_layers,
-            num_kv_heads=self.num_kv_heads,
-            num_heads=self.num_heads,
-            head_dim=self.inferred_head_dim,
-            seq_len=context_length,
-            vocab_size=vocab_size,
-            glu=True,
-            num_experts=self.num_experts,
-            num_experts_per_tok=self.num_experts_per_token,
-            num_shared_experts=1,
-            shared_intermediate_dim=self.shared_expert_intermediate_dim,
-            sliding_window=self.sliding_window,
-            num_global_layers=int(long_layer_schedule(self.num_layers).sum()),
-        )
-
     @classmethod
     def from_hf_config(cls, hf_config: HfConfig) -> "SnowballConfig":
         _assert_snowball_recipe(hf_config)
@@ -384,12 +362,6 @@ def _assert_snowball_recipe(hf_config: HfConfig) -> None:
                 f"snowball pins {flag}=True (June recipe); checkpoint has {flag}={val!r}. "
                 "Off-recipe Grug variants need their own named snapshot."
             )
-
-
-def long_layer_schedule(num_layers: int) -> np.ndarray:
-    """June recipe: every 4th layer and the last one run full-causal NoPE attention; the rest are windowed."""
-    idx = np.arange(num_layers)
-    return ((idx % _LONG_LAYER_STRIDE) == _LONG_LAYER_STRIDE - 1) | (idx == num_layers - 1)
 
 
 # --- Layers (faithful array-first snapshot of experiments/grug/moe/model.py) --------------------
@@ -721,8 +693,10 @@ class SnowballTransformer(eqx.Module):
         # buffers at a time. Unrolling keeps every layer's buffers live simultaneously (temp scales
         # linearly with depth), which OOMs the 67B on 8xH100. The stacked blocks + per-layer long
         # schedule feed a single uniform scan body (June recipe: long layers = every 4th + the last).
+        num_blocks = len(self.blocks)
         stacked = jax.tree_util.tree_map(lambda *layers: jnp.stack(layers), *self.blocks)
-        long_schedule = jnp.asarray(long_layer_schedule(len(self.blocks)))
+        idx = jnp.arange(num_blocks)
+        long_schedule = ((idx % 4) == 3) | (idx == num_blocks - 1)
 
         def _scan_layer(carry: Float[Array, "B S D"], layer_and_flag) -> tuple[Float[Array, "B S D"], None]:
             layer, use_long = layer_and_flag
