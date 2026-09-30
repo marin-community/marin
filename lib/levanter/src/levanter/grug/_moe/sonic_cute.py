@@ -32,6 +32,7 @@ from levanter.grug._moe.common import (
     _interleave_gate_up,
     _prepare_moe_dispatch,
     _swiglu_gate_up_backward,
+    _unpack_pairs_u32,
     _zero_dropped_assignments,
     _zero_inactive_grouped_rows,
 )
@@ -132,14 +133,18 @@ def _expert_mlp_quack_wgrad_backward(res, dy):
     """The backward of ``_expert_mlp_quack_wgrad``, plus each row's ``<y, dy>``.
 
     ``y = h @ W2`` row by row, so ``<y, dy> = <h, dy @ W2^T> = <h, dh>``: the backward already
-    holds both factors and never needs ``y``. The dot accumulates in fp32. Rows past ``cu[-1]``
-    are unspecified in every row-indexed output.
+    holds both factors and never needs ``y``. ``h`` is recomputed in fp32 from the gate/up
+    preactivations that the SwiGLU backward reads anyway, so XLA fuses the row dot into that
+    pass; reading the saved ``h`` instead costs a separate pass and more peak memory. The dot
+    accumulates in fp32. Rows past ``cu[-1]`` are unspecified in every row-indexed output.
 
     Returns ``(dx, dw13_il, dw2, output_dot_cotangent)``.
     """
     x_dispatch, w13_il, moe_w2, gu, h, cu = res
     dh = quack_grouped_gemm(dy, moe_w2, cu, b_major="k", **_QUACK_GROUPED_KW)
-    output_dot_cotangent = jnp.sum(dh.astype(jnp.float32) * h.astype(jnp.float32), axis=-1)
+    gate, up = _unpack_pairs_u32(gu)
+    h_fp32 = jax.nn.silu(gate.astype(jnp.float32)) * up.astype(jnp.float32)
+    output_dot_cotangent = jnp.sum(dh.astype(jnp.float32) * h_fp32, axis=-1)
     dw2 = quack_grouped_wgrad(h, dy, cu, **_QUACK_WGRAD_KW)
     d_gu = _swiglu_gate_up_backward(gu, dh)
     dx = quack_grouped_gemm(d_gu, w13_il, cu, b_major="k", **_QUACK_GROUPED_KW)

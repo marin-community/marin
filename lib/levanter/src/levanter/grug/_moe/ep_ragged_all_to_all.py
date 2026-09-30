@@ -465,6 +465,10 @@ def _routed_experts(
     """Dispatch the sorted rows to their experts, run the expert MLP, return and combine.
 
     ``weights`` must be zero for every assignment that ``routing.accepted`` marks as dropped.
+    An accepted assignment whose weight is exactly zero gets a zero weight gradient, where the
+    exact gradient is ``<dout, y>``: its output cotangent ``w * dout`` carries no information.
+    Router weights that are sigmoids or softmaxes reach zero only below about 1e-38, where the
+    derivative with respect to the logit is as small, so the router logits' gradient is unchanged.
 
     The backward computes the routing-weight gradient on the expert side. Each output row is
     ``y = h @ W2`` and its cotangent there is ``dy = w * dout``, so ``<dout, y> = <h, dh> / w``

@@ -68,7 +68,9 @@ def _inputs(case, mesh):
     elif case["routing"] == "one_hot":
         scores[:, 0] += 100.0
     selected = np.argsort(-scores, axis=1)[:, :topk].astype(np.int32)
-    logits = np.take_along_axis(scores, selected, axis=1)
+    # Weights from their own logits: the routing boost above would drive most weights to exact
+    # zero in bf16, a case the expert-side weight gradient maps to zero by design.
+    logits = rng.standard_normal((tokens, topk), dtype=np.float32)
     weights = np.exp(logits - logits.max(axis=1, keepdims=True))
     weights /= weights.sum(axis=1, keepdims=True)
     valid = np.ones((tokens,), dtype=bool)

@@ -14,8 +14,6 @@ Variants:
   control:   main's module, full remat.
   unfilled:  inverse permutation + chained cotangents + unfilled buffers, full remat.
   candidate: the branch module, remat saving the MoE output (the hero's new policy).
-  candidate_s_from_gu: candidate with <h, dh> computed from the gate/up preactivations instead of
-             the saved SwiGLU output, to see whether XLA fuses it into the SwiGLU backward.
 
 Usage (GB200x4): python autoresearch/loop-260930-mfu30/b/scan_compare.py
 """
@@ -37,8 +35,6 @@ import numpy as np
 from jax.ad_checkpoint import checkpoint_name
 from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
-from levanter.grug._moe.common import _swiglu_gate_up_backward, _unpack_pairs_u32
-from levanter.grug._moe.quack_moe_cute import quack_grouped_gemm, quack_grouped_wgrad
 
 HERE = pathlib.Path(__file__).resolve().parent
 LAYERS = 3
@@ -60,20 +56,6 @@ def _load_frozen(name: str):
 _BACKWARD = sonic_cute._expert_mlp_quack_wgrad_backward
 
 
-def _backward_s_from_gu(res, dy):
-    """As `_expert_mlp_quack_wgrad_backward`, recomputing h from gu for the row dot."""
-    x_dispatch, w13_il, moe_w2, gu, h, cu = res
-    dh = quack_grouped_gemm(dy, moe_w2, cu, b_major="k", **sonic_cute._QUACK_GROUPED_KW)
-    gate, up = _unpack_pairs_u32(gu)
-    h_recomputed = jax.nn.silu(gate.astype(jnp.float32)) * up.astype(jnp.float32)
-    output_dot = jnp.sum(dh.astype(jnp.float32) * h_recomputed, axis=-1)
-    dw2 = quack_grouped_wgrad(h, dy, cu, **sonic_cute._QUACK_WGRAD_KW)
-    d_gu = _swiglu_gate_up_backward(gu, dh)
-    dx = quack_grouped_gemm(d_gu, w13_il, cu, b_major="k", **sonic_cute._QUACK_GROUPED_KW)
-    dw13_il = quack_grouped_wgrad(x_dispatch, d_gu, cu, **sonic_cute._QUACK_WGRAD_KW)
-    return dx, dw13_il, dw2, output_dot
-
-
 # name -> (module-local function, remat policy, QuACK backward)
 VARIANTS = {
     "control": (_load_frozen("control_ep_ragged_all_to_all")._moe_mlp_ep_ragged_a2a_local, None, _BACKWARD),
@@ -82,11 +64,6 @@ VARIANTS = {
         candidate_module._moe_mlp_ep_ragged_a2a_local,
         jax.checkpoint_policies.save_only_these_names(MOE_OUTPUT),
         _BACKWARD,
-    ),
-    "candidate_s_from_gu": (
-        candidate_module._moe_mlp_ep_ragged_a2a_local,
-        jax.checkpoint_policies.save_only_these_names(MOE_OUTPUT),
-        _backward_s_from_gu,
     ),
 }
 
