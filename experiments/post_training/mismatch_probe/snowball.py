@@ -60,12 +60,17 @@ def snowball_recipe(
     routing: Routing,
     request_window_tokens: int,
     response_tokens: int,
+    capture: bool = False,
+    timing_modes: tuple[str, ...] = (),
 ) -> str:
     replay = campaign is Campaign.MISMATCH or routing is not Routing.NATIVE
-    numerics = campaign is Campaign.MISMATCH
-    modes = NUMERICS_MODES if numerics else REPLAY_MODES if replay else ()
+    modes = NUMERICS_MODES if campaign is Campaign.MISMATCH else REPLAY_MODES if replay else ()
     probe = probe_block(
-        settings, router_replay=replay, trainer_modes=modes, capture_layers=CAPTURE_LAYERS if numerics else ()
+        settings,
+        router_replay=replay,
+        trainer_modes=modes,
+        capture_layers=CAPTURE_LAYERS if capture else (),
+        timing_modes=timing_modes,
     )
     probe["generator"]["sampling_params"]["seed"] = settings.seed
     config = {
@@ -149,6 +154,8 @@ def build_spec(
     batch_size: int,
     request_window_tokens: int,
     response_tokens: int,
+    capture: bool = False,
+    timing_modes: tuple[str, ...] = (),
 ) -> tuple[SkyRLSpec, IrisSkyRLExecution]:
     if campaign is Campaign.MISMATCH and (settings.updates != (0,) or routing is not Routing.NATIVE):
         raise ValueError("the mismatch campaign scores starting weights in all modes without training updates")
@@ -165,6 +172,8 @@ def build_spec(
                 routing=routing,
                 request_window_tokens=request_window_tokens,
                 response_tokens=response_tokens,
+                capture=capture,
+                timing_modes=timing_modes,
             ),
             runtime=SkyRLRuntime(profile=SNOWBALL_RECIPE.profile),
             model=ArtifactHfModel(
@@ -230,6 +239,8 @@ def build_run(**kwargs) -> ArtifactStep[SkyRLRun]:
 @click.option("--keep-fraction", type=click.FloatRange(min=0, max=1), default=0.5, show_default=True)
 @click.option("--rescore-prefix-cache", "cache_mode", type=click.Choice(("off", "on", "both")), default="off")
 @click.option("--reuse-probe")
+@click.option("--capture/--no-capture", default=False, help="Record trainer regions at the capture layers.")
+@click.option("--timing-mode", "timing_modes", multiple=True, help="Time forward + backward for this mode.")
 @rl_build_options
 def main(
     campaign: str,
@@ -249,6 +260,8 @@ def main(
     keep_fraction: float,
     cache_mode: str,
     reuse_probe: str | None,
+    capture: bool,
+    timing_modes: tuple[str, ...],
 ) -> ArtifactStep[SkyRLRun]:
     selected = Campaign(campaign)
     return build_run(
@@ -272,6 +285,8 @@ def main(
         batch_size=batch_size,
         request_window_tokens=request_window_tokens,
         response_tokens=response_tokens,
+        capture=capture,
+        timing_modes=timing_modes,
     )
 
 

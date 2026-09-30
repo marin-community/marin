@@ -50,7 +50,6 @@ REPLAY_MODES = ("router_replay", "router_replay_response", "router_replay_filter
 # response-only), and replay of the prefill re-read's routes (the prefill metric and its placebo).
 NUMERICS_MODES = (
     "native_again",
-    "native_capture",
     "router_replay",
     "router_replay_response",
     "repeat_replay",
@@ -92,13 +91,15 @@ def probe_block(
     router_replay: bool = True,
     trainer_modes: tuple[str, ...] = REPLAY_MODES,
     capture_layers: tuple[int, ...] = (),
+    timing_modes: tuple[str, ...] = (),
 ) -> dict:
     """Render fixed-token collection settings for a synchronous Megatron recipe.
 
-    Sampling is the full distribution at temperature one. MarinSkyRL applies the
-    behavior-logprob sampling program to probe runs, which sets ``min_tokens`` to zero,
-    so vLLM reports the probability of the distribution the trainer scores.
+    Capture layers add the native_capture mode. Sampling is the full distribution at temperature
+    one; MarinSkyRL applies the behavior-logprob sampling program to probe runs, which sets
+    ``min_tokens`` to zero, so vLLM reports the probability of the distribution the trainer scores.
     """
+    modes = (*trainer_modes, "native_capture") if capture_layers else trainer_modes
     return {
         "trainer": {
             "policy": {"megatron_config": {"moe_router_replay": router_replay}},
@@ -109,11 +110,12 @@ def probe_block(
                 "archive_uri": None,
                 "reuse_probe": settings.reuse_probe,
                 "score_after_updates": list(settings.updates),
-                "extra_trainer_modes": list(trainer_modes),
+                "extra_trainer_modes": list(modes),
                 "filtered_replay": {"keep_fraction": settings.keep_fraction},
                 "rescore_prefix_cache": settings.cache_mode,
                 "reread_again": settings.cache_mode != "on",
                 "capture_layers": list(capture_layers),
+                "timing_modes": list(timing_modes),
             },
         },
         "generator": {
@@ -143,6 +145,7 @@ def tiny_grug_recipe(
     warmup: bool,
     trainer_modes: tuple[str, ...] = REPLAY_MODES,
     capture_layers: tuple[int, ...] = (),
+    timing_modes: tuple[str, ...] = (),
 ) -> str:
     """Render one role-independent training recipe for the selected arm."""
     config = {
@@ -186,7 +189,7 @@ def tiny_grug_recipe(
         },
         "data": {"kind": "parquet", "train_data": [], "val_data": []},
     }
-    probe = probe_block(settings, trainer_modes=trainer_modes, capture_layers=capture_layers)
+    probe = probe_block(settings, trainer_modes=trainer_modes, capture_layers=capture_layers, timing_modes=timing_modes)
     probe["trainer"]["mismatch_probe"]["enabled"] = not warmup
     config = merge({}, config, probe)
     return yaml.safe_dump(config, sort_keys=False)
@@ -202,6 +205,7 @@ def build_arms(
     warmup: bool,
     trainer_modes: tuple[str, ...] = REPLAY_MODES,
     capture_layers: tuple[int, ...] = (),
+    timing_modes: tuple[str, ...] = (),
 ) -> dict[str, ArtifactStep[SkyRLRun]]:
     """Build separate training artifacts for arms sharing model and data inputs."""
     model = ArtifactStep.adopt(
@@ -254,6 +258,7 @@ def build_arms(
                     warmup=warmup,
                     trainer_modes=trainer_modes,
                     capture_layers=capture_layers,
+                    timing_modes=timing_modes,
                 ),
                 runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
                 model=ArtifactHfModel(
@@ -290,6 +295,7 @@ def build_arms(
 @click.option("--rescore-prefix-cache", "cache_mode", type=click.Choice(("off", "on", "both")), default="off")
 @click.option("--trainer-mode", "trainer_modes", multiple=True, default=REPLAY_MODES, show_default=True)
 @click.option("--capture-layer", "capture_layers", multiple=True, type=int)
+@click.option("--timing-mode", "timing_modes", multiple=True)
 @rl_build_options
 def main(
     arm_names: tuple[str, ...],
@@ -307,6 +313,7 @@ def main(
     cache_mode: str,
     trainer_modes: tuple[str, ...],
     capture_layers: tuple[int, ...],
+    timing_modes: tuple[str, ...],
 ) -> dict[str, ArtifactStep[SkyRLRun]]:
     settings = ProbeSettings(
         seed=seed,
@@ -327,6 +334,7 @@ def main(
         warmup=warmup,
         trainer_modes=trainer_modes,
         capture_layers=capture_layers,
+        timing_modes=timing_modes,
     )
 
 
