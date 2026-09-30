@@ -12,7 +12,7 @@ Task generation includes repository discovery, input curation, model-assisted au
 | --- | --- |
 | [Requirements](requirements.md) | Scientific, sandbox, runtime and deterministic-reward requirements |
 | [Repository discovery](discovery.md) | Find and inspect tools, pipelines, tutorials and paper-analysis repositories |
-| [Discovery results](01-discovery/index.md) | The 95-source inventory, adoption correlations and GitHub topic analysis |
+| [Discovery results](01-discovery/index.md) | The original 95-source inventory and four rankings expanded from 100 to 200, with overlap, topic diversity and source types |
 | [Task authoring](task-authoring.md) | Convert sources into tasks and generate meaningful variations |
 | [Validation](validation.md) | Execute references, challenge graders, trial tasks and decide release readiness |
 | [Storage and publication](storage.md) | Public artifacts, release layout, provenance and solver isolation |

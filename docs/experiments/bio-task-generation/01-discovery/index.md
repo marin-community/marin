@@ -9,6 +9,10 @@ evidence; no task authoring or execution validation is claimed.
 
 | Page or artifact | Contents |
 | --- | --- |
+| [Expansion to 200 per ranking](ranking-expansion.md) | Marginal diversity and overlap: 672 distinct sources, including 337 new to the combined baseline |
+| [Additional ranked sources](ranking-additions.md) | Ranks 101–200 for each approach, with scores, GitHub stars, topics and source types |
+| [Four top-100 rankings](ranking-comparison.md) | Overlap, topic diversity and source types across Bioconda, Bioconductor, PyPI and GitHub |
+| [Ranked source lists](ranking-lists.md) | All 400 ranking positions, covering 335 distinct sources |
 | [Inventory and source screening](#candidate-inventory) | The 95 candidates, their scientific uses and adoption measurements |
 | [Adoption analysis](adoption.md) | Correlations, metric coverage, sensitivity checks and limitations |
 | [GitHub topics](topics.md) | Observed topic strings, frequencies and search ideas |
@@ -19,7 +23,8 @@ The stage number places discovery before source inspection, task authoring and
 validation. Within this stage, filenames describe the artifacts. Observation
 dates and cohort membership are recorded in the data and reports. Keep a dated
 copy of the cohort and its measurements before replacing them with a larger
-sample; comparisons between 95 and 200 candidates need both inputs.
+sample. The original 95-source inventory, four top-100 lists and four top-200
+lists are retained separately; the expansion compares the latter two.
 
 ## September 29, 2026 inventory
 
@@ -43,8 +48,9 @@ preserves its July 28 adoption evidence. Its approximate global ranking is not
 carried forward. The initial screen displayed the top 110 package rows from
 each download table, then manually selected additions and adjacent tools.
 The 95 entries form a reviewed batch, not a strict top-95 ranking or a scientific
-coverage threshold. There is no composite adoption score. This comparison holds
-the cohort fixed before choosing how to expand it to 200 and inspect diversity.
+coverage threshold. There is no composite adoption score. This adoption comparison
+holds the 95-source cohort fixed; the separate ranking analyses select sources
+from broader pools and compare diversity at depths of 100 and 200.
 
 Discovery accepts public source repositories and versioned source archives.
 A Git repository is not required. Record the source URL, revision or release,

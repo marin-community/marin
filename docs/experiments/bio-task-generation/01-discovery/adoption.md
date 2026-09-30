@@ -51,6 +51,11 @@ Two further checks leave the broad ranking result similar:
 - Using 90 days of PyPI counts gives Bioconda/PyPI ρ = 0.36 and stars/PyPI
   ρ = 0.34 (both n = 19), versus 0.35 and 0.29 for 30 days.
 
+The 90-day window crosses PyPI's [August 24, 2026 download-count definition
+change](https://blog.pypi.org/posts/2026-08-31-download-counts/), which stopped
+counting metadata requests. The 30-day window starts after that change. Treat
+the longer window as a descriptive sensitivity check across a measurement change.
+
 Role composition matters. Excluding entries labeled scientific libraries changes
 stars/PyPI ρ to 0.54 (n = 11) and stars/Bioconductor ρ to 0.27 (n = 12).
 Those smaller subsets are descriptive checks, not evidence that one metric is

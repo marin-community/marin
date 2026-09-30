@@ -1,0 +1,729 @@
+tag,mapped_domain,bioconda,bioconductor,pypi,github
+2d,,0,0,1,1
+3-clause-bsd,,0,0,1,0
+3d,,0,0,1,1
+3d-convolutional-network,,0,0,0,1
+3d-images,Bioimaging,0,0,1,0
+3d-printing,,0,0,0,1
+3d-slicer,Bioimaging,0,0,0,1
+4d-lung,,0,0,0,1
+adapter,,1,0,0,1
+adapter-trimming,Sequence processing,1,0,0,0
+afni-brik-head,Neuroscience & behavior,0,0,1,0
+agent,,0,0,0,1
+agent-skills,,0,0,0,1
+ai,,0,0,0,2
+ai-scientist,,0,0,0,1
+ai4science,,0,0,0,1
+algorithm,,0,0,1,0
+algorithms,,1,0,1,0
+alignment,Sequence processing,3,0,0,1
+alignment-path,Sequence processing,0,0,1,0
+alignments,Sequence processing,1,0,0,0
+amplicon,Microbiome & metagenomics,2,0,0,0
+analyses,,0,0,1,0
+analysis,,1,0,0,1
+analysis-pipeline,,0,0,0,1
+animal-pose-estimation,Neuroscience & behavior,0,0,0,1
+anndata,Single-cell & spatial omics,0,0,3,1
+annotation,,1,1,0,0
+annotations,,0,1,0,0
+api,,0,0,2,0
+api-client,,0,0,1,0
+artificial-intelligence,,0,0,0,1
+assembler,Genome assembly & annotation,1,0,0,0
+assembly,Genome assembly & annotation,1,0,0,0
+ast,,0,0,1,0
+atac-seq,Gene regulation,0,0,0,1
+attention-gates,,0,0,0,1
+attention-mechanisms,,0,0,0,1
+attention-model,,0,0,0,1
+augmentation,,0,0,0,1
+automl,,0,0,0,1
+awesome,,0,0,0,2
+awesome-list,,0,0,0,4
+awesome-lists,,0,0,0,1
+aws,,1,0,0,1
+bam,Sequence processing,1,0,0,0
+bbcms,Sequence processing,1,0,0,0
+bbduk,Sequence processing,1,0,0,0
+bbmap,Sequence processing,1,0,0,0
+bbmerge,Sequence processing,1,0,0,0
+bbnorm,Sequence processing,1,0,0,0
+bcf,Sequence processing,1,0,0,0
+bci,Neuroscience & behavior,0,0,0,1
+behavior-analysis,Neuroscience & behavior,0,0,0,1
+benchmark,,0,0,0,1
+bennett-acceptance-ratio,Protein structure & biophysics,0,0,1,0
+bgzf,Sequence processing,1,0,1,0
+bids,Neuroscience & behavior,0,0,1,0
+big-data,,0,0,1,0
+bigbed,,1,0,1,0
+bigwig,Gene regulation,1,0,1,0
+binding,Protein structure & biophysics,0,0,0,1
+binding-prediction,,0,0,0,1
+bingo,,0,0,1,0
+bioc,,0,1,0,0
+biochemistry,Protein structure & biophysics,0,0,1,0
+bioconda,,1,0,1,1
+bioconductor,,3,9,0,0
+bioconductor-package,,18,35,0,0
+bioconductor-packages,,0,1,0,0
+biocuration,Systems biology & ontologies,0,0,1,0
+bioimage-analysis,,0,0,0,1
+bioimage-informatics,,0,0,0,1
+bioinfomatics,General biology & multi-omics,1,0,1,0
+bioinformatics,General biology & multi-omics,32,3,22,21
+biology,General biology & multi-omics,1,0,0,3
+biomart,Genome assembly & annotation,0,1,0,0
+biomedical,,0,0,0,1
+biomedical-image-processing,Bioimaging,0,0,1,0
+biomedical-imaging,,0,0,0,1
+biomedicine,,0,0,0,1
+biopragmatics,Systems biology & ontologies,0,0,1,0
+biopython,General biology & multi-omics,0,0,1,1
+bioregistry,Systems biology & ontologies,0,0,2,0
+biosensor,Neuroscience & behavior,0,0,0,1
+biosensors,Neuroscience & behavior,0,0,0,1
+biosignals,Neuroscience & behavior,0,0,1,2
+blast,Sequence processing,1,0,0,1
+bloom-filter,,1,0,0,0
+brain,Neuroscience & behavior,0,0,0,1
+brain-computer-interface,Neuroscience & behavior,0,0,0,1
+brain-connectivity,Neuroscience & behavior,0,0,1,1
+brain-control,Neuroscience & behavior,0,0,0,1
+brain-imaging,Neuroscience & behavior,0,0,3,1
+brain-machine-interface,Neuroscience & behavior,0,0,0,1
+brain-mri,Neuroscience & behavior,0,0,1,1
+brainflow,Neuroscience & behavior,0,0,0,1
+brainweb,Neuroscience & behavior,0,0,1,0
+brats2018,,0,0,0,1
+brats2019,,0,0,0,1
+c-plus-plus,,5,0,4,3
+callvariants,Sequence processing,1,0,0,0
+cancer-genomics,General biology & multi-omics,0,0,0,2
+cancer-imaging-research,Bioimaging,0,0,0,2
+cardiac,Neuroscience & behavior,0,0,1,1
+ccl,,0,0,1,0
+cclabel,,0,0,1,0
+ccp4,Protein structure & biophysics,0,0,1,0
+cell-analysis,,0,0,0,1
+cell-biology,General biology & multi-omics,0,0,1,1
+cell-clusters,Single-cell & spatial omics,0,0,0,1
+cell-design,General biology & multi-omics,0,0,1,0
+cell-differentiation,Single-cell & spatial omics,0,0,0,1
+cell-populations,Single-cell & spatial omics,0,0,0,1
+cell-segmentation,Bioimaging,0,0,1,2
+chemical-components,Cheminformatics & drug discovery,0,0,1,0
+chemical-data,Cheminformatics & drug discovery,0,0,1,1
+chemical-database,Cheminformatics & drug discovery,0,0,1,0
+chemical-toolbox,Cheminformatics & drug discovery,0,0,1,1
+cheminformatics,Cheminformatics & drug discovery,0,0,7,2
+chemistry,Cheminformatics & drug discovery,0,0,6,2
+chemoinformatics,Cheminformatics & drug discovery,0,0,0,1
+chimera,,1,0,0,0
+chip-seq,Gene regulation,1,0,0,0
+cif,Protein structure & biophysics,0,0,1,0
+cifti-2,Neuroscience & behavior,0,0,1,0
+cite-seq,Single-cell & spatial omics,0,0,1,1
+classification,,0,0,0,1
+claude,,0,0,0,1
+claude-skills,,0,0,0,1
+claudecode,,0,0,0,1
+clinical-research,Biomedical text & clinical data,0,0,0,1
+cloud,,1,0,0,1
+cloudman,Computing infrastructure,0,0,1,0
+clumpify,Sequence processing,1,0,0,0
+clustering,,2,1,0,2
+cnn,,0,0,0,1
+cobra,Systems biology & ontologies,0,0,1,0
+collection,,0,0,0,1
+common-workflow-language,Computing infrastructure,0,0,1,0
+commonwl,Computing infrastructure,0,0,2,0
+comparative-genomics,Genome assembly & annotation,1,0,0,0
+complex-heatmaps,,0,1,0,1
+compositional-data,Microbiome & metagenomics,0,0,1,0
+compression,,1,1,0,0
+computational-biology,General biology & multi-omics,1,0,4,3
+computational-chemistry,Cheminformatics & drug discovery,0,0,2,1
+computational-imaging,Bioimaging,0,0,0,1
+computational-pathology,,0,0,0,1
+computed-tomography,Bioimaging,0,0,0,1
+conda,,1,0,0,1
+connected-components,,0,0,1,0
+containers,,0,0,1,0
+convolutional-neural-networks,,0,0,0,2
+core-package,Computing infrastructure,18,33,0,0
+cornerstone,,0,0,0,1
+cpp,,1,0,1,1
+cram,Sequence processing,1,0,0,0
+cran,,0,0,0,1
+cross-platform,,1,0,1,1
+crystallography,Protein structure & biophysics,0,0,1,0
+ct,,0,0,0,2
+ct-denoising,,0,0,0,1
+custom-pipes,,0,0,0,1
+cwl,Computing infrastructure,0,0,2,0
+cython,,1,0,2,0
+cython-library,,0,0,2,0
+cython-wrapper,,0,0,1,0
+cytometry,General biology & multi-omics,0,0,1,0
+d3js,,1,0,0,0
+data-analysis,,0,0,1,2
+data-augmentation,,0,0,0,1
+data-format,,0,0,1,0
+data-formats,,0,0,1,0
+data-integration,,0,0,1,1
+data-science,,0,1,4,3
+data-structures,,0,0,1,0
+data-visualisation,,1,0,0,0
+data-visualization,,1,0,1,3
+data-warehouse,,1,0,0,0
+dataflow,,1,0,1,1
+dataflow-programming,,0,0,1,0
+dataset,,0,0,0,2
+datasets,,0,0,0,1
+ddpm,,0,0,0,1
+decathlon,,0,0,0,1
+decision-tree,,0,0,1,0
+decoding,Neuroscience & behavior,0,0,1,1
+deep-generative-model,,0,0,1,1
+deep-learning,,0,0,1,16
+deep-neural-network,,0,0,0,1
+deep-neural-networks,,0,0,0,1
+deeplabcut,Neuroscience & behavior,0,0,0,1
+deeplearning,,0,0,0,1
+deepvariant,Genetic variation,0,0,0,1
+denoising,,0,0,0,1
+denoising-diffusion,,0,0,0,1
+densenet,,0,0,0,1
+detection,,0,0,0,1
+dicom,Bioimaging,0,0,1,3
+dicom-viewer,,0,0,0,2
+differential-expression,Gene expression,0,0,0,1
+diffusion,,0,0,0,1
+diffusion-models,,0,0,0,2
+digital-pathology,,0,0,0,1
+dihedral-angles,Protein structure & biophysics,0,0,1,0
+dimensionality-reduction,,0,0,0,1
+discovery,,1,0,0,0
+disease-ontology,Systems biology & ontologies,0,1,0,0
+dltk,Bioimaging,0,0,0,1
+dltk-model-zoo,Bioimaging,0,0,0,1
+dna,Sequence processing,2,0,2,4
+docker,,1,0,0,2
+docking,Cheminformatics & drug discovery,0,0,0,1
+dotnet,,0,0,1,0
+drug-design,Cheminformatics & drug discovery,0,0,2,0
+drug-discovery,Cheminformatics & drug discovery,0,0,5,5
+drug-target-interactions,Cheminformatics & drug discovery,0,0,1,0
+duplication,,1,0,0,1
+dynamic-systems,,0,0,0,1
+ecat,,0,0,1,0
+ecg,Neuroscience & behavior,0,0,1,2
+ecog,Neuroscience & behavior,0,0,1,1
+eda,Neuroscience & behavior,0,0,1,1
+edit-distance,,0,0,1,0
+eeg,Neuroscience & behavior,0,0,2,4
+eeg-analysis,Neuroscience & behavior,0,0,0,1
+electrocorticography,Neuroscience & behavior,0,0,1,1
+electroencephalography,Neuroscience & behavior,0,0,1,1
+elegans,Neuroscience & behavior,0,0,0,1
+emg,Neuroscience & behavior,0,0,1,2
+emg-signal,Neuroscience & behavior,0,0,0,1
+enrichment-analysis,Systems biology & ontologies,0,4,1,0
+ensembl,Genome assembly & annotation,0,2,0,0
+entropy,,0,0,1,1
+eog,Neuroscience & behavior,0,0,1,1
+equilibrium,Protein structure & biophysics,0,0,1,0
+equivariance,,0,0,0,1
+error-correction,,1,0,0,0
+evolution,Phylogenetics & evolution,1,0,0,0
+experiment,,0,0,0,1
+experiment-control,Neuroscience & behavior,0,0,0,1
+experimental-design,General biology & multi-omics,0,0,0,1
+exporter,,0,1,0,0
+expression-browser,Gene expression,1,0,0,0
+extended-bridge-sampling,Protein structure & biophysics,0,0,1,0
+fasta,Sequence processing,3,0,1,1
+fastmri,,0,0,0,1
+fastmri-challenge,,0,0,0,1
+fastmri-dataset,,0,0,0,1
+fastq,Sequence processing,4,0,0,2
+fcs,General biology & multi-omics,0,0,1,0
+fcs-files,General biology & multi-omics,0,0,1,0
+feature-detectors,,0,0,0,1
+feature-extraction,,0,0,0,1
+federated-learning,,0,0,0,1
+few-shot-learning,,0,0,0,1
+fhir,Biomedical text & clinical data,0,0,1,0
+fhir-client,Biomedical text & clinical data,0,0,1,0
+fhir-parser,Biomedical text & clinical data,0,0,1,0
+filter,,1,0,0,1
+filter-plugin,,1,1,0,0
+filtering,,1,0,0,1
+fingerprints,Cheminformatics & drug discovery,0,0,1,0
+flow-cytometry,General biology & multi-omics,0,0,1,0
+flow-cytometry-analysis,General biology & multi-omics,0,0,1,0
+flow-cytometry-files,General biology & multi-omics,0,0,1,0
+flux,Systems biology & ontologies,0,0,1,0
+fm-index,Sequence processing,1,0,0,1
+fmri,Neuroscience & behavior,0,0,1,1
+foundation-model,,0,0,0,1
+free-energies,Protein structure & biophysics,0,0,1,0
+gamma-poisson,,0,1,0,0
+gan,,0,0,0,1
+gatk,Genetic variation,1,0,0,1
+gdc,General biology & multi-omics,0,1,0,0
+gene,General biology & multi-omics,1,0,0,0
+gene-expression,Gene expression,1,0,0,1
+gene-expression-profiles,Gene expression,0,0,0,1
+gene-finding,Genome assembly & annotation,0,0,1,0
+gene-ontology,Systems biology & ontologies,0,1,0,0
+gene-set-enrichment,Systems biology & ontologies,0,1,0,0
+generation,,0,0,0,1
+generative-adversarial-network,,0,0,0,1
+generative-models,,0,0,0,1
+genome,General biology & multi-omics,3,0,1,2
+genome-analysis,General biology & multi-omics,1,0,2,0
+genome-annotation,Genome assembly & annotation,1,0,0,0
+genome-assembly,Genome assembly & annotation,1,0,0,0
+genome-browser,Genome assembly & annotation,1,0,0,0
+genomicranges,Genome assembly & annotation,1,1,1,0
+genomics,General biology & multi-omics,9,3,10,8
+genomics-visualization,Genome assembly & annotation,1,0,0,0
+ggplot2,,0,1,0,0
+gifti,Neuroscience & behavior,0,0,1,0
+glm,,0,1,0,0
+go,Systems biology & ontologies,0,1,0,0
+golang,,1,0,0,1
+gpt,,0,0,0,1
+grand-challenge,,0,0,0,1
+graph,,0,0,0,1
+graph-neural-networks,,0,0,0,1
+groovy,,1,0,0,2
+gsea,Systems biology & ontologies,0,1,1,0
+hacktoberfest,,1,0,3,7
+haplotype,Genetic variation,1,0,0,0
+hdf,Computing infrastructure,0,0,1,0
+hdf5,Computing infrastructure,3,3,1,0
+hdf5-library,Computing infrastructure,1,1,0,0
+healthcare-imaging,,0,0,0,1
+heart-rate,Neuroscience & behavior,0,0,1,1
+heatmap,,0,1,0,1
+hello,,1,0,0,1
+hidden-markov-model,,0,0,1,0
+histology,,0,0,0,1
+hmmer,Sequence processing,0,0,1,0
+hmmer3,Sequence processing,0,0,1,0
+hpc,,1,0,0,1
+hrv,Neuroscience & behavior,0,0,1,1
+htslib,Sequence processing,3,0,2,0
+human-cell-atlas,Single-cell & spatial omics,0,3,1,2
+ibsi,Bioimaging,0,0,0,1
+illumina,Sequence processing,2,0,0,1
+image,,0,0,0,1
+image-analysis,Bioimaging,0,0,1,2
+image-classification,,0,0,0,1
+image-dataset,,0,0,0,1
+image-guided-therapy,Bioimaging,0,0,0,1
+image-processing,Bioimaging,0,0,1,2
+image-registration,Bioimaging,0,0,0,1
+image-segmentation,Bioimaging,0,0,0,2
+imagej,,0,0,0,1
+imaging,,0,0,0,1
+imaging-informatics,,0,0,0,1
+immunology,General biology & multi-omics,0,0,1,0
+inchi,Cheminformatics & drug discovery,0,0,1,0
+indexing,,1,0,1,0
+indigo,Cheminformatics & drug discovery,0,0,1,0
+insight-toolkit,,0,0,0,1
+integrative-analysis,General biology & multi-omics,0,1,0,0
+intelligence,,0,0,0,1
+interval-tree,,0,0,1,0
+iseg,,0,0,0,1
+iseg-challenge,,0,0,0,1
+itk,Bioimaging,0,0,0,2
+java,,3,0,1,0
+javafx,,0,0,0,1
+javascript,,0,0,0,3
+kegg,Systems biology & ontologies,0,1,0,0
+keras,,0,0,0,2
+keypoint-detection,,0,0,0,1
+keypoint-tracking,,0,0,0,1
+kitware,,0,0,0,1
+kokkos,,0,0,0,1
+labeling-algorithms,,0,0,1,0
+labeling-tool,,0,0,0,1
+lammps,Protein structure & biophysics,0,0,0,1
+levehnstein-distance,,0,0,1,0
+library,,0,0,1,0
+ligands,Cheminformatics & drug discovery,0,0,1,0
+linclust,,1,0,0,1
+linguistics,,0,0,0,1
+linked-reads,Genetic variation,1,0,0,0
+linkml,,0,0,2,0
+linux,,0,0,1,0
+list,,0,0,0,1
+looking-for-maintainer,,0,1,0,0
+machine-learning,,0,0,5,12
+macos,,0,0,1,0
+magnetoencephalography,Neuroscience & behavior,0,0,1,1
+manipulation,,1,0,0,1
+mappings,,0,0,1,0
+mass-spectrometry,Proteomics,0,1,2,0
+materials-science,,0,0,0,2
+matlab,,0,0,0,1
+matrix-library,Computing infrastructure,0,1,0,0
+mbar,Protein structure & biophysics,0,0,1,0
+mdanalysis,Protein structure & biophysics,0,0,1,1
+mdtraj,Protein structure & biophysics,0,0,1,0
+medical,,0,0,0,6
+medical-image-analysis,Bioimaging,0,0,0,2
+medical-image-computing,Bioimaging,0,0,0,3
+medical-image-processing,Bioimaging,0,0,0,5
+medical-image-segmentation,,0,0,0,2
+medical-image-synthesis,,0,0,0,1
+medical-imaging,Bioimaging,0,0,0,18
+medical-informatics,,0,0,0,1
+medical-llms,,0,0,0,1
+medical-research,Biomedical text & clinical data,0,0,0,1
+medical-vlms,,0,0,0,1
+medicinal-chemistry,Cheminformatics & drug discovery,0,0,1,0
+medmnist,Bioimaging,0,0,0,1
+meg,Neuroscience & behavior,0,0,1,2
+merging,,1,0,0,1
+metabarcoding,Microbiome & metagenomics,2,0,0,0
+metabolic-models,Systems biology & ontologies,0,0,1,0
+metabolic-network,Systems biology & ontologies,0,0,1,0
+metabolism,Systems biology & ontologies,0,0,1,0
+metabolomics,General biology & multi-omics,0,1,1,1
+metagenome-assembly,Genome assembly & annotation,1,0,0,0
+metagenomes,Microbiome & metagenomics,0,0,1,0
+metagenomics,Microbiome & metagenomics,3,0,1,1
+metatranscriptomics,Microbiome & metagenomics,1,0,0,0
+meteorjs,,1,0,0,0
+microbiome,Microbiome & metagenomics,2,0,1,0
+minc,Neuroscience & behavior,0,0,1,0
+mirror,,0,1,0,0
+ml,,0,0,0,1
+mmcif,Protein structure & biophysics,0,0,2,0
+mmseqs,Sequence processing,1,0,0,1
+mnist,,0,0,0,1
+modeling,,0,0,1,0
+models,,0,0,0,1
+molecular-descriptor,Cheminformatics & drug discovery,0,0,1,0
+molecular-dynamics,Protein structure & biophysics,0,0,3,3
+molecular-dynamics-simulation,Protein structure & biophysics,0,0,1,1
+molecular-dynamics-simulations,Protein structure & biophysics,0,0,1,0
+molecular-dynamics-trajectories,Protein structure & biophysics,0,0,1,0
+molecular-graphics,Protein structure & biophysics,0,0,1,0
+molecular-modeling,Protein structure & biophysics,0,0,2,0
+molecular-simulation,Protein structure & biophysics,0,0,1,1
+molecular-structures,Protein structure & biophysics,0,0,1,0
+molecule,Cheminformatics & drug discovery,0,0,1,0
+molecule-simulation,Protein structure & biophysics,0,0,0,1
+molecule-visualization,Protein structure & biophysics,0,0,1,0
+molecules,Cheminformatics & drug discovery,0,0,1,0
+molfile,Cheminformatics & drug discovery,0,0,1,0
+mongodb,,1,0,0,0
+mooc,,0,0,0,1
+mpi,,1,0,0,0
+mrbrains18,,0,0,0,1
+mri,Neuroscience & behavior,0,0,0,3
+mri-reconstruction,,0,0,0,1
+ms-data,Proteomics,0,0,1,0
+msd,,0,0,0,1
+mtz,,0,0,1,0
+mudata,Single-cell & spatial omics,0,0,1,0
+multi-modal,,0,0,0,1
+multi-omics,General biology & multi-omics,0,0,1,0
+multimodal-omics-analysis,General biology & multi-omics,0,0,1,0
+multiple-sequence-alignment,Sequence processing,0,0,1,1
+multiqc,,1,0,0,1
+multistate-bennett-acceptance-ratio,Protein structure & biophysics,0,0,1,0
+multivariate-analysis,,0,0,1,0
+muon,Single-cell & spatial omics,0,0,1,0
+muse,Neuroscience & behavior,0,0,0,1
+mvpa,Neuroscience & behavior,0,0,1,1
+mzml-files,Proteomics,0,0,1,0
+mzml-interface,Proteomics,0,0,1,0
+napari,Bioimaging,0,0,1,1
+national-institutes-of-health,,0,0,0,1
+ncbi,General biology & multi-omics,0,0,1,0
+ncbi-geo,Gene expression,0,1,0,0
+nci-itcr,,0,1,0,3
+nci-qin,,0,0,0,2
+ncls,Genome assembly & annotation,0,0,1,0
+ncsn,,0,0,0,1
+negation,Biomedical text & clinical data,0,0,1,0
+negation-phrases,Biomedical text & clinical data,0,0,1,0
+negative-binomial-regression,Gene expression,0,1,0,0
+negex,Biomedical text & clinical data,0,0,1,0
+neighborhood,,0,0,1,0
+neural-network,,0,0,0,1
+neural-networks,,0,0,1,2
+neurodata-without-borders,Neuroscience & behavior,0,0,1,0
+neuroimaging,Neuroscience & behavior,0,0,4,6
+neuroscience,Neuroscience & behavior,0,0,2,5
+next-generation-sequencing,Sequence processing,1,0,0,0
+nextflow,Computing infrastructure,1,0,0,1
+ngs,Sequence processing,7,0,1,4
+nifti,Neuroscience & behavior,0,0,1,0
+nih,,0,0,0,1
+nirs,Neuroscience & behavior,0,0,0,1
+nlp,Biomedical text & clinical data,0,0,1,1
+nodejs,,1,0,0,0
+non-euclidean-geometry,,0,0,0,1
+nucleotide-alignment,Sequence processing,1,0,0,0
+numfocus,,0,0,0,1
+numpy,,0,0,3,1
+nwb,Neuroscience & behavior,0,0,1,0
+nwb-n,Neuroscience & behavior,0,0,1,0
+obo,Systems biology & ontologies,0,0,2,0
+obo-graphs,Systems biology & ontologies,0,0,1,0
+obofoundry,Systems biology & ontologies,0,0,4,0
+omics,General biology & multi-omics,0,0,1,0
+on-disk,,0,1,0,0
+ontologies,Systems biology & ontologies,0,0,1,0
+ontology,Systems biology & ontologies,0,0,2,0
+ontology-lookup-services,Systems biology & ontologies,0,0,1,0
+ontology-mappings,Systems biology & ontologies,0,0,1,0
+open-data,,0,0,1,0
+open-science,,0,0,1,1
+open-source,,0,0,1,1
+openbci,Neuroscience & behavior,0,0,0,1
+opencv,,0,0,0,1
+openmp,,1,0,0,0
+openms,Proteomics,0,0,1,0
+openworm,Neuroscience & behavior,0,0,0,1
+orf-finder,Genome assembly & annotation,0,0,1,0
+overlap,,1,0,0,1
+overlap-queries,,0,0,1,0
+owl,,0,0,1,0
+package-management,Computing infrastructure,1,0,0,1
+pandas,,0,0,1,0
+parser,,0,1,2,0
+path-compression,,0,0,1,0
+pathology,,0,0,0,1
+pathway-analysis,Systems biology & ontologies,0,2,0,0
+pathway-enrichment-analysis,Systems biology & ontologies,0,1,0,0
+pathways,Systems biology & ontologies,0,1,0,0
+pdb,Protein structure & biophysics,0,0,3,0
+pdb-files,Protein structure & biophysics,0,0,3,0
+periodic-boundary,,0,0,1,0
+phylogenetic-trees,Phylogenetics & evolution,0,2,0,0
+phylogenetics,Phylogenetics & evolution,1,0,4,1
+phylogenomic,Phylogenetics & evolution,0,0,1,0
+physiology,Neuroscience & behavior,0,0,1,1
+pipeline,,2,0,0,2
+pipeline-framework,Computing infrastructure,1,0,0,1
+polyg,,1,0,0,1
+pose-estimation,Neuroscience & behavior,0,0,0,1
+postgresql,,0,0,1,0
+ppg,Neuroscience & behavior,0,0,1,1
+prediction,,1,0,0,0
+prefixmaps,,0,0,1,0
+preprocessing,,1,0,0,1
+prodigal,Genome assembly & annotation,0,0,1,0
+profile-search,Sequence processing,1,0,0,1
+protein,Protein structure & biophysics,1,0,3,1
+protein-alignment,Sequence processing,1,0,0,0
+protein-design,Protein structure & biophysics,0,0,0,1
+protein-identification,Proteomics,2,0,0,0
+protein-structure,Protein structure & biophysics,2,0,2,3
+protein-structure-alignment,Protein structure & biophysics,1,0,0,0
+protein-structure-prediction,Protein structure & biophysics,0,0,0,1
+proteomics,Proteomics,2,1,1,1
+psycholinguistics,Neuroscience & behavior,0,0,0,1
+psychology,Neuroscience & behavior,0,0,0,1
+psychophysics,Neuroscience & behavior,0,0,0,1
+psychopy,Neuroscience & behavior,0,0,0,1
+pubchem,Cheminformatics & drug discovery,0,0,1,0
+pymbar,Protein structure & biophysics,0,0,1,0
+pynwb,Neuroscience & behavior,0,0,1,0
+pypi,,1,0,0,1
+python,,7,0,33,18
+python-bindings,,0,0,3,0
+python-extension,,0,0,1,0
+python-interface,,0,0,1,0
+python-library,,0,0,3,0
+python3,,0,0,1,0
+pytorch,,0,0,0,7
+qc,,1,0,0,1
+qin-lung-ct,,0,0,0,1
+qin-prostate-repeatability,,0,0,0,1
+qt,,0,0,0,1
+quality,,1,0,0,1
+quality-control,,3,0,0,2
+quantification,Gene expression,1,0,0,0
+quantitative-imaging,,0,0,0,1
+quantum-chemistry,,0,0,0,1
+quasi-mapping,Gene expression,1,0,0,0
+r,,1,8,0,0
+r-package,,1,2,0,0
+radiomics,Bioimaging,0,0,0,1
+radiomics-feature-extraction,Bioimaging,0,0,0,1
+radiomics-features,Bioimaging,0,0,0,1
+rcsb,Protein structure & biophysics,0,0,1,0
+rdkit,Cheminformatics & drug discovery,0,0,4,1
+reactjs,,1,0,0,1
+reactome-pathway-analysis,Systems biology & ontologies,0,1,0,0
+reactomepa,Systems biology & ontologies,0,1,0,0
+read-aligners,Sequence processing,2,0,0,0
+reconstruction,,0,0,0,2
+registration,,0,0,0,2
+regression,,0,1,0,0
+reporting,,1,0,0,1
+reproducibility,,1,0,1,1
+reproducible-research,,1,0,1,2
+reproducible-science,,1,0,0,1
+research,,0,0,1,0
+resnet,,0,0,0,1
+rhdf5,Computing infrastructure,1,1,0,0
+rmsd,Protein structure & biophysics,0,0,1,0
+rna-seq,Gene expression,2,0,0,0
+rna-seq-data,Gene expression,0,0,0,1
+rna-seq-experiments,Gene expression,0,0,0,1
+rna-seq-quantification,Gene expression,1,0,0,0
+rnaseq,Gene expression,1,0,0,0
+rpackage,,1,1,0,0
+rstats,,0,2,0,0
+rust,,0,0,2,0
+sailfish,Gene expression,1,0,0,0
+salmon,Gene expression,1,0,0,0
+sam,Sequence processing,2,0,0,0
+samtools,Sequence processing,1,0,1,0
+sbml,Systems biology & ontologies,0,0,1,0
+sbml-model,Systems biology & ontologies,0,0,1,0
+sbml-simulation,Systems biology & ontologies,0,0,1,0
+scaffold,Genome assembly & annotation,1,0,0,0
+scanpy,Single-cell & spatial omics,0,0,2,1
+science,,3,0,2,6
+scientific-computing,,0,0,0,2
+scientific-documents,,0,0,0,1
+scientific-visualization,,0,0,0,1
+sciworkflows,Computing infrastructure,0,0,1,0
+score-based,,0,0,0,1
+score-based-models,,0,0,0,1
+score-matching,,0,0,0,1
+scr,Neuroscience & behavior,0,0,1,1
+scrna-seq,Single-cell & spatial omics,1,0,1,1
+scrna-seq-data,Single-cell & spatial omics,0,0,0,1
+scverse,Single-cell & spatial omics,0,0,5,2
+sde,,0,0,0,1
+search,,1,0,0,0
+segmentation,Bioimaging,0,0,2,8
+segmentation-models,,0,0,0,1
+selective-alignment,Sequence processing,1,0,0,0
+semantic-segmentation,,0,0,0,1
+semantic-similarity,Systems biology & ontologies,0,2,0,0
+semantic-web,,0,0,1,0
+semi-supervised-learning,,0,0,0,1
+seqera,,1,0,0,1
+sequence,Sequence processing,1,0,0,1
+sequence-alignment,Sequence processing,4,0,5,3
+sequence-analysis,Sequence processing,1,0,2,1
+sequence-assembler,Genome assembly & annotation,1,0,0,0
+sequence-clustering,Sequence processing,2,0,0,1
+sequence-search,Sequence processing,2,0,0,1
+sequencing,Sequence processing,6,0,2,4
+sge,,1,0,0,1
+signal,,0,0,1,1
+signal-processing,,0,0,1,2
+simd,,0,0,1,0
+simulation,,0,0,1,3
+single-cell,Single-cell & spatial omics,1,0,1,3
+single-cell-analysis,Single-cell & spatial omics,0,0,1,0
+single-cell-genomics,Single-cell & spatial omics,0,0,3,2
+single-cell-rna-seq,Single-cell & spatial omics,1,1,2,2
+single-molecule-pulling,Protein structure & biophysics,0,0,1,0
+singler,Single-cell & spatial omics,0,1,0,0
+singular-value-decomposition,Computing infrastructure,0,1,0,0
+singularity,,1,0,0,1
+singularity-containers,,1,0,0,1
+skin-conductance,Neuroscience & behavior,0,0,1,1
+skip-connections,,0,0,0,1
+slurm,,1,0,0,1
+smart-on-fhir,Biomedical text & clinical data,0,0,1,0
+smarts,Cheminformatics & drug discovery,0,0,1,0
+smiles,Cheminformatics & drug discovery,0,0,2,0
+snakemake,Computing infrastructure,1,0,1,1
+software,,0,0,1,1
+spacy,,0,0,1,1
+spacy-extension,,0,0,1,0
+spacy-pipeline,,0,0,1,0
+spark,,1,0,0,1
+spatial-analysis,,0,0,1,0
+spatial-transcriptomics,Single-cell & spatial omics,0,0,1,1
+spliced-alignment,Sequence processing,1,0,1,1
+splitting,,1,0,0,1
+squidpy,Single-cell & spatial omics,0,0,1,0
+sssom,Systems biology & ontologies,0,0,1,0
+statistical-methods,,1,0,0,0
+statistics,,0,0,1,1
+stochastic-processes,,0,0,0,1
+strain-engineering,Systems biology & ontologies,0,0,1,0
+streamlines,Neuroscience & behavior,0,0,1,0
+structural-bioinformatics,Protein structure & biophysics,0,0,1,0
+structural-biology,Protein structure & biophysics,0,0,4,0
+structure-prediction,Protein structure & biophysics,0,0,0,1
+super-resolution,,0,0,0,1
+surface-area,Protein structure & biophysics,0,0,1,0
+systems-biology,Systems biology & ontologies,0,0,1,0
+tadpole,,1,0,0,0
+taxonomy,Phylogenetics & evolution,2,0,0,1
+tcga,General biology & multi-omics,0,2,0,0
+tcga-data,General biology & multi-omics,0,1,0,0
+tcgabiolinks,General biology & multi-omics,0,1,0,0
+tcia,,0,0,0,1
+tcia-dac,Bioimaging,0,0,0,2
+tck,Neuroscience & behavior,0,0,1,0
+tensorflow,,0,0,0,2
+thermodynamic-states,Protein structure & biophysics,0,0,1,0
+tiledb,,0,0,1,0
+tiledb-api,,0,0,1,0
+tiledb-soma,Single-cell & spatial omics,0,0,1,0
+tissue-microarray-analysis,,0,0,0,1
+tool,,1,0,0,1
+toolbox,,0,0,0,1
+toolkit,,1,0,0,1
+tractography,Neuroscience & behavior,0,0,0,1
+trajectory-analysis,Protein structure & biophysics,0,0,1,1
+transcriptome,Gene expression,1,0,0,0
+transcriptome-assembly,Gene expression,1,0,0,0
+transcriptomics,Gene expression,0,0,2,1
+transformer,,0,0,0,1
+transformers,,0,0,0,1
+tree-structure,,0,0,1,0
+treeview,,0,0,1,0
+trimming,Sequence processing,1,0,0,1
+trk,Neuroscience & behavior,0,0,1,0
+tutorial,,0,0,1,1
+u24ca289073,,2,12,0,0
+umi,Sequence processing,1,0,0,1
+unet,,0,0,0,2
+unet-image-segmentation,,0,0,0,1
+union-find,,0,0,1,0
+usegalaxy,Computing infrastructure,0,0,1,1
+utrecht-university,,0,0,1,0
+vae,,0,0,0,1
+variant-analysis,Genetic variation,0,0,2,0
+variant-calling,Genetic variation,1,0,0,0
+variation,Genetic variation,0,0,2,0
+variational-autoencoder,,0,0,1,1
+variational-bayes,,0,0,1,1
+vcf,Genetic variation,2,0,1,0
+viewer,,0,0,0,1
+visualization,,0,3,3,2
+visualize-data,,0,0,1,1
+vizualisation,,1,0,0,1
+vtk,,0,0,0,1
+webassembly,,0,0,1,0
+whole-slide-imaging,,0,0,0,1
+windows,,0,0,1,0
+workflow,Computing infrastructure,0,0,0,1
+workflow-engine,Computing infrastructure,1,0,1,2
+workflow-management,Computing infrastructure,1,0,1,1
+workflows,Computing infrastructure,0,0,1,0
+zero-footprint,,0,0,0,1
