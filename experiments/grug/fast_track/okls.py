@@ -116,6 +116,7 @@ def _okls_core_2d(
     lr_peak: float,
     weight_decay: float,
     hyperball: bool,
+    input_damping: float = 0.0,
 ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
     """One OKLS step on a single 2-D matrix. Returns (delta, momentum, S_a, S_b, P_a, P_b), all fp32.
 
@@ -128,6 +129,10 @@ def _okls_core_2d(
     ``param(1 - wd*lr*lr/lr_peak) - lr*c*s*U``. With ``hyperball``: the whitened direction ``U`` is
     taken through MuonH's Frobenius norm-preserving hyperball step instead (no muP scale, no decoupled
     weight decay -- ``lr`` sets the effective step size, mirroring the MuonH matrix step).
+
+    ``input_damping`` (lambda) roots ``S_a + lambda * tr(S_a)/m * I`` instead of ``S_a``: it caps how far the
+    weakest input directions get amplified, and a large lambda leaves only output-side whitening (the input
+    root becomes a scaled identity, and the hyperball step removes the scale). The EMA statistics stay undamped.
     """
     m, n = grad.shape
 
@@ -156,7 +161,8 @@ def _okls_core_2d(
 
     # Fresh roots on refresh steps; stored ones otherwise. Then whiten.
     if refresh:
-        p_a = scaled_cans_inv_sqrt(s_a, cans_steps, matmul_dtype)
+        s_a_root = s_a + input_damping * (jnp.trace(s_a) / m) * jnp.eye(m, dtype=s_a.dtype) if input_damping else s_a
+        p_a = scaled_cans_inv_sqrt(s_a_root, cans_steps, matmul_dtype)
         p_b = scaled_cans_inv_sqrt(s_b, cans_steps, matmul_dtype)
     whitened = p_a @ nesterov @ p_b
 
@@ -223,6 +229,7 @@ def scale_with_grug_okls(
     lr_peak: float,
     hyperball: bool = False,
     root_every: int = 1,
+    input_damping: float = 0.0,
 ) -> optax.GradientTransformation:
     """Online KL-Shampoo transform for the stacked model (2D/3D/4D matrix leaves).
 
@@ -278,6 +285,7 @@ def scale_with_grug_okls(
                         lr_peak=lr_peak,
                         weight_decay=weight_decay,
                         hyperball=hyperball,
+                        input_damping=input_damping,
                     )
 
                 for _ in range(param.ndim - 2):

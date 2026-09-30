@@ -64,7 +64,7 @@ def test_warm_start_is_symmetric_pd():
     assert err < 1e-2
 
 
-def _okls_transform(hyperball: bool = False):
+def _okls_transform(hyperball: bool = False, input_damping: float = 0.0):
     return scale_with_grug_okls(
         beta1=0.9684,
         beta2=0.9482,
@@ -75,6 +75,7 @@ def _okls_transform(hyperball: bool = False):
         learning_rate=jnp.asarray(0.09, jnp.float32),
         lr_peak=0.09,
         hyperball=hyperball,
+        input_damping=input_damping,
     )
 
 
@@ -150,3 +151,24 @@ def test_okls_hyperball_step_is_norm_preserving():
         new_norm = float(jnp.linalg.norm(new_p["stack3d"][i]))
         assert abs(new_norm - old_norm) / old_norm < 1e-4, f"layer {i} norm not preserved"
         assert float(jnp.linalg.norm(new_p["stack3d"][i] - params["stack3d"][i])) > 0
+
+
+def test_input_damping_stops_amplifying_weak_input_directions():
+    """A gradient whose rows (input directions) span three decades: plain OKLS evens the rows out, heavy input
+    damping leaves them ordered like the gradient (output-side whitening only)."""
+    rng = np.random.default_rng(3)
+    row_scale = np.geomspace(1.0, 1e-3, 16).astype(np.float32)
+    grad = jnp.asarray(row_scale[:, None] * rng.standard_normal((16, 12)).astype(np.float32))
+    params, grads = {"m": jnp.zeros((16, 12))}, {"m": grad}
+
+    def row_spread(input_damping):
+        tx = _okls_transform(input_damping=input_damping)
+        updates, _ = tx.update(grads, tx.init(params), params)
+        rows = np.linalg.norm(np.asarray(updates["m"]), axis=1)
+        return rows[0] / rows[-1]
+
+    plain, damped = row_spread(0.0), row_spread(1e4)
+    gradient = float(row_scale[0] / row_scale[-1])
+    # The first step's warm-start factor only partly whitens (see the anisotropy test above).
+    assert plain < gradient / 2
+    assert damped > gradient / 2 and damped > 2 * plain

@@ -1106,6 +1106,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     okls_weight_decay: float = 0.0303
     """Paper-mode AdamC decoupled weight decay."""
     okls_root_every: int = 1
+    okls_input_damping: float = 0.0
+    """Damping lambda on OKLS's input-side factor before its root (``okls._okls_core_2d``): 0 is plain OKLS, a
+    large value leaves output-side-only whitening. Our input-side factors have 1-12% effective rank."""
     latent_proj_update: str = "muonh"
     """How the LatentMoE projections (``w_latent_down`` / ``w_latent_up``) train: ``muonh`` (like every matrix),
     ``frozen`` (kept at init), or ``stiefel`` (Skewon, ``stiefel.py``: stays at its scaled semi-orthogonal init
@@ -1394,6 +1397,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                         lr_peak=self.learning_rate * self.okls_lr_mult if self.okls_hyperball else self.okls_peak_lr,
                         hyperball=self.okls_hyperball,
                         root_every=self.okls_root_every,
+                        input_damping=self.okls_input_damping,
                     ),
                     _match_named_update_sharding(),
                 ),
