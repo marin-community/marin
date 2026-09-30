@@ -10,13 +10,11 @@ from typing import Any
 from pydantic import Json, JsonValue, TypeAdapter
 
 from taskcompendium.models import (
-    FINAL_TOOL_CHOICES,
     AnswerType,
     AssistantToolCalls,
     ConversationInput,
     ConversationToolCall,
     EnvironmentRequirements,
-    FinalTools,
     FunctionCall,
     FunctionDefinition,
     Source,
@@ -163,7 +161,7 @@ def import_row(row: dict[str, Any], expected_sha256: str) -> tuple[TaskSpec, Sub
     events = _events(request)
     tool_choice = request.get("tool_choice")
     parallel_tool_calls = request.get("parallel_tool_calls")
-    if tool_choice is not None and (not isinstance(tool_choice, str) or tool_choice not in FINAL_TOOL_CHOICES):
+    if tool_choice is not None and (not isinstance(tool_choice, str) or tool_choice not in {"auto", "none", "required"}):
         raise ValueError("unsupported source tool_choice")
     if parallel_tool_calls is not None and not isinstance(parallel_tool_calls, bool):
         raise ValueError("source parallel_tool_calls must be a boolean")
@@ -180,14 +178,14 @@ def import_row(row: dict[str, Any], expected_sha256: str) -> tuple[TaskSpec, Sub
         id=f"nemo-predicted-action-{expected_sha256}",
         context=ConversationInput(events=events),
         environment_requirements=EnvironmentRequirements(),
-        final_tools=FinalTools(
-            functions=functions,
-            tool_choice=tool_choice,
-            parallel_tool_calls=parallel_tool_calls,
-        ),
+        final_tools=functions,
         answer_type=AnswerType.NATIVE_ACTION,
         verifier=predicted_action_verifier(expected_calls),
         source=source,
     )
-    convention = FinalAction(id="native-final-action")
+    convention = FinalAction(
+        id="native-final-action",
+        require_call=tool_choice == "required",
+        max_calls=1 if parallel_tool_calls is False else None,
+    )
     return specification, convention
