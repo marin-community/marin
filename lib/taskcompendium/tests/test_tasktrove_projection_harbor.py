@@ -4,7 +4,11 @@
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from experiments.post_training.taskcompendium.trial_tasktrove_projection import _source_row_index
+from experiments.post_training.taskcompendium import trial_tasktrove_projection
+from experiments.post_training.taskcompendium.trial_tasktrove_projection import (
+    _read_candidate_archive,
+    _source_row_index,
+)
 from rigging.filesystem.storage_path import StoragePath
 
 
@@ -53,3 +57,29 @@ def test_source_proof_requires_one_exact_private_ledger_match(tmp_path):
 
     with pytest.raises(ValueError, match="expected exactly one"):
         _source_row_index(StoragePath(str(ledger_path)), _candidate(), _proof())
+
+
+def test_reimport_uses_the_accepted_clean_release_identity(monkeypatch):
+    candidate = {
+        "source": {
+            "dataset": "s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.18.3",
+            "revision": "2026.09.18.3",
+        }
+    }
+    captured = {}
+
+    def record_arguments(*args):
+        captured["args"] = args
+        return object()
+
+    monkeypatch.setattr(trial_tasktrove_projection, "read_archive", record_arguments)
+
+    _read_candidate_archive(b"archive", candidate, "source", "path.tar.gz")
+
+    assert captured["args"] == (
+        b"archive",
+        "source",
+        "path.tar.gz",
+        candidate["source"]["dataset"],
+        candidate["source"]["revision"],
+    )

@@ -85,6 +85,17 @@ def _archive_at(source_path: str, row_index: int) -> bytes:
     raise ValueError(f"Accepted source row {row_index} is outside the source Parquet file")
 
 
+def _read_candidate_archive(archive_bytes: bytes, candidate: dict, source_subset: str, archive_path: str):
+    source = candidate["source"]
+    return read_archive(
+        archive_bytes,
+        source_subset,
+        archive_path,
+        source["dataset"],
+        source["revision"],
+    )
+
+
 def _reply(specification, correct: bool) -> dict[str, str]:
     parameters = json.loads(specification.verifier.parameters_json)
     if specification.verifier.kind is VerifierKind.MCQ_ANSWER:
@@ -112,7 +123,7 @@ async def _trial(task_dir: Path, reply: dict[str, str], trials_dir: Path, name: 
         )
 
 
-async def _run(group_path: str, ledger_path: StoragePath, ingestion_uri: str, workdir: Path, artifact_dir: Path) -> dict:
+async def _run(group_path: str, ledger_path: StoragePath, workdir: Path, artifact_dir: Path) -> dict:
     with StoragePath(group_path).open("rb") as opened:
         wrapper = json.loads(opened.readline())
     candidate = wrapper["task"]
@@ -125,13 +136,7 @@ async def _run(group_path: str, ledger_path: StoragePath, ingestion_uri: str, wo
     archive_sha256 = hashlib.sha256(archive_bytes).hexdigest()
     if archive_sha256 != proof["archive_sha256"]:
         raise ValueError("Sampled archive SHA256 differs from exact accepted source proof")
-    archive = read_archive(
-        archive_bytes,
-        source_subset,
-        archive_path,
-        ingestion_uri,
-        candidate["source"]["revision"],
-    )
+    archive = _read_candidate_archive(archive_bytes, candidate, source_subset, archive_path)
     if source_subset == "laion__nemotron-gym-knowledge-mcqa-v2":
         specification = import_mcqa(archive)
         family = "qa-short-answer"
@@ -139,7 +144,9 @@ async def _run(group_path: str, ledger_path: StoragePath, ingestion_uri: str, wo
         specification = import_math(archive).specification
         family = "math-answer"
     if public_task_record(specification, family=family) != candidate:
-        raise ValueError("Re-imported source task differs from the accepted public projection")
+        projected = public_task_record(specification, family=family)
+        mismatched_fields = sorted(key for key in candidate if candidate[key] != projected.get(key))
+        raise ValueError(f"Re-imported source task differs from accepted public fields: {mismatched_fields}")
 
     task_dir = lower_to_harbor(
         specification,
@@ -190,7 +197,7 @@ async def main() -> None:
         ]
         if len(groups) != 1 or groups[0]["rows"] < 1:
             raise ValueError(f"Expected one nonempty accepted projection group for {source_subset}")
-        outcomes.append(await _run(groups[0]["uri"], ledger_path, ingestion_uri, workdir, artifact_dir))
+        outcomes.append(await _run(groups[0]["uri"], ledger_path, workdir, artifact_dir))
     (artifact_dir / "harbor-summary.json").write_text(json.dumps(outcomes, indent=2, sort_keys=True) + "\n")
 
 
