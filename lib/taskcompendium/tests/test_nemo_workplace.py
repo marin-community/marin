@@ -21,14 +21,19 @@ from taskcompendium.grading import exact_answer
 from taskcompendium.harbor.runner import ChatLaunch, run_trial
 from taskcompendium.importers.nemo_workplace import (
     DATASET_REVISION,
+    DATASET_SPLIT_ROW_COUNTS,
+    DATASET_SPLIT_SHA256,
     PROVIDER_GIT_REVISION,
     PROVIDER_REPOSITORY,
     ROW_SHA256,
+    ROW_SHA256_BY_ID,
     SOURCE_EXAMPLE_MAX_BYTES,
     SOURCE_EXAMPLE_SHA256,
     SOURCE_EXAMPLE_URL,
+    import_dataset_split,
     import_row,
     select_row_zero,
+    select_rows,
 )
 from taskcompendium.lowering import lower_to_harbor
 from taskcompendium.models import AnswerType, ConversationInput, ConversationTrace, TaskSpec, TextMessage, VerifierKind
@@ -120,6 +125,35 @@ def test_workplace_import_pins_row_tool_surface_and_private_state(source_example
     assert provider.provider.endswith(f"@{PROVIDER_GIT_REVISION}:nemo_workplace.provider:NemoWorkplaceProvider")
 
 
+def test_workplace_import_converts_every_pinned_example_row(source_example: bytes):
+    rows = select_rows(source_example)
+    imports = [import_row(row) for row in rows]
+    specifications = [item.specification for item in imports]
+
+    assert [spec.source.row for spec in specifications] == ["0", "1", "2", "3", "4"]
+    assert [spec.id for spec in specifications] == [f"nemo-workplace-{row_id}" for row_id in range(5)]
+    assert all(spec.answer_type is AnswerType.STATE for spec in specifications)
+    assert all(spec.verifier.kind is VerifierKind.STRUCTURED_EXACT for spec in specifications)
+    assert all("ground_truth" not in spec.model_dump_json() for spec in specifications)
+
+
+async def test_workplace_import_gradeable_empty_ground_truth_split_row(monkeypatch, source_row: bytes):
+    row = json.loads(source_row)
+    row["category"] = "workplace_assistant_analytics"
+    row["ground_truth"] = []
+    data = (json.dumps(row, separators=(",", ":")) + "\n").encode()
+    monkeypatch.setitem(DATASET_SPLIT_ROW_COUNTS, "train", 1)
+    monkeypatch.setitem(DATASET_SPLIT_SHA256, "train", hashlib.sha256(data).hexdigest())
+
+    (workplace_import,) = import_dataset_split(data, "train")
+    specification, convention, _ = workplace_import
+    provider = _provider()
+
+    assert specification.id == "nemo-workplace-train-0"
+    assert specification.source.row == f"train:0:{hashlib.sha256(data).hexdigest()}"
+    assert await _reward(specification, convention, provider) == 1.0
+
+
 def test_workplace_import_rejects_unpinned_row_and_changed_tools(monkeypatch, source_example: bytes, source_row: bytes):
     data, row = _source(source_row)
     with pytest.raises(ValueError, match="pinned digest"):
@@ -130,7 +164,7 @@ def test_workplace_import_rejects_unpinned_row_and_changed_tools(monkeypatch, so
         import_row(data + b" ")
     row["responses_create_params"]["tools"][0]["name"] = "wrong_tool"
     changed = json.dumps(row).encode()
-    monkeypatch.setattr("taskcompendium.importers.nemo_workplace.ROW_SHA256", hashlib.sha256(changed).hexdigest())
+    monkeypatch.setitem(ROW_SHA256_BY_ID, 0, hashlib.sha256(changed).hexdigest())
     with pytest.raises(ValueError, match="pinned provider"):
         import_row(changed)
 
