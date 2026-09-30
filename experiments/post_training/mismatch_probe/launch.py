@@ -46,8 +46,16 @@ TINY_GRUG_POLICY = PolicySpec(
 
 WARMUP_UPDATES = 3
 REPLAY_MODES = ("router_replay", "router_replay_response", "router_replay_filtered")
-# Numerics campaign: determinism and batch-layout references, full and response-only replay.
-NUMERICS_MODES = ("native_again", "router_replay", "router_replay_response", "repeat_replay")
+# Numerics campaign: determinism and batch-layout references, generation-route replay (full and
+# response-only), and replay of the prefill re-read's routes (the prefill metric and its placebo).
+NUMERICS_MODES = (
+    "native_again",
+    "router_replay",
+    "router_replay_response",
+    "repeat_replay",
+    "reread_replay",
+    "repeat_reread_replay",
+)
 
 
 @dataclass(frozen=True)
@@ -99,6 +107,7 @@ def probe_block(
                 "extra_trainer_modes": list(trainer_modes),
                 "filtered_replay": {"keep_fraction": settings.keep_fraction},
                 "rescore_prefix_cache": settings.cache_mode,
+                "reread_again": settings.cache_mode != "on",
             },
         },
         "generator": {
