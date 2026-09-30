@@ -47,6 +47,7 @@ METRIC_TITLES = {
 KEEP_RULE_METRICS = ("abs_mean", "abs_p99", "k3")
 NATIVE_MODE = "native"
 REREAD_REPLAY_MODE = "reread_replay"
+REPLAY_MODE = "router_replay"
 BOOTSTRAP_DRAWS = 1000
 GENERATION_SCORING = f"{GENERATION_SCORER}@0"
 RESCORE_AGAIN_SCORING = f"{RESCORE_AGAIN_SCORER}@0"
@@ -492,7 +493,8 @@ def _timing_values(archive: ArchiveData) -> dict[str, float]:
     return values
 
 
-def analyze_archive(uri: str, *, bootstrap_draws: int = BOOTSTRAP_DRAWS) -> dict:
+def analyze_archive(uri: str, *, bootstrap_draws: int = BOOTSTRAP_DRAWS, kept_numerics: str | None = None) -> dict:
+    """Analyze one archive; ``kept_numerics`` adds paired tables against replay under that numerics set."""
     archive = load_archive(uri)
     manifest, probes, scores = archive.manifest, archive.probes, archive.scores
     identity = {
@@ -512,6 +514,7 @@ def analyze_archive(uri: str, *, bootstrap_draws: int = BOOTSTRAP_DRAWS) -> dict
         "comparisons": {},
         "paired_improvements": {},
         "paired_vs_reread": {},
+        "paired_vs_generation": {},
         "paired_vs_reread_stable": {},
         "vllm_stable_token_fraction": None,
         "route_diagnostics": {},
@@ -606,11 +609,14 @@ def analyze_archive(uri: str, *, bootstrap_draws: int = BOOTSTRAP_DRAWS) -> dict
         )
 
     kept_mode = REREAD_REPLAY_MODE if f"{REREAD_REPLAY_MODE}_vs_reread" in sampled_metrics else NATIVE_MODE
-    kept = f"{kept_mode}_vs_reread"
-    if kept in sampled_metrics:
+    kept_suffix = f"+{kept_numerics}" if kept_numerics else ""
+    for prefill_kept in dict.fromkeys((kept_mode, f"{REREAD_REPLAY_MODE}{kept_suffix}")):
+        kept = f"{prefill_kept}_vs_reread"
+        if kept not in sampled_metrics:
+            continue
         candidates = {}
         for mode in _update_zero_trainer_modes(scores):
-            if mode == kept_mode:
+            if mode == prefill_kept or f"{mode}_vs_reread" not in sampled_metrics:
                 continue
             paired = _paired_intervals(
                 report["comparisons"], sampled_metrics, kept, f"{mode}_vs_reread", KEEP_RULE_METRICS
@@ -620,7 +626,22 @@ def analyze_archive(uri: str, *, bootstrap_draws: int = BOOTSTRAP_DRAWS) -> dict
                 # Worse than the kept stack: some interval of kept minus candidate lies entirely below zero.
                 "regresses": any(item["ci95"][1] < 0 for item in paired.values()),
             }
-        report["paired_vs_reread"][kept_mode] = candidates
+        report["paired_vs_reread"][prefill_kept] = candidates
+    if kept_suffix:
+        generation_kept = f"{REPLAY_MODE}{kept_suffix}"
+        kept = f"{generation_kept}_vs_generation"
+        if kept in sampled_metrics:
+            candidates = {}
+            for mode in _update_zero_trainer_modes(scores):
+                variant = f"{mode}_vs_generation"
+                if mode == generation_kept or not mode.startswith(REPLAY_MODE) or variant not in sampled_metrics:
+                    continue
+                paired = _paired_intervals(report["comparisons"], sampled_metrics, kept, variant, KEEP_RULE_METRICS)
+                candidates[mode] = {
+                    "metrics": paired,
+                    "regresses": any(item["ci95"][1] < 0 for item in paired.values()),
+                }
+            report["paired_vs_generation"][generation_kept] = candidates
     kept_stable = f"{kept_mode}_vs_reread_stable"
     if kept_stable in sampled_metrics:
         candidates = {}
@@ -958,7 +979,33 @@ def render_markdown(report: dict) -> str:
         )
         for kept, candidates in report["paired_vs_reread_stable"].items()
     ]
+    paired_tables += [
+        (kept, candidates, "generation") for kept, candidates in report.get("paired_vs_generation", {}).items()
+    ]
     for kept, candidates, scope in paired_tables:
+        if scope == "generation":
+            headers = " | ".join(f"{METRIC_TITLES[metric]} | 95% paired CI" for metric in KEEP_RULE_METRICS)
+            lines.extend(
+                [
+                    f"## Generation metric: `{kept}` minus candidate",
+                    "",
+                    "Both sides are scored against vLLM's generation-time log probabilities. "
+                    f"Positive means the candidate is closer to vLLM than `{kept}`. "
+                    "A candidate regresses when any interval lies entirely below zero.",
+                    "",
+                    f"| Candidate | {headers} | regresses |",
+                    "|---|" + "---:|---:|" * len(KEEP_RULE_METRICS) + "---|",
+                ]
+            )
+            for mode, item in candidates.items():
+                cells = " | ".join(
+                    f"{_display_metric(item['metrics'][metric]['baseline_minus_candidate'])} | "
+                    f"{_display_interval(item['metrics'][metric]['ci95'])}"
+                    for metric in KEEP_RULE_METRICS
+                )
+                lines.append(f"| {mode} | {cells} | {'**yes**' if item['regresses'] else 'no'} |")
+            lines.append("")
+            continue
         headers = " | ".join(f"{METRIC_TITLES[metric]} | 95% paired CI" for metric in KEEP_RULE_METRICS)
         lines.extend(
             [
@@ -1110,9 +1157,13 @@ def main() -> None:
     parser.add_argument("archives", nargs="+", help="FineStore URIs of completed mismatch probes")
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--bootstrap-draws", type=int, default=BOOTSTRAP_DRAWS)
+    parser.add_argument("--kept-numerics", help="Numerics set of the kept stack, e.g. compiled_stack.")
     args = parser.parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    reports = [analyze_archive(uri, bootstrap_draws=args.bootstrap_draws) for uri in args.archives]
+    reports = [
+        analyze_archive(uri, bootstrap_draws=args.bootstrap_draws, kept_numerics=args.kept_numerics)
+        for uri in args.archives
+    ]
     if len(reports) == 1:
         _write_single_report(reports[0], args.output_dir)
         return
