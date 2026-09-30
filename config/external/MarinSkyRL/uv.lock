@@ -1116,7 +1116,7 @@ dependencies = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "marinskyrl", git = "https://github.com/marin-community/MarinSkyRL.git?rev=bf014cb8a41c0b3abeac20f20eab2908b78ae8fa" }]
+requires-dist = [{ name = "marinskyrl", git = "https://github.com/marin-community/MarinSkyRL.git?rev=1f130218e56590075363d59cd94fb97c292d65e0" }]
 
 [[package]]
 name = "marin-finelog"
@@ -1264,7 +1264,7 @@ secrets = [
 [[package]]
 name = "marinskyrl"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/MarinSkyRL.git?rev=bf014cb8a41c0b3abeac20f20eab2908b78ae8fa#bf014cb8a41c0b3abeac20f20eab2908b78ae8fa" }
+source = { git = "https://github.com/marin-community/MarinSkyRL.git?rev=1f130218e56590075363d59cd94fb97c292d65e0#1f130218e56590075363d59cd94fb97c292d65e0" }
 dependencies = [
     { name = "aiohttp" },
     { name = "boto3" },
