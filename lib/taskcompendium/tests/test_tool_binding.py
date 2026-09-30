@@ -22,7 +22,6 @@ from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
-    FinalTools,
     FunctionDefinition,
     ProviderRequirement,
     Source,
@@ -297,7 +296,7 @@ def test_provider_tool_collisions_reject_export(tmp_path, monkeypatch):
         lower_to_harbor(_specification(), convention, environment_config, tmp_path / "task")
 
     plain_specification = _specification().model_copy(
-        update={"final_tools": FinalTools(functions=(FunctionDefinition(name="lookup", parameters={"type": "object"}),))}
+        update={"final_tools": (FunctionDefinition(name="lookup", parameters={"type": "object"}),)}
     )
     plain = PlainText(id="plain")
     with pytest.raises(ValueError, match="Submission function names collide"):
@@ -413,14 +412,3 @@ def test_escaping_provider_name_prevents_export(tmp_path, monkeypatch, name):
         )
     assert not (tmp_path / "task").exists()
     assert not (tmp_path / "outside").exists()
-
-
-def test_disabled_provider_tools_excludes_candidate_and_export(tmp_path, monkeypatch):
-    bindings = _external_services(tmp_path, monkeypatch)
-    environment_config = HarborEnvironmentConfig(tool_providers={"a": bindings[0], "b": bindings[1]})
-    specification = _specification().model_copy(update={"final_tools": FinalTools(tool_choice="none")})
-    convention = PlainText(id="plain")
-    assert not compatible_lowerings(specification, (convention,), (environment_config,))
-    with pytest.raises(ValueError, match="Provider tools conflict"):
-        lower_to_harbor(specification, convention, environment_config, tmp_path / "task")
-    assert not (tmp_path / "task").exists()
