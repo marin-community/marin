@@ -100,3 +100,36 @@ study, removing a sync point moves the wait to the next collective.
 4. (peer) PGLE on main: another session's `pgle-main-*` runs. Stack at the end, since a PGLE profile
    is program-specific.
 5. Queue for re-assignment: norm/elementwise fusion, loss/lm_head, FA4, optimizer, MoE GEMMs, remat.
+
+## M30-002 Agent C: dense GEMMs are power-capped (direction closed, 2026-09-30)
+
+Single-GB200 microbenchmarks of the hero GEMM shapes (same nvjet kernels as training;
+`research/mcwitt/mfu30-gemm` @ 964e813f34, logbook `mfu30-gemm.md`): zero operands stay under the cap
+(830-940 W, 2062 MHz) at 2.1-2.3 PF/s; realistic operands pin the 1200 W cap, clocks fall to 1200-1600 MHz,
+1.44-1.52 PF/s. Operand bit content sets the power. cuBLASLt off changes <2%; Triton GEMMs are 8-20% slower;
+four GPUs of a node at once lose another ~6%. Rack W&B: as MFU went 22.3 -> 26.4 -> 28.4%, mean power
+rose 1030 -> 1075 -> 1115 W and median SM clock fell ~1900 -> ~1700 -> ~1570 MHz. In the baseline trace, a
+GEMM's rate anticorrelates with tensor activity in the prior 50 ms (r = -0.66; -0.25 at fixed shape).
+QKV fusion saves 2.4-3.9% of those GEMMs, gate/up fusion 2.3%: ~0.02-0.03 s/step each, below detection.
+Contention: the ragged all-to-all's 32 blocks exclude cuBLAS blocks from 32 of 148 SMs (-22%), matching the
+overlapped rate. Flag-only QKV merge for the final stack: `--xla_gpu_dot_merger_threshold_mb~448` (~0.02 s).
+
+Consequence: tensor-core time (~9 s/step) only shrinks through fewer FLOPs. The remaining 0.78 s must come
+from exposed communication and copies, idle time, memory-bound passes, and recompute. Removing gaps next to
+GEMMs may return ~10-15% of the removed time as slower GEMMs (low confidence).
+
+## M30-003 Agent A: XLA remat counts the host-resident carry as device memory (2026-09-30)
+
+With `--xla_gpu_enable_host_memory_offloading` unset (hero default), post-schedule HloRematerialization
+charges the 36 GiB pinned-host carry stack `bf16[48,16,4096,6144]{S(5)}` against the backward loop's device
+limit (verified in XLA source at PJRT commit 708c3a4ec79c). The baseline HLO has 143 `*.remat*`
+instructions, 84 in the backward body (10.6 GiB of recomputed values, incl. a sync `all-gather.127.remat`
+per layer), costing 0.63 s/step on the compute stream (0.40 memory-bound fusions, 0.23 the all-gather,
+mostly skew wait). Buffer assignment decoded from the xplane: temp arena 67.49 GiB + 35.6 persistent = the
+103.09 peak; arena peaks in the optimizer phase. Host optimizer state is 38.55 GiB/GPU (30.4 expert momentum,
+5.9 embedding Adam). Full on-device state (H-A1) would peak ~137.7 GiB (needs fraction ~0.78 and slop >100).
+PGLE (#9481 t21 trace) hides the first momentum H2D but leaves the three end-of-step D2H (~0.2 s) and the
+XLA remat (0.35 s): orthogonal to H-A4.
+
+Arm `m30a-hmo-01` (flag on, profiled, remat VLOG) queued. Prediction: remat count ~0, -0.25 to -0.45 s/step,
+peak +5-10 GiB, first-step loss identical. Next: + pipelined carry prefetch; then H-A1.
