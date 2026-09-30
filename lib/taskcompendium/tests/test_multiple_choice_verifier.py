@@ -15,7 +15,7 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
-from taskcompendium.submission import PlainText
+from taskcompendium.submission import GradingAttempt, PlainText
 from taskcompendium.verifier_registry import grade_answer
 from taskcompendium.verifiers.multiple_choice import multiple_choice_answer
 
@@ -38,8 +38,11 @@ async def test_hand_authored_multiple_choice_answer(response, reward):
     result = await grade_answer(
         specification,
         convention,
-        ConversationTrace(events=(*specification.context.events, TextMessage(role="assistant", content=response))),
-        object(),
+        GradingAttempt(
+            ConversationTrace(events=(*specification.context.events, TextMessage(role="assistant", content=response))),
+            {},
+            object(),
+        ),
     )
 
     assert (result.status, result.reward) == (Outcome.GRADED, reward)

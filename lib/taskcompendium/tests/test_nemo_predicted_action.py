@@ -23,7 +23,7 @@ from taskcompendium.models import (
     FunctionCall,
     ToolCallComparatorConfig,
 )
-from taskcompendium.submission import FinalAction
+from taskcompendium.submission import FinalAction, GradingAttempt
 from taskcompendium.verifier_registry import grade_answer
 from taskcompendium.verifiers.predicted_action import compare
 
@@ -78,14 +78,14 @@ def test_exported_nemo_verifier_grades_in_fresh_process(tmp_path):
         "import asyncio, json, sys; from pathlib import Path; "
         "from taskcompendium.verifier_registry import grade_answer; "
         "from taskcompendium.harbor.protocol import chat_conversation; "
-        "from taskcompendium.submission import chat_request; "
+        "from taskcompendium.submission import GradingAttempt, chat_request; "
         "from taskcompendium.lowering import read_submission_convention, read_specification; "
         "root = Path(sys.argv[1]); "
         "specification = read_specification(root / 'specification.json'); "
         "convention = read_submission_convention(root / 'submission_convention.json'); "
         "conversation = chat_conversation([*chat_request(specification, convention)['messages'], "
         "json.loads(sys.argv[2])]); "
-        "result = asyncio.run(grade_answer(specification, convention, conversation, object())); "
+        "result = asyncio.run(grade_answer(specification, convention, GradingAttempt(conversation, {}, object()))); "
         "print(json.dumps({'status': result.status, 'reward': result.reward}))"
     )
     response = json.dumps(_action(row["expected_action"]["name"], row["expected_action"]["arguments"]))
@@ -336,7 +336,7 @@ async def test_predicted_action_grades_typed_evidence_from_any_harness():
     )
     conversation = ConversationTrace(events=(*specification.context.events, final))
 
-    result = await grade_answer(specification, convention, conversation, object())
+    result = await grade_answer(specification, convention, GradingAttempt(conversation, {}, object()))
 
     assert (result.status, result.reward) == ("graded", 1.0)
 

@@ -3,6 +3,7 @@
 
 """Private semantics for one deterministic task and its final submission."""
 
+import re
 from dataclasses import dataclass
 from enum import StrEnum
 from math import isfinite
@@ -10,9 +11,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
-from taskcompendium.resources import SHA256_PATTERN, TaskResource, validate_resource_paths
-
 SCHEMA_VERSION = "0.11"
+SHA256_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
 
 
 class AnswerType(StrEnum):
@@ -287,7 +287,6 @@ class TaskSpec(BaseModel):
     answer_type: AnswerType
     verifier: VerifierSpec
     source: Source
-    resources: tuple[TaskResource, ...] = ()
     schema_version: str = SCHEMA_VERSION
 
     @model_validator(mode="after")
@@ -298,7 +297,6 @@ class TaskSpec(BaseModel):
             raise ValueError("A task id is required")
         if any(not name for name in self.tool_providers):
             raise ValueError("Provider requirement names must be nonempty")
-        validate_resource_paths(self.resources)
         if self.answer_type == AnswerType.NATIVE_ACTION and not self.final_tools.functions:
             raise ValueError("Native-action tasks require advertised functions")
         return self

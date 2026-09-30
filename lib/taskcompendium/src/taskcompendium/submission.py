@@ -5,6 +5,7 @@
 
 import json
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from math import isfinite
@@ -62,10 +63,11 @@ class SubmissionFailurePolicy(StrEnum):
 
 @dataclass(frozen=True)
 class GradingAttempt:
-    """The complete conversation and authoritative trial environment."""
+    """Trial evidence available to submission conventions and verifiers."""
 
     conversation: ConversationTrace
-    environment: object
+    tool_providers: Mapping[str, object]
+    workspace: object
 
 
 @dataclass(frozen=True)
@@ -92,7 +94,7 @@ class SubmissionFailure(ValueError):
 
 @runtime_checkable
 class StateReadable(Protocol):
-    async def provider_state(self, provider: str) -> JsonValue: ...
+    def canonical_state(self) -> JsonValue: ...
 
 
 class Convention(BaseModel, ABC):
@@ -186,9 +188,10 @@ class ProviderState(Convention):
         final = attempt.conversation.events[-1]
         if not isinstance(final, (TextMessage, AssistantToolCalls)):
             raise SubmissionFailure("State submission requires a final assistant message")
-        if not isinstance(attempt.environment, StateReadable):
-            raise TypeError("Environment does not expose provider state")
-        state = await attempt.environment.provider_state(self.provider)
+        provider = attempt.tool_providers[self.provider]
+        if not isinstance(provider, StateReadable):
+            raise TypeError(f"Provider {self.provider!r} does not expose canonical state")
+        state = provider.canonical_state()
         _validate_json_state(state)
         return StateSubmission(json.loads(json.dumps(state, allow_nan=False)))
 
@@ -273,10 +276,7 @@ def submission_instruction(convention: SubmissionConvention) -> str:
     if convention.answer_format == AnswerFormat.JSON:
         return f'Give your answer as a JSON object with an "{ANSWER_FIELD}" field.'
     if convention.answer_format == AnswerFormat.STATE:
-        return (
-            "Use the available tools to complete the task. "
-            "Your final message ends the interaction; the result is graded from the environment state."
-        )
+        return "Use the available tools to complete the task. When you are done, send a final message."
     if convention.answer_format == AnswerFormat.ANSWER_CALL:
         return f'Call {ANSWER_CALL_NAME} with your final answer as the "{ANSWER_FIELD}" string.'
     if convention.answer_format == AnswerFormat.FINAL_ACTION:

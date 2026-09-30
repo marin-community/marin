@@ -14,7 +14,7 @@ from harbor.models.trial.paths import TrialPaths
 from upath import UPath
 
 from taskcompendium.grading import exact_answer, structured_exact
-from taskcompendium.harbor.adapter import CompositeToolEnvironment, NoToolEnvironment
+from taskcompendium.harbor.adapter import CompositeToolEnvironment
 from taskcompendium.harbor.runner import ChatLaunch, run_trial
 from taskcompendium.lowering import HarborEnvironmentConfig, ToolBinding, lower_to_harbor
 from taskcompendium.models import (
@@ -99,7 +99,7 @@ class BrokenStateProvider(BetaProvider):
         raise RuntimeError("state unavailable")
 
 
-class HarborBackedProvider(NoToolEnvironment):
+class HarborBackedProvider(CompositeToolEnvironment):
     ACTION_INTERFACE = AlphaProvider.ACTION_INTERFACE
     SEED_SHA256 = AlphaProvider.SEED_SHA256
     PROVIDER_REVISION = AlphaProvider.PROVIDER_REVISION
