@@ -51,8 +51,11 @@ def import_task(archive: TaskArchive) -> TaskSpec:
     """Import a cleaned MCQA archive as a text-answer task."""
     try:
         metadata = tomllib.loads(archive.files[TASK_MANIFEST].decode())[METADATA_TABLE]
-        if metadata.get("family") != FAMILY or metadata.get("converter") != CONVERTER:
+        if metadata.get("family") != FAMILY or metadata.get("converter") != CONVERTER or metadata.get("mode") != "mcq":
             raise ValueError("Unsupported TaskTrove MCQA source")
+        tags = metadata.get("tags", [])
+        if not isinstance(tags, list) or any(not isinstance(tag, str) for tag in tags):
+            raise ValueError("TaskTrove tags must be an ordered list of strings")
         contract = parse_spec(archive.files["tests/verifier.toml"].decode())
         if not isinstance(contract, McqSpec):
             raise ValueError("TaskTrove MCQA archive must declare an MCQ verifier")
@@ -70,4 +73,5 @@ def import_task(archive: TaskArchive) -> TaskSpec:
         answer_type=AnswerType.TEXT,
         verifier=multiple_choice_answer(contract.expected, contract.options),
         source=archive.source,
+        tags=tuple(tags),
     )

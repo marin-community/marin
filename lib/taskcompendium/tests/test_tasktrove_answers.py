@@ -17,8 +17,8 @@ from tasktrove_verify.spec import McqSpec
 from taskcompendium.grading import Outcome
 from taskcompendium.importers.tasktrove.convert import MAX_ARCHIVE_MEMBERS, read_archive
 from taskcompendium.importers.tasktrove.mcqa import import_task
-from taskcompendium.lowering import HarborEnvironmentConfig, lower_to_harbor
-from taskcompendium.models import AnswerType, ConversationTrace, TextMessage, VerifierKind
+from taskcompendium.lowering import HarborEnvironmentConfig, lower_to_harbor, read_specification
+from taskcompendium.models import AnswerType, ConversationTrace, TaskSpec, TextMessage, VerifierKind
 from taskcompendium.submission import GradingAttempt, JsonAnswer, PlainText, render_instruction
 from taskcompendium.verifier_registry import grade_answer
 
@@ -45,6 +45,23 @@ def test_import_preserves_release_identity():
     assert specification.source.row == f"{TASKTROVE_SOURCE}:{TASKTROVE_PATH}"
     later_release = import_task(_archive("2026.09.10.10"))
     assert later_release.id != specification.id
+
+
+def test_import_preserves_ordered_source_tags_through_harbor_export(tmp_path):
+    specification = import_task(_archive())
+    expected_tags = ("qa", "mcq", "nemotron")
+
+    assert specification.tags == expected_tags
+    assert TaskSpec.model_validate_json(specification.model_dump_json()).tags == expected_tags
+
+    task = lower_to_harbor(
+        specification,
+        PlainText(id="plain"),
+        HarborEnvironmentConfig(),
+        tmp_path / "task",
+    )
+
+    assert read_specification(task / "specification.json").tags == expected_tags
 
 
 def test_import_removes_source_submission_instructions():

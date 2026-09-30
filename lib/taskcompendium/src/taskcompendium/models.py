@@ -11,7 +11,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
-SCHEMA_VERSION = "0.12"
+SCHEMA_VERSION = "0.13"
 SHA256_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
 
 
@@ -290,6 +290,7 @@ class TaskSpec(BaseModel):
     answer_type: AnswerType
     verifier: VerifierSpec
     source: Source
+    tags: tuple[str, ...] = ()
     schema_version: str = SCHEMA_VERSION
 
     @model_validator(mode="after")
