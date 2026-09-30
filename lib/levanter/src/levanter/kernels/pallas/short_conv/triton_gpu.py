@@ -40,8 +40,6 @@ except ModuleNotFoundError:
 KERNEL_SIZE = 4
 #: Rows each program walks. The halo re-read is ``(KERNEL_SIZE - 1) / CHUNK`` of a pass.
 CHUNK = 64
-#: Rows loaded per loop iteration; independent loads in flight per program.
-UNROLL = 8
 _MAX_CHANNEL_BLOCK = 1024
 
 
@@ -95,6 +93,21 @@ if triton is not None and tl is not None:
         return tl.load(seg_ptr + row, mask=inside, other=-1)
 
     @triton.jit
+    def _tap(x_prev, seg_prev, seg_cur, w_lag, dtype: tl.constexpr, exact: tl.constexpr):
+        """``w_lag * x_prev``, dropped across a document boundary, rounded like the reference."""
+        kept = tl.where(seg_prev == seg_cur, x_prev, 0.0).to(tl.float32)
+        return _round(w_lag * kept, dtype, exact)
+
+    @triton.jit
+    def _conv_row(x0, s0, x1, s1, x2, s2, x3, s3, w0, w1, w2, w3, dtype: tl.constexpr, exact: tl.constexpr):
+        # Ascending lags, the reference's order.
+        acc = _round(w0 * x0.to(tl.float32), dtype, exact)
+        acc = _round(acc + _tap(x1, s1, s0, w1, dtype, exact), dtype, exact)
+        acc = _round(acc + _tap(x2, s2, s0, w2, dtype, exact), dtype, exact)
+        acc = _round(acc + _tap(x3, s3, s0, w3, dtype, exact), dtype, exact)
+        return acc.to(dtype)
+
+    @triton.jit
     def _short_conv_fwd_kernel(
         x_ptr,
         seg_ptr,
@@ -104,7 +117,6 @@ if triton is not None and tl is not None:
         channels: tl.constexpr,
         chunk: tl.constexpr,
         block_c: tl.constexpr,
-        unroll: tl.constexpr,
         exact: tl.constexpr,
     ):
         dtype = out_ptr.dtype.element_ty
@@ -126,23 +138,41 @@ if triton is not None and tl is not None:
         s1 = _seg(seg_base, start - 1, seq_len)
         s2 = _seg(seg_base, start - 2, seq_len)
         s3 = _seg(seg_base, start - 3, seq_len)
-        for offset in range(0, chunk, unroll):
-            for u in tl.static_range(unroll):
-                t = start + offset + u
-                x0 = tl.load(x_base + t.to(tl.int64) * channels + cols)
-                s0 = tl.load(seg_base + t)
-                # Ascending lags, the reference's order; a tap across a document boundary reads 0.
-                acc = _round(w0 * x0.to(tl.float32), dtype, exact)
-                k1 = tl.where(s1 == s0, x1, 0.0).to(tl.float32)
-                acc = _round(acc + _round(w1 * k1, dtype, exact), dtype, exact)
-                k2 = tl.where(s2 == s0, x2, 0.0).to(tl.float32)
-                acc = _round(acc + _round(w2 * k2, dtype, exact), dtype, exact)
-                k3 = tl.where(s3 == s0, x3, 0.0).to(tl.float32)
-                acc = _round(acc + _round(w3 * k3, dtype, exact), dtype, exact)
-                tl.store(out_base + t.to(tl.int64) * channels + cols, acc.to(dtype))
-                x3, s3 = x2, s2
-                x2, s2 = x1, s1
-                x1, s1 = x0, s0
+        for offset in range(0, chunk, 4):
+            t = start + offset
+            # All four rows' loads before any store, so they are in flight together.
+            xa = tl.load(x_base + t.to(tl.int64) * channels + cols)
+            xb = tl.load(x_base + (t + 1).to(tl.int64) * channels + cols)
+            xc = tl.load(x_base + (t + 2).to(tl.int64) * channels + cols)
+            xd = tl.load(x_base + (t + 3).to(tl.int64) * channels + cols)
+            sa = tl.load(seg_base + t)
+            sb = tl.load(seg_base + t + 1)
+            sc = tl.load(seg_base + t + 2)
+            sd = tl.load(seg_base + t + 3)
+            ya = _conv_row(xa, sa, x1, s1, x2, s2, x3, s3, w0, w1, w2, w3, dtype, exact)
+            yb = _conv_row(xb, sb, xa, sa, x1, s1, x2, s2, w0, w1, w2, w3, dtype, exact)
+            yc = _conv_row(xc, sc, xb, sb, xa, sa, x1, s1, w0, w1, w2, w3, dtype, exact)
+            yd = _conv_row(xd, sd, xc, sc, xb, sb, xa, sa, w0, w1, w2, w3, dtype, exact)
+            tl.store(out_base + t.to(tl.int64) * channels + cols, ya)
+            tl.store(out_base + (t + 1).to(tl.int64) * channels + cols, yb)
+            tl.store(out_base + (t + 2).to(tl.int64) * channels + cols, yc)
+            tl.store(out_base + (t + 3).to(tl.int64) * channels + cols, yd)
+            x1, s1 = xd, sd
+            x2, s2 = xc, sc
+            x3, s3 = xb, sb
+
+    @triton.jit
+    def _dx_row(d0, s0, d1, s1, d2, s2, d3, s3, w0, w1, w2, w3, dtype: tl.constexpr, exact: tl.constexpr):
+        """``dx[u]`` from ``dy[u..u+3]``: descending lags, then tap 0 (the reference transpose's order)."""
+        acc = tl.where(s3 == s0, _round(w3 * d3.to(tl.float32), dtype, exact), 0.0)
+        acc = _round(acc + tl.where(s2 == s0, _round(w2 * d2.to(tl.float32), dtype, exact), 0.0), dtype, exact)
+        acc = _round(acc + tl.where(s1 == s0, _round(w1 * d1.to(tl.float32), dtype, exact), 0.0), dtype, exact)
+        acc = _round(acc + _round(w0 * d0.to(tl.float32), dtype, exact), dtype, exact)
+        return acc.to(dtype)
+
+    @triton.jit
+    def _masked(x_prev, seg_prev, seg_cur):
+        return tl.where(seg_prev == seg_cur, x_prev, 0.0).to(tl.float32)
 
     @triton.jit
     def _short_conv_bwd_kernel(
@@ -156,7 +186,6 @@ if triton is not None and tl is not None:
         channels: tl.constexpr,
         chunk: tl.constexpr,
         block_c: tl.constexpr,
-        unroll: tl.constexpr,
         exact: tl.constexpr,
     ):
         dtype = dx_ptr.dtype.element_ty
@@ -190,34 +219,57 @@ if triton is not None and tl is not None:
         dw1 = tl.zeros([block_c], dtype=tl.float32)
         dw2 = tl.zeros([block_c], dtype=tl.float32)
         dw3 = tl.zeros([block_c], dtype=tl.float32)
-        for offset in range(0, chunk, unroll):
-            for u in tl.static_range(unroll):
-                r = start + offset + u
-                d3 = _row(dy_base, r + 3, seq_len, channels, cols)
-                sd3 = _seg(seg_base, r + 3, seq_len)
-                xr = tl.load(x_base + r.to(tl.int64) * channels + cols)
-                # dx: descending lags, then tap 0 (the order of the reference's transpose).
-                acc = tl.where(sd3 == sd0, _round(w3 * d3.to(tl.float32), dtype, exact), 0.0)
-                acc = _round(
-                    acc + tl.where(sd2 == sd0, _round(w2 * d2.to(tl.float32), dtype, exact), 0.0), dtype, exact
-                )
-                acc = _round(
-                    acc + tl.where(sd1 == sd0, _round(w1 * d1.to(tl.float32), dtype, exact), 0.0), dtype, exact
-                )
-                acc = _round(acc + _round(w0 * d0.to(tl.float32), dtype, exact), dtype, exact)
-                tl.store(dx_base + r.to(tl.int64) * channels + cols, acc.to(dtype))
-                # dw: fp32 sums of dy[r] times the shifted, masked x.
-                g = d0.to(tl.float32)
-                dw0 += g * xr.to(tl.float32)
-                dw1 += g * tl.where(sb1 == sd0, xb1, 0.0).to(tl.float32)
-                dw2 += g * tl.where(sb2 == sd0, xb2, 0.0).to(tl.float32)
-                dw3 += g * tl.where(sb3 == sd0, xb3, 0.0).to(tl.float32)
-                xb3, sb3 = xb2, sb2
-                xb2, sb2 = xb1, sb1
-                xb1, sb1 = xr, sd0
-                d0, sd0 = d1, sd1
-                d1, sd1 = d2, sd2
-                d2, sd2 = d3, sd3
+        for offset in range(0, chunk, 4):
+            r = start + offset
+            # Rows r..r+3: x at r..r+3 and dy at r+3..r+6, all loaded before any store.
+            e0 = _row(dy_base, r + 3, seq_len, channels, cols)
+            e1 = _row(dy_base, r + 4, seq_len, channels, cols)
+            e2 = _row(dy_base, r + 5, seq_len, channels, cols)
+            e3 = _row(dy_base, r + 6, seq_len, channels, cols)
+            se0 = _seg(seg_base, r + 3, seq_len)
+            se1 = _seg(seg_base, r + 4, seq_len)
+            se2 = _seg(seg_base, r + 5, seq_len)
+            se3 = _seg(seg_base, r + 6, seq_len)
+            xa = tl.load(x_base + r.to(tl.int64) * channels + cols)
+            xb = tl.load(x_base + (r + 1).to(tl.int64) * channels + cols)
+            xc = tl.load(x_base + (r + 2).to(tl.int64) * channels + cols)
+            xd = tl.load(x_base + (r + 3).to(tl.int64) * channels + cols)
+            # Segment ids of rows r..r+3 are sd0, sd1, sd2, se0.
+            gxa = _dx_row(d0, sd0, d1, sd1, d2, sd2, e0, se0, w0, w1, w2, w3, dtype, exact)
+            gxb = _dx_row(d1, sd1, d2, sd2, e0, se0, e1, se1, w0, w1, w2, w3, dtype, exact)
+            gxc = _dx_row(d2, sd2, e0, se0, e1, se1, e2, se2, w0, w1, w2, w3, dtype, exact)
+            gxd = _dx_row(e0, se0, e1, se1, e2, se2, e3, se3, w0, w1, w2, w3, dtype, exact)
+            tl.store(dx_base + r.to(tl.int64) * channels + cols, gxa)
+            tl.store(dx_base + (r + 1).to(tl.int64) * channels + cols, gxb)
+            tl.store(dx_base + (r + 2).to(tl.int64) * channels + cols, gxc)
+            tl.store(dx_base + (r + 3).to(tl.int64) * channels + cols, gxd)
+            # dw: fp32 sums of dy[u] times the shifted, masked x, rows u = r..r+3 in order.
+            g = d0.to(tl.float32)
+            dw0 += g * xa.to(tl.float32)
+            dw1 += g * _masked(xb1, sb1, sd0)
+            dw2 += g * _masked(xb2, sb2, sd0)
+            dw3 += g * _masked(xb3, sb3, sd0)
+            g = d1.to(tl.float32)
+            dw0 += g * xb.to(tl.float32)
+            dw1 += g * _masked(xa, sd0, sd1)
+            dw2 += g * _masked(xb1, sb1, sd1)
+            dw3 += g * _masked(xb2, sb2, sd1)
+            g = d2.to(tl.float32)
+            dw0 += g * xc.to(tl.float32)
+            dw1 += g * _masked(xb, sd1, sd2)
+            dw2 += g * _masked(xa, sd0, sd2)
+            dw3 += g * _masked(xb1, sb1, sd2)
+            g = e0.to(tl.float32)
+            dw0 += g * xd.to(tl.float32)
+            dw1 += g * _masked(xc, sd2, se0)
+            dw2 += g * _masked(xb, sd1, se0)
+            dw3 += g * _masked(xa, sd0, se0)
+            xb1, sb1 = xd, se0
+            xb2, sb2 = xc, sd2
+            xb3, sb3 = xb, sd1
+            d0, sd0 = e1, se1
+            d1, sd1 = e2, se2
+            d2, sd2 = e3, se3
         partial = dw_ptr + (batch * (seq_len // chunk) + chunk_id) * 4 * channels
         tl.store(partial + cols, dw0)
         tl.store(partial + channels + cols, dw1)
@@ -263,7 +315,6 @@ def short_conv_triton_fwd_local(
         channels=channels,
         chunk=CHUNK,
         block_c=block_c,
-        unroll=UNROLL,
         exact=exact_reference_rounding,
     )
 
@@ -296,7 +347,6 @@ def short_conv_triton_bwd_local(
         channels=channels,
         chunk=CHUNK,
         block_c=block_c,
-        unroll=UNROLL,
         exact=exact_reference_rounding,
     )
     return dx, dw_partials
