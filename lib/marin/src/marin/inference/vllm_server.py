@@ -13,6 +13,7 @@ import sys
 import tempfile
 import threading
 import time
+from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
@@ -589,10 +590,11 @@ def resolve_model_name_or_path(model: InferenceModelConfig) -> tuple[str, Infere
 
 
 def _tail_file(path: str, max_lines: int) -> str:
+    if max_lines <= 0:
+        return ""
     try:
         with open(path, "r") as f:
-            lines = f.readlines()
-        return "".join(lines[-max_lines:])
+            return "".join(deque(f, maxlen=max_lines))
     except Exception as exc:
         return f"<failed to read {path}: {exc}>"
 

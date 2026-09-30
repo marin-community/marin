@@ -235,6 +235,7 @@ def test_native_logs_keeps_placement_older_than_diagnostic_tail(tmp_path):
     (tmp_path / "stderr.log").write_text("")
 
     assert placement not in _native_logs_tail(str(tmp_path), max_lines=200)
+    assert "later line 249" not in _native_logs_tail(str(tmp_path), max_lines=0)
     assert placement in _native_logs(str(tmp_path))
 
 
