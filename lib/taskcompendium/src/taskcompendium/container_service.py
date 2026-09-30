@@ -199,6 +199,8 @@ class ContainerToolProvider:
 
     async def stop(self) -> None:
         """Remove this trial's container, including after a failed handshake."""
+        if self.process is None:
+            return
         process = await asyncio.create_subprocess_exec(
             "docker",
             "rm",
@@ -217,6 +219,7 @@ class ContainerToolProvider:
         if self.stderr_task is not None:
             await self.stderr_task
         self._record({"diagnostics": self.diagnostics.decode(errors="replace")})
+        self.process = None
 
 
 def _reject_constant(value: str) -> None:
