@@ -150,7 +150,8 @@ def _build(mesh, inp, local_fn, policy, backward):
 
     def loss(x, w13, w2, weights):
         shifts = jnp.arange(LAYERS, dtype=jnp.int32)
-        y, _ = jax.lax.scan(jax.checkpoint(layer, policy=policy), x, (w13, w2, weights, shifts))
+        body = layer if policy == "none" else jax.checkpoint(layer, policy=policy)
+        y, _ = jax.lax.scan(body, x, (w13, w2, weights, shifts))
         return jnp.sum(y.astype(jnp.float32) ** 2)
 
     args = (inp["x"], inp["w13"], inp["w2"], inp["weights"])
