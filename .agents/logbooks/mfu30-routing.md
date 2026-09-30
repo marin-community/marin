@@ -127,3 +127,12 @@ Job `/mwittmann/m30b-gate-unfilled-01` (GB200x4, hero env), candidate C at e612b
   `test_moe_mlp_reports_positive_drop_count_in_ragged_a2a_when_over_capacity`. All three feed float32
   activations into the SM100 QuACK path, which asserts "gated aux output must be 16-bit". CI runs these on
   CPU, where the ragged path is skipped, so they are GPU-only failures independent of this branch.
+
+## M30B-008 Rack arm: A+B+C stacked, profiled (2026-09-30 18:41 UTC)
+
+Cancelled `m30b-invchain-01` (A+B; queued since 18:00 UTC, gang never admitted) and submitted
+`m30b-unfilled-01` (`/mwittmann/m30b-unfilled-01-coord`, port 33201, code e612b34244, branch head
+fcec70f93d) with `--profile-start-step 180021 --profile-steps 3`. All three changes are bitwise exact on
+the gate, so one stacked arm measures the deployable set; the profile attributes the removed kernels.
+Expected: +1.5-2% throughput (0.2-0.25 s/step if the component wins carry over), loss equal to
+`mhep-ctx4k-s0-20260930` at every step if the hero step is deterministic, peak HBM unchanged or lower.
