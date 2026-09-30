@@ -305,9 +305,9 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
-          cache-dependency-glob: "lib/taskcompendium/uv.lock"
+          cache-dependency-glob: "uv.lock"
       - name: Test TaskCompendium and Harbor adapters
-        run: uv run --project lib/taskcompendium --frozen --extra harbor --extra math --group test pytest lib/taskcompendium/tests -q
+        run: uv run --package taskcompendium --frozen --extra harbor --extra math --extra ingest --group test pytest -c lib/taskcompendium/pyproject.toml lib/taskcompendium/tests experiments/post_training/taskcompendium/tests -q
 
   iris_e2e_smoke:
     name: iris-e2e-smoke
