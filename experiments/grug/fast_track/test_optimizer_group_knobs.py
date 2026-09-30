@@ -17,6 +17,8 @@ import experiments.grug.fast_track.test_ngram_stat as t
 from experiments.grug.fast_track.optimizer import (
     GrugMoeMuonHConfig,
     cautious_matrix_deltas,
+    expert_consistency_metrics,
+    retract_to_param_sphere,
     scale_by_expert_consistency,
 )
 
@@ -158,3 +160,31 @@ def test_routed_consistency_and_cautious_change_only_the_routed_experts():
             )
             routed, routed_base = (np.asarray(u.kda_blocks.stacked.mlp.expert_mlp.w_up) for u in (out, base))
             assert not np.allclose(routed, routed_base)
+
+
+def _fixed_delta(delta):
+    return optax.GradientTransformation(lambda p: optax.EmptyState(), lambda u, s, p=None: (delta, s))
+
+
+@pytest.mark.parametrize("per_expert", [True, False])
+def test_retraction_puts_scaled_updates_back_on_the_sphere(per_expert):
+    params = jax.random.normal(jax.random.PRNGKey(0), (2, 3, 6, 5))
+    delta = 0.3 * jax.random.normal(jax.random.PRNGKey(1), params.shape)
+    out, _ = retract_to_param_sphere(_fixed_delta(delta), per_expert).update(params, optax.EmptyState(), params)
+    axes = (2, 3) if per_expert else (1, 2, 3)
+    np.testing.assert_allclose(
+        np.linalg.norm(np.asarray(params + out).reshape(*params.shape[: axes[0]], -1), axis=-1),
+        np.linalg.norm(np.asarray(params).reshape(*params.shape[: axes[0]], -1), axis=-1),
+        rtol=1e-5,
+    )
+
+
+def test_consistency_metrics_report_the_per_expert_multipliers():
+    opt = scale_by_expert_consistency(optax.identity(), momentum=0.9, beta2=0.99)
+    state = opt.init(jnp.zeros((2, 6, 5)))
+    for step in range(40):
+        noise = jax.random.normal(jax.random.PRNGKey(step), (6, 5))
+        _, state = opt.update(jnp.stack([jnp.ones((6, 5)), noise]), state)
+    metrics = expert_consistency_metrics(state)
+    assert float(metrics["train/expert_consistency_p90"]) > 0.9
+    assert float(metrics["train/expert_consistency_p10"]) < 0.3

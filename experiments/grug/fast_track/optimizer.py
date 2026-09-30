@@ -870,11 +870,58 @@ def cautious_matrix_deltas(inner: optax.GradientTransformation) -> optax.Gradien
     return optax.GradientTransformation(inner.init, update)
 
 
+def retract_to_param_sphere(inner: optax.GradientTransformation, per_expert: bool) -> optax.GradientTransformation:
+    """Put ``params + delta`` back on the parameter's Frobenius sphere, with the same spheres as the MuonH step (one
+    per layer, or with ``per_expert`` one per (layer, expert) of a 4-D stack). Rescaling or masking a MuonH chord
+    lands inside the sphere; without this the norm would shrink step after step."""
+
+    def update(updates, state, params=None):
+        if params is None:
+            raise ValueError("retract_to_param_sphere requires params")
+        deltas, state = inner.update(updates, state, params)
+
+        def retract(p, d):
+            if not _is_matrix_stack(p):
+                return d
+            axes = (-2, -1) if per_expert and p.ndim == 4 else tuple(range(1, p.ndim)) if p.ndim > 2 else (0, 1)
+            p32 = p.astype(jnp.float32)
+            moved = p32 + d.astype(jnp.float32)
+            norm = jnp.sqrt(jnp.sum(jnp.square(p32), axis=axes, keepdims=True))
+            moved_norm = jnp.sqrt(jnp.sum(jnp.square(moved), axis=axes, keepdims=True))
+            return (moved * norm / jnp.maximum(moved_norm, 1e-10) - p32).astype(d.dtype)
+
+        return jax.tree.map(retract, params, deltas), state
+
+    return optax.GradientTransformation(inner.init, update)
+
+
 class ExpertConsistencyState(NamedTuple):
     inner: optax.OptState
     count: jax.Array
     momentum: optax.Updates
     grad_sq: optax.Updates
+    scale: optax.Updates
+    """The last step's per-expert multiplier, for logging (``expert_consistency_metrics``)."""
+
+
+def expert_consistency_metrics(opt_state) -> dict[str, jax.Array]:
+    """Distribution of the routed experts' consistency multipliers (empty without ``scale_by_expert_consistency``)."""
+    states = [
+        x
+        for x in jax.tree.leaves(opt_state, is_leaf=lambda x: isinstance(x, ExpertConsistencyState))
+        if isinstance(x, ExpertConsistencyState)
+    ]
+    scales = [s.reshape(-1) for state in states for s in jax.tree.leaves(state.scale)]
+    if not scales:
+        return {}
+    flat = jnp.concatenate(scales)
+    return {
+        "train/expert_consistency_mean": jnp.mean(flat),
+        "train/expert_consistency_p10": jnp.percentile(flat, 10),
+        "train/expert_consistency_p50": jnp.percentile(flat, 50),
+        "train/expert_consistency_p90": jnp.percentile(flat, 90),
+        "train/expert_consistency_zero_frac": jnp.mean((flat == 0).astype(jnp.float32)),
+    }
 
 
 def scale_by_expert_consistency(
@@ -898,6 +945,7 @@ def scale_by_expert_consistency(
             count=jnp.zeros([], jnp.int32),
             momentum=jax.tree.map(lambda p: jnp.zeros(p.shape, jnp.float32) if _is_matrix_stack(p) else None, params),
             grad_sq=jax.tree.map(zeros_sq, params),
+            scale=jax.tree.map(zeros_sq, params),
         )
 
     def update_fn(updates, state, params=None):
@@ -928,7 +976,7 @@ def scale_by_expert_consistency(
         scales = jax.tree.map(scale, momenta, grad_sq, is_leaf=is_leaf)
         deltas, inner_state = inner.update(updates, state.inner, params)
         deltas = jax.tree.map(lambda d, c: d if c is None else (d * c).astype(d.dtype), deltas, scales, is_leaf=is_leaf)
-        return deltas, ExpertConsistencyState(inner_state, count, momenta, grad_sq)
+        return deltas, ExpertConsistencyState(inner_state, count, momenta, grad_sq, scales)
 
     return optax.GradientTransformation(init_fn, update_fn)
 
@@ -1608,6 +1656,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
         if self.muonh_routed_consistency_beta2 is not None:
             momentum = self.momentum if self.muonh_routed_momentum is None else self.muonh_routed_momentum
             inner = scale_by_expert_consistency(inner, momentum, self.muonh_routed_consistency_beta2)
+        if self.muonh_routed_cautious or self.muonh_routed_consistency_beta2 is not None:
+            inner = retract_to_param_sphere(inner, self.hyperball_per_expert)
         return inner
 
     def __post_init__(self):

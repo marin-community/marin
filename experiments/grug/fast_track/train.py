@@ -74,7 +74,7 @@ from experiments.grug.fast_track.model import (
     write_ngram_stats,
 )
 from experiments.grug.fast_track.muon_probe import MuonProbe
-from experiments.grug.fast_track.optimizer import magma_metrics, optimizer_diagnostics
+from experiments.grug.fast_track.optimizer import expert_consistency_metrics, magma_metrics, optimizer_diagnostics
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
 # variant-specific model/loss/FLOP wiring, per the grug copy-first workflow in
@@ -1107,6 +1107,7 @@ def _make_train_step(
             updates, opt_state = optimizer.update(opt_grads, opt_state_in, qb_params)
             metrics.update(optimizer_diagnostics(opt_state))
             metrics.update(magma_metrics(opt_state))
+            metrics.update(expert_consistency_metrics(opt_state))
             params = optax.apply_updates(qb_params, updates)
             master_params = None
         if params.ngram_stat_table is not None:
