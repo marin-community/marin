@@ -27,7 +27,8 @@ _SUPPORTED_FILES = frozenset(
 )
 _FILE_SUBMISSION = re.compile(
     r"^\s*(?:please\s+)?(?:write|save|put|submit|store|place)\s+(?:your\s+)?(?:final\s+)?"
-    r"(?:answer|response)\s+(?:to|in|at)\s+[`']?/app/(?:answer|solution)\.(?:txt|json)[`']?[.!]?\s*$",
+    r"(?:answer|response)\s+(?:to|in|at)\s+(?:(?:a|the)\s+file\s+named\s+)?"
+    r"[`']?/app/(?:answer|solution)\.(?:txt|json)[`']?[.!]?\s*$",
     re.IGNORECASE,
 )
 _TOOL_REQUIREMENT = re.compile(
@@ -39,6 +40,35 @@ _TOOL_REQUIREMENT = re.compile(
 _UNKNOWN_FILE_REFERENCE = re.compile(r"\b(?:answer|solution)\.txt\b|/app/(?:answer|solution)\.", re.IGNORECASE)
 _REPEATED_BLANK_LINES = re.compile(r"\n{3,}")
 _NEMOTRON_OUTPUT_PATH = re.compile(r"Write the final answer to `/app/answer\.txt`\.\s*", re.IGNORECASE)
+_NEMOTRON_FILE_PREAMBLE = re.compile(r",\s*then write your final answer at the path `/app/answer\.txt`\.", re.IGNORECASE)
+_NEMOTRON_BOXED_FILE_FORMAT = re.compile(
+    r"Format requirement: the answer file should contain `\\boxed\{<answer>\}` on its\s*"
+    r"last meaningful line\. The verifier extracts the last `\\boxed\{\.\.\.\}` it finds\.",
+    re.IGNORECASE,
+)
+_NEMOTRON_BOXED_CHAT_FORMAT = "Format requirement: put your final answer in `\\boxed{...}`."
+_NEMOTRON_V5_TEMPLATE = "334fa3ab07c7"
+_NEMOTRON_V5_SUBMISSION_HEADING = re.compile(r"(?im)^## Submitting your answer \(IMPORTANT\)\s*\n")
+_NEMOTRON_V5_SUBMISSION_TEXT = "\n".join(
+    (
+        "## Submitting your answer (IMPORTANT)",
+        "You are a terminal agent. Your chat reply is NOT graded — the grader only reads the file "
+        "`/app/answer.txt` inside the sandbox. You MUST write your solution, ending with the final answer "
+        "in \\boxed{...} to `/app/answer.txt` by RUNNING A SHELL COMMAND, e.g. a heredoc:",
+        "",
+        "    cat > /app/answer.txt <<'EOF'",
+        "    <your solution, ending with the final answer in \\boxed{...} here>",
+        "    EOF",
+        "",
+        "Then confirm it with `cat /app/answer.txt`. An empty or missing `/app/answer.txt` scores 0 "
+        "regardless of what you wrote in your reply.",
+        "",
+        "Reliability note: write a provisional `/app/answer.txt` as soon as you have a",
+        "candidate answer, then refine it if needed. This preserves a scoreable answer if",
+        "later computation consumes the remaining agent time.",
+    )
+)
+_NEMOTRON_V5_CHAT_INSTRUCTION = "Present the final answer in `\\boxed{...}`. Show your work when it helps."
 _ALL_PUZZLES_DELIVERABLE = re.compile(
     r"## Deliverable \(REQUIRED\)\s*\n\s*"
     r"Write ONLY your final answer to \*\*`/app/answer\.txt`\*\* \(a single line, no\s*\n"
@@ -68,7 +98,7 @@ def _metadata(archive: TaskArchive) -> tuple[tuple[str, ...], TaskTroveSourceEvi
     return tuple(raw_tags), evidence
 
 
-def _instructions(archive: TaskArchive, converter: str) -> str:
+def _instructions(archive: TaskArchive, converter: str, template_id: str) -> str:
     extras = set(archive.files) - _SUPPORTED_FILES
     if extras:
         raise ValueError(f"Mathematical task requires unsupported task resources: {sorted(extras)}")
@@ -77,6 +107,18 @@ def _instructions(archive: TaskArchive, converter: str) -> str:
         instruction = instruction.replace("Provide your answer in the file answer.txt", "")
         instruction = instruction.replace("## Submitting the answer", "")
         instruction = _NEMOTRON_OUTPUT_PATH.sub("", instruction)
+        if template_id == "5ee94cf985a9":
+            instruction = _NEMOTRON_FILE_PREAMBLE.sub(".", instruction)
+            instruction = _NEMOTRON_BOXED_FILE_FORMAT.sub(lambda _: _NEMOTRON_BOXED_CHAT_FORMAT, instruction)
+        elif template_id == _NEMOTRON_V5_TEMPLATE:
+            instruction = _NEMOTRON_FILE_PREAMBLE.sub(".", instruction)
+            instruction = _NEMOTRON_BOXED_FILE_FORMAT.sub(lambda _: _NEMOTRON_BOXED_CHAT_FORMAT, instruction)
+            match = _NEMOTRON_V5_SUBMISSION_HEADING.search(instruction)
+            if match is None or " ".join(instruction[match.start() :].split()) != " ".join(
+                _NEMOTRON_V5_SUBMISSION_TEXT.split()
+            ):
+                raise ValueError("Unsupported Nemotron math v5 submission section")
+            instruction = instruction[: match.start()] + _NEMOTRON_V5_CHAT_INSTRUCTION
     elif converter == "all_puzzles":
         instruction = instruction.replace("<!-- laion v2 puzzles deliverable: answer.txt -->", "")
         instruction, count = _ALL_PUZZLES_DELIVERABLE.subn(
@@ -103,7 +145,7 @@ def import_task(archive: TaskArchive) -> TaskTroveImportResult:
     """Convert a math-mode TaskTrove Clean archive to a text or numeric task."""
     try:
         tags, evidence = _metadata(archive)
-        instructions = _instructions(archive, evidence.converter)
+        instructions = _instructions(archive, evidence.converter, evidence.template_id)
         contract = parse_spec(archive.files["tests/verifier.toml"].decode())
         if not isinstance(contract, MathSpec):
             raise ValueError("TaskTrove mathematical archive must declare a MathSpec")
