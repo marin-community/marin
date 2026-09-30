@@ -31,13 +31,7 @@ import jax.numpy as jnp
 from jaxtyping import Array, Bool, Float, Int
 
 from haliax.nn.ragged_dot import ragged_dot
-from levanter.grug._moe.common import (
-    _assignment_validity,
-    _interleave_gate_up,
-    _invert_permutation,
-    _scaled_capacity,
-    CapacityDrops,
-)
+from levanter.grug._moe.common import _assignment_validity, _interleave_gate_up, _scaled_capacity, CapacityDrops
 from levanter.grug._moe.sonic import sonic_gather_sum, sonic_gather_sum_available
 from levanter.grug._moe.ep_common import (
     ExpertA2aParams,
@@ -167,7 +161,7 @@ def _unpermute_from_global_expert(
     topk: int,
 ) -> Float[Array, "Tlocal H"]:
     """Weight each token's expert outputs by its routing weights and sum them."""
-    positions = _invert_permutation(sorted_indices)
+    positions = jnp.argsort(sorted_indices)
     if sonic_gather_sum_available():
         # One kernel for the gather and the sum, materializing neither the unpermuted
         # ``[TK, H]`` buffer nor the ``[T, K, H]`` view -- at top-8 that view is eight times
@@ -205,7 +199,7 @@ def _gather_dispatch_rows_bwd(
     topk: int, sorted_indices: Int[Array, "TK"], cotangent: Float[Array, "TK H"]
 ) -> tuple[Float[Array, "Tlocal H"], None]:
     tokens_per_shard = sorted_indices.shape[0] // topk
-    positions = _invert_permutation(sorted_indices).reshape(tokens_per_shard, topk)
+    positions = jnp.argsort(sorted_indices).reshape(tokens_per_shard, topk)
     if sonic_gather_sum_available():
         ones = jnp.ones((tokens_per_shard, topk), dtype=jnp.float32)
         grad_x = sonic_gather_sum(cotangent, positions, ones)

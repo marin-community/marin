@@ -9,6 +9,8 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Bool, Float, Int
 
+from levanter.grug._moe.common import _invert_permutation
+
 
 def _sort_activations(inputs: Float[Array, "N *tail"], sort_indices: Int[Array, "N"]) -> Float[Array, "N *tail"]:
     if inputs.shape[0] != sort_indices.shape[0]:
@@ -33,7 +35,7 @@ def _sort_activations_custom_bwd(
     residuals: Int[Array, "N"], grads: Float[Array, "N *tail"]
 ) -> tuple[Float[Array, "N *tail"], None]:
     sort_indices = residuals
-    return _sort_activations_custom(grads, jnp.argsort(sort_indices)), None
+    return _sort_activations_custom(grads, _invert_permutation(sort_indices)), None
 
 
 _sort_activations_custom.defvjp(_sort_activations_custom_fwd, _sort_activations_custom_bwd)
@@ -49,7 +51,7 @@ def _ranks_within_groups(
     sortable_groups = jnp.where(valid, group_ids, num_groups)
     safe_groups = jnp.where(valid, group_ids, 0)
     order = jnp.argsort(sortable_groups, stable=True)
-    inverse_order = jnp.argsort(order)
+    inverse_order = _invert_permutation(order)
     counts = jnp.bincount(sortable_groups, length=num_groups).astype(jnp.int32)
     starts = jnp.cumsum(counts) - counts
     sorted_ranks = jnp.arange(group_ids.shape[0], dtype=jnp.int32) - starts[safe_groups[order]]
