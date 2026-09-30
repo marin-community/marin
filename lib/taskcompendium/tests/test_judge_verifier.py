@@ -75,7 +75,9 @@ def _runtime(endpoint: JudgeEndpoint, *, max_requests: int = 8) -> JudgeRuntimeC
     )
 
 
-async def _run(tmp_path, endpoint, task, answer: str, trial_name: str, *, max_requests: int = 8):
+async def _run(
+    tmp_path, endpoint, task, answer: str, trial_name: str, *, max_requests: int = 8, provide_runtime: bool = True
+):
     environment_config = HarborEnvironmentConfig()
     task_dir = lower_to_harbor(task, PlainText(id="plain"), environment_config, tmp_path / f"task-{trial_name}")
     result = await run_replay_trial(
@@ -83,7 +85,7 @@ async def _run(tmp_path, endpoint, task, answer: str, trial_name: str, *, max_re
         {"role": "assistant", "content": answer},
         tmp_path / "trials",
         trial_name,
-        _runtime(endpoint, max_requests=max_requests),
+        _runtime(endpoint, max_requests=max_requests) if provide_runtime else None,
     )
     return result, task_dir
 
@@ -93,7 +95,7 @@ async def test_judge_exact_gate_skips_endpoint_and_keeps_reference_private(tmp_p
         JudgeSpec(references=("Mars",), question="What is the red planet?", model="other-judge"),
         context="Scoring note that must stay private.",
     )
-    result, task_dir = await _run(tmp_path, judge_endpoint, _task(verifier), "Mars", "exact-gate")
+    result, task_dir = await _run(tmp_path, judge_endpoint, _task(verifier), "Mars", "exact-gate", provide_runtime=False)
 
     outcome = json.loads((tmp_path / "trials/exact-gate/verifier/taskcompendium-result.json").read_text())
     assert result.exception_info is None, result.exception_info

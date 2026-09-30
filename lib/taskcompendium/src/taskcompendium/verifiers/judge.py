@@ -23,7 +23,7 @@ from tasktrove_verify.spec import (
 
 from taskcompendium.grading import GradeResult, Outcome, Verifier
 from taskcompendium.models import VerifierKind, VerifierSpec
-from taskcompendium.submission import GradingAttempt, TextSubmission
+from taskcompendium.submission import GradingAttempt, Submission, TextSubmission
 
 MAX_CONTEXT_CHARS = 60_000
 
@@ -55,11 +55,9 @@ class JudgeVerifier(Verifier):
                 raise ValueError("Judge context path must be relative to the private tests directory")
         return self
 
-    async def grade(self, submission, *, specification: VerifierSpec, attempt: GradingAttempt) -> GradeResult:
+    async def grade(self, submission: Submission, *, attempt: GradingAttempt) -> GradeResult:
         if not isinstance(submission, TextSubmission):
             raise TypeError("Judge verifier requires a text submission")
-        if attempt.judge_runtime is None:
-            return GradeResult(Outcome.INFRA_ERROR, None, "judge runtime was not configured")
         try:
             return await asyncio.to_thread(_grade, self, submission, attempt.judge_runtime)
         except Exception as error:
@@ -75,7 +73,7 @@ def judge_answer(spec: JudgeSpec, *, context: str | None = None) -> VerifierSpec
     return VerifierSpec(kind=VerifierKind.JUDGE, parameters_json=verifier.model_dump_json())
 
 
-def _grade(verifier: JudgeVerifier, submission: TextSubmission, runtime: JudgeRuntimeConfig) -> GradeResult:
+def _grade(verifier: JudgeVerifier, submission: TextSubmission, runtime: JudgeRuntimeConfig | None) -> GradeResult:
     # The judge module imports the optional OpenAI client, so load it only for judge tasks.
     from tasktrove_verify.modes.grade_judge import JudgeInfrastructureError  # noqa: PLC0415
     from tasktrove_verify.modes.grade_judge import grade as grade_judge  # noqa: PLC0415

@@ -3,7 +3,6 @@
 
 """Private semantics for one deterministic task and its final submission."""
 
-import re
 from dataclasses import dataclass
 from enum import StrEnum
 from math import isfinite
@@ -11,8 +10,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
-SCHEMA_VERSION = "0.15"
-SHA256_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
+SCHEMA_VERSION = "0.16"
 
 
 class AnswerType(StrEnum):
@@ -230,42 +228,28 @@ class ConversationTrace(BaseModel):
         return self
 
 
-class ProviderRequirement(BaseModel):
-    """One seeded action interface required by the task."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    # Versioned action contract expected from the selected provider.
-    action_interface: str
-    # Digest of the immutable state used to initialize each trial.
-    seed_sha256: str
-
-    @model_validator(mode="after")
-    def validate_provider(self) -> "ProviderRequirement":
-        if not self.action_interface:
-            raise ValueError("Provider requirements need an action interface")
-        if not SHA256_PATTERN.fullmatch(self.seed_sha256):
-            raise ValueError("An immutable provider seed requires a lowercase SHA256 digest")
-        return self
-
-
 class EnvironmentRequirements(BaseModel):
-    """General workspace operations, separate from callable tool interfaces."""
+    """Environment functionality required to run the task.
+
+    ``capabilities`` contains generic operations such as ``filesystem`` or
+    ``shell``. ``action_interfaces`` contains named stateful tool surfaces such
+    as ``workplace:v1``.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     capabilities: tuple[str, ...] = ()
+    action_interfaces: tuple[str, ...] = ()
 
 
 class TaskSpec(BaseModel):
-    """The private task definition, including workspace and tool requirements."""
+    """The private definition of one deterministic answer task."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     id: str
     context: ConversationInput
     environment_requirements: EnvironmentRequirements
-    tool_providers: dict[str, ProviderRequirement] = Field(default_factory=dict)
     final_tools: tuple[FunctionDefinition, ...] = ()
     answer_type: AnswerType
     verifier: VerifierSpec
@@ -279,8 +263,6 @@ class TaskSpec(BaseModel):
             raise ValueError(f"Unsupported TaskSpec schema: {self.schema_version}")
         if not self.id:
             raise ValueError("A task id is required")
-        if any(not name for name in self.tool_providers):
-            raise ValueError("Provider requirement names must be nonempty")
         if len({function.name for function in self.final_tools}) != len(self.final_tools):
             raise ValueError("Advertised function names must be unique")
         if self.answer_type == AnswerType.NATIVE_ACTION and not self.final_tools:

@@ -96,7 +96,6 @@ async def test_imported_mcqa_matches_source_grading(tmp_path):
                 ConversationTrace(
                     events=(*specification.context.events, TextMessage(role="assistant", content=response))
                 ),
-                {},
                 object(),
             ),
         )
@@ -113,7 +112,6 @@ async def test_imported_mcqa_extracts_json_and_rejects_malformed_answers():
             ConversationTrace(
                 events=(*specification.context.events, TextMessage(role="assistant", content='{"answer":"C"}'))
             ),
-            {},
             object(),
         ),
     )
@@ -124,7 +122,6 @@ async def test_imported_mcqa_extracts_json_and_rejects_malformed_answers():
             ConversationTrace(
                 events=(*specification.context.events, TextMessage(role="assistant", content="Answer: C"))
             ),
-            {},
             object(),
         ),
     )
@@ -215,7 +212,7 @@ def test_imported_mcqa_resolves_verifier_in_fresh_process(tmp_path):
         "result = asyncio.run(grade_answer(specification, "
         "read_submission_convention(root / 'submission_convention.json'), "
         "GradingAttempt(ConversationTrace(events=(*specification.context.events, "
-        "TextMessage(role='assistant', content='C'))), {}, object()))); "
+        "TextMessage(role='assistant', content='C'))), object()))); "
         "print(json.dumps({'status': result.status, 'reward': result.reward}))"
     )
 

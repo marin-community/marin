@@ -5,11 +5,9 @@
 
 import json
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
-from math import isfinite
-from typing import Annotated, Any, Literal, Protocol, Self, runtime_checkable
+from typing import Annotated, Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 from tasktrove_verify.spec import JudgeRuntimeConfig
@@ -51,7 +49,6 @@ class AnswerFormat(StrEnum):
 
     PLAIN = "plain"
     JSON = "json"
-    STATE = "state"
     ANSWER_CALL = "answer_call"
     FINAL_ACTION = "final_action"
 
@@ -61,7 +58,6 @@ class GradingAttempt:
     """Trial evidence available to submission conventions and verifiers."""
 
     conversation: ConversationTrace
-    tool_providers: Mapping[str, object]
     workspace: object
     judge_runtime: JudgeRuntimeConfig | None = None
 
@@ -88,11 +84,6 @@ class SubmissionFailure(ValueError):
     """The agent ended the interaction without a valid submission."""
 
 
-@runtime_checkable
-class StateReadable(Protocol):
-    def canonical_state(self) -> JsonValue: ...
-
-
 class Convention(BaseModel, ABC):
     """How a result is requested, delivered, and extracted."""
 
@@ -109,8 +100,6 @@ class Convention(BaseModel, ABC):
 
     def supports(self, answer_type: AnswerType) -> bool:
         """Whether this convention can carry the semantic result."""
-        if self.answer_format == AnswerFormat.STATE:
-            return answer_type == AnswerType.STATE
         if self.answer_format == AnswerFormat.FINAL_ACTION:
             return answer_type == AnswerType.NATIVE_ACTION
         return answer_type in (AnswerType.TEXT, AnswerType.NUMBER)
@@ -182,48 +171,13 @@ class FinalAction(Convention):
         return ActionSubmission(final)
 
 
-class ProviderState(Convention):
-    answer_format: Literal[AnswerFormat.STATE] = AnswerFormat.STATE
-    provider: str = Field(min_length=1)
-
-    async def extract(self, attempt: GradingAttempt) -> StateSubmission:
-        final = attempt.conversation.events[-1]
-        if not isinstance(final, (TextMessage, AssistantToolCalls)):
-            raise SubmissionFailure("State submission requires a final assistant message")
-        provider = attempt.tool_providers[self.provider]
-        if not isinstance(provider, StateReadable):
-            raise TypeError(f"Provider {self.provider!r} does not expose canonical state")
-        state = provider.canonical_state()
-        _validate_json_state(state)
-        return StateSubmission(json.loads(json.dumps(state, allow_nan=False)))
-
-
-SubmissionConvention = Annotated[
-    PlainText | JsonAnswer | AnswerCall | FinalAction | ProviderState, Field(discriminator="answer_format")
-]
+SubmissionConvention = Annotated[PlainText | JsonAnswer | AnswerCall | FinalAction, Field(discriminator="answer_format")]
 
 
 def _text_answer(response: ConversationEvent) -> str:
     if not isinstance(response, TextMessage) or response.role != "assistant" or not response.content.strip():
         raise SubmissionFailure("Text submission requires nonempty assistant content without tool calls")
     return response.content
-
-
-def _validate_json_state(value: object) -> None:
-    """Reject lossy JSON coercions at the authoritative state boundary."""
-    if value is None or type(value) in (bool, int, str):
-        return
-    if type(value) is float and isfinite(value):
-        return
-    if type(value) is list:
-        for item in value:
-            _validate_json_state(item)
-        return
-    if type(value) is dict and all(type(key) is str for key in value):
-        for item in value.values():
-            _validate_json_state(item)
-        return
-    raise TypeError("Provider state is not JSON compatible")
 
 
 @dataclass(frozen=True)
@@ -237,7 +191,7 @@ class SubmissionCompatibility:
         return not self.reasons
 
 
-def submission_compatible(specification: TaskSpec, convention: SubmissionConvention) -> SubmissionCompatibility:
+def submission_compatibility(specification: TaskSpec, convention: SubmissionConvention) -> SubmissionCompatibility:
     """Explain which parts of the task a submission convention cannot carry."""
     if not convention.supports(specification.answer_type):
         return SubmissionCompatibility(
@@ -253,11 +207,6 @@ def submission_compatible(specification: TaskSpec, convention: SubmissionConvent
         if any(function.name == ANSWER_CALL_NAME for function in specification.final_tools):
             reasons.append("final tool name collides with submit_answer")
         return SubmissionCompatibility(tuple(reasons))
-    if convention.answer_format == AnswerFormat.STATE:
-        reasons = []
-        if specification.final_tools:
-            reasons.append("state submission does not carry final tools")
-        return SubmissionCompatibility(tuple(reasons))
     return SubmissionCompatibility(())
 
 
@@ -267,8 +216,6 @@ def submission_instruction(convention: SubmissionConvention) -> str:
         return "Give your answer as plain text."
     if convention.answer_format == AnswerFormat.JSON:
         return f'Give your answer as a JSON object with an "{ANSWER_FIELD}" field.'
-    if convention.answer_format == AnswerFormat.STATE:
-        return "Use the available tools to complete the task. When you are done, send a final message."
     if convention.answer_format == AnswerFormat.ANSWER_CALL:
         return f'Call {ANSWER_CALL_NAME} with your final answer as the "{ANSWER_FIELD}" string.'
     if convention.answer_format == AnswerFormat.FINAL_ACTION:
@@ -279,7 +226,7 @@ def submission_instruction(convention: SubmissionConvention) -> str:
 def render_instruction(specification: TaskSpec, convention: SubmissionConvention) -> str:
     """Return Harbor instruction text for the selected convention."""
     context = specification.context
-    compatibility = submission_compatible(specification, convention)
+    compatibility = submission_compatibility(specification, convention)
     if not compatibility.compatible:
         raise ValueError(f"Submission convention {convention.id!r} is incompatible: {'; '.join(compatibility.reasons)}")
     if convention.answer_format == AnswerFormat.FINAL_ACTION:
@@ -318,7 +265,7 @@ def conversation_messages(context: ConversationInput) -> list[dict[str, Any]]:
 
 def chat_request(specification: TaskSpec, convention: SubmissionConvention) -> dict[str, Any]:
     """Prepare the conversation and tools for the selected submission convention."""
-    compatibility = submission_compatible(specification, convention)
+    compatibility = submission_compatibility(specification, convention)
     if not compatibility.compatible:
         raise ValueError(f"Submission convention is incompatible: {'; '.join(compatibility.reasons)}")
     messages = conversation_messages(specification.context)
