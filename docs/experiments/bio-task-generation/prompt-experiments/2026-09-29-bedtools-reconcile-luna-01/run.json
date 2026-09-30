@@ -1,0 +1,83 @@
+{
+  "run_id": "2026-09-29-bedtools-reconcile-luna-01",
+  "status": "completed and reviewed; main repairs made, consistency errors remain",
+  "question": "Can a separate general reconciliation worker repair discovery errors while retaining source coverage?",
+  "baseline": "../2026-09-29-bedtools-luna-06/run.json",
+  "repository": "https://github.com/arq5x/bedtools2",
+  "prompt": {
+    "path": "docs/experiments/bio-task-generation/prompts/reconcile-units.md",
+    "snapshot": "template.md",
+    "sha256": "7b13aa342eb89c90c77d816dfb61b121ae7fe1942113e0a1d15155b071a077e9",
+    "resolved_snapshot": "resolved-prompt.md",
+    "resolved_sha256": "9ec832e10dcb3f851ccec5bc8e2ec4299c0e825d21740898b39805e6c5248fd3",
+    "base_commit": "72008dd68247318a367a840a4f41e27fb15ff7e1",
+    "working_tree": true
+  },
+  "inputs": {
+    "source_run": "2026-09-29-bedtools-luna-06",
+    "artifact_sha256": {
+      "inputs/datasets.jsonl": "f358f2eb8a94e7af4e4992e6e07a035ed6ab84522dfd8c55c714f1c78963eafd",
+      "inputs/discovery-prompt.md": "d895b27ec8b556c7244494a2a2df78937025525f365899173fee99415fad9630",
+      "inputs/inspection.md": "efaaa4bc2cbf5dd0e27e1cf8130be74bb26de2eb252a414748e656108fd56e55",
+      "inputs/units.jsonl": "00589c62279df6d05ab3adcc78a7184a935b5821491610847af21e9f18135def"
+    }
+  },
+  "model": {
+    "requested": "gpt-6-luna",
+    "reported_version": null,
+    "reasoning_effort": "inherited; no explicit override",
+    "context_output_compaction_limits": null,
+    "tokens": null,
+    "cost": null
+  },
+  "execution": {
+    "runner": "collaboration.spawn_agent",
+    "runner_version": null,
+    "history": "none",
+    "concurrent_children": 1,
+    "attempts": 1,
+    "retries": 0,
+    "budget_minutes": 10,
+    "prepared_at_utc": "2026-09-29T23:20:18.728440+00:00",
+    "deadline_utc": "2026-09-29T23:30:18.728440+00:00",
+    "launch_message": "launch-message.txt",
+    "launch_message_sha256": "fea6767056e56431fb79a073591a976d413a9053c4e5de51ed7a0688ca4015a4",
+    "source_access": "source-access.txt",
+    "source_access_sha256": "57dbb1d7583d4b768e113169f55e349b7e3c094c93140e42141531bf2b7bfdec",
+    "outputs": "outputs/",
+    "agent_task": "/root/bedtools_reconcile_luna_01",
+    "launch_observed_at_utc": "2026-09-29T23:21:06.186065+00:00",
+    "completion_observed_at_utc": "2026-09-29T23:27:21.392659+00:00"
+  },
+  "review_criteria": "review-criteria.md",
+  "trace_export": "Full agent/tool trace unavailable; final message saved in worker-final.txt.",
+  "outputs": {
+    "counts": {
+      "units": 22,
+      "datasets": 13
+    },
+    "structural_errors": [],
+    "retention": {
+      "input_units": 17,
+      "retained_unit_ids": 16,
+      "replaced_unit_ids": [
+        "bedtools2_tutorial_dnase_regulatory_analysis"
+      ],
+      "input_asset_urls": 12,
+      "missing_input_asset_urls": []
+    },
+    "queue_audit": {
+      "listed": 41,
+      "marked_inspected": 18,
+      "pending": 23,
+      "reported_total_in_prose": 40
+    },
+    "artifact_sha256": {
+      "outputs/datasets.jsonl": "a0cde05722d14543262595063e7ef88209e6b25c4a10c70b1fd46d0d8b8e9b46",
+      "outputs/inspection.md": "bb4315c309a2f7506bae0d53e60668e409a6d3581373beb863e3b03d106160b4",
+      "outputs/reconciliation.md": "f3f04fb50a9d91054ed3af5184dd8878712fb0756310ce6ee515a610a9801b53",
+      "outputs/units.jsonl": "64eb4c79b3f9d3b025ad2a4abad7fad569020688cfa0f12ee4b4e5d141862070"
+    }
+  },
+  "review_recorded_at_utc": "2026-09-29T23:29:22.845318+00:00"
+}

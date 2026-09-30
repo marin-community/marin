@@ -6,7 +6,7 @@ Turn inspected scientific use cases into Harbor tasks. Optimize for using establ
 
 ## Tool use and tool creation
 
-The initial goal is an agent that uses bioinformatics tools to answer scientific questions. For every candidate unit, record its source location and provisional boundary, such as a function, cell group or workflow rule, then classify whether it uses existing tools, implements a tool, or combines both. Detailed extraction rules remain a separate work item. Separately state what the proposed task requires the solver to do. A tool implementation can supply an API to use without becoming an implementation assignment.
+The initial goal is an agent that uses bioinformatics tools to answer scientific questions. The find-units worker records each candidate unit's source location and provisional boundary, such as a function, cell group or workflow rule, then classifies whether the source work uses existing tools, implements a tool, or combines both, with supporting evidence. The task author reviews that classification and separately states what the proposed task requires the solver to do. A tool implementation can supply an API to use without becoming an implementation assignment.
 
 Tool use includes selecting and configuring methods, calling packages, connecting stages and writing analysis or data-handling code. Writing a function to run an existing differential-expression package can be tool use; implementing the package's statistical method is tool creation. The scientific objective and required work determine this distinction, not whether the answer contains code or a function definition.
 
@@ -132,7 +132,7 @@ For a selected repository, use four prompt roles. Finding repositories remains a
 
 | Prompt role | Inputs | Outputs |
 | --- | --- | --- |
-| [Find units](prompts/find-units.md) | Repository and any supplied scientific focus or dataset inventory | Tutorials, functions, notebook sections, workflow stages and associated data, with source locations, revisions, dependencies and scientific uses |
+| [Find units](prompts/find-units.md) | Repository and any supplied scientific focus or dataset inventory | Documented operations, scientific usage examples, tutorials, functions, notebook sections, workflow stages and associated data, with source locations, revisions, dependencies and scientific uses |
 | [Author a task](prompts/author-task.md) | A unit or related group of units, surrounding source context and compatible data | A saved scientific proposal, followed by a Harbor package, input manifest, native reference and executable grader |
 | Solve independently | Only solver-visible instructions, inputs and tools | Submitted artifacts and a recorded execution trace |
 | Reflect on and validate the task | Task package, reference, grader, automated checks, solver submissions and traces | Evidence-backed task critique, proposed revisions and an accept/revise/reject recommendation |
@@ -140,6 +140,12 @@ For a selected repository, use four prompt roles. Finding repositories remains a
 ### Worker contexts and handoffs
 
 Start with one explorer per repository and an author for each candidate task. A unit is an inspection starting point: one tutorial may yield several tasks, and several functions may support one task. Let authors inspect adjacent code and combine related units. Discover datasets alongside units and record them in the [reusable input collection](discovery.md#reusable-input-collection); the author checks suitability and prepares inputs for its task.
+
+The explorer checks data identities, references, tool roles, and record
+consistency within the find-units prompt before handing off its inventory.
+[Prompt experiments](prompt-experiments/index.md) tested a separate reconciliation
+worker; the design retains one discovery worker. Its self-check does not replace
+independent solving or validation of an authored task.
 
 Initially, reuse the author's context across proposal, construction and repair. Save the proposal before building and record changes when construction exposes missing assumptions. The separate phase outputs make these jobs inspectable without requiring a separate LLM worker for each phase. Model choice and worker concurrency remain independent configuration decisions.
 
@@ -149,6 +155,25 @@ Automated Harbor execution, reference and grader checks are harness operations b
 
 ### Versioned artifacts
 
-For each run record the prompt revision, resolved prompt, structured inputs, source revisions/hashes, model configuration, orchestration/validation revisions, outputs and results. These enable auditing and reruns, not deterministic model generation. Exclude credentials from records.
+Keep a run record for each prompt experiment, with links to the original artifacts:
 
-Develop prompts using the [pipeline development testbed](index.md#pipeline-development-testbed). Revisit affected cases when the pipeline or prompts change, comparing task framing and verification before scaling. The [find-units prompt](prompts/find-units.md) produces linked unit and data inventories. The [task-authoring prompt](prompts/author-task.md) consumes selected records and covers proposal, construction, author checks, handoff and repair from review feedback. The reflection prompt and worker orchestration remain to be implemented; independent solving may reuse the existing agent instructions. The two prompt files have not yet been trialed on the testbed.
+- The question being tested, comparison baseline, and review criteria chosen before the run. Label criteria added after inspecting results.
+- The prompt revision or content hash, exact resolved prompt, structured inputs, source revisions, and any additional worker instructions. Snapshot uncommitted prompts so later edits cannot change the record of what ran.
+- The requested model, reported model version, reasoning effort, context/output/compaction limits, tools, concurrency, budgets, timeouts, and retries. Mark settings that the runner does not expose as unknown.
+- The launch configuration, orchestration and validation revisions, start/end observations, execution status, and available usage or cost measurements.
+- Raw outputs, tool and agent traces where available, artifact locations and hashes, automated checks, and a separate review with evidence for its conclusions.
+
+Agent traces help explain retrieval choices, failures, and intermediate work.
+A concise experiment entry records what was tested, what happened, what remains
+uncertain, and the next decision. Keep these entries in the
+[prompt experiment record](prompt-experiments/index.md), with small supporting
+artifacts alongside them and links to larger traces in run storage. Link findings
+from the task's issue or PR. Exclude credentials and record missing evidence
+explicitly.
+
+Preserve original prompts and outputs. Record a new attempt when the prompt,
+model, or execution changes; distinguish a fresh attempt from reviewing existing
+outputs. Keep candidate prompt revisions labeled as untested until executed.
+These records support auditing and reruns; model generation may still vary.
+
+Develop prompts using the [pipeline development testbed](index.md#pipeline-development-testbed). Revisit affected cases when the pipeline or prompts change, comparing task framing and verification before scaling. The [find-units prompt](prompts/find-units.md) produces linked unit and data inventories. The [task-authoring prompt](prompts/author-task.md) consumes selected records and covers proposal, construction, author checks, handoff and repair from review feedback. The reflection prompt and worker orchestration remain to be implemented; independent solving may reuse the existing agent instructions. Unit-discovery trials and their prompt revisions are recorded in [prompt experiments](prompt-experiments/index.md). The authoring prompt has not yet been trialed.

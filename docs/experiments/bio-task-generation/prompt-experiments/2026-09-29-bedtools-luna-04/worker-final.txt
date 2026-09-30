@@ -1,0 +1,7 @@
+Completed the source inventory in the assigned outputs directory:
+
+- `units.jsonl`: 4 source-backed units covering interval overlap, coverage profiling, complement/genome coverage, and nearest-feature analysis.
+- `datasets.jsonl`: 5 candidate data records, with unresolved provenance and access details labeled.
+- `inspection.md`: source map, inspected scope, gaps, and stopping reason.
+
+JSONL parsing, identifier uniqueness, and all dataset/unit references validated. No data were downloaded or executed. The pass stopped after reviewing the repository overview, tutorial excerpts, and focused tool documentation; the tutorial remainder, repository tests/data, exact master SHA, and historical dataset availability remain leads.

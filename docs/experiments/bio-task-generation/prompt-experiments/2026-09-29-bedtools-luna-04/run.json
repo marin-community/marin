@@ -1,0 +1,57 @@
+{
+  "run_id": "2026-09-29-bedtools-luna-04",
+  "status": "completed and reviewed",
+  "question": "Does an explicit stopping rule improve source coverage while retaining data identity and role classification?",
+  "baseline": "../2026-09-29-bedtools-luna-03/run.json",
+  "prompt": {
+    "path": "docs/experiments/bio-task-generation/prompts/find-units.md",
+    "base_commit": "72008dd68247318a367a840a4f41e27fb15ff7e1",
+    "working_tree": true,
+    "sha256": "306b4121b704e4bdd0f7608dfd5064c22c58dd9f6ab2e8487c7dee572893aa36",
+    "snapshot": "template.md",
+    "resolved_snapshot": "resolved-prompt.md",
+    "resolved_sha256": "4c73f96aa1a4f21f1ebeee4f9b9b19c8f7f4d61f8bcadb92b5c5e9f344c080f7"
+  },
+  "repository": "https://github.com/arq5x/bedtools2",
+  "model": {
+    "requested": "gpt-6-luna",
+    "reported_version": null,
+    "reasoning_effort": "inherited; no explicit override",
+    "context_output_compaction_limits": null,
+    "tokens": null,
+    "cost": null
+  },
+  "execution": {
+    "runner": "collaboration.spawn_agent",
+    "runner_version": null,
+    "history": "none",
+    "concurrent_children": 1,
+    "attempts": 1,
+    "retries": 0,
+    "budget_minutes": 10,
+    "prepared_at_utc": "2026-09-29T22:03:17.320579+00:00",
+    "deadline_utc": "2026-09-29T22:13:17.320579+00:00",
+    "launch_message": "launch-message.txt",
+    "launch_message_sha256": "3c34fb850821177eee04d2a293d5e8f0455f3a28e6c4c464d75cbab68ae7bc60",
+    "outputs": "outputs/",
+    "agent_task": "/root/bedtools_find_units_luna_04",
+    "launch_observed_at_utc": "2026-09-29T22:04:57.105358+00:00",
+    "completion_observed_at_utc": "2026-09-29T22:07:50.936532+00:00"
+  },
+  "review_criteria": "review-criteria.md",
+  "review_protocol_note": "Substantive bedtools probes are unchanged. The direct comparison is trial 03; this also tests the intervening role, source-fallback, and data-reconciliation changes introduced for Scanpy 02. It does not isolate the stopping instruction alone.",
+  "trace_export": "Full agent/tool trace unavailable; final message saved in worker-final.txt.",
+  "outputs": {
+    "counts": {
+      "units": 4,
+      "datasets": 5
+    },
+    "structural_errors": [],
+    "artifact_sha256": {
+      "outputs/datasets.jsonl": "bc63fd0756f8ca02f0722d8bc02408fbeef1c069c1141d11713e023be59a8f0f",
+      "outputs/inspection.md": "a4483ed338c6b02d52c4b4925e6bc71353407ffeacdce28c1bbb58cd20269876",
+      "outputs/units.jsonl": "e312985ca5c0d6b77110d8d0fc46cce8d7e17d74cebde622d761eb031fa81470"
+    }
+  },
+  "review_recorded_at_utc": "2026-09-29T22:15:08.624071+00:00"
+}

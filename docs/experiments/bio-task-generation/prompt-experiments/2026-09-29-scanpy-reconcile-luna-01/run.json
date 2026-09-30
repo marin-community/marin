@@ -1,0 +1,78 @@
+{
+  "run_id": "2026-09-29-scanpy-reconcile-luna-01",
+  "status": "completed and reviewed; PBMC identity repaired, split API metadata and source interpretation need repair",
+  "question": "Does the same reconciliation prompt merge processing stages, preserve independent datasets, and repair a Python/notebook inventory?",
+  "baseline": "../2026-09-29-scanpy-luna-01/run.json",
+  "repository": "https://github.com/scverse/scanpy",
+  "prompt": {
+    "path": "docs/experiments/bio-task-generation/prompts/reconcile-units.md",
+    "snapshot": "template.md",
+    "sha256": "a64d9a73f4b575f0d093c2c3e1543dc685562b5b9b082e9beb0e5188d367e71f",
+    "resolved_snapshot": "resolved-prompt.md",
+    "resolved_sha256": "93cf6767c8f091276273e96be3c554fb3fd47749b78d74bf5e0689608f6d361a",
+    "base_commit": "72008dd68247318a367a840a4f41e27fb15ff7e1",
+    "working_tree": true
+  },
+  "inputs": {
+    "source_run": "2026-09-29-scanpy-luna-01",
+    "artifact_sha256": {
+      "inputs/datasets.jsonl": "490d838f76a6f446a958f318b332926083eaddaf28ce0159c30259cc4b0febbc",
+      "inputs/discovery-prompt.md": "1d05a87e04fddb14867533e8859dc159aa4be026c2ec8458c382bca0a30845c8",
+      "inputs/inspection.md": "0a7c00645003c49eecde87861fa60d86bda5c00b48f3009a96d85e504186ca1e",
+      "inputs/units.jsonl": "be63cc606f5687d955e8eb9c3a3facf8b5fe69eea5f5f3293132ff46294bab2a"
+    }
+  },
+  "model": {
+    "requested": "gpt-6-luna",
+    "reported_version": null,
+    "reasoning_effort": "inherited; no explicit override",
+    "context_output_compaction_limits": null,
+    "tokens": null,
+    "cost": null
+  },
+  "execution": {
+    "runner": "collaboration.spawn_agent",
+    "runner_version": null,
+    "history": "none",
+    "concurrent_children": 1,
+    "attempts": 1,
+    "retries": 0,
+    "budget_minutes": 10,
+    "prepared_at_utc": "2026-09-29T23:33:57.001271+00:00",
+    "deadline_utc": "2026-09-29T23:43:57.001271+00:00",
+    "launch_message": "launch-message.txt",
+    "launch_message_sha256": "93d7eae61f5fef1c03e0f692773d4c22c348785876943d50e704d87a24142769",
+    "source_access": "source-access.txt",
+    "source_access_sha256": "f17117d26b1ee3dc93f82266361e5986dd263e6e881becaa7ef87bbc0efe7842",
+    "outputs": "outputs/",
+    "agent_task": "/root/scanpy_reconcile_luna_01",
+    "launch_observed_at_utc": "2026-09-29T23:35:36.523074+00:00",
+    "completion_observed_at_utc": "2026-09-29T23:38:21.672090+00:00"
+  },
+  "review_criteria": "review-criteria.md",
+  "trace_export": "Full agent/tool trace unavailable; final message saved in worker-final.txt.",
+  "review_protocol_note": "Prompt identical to bedtools reconciliation 02. Input is the saved Scanpy 01 inventory from an earlier discovery prompt. Target contract is the current find-units prompt. Pinned source revision is supplied for new review reads, not retroactive attribution of old mutable sources.",
+  "outputs": {
+    "counts": {
+      "units": 6,
+      "datasets": 5
+    },
+    "structural_errors": [],
+    "retention": {
+      "input_units": 5,
+      "retained_unit_ids": 4,
+      "replaced_unit_ids": [
+        "scanpy.api.ingest-bbknn"
+      ],
+      "input_asset_urls": 6,
+      "missing_input_asset_urls": []
+    },
+    "artifact_sha256": {
+      "outputs/datasets.jsonl": "6444b10223f3047c22c71073e3c6751446c572194d17a1cbc61c3a55c583386a",
+      "outputs/inspection.md": "34c7e597ee8ee4dbd1c94da7aa91a2f81ca5c9ecc469558f60b69a6f3d4b66b6",
+      "outputs/reconciliation.md": "166854da9d25da6eb3e161eceea10a4bfbde5ac09ae3228afcb95d188b7425ed",
+      "outputs/units.jsonl": "55b51b41722255525e7403c4b4fc685255d66c0293712c971e649d7b16f643ef"
+    }
+  },
+  "review_recorded_at_utc": "2026-09-29T23:41:26.669838+00:00"
+}

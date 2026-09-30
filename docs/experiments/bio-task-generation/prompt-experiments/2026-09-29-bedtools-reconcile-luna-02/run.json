@@ -1,0 +1,82 @@
+{
+  "run_id": "2026-09-29-bedtools-reconcile-luna-02",
+  "status": "completed and reviewed; data and role repairs reproduced, workflow boundary remains broad",
+  "question": "Does checking all edited fields, deriving counts, and clarifying readiness remove residual reconciliation errors?",
+  "baseline": "../2026-09-29-bedtools-reconcile-luna-01/run.json",
+  "repository": "https://github.com/arq5x/bedtools2",
+  "prompt": {
+    "path": "docs/experiments/bio-task-generation/prompts/reconcile-units.md",
+    "snapshot": "template.md",
+    "sha256": "a64d9a73f4b575f0d093c2c3e1543dc685562b5b9b082e9beb0e5188d367e71f",
+    "resolved_snapshot": "resolved-prompt.md",
+    "resolved_sha256": "2967f30be7606d0fc0fb711d5da04a81a0f635786c3f8b5db4e288dab55b4f86",
+    "base_commit": "72008dd68247318a367a840a4f41e27fb15ff7e1",
+    "working_tree": true
+  },
+  "inputs": {
+    "source_run": "2026-09-29-bedtools-luna-06",
+    "artifact_sha256": {
+      "inputs/datasets.jsonl": "f358f2eb8a94e7af4e4992e6e07a035ed6ab84522dfd8c55c714f1c78963eafd",
+      "inputs/discovery-prompt.md": "d895b27ec8b556c7244494a2a2df78937025525f365899173fee99415fad9630",
+      "inputs/inspection.md": "efaaa4bc2cbf5dd0e27e1cf8130be74bb26de2eb252a414748e656108fd56e55",
+      "inputs/units.jsonl": "00589c62279df6d05ab3adcc78a7184a935b5821491610847af21e9f18135def"
+    }
+  },
+  "model": {
+    "requested": "gpt-6-luna",
+    "reported_version": null,
+    "reasoning_effort": "inherited; no explicit override",
+    "context_output_compaction_limits": null,
+    "tokens": null,
+    "cost": null
+  },
+  "execution": {
+    "runner": "collaboration.spawn_agent",
+    "runner_version": null,
+    "history": "none",
+    "concurrent_children": 1,
+    "attempts": 1,
+    "retries": 0,
+    "budget_minutes": 10,
+    "prepared_at_utc": "2026-09-29T23:28:26.387329+00:00",
+    "deadline_utc": "2026-09-29T23:38:26.387329+00:00",
+    "launch_message": "launch-message.txt",
+    "launch_message_sha256": "1a677079f84fc78a837e2aa1aed30f86a02f124c3f62d66e965a6647e483f973",
+    "source_access": "source-access.txt",
+    "source_access_sha256": "57dbb1d7583d4b768e113169f55e349b7e3c094c93140e42141531bf2b7bfdec",
+    "outputs": "outputs/",
+    "agent_task": "/root/bedtools_reconcile_luna_02",
+    "launch_observed_at_utc": "2026-09-29T23:29:22.843042+00:00",
+    "completion_observed_at_utc": "2026-09-29T23:33:15.230867+00:00"
+  },
+  "review_criteria": "review-criteria.md",
+  "trace_export": "Full agent/tool trace unavailable; final message saved in worker-final.txt.",
+  "review_protocol_note": "Original bedtools 06 input bytes are identical to reconciliation 01. Additional reviewer probes derive from its observed failures and were fixed before this launch.",
+  "outputs": {
+    "counts": {
+      "units": 17,
+      "datasets": 12
+    },
+    "structural_errors": [],
+    "retention": {
+      "input_units": 17,
+      "retained_unit_ids": 17,
+      "replaced_unit_ids": [],
+      "input_asset_urls": 12,
+      "missing_input_asset_urls": []
+    },
+    "queue_audit": {
+      "listed": 41,
+      "marked_inspected": 17,
+      "pending": 24,
+      "note": "Counts manually matched to the named entries in output inspection.md. The two output reports disagree about whether tree metadata was freshly fetched."
+    },
+    "artifact_sha256": {
+      "outputs/datasets.jsonl": "de60dec0c8e597581446633c74432bd1bab402f214f396cc33e623de29708305",
+      "outputs/inspection.md": "50a9fb55c1bf6ad3b927a79c17c0992a57d821c482d399d8c3f037043e001785",
+      "outputs/reconciliation.md": "6b2047b77f122b530cbae616b06996edfa292bb8afaec8aeb88a680f88f78640",
+      "outputs/units.jsonl": "284869711248188f0df4aa4cc4a6d96b2a54c4c31d1a76a9b87f13350799c44e"
+    }
+  },
+  "review_recorded_at_utc": "2026-09-29T23:35:36.525275+00:00"
+}

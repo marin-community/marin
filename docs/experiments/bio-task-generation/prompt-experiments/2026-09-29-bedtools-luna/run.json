@@ -1,0 +1,114 @@
+{
+  "run_id": "2026-09-29-bedtools-luna",
+  "status": "completed exploratory baseline",
+  "record_provenance": "Normalized after the run from saved configuration, timestamps, raw outputs, and independent review. Original prompt and worker output bytes are preserved.",
+  "question": "What source inventory does the general find-units prompt produce for bedtools without parent history or repository-specific hints?",
+  "baseline": null,
+  "prompt": {
+    "source": "../../prompts/find-units.md",
+    "commit": "72008dd68247318a367a840a4f41e27fb15ff7e1",
+    "template_sha256": "7ae464276280269e8ad9d2491412ce69cd9371f3775469fad011b38b8aefbbd0",
+    "resolved_snapshot": "resolved-prompt.md",
+    "resolved_sha256": "53b6153f5cbf1ddc713699dfa032dc031e370437f734592e6cbe4a286f2b80d0"
+  },
+  "inputs": {
+    "repository": "https://github.com/arq5x/bedtools2",
+    "repository_name": "arq5x/bedtools2",
+    "parent_history": "none",
+    "prior_planning_materials": "not supplied; lookup excluded",
+    "repository_specific_hints": "none"
+  },
+  "model": {
+    "requested": "gpt-6-luna",
+    "reported_version": null,
+    "reasoning_effort_override": null,
+    "effective_reasoning_effort": null,
+    "reasoning_note": "inherited; no explicit override",
+    "context_limit": null,
+    "output_limit": null,
+    "compaction_policy": null,
+    "tokens": null,
+    "cost": null,
+    "unknowns_note": "Not exposed or recorded by the launch interface."
+  },
+  "execution": {
+    "runner": "collaboration.spawn_agent",
+    "runner_version": null,
+    "agent_task": "/root/bedtools_find_units_luna",
+    "concurrent_children": 1,
+    "attempts": 1,
+    "retries": 0,
+    "inspection_budget_minutes": 10,
+    "prepared_at_utc": "2026-09-29T21:11:54.431012+00:00",
+    "completion_observed_at_utc": "2026-09-29T21:15:45.871182+00:00",
+    "deadline_utc": "2026-09-29T21:21:54.431012+00:00",
+    "actual_worker_start": null,
+    "actual_worker_end": null,
+    "local_host": "shared 2-vCPU, 8-GB VM; model-serving hardware unreported",
+    "checks": "lightweight JSON validation and source review; no Harbor or solver execution"
+  },
+  "operational_instructions": {
+    "read_only_research": true,
+    "writes": "assigned output directory only",
+    "allowed": [
+      "web and GitHub inspection",
+      "small source/documentation reads",
+      "bounded data previews",
+      "lightweight JSON validation"
+    ],
+    "excluded": [
+      "repository clones and builds",
+      "dependency installation",
+      "biological dataset downloads",
+      "Harbor runs",
+      "additional model calls",
+      "cloud jobs",
+      "further subagents"
+    ],
+    "shared_node_resource_rules": "provided in launch message",
+    "prior_planning_materials": "not supplied and excluded from lookup"
+  },
+  "source_versions": {
+    "worker_repository_revision": null,
+    "worker_repository_ref": "master",
+    "worker_external_docs_version": "2.31.0 as reported in the inspection note",
+    "parent_review_revision": {
+      "sha": "614e9a5c5935ab86e873dab9072fbbaf003c1b7e",
+      "commit_date": "2026-06-10T22:16:42Z",
+      "url": "https://github.com/arq5x/bedtools2/commit/614e9a5c5935ab86e873dab9072fbbaf003c1b7e",
+      "supplied_to_worker": false
+    },
+    "limitation": "The parent review revision was not supplied to the worker and does not pin all worker retrievals."
+  },
+  "review": {
+    "protocol": "exploratory; scientific findings are post-run review",
+    "predeclared_checks": [
+      "JSONL parses",
+      "required top-level fields",
+      "unique identifiers",
+      "resolving dataset/unit references"
+    ],
+    "predeclared_scientific_thresholds": null,
+    "structural_results": "structural-review.json",
+    "scientific_results": "index.md#results",
+    "counts": {
+      "units": 3,
+      "datasets": 1
+    },
+    "post_run_expectations": "Operation-level units and linked usage examples were suggested after execution; they were not worker hints."
+  },
+  "evidence_gaps": [
+    "Full agent/tool trace was not exported.",
+    "Exact operational launch-message text was not saved; an operational summary is retained.",
+    "Effective model settings, token usage, and cost are unavailable.",
+    "Precise worker runtime was not measured.",
+    "Worker source revision is unresolved."
+  ],
+  "artifact_sha256": {
+    "outputs/datasets.jsonl": "055425bf7371b50eb12d2f2ca5acfe80111ee570a039591af9fd139f7157d1c7",
+    "outputs/inspection.md": "7524fe283592a7089680e956d163b9d7bf725ac9c5232137888e081811fc46fd",
+    "outputs/units.jsonl": "47bb07e933a96630827d7f3ef4f7caaec9803d58273172ebb2c289f3e70ed264",
+    "resolved-prompt.md": "53b6153f5cbf1ddc713699dfa032dc031e370437f734592e6cbe4a286f2b80d0",
+    "structural-review.json": "6bb97febd21a31163afe4ca6055d0821202d16769887c26f49a5c917574b19a3"
+  }
+}

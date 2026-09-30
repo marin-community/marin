@@ -1,0 +1,10 @@
+Completed the inventory reconciliation. Outputs are:
+
+- `docs/experiments/bio-task-generation/prompt-experiments/2026-09-29-scanpy-reconcile-luna-02/outputs/units.jsonl`
+- `docs/experiments/bio-task-generation/prompt-experiments/2026-09-29-scanpy-reconcile-luna-02/outputs/datasets.jsonl`
+- `docs/experiments/bio-task-generation/prompt-experiments/2026-09-29-scanpy-reconcile-luna-02/outputs/inspection.md`
+- `docs/experiments/bio-task-generation/prompt-experiments/2026-09-29-scanpy-reconcile-luna-02/outputs/reconciliation.md`
+
+The revised inventory has **7 units** and **5 datasets**. The combined ingest/BBKNN records were split by workflow, and processed PBMC3k was merged into its raw-data record as a separate processing-stage asset, with exact row correspondence left unresolved. JSON parsing, unique IDs, required fields, and unit/data links passed validation.
+
+Recommendation: **`ready_for_authoring_review`**. The pass stopped after source-backed reconciliation and validation, within the assigned time window. Asset availability, terms, some study metadata, and remaining discovery leads are still unresolved and documented.

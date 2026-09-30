@@ -1,0 +1,28 @@
+{
+  "counts": {
+    "units": 22,
+    "datasets": 13
+  },
+  "structural_errors": [],
+  "retention": {
+    "input_units": 17,
+    "retained_unit_ids": 16,
+    "replaced_unit_ids": [
+      "bedtools2_tutorial_dnase_regulatory_analysis"
+    ],
+    "input_asset_urls": 12,
+    "missing_input_asset_urls": []
+  },
+  "queue_audit": {
+    "listed": 41,
+    "marked_inspected": 18,
+    "pending": 23,
+    "reported_total_in_prose": 40
+  },
+  "artifact_sha256": {
+    "outputs/datasets.jsonl": "a0cde05722d14543262595063e7ef88209e6b25c4a10c70b1fd46d0d8b8e9b46",
+    "outputs/inspection.md": "bb4315c309a2f7506bae0d53e60668e409a6d3581373beb863e3b03d106160b4",
+    "outputs/reconciliation.md": "f3f04fb50a9d91054ed3af5184dd8878712fb0756310ce6ee515a610a9801b53",
+    "outputs/units.jsonl": "64eb4c79b3f9d3b025ad2a4abad7fad569020688cfa0f12ee4b4e5d141862070"
+  }
+}

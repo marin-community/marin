@@ -1,0 +1,7 @@
+Completed the source inventory in the assigned outputs directory:
+
+- `units.jsonl`: 5 source-backed units
+- `datasets.jsonl`: 4 data and reference records
+- `inspection.md`: repository scope, evidence, unresolved leads, and revision gap
+
+Lightweight JSONL validation passed: identifiers are unique and all dataset and related-unit references resolve. The immutable GitHub commit SHA could not be obtained because shell access to GitHub failed DNS resolution; the inventory records that gap. No data was downloaded or executed.

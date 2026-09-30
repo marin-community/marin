@@ -15,8 +15,9 @@ and which work it prevents.
 
 ## Understand the assigned units
 
-Inspect the assigned tutorials, functions, notebook sections, workflow stages,
-or analysis code together with their dependencies and scientific context.
+Inspect the assigned documented operations, usage examples, tutorials,
+functions, notebook sections, workflow stages, or analysis code together with
+their dependencies and scientific context.
 Follow relevant links to supporting software and data. Repository-wide unit
 discovery is a separate job; extend inspection where this task needs it and
 record additional sources.
@@ -27,6 +28,8 @@ task. Explain the chosen boundary. Record other useful task ideas for separate
 authoring assignments.
 
 Distinguish code that uses established tools from code that implements them.
+Record the source unit's tool-role classification and separately state whether
+the proposed task requires the solver to use tools, create them, or both.
 Prioritize scientific tool use: selecting inputs, configuring methods, writing
 analysis scripts, reconciling metadata, and connecting operations. State which
 software is supplied and what the solver must produce.

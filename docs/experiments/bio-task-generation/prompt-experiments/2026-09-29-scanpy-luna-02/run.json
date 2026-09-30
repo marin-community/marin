@@ -1,0 +1,57 @@
+{
+  "run_id": "2026-09-29-scanpy-luna-02",
+  "status": "completed and reviewed",
+  "question": "Do explicit source fallbacks and final data reconciliation improve the Scanpy inventory?",
+  "baseline": "../2026-09-29-scanpy-luna-01/run.json",
+  "prompt": {
+    "path": "docs/experiments/bio-task-generation/prompts/find-units.md",
+    "base_commit": "72008dd68247318a367a840a4f41e27fb15ff7e1",
+    "working_tree": true,
+    "sha256": "92e66381b023d9a9cba4a3e95e2c96cf132221a1a84df631bd9fece671258a84",
+    "snapshot": "template.md",
+    "resolved_snapshot": "resolved-prompt.md",
+    "resolved_sha256": "7bd979ea22dae5301b70c196174abd4bddb08378590f732d61881bf0383de882"
+  },
+  "repository": "https://github.com/scverse/scanpy",
+  "model": {
+    "requested": "gpt-6-luna",
+    "reported_version": null,
+    "reasoning_effort": "inherited; no explicit override",
+    "context_output_compaction_limits": null,
+    "tokens": null,
+    "cost": null
+  },
+  "execution": {
+    "runner": "collaboration.spawn_agent",
+    "runner_version": null,
+    "history": "none",
+    "concurrent_children": 1,
+    "attempts": 1,
+    "retries": 0,
+    "budget_minutes": 10,
+    "prepared_at_utc": "2026-09-29T21:57:17.444643+00:00",
+    "deadline_utc": "2026-09-29T22:07:17.444643+00:00",
+    "launch_message": "launch-message.txt",
+    "launch_message_sha256": "762578f22c8c4a997889cec6debe607481be504aa7427db3dcab39932ecfffa5",
+    "outputs": "outputs/",
+    "agent_task": "/root/scanpy_find_units_luna_02",
+    "launch_observed_at_utc": "2026-09-29T21:59:24.750740+00:00",
+    "completion_observed_at_utc": "2026-09-29T22:01:31.780073+00:00"
+  },
+  "review_criteria": "review-criteria.md",
+  "trace_export": "Full agent/tool trace unavailable; final message saved in worker-final.txt.",
+  "review_protocol_note": "The carried-over criteria include a stale description of the first run as a transfer probe. This run compares Scanpy 01 and 02; the substantive review dimensions and probes were unchanged.",
+  "review_recorded_at_utc": "2026-09-29T22:04:57.106008+00:00",
+  "outputs": {
+    "counts": {
+      "units": 3,
+      "datasets": 3
+    },
+    "structural_errors": [],
+    "artifact_sha256": {
+      "outputs/datasets.jsonl": "7164bfe3e7c9f364ae7f60cecc5242ac5078fb9614bf597f448155c1f4492bd3",
+      "outputs/inspection.md": "d8e74694ed0724be25a1636bccf0da8bee099fc88468544ed8ff15d5e5be3077",
+      "outputs/units.jsonl": "d62a84bfad501f41deab8494eb18c2ac6c53c48ef3574739bdee60470d9c9872"
+    }
+  }
+}

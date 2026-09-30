@@ -1,0 +1,7 @@
+Completed the source inventory at the assigned revision. The outputs are:
+
+- [units.jsonl](/home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-29-bedtools-luna-05/outputs/units.jsonl) — 5 source-backed units covering a fetal-tissue DNase/Jaccard tutorial, chromosome-level repeat QC, interval overlap analysis, Fisher overlap testing, and Jaccard similarity.
+- [datasets.jsonl](/home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-29-bedtools-luna-05/outputs/datasets.jsonl) — 3 records for the tutorial’s DNase data, UCSC Simple Repeats, and GRCh38 chromosome sizes.
+- [inspection.md](/home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-29-bedtools-luna-05/outputs/inspection.md) — source map, inspection limits, remaining leads, and stopping rationale.
+
+JSONL parsing, identifier uniqueness, and unit/dataset references validated. The pass stopped after representative source coverage within the ten-minute window; no task execution or external dataset retrieval was performed.

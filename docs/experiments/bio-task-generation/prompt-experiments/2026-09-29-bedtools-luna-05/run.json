@@ -1,0 +1,62 @@
+{
+  "run_id": "2026-09-29-bedtools-luna-05",
+  "status": "completed and reviewed",
+  "question": "Does supplying a pinned revision and direct repository-file retrieval improve the inventory with the scientific prompt unchanged?",
+  "baseline": "../2026-09-29-bedtools-luna-04/run.json",
+  "prompt": {
+    "path": "docs/experiments/bio-task-generation/prompts/find-units.md",
+    "base_commit": "72008dd68247318a367a840a4f41e27fb15ff7e1",
+    "working_tree": true,
+    "sha256": "306b4121b704e4bdd0f7608dfd5064c22c58dd9f6ab2e8487c7dee572893aa36",
+    "snapshot": "template.md",
+    "resolved_snapshot": "resolved-prompt.md",
+    "resolved_sha256": "4c73f96aa1a4f21f1ebeee4f9b9b19c8f7f4d61f8bcadb92b5c5e9f344c080f7"
+  },
+  "repository": "https://github.com/arq5x/bedtools2",
+  "model": {
+    "requested": "gpt-6-luna",
+    "reported_version": null,
+    "reasoning_effort": "inherited; no explicit override",
+    "context_output_compaction_limits": null,
+    "tokens": null,
+    "cost": null
+  },
+  "execution": {
+    "runner": "collaboration.spawn_agent",
+    "runner_version": null,
+    "history": "none",
+    "concurrent_children": 1,
+    "attempts": 1,
+    "retries": 0,
+    "budget_minutes": 10,
+    "prepared_at_utc": "2026-09-29T22:13:17.176700+00:00",
+    "deadline_utc": "2026-09-29T22:23:17.176700+00:00",
+    "launch_message": "launch-message.txt",
+    "launch_message_sha256": "89e1f2bcb8892343228d4dc00c9ecd93e6e4f305d71d85dab26d7cf715130fbc",
+    "source_access": "source-access.txt",
+    "source_access_sha256": "57dbb1d7583d4b768e113169f55e349b7e3c094c93140e42141531bf2b7bfdec",
+    "source_revision": "614e9a5c5935ab86e873dab9072fbbaf003c1b7e",
+    "outputs": "outputs/",
+    "initial_prepared_at_utc": "2026-09-29T22:09:25.465756+00:00",
+    "preparation_note": "Launch deadline refreshed before first launch after context handoff.",
+    "agent_task": "/root/bedtools_find_units_luna_05",
+    "launch_observed_at_utc": "2026-09-29T22:13:50.511219+00:00",
+    "completion_observed_at_utc": "2026-09-29T22:16:26.705628+00:00"
+  },
+  "review_criteria": "review-criteria.md",
+  "review_protocol_note": "The scientific prompt and reviewer probes match bedtools 04. The changed variables are a runner-supplied source revision and explicit CLI source-retrieval instructions. Treat as an execution-setup probe, not a prompt-only comparison.",
+  "trace_export": "Full agent/tool trace unavailable; final message saved in worker-final.txt.",
+  "outputs": {
+    "counts": {
+      "units": 5,
+      "datasets": 3
+    },
+    "structural_errors": [],
+    "artifact_sha256": {
+      "outputs/datasets.jsonl": "8d0d5e4277aff89716f1c1a6483d6d28713f2bac7177352a8ed6904195cbc0b2",
+      "outputs/inspection.md": "c7dd6d821c1a253155745eff9719062c7614ff8ce3ed528f140e194665e86527",
+      "outputs/units.jsonl": "3c735da71de3da09c4d672c78bc548aad7724c16ec25cb96ccfa69a79a36f28a"
+    }
+  },
+  "review_recorded_at_utc": "2026-09-29T22:19:14.953766+00:00"
+}

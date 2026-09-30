@@ -13,6 +13,7 @@ Task generation includes repository discovery, input curation, model-assisted au
 | [Requirements](requirements.md) | Scientific, sandbox, runtime and deterministic-reward requirements |
 | [Repository discovery](discovery.md) | Find and inspect tools, pipelines, tutorials and paper-analysis repositories |
 | [Task authoring](task-authoring.md) | Convert sources into tasks and generate meaningful variations |
+| [Prompt experiments](prompt-experiments/index.md) | Recorded trials, exact prompts and outputs, findings, and proposed comparisons |
 | [Validation](validation.md) | Execute references, challenge graders, trial tasks and decide release readiness |
 | [Storage and publication](storage.md) | Public artifacts, release layout, provenance and solver isolation |
 | [Transcriptomics examples](examples/transcriptomics.md) | Concrete candidates for reviewing the process |
@@ -36,6 +37,20 @@ Work should be public: documentation, code, prompts, task inputs, references, gr
 
 ## Pipeline development testbed
 
+Develop a shared task-generation procedure that can apply across hundreds of
+repositories. Compare the same prompt revision across different repository types,
+using their source material as inputs. Keep repository-specific expectations and
+findings in test cases and reviews. For each failure, distinguish unclear general
+guidance from execution mistakes, unavailable evidence, and budget limits. Revise
+the shared prompt when the diagnosis supports a general improvement, then check
+that change on other repository types before claiming it generalizes.
+
+For unit-discovery trials, review source coverage, unit boundaries, data identity,
+provenance, and whether another worker can use the inventory. Record manual
+expectations before a comparison and keep them outside the worker's inputs.
+Compare prompt revisions with the same model, tools, and budget where possible;
+record any differences and preserve each run's [experiment record](task-authoring.md#versioned-artifacts).
+
 Revisit these examples when changing discovery, recipe extraction, instance generation or validation. They are reference cases for diagnosing the pipeline and reviewing task framing, not a ranked source list or a requirement to implement every example now.
 
 | Reference case | What to examine when the pipeline changes |
@@ -44,7 +59,7 @@ Revisit these examples when changing discovery, recipe extraction, instance gene
 | [Snakemake STAR–DESeq2 workflow](https://snakemake.github.io/snakemake-workflow-catalog/docs/workflows/snakemake-workflows/rna-seq-star-deseq2.html), with our [worked example](examples/star-deseq2.md) | Use rule boundaries and dependencies; preserve scientific decisions while composing stages and subsetting data |
 | Gonzalo Benegas's [papers](https://gonzalobenegas.github.io/), [Scholar profile](https://scholar.google.com/citations?user=tJbZmiUAAAAJ) and [repositories](https://github.com/gonzalobenegas) | Find useful tasks in paper-specific code with varying documentation and portability; obtain feedback from a researcher familiar with the original scientific intent |
 | [Tim O'Donnell's work](https://timodonnell.github.io/) | Add collaborator-familiar papers and software as further cases for reviewing scientific task framing; select specific examples as the pipeline develops |
-| [bedtools](https://bedtools.readthedocs.io/en/latest/) | Review genomic interval operations and their composition into scientific workflows |
+| [bedtools](https://bedtools.readthedocs.io/en/latest/) and its [usage examples](https://bedtools.readthedocs.io/en/stable/index.html#interesting-usage-examples) | Inspect documented operations such as `map` and `intersect` as units, alongside scientific usage examples that combine operations |
 | [UCSC Genome Browser binaries](https://hgdownload.soe.ucsc.edu/admin/exe/), with their [source code](https://github.com/ucscGenomeBrowser/kent/tree/master/src/utils) | Review tasks built around standalone command-line utilities, including their input/output conventions |
 
 Gonzalo Benegas has substantial experience using bedtools and the UCSC Genome Browser binaries. Use that familiarity to guide manual review of their task framing and expected outputs.

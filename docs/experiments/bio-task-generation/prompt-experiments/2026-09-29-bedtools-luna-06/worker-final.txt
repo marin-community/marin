@@ -1,0 +1,7 @@
+Completed the partial inventory at the assigned time limit. The outputs are:
+
+- `docs/experiments/bio-task-generation/prompt-experiments/2026-09-29-bedtools-luna-06/outputs/units.jsonl` — 17 source-backed units.
+- `docs/experiments/bio-task-generation/prompt-experiments/2026-09-29-bedtools-luna-06/outputs/datasets.jsonl` — 2 dataset records.
+- `docs/experiments/bio-task-generation/prompt-experiments/2026-09-29-bedtools-luna-06/outputs/inspection.md` — source map, queue, findings, and remaining leads.
+
+JSONL parsing, required fields, identifier uniqueness, and all dataset/unit references were checked. The pass stopped at the ten-minute deadline with 23 of 40 tool manuals still pending; no datasets or commands were executed.

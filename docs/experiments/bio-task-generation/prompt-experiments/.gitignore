@@ -1,0 +1,2 @@
+# Preserve small source inventories used as evidence in prompt experiments.
+!*.jsonl

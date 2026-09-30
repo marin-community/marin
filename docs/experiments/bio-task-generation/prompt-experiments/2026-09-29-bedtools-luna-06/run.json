@@ -1,0 +1,68 @@
+{
+  "run_id": "2026-09-29-bedtools-luna-06",
+  "status": "completed and reviewed; broader coverage with semantic regressions",
+  "question": "Does an entry-level inspection queue improve source coverage and stopping behavior with the same direct source-access setup?",
+  "baseline": "../2026-09-29-bedtools-luna-05/run.json",
+  "prompt": {
+    "path": "docs/experiments/bio-task-generation/prompts/find-units.md",
+    "base_commit": "72008dd68247318a367a840a4f41e27fb15ff7e1",
+    "working_tree": true,
+    "sha256": "f9a8359440c0cde57648e6b9fc6af66249e316eb40bd3932e1668f6e25e1db05",
+    "snapshot": "template.md",
+    "resolved_snapshot": "resolved-prompt.md",
+    "resolved_sha256": "d895b27ec8b556c7244494a2a2df78937025525f365899173fee99415fad9630"
+  },
+  "repository": "https://github.com/arq5x/bedtools2",
+  "model": {
+    "requested": "gpt-6-luna",
+    "reported_version": null,
+    "reasoning_effort": "inherited; no explicit override",
+    "context_output_compaction_limits": null,
+    "tokens": null,
+    "cost": null
+  },
+  "execution": {
+    "runner": "collaboration.spawn_agent",
+    "runner_version": null,
+    "history": "none",
+    "concurrent_children": 1,
+    "attempts": 1,
+    "retries": 0,
+    "budget_minutes": 10,
+    "prepared_at_utc": "2026-09-29T22:17:38.801983+00:00",
+    "deadline_utc": "2026-09-29T22:27:38.801983+00:00",
+    "launch_message": "launch-message.txt",
+    "launch_message_sha256": "18fd7f7125a56e6ae8410616662b66b4934a6cb9993f8560a197924e21f87cb7",
+    "source_access": "source-access.txt",
+    "source_access_sha256": "57dbb1d7583d4b768e113169f55e349b7e3c094c93140e42141531bf2b7bfdec",
+    "source_revision": "614e9a5c5935ab86e873dab9072fbbaf003c1b7e",
+    "outputs": "outputs/",
+    "agent_task": "/root/bedtools_find_units_luna_06",
+    "launch_observed_at_utc": "2026-09-29T22:19:14.953074+00:00",
+    "completion_observed_at_utc": "2026-09-29T22:27:55.161686+00:00"
+  },
+  "review_criteria": "review-criteria.md",
+  "review_protocol_note": "Same source revision, source-access instructions and substantive reviewer probes as bedtools 05. Only the generic prompt adds an entry-level queue and a final budget/queue check. The criteria file retains its original baseline paragraph; compare directly against trial 05 for this revision.",
+  "trace_export": "Full agent/tool trace unavailable; final message saved in worker-final.txt.",
+  "outputs": {
+    "counts": {
+      "units": 17,
+      "datasets": 2
+    },
+    "structural_errors": [],
+    "queue_audit": {
+      "listed_manuals": 41,
+      "marked_inspected": 17,
+      "marked_pending": 24,
+      "worker_claimed_total": 40,
+      "worker_claimed_pending": 23,
+      "note": "Pinned Git tree independently confirms 41 manual paths. Inspection states are worker reports, not full trace verification."
+    },
+    "artifact_sha256": {
+      "outputs/datasets.jsonl": "f358f2eb8a94e7af4e4992e6e07a035ed6ab84522dfd8c55c714f1c78963eafd",
+      "outputs/inspection.md": "efaaa4bc2cbf5dd0e27e1cf8130be74bb26de2eb252a414748e656108fd56e55",
+      "outputs/units.jsonl": "00589c62279df6d05ab3adcc78a7184a935b5821491610847af21e9f18135def"
+    }
+  },
+  "review_recorded_at_utc": "2026-09-29T22:29:41.377352+00:00"
+}

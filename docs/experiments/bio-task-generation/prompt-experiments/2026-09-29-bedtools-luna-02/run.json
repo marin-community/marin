@@ -1,0 +1,56 @@
+{
+  "run_id": "2026-09-29-bedtools-luna-02",
+  "status": "completed and reviewed",
+  "question": "Does the revised general prompt improve the bedtools inventory compared with the first Luna trial?",
+  "baseline": "../2026-09-29-bedtools-luna/run.json",
+  "prompt": {
+    "path": "docs/experiments/bio-task-generation/prompts/find-units.md",
+    "base_commit": "72008dd68247318a367a840a4f41e27fb15ff7e1",
+    "working_tree": true,
+    "sha256": "64a8b5663ee5eb94f10423b3319e3d65292c3644e31b437740baf33c35e671fb",
+    "snapshot": "template.md",
+    "resolved_snapshot": "resolved-prompt.md",
+    "resolved_sha256": "32cbd5cf75d6471cf89b2e233f6ca2735ca0a634ddd9d3138ac009d7ce19ad92"
+  },
+  "model": {
+    "requested": "gpt-6-luna",
+    "reported_version": null,
+    "reasoning_effort": "inherited; no explicit override",
+    "context_output_compaction_limits": null,
+    "tokens": null,
+    "cost": null
+  },
+  "execution": {
+    "runner": "collaboration.spawn_agent",
+    "runner_version": null,
+    "history": "none",
+    "concurrent_children": 1,
+    "attempts": 1,
+    "retries": 0,
+    "budget_minutes": 10,
+    "prepared_at_utc": "2026-09-29T21:40:30.384653+00:00",
+    "deadline_utc": "2026-09-29T21:50:30.384653+00:00",
+    "launch_message": "launch-message.txt",
+    "launch_message_sha256": "ef375cf4a702b6273de73c8ad32942a69c5c674c017d6ef460e1de689f1c2c6e",
+    "outputs": "outputs/",
+    "agent_task": "/root/bedtools_find_units_luna_02",
+    "launch_observed_at_utc": "2026-09-29T21:41:25.228978+00:00",
+    "completion_timestamp_note": "Recorded when the parent saved the completed-run record after receiving the final answer; this is a conservative upper bound, not the exact worker finish time.",
+    "completion_observed_at_utc": "2026-09-29T21:45:38.961214+00:00"
+  },
+  "review_criteria": "review-criteria.md",
+  "trace_export": "Full agent/tool trace unavailable; final message saved in worker-final.txt.",
+  "review_recorded_at_utc": "2026-09-29T21:45:38.961214+00:00",
+  "outputs": {
+    "counts": {
+      "units": 5,
+      "datasets": 4
+    },
+    "structural_errors": [],
+    "artifact_sha256": {
+      "outputs/datasets.jsonl": "66734f01f974db328c46d6d23b43238ac7ed4f44fa82163fc9dd4f3ea4509dfa",
+      "outputs/inspection.md": "ad9ad753e6b54562cd19a23cedd4bf2428951b207108ae843d8485e8873515dd",
+      "outputs/units.jsonl": "6e627fd088bece3850d4d15c9c55bd2a15dde4033f18236f9d0b7e081c3c0c63"
+    }
+  }
+}

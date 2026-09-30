@@ -1,0 +1,30 @@
+{
+  "counts": {
+    "units": 7,
+    "datasets": 5
+  },
+  "structural_errors": [],
+  "inspection_reference_audit": {
+    "unresolved_current_source_map_unit_ids": [
+      "scanpy.api.ingest-bbknn",
+      "scanpy.tutorial.ingest-bbknn"
+    ],
+    "note": "Added after reviewing this output; earlier structural checks covered JSON references only."
+  },
+  "retention": {
+    "input_units": 5,
+    "retained_unit_ids": 3,
+    "replaced_unit_ids": [
+      "scanpy.api.ingest-bbknn",
+      "scanpy.tutorial.ingest-bbknn"
+    ],
+    "input_asset_urls": 6,
+    "missing_input_asset_urls": []
+  },
+  "artifact_sha256": {
+    "outputs/datasets.jsonl": "36802ee8f15c482952b3e9a40c87da6f09f076a00bbd52cd19400196b3bfe687",
+    "outputs/inspection.md": "a7c9e1972cc906c5c3fb2d67fc19beffdae7a6c3934b4abd2944108c28412e50",
+    "outputs/reconciliation.md": "d2f807431d8ab00b6d5fa2466618e9da5b8e6ba6ef0a05aa64926627d5b87369",
+    "outputs/units.jsonl": "85801790e2761305ffa40ba38156d4436239c6fe6be10e989e28a148bac9d932"
+  }
+}

@@ -86,10 +86,8 @@ it may support a useful task. Classify the work represented by the unit:
 `tool_use` applies existing packages, including analysis scripts and workflow
 composition; `tool_creation` implements or changes the underlying scientific
 tool or algorithm; `mixed` requires both. Reading a package's implementation to
-understand an API does not make use of that API tool creation. Classify the work
-shown in the source; the author separately determines what a task requires the
-solver to do. Prioritize scientific tool use while retaining the sources needed
-to understand it.
+understand an API does not make use of that API tool creation. Prioritize
+scientific tool use while retaining the sources needed to understand it.
 
 Link related units, including dependencies, component operations, and different
 scientific uses of shared code. An author can use these relationships to combine
@@ -208,24 +206,14 @@ remains to be learned from them.
 ## Check and hand off
 
 Check that both JSONL files parse, identifiers are unique within each inventory,
-and every dataset and unit reference resolves in the inventories and source map.
-Recompute reported counts from the final records and inspection queue.
-
-Review each unit against its cited sources: scientific use, tool role and its
-explanation, inputs, outputs, dependencies, and limitations must agree. After
-splitting or merging records, check each resulting unit independently for copied
-metadata that no longer applies. Preserve distinct scientific uses and data
-relationships, or record their deferral in the source map. Before reporting a
-source contradiction, check whether the claims concern the same entity, version,
-and processing stage, including relevant adjacent code or comments.
-
+and every dataset and related-unit reference resolves. Confirm that accepted
+units have precise source locations and evidence for their scientific purpose.
 Reconcile data records across all units and source collections. Merge records
 that describe different processing stages or subsets of the same observations,
-retain those differences as assets, and update all affected references. Keep
-distinct datasets and reference products separate. Check each data link against
-the unit's inputs. Compare the inventory with the repository and document
-outlines; record relevant omissions as uninspected leads with locations for the
-next pass.
+retain those differences as assets, and update every unit's links. Keep distinct
+datasets and reference products separate. Check each data link against the
+unit's inputs. Compare the inventory with the repository and document outlines;
+record relevant omissions as uninspected leads with locations for the next pass.
 
 Pass selected unit records, their relevant dependencies and related units, and
 referenced dataset records as the author's assigned source units and supporting

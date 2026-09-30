@@ -1,0 +1,7 @@
+Completed the inventory in the assigned output directory:
+
+- `units.jsonl`: 5 source units
+- `datasets.jsonl`: 6 dataset records
+- `inspection.md`: source map, coverage limits, and remaining leads
+
+Both JSONL files parse, IDs are unique, and all dataset and related-unit references resolve. The PBMC clustering tutorial returned HTTP 429; the remaining coverage gaps and unverified data details are documented in `inspection.md`. No datasets were downloaded or analyses executed.

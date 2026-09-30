@@ -1,0 +1,7 @@
+Completed the Scanpy source inventory and wrote:
+
+- `docs/experiments/bio-task-generation/prompt-experiments/2026-09-29-scanpy-luna-02/outputs/units.jsonl` — 3 source-backed tutorial units.
+- `docs/experiments/bio-task-generation/prompt-experiments/2026-09-29-scanpy-luna-02/outputs/datasets.jsonl` — 3 PBMC data or annotation records.
+- `docs/experiments/bio-task-generation/prompt-experiments/2026-09-29-scanpy-luna-02/outputs/inspection.md` — source map, inspected scope, revision gaps, and continuation leads.
+
+Lightweight JSON validation passed: identifiers are unique and all dataset and related-unit references resolve. The stopping explanation and uninspected sources are recorded in `inspection.md`. No datasets were downloaded and no workflows were executed.

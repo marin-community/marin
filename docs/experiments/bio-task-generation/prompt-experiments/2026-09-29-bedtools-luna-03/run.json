@@ -1,0 +1,55 @@
+{
+  "model": {
+    "requested": "gpt-6-luna",
+    "reported_version": null,
+    "reasoning_effort": "inherited; no explicit override",
+    "context_output_compaction_limits": null,
+    "tokens": null,
+    "cost": null
+  },
+  "run_id": "2026-09-29-bedtools-luna-03",
+  "status": "completed and reviewed",
+  "question": "Does a source map and a clearer data-record boundary improve coverage and data identity beyond the second bedtools trial?",
+  "baseline": "../2026-09-29-bedtools-luna-02/run.json",
+  "prompt": {
+    "path": "docs/experiments/bio-task-generation/prompts/find-units.md",
+    "base_commit": "72008dd68247318a367a840a4f41e27fb15ff7e1",
+    "working_tree": true,
+    "sha256": "940a0f78fb29eedcb45114b896134074c20eb3ad34d2ea3641746996ca99c868",
+    "snapshot": "template.md",
+    "resolved_snapshot": "resolved-prompt.md",
+    "resolved_sha256": "c224c0ff6595a17d01055162da4f2da6c39fdb8f167f7c00ad78f06c4fdc9ebc"
+  },
+  "execution": {
+    "runner": "collaboration.spawn_agent",
+    "runner_version": null,
+    "history": "none",
+    "concurrent_children": 1,
+    "attempts": 1,
+    "retries": 0,
+    "budget_minutes": 10,
+    "prepared_at_utc": "2026-09-29T21:46:17.809844+00:00",
+    "deadline_utc": "2026-09-29T21:56:17.809844+00:00",
+    "launch_message": "launch-message.txt",
+    "launch_message_sha256": "fb4e2a561418346228f81af6dbe147b24726a78ece3f17708202ed7d8d5be3d4",
+    "outputs": "outputs/",
+    "agent_task": "/root/bedtools_find_units_luna_03",
+    "launch_observed_at_utc": "2026-09-29T21:47:03.640240+00:00",
+    "completion_observed_at_utc": "2026-09-29T21:51:08.332617+00:00"
+  },
+  "review_criteria": "review-criteria.md",
+  "trace_export": "Full agent/tool trace unavailable; final message saved in worker-final.txt.",
+  "review_recorded_at_utc": "2026-09-29T21:53:47.964627+00:00",
+  "outputs": {
+    "counts": {
+      "units": 5,
+      "datasets": 7
+    },
+    "structural_errors": [],
+    "artifact_sha256": {
+      "outputs/datasets.jsonl": "a5bace9b997565be94410c12071f2c21053bc0cfce804b64bbecd5b0452a593b",
+      "outputs/inspection.md": "85f28e2054621612c91c95e5532782490da23040e294fcba4a813cfe07bb89ee",
+      "outputs/units.jsonl": "8d602bc4dc146ee1574bb88721bf5f6827b49068aada69299f3d42fe37ccaacc"
+    }
+  }
+}

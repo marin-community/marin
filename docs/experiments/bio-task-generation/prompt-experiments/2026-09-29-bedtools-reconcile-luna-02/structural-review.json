@@ -1,0 +1,26 @@
+{
+  "counts": {
+    "units": 17,
+    "datasets": 12
+  },
+  "structural_errors": [],
+  "retention": {
+    "input_units": 17,
+    "retained_unit_ids": 17,
+    "replaced_unit_ids": [],
+    "input_asset_urls": 12,
+    "missing_input_asset_urls": []
+  },
+  "queue_audit": {
+    "listed": 41,
+    "marked_inspected": 17,
+    "pending": 24,
+    "note": "Counts manually matched to the named entries in output inspection.md. The two output reports disagree about whether tree metadata was freshly fetched."
+  },
+  "artifact_sha256": {
+    "outputs/datasets.jsonl": "de60dec0c8e597581446633c74432bd1bab402f214f396cc33e623de29708305",
+    "outputs/inspection.md": "50a9fb55c1bf6ad3b927a79c17c0992a57d821c482d399d8c3f037043e001785",
+    "outputs/reconciliation.md": "6b2047b77f122b530cbae616b06996edfa292bb8afaec8aeb88a680f88f78640",
+    "outputs/units.jsonl": "284869711248188f0df4aa4cc4a6d96b2a54c4c31d1a76a9b87f13350799c44e"
+  }
+}

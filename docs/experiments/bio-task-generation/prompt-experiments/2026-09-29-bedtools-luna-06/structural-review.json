@@ -1,0 +1,20 @@
+{
+  "counts": {
+    "units": 17,
+    "datasets": 2
+  },
+  "structural_errors": [],
+  "queue_audit": {
+    "listed_manuals": 41,
+    "marked_inspected": 17,
+    "marked_pending": 24,
+    "worker_claimed_total": 40,
+    "worker_claimed_pending": 23,
+    "note": "Pinned Git tree independently confirms 41 manual paths. Inspection states are worker reports, not full trace verification."
+  },
+  "artifact_sha256": {
+    "outputs/datasets.jsonl": "f358f2eb8a94e7af4e4992e6e07a035ed6ab84522dfd8c55c714f1c78963eafd",
+    "outputs/inspection.md": "efaaa4bc2cbf5dd0e27e1cf8130be74bb26de2eb252a414748e656108fd56e55",
+    "outputs/units.jsonl": "00589c62279df6d05ab3adcc78a7184a935b5821491610847af21e9f18135def"
+  }
+}

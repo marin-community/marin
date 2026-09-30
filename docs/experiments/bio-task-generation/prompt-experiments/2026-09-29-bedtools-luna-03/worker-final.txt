@@ -1,0 +1,7 @@
+Completed the inventory in:
+
+- `docs/experiments/bio-task-generation/prompt-experiments/2026-09-29-bedtools-luna-03/outputs/units.jsonl` — 5 source-backed units.
+- `docs/experiments/bio-task-generation/prompt-experiments/2026-09-29-bedtools-luna-03/outputs/datasets.jsonl` — 7 candidate data and reference records.
+- `docs/experiments/bio-task-generation/prompt-experiments/2026-09-29-bedtools-luna-03/outputs/inspection.md` — source map, coverage gaps, and handoff leads.
+
+JSONL parsing, identifier uniqueness, and unit/dataset reference checks passed. I stopped after the targeted lightweight pass and validation; source code, tests, and repository data directories remain uninspected leads. The inspected GitHub pages did not expose a commit SHA, which is recorded as a revision gap.

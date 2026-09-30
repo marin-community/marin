@@ -1,0 +1,12 @@
+{
+  "counts": {
+    "units": 4,
+    "datasets": 5
+  },
+  "structural_errors": [],
+  "artifact_sha256": {
+    "outputs/datasets.jsonl": "bc63fd0756f8ca02f0722d8bc02408fbeef1c069c1141d11713e023be59a8f0f",
+    "outputs/inspection.md": "a4483ed338c6b02d52c4b4925e6bc71353407ffeacdce28c1bbb58cd20269876",
+    "outputs/units.jsonl": "e312985ca5c0d6b77110d8d0fc46cce8d7e17d74cebde622d761eb031fa81470"
+  }
+}

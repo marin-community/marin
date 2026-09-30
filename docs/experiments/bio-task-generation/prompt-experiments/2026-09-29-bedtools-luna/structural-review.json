@@ -1,0 +1,12 @@
+{
+  "counts": {
+    "units": 3,
+    "datasets": 1
+  },
+  "structural_errors": [],
+  "output_hashes": {
+    "units.jsonl": "47bb07e933a96630827d7f3ef4f7caaec9803d58273172ebb2c289f3e70ed264",
+    "datasets.jsonl": "055425bf7371b50eb12d2f2ca5acfe80111ee570a039591af9fd139f7157d1c7",
+    "inspection.md": "7524fe283592a7089680e956d163b9d7bf725ac9c5232137888e081811fc46fd"
+  }
+}

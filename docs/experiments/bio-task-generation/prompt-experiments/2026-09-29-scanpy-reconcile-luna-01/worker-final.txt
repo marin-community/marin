@@ -1,0 +1,10 @@
+Completed the reconciliation outputs in the assigned directory:
+
+- [units.jsonl](/home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-29-scanpy-reconcile-luna-01/outputs/units.jsonl)
+- [datasets.jsonl](/home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-29-scanpy-reconcile-luna-01/outputs/datasets.jsonl)
+- [inspection.md](/home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-29-scanpy-reconcile-luna-01/outputs/inspection.md)
+- [reconciliation.md](/home/exedev/.codex/worktrees/ddcd/marin/docs/experiments/bio-task-generation/prompt-experiments/2026-09-29-scanpy-reconcile-luna-01/outputs/reconciliation.md)
+
+The final inventory has **6 units and 5 dataset records**. JSON parsing, required fields, identifier uniqueness, and unit-to-data and unit-to-unit links passed. The recommendation is **`needs_inventory_repair`** because the Paul15 loader has an unresolved 3461-versus-3451 gene-count discrepancy.
+
+I stopped after the targeted pinned-source checks established the PBMC identity corrections and exposed that discrepancy. The remaining source and asset checks are recorded as unresolved; no biological data were downloaded or executed.

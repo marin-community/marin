@@ -30,27 +30,9 @@ examples, workflows, notebooks, analysis scripts, functions and classes, tests,
 and linked studies or datasets. Choose inspection routes suited to the
 repository's purpose and organization.
 
-Start a source map in `inspection.md`: list the source collections or major
-sections found, their locations, and which you will inspect. Use this map to
-spread inspection across distinct operations and analyses before exploring more
-variants of an already covered use. Update it as sources are inspected; a large
-repository may require a partial pass with specific leads for continuation.
-
-Turn source collections into an inspection queue. For a command index, API
-module, tutorial, or other bounded collection, enumerate its entries or sections
-with source locations. Give each entry a status: pending, inspected with unit
-IDs, or skipped with a reason. Inspect entries in turn and save records as you
-go. A collection-level summary does not account for its uninspected members.
-When a collection is covered, use remaining budget on the next useful collection
-or linked scientific example. Keep the queue in `inspection.md` so another
-worker can continue from specific entries.
-
 Follow relevant links to supporting documentation, scientific uses, code, and
 data, including sources outside the repository. Linked examples can provide
 additional units and scientific context. Cite the sources supporting your findings.
-If an important rendered page is blocked or incomplete, try its source file or
-another official representation. Record which sections you actually inspected;
-an unseen section is an open lead, not evidence that the source lacks an analysis.
 
 Use file listings, searches, or scripts to enumerate large collections, then
 inspect their contents. A filename, API signature, or documentation heading is
@@ -82,14 +64,9 @@ section may span several cells. Record hidden state and upstream artifacts an
 author would need to supply or reconstruct.
 
 For each unit, explain the scientific activity, its inputs and outputs, and why
-it may support a useful task. Classify the work represented by the unit:
-`tool_use` applies existing packages, including analysis scripts and workflow
-composition; `tool_creation` implements or changes the underlying scientific
-tool or algorithm; `mixed` requires both. Reading a package's implementation to
-understand an API does not make use of that API tool creation. Classify the work
-shown in the source; the author separately determines what a task requires the
-solver to do. Prioritize scientific tool use while retaining the sources needed
-to understand it.
+it may support a useful task. Distinguish code that uses existing tools from
+code that implements tools, and identify mixed cases. Prioritize scientific
+tool use while retaining the implementation or API needed to understand it.
 
 Link related units, including dependencies, component operations, and different
 scientific uses of shared code. An author can use these relationships to combine
@@ -115,16 +92,13 @@ record whether an asset serves as study data, reference material, an annotation,
 or a demonstration fixture. A fixture can contain observed data; its size and
 purpose still need inspection.
 
-Use one record per identifiable dataset or reference product. Group raw data,
-processed representations, and subsets from the same observations as linked
-assets. Give independently sourced annotations and references their own records,
-even when used together. Shared packaging or use in one analysis does not
-establish shared observations. Keep uncertain relationships explicit.
-
-An example filename or required input format alone does not identify a dataset.
-Describe such input requirements in the unit's `inputs` and leave `dataset_ids`
-empty until a source dataset is identified. Partially documented datasets with
-an identifiable source can be recorded with their unknowns.
+Group assets derived from the same observations under one dataset record. Link
+raw data, processed representations, and subsets to their shared study and
+derivations.
+Keep supporting annotations and reference assets in separate records and link
+them to the analyses that use them; they do not establish additional independent
+studies. Shared packaging or use in one analysis does not establish shared
+observations. Keep uncertain relationships explicit.
 
 Record accessions or source URLs, available versions, formats, reported sizes,
 and access or redistribution terms with supporting sources. Distinguish metadata
@@ -186,9 +160,8 @@ dataset records by including those records in the output with their provenance.
 ### `inspection.md`
 
 Summarize the repository, inspected revision, scientific uses found, and how the
-inventory is organized. Include the source map, with each collection's location,
-inspection status, resulting unit IDs, and specific uninspected leads. Record
-inaccessible sources, deduplication decisions, and why the discovery pass stopped.
+inventory is organized. Record inspected areas, uninspected leads, inaccessible
+sources, deduplication decisions, and the reason the discovery pass stopped.
 Support the stopping explanation with available run information.
 Identify useful gaps and related units worth inspecting together. Separate
 source-backed facts from hypotheses about possible tasks.
@@ -196,36 +169,15 @@ source-backed facts from hypotheses about possible tasks.
 Do not impose a fixed unit count or fabricate units to fill a quota. Seek
 distinct scientific uses within the inspection budget and report coverage
 limits. An empty inventory is valid when no suitable units are found.
-Use remaining budget on the most useful uninspected leads in the source map.
-End the pass when the mapped scope is inspected, further leads repeat recorded
-work, or an actual time, access, or resource limit prevents useful progress.
-Before finalizing, check the remaining budget against the pending queue. A few
-representative examples do not complete a pass while useful entries and budget
-remain. If interrupted, save the current inventory and queue as a partial pass.
-For a partial pass, identify the next source locations to inspect and what
-remains to be learned from them.
 
 ## Check and hand off
 
 Check that both JSONL files parse, identifiers are unique within each inventory,
-and every dataset and unit reference resolves in the inventories and source map.
-Recompute reported counts from the final records and inspection queue.
-
-Review each unit against its cited sources: scientific use, tool role and its
-explanation, inputs, outputs, dependencies, and limitations must agree. After
-splitting or merging records, check each resulting unit independently for copied
-metadata that no longer applies. Preserve distinct scientific uses and data
-relationships, or record their deferral in the source map. Before reporting a
-source contradiction, check whether the claims concern the same entity, version,
-and processing stage, including relevant adjacent code or comments.
-
-Reconcile data records across all units and source collections. Merge records
-that describe different processing stages or subsets of the same observations,
-retain those differences as assets, and update all affected references. Keep
-distinct datasets and reference products separate. Check each data link against
-the unit's inputs. Compare the inventory with the repository and document
-outlines; record relevant omissions as uninspected leads with locations for the
-next pass.
+and every dataset and related-unit reference resolves. Confirm that accepted
+units have precise source locations and evidence for their scientific purpose.
+Check that each data link matches the unit's inputs and preserves distinct data
+identities. Compare the inventory with the repository and document outlines;
+record relevant omissions as uninspected leads with locations for the next pass.
 
 Pass selected unit records, their relevant dependencies and related units, and
 referenced dataset records as the author's assigned source units and supporting

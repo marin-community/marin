@@ -1,0 +1,86 @@
+{
+  "run_id": "2026-09-29-scanpy-reconcile-luna-02",
+  "status": "completed and reviewed; identity repair retained, copied dependencies and stale map IDs remain",
+  "question": "Does a per-replacement evidence audit prevent copied API metadata and false contradiction claims while preserving identity repairs?",
+  "baseline": "../2026-09-29-scanpy-reconcile-luna-01/run.json",
+  "repository": "https://github.com/scverse/scanpy",
+  "prompt": {
+    "path": "docs/experiments/bio-task-generation/prompts/reconcile-units.md",
+    "snapshot": "template.md",
+    "sha256": "160354e231210adb0e5bc8be791deefae2acb9be163c44ed080f9641838ea3b7",
+    "resolved_snapshot": "resolved-prompt.md",
+    "resolved_sha256": "c77dd6afa1a3fbb60d136c7014c98ddea1909fc80ed95806b85a039237c7608b",
+    "base_commit": "72008dd68247318a367a840a4f41e27fb15ff7e1",
+    "working_tree": true
+  },
+  "inputs": {
+    "source_run": "2026-09-29-scanpy-luna-01",
+    "artifact_sha256": {
+      "inputs/datasets.jsonl": "490d838f76a6f446a958f318b332926083eaddaf28ce0159c30259cc4b0febbc",
+      "inputs/discovery-prompt.md": "1d05a87e04fddb14867533e8859dc159aa4be026c2ec8458c382bca0a30845c8",
+      "inputs/inspection.md": "0a7c00645003c49eecde87861fa60d86bda5c00b48f3009a96d85e504186ca1e",
+      "inputs/units.jsonl": "be63cc606f5687d955e8eb9c3a3facf8b5fe69eea5f5f3293132ff46294bab2a"
+    }
+  },
+  "model": {
+    "requested": "gpt-6-luna",
+    "reported_version": null,
+    "reasoning_effort": "inherited; no explicit override",
+    "context_output_compaction_limits": null,
+    "tokens": null,
+    "cost": null
+  },
+  "execution": {
+    "runner": "collaboration.spawn_agent",
+    "runner_version": null,
+    "history": "none",
+    "concurrent_children": 1,
+    "attempts": 1,
+    "retries": 0,
+    "budget_minutes": 10,
+    "prepared_at_utc": "2026-09-29T23:39:38.376690+00:00",
+    "deadline_utc": "2026-09-29T23:49:38.376690+00:00",
+    "launch_message": "launch-message.txt",
+    "launch_message_sha256": "e6e8508169ffb2ad39e4d68320a9e54dd8987a0fc43da86614cedd97ee7fa06c",
+    "source_access": "source-access.txt",
+    "source_access_sha256": "f17117d26b1ee3dc93f82266361e5986dd263e6e881becaa7ef87bbc0efe7842",
+    "outputs": "outputs/",
+    "agent_task": "/root/scanpy_reconcile_luna_02",
+    "launch_observed_at_utc": "2026-09-29T23:41:26.668694+00:00",
+    "completion_observed_at_utc": "2026-09-29T23:43:52.096590+00:00"
+  },
+  "review_criteria": "review-criteria.md",
+  "trace_export": "Full agent/tool trace unavailable; final message saved in worker-final.txt.",
+  "review_protocol_note": "Same original Scanpy discovery 01 inventory, target contract and source-access instructions as reconciliation 01. Added probes were fixed after its review and before this run.",
+  "outputs": {
+    "counts": {
+      "units": 7,
+      "datasets": 5
+    },
+    "structural_errors": [],
+    "inspection_reference_audit": {
+      "unresolved_current_source_map_unit_ids": [
+        "scanpy.api.ingest-bbknn",
+        "scanpy.tutorial.ingest-bbknn"
+      ],
+      "note": "Added after reviewing this output; earlier structural checks covered JSON references only."
+    },
+    "retention": {
+      "input_units": 5,
+      "retained_unit_ids": 3,
+      "replaced_unit_ids": [
+        "scanpy.api.ingest-bbknn",
+        "scanpy.tutorial.ingest-bbknn"
+      ],
+      "input_asset_urls": 6,
+      "missing_input_asset_urls": []
+    },
+    "artifact_sha256": {
+      "outputs/datasets.jsonl": "36802ee8f15c482952b3e9a40c87da6f09f076a00bbd52cd19400196b3bfe687",
+      "outputs/inspection.md": "a7c9e1972cc906c5c3fb2d67fc19beffdae7a6c3934b4abd2944108c28412e50",
+      "outputs/reconciliation.md": "d2f807431d8ab00b6d5fa2466618e9da5b8e6ba6ef0a05aa64926627d5b87369",
+      "outputs/units.jsonl": "85801790e2761305ffa40ba38156d4436239c6fe6be10e989e28a148bac9d932"
+    }
+  },
+  "review_recorded_at_utc": "2026-09-29T23:46:15.274800+00:00"
+}

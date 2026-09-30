@@ -1,0 +1,22 @@
+{
+  "counts": {
+    "units": 6,
+    "datasets": 5
+  },
+  "structural_errors": [],
+  "retention": {
+    "input_units": 5,
+    "retained_unit_ids": 4,
+    "replaced_unit_ids": [
+      "scanpy.api.ingest-bbknn"
+    ],
+    "input_asset_urls": 6,
+    "missing_input_asset_urls": []
+  },
+  "artifact_sha256": {
+    "outputs/datasets.jsonl": "6444b10223f3047c22c71073e3c6751446c572194d17a1cbc61c3a55c583386a",
+    "outputs/inspection.md": "34c7e597ee8ee4dbd1c94da7aa91a2f81ca5c9ecc469558f60b69a6f3d4b66b6",
+    "outputs/reconciliation.md": "166854da9d25da6eb3e161eceea10a4bfbde5ac09ae3228afcb95d188b7425ed",
+    "outputs/units.jsonl": "55b51b41722255525e7403c4b4fc685255d66c0293712c971e649d7b16f643ef"
+  }
+}
