@@ -165,7 +165,8 @@ class ContainerToolProvider:
                     line = await process.stdout.readline()
                 if not line or not line.endswith(b"\n") or len(line) > MAX_PROTOCOL_BYTES:
                     raise ProviderProtocolError("Provider returned an absent or oversized protocol response")
-                response = json.loads(line, parse_constant=lambda value: _reject_constant(value))
+                self._record({"raw_response": line.decode(errors="replace")})
+                response = json.loads(line, parse_constant=_reject_constant)
                 if not isinstance(response, dict) or response.get("id") != request["id"]:
                     raise ProviderProtocolError("Provider response ID differs from its request")
                 if set(response) == {"id", "error"}:

@@ -13,7 +13,7 @@ from threading import Thread
 
 import pytest
 
-from taskcompendium.container_service import ContainerService
+from taskcompendium.container_service import ContainerService, ContainerToolProvider
 from taskcompendium.harbor.runner import ChatLaunch, run_trial
 from taskcompendium.importers.nemo_workplace import (
     PROVIDER,
@@ -136,3 +136,28 @@ async def test_workplace_concurrent_and_fresh_harbor_trials_are_isolated(tmp_pat
         results.append(await run_trial(task, config, launch, tmp_path / "trials", "fresh"))
     assert [result.exception_info for result in results] == [None] * 3
     assert [result.verifier_result.rewards for result in results] == [{"reward": 1.0}] * 3
+
+
+@pytest.mark.docker
+async def test_workplace_service_has_no_workspace_access_or_network(tmp_path, provider_source, workplace_runtime):
+    _, _, config = import_row(ROW.read_bytes(), provider_source, workplace_runtime)
+    binding = config.tool_providers["workplace"]
+    provider = ContainerToolProvider(
+        runtime=workplace_runtime,
+        action_interface=binding.action_interface,
+        seed_sha256=binding.seed_sha256,
+        provider_revision=binding.provider_revision,
+        tool_definitions=list(binding.tool_definitions),
+        trace_path=tmp_path / "service.jsonl",
+    )
+    await provider.start()
+    try:
+        inspection = json.loads(subprocess.check_output(("docker", "inspect", provider.container_name)))[0]
+        host = inspection["HostConfig"]
+        assert host["NetworkMode"] == "none"
+        assert host["Binds"] is None and not host["Privileged"]
+        assert host["ReadonlyRootfs"] and host["CapDrop"] == ["ALL"]
+        assert inspection["Config"]["User"] == "65532:65532"
+        assert all(mount["Type"] != "bind" for mount in inspection["Mounts"])
+    finally:
+        await provider.stop()

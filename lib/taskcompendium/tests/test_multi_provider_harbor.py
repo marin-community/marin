@@ -351,3 +351,84 @@ async def test_composite_keeps_workspace_operations_outside_tool_providers(tmp_p
         await composite.upload_dir(tmp_path / "source", "/workspace")
 
     assert result.stdout == "/app\n"
+
+
+async def test_malformed_provider_response_remains_ungraded_with_raw_trace(tmp_path, monkeypatch, service_processes):
+    beta = _binding(BetaProvider).model_copy(
+        update={
+            "runtime": container_runtime(
+                BetaProvider.ACTION_INTERFACE,
+                BetaProvider.SEED_SHA256,
+                BetaProvider.PROVIDER_REVISION,
+                BetaProvider.TOOL_DEFINITIONS,
+                wrong_id=True,
+            )
+        }
+    )
+    config = HarborEnvironmentConfig(tool_providers={"alpha": _binding(AlphaProvider), "beta": beta})
+    task = lower_to_harbor(
+        _specification(AnswerType.STATE), ProviderState(id="state", provider="beta"), config, tmp_path / "task"
+    )
+
+    def respond(request, timeout):
+        return BytesIO(json.dumps({"choices": [{"message": {"role": "assistant", "content": "Done."}}]}).encode())
+
+    monkeypatch.setattr("taskcompendium.harbor.adapter.urllib.request.urlopen", respond)
+    result = await run_trial(
+        task, config, ChatLaunch(model="test", api_base="https://example.invalid"), tmp_path / "trials", "bad"
+    )
+    assert result.verifier_result is None
+    outcome = json.loads((tmp_path / "trials/bad/verifier/taskcompendium-result.json").read_text())
+    assert outcome["status"] == "infra_error" and outcome["reward"] is None
+    trace = [json.loads(line) for line in (tmp_path / "trials/bad/agent/provider-beta.jsonl").read_text().splitlines()]
+    assert any(json.loads(event["raw_response"]).get("id") == "invalid" for event in trace if "raw_response" in event)
+
+
+async def test_service_action_failure_retains_call_once_without_final_message(tmp_path, monkeypatch, service_processes):
+    beta = _binding(BetaProvider).model_copy(
+        update={
+            "runtime": container_runtime(
+                BetaProvider.ACTION_INTERFACE,
+                BetaProvider.SEED_SHA256,
+                BetaProvider.PROVIDER_REVISION,
+                BetaProvider.TOOL_DEFINITIONS,
+                fail_call=True,
+            )
+        }
+    )
+    config = HarborEnvironmentConfig(tool_providers={"alpha": _binding(AlphaProvider), "beta": beta})
+    task = lower_to_harbor(
+        _specification(AnswerType.STATE), ProviderState(id="state", provider="beta"), config, tmp_path / "task"
+    )
+
+    def respond(request, timeout):
+        return BytesIO(
+            json.dumps(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "role": "assistant",
+                                "content": None,
+                                "tool_calls": [_call("increment_beta", "failed-1")],
+                            }
+                        }
+                    ]
+                }
+            ).encode()
+        )
+
+    monkeypatch.setattr("taskcompendium.harbor.adapter.urllib.request.urlopen", respond)
+    result = await run_trial(
+        task, config, ChatLaunch(model="test", api_base="https://example.invalid"), tmp_path / "trials", "failed"
+    )
+    assert result.exception_info is not None and result.verifier_result is None
+    assert not (tmp_path / "trials/failed/agent/submission.json").exists()
+    events = [
+        json.loads(line) for line in (tmp_path / "trials/failed/agent/provider-beta.jsonl").read_text().splitlines()
+    ]
+    calls = [event["request"] for event in events if event.get("request", {}).get("method") == "call"]
+    assert [request["params"] for request in calls] == [
+        {"name": "increment_beta", "arguments": "{}", "call_id": "failed-1"}
+    ]
+    assert any("error" in json.loads(event["raw_response"]) for event in events if "raw_response" in event)
