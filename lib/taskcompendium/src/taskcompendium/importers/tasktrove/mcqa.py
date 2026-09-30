@@ -16,6 +16,7 @@ from taskcompendium.verifiers.multiple_choice import multiple_choice_answer
 
 FAMILY = "qa-short-answer"
 CONVERTER = "nemotron_mcqa"
+TEMPLATE_ID = "c814af4f124d"
 _PREFIX = (
     "You are answering a multiple-choice question. Read the question below and write your final "
     "answer to `/app/answer.txt`.\n\n"
@@ -51,7 +52,12 @@ def import_task(archive: TaskArchive) -> TaskSpec:
     """Import a cleaned MCQA archive as a text-answer task."""
     try:
         metadata = tomllib.loads(archive.files[TASK_MANIFEST].decode())[METADATA_TABLE]
-        if metadata.get("family") != FAMILY or metadata.get("converter") != CONVERTER or metadata.get("mode") != "mcq":
+        if (
+            metadata.get("family") != FAMILY
+            or metadata.get("converter") != CONVERTER
+            or metadata.get("template_id") != TEMPLATE_ID
+            or metadata.get("mode") != "mcq"
+        ):
             raise ValueError("Unsupported TaskTrove MCQA source")
         tags = metadata.get("tags", [])
         if not isinstance(tags, list) or any(not isinstance(tag, str) for tag in tags):

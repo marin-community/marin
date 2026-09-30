@@ -32,10 +32,51 @@ TASKTROVE_PATH = "Nemotron-RL-knowledge-mcqa-1961bdb52b5a.tar.gz"
 RELEASE_URI = "s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.10.9"
 
 RELEASE_REVISION = "2026.09.10.9"
+PINNED_RELEASE_URI = "s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.18.3"
+PINNED_RELEASE_REVISION = "2026.09.18.3"
 
 
 def _archive(release_revision: str = RELEASE_REVISION):
     return read_archive(FIXTURE.read_bytes(), TASKTROVE_SOURCE, TASKTROVE_PATH, RELEASE_URI, release_revision)
+
+
+def _synthetic_supported_archive():
+    manifest = f"""[metadata]
+tasktrove_source = "{TASKTROVE_SOURCE}"
+tasktrove_path = "synthetic-mcqa.tar.gz"
+family = "qa-short-answer"
+converter = "nemotron_mcqa"
+template_id = "c814af4f124d"
+mode = "mcq"
+tags = ["qa", "mcq", "synthetic"]
+"""
+    instruction = (
+        "You are answering a multiple-choice question. Read the question below and write your final "
+        "answer to `/app/answer.txt`.\n\n"
+        "The verifier extracts a single letter (A/B/C/...) from your answer file using a regex pattern; "
+        "the simplest valid output is a file containing exactly\n`Answer: X` (where X is your chosen letter).\n\n"
+        "---\n\nAnswer the following multiple choice question. The last line of your response "
+        "should be in the following format: 'Answer: A/B/C/D/E' (e.g. 'Answer: C').\n\n"
+        "Synthetic question: Which label is assigned to this example?\nA: Alpha\nB: Bravo\nC: Charlie\nD: Delta\nE: Echo"
+    )
+    files = {
+        "task.toml": manifest.encode(),
+        "instruction.md": instruction.encode(),
+        "tests/verifier.toml": b'mode = "mcq"\nexpected = "D"\noptions = 5\n',
+    }
+    archive_data = io.BytesIO()
+    with tarfile.open(fileobj=archive_data, mode="w:gz") as archive:
+        for name, content in files.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(content)
+            archive.addfile(info, io.BytesIO(content))
+    return read_archive(
+        archive_data.getvalue(),
+        TASKTROVE_SOURCE,
+        "synthetic-mcqa.tar.gz",
+        PINNED_RELEASE_URI,
+        PINNED_RELEASE_REVISION,
+    )
 
 
 def test_import_preserves_release_identity():
@@ -62,6 +103,19 @@ def test_import_preserves_ordered_source_tags_through_harbor_export(tmp_path):
     )
 
     assert read_specification(task / "specification.json").tags == expected_tags
+
+
+def test_supported_mcqa_template_preserves_synthetic_choices_and_tags():
+    specification = import_task(_synthetic_supported_archive())
+    prompt = specification.context.events[0].content
+
+    assert specification.tags == ("qa", "mcq", "synthetic")
+    assert "Synthetic question" in prompt
+    assert [prompt.index(option) for option in ("A: Alpha", "B: Bravo", "C: Charlie", "D: Delta", "E: Echo")] == sorted(
+        prompt.index(option) for option in ("A: Alpha", "B: Bravo", "C: Charlie", "D: Delta", "E: Echo")
+    )
+    assert "/app/answer.txt" not in prompt
+    assert "verifier" not in prompt.lower()
 
 
 def test_import_removes_source_submission_instructions():
@@ -140,6 +194,17 @@ def test_import_rejects_non_mcqa_source_before_lowering():
         import_task(archive)
 
 
+def test_import_rejects_unknown_mcqa_template_id():
+    archive = _archive()
+    archive.files["task.toml"] = archive.files["task.toml"].replace(
+        b'template_id = "c814af4f124d"',
+        b'template_id = "unreviewed-template"',
+    )
+
+    with pytest.raises(ValueError, match="Unsupported TaskTrove MCQA source"):
+        import_task(archive)
+
+
 def test_import_rejects_unknown_source_submission_format():
     archive = _archive()
     archive.files["instruction.md"] = archive.files["instruction.md"].replace(
@@ -195,6 +260,25 @@ async def test_imported_mcqa_runs_through_direct_chat_harbor(tmp_path):
     outcome = json.loads((tmp_path / "trials/mcqa/verifier/taskcompendium-result.json").read_text())
     assert result.exception_info is None, result.exception_info
     assert outcome == {"status": "graded", "reward": 1.0, "error": None}
+
+
+async def test_synthetic_mcqa_runs_positive_and_negative_harbor_trials(tmp_path):
+    task = lower_to_harbor(
+        import_task(_synthetic_supported_archive()),
+        PlainText(id="plain"),
+        HarborEnvironmentConfig(),
+        tmp_path / "task",
+    )
+
+    correct = await run_replay_trial(task, {"role": "assistant", "content": "D"}, tmp_path / "trials", "correct")
+    incorrect = await run_replay_trial(task, {"role": "assistant", "content": "B"}, tmp_path / "trials", "incorrect")
+
+    correct_outcome = json.loads((tmp_path / "trials/correct/verifier/taskcompendium-result.json").read_text())
+    incorrect_outcome = json.loads((tmp_path / "trials/incorrect/verifier/taskcompendium-result.json").read_text())
+    assert correct.exception_info is None, correct.exception_info
+    assert incorrect.exception_info is None, incorrect.exception_info
+    assert correct_outcome == {"status": "graded", "reward": 1.0, "error": None}
+    assert incorrect_outcome == {"status": "graded", "reward": 0.0, "error": None}
 
 
 def test_imported_mcqa_resolves_verifier_in_fresh_process(tmp_path):
