@@ -206,6 +206,7 @@ def build_arms(
     trainer_modes: tuple[str, ...] = REPLAY_MODES,
     capture_layers: tuple[int, ...] = (),
     timing_modes: tuple[str, ...] = (),
+    cluster: str = TINY_GRUG_POLICY.cluster,
 ) -> dict[str, ArtifactStep[SkyRLRun]]:
     """Build separate training artifacts for arms sharing model and data inputs."""
     model = ArtifactStep.adopt(
@@ -233,14 +234,14 @@ def build_arms(
     )
     topology = SkyRLTopology(num_nodes=1, gpus_per_node=2, gpu_variant="H100", role_plan=role_plan)
     execution = IrisSkyRLExecution(
-        cluster=TINY_GRUG_POLICY.cluster,
-        cluster_config=f"lib/iris/config/{TINY_GRUG_POLICY.cluster}.yaml",
+        cluster=cluster,
+        cluster_config=f"lib/iris/config/{cluster}.yaml",
         cpu=16,
         memory=TINY_GRUG_POLICY.task_memory,
         disk="256GB",
         priority="interactive",
         max_retries=1,
-        target_cluster=TINY_GRUG_POLICY.cluster,
+        target_cluster=cluster,
         parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
         coordinator_timeout_hours=12,
         wandb_entity="marin-community",
@@ -296,6 +297,7 @@ def build_arms(
 @click.option("--trainer-mode", "trainer_modes", multiple=True, default=REPLAY_MODES, show_default=True)
 @click.option("--capture-layer", "capture_layers", multiple=True, type=int)
 @click.option("--timing-mode", "timing_modes", multiple=True)
+@click.option("--cluster", type=click.Choice(("cw-us-east-02a", "cw-rno2a")), default=TINY_GRUG_POLICY.cluster)
 @rl_build_options
 def main(
     arm_names: tuple[str, ...],
@@ -314,6 +316,7 @@ def main(
     trainer_modes: tuple[str, ...],
     capture_layers: tuple[int, ...],
     timing_modes: tuple[str, ...],
+    cluster: str,
 ) -> dict[str, ArtifactStep[SkyRLRun]]:
     settings = ProbeSettings(
         seed=seed,
@@ -335,6 +338,7 @@ def main(
         trainer_modes=trainer_modes,
         capture_layers=capture_layers,
         timing_modes=timing_modes,
+        cluster=cluster,
     )
 
 
