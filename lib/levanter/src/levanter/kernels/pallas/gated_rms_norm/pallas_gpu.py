@@ -120,32 +120,39 @@ def _logistic(value: jax.Array, dtype) -> jax.Array:
     return _round(1.0 / _round(1.0 + exp, dtype), dtype)
 
 
-def _stats_kernel(x_ref, w_ref, w_down_ref, h_ref, rstd_ref, *, d_block: int, eps: float, dtype):
+def _silu(value: jax.Array, dtype) -> jax.Array:
+    """``jax.nn.silu`` in ``dtype`` as XLA lowers it: ``v * logistic(v)``, each op rounded."""
+    return _round(value * _logistic(value, dtype), dtype)
+
+
+def _stats_kernel(x_ref, w_ref, w_down_ref, h_ref, silu_ref, rstd_ref, *, d_block: int, eps: float, dtype):
     t_block, hidden = x_ref.shape
     rank = w_down_ref.shape[1]
 
     def body(step, carry):
-        acc, sumsq = carry
+        acc, squares = carry
         span = pl.ds(step * d_block, d_block)
         x = x_ref[:, span].astype(jnp.float32)
         w = w_ref[span].astype(jnp.float32)
-        sumsq = sumsq + jnp.sum(x * x, axis=1)
+        # Elementwise accumulation; one cross-lane reduction after the loop.
+        squares = squares + x * x
         xw = (x * w[None, :]).astype(dtype)
         acc = acc + jnp.dot(xw, w_down_ref[span, :].astype(dtype), preferred_element_type=jnp.float32)
-        return acc, sumsq
+        return acc, squares
 
-    init = (jnp.zeros((t_block, rank), jnp.float32), jnp.zeros((t_block,), jnp.float32))
-    acc, sumsq = jax.lax.fori_loop(0, hidden // d_block, body, init)
-    rstd = jax.lax.rsqrt(sumsq * (1.0 / hidden) + eps)
+    init = (jnp.zeros((t_block, rank), jnp.float32), jnp.zeros((t_block, d_block), jnp.float32))
+    acc, squares = jax.lax.fori_loop(0, hidden // d_block, body, init)
+    rstd = jax.lax.rsqrt(jnp.sum(squares, axis=1) * (1.0 / hidden) + eps)
     rstd_ref[...] = rstd
-    h_ref[...] = (acc * rstd[:, None]).astype(h_ref.dtype)
+    h = _round(acc * rstd[:, None], dtype)
+    h_ref[...] = h.astype(h_ref.dtype)
+    # The output kernel reads the activated projection once per tile instead of recomputing it.
+    silu_ref[...] = _silu(h, dtype).astype(silu_ref.dtype)
 
 
-def _output_kernel(x_ref, w_ref, rstd_ref, h_ref, w_up_ref, out_ref, gate_ref, *, dtype):
-    h = h_ref[...].astype(jnp.float32)
-    silu = _round(h * _logistic(h, dtype), dtype)
-    logits = _round(jnp.dot(silu.astype(dtype), w_up_ref[...].astype(dtype), preferred_element_type=jnp.float32), dtype)
-    gate = _logistic(logits, dtype)
+def _output_kernel(x_ref, w_ref, rstd_ref, silu_ref, w_up_ref, out_ref, gate_ref, *, dtype):
+    logits = jnp.dot(silu_ref[...].astype(dtype), w_up_ref[...].astype(dtype), preferred_element_type=jnp.float32)
+    gate = _logistic(_round(logits, dtype), dtype)
     x = x_ref[...].astype(jnp.float32)
     y = _round(x * rstd_ref[...][:, None] * w_ref[...].astype(jnp.float32)[None, :], dtype)
     out_ref[...] = (y * gate).astype(out_ref.dtype)
@@ -180,7 +187,7 @@ def gated_rms_norm_pallas_fwd_local(
     rstd_shape = jax.ShapeDtypeStruct((tokens,), jnp.float32)
     stats = pl.pallas_call(
         functools.partial(_stats_kernel, d_block=block_sizes.stats_d_block_size, eps=eps, dtype=dtype),
-        out_shape=[h_shape, rstd_shape],
+        out_shape=[h_shape, h_shape, rstd_shape],
         grid=(tokens // bt,),
         in_specs=[
             pl.BlockSpec((bt, hidden), lambda i: (i, 0)),
@@ -189,6 +196,7 @@ def gated_rms_norm_pallas_fwd_local(
         ],
         out_specs=[
             pl.BlockSpec((bt, rank), lambda i: (i, 0)),
+            pl.BlockSpec((bt, rank), lambda i: (i, 0)),
             pl.BlockSpec((bt,), lambda i: (i,)),
         ],
         compiler_params=_compiler_params(block_sizes.stats_num_warps, block_sizes.stats_num_stages),
@@ -196,11 +204,11 @@ def gated_rms_norm_pallas_fwd_local(
         cost_estimate=with_io_bytes_accessed(
             pl.estimate_cost(lambda a, b: (a @ b), x, w_down),
             kernel_inputs_specs=(x, norm_weight, w_down),
-            kernel_outputs_specs=(h_shape, rstd_shape),
+            kernel_outputs_specs=(h_shape, h_shape, rstd_shape),
         ),
         name="gated_rms_norm_stats",
     )
-    h, rstd = stats(x, norm_weight, w_down)
+    h, silu, rstd = stats(x, norm_weight, w_down)
 
     out_shape = jax.ShapeDtypeStruct((tokens, hidden), dtype)
     gate_shape = jax.ShapeDtypeStruct((tokens, hidden), dtype)
@@ -230,7 +238,7 @@ def gated_rms_norm_pallas_fwd_local(
         ),
         name="gated_rms_norm_output",
     )
-    out, gate = output(x, norm_weight, rstd, h, w_up)
+    out, gate = output(x, norm_weight, rstd, silu, w_up)
     return out, gate, h, rstd
 
 
