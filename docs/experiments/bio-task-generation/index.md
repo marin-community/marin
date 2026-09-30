@@ -58,6 +58,13 @@ distinguish versioned outputs and traces from unavailable or local-only material
 Repair destination links and executable paths separately from immutable historical
 snapshots; preserve original hashes and record every adaptation.
 
+Use the completed [discovery migration #2](https://github.com/Open-Athena/biotasks/issues/2)
+as the preservation precedent. Its [archive record](https://github.com/Open-Athena/biotasks/blob/6bb14ef5eea9a58b6b704808ff21bdecb8791170/experiments/5-source-discovery/runs/2026-09-30-bucket-archive/README.md)
+keeps manifests and verification evidence in Git and raw cache bytes in the public
+`open-athena/biotasks` HF bucket. Authoring's local-only caches and logs still need
+an explicit archive or retention disposition; the source branch alone does not
+complete that preservation. No authoring bucket upload is claimed here.
+
 ## Direction
 
 Start from recurring scientific workflows found in repositories, tutorials and reproducible studies. Use benchmarks as optional inspiration and checks for omissions; benchmark question frequencies do not determine priorities. Preserve existing out-of-distribution exclusions when borrowing benchmark material. SciGym is excluded.

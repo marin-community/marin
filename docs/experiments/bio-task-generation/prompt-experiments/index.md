@@ -50,6 +50,25 @@ outputs. Migration should record a disposition for the local-only material and
 check hashes and links after relocation, as required by
 [destination issue #3](https://github.com/Open-Athena/biotasks/issues/3).
 
+The [completed discovery migration](https://github.com/Open-Athena/biotasks/issues/2)
+provides the destination pattern. Its [pinned archive procedure](https://github.com/Open-Athena/biotasks/blob/6bb14ef5eea9a58b6b704808ff21bdecb8791170/experiments/5-source-discovery/runs/2026-09-30-bucket-archive/README.md)
+preserves an exact file allowlist, prepares an archive and manifest, commits the
+manifest/upload plan, and verifies anonymous download of both objects and every
+member. The [destination storage guide](https://github.com/Open-Athena/biotasks/blob/37271415c4c201ba9dbbda66c203caa4050744c3/docs/storage.md)
+uses `hf://buckets/open-athena/biotasks/research/<issue>-<topic>/<capture-date>/<manifest-sha256>/`.
+The manifest hash identifies the exact recorded bytes; bucket prefixes are
+append-only by convention, without server-enforced version history. Preserve the
+source until the archive verification is recorded.
+
+A lightweight source-checkout inventory on 2026-09-30 found 71 files totaling
+8,912,438 bytes in ignored `artifacts/bio-task-generation/`, including raw CLI
+logs, source caches, helpers and local check records. This is a candidate-file
+count at that observation, not a frozen upload allowlist. Review exclusions and
+source terms, recover useful helpers as historical source, and archive eligible
+remaining evidence using the destination procedure. An exact allowlist, archive
+manifest, upload and download verification for these authoring artifacts remain
+pending. The original local files are retained.
+
 ## Cross-repository comparison on 2026-09-30
 
 The [comparison configuration](2026-09-30-comparison.json) records a two-hour
