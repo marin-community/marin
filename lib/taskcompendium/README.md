@@ -4,15 +4,15 @@
 
 Training and evaluation tasks arrive with different prompt formats, answer rules, tools, and graders. TaskCompendium separates the problem a model must solve from the way a framework runs and grades it. A caller can choose among compatible presentations of a task while keeping its reference answer private. Additional Harbor environment configurations can use the same task definition.
 
-The current implementation exports Harbor tasks for text, number, native-action, and state results. A task can require several named, versioned action interfaces, each with its own immutable seed. File results have no submission convention in this package.
+The current implementation exports Harbor tasks for text, number, native-action, and state results. A task can require several named, versioned action interfaces. File results have no submission convention in this package.
 
 ## What does it contain?
 
 - **Task specs** describe the source problem, required capabilities, the kind of result, and how to verify it.
 - **Submission conventions** describe how to ask for and extract a result, such as a plain answer, a JSON object, or a final function call.
-- **Harbor environment configurations** select direct chat or one or more importable providers with pinned tool surfaces and seeds.
+- **Harbor environment configurations** select direct chat or one or more importable tool providers.
 - **Lowering tools** find compatible convention and environment configuration pairs, select a pair, and export a runnable Harbor task package.
-- **A Harbor adapter** sends the conversation to an OpenAI-compatible endpoint, dispatches tool calls across turns, and records the result. Tests use a replay agent for fixed final submissions.
+- **A Harbor adapter** sends the conversation to an OpenAI-compatible endpoint, dispatches tool calls across turns, and records the result.
 
 ```mermaid
 flowchart LR
@@ -70,13 +70,13 @@ With the `answer_call` convention, the chat agent adds `submit_answer(answer: st
 
 `TaskSpec.tool_providers` names the action interfaces and immutable seeds a task needs. `HarborEnvironmentConfig.tool_providers` binds those names to implementations and pinned tool schemas. A trial can use several providers; their function names must be unique and must not collide with terminal submission functions. A provider can use an installed `python:module:Class` import or a pinned external source such as `python+git+https://github.com/marin-community/nemo_workplace@<full-commit-sha>:nemo_workplace.provider:NemoWorkplaceProvider`. The Git commit pin is distinct from the provider's own `provider_revision`. MCP bindings are not implemented yet.
 
-For a Git provider, the trusted export caller supplies its local checkout through `trusted_provider_sources={"workplace": checkout_path}`. TaskCompendium checks the HTTPS origin, exact commit, clean tree, tracked file paths, size limits, and symlinks, then packages the tracked source under `environment/provider_sources/`. It validates the provider's interface, seed, and selected tool schemas from that packaged source before export completes. A launch rechecks every packaged file before Harbor starts. The provider runs from a process-local copy of the verified snapshot, so trials do not fetch source or write into the exported task. Its ordinary Python dependencies must already be available in the runtime. Git provider packages must use relative imports within their own package so they can load under an isolated namespace even when an installed copy was imported earlier.
+For a Git provider, the trusted export caller supplies its local checkout through `trusted_provider_sources={"workplace": checkout_path}`. TaskCompendium verifies the checkout and packages its tracked source with the exported task. Harbor runs the provider from that snapshot without fetching source during the trial. The provider's Python dependencies must be installed in the runtime.
 
 Tool providers expose callable actions. `environment_requirements` separately describes workspace capabilities such as filesystem and shell access. The host chat runtime cannot satisfy those requirements. A workspace runtime must supply them; declaring a capability on a tool provider does not create a workspace.
 
 ### Files and state
 
-`answer_type=file` names a file result; this package has no file submission convention. `answer_type=state` names the resulting environment state, which can include changes outside a filesystem. `ProviderState(provider="workplace")` selects the authoritative provider snapshot. Its `canonical_state()` method returns a JSON-compatible value without receiving the expected state. The private `structured_exact` verifier compares that value with the independently constructed expected state. The final assistant message ends the interaction.
+`answer_type=file` names a file result; this package has no file submission convention. `answer_type=state` names the resulting environment state, which can include changes outside a filesystem. `ProviderState(provider="workplace")` selects the 'workplace' provider's state via its `canonical_state()` method. This method returns a JSON-compatible value. The grader then compares this to the expected state. The final assistant message ends the interaction.
 
 ## What can we import?
 
@@ -166,7 +166,7 @@ result = asyncio.run(
 )
 ```
 
-Harbor runs one `ChatAgent` for every submission convention. Direct chat sends one request; tool-backed chat retains fresh provider state across calls and may use several turns. The agent writes a typed `ConversationTrace` to `submission.json`, containing the full model-visible conversation, including submission instructions and the final assistant message. Function-call arguments are decoded objects in source context and grading evidence. The latest raw model response is retained in `chat-response.json` for diagnostics. Provider call IDs, actions, and observations remain ordered in the trace. Terminal answer and final-action calls end the interaction without dispatch.
+Harbor runs a `ChatAgent` for each exported chat task. Direct chat sends one request; tool-backed chat retains fresh provider state across calls and may use several turns. The agent writes a typed `ConversationTrace` to `submission.json`, containing the full model-visible conversation, including submission instructions and the final assistant message. Function-call arguments are decoded objects in source context and grading evidence. The latest raw model response is retained in `chat-response.json` for diagnostics. Provider call IDs, actions, and observations remain ordered in the trace. Terminal answer and final-action calls end the interaction without dispatch.
 
 The host chat environment exposes no filesystem or shell tools. The custom verifier receives the typed trace, submission convention, and Harbor's verifier-side environment. Each harness translates its own protocol into these shared conversation types; graders do not assume OpenAI or Terminus wire formats. A valid but wrong answer or state receives reward `0.0`. A well-formed message that violates its submission convention receives a `submission_failure` result and reward `0.0`. A malformed model message or tool-call argument fails at the harness boundary as an infrastructure error, with no reward and the raw response retained. Verifier failures are recorded separately in `taskcompendium-result.json`. The package requires Harbor's [custom-verifier task loading](https://github.com/marin-community/harbor/pull/155). Its generated `tests/test.sh` is a Harbor compatibility stub; grading runs in the custom verifier. Install the pinned Harbor fork through the package extra with `uv sync --project lib/taskcompendium --extra harbor`; its revision is declared in `lib/taskcompendium/pyproject.toml`.
 
