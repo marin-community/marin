@@ -16,7 +16,7 @@ import json
 import os
 import urllib.error
 import urllib.request
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol, cast, runtime_checkable
 
 from harbor.agents.base import BaseAgent
 from harbor.environments.base import BaseEnvironment, ExecResult
@@ -268,10 +268,9 @@ class ChatAgent(BaseAgent):
             messages.append({"role": "tool", "tool_call_id": call.call_id, "content": observation})
 
     async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
-        if not isinstance(environment, CompositeToolEnvironment):
-            raise TypeError("Chat requires a composite Harbor environment")
-        bindings = read_environment_config(environment.environment_dir.parent / ENVIRONMENT_CONFIG_FILE).tool_providers
-        provider_tools = await environment.native_tool_definitions()
+        composite = cast(CompositeToolEnvironment, environment)
+        bindings = read_environment_config(composite.environment_dir.parent / ENVIRONMENT_CONFIG_FILE).tool_providers
+        provider_tools = await composite.native_tool_definitions()
         terminal_tools = self.request.get("tools", [])
         terminal_names = {tool["function"]["name"] for tool in terminal_tools}
         provider_names = {tool["function"]["name"] for tool in provider_tools}
@@ -318,7 +317,7 @@ class ChatAgent(BaseAgent):
                 (self.logs_dir / SUBMISSION_FILE).write_text(chat_conversation(messages).model_dump_json())
                 return
             # Provider observations become the next model-visible turn; call IDs and action order are retained.
-            await self._dispatch_provider_calls(calls, environment, messages, actions, seen_call_ids)
+            await self._dispatch_provider_calls(calls, composite, messages, actions, seen_call_ids)
         raise RuntimeError(f"Tool agent exhausted {self.max_turns} turns")
 
 
