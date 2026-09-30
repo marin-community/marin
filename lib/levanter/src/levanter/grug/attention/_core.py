@@ -1,5 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
+from __future__ import annotations
+
 import functools
 import math
 from collections.abc import Callable
@@ -14,7 +16,7 @@ from jax import numpy as jnp
 from jax import shard_map
 from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_kernel
 from jax.sharding import NamedSharding, auto_axes
-from jaxtyping import Array, Bool, Float, Int
+from shape_extensions import Int, IntVar
 
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
 from levanter.kernels.pallas.splash_attention import (
@@ -72,8 +74,8 @@ class AttentionMask(eqx.Module):
 
     def with_segment_ids(
         self,
-        q_segment_ids: Int[Array, "..."],
-        kv_segment_ids: Int[Array, "..."] | None = None,
+        q_segment_ids: jax.Array,
+        kv_segment_ids: jax.Array | None = None,
     ) -> "AttentionMask":
         kv_ids = q_segment_ids if kv_segment_ids is None else kv_segment_ids
         return AttentionMask(
@@ -98,7 +100,7 @@ class AttentionMask(eqx.Module):
             fa4_bounds=(lower_bounds, valid),
         )
 
-    def materialize_mask(self, q_len: int, k_len: int) -> Bool[Array, "..."] | None:
+    def materialize_mask(self, q_len: int, k_len: int) -> jax.Array | None:
         """Return a boolean mask (True = allowed) or None.
 
         Shapes:
@@ -141,12 +143,12 @@ class AttentionMask(eqx.Module):
         return mask
 
 
-def token_validity_from_attention_mask(
+def token_validity_from_attention_mask[B: IntVar, S: IntVar](
     mask: AttentionMask | jax.Array | None,
     *,
-    batch_size: int,
-    sequence_length: int,
-) -> Bool[Array, "B S"]:
+    batch_size: Int[B],
+    sequence_length: Int[S],
+) -> jax.Array[[B, S]]:
     """Return positions that represent tokens rather than sequence padding.
 
     Negative query segment IDs encode padding for structured masks. Boolean
@@ -177,7 +179,9 @@ def token_validity_from_attention_mask(
     return jnp.broadcast_to(valid, (batch_size, sequence_length))
 
 
-def _rotary_cache(seq_len: int, head_dim: int, rope: RotaryConfig) -> tuple[Float[Array, "S D"], Float[Array, "S D"]]:
+def _rotary_cache[S: IntVar, D: IntVar](
+    seq_len: Int[S], head_dim: Int[D], rope: RotaryConfig
+) -> tuple[jax.Array[[S, D // 2]], jax.Array[[S, D // 2]]]:
     half_dim = head_dim // 2
     inv_freq = 1.0 / (rope.theta ** (jnp.arange(0, half_dim, dtype=jnp.float32) / half_dim))
     positions = jnp.arange(seq_len, dtype=jnp.float32)
@@ -188,30 +192,34 @@ def _rotary_cache(seq_len: int, head_dim: int, rope: RotaryConfig) -> tuple[Floa
 
 
 @named_call
-def apply_rotary_embedding(
-    q: Float[Array, "B S H D"],
-    k: Float[Array, "B S H D"],
+def apply_rotary_embedding[B: IntVar, S: IntVar, Hq: IntVar, Hkv: IntVar, D: IntVar](
+    q: jax.Array[[B, S, Hq, D]],
+    k: jax.Array[[B, S, Hkv, D]],
     *,
-    seq_len: int,
-    head_dim: int,
+    seq_len: Int[S],
+    head_dim: Int[D],
     rope: RotaryConfig,
-) -> tuple[Float[Array, "B S H D"], Float[Array, "B S H D"]]:
+) -> tuple[jax.Array[[B, S, Hq, D]], jax.Array[[B, S, Hkv, D]]]:
     cos, sin = _rotary_cache(seq_len, head_dim, rope)
     cos = cos[None, :, None, :]
     sin = sin[None, :, None, :]
 
-    def _apply(x: Float[Array, "B S H D"]) -> Float[Array, "B S H D"]:
+    def _apply[H: IntVar](x: jax.Array[[B, S, H, D]]) -> jax.Array[[B, S, H, D]]:
         dtype = x.dtype
         x1, x2 = jnp.split(x, 2, axis=-1)
+        # pyrefly: ignore[bad-return]  # 2 * (D // 2) == D because rotary head_dim is even.
         return jnp.concatenate([x1 * cos - x2 * sin, x2 * cos + x1 * sin], axis=-1).astype(dtype)
 
     return _apply(q), _apply(k)
 
 
-def align_kv_heads(x: Float[Array, "B K Hkv D"], *, num_q_heads: int) -> Float[Array, "B K Hq D"]:
+def align_kv_heads[B: IntVar, K: IntVar, Hkv: IntVar, D: IntVar, Hq: IntVar](
+    x: jax.Array[[B, K, Hkv, D]], *, num_q_heads: Int[Hq]
+) -> jax.Array[[B, K, Hq, D]]:
     """Expand grouped-query KV heads to match query-head layout."""
     num_kv_heads = x.shape[2]
     if num_q_heads == num_kv_heads:
+        # pyrefly: ignore[bad-return]  # equal head counts mean Hkv == Hq; runtime checks do not narrow dims.
         return x
     if num_q_heads % num_kv_heads != 0:
         raise ValueError(f"num_heads ({num_q_heads}) must be divisible by num_kv_heads ({num_kv_heads})")
@@ -222,21 +230,21 @@ def align_kv_heads(x: Float[Array, "B K Hkv D"], *, num_q_heads: int) -> Float[A
     return tiled.reshape(*x.shape[:2], num_q_heads, x.shape[3])
 
 
-def _reference_attention_math(
-    q: Float[Array, "B Q Hq D"],
-    k: Float[Array, "B K Hkv D"],
-    v: Float[Array, "B K Hkv D"],
-    mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+def _reference_attention_math[B: IntVar, Q: IntVar, K: IntVar, Hq: IntVar, Hkv: IntVar, D: IntVar](
+    q: jax.Array[[B, Q, Hq, D]],
+    k: jax.Array[[B, K, Hkv, D]],
+    v: jax.Array[[B, K, Hkv, D]],
+    mask: AttentionMask | jax.Array | None,
     *,
     logits_dtype: jnp.dtype | None,
-) -> Float[Array, "B Q Hq D"]:
+) -> jax.Array[[B, Q, Hq, D]]:
     head_dim = q.shape[-1]
     num_q_heads = q.shape[2]
-    k = align_kv_heads(k, num_q_heads=num_q_heads)
-    v = align_kv_heads(v, num_q_heads=num_q_heads)
+    k_aligned = align_kv_heads(k, num_q_heads=num_q_heads)
+    v_aligned = align_kv_heads(v, num_q_heads=num_q_heads)
 
     scale = 1.0 / math.sqrt(head_dim)
-    scores = jnp.einsum("bqhd,bkhd->bhqk", q * scale, k)
+    scores = jnp.einsum("bqhd,bkhd->bhqk", q * scale, k_aligned)
 
     explicit = None
     if mask is None:
@@ -267,19 +275,19 @@ def _reference_attention_math(
             scores = scores + explicit
     if logits_dtype is not None:
         scores = scores.astype(logits_dtype)
-    weights = jax.nn.softmax(scores, axis=-1).astype(v.dtype)
-    ctx = jnp.einsum("bhqk,bkhd->bqhd", weights, v)
-    return ctx.astype(v.dtype)
+    weights = jax.nn.softmax(scores, axis=-1).astype(v_aligned.dtype)
+    ctx = jnp.einsum("bhqk,bkhd->bqhd", weights, v_aligned)
+    return ctx.astype(v_aligned.dtype)
 
 
-def reference_attention(
-    q: Float[Array, "B Q Hq D"],
-    k: Float[Array, "B K Hkv D"],
-    v: Float[Array, "B K Hkv D"],
-    mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+def reference_attention[B: IntVar, Q: IntVar, K: IntVar, Hq: IntVar, Hkv: IntVar, D: IntVar](
+    q: jax.Array[[B, Q, Hq, D]],
+    k: jax.Array[[B, K, Hkv, D]],
+    v: jax.Array[[B, K, Hkv, D]],
+    mask: AttentionMask | jax.Array | None,
     *,
     logits_dtype: jnp.dtype | None,
-) -> Float[Array, "B Q Hq D"]:
+) -> jax.Array[[B, Q, Hq, D]]:
     """Reference attention whose output sharding follows ``q``."""
     out_sharding = named_sharding_of(q)
     if out_sharding is None:
@@ -289,28 +297,28 @@ def reference_attention(
     # score contraction ambiguous), so run the math under Auto axes and pin only the
     # output to q's sharding.
     # pyrefly: ignore[bad-assignment]  # auto_axes's decorator overload erases the wrapped signature
-    wrapped: Callable[..., Float[Array, "B Q Hq D"]] = auto_axes(_reference_attention_math, out_sharding=out_sharding)
+    wrapped: Callable[..., jax.Array[[B, Q, Hq, D]]] = auto_axes(_reference_attention_math, out_sharding=out_sharding)
     return wrapped(q, k, v, mask, logits_dtype=logits_dtype)
 
 
-def _tpu_splash_attention(
-    q: Float[Array, "B Q Hq D"],
-    k: Float[Array, "B K Hkv D"],
-    v: Float[Array, "B K Hkv D"],
+def _tpu_splash_attention[B: IntVar, Q: IntVar, K: IntVar, Hq: IntVar, Hkv: IntVar, D: IntVar](
+    q: jax.Array[[B, Q, Hq, D]],
+    k: jax.Array[[B, K, Hkv, D]],
+    v: jax.Array[[B, K, Hkv, D]],
     mask: AttentionMask | jax.Array | None,
-) -> Float[Array, "B Q Hq D"]:
+) -> jax.Array[[B, Q, Hq, D]]:
     # Splash attention expects BHSD.
     q_ = jnp.transpose(q, (0, 2, 1, 3))
     k_ = jnp.transpose(k, (0, 2, 1, 3))
     v_ = jnp.transpose(v, (0, 2, 1, 3))
 
-    B, Hq, Sq, D = q_.shape
-    _, _, Sk, _ = k_.shape
+    b, hq, sq, d = q_.shape
+    _, _, sk, _ = k_.shape
 
-    if Sk % 128 != 0:
+    if sk % 128 != 0:
         raise NotImplementedError("Splash attention requires key/value sequence length to be a multiple of 128.")
 
-    q_ = q_ * (1.0 / math.sqrt(D))
+    q_ = q_ * (1.0 / math.sqrt(d))
 
     mesh = _get_mesh()
     if mesh is None or getattr(mesh, "empty", False):
@@ -356,8 +364,8 @@ def _tpu_splash_attention(
     kv_seq_shards = splash_partition_spec_shard_factor(k_pspec[2], mesh)
 
     block_sizes = splash_attention_block_sizes(
-        q_seq_len=Sq,
-        kv_seq_len=Sk,
+        q_seq_len=sq,
+        kv_seq_len=sk,
         q_seq_shards=q_seq_shards,
         kv_seq_shards=kv_seq_shards,
         max_block_size=DEFAULT_SPLASH_BLOCK_SIZE,
@@ -395,9 +403,9 @@ def _tpu_splash_attention(
 
     mask_lowering = lower_splash_attention_mask(
         mask=mask_spec,
-        q_seq_len=Sq,
-        kv_seq_len=Sk,
-        num_heads=Hq,
+        q_seq_len=sq,
+        kv_seq_len=sk,
+        num_heads=hq,
         q_seq_shards=q_seq_shards,
     )
 
@@ -428,23 +436,25 @@ def _tpu_splash_attention(
     return jnp.transpose(out, (0, 2, 1, 3)).astype(v.dtype)
 
 
-def attention(
-    q: Float[Array, "B Q Hq D"],
-    k: Float[Array, "B K Hkv D"],
-    v: Float[Array, "B K Hkv D"],
-    mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+def attention[B: IntVar, Q: IntVar, K: IntVar, Hq: IntVar, Hkv: IntVar, D: IntVar](
+    q: jax.Array[[B, Q, Hq, D]],
+    k: jax.Array[[B, K, Hkv, D]],
+    v: jax.Array[[B, K, Hkv, D]],
+    mask: AttentionMask | jax.Array | None,
     *,
     implementation: GrugAttentionImplementation | None = None,
-) -> Float[Array, "B Q Hq D"]:
+) -> jax.Array[[B, Q, Hq, D]]:
     if implementation == "reference":
         return reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
     if implementation == "gpu_fa4_cute":
         from levanter.grug.attention._fa4_cute import gpu_fa4_cute_attention  # noqa: PLC0415
 
+        # pyrefly: ignore[bad-argument-type]  # FA4 is self-attention only; q_len == k_len is checked at runtime.
         return gpu_fa4_cute_attention(q, k, v, mask)
     if implementation == "gpu_fa4_cute_sm100":
         from levanter.grug.attention._fa4_cute import gpu_fa4_cute_sm100_attention  # noqa: PLC0415
 
+        # pyrefly: ignore[bad-argument-type]  # same runtime q_len == k_len invariant as above.
         return gpu_fa4_cute_sm100_attention(q, k, v, mask)
     if implementation == "tpu_splash":
         if isinstance(mask, jax.Array):

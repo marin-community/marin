@@ -12,6 +12,8 @@ target is BF16/FP16 BSHD causal self-attention with dynamic per-token lower boun
 This avoids both THD compaction and materialized [B, S, S] masks.
 """
 
+from __future__ import annotations
+
 import functools
 import importlib
 from dataclasses import dataclass
@@ -20,6 +22,7 @@ from typing import Any, NamedTuple
 
 import jax
 import jax.numpy as jnp
+from shape_extensions import IntVar
 
 from levanter.cutlass_kernel_cache import cutlass_call
 from levanter.grug.attention._fa4_cute_kernels import (
@@ -74,17 +77,17 @@ def _optional_dependency_error() -> RuntimeError:
     )
 
 
-def segmented_flash_attention_forward(
-    q: jax.Array,
-    k: jax.Array,
-    v: jax.Array,
-    lower_bounds: jax.Array,
-    valid: jax.Array,
+def segmented_flash_attention_forward[B: IntVar, Q: IntVar, K: IntVar, Hq: IntVar, Hkv: IntVar, D: IntVar](
+    q: jax.Array[[B, Q, Hq, D]],
+    k: jax.Array[[B, K, Hkv, D]],
+    v: jax.Array[[B, K, Hkv, D]],
+    lower_bounds: jax.Array[[B, Q]],
+    valid: jax.Array[[B, Q]],
     *,
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
-    q_offset: jax.Array,
-) -> tuple[jax.Array, jax.Array]:
+    q_offset: jax.Array[[1]],
+) -> tuple[jax.Array[[B, Q, Hq, D]], jax.Array[[B, Hq, Q]]]:
     """FA4/CuTe segmented attention forward entry point.
 
     ``Sq`` is the local query sequence length; ``Sk`` is the full key/value sequence length.
@@ -184,20 +187,20 @@ def segmented_flash_attention_forward(
     return call(q, k, v, lower_bounds, valid.astype(jnp.int32), q_offset)
 
 
-def segmented_flash_attention_backward(
-    q: jax.Array,
-    k: jax.Array,
-    v: jax.Array,
-    out: jax.Array,
-    dout: jax.Array,
-    lse: jax.Array,
-    lower_bounds: jax.Array,
-    valid: jax.Array,
+def segmented_flash_attention_backward[B: IntVar, Q: IntVar, K: IntVar, Hq: IntVar, Hkv: IntVar, D: IntVar](
+    q: jax.Array[[B, Q, Hq, D]],
+    k: jax.Array[[B, K, Hkv, D]],
+    v: jax.Array[[B, K, Hkv, D]],
+    out: jax.Array[[B, Q, Hq, D]],
+    dout: jax.Array[[B, Q, Hq, D]],
+    lse: jax.Array[[B, Hq, Q]],
+    lower_bounds: jax.Array[[B, Q]],
+    valid: jax.Array[[B, Q]],
     *,
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
-    q_offset: jax.Array,
-) -> tuple[jax.Array, jax.Array, jax.Array]:
+    q_offset: jax.Array[[1]],
+) -> tuple[jax.Array[[B, Q, Hq, D]], jax.Array[[B, K, Hkv, D]], jax.Array[[B, K, Hkv, D]]]:
     """Return gradients for FA4/CuTe packed-segment attention."""
     _validate_forward_inputs(q, k, v, lower_bounds, valid, softmax_scale=softmax_scale, q_offset=q_offset)
     _validate_backward_inputs(q, k, v, out, dout, lse)
@@ -294,20 +297,20 @@ def segmented_flash_attention_backward(
     return dq, dk, dv
 
 
-def _segmented_flash_attention_backward_sm100(
-    q: jax.Array,
-    k: jax.Array,
-    v: jax.Array,
-    out: jax.Array,
-    dout: jax.Array,
-    lse: jax.Array,
-    lower_bounds: jax.Array,
-    valid: jax.Array,
+def _segmented_flash_attention_backward_sm100[B: IntVar, Q: IntVar, K: IntVar, Hq: IntVar, Hkv: IntVar, D: IntVar](
+    q: jax.Array[[B, Q, Hq, D]],
+    k: jax.Array[[B, K, Hkv, D]],
+    v: jax.Array[[B, K, Hkv, D]],
+    out: jax.Array[[B, Q, Hq, D]],
+    dout: jax.Array[[B, Q, Hq, D]],
+    lse: jax.Array[[B, Hq, Q]],
+    lower_bounds: jax.Array[[B, Q]],
+    valid: jax.Array[[B, Q]],
     *,
     softmax_scale: float,
     config: Flash4CuteSm100BackwardConfig,
-    q_offset: jax.Array,
-) -> tuple[jax.Array, jax.Array, jax.Array]:
+    q_offset: jax.Array[[1]],
+) -> tuple[jax.Array[[B, Q, Hq, D]], jax.Array[[B, K, Hkv, D]], jax.Array[[B, K, Hkv, D]]]:
     """Match the segmented backend contract using native one-CTA SM100."""
     ratio = q.shape[2] // k.shape[2]
     modules = _import_cutlass_cute()
@@ -358,15 +361,17 @@ def _segmented_flash_attention_backward_sm100(
     )
 
 
-def segmented_flash_attention_backward_sm90_native(
-    q: jax.Array,
-    k: jax.Array,
-    v: jax.Array,
-    out: jax.Array,
-    dout: jax.Array,
-    lse: jax.Array,
-    lower_bounds: jax.Array,
-    valid: jax.Array,
+def segmented_flash_attention_backward_sm90_native[
+    B: IntVar, Q: IntVar, K: IntVar, Hq: IntVar, Hkv: IntVar, D: IntVar
+](
+    q: jax.Array[[B, Q, Hq, D]],
+    k: jax.Array[[B, K, Hkv, D]],
+    v: jax.Array[[B, K, Hkv, D]],
+    out: jax.Array[[B, Q, Hq, D]],
+    dout: jax.Array[[B, Q, Hq, D]],
+    lse: jax.Array[[B, Hq, Q]],
+    lower_bounds: jax.Array[[B, Q]],
+    valid: jax.Array[[B, Q]],
     mask_block_cnt: jax.Array,
     mask_block_idx: jax.Array,
     full_block_cnt: jax.Array | None = None,
@@ -375,7 +380,7 @@ def segmented_flash_attention_backward_sm90_native(
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
     window_size_left: int | None = None,
-) -> tuple[jax.Array, jax.Array, jax.Array]:
+) -> tuple[jax.Array[[B, Q, Hq, D]], jax.Array[[B, K, Hkv, D]], jax.Array[[B, K, Hkv, D]]]:
     """Run the native SM90 segmented backward path for D128 GQA kernels."""
     if q.shape[1] != k.shape[1]:
         raise ValueError("native SM90 backward requires equal q/k sequence lengths")
@@ -473,12 +478,12 @@ def segmented_flash_attention_backward_sm90_native(
     )
 
 
-def _native_backward_preprocess(
+def _native_backward_preprocess[B: IntVar, Q: IntVar, Hq: IntVar, D: IntVar](
     modules: _CutlassCuteModules,
-    q: jax.Array,
-    out: jax.Array,
-    dout: jax.Array,
-    lse: jax.Array,
+    q: jax.Array[[B, Q, Hq, D]],
+    out: jax.Array[[B, Q, Hq, D]],
+    dout: jax.Array[[B, Q, Hq, D]],
+    lse: jax.Array[[B, Hq, Q]],
     *,
     tile: tuple[int, int],
     softmax_scale: float,
@@ -498,16 +503,16 @@ def _native_backward_preprocess(
     return dpsum, lse_log2
 
 
-def _native_backward_gradients(
+def _native_backward_gradients[B: IntVar, Q: IntVar, K: IntVar, Hq: IntVar, Hkv: IntVar, D: IntVar](
     modules: _CutlassCuteModules,
-    qkv: tuple[jax.Array, jax.Array, jax.Array],
+    qkv: tuple[jax.Array[[B, Q, Hq, D]], jax.Array[[B, K, Hkv, D]], jax.Array[[B, K, Hkv, D]]],
     accumulators: tuple[jax.Array, jax.Array, jax.Array],
     *,
     tile_rows: tuple[int, int, int],
     arch: int,
     num_threads: int,
     softmax_scale: float,
-) -> tuple[jax.Array, jax.Array, jax.Array]:
+) -> tuple[jax.Array[[B, Q, Hq, D]], jax.Array[[B, K, Hkv, D]], jax.Array[[B, K, Hkv, D]]]:
     inputs, outputs = _native_backward_postprocess_specs(modules, vector_elems=8)
     gradients = []
     for tensor, accum, scale, rows in zip(
@@ -734,10 +739,10 @@ def _block_sparse_indices(is_partial: jax.Array, is_full: jax.Array) -> _BlockSp
     )
 
 
-def _cutlass_attention_backward_output_shapes(
-    q: jax.Array,
-    k: jax.Array,
-    v: jax.Array,
+def _cutlass_attention_backward_output_shapes[B: IntVar, Q: IntVar, K: IntVar, Hq: IntVar, Hkv: IntVar, D: IntVar](
+    q: jax.Array[[B, Q, Hq, D]],
+    k: jax.Array[[B, K, Hkv, D]],
+    v: jax.Array[[B, K, Hkv, D]],
     backward_tile: tuple[int, int],
 ) -> tuple[jax.ShapeDtypeStruct, ...]:
     batch, seq_len, q_heads, head_dim = q.shape
@@ -770,8 +775,8 @@ def _cutlass_attention_backward_output_shapes(
     )
 
 
-def _native_backward_preprocess_output_shapes(
-    q: jax.Array,
+def _native_backward_preprocess_output_shapes[B: IntVar, Q: IntVar, Hq: IntVar, D: IntVar](
+    q: jax.Array[[B, Q, Hq, D]],
     backward_tile: tuple[int, int],
 ) -> tuple[jax.ShapeDtypeStruct, ...]:
     batch, seq_len, q_heads, _head_dim = q.shape
@@ -781,10 +786,10 @@ def _native_backward_preprocess_output_shapes(
     return scratch_q, scratch_q
 
 
-def _native_backward_accum_output_shapes(
-    q: jax.Array,
-    k: jax.Array,
-    v: jax.Array,
+def _native_backward_accum_output_shapes[B: IntVar, Q: IntVar, K: IntVar, Hq: IntVar, Hkv: IntVar, D: IntVar](
+    q: jax.Array[[B, Q, Hq, D]],
+    k: jax.Array[[B, K, Hkv, D]],
+    v: jax.Array[[B, K, Hkv, D]],
     backward_tile: tuple[int, int],
 ) -> tuple[jax.ShapeDtypeStruct, ...]:
     batch, seq_len, q_heads, head_dim = q.shape
@@ -800,17 +805,17 @@ def _native_backward_accum_output_shapes(
     return dq_accum, dk_accum, dv_accum
 
 
-def fa4_cute_attention_forward(
-    q: jax.Array,
-    k: jax.Array,
-    v: jax.Array,
-    lower_bounds: jax.Array,
-    valid: jax.Array,
+def fa4_cute_attention_forward[B: IntVar, Q: IntVar, K: IntVar, Hq: IntVar, Hkv: IntVar, D: IntVar](
+    q: jax.Array[[B, Q, Hq, D]],
+    k: jax.Array[[B, K, Hkv, D]],
+    v: jax.Array[[B, K, Hkv, D]],
+    lower_bounds: jax.Array[[B, Q]],
+    valid: jax.Array[[B, Q]],
     *,
     sm_scale: float | None = None,
     kernel_config: Flash4CuteKernelConfig,
-    q_offset: jax.Array,
-) -> jax.Array:
+    q_offset: jax.Array[[1]],
+) -> jax.Array[[B, Q, Hq, D]]:
     """FA4/CuTe attention boundary with packed causal metadata.
 
     Forward uses the CUTLASS/CuTe JAX FFI path. Backward is routed through a custom VJP so JAX does not
@@ -832,16 +837,16 @@ def fa4_cute_attention_forward(
 
 
 @partial(jax.custom_vjp, nondiff_argnums=(6, 7))
-def _segmented_flash_attention_custom_vjp(
-    q: jax.Array,
-    k: jax.Array,
-    v: jax.Array,
-    lower_bounds: jax.Array,
-    valid: jax.Array,
-    q_offset: jax.Array,
+def _segmented_flash_attention_custom_vjp[B: IntVar, Q: IntVar, K: IntVar, Hq: IntVar, Hkv: IntVar, D: IntVar](
+    q: jax.Array[[B, Q, Hq, D]],
+    k: jax.Array[[B, K, Hkv, D]],
+    v: jax.Array[[B, K, Hkv, D]],
+    lower_bounds: jax.Array[[B, Q]],
+    valid: jax.Array[[B, Q]],
+    q_offset: jax.Array[[1]],
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
-) -> jax.Array:
+) -> jax.Array[[B, Q, Hq, D]]:
     out, _ = segmented_flash_attention_forward(
         q,
         k,
@@ -866,16 +871,16 @@ class _SegmentedAttentionResiduals(NamedTuple):
     q_offset: jax.Array
 
 
-def _segmented_flash_attention_custom_vjp_fwd(
-    q: jax.Array,
-    k: jax.Array,
-    v: jax.Array,
-    lower_bounds: jax.Array,
-    valid: jax.Array,
-    q_offset: jax.Array,
+def _segmented_flash_attention_custom_vjp_fwd[B: IntVar, Q: IntVar, K: IntVar, Hq: IntVar, Hkv: IntVar, D: IntVar](
+    q: jax.Array[[B, Q, Hq, D]],
+    k: jax.Array[[B, K, Hkv, D]],
+    v: jax.Array[[B, K, Hkv, D]],
+    lower_bounds: jax.Array[[B, Q]],
+    valid: jax.Array[[B, Q]],
+    q_offset: jax.Array[[1]],
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
-) -> tuple[jax.Array, _SegmentedAttentionResiduals]:
+) -> tuple[jax.Array[[B, Q, Hq, D]], _SegmentedAttentionResiduals]:
     out, lse = segmented_flash_attention_forward(
         q,
         k,
@@ -938,6 +943,7 @@ def _validate_forward_inputs(
     softmax_scale: float,
     q_offset: jax.Array,
 ) -> None:
+    # Parameters stay bare: this validates rank and cross-parameter relations (Hq % Hkv == 0, ...) at runtime.
     if q.ndim != 4 or k.ndim != 4 or v.ndim != 4:
         raise ValueError(f"q/k/v must be BSHD tensors, got q={q.shape}, k={k.shape}, v={v.shape}")
     if q.shape[0] != k.shape[0] or q.shape[0] != v.shape[0]:

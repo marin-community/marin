@@ -4656,41 +4656,6 @@
       "severity": "error"
     },
     {
-      "column": 27,
-      "path": "lib/levanter/src/levanter/grug/attention/_core.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: split requires at least 1-D array",
-      "severity": "error"
-    },
-    {
-      "column": 31,
-      "path": "lib/levanter/src/levanter/grug/attention/_core.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 23,
-      "path": "lib/levanter/src/levanter/grug/attention/_core.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: transpose axes must cover every dimension",
-      "severity": "error"
-    },
-    {
-      "column": 23,
-      "path": "lib/levanter/src/levanter/grug/attention/_core.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: transpose axes must cover every dimension",
-      "severity": "error"
-    },
-    {
-      "column": 23,
-      "path": "lib/levanter/src/levanter/grug/attention/_core.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: transpose axes must cover every dimension",
-      "severity": "error"
-    },
-    {
       "column": 66,
       "path": "lib/levanter/src/levanter/grug/attention/_core.py",
       "name": "bad-argument-type",
@@ -4709,20 +4674,6 @@
       "path": "lib/levanter/src/levanter/grug/attention/_core.py",
       "name": "bad-argument-type",
       "concise_description": "Argument `AbstractMesh | Mesh` is not assignable to parameter `mesh` with type `Mesh | None` in function `levanter.kernels.pallas.splash_attention.splash_partition_spec_shard_factor`",
-      "severity": "error"
-    },
-    {
-      "column": 56,
-      "path": "lib/levanter/src/levanter/grug/attention/_fa4_cute.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 54,
-      "path": "lib/levanter/src/levanter/grug/attention/_fa4_cute.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
       "severity": "error"
     },
     {
@@ -4791,13 +4742,6 @@
     {
       "column": 29,
       "path": "lib/levanter/src/levanter/grug/attention/_fa4_cute_backend.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 38,
-      "path": "lib/levanter/src/levanter/grug/grug_moe.py",
       "name": "unsupported-operation",
       "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
       "severity": "error"
@@ -4874,41 +4818,6 @@
     },
     {
       "column": 20,
-      "path": "lib/levanter/src/levanter/grug/grug_moe.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 35,
-      "path": "lib/levanter/src/levanter/grug/grug_moe.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 20,
-      "path": "lib/levanter/src/levanter/grug/grug_moe.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 58,
-      "path": "lib/levanter/src/levanter/grug/grug_moe.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 50,
-      "path": "lib/levanter/src/levanter/grug/grug_moe.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: indices and arr must have the same number of dimensions",
-      "severity": "error"
-    },
-    {
-      "column": 66,
       "path": "lib/levanter/src/levanter/grug/grug_moe.py",
       "name": "unsupported-operation",
       "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
@@ -6452,20 +6361,6 @@
       "path": "lib/levanter/src/levanter/models/snowball.py",
       "name": "bad-argument-type",
       "concise_description": "Unpacked keyword argument `bool | float | int | list[str] | str` is not assignable to parameter `problem_type` with type `Literal['multi_label_classification', 'regression', 'single_label_classification'] | None` in function `GrugMoeHfConfig.__init__`",
-      "severity": "error"
-    },
-    {
-      "column": 22,
-      "path": "lib/levanter/src/levanter/models/snowball.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
-      "severity": "error"
-    },
-    {
-      "column": 28,
-      "path": "lib/levanter/src/levanter/models/snowball.py",
-      "name": "unsupported-operation",
-      "concise_description": "Cannot evaluate type-level shape DSL call: axis out of bounds",
       "severity": "error"
     },
     {

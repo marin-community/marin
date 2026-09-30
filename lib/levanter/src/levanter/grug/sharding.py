@@ -1,10 +1,12 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
+from __future__ import annotations
 
 import jax
 import numpy as np
 from jax import P
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec, get_abstract_mesh, get_mesh, reshard
+from shape_extensions import IntTuple
 
 from levanter.sharding import partition_spec_of
 
@@ -16,8 +18,9 @@ Plm_head = P(Pbatch[0], "model")
 Plogits = P(Pbatch[0], None, "model")
 
 
-def unshard(x: jax.Array) -> jax.Array:
-    return reshard(x, P(None))
+def unshard[Dims: IntTuple](x: jax.Array[[*Dims]]) -> jax.Array[[*Dims]]:
+    unsharded: jax.Array[[*Dims]] = reshard(x, P(None))
+    return unsharded
 
 
 def _current_mesh() -> Mesh | jax.sharding.AbstractMesh:
@@ -99,18 +102,20 @@ def _drop_absent_mesh_axes(mesh: Mesh | jax.sharding.AbstractMesh, spec: Partiti
     return P(*(keep(entry) for entry in spec))
 
 
-def _reshard_for_init(x: jax.Array, spec: PartitionSpec) -> jax.Array:
+def _reshard_for_init[Dims: IntTuple](x: jax.Array[[*Dims]], spec: PartitionSpec) -> jax.Array[[*Dims]]:
     mesh = _current_mesh()
     if mesh is None or mesh.empty:
         return x
-    return reshard(x, NamedSharding(mesh, _drop_absent_mesh_axes(mesh, spec)))
+    resharded: jax.Array[[*Dims]] = reshard(x, NamedSharding(mesh, _drop_absent_mesh_axes(mesh, spec)))
+    return resharded
 
 
-def _reshard_for_shard_map(
-    x: jax.Array, mesh: Mesh | jax.sharding.AbstractMesh | None, spec: PartitionSpec
-) -> jax.Array:
+def _reshard_for_shard_map[Dims: IntTuple](
+    x: jax.Array[[*Dims]], mesh: Mesh | jax.sharding.AbstractMesh | None, spec: PartitionSpec
+) -> jax.Array[[*Dims]]:
     if mesh is not None and not mesh.empty:
-        return reshard(x, NamedSharding(mesh, spec))
+        resharded: jax.Array[[*Dims]] = reshard(x, NamedSharding(mesh, spec))
+        return resharded
     return x
 
 

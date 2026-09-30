@@ -7,9 +7,14 @@ This wraps the shared fused kernel API for TPU and falls back to a full-logits
 reference implementation on non-TPU backends.
 """
 
+from __future__ import annotations
+
+from typing import Literal, overload
+
 import jax
 import jax.numpy as jnp
 from jax.sharding import PartitionSpec as P
+from shape_extensions import IntTuple, IntVar
 
 from haliax.jax_utils import named_call
 from levanter.grug.sharding import _axis_names, _current_mesh, _reshard_for_shard_map
@@ -31,12 +36,44 @@ def _token_dim_specs(x: jax.Array) -> tuple:
     return ("data",) + (None,) * (x.ndim - 2)
 
 
-def _psum_over_axes(x: jax.Array, axis_names: tuple[str, ...]) -> jax.Array:
+def _psum_over_axes(x: jax.Array[[]], axis_names: tuple[str, ...]) -> jax.Array[[]]:
     if len(axis_names) == 0:
         return x
     if len(axis_names) == 1:
         return jax.lax.psum(x, axis_names[0])
     return jax.lax.psum(x, axis_names)
+
+
+@overload
+def fused_linear_softmax_cross_entropy_loss[Batch: IntTuple, D: IntVar, V: IntVar](
+    hidden: jax.Array[[*Batch, D]],
+    lm_head: jax.Array[[D, V]],
+    labels: jax.Array[[*Batch]],
+    *,
+    weight: jax.Array[[*Batch]] | None = None,
+    reduction: Literal["mean", "sum"] = "mean",
+    logsumexp_weight: float | None = None,
+    dtype: jnp.dtype = jnp.float32,
+    precision: jax.lax.PrecisionLike = None,
+    implementation: str | tuple[str, ...] | None = None,
+    block_sizes: BlockSizes | None = None,
+) -> jax.Array[[]]: ...
+
+
+@overload
+def fused_linear_softmax_cross_entropy_loss[Batch: IntTuple, D: IntVar, V: IntVar](
+    hidden: jax.Array[[*Batch, D]],
+    lm_head: jax.Array[[D, V]],
+    labels: jax.Array[[*Batch]],
+    *,
+    weight: jax.Array[[*Batch]] | None = None,
+    reduction: Literal["none"],
+    logsumexp_weight: float | None = None,
+    dtype: jnp.dtype = jnp.float32,
+    precision: jax.lax.PrecisionLike = None,
+    implementation: str | tuple[str, ...] | None = None,
+    block_sizes: BlockSizes | None = None,
+) -> jax.Array[[*Batch]]: ...
 
 
 @named_call

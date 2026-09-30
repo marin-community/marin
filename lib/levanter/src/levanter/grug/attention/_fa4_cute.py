@@ -1,5 +1,6 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
+from __future__ import annotations
 
 import math
 from dataclasses import replace
@@ -10,7 +11,7 @@ from jax import shard_map
 from jax import numpy as jnp
 from jax.sharding import PartitionSpec as P
 from jax.sharding import get_abstract_mesh, reshard
-from jaxtyping import Array, Bool, Float, Int
+from shape_extensions import Int, IntVar
 
 from levanter.cutlass_kernel_cache import gpu_compute_capability
 from levanter.grug.attention._core import AttentionMask
@@ -25,65 +26,71 @@ from levanter.grug.attention._fa4_cute_config import (
 from levanter.sharding import partitioning_axes, partition_spec_of
 
 
-def _replicate_metadata(x: jax.Array) -> jax.Array:
+def _replicate_metadata[B: IntVar, S: IntVar](x: jax.Array[[B, S]]) -> jax.Array[[B, S]]:
     mesh = get_abstract_mesh()
     if mesh is None or mesh.empty:
         return x
-    return reshard(x, P(None, None))
+    replicated: jax.Array[[B, S]] = reshard(x, P(None, None))
+    return replicated
 
 
-def _batched_segment_ids(segment_ids: jax.Array, *, batch_size: int, seq_len: int) -> jax.Array:
+def _batched_segment_ids[B: IntVar, S: IntVar](
+    segment_ids: jax.Array, *, batch_size: Int[B], seq_len: Int[S]
+) -> jax.Array[[B, S]]:
     if segment_ids.ndim == 1:
         if segment_ids.shape[0] != seq_len:
             raise ValueError(f"1D segment_ids must match sequence length {seq_len}, got {segment_ids.shape}")
-        segment_ids = jnp.broadcast_to(segment_ids[None, :], (batch_size, seq_len))
+        batched: jax.Array[[B, S]] = jnp.broadcast_to(segment_ids[None, :], (batch_size, seq_len))
     elif segment_ids.ndim == 2:
         if segment_ids.shape[0] not in (1, batch_size) or segment_ids.shape[1] != seq_len:
             raise ValueError(f"2D segment_ids must have shape [1|{batch_size}, {seq_len}], got {segment_ids.shape}")
         if segment_ids.shape[0] == 1 and batch_size != 1:
-            segment_ids = jnp.broadcast_to(segment_ids, (batch_size, seq_len))
+            batched = jnp.broadcast_to(segment_ids, (batch_size, seq_len))
+        else:
+            batched = segment_ids
     else:
         raise ValueError(f"segment_ids must be 1D or 2D, got ndim={segment_ids.ndim}")
-    return _replicate_sequence_axis(segment_ids)
+    return _replicate_sequence_axis(batched)
 
 
-def _replicate_sequence_axis(x: jax.Array) -> jax.Array:
+def _replicate_sequence_axis[B: IntVar, S: IntVar](x: jax.Array[[B, S]]) -> jax.Array[[B, S]]:
     """Replicate a ``[B, S]`` metadata array over sequence, preserving batch sharding."""
     spec = partition_spec_of(x)
     if spec is None or len(spec) < 2 or spec[1] is None:
         return x
-    return reshard(x, P(spec[0], None))
+    replicated: jax.Array[[B, S]] = reshard(x, P(spec[0], None))
+    return replicated
 
 
-def _segment_starts(segment_ids: jax.Array) -> jax.Array:
+def _segment_starts[B: IntVar, S: IntVar](segment_ids: jax.Array[[B, S]]) -> jax.Array[[B, S]]:
     valid = segment_ids >= 0
     previous = jnp.concatenate([segment_ids[:, :1], segment_ids[:, :-1]], axis=1)
     first = jnp.zeros_like(valid).at[:, 0].set(True)
     return valid & (first | (segment_ids != previous))
 
 
-def _packed_segment_start_positions(
+def _packed_segment_start_positions[B: IntVar, S: IntVar](
     segment_ids: jax.Array,
     *,
-    batch_size: int,
-    seq_len: int,
-) -> Int[Array, "B S"]:
-    segment_ids = _batched_segment_ids(segment_ids, batch_size=batch_size, seq_len=seq_len)
-    valid = segment_ids >= 0
-    starts = _segment_starts(segment_ids)
+    batch_size: Int[B],
+    seq_len: Int[S],
+) -> jax.Array[[B, S]]:
+    batched_ids = _batched_segment_ids(segment_ids, batch_size=batch_size, seq_len=seq_len)
+    valid = batched_ids >= 0
+    starts = _segment_starts(batched_ids)
     positions = _replicate_metadata(jnp.arange(seq_len, dtype=jnp.int32)[None, :])
     start_positions = jnp.where(starts, positions, 0)
-    current_start: jax.Array = jax.lax.associative_scan(jnp.maximum, start_positions, axis=1)
+    current_start: jax.Array[[B, S]] = jax.lax.associative_scan(jnp.maximum, start_positions, axis=1)
     return jnp.where(valid, current_start, seq_len)
 
 
-def _packed_segment_causal_lower_bounds(
+def _packed_segment_causal_lower_bounds[B: IntVar, S: IntVar](
     segment_ids: jax.Array,
     *,
-    batch_size: int,
-    seq_len: int,
+    batch_size: Int[B],
+    seq_len: Int[S],
     sliding_window: int | None,
-) -> tuple[Int[Array, "B S"], Bool[Array, "B S"]]:
+) -> tuple[jax.Array[[B, S]], jax.Array[[B, S]]]:
     """Return per-token inclusive key lower bounds for dynamic packed causal attention."""
     if sliding_window is not None and sliding_window <= 0:
         raise ValueError(f"sliding_window must be positive, got {sliding_window}")
@@ -115,12 +122,12 @@ def _packed_segment_causal_lower_bounds(
     return jnp.where(valid, lower_bounds, next_valid_lower_bound), valid
 
 
-def _simple_causal_lower_bounds(
+def _simple_causal_lower_bounds[B: IntVar, S: IntVar](
     *,
-    batch_size: int,
-    seq_len: int,
+    batch_size: Int[B],
+    seq_len: Int[S],
     sliding_window: int | None,
-) -> tuple[Int[Array, "B S"], Bool[Array, "B S"]]:
+) -> tuple[jax.Array[[B, S]], jax.Array[[B, S]]]:
     if sliding_window is not None and sliding_window <= 0:
         raise ValueError(f"sliding_window must be positive, got {sliding_window}")
 
@@ -134,34 +141,34 @@ def _simple_causal_lower_bounds(
     return lower_bounds, valid
 
 
-def _packed_self_attention_segment_ids(
-    q: jax.Array,
-    k: jax.Array,
-    mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+def _packed_self_attention_segment_ids[B: IntVar, S: IntVar, Hq: IntVar, Hkv: IntVar, D: IntVar](
+    q: jax.Array[[B, S, Hq, D]],
+    k: jax.Array[[B, S, Hkv, D]],
+    mask: AttentionMask | jax.Array | None,
     *,
     backend_name: str,
-) -> Int[Array, "B S"]:
-    mask = _validate_causal_self_attention(q, k, mask, backend_name=backend_name)
-    if mask.segment_ids is None:
+) -> jax.Array[[B, S]]:
+    validated_mask = _validate_causal_self_attention(q, k, mask, backend_name=backend_name)
+    if validated_mask.segment_ids is None:
         raise NotImplementedError(f"{backend_name} currently requires packed segment_ids.")
 
-    q_segment_ids, kv_segment_ids = mask.segment_ids
+    q_segment_ids, kv_segment_ids = validated_mask.segment_ids
     same_segment_ids = q_segment_ids is kv_segment_ids
-    q_segment_ids = _batched_segment_ids(q_segment_ids, batch_size=q.shape[0], seq_len=q.shape[1])
+    batched_q_segment_ids = _batched_segment_ids(q_segment_ids, batch_size=q.shape[0], seq_len=q.shape[1])
     if not same_segment_ids:
-        kv_segment_ids = _batched_segment_ids(kv_segment_ids, batch_size=k.shape[0], seq_len=k.shape[1])
-        q_segment_ids = eqx.error_if(
-            q_segment_ids,
-            jnp.any(q_segment_ids != kv_segment_ids),
+        batched_kv_segment_ids = _batched_segment_ids(kv_segment_ids, batch_size=k.shape[0], seq_len=k.shape[1])
+        batched_q_segment_ids = eqx.error_if(
+            batched_q_segment_ids,
+            jnp.any(batched_q_segment_ids != batched_kv_segment_ids),
             f"{backend_name} requires matching q/kv segment_ids for packed self-attention.",
         )
-    return q_segment_ids
+    return batched_q_segment_ids
 
 
 def _validate_causal_self_attention(
     q: jax.Array,
     k: jax.Array,
-    mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+    mask: AttentionMask | jax.Array | None,
     *,
     backend_name: str,
 ) -> AttentionMask:
@@ -180,27 +187,27 @@ def _validate_causal_self_attention(
     return mask
 
 
-def _self_attention_lower_bounds(
-    q: jax.Array,
-    k: jax.Array,
-    mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+def _self_attention_lower_bounds[B: IntVar, S: IntVar, Hq: IntVar, Hkv: IntVar, D: IntVar](
+    q: jax.Array[[B, S, Hq, D]],
+    k: jax.Array[[B, S, Hkv, D]],
+    mask: AttentionMask | jax.Array | None,
     *,
     backend_name: str,
-) -> tuple[Int[Array, "B S"], Bool[Array, "B S"]]:
-    mask = _validate_causal_self_attention(q, k, mask, backend_name=backend_name)
-    if mask.segment_ids is None:
+) -> tuple[jax.Array[[B, S]], jax.Array[[B, S]]]:
+    validated_mask = _validate_causal_self_attention(q, k, mask, backend_name=backend_name)
+    if validated_mask.segment_ids is None:
         return _simple_causal_lower_bounds(
             batch_size=q.shape[0],
             seq_len=q.shape[1],
-            sliding_window=mask.sliding_window,
+            sliding_window=validated_mask.sliding_window,
         )
 
-    q_segment_ids = _packed_self_attention_segment_ids(q, k, mask, backend_name=backend_name)
+    q_segment_ids = _packed_self_attention_segment_ids(q, k, validated_mask, backend_name=backend_name)
     return _packed_segment_causal_lower_bounds(
         q_segment_ids,
         batch_size=q.shape[0],
         seq_len=q.shape[1],
-        sliding_window=mask.sliding_window,
+        sliding_window=validated_mask.sliding_window,
     )
 
 
@@ -219,16 +226,16 @@ def _partitioned_dims(
     return tuple(partitioning_axes(entry, mesh) for entry in entries)
 
 
-def _fa4_cute_attention_forward_sharded(
-    q: jax.Array,
-    k: jax.Array,
-    v: jax.Array,
-    lower_bounds: jax.Array,
-    valid: jax.Array,
+def _fa4_cute_attention_forward_sharded[B: IntVar, Q: IntVar, K: IntVar, Hq: IntVar, Hkv: IntVar, D: IntVar](
+    q: jax.Array[[B, Q, Hq, D]],
+    k: jax.Array[[B, K, Hkv, D]],
+    v: jax.Array[[B, K, Hkv, D]],
+    lower_bounds: jax.Array[[B, Q]],
+    valid: jax.Array[[B, Q]],
     *,
     sm_scale: float,
     kernel_config: Flash4CuteKernelConfig,
-) -> jax.Array:
+) -> jax.Array[[B, Q, Hq, D]]:
     # Check global lengths before shard_map replaces Q with one rank's query slice.
     if q.shape[1] != k.shape[1]:
         raise ValueError(f"FA4/CuTe self-attention requires q_len == k_len globally, got q={q.shape}, k={k.shape}")
@@ -322,14 +329,14 @@ def _segmented_kernel_config(head_dim: int) -> Flash4CuteKernelConfig:
     return kernel_config
 
 
-def _gpu_fa4_cute_attention(
-    q: Float[Array, "B Q Hq D"],
-    k: Float[Array, "B K Hkv D"],
-    v: Float[Array, "B K Hkv D"],
-    mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+def _gpu_fa4_cute_attention[B: IntVar, S: IntVar, Hq: IntVar, Hkv: IntVar, D: IntVar](
+    q: jax.Array[[B, S, Hq, D]],
+    k: jax.Array[[B, S, Hkv, D]],
+    v: jax.Array[[B, S, Hkv, D]],
+    mask: AttentionMask | jax.Array | None,
     *,
     kernel_config: Flash4CuteKernelConfig,
-) -> Float[Array, "B Q Hq D"]:
+) -> jax.Array[[B, S, Hq, D]]:
     _validate_head_layout(q, k, backend_name="gpu_fa4_cute_attention")
     if isinstance(mask, AttentionMask) and mask.fa4_bounds is not None:
         # The caller precomputed and selected the per-token metadata outside any per-layer scan/cond
@@ -354,24 +361,24 @@ def _gpu_fa4_cute_attention(
     )
 
 
-def gpu_fa4_cute_attention(
-    q: Float[Array, "B Q Hq D"],
-    k: Float[Array, "B K Hkv D"],
-    v: Float[Array, "B K Hkv D"],
-    mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
-) -> Float[Array, "B Q Hq D"]:
+def gpu_fa4_cute_attention[B: IntVar, S: IntVar, Hq: IntVar, Hkv: IntVar, D: IntVar](
+    q: jax.Array[[B, S, Hq, D]],
+    k: jax.Array[[B, S, Hkv, D]],
+    v: jax.Array[[B, S, Hkv, D]],
+    mask: AttentionMask | jax.Array | None,
+) -> jax.Array[[B, S, Hq, D]]:
     """Run causal self-attention through the segmented FA4/CuTe kernel."""
     if jax.default_backend() != "gpu":
         raise RuntimeError("gpu_fa4_cute_attention requires the JAX GPU backend.")
     return _gpu_fa4_cute_attention(q, k, v, mask, kernel_config=_segmented_kernel_config(q.shape[-1]))
 
 
-def gpu_fa4_cute_sm100_attention(
-    q: Float[Array, "B Q Hq D"],
-    k: Float[Array, "B K Hkv D"],
-    v: Float[Array, "B K Hkv D"],
-    mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
-) -> Float[Array, "B Q Hq D"]:
+def gpu_fa4_cute_sm100_attention[B: IntVar, S: IntVar, Hq: IntVar, Hkv: IntVar, D: IntVar](
+    q: jax.Array[[B, S, Hq, D]],
+    k: jax.Array[[B, S, Hkv, D]],
+    v: jax.Array[[B, S, Hkv, D]],
+    mask: AttentionMask | jax.Array | None,
+) -> jax.Array[[B, S, Hq, D]]:
     """Run native SM100 forward and one-block backward for BF16 D128 GQA.
 
     Select with ``implementation="gpu_fa4_cute_sm100"``. Supports GQA ratios
@@ -390,13 +397,13 @@ def gpu_fa4_cute_sm100_attention(
     return _gpu_fa4_cute_attention(q, k, v, mask, kernel_config=config)
 
 
-def fa4_cute_segment_bounds(
+def fa4_cute_segment_bounds[B: IntVar, S: IntVar](
     mask: AttentionMask,
     *,
-    batch_size: int,
-    seq_len: int,
+    batch_size: Int[B],
+    seq_len: Int[S],
     sliding_window: int | None,
-) -> tuple[Int[Array, "B S"], Bool[Array, "B S"]]:
+) -> tuple[jax.Array[[B, S]], jax.Array[[B, S]]]:
     """Compute FA4/CuTe per-token ``(lower_bounds, valid)`` for ``mask`` at a given window.
 
     Exposed so callers can precompute the metadata once outside a ``lax.scan``/``lax.cond`` and
@@ -416,16 +423,16 @@ def fa4_cute_segment_bounds(
     # in ``_packed_self_attention_segment_ids``) rather than rejecting on object identity, which
     # would break normal packed training.
     same_segment_ids = q_segment_ids is kv_segment_ids
-    q_segment_ids = _batched_segment_ids(q_segment_ids, batch_size=batch_size, seq_len=seq_len)
+    batched_q_segment_ids = _batched_segment_ids(q_segment_ids, batch_size=batch_size, seq_len=seq_len)
     if not same_segment_ids:
-        kv_segment_ids = _batched_segment_ids(kv_segment_ids, batch_size=batch_size, seq_len=seq_len)
-        q_segment_ids = eqx.error_if(
-            q_segment_ids,
-            jnp.any(q_segment_ids != kv_segment_ids),
+        batched_kv_segment_ids = _batched_segment_ids(kv_segment_ids, batch_size=batch_size, seq_len=seq_len)
+        batched_q_segment_ids = eqx.error_if(
+            batched_q_segment_ids,
+            jnp.any(batched_q_segment_ids != batched_kv_segment_ids),
             "fa4_cute_segment_bounds requires matching q/kv segment ids.",
         )
     return _packed_segment_causal_lower_bounds(
-        q_segment_ids,
+        batched_q_segment_ids,
         batch_size=batch_size,
         seq_len=seq_len,
         sliding_window=sliding_window,

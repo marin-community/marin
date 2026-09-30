@@ -14,6 +14,8 @@ Implementation overview:
   keeps the stable public API used by Grug model code and benchmarks.
 """
 
+from __future__ import annotations
+
 from collections.abc import Callable
 from functools import partial
 from typing import cast
@@ -26,7 +28,7 @@ from haliax.jax_utils import named_call
 from jax import shard_map
 from jax.sharding import PartitionSpec as P
 from jax.sharding import reshard
-from jaxtyping import Array, Bool, Float, Int
+from shape_extensions import IntVar
 
 from levanter.grug._moe.common import (
     _DEFAULT_EP_CAPACITY_FACTOR,
@@ -73,11 +75,11 @@ MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC = "moe/skipped_padding_assignments"
 MOE_VALID_ASSIGNMENTS_METRIC = "moe/valid_assignments"
 
 
-def moe_routing_stats(
-    selected_experts: Int[Array, "T K"],
-    router_probs: Float[Array, "T E"],
-    router_logits: Float[Array, "T E"],
-    token_valid: Bool[Array, "T"],
+def moe_routing_stats[T: IntVar, K: IntVar, E: IntVar](
+    selected_experts: jax.Array[[T, K]],
+    router_probs: jax.Array[[T, E]],
+    router_logits: jax.Array[[T, E]],
+    token_valid: jax.Array[[T]],
     *,
     num_experts: int,
     num_experts_per_token: int,
@@ -107,11 +109,11 @@ def moe_routing_stats(
     }
 
 
-def moe_routing_stats_local(
-    selected_experts: Int[Array, "T K"],
-    router_probs: Float[Array, "T E"],
-    router_logits: Float[Array, "T E"],
-    token_valid: Bool[Array, "T"],
+def moe_routing_stats_local[T: IntVar, K: IntVar, E: IntVar](
+    selected_experts: jax.Array[[T, K]],
+    router_probs: jax.Array[[T, E]],
+    router_logits: jax.Array[[T, E]],
+    token_valid: jax.Array[[T]],
     mesh: jax.sharding.AbstractMesh,
     *,
     batch_axes: tuple[str, ...],
@@ -190,31 +192,33 @@ def qb_topk_physical_count(local_tokens: int, *, num_experts_per_token: int, num
     return max(1, local_tokens * num_experts_per_token // num_experts)
 
 
-def qb_beta_topk_shard(
-    s_local: Float[Array, "t E"],
-    valid_local: Bool[Array, "t"],
+def qb_beta_topk_shard[T: IntVar, E: IntVar](
+    s_local: jax.Array[[T, E]],
+    valid_local: jax.Array[[T]],
     *,
     physical_count: int,
     num_experts_per_token: int,
     num_experts: int,
-) -> tuple[Float[Array, "E"], Int[Array, ""]]:
+) -> tuple[jax.Array[[E]], jax.Array[[]]]:
     """Per-shard QB threshold over valid tokens plus the valid count that weights it."""
     valid_count = jnp.sum(valid_local, dtype=jnp.int32)
-    topk_values, _ = jax.lax.top_k(jnp.where(valid_local[None, :], s_local.T, -jnp.inf), physical_count)
+    # Unpacking the top_k() tuple loses its shape; index the pair and pin the values instead.
+    topk = jax.lax.top_k(jnp.where(valid_local[None, :], s_local.T, -jnp.inf), physical_count)
+    topk_values: jax.Array[[E, int]] = topk[0]
     logical_count = jnp.clip(valid_count * num_experts_per_token // num_experts, 1, physical_count)
     beta = jnp.take(topk_values, logical_count - 1, axis=1)
     return jnp.where(valid_count > 0, beta, 0), valid_count
 
 
-def estimate_qb_beta_topk(
-    s_minus_alpha: Float[Array, "T E"],
-    token_valid: Bool[Array, "T"],
+def estimate_qb_beta_topk[T: IntVar, E: IntVar](
+    s_minus_alpha: jax.Array[[T, E]],
+    token_valid: jax.Array[[T]],
     mesh: jax.sharding.AbstractMesh,
     *,
     batch_axes: tuple[str, ...],
     num_experts_per_token: int,
     num_experts: int,
-) -> Float[Array, "E"]:
+) -> jax.Array[[E]]:
     """Estimate QB thresholds from valid tokens on each batch shard."""
     num_devices = 1
     for axis in batch_axes:
@@ -260,17 +264,17 @@ class QBRoutedMoE(eqx.Module):
     routing_renorm_sum: float = eqx.field(static=True, default=2.5)
 
     @named_call
-    def __call__(
+    def __call__[T: IntVar, D: IntVar, E: IntVar](
         self,
-        x: Float[Array, "T D"],
-        token_valid: Bool[Array, "T"],
+        x: jax.Array[[T, D]],
+        token_valid: jax.Array[[T]],
         *,
-        router: Float[Array, "D E"],
-        router_bias: Float[Array, "E"],
+        router: jax.Array[[D, E]],
+        router_bias: jax.Array[[E]],
         expert_mlp: "MoEExpertMlp",
         mesh: jax.sharding.AbstractMesh,
         report_capacity_overflow: bool = True,
-    ) -> tuple[Float[Array, "T D"], dict[str, jax.Array]]:
+    ) -> tuple[jax.Array[[T, D]], dict[str, jax.Array]]:
         """Route tokens and return their expert output plus router metrics.
 
         Invalid positions still have static routing tensor shapes, but are
@@ -285,12 +289,17 @@ class QBRoutedMoE(eqx.Module):
             raise ValueError(f"token_valid must have shape [{x.shape[0]}], got shape={token_valid.shape}")
 
         with jax.named_scope("moe_route"):
-            router_logits = jnp.einsum("td,de->te", x, reshard(router, P(None, None))).astype(jnp.float32)
+            # reshard() drops the shape, which sends the einsum to its unshaped overload; pin it.
+            replicated_router: jax.Array[[D, E]] = reshard(router, P(None, None))
+            router_logits: jax.Array[[T, E]] = jnp.einsum("td,de->te", x, replicated_router).astype(jnp.float32)
             biased_logits = router_logits + jax.lax.stop_gradient(router_bias)
             router_probs = jax.nn.softmax(router_logits, axis=-1)
-            topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.num_experts_per_token + 1)
+            # Unpacking the top_k() tuple loses its shape; index the pair and pin each half instead.
+            router_topk = jax.lax.top_k(biased_logits, self.num_experts_per_token + 1)
+            topk_logits: jax.Array[[T, int]] = router_topk[0]
+            all_selected_experts: jax.Array[[T, int]] = router_topk[1]
             qb_alpha = topk_logits[:, -1:]
-            selected_experts = selected_experts[:, :-1]
+            selected_experts = all_selected_experts[:, :-1]
             selected_logits = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
             combine_weights = jax.nn.sigmoid(selected_logits)
             # Keep sigmoid rounding consistent when AD fuses expert-weight renormalization.
@@ -329,14 +338,14 @@ class QBRoutedMoE(eqx.Module):
                 report_capacity_overflow=report_capacity_overflow,
             )
         if report_capacity_overflow:
-            routed, dispatch_counts = cast(tuple[Float[Array, "T D"], MoeDispatchCounts], moe_out)
+            routed, dispatch_counts = cast("tuple[jax.Array[[T, D]], MoeDispatchCounts]", moe_out)
             router_stats["capacity_overflow"] = dispatch_counts.dropped.astype(jnp.float32)
             router_stats["skipped_assignments"] = dispatch_counts.padding_skipped.astype(jnp.float32)
             router_stats["routing_assignments"] = jnp.asarray(x.shape[0] * self.num_experts_per_token, dtype=jnp.int32)
             router_stats["routing_sender_drops"] = dispatch_counts.sender_dropped
             router_stats["routing_receiver_drops"] = dispatch_counts.receiver_dropped
         else:
-            routed = cast(Float[Array, "T D"], moe_out)
+            routed = cast("jax.Array[[T, D]]", moe_out)
             router_stats["capacity_overflow"] = jnp.zeros((), dtype=jnp.float32)
             router_stats["skipped_assignments"] = padding_skipped_assignments(
                 token_valid, topk=self.num_experts_per_token
@@ -398,16 +407,16 @@ class MoEExpertMlp(eqx.Module):
         )
 
     @named_call
-    def __call__(
+    def __call__[T: IntVar, D: IntVar, K: IntVar](
         self,
-        x: Float[Array, "T D"],
-        selected_experts: Int[Array, "T K"],
-        combine_weights: Float[Array, "T K"],
+        x: jax.Array[[T, D]],
+        selected_experts: jax.Array[[T, K]],
+        combine_weights: jax.Array[[T, K]],
         *,
-        token_valid: Bool[Array, "T"] | None = None,
+        token_valid: jax.Array[[T]] | None = None,
         mesh: jax.sharding.AbstractMesh | None = None,
         report_capacity_overflow: bool = False,
-    ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], MoeDispatchCounts]:
+    ) -> jax.Array[[T, D]] | tuple[jax.Array[[T, D]], MoeDispatchCounts]:
         w_gate_up = jnp.concatenate([self.w_gate, self.w_up], axis=-1)
         return moe_mlp(
             x,
@@ -428,14 +437,14 @@ class MoEExpertMlp(eqx.Module):
 
 
 @named_call
-def moe_mlp(
-    x: Float[Array, "T D"],
-    selected_experts: Int[Array, "T K"],
-    combine_weights: Float[Array, "T K"],
-    w_up_gate: Float[Array, "E D I2"],
-    w_down: Float[Array, "E I D"],
+def moe_mlp[T: IntVar, D: IntVar, K: IntVar, E: IntVar, I2: IntVar, I: IntVar](
+    x: jax.Array[[T, D]],
+    selected_experts: jax.Array[[T, K]],
+    combine_weights: jax.Array[[T, K]],
+    w_up_gate: jax.Array[[E, D, I2]],
+    w_down: jax.Array[[E, I, D]],
     *,
-    token_valid: Bool[Array, "T"] | None = None,
+    token_valid: jax.Array[[T]] | None = None,
     activation: MoeActivation = ActivationFunctionEnum.silu,
     implementation: MoeImplementation | str | None = None,
     mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh | None = None,
@@ -444,7 +453,7 @@ def moe_mlp(
     report_capacity_overflow: bool = False,
     expert_chunks: int = 1,
     num_expert_waves: int = 1,
-) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], MoeDispatchCounts]:
+) -> jax.Array[[T, D]] | tuple[jax.Array[[T, D]], MoeDispatchCounts]:
     """Functional routed MoE MLP core used by Grug modules and benchmarks.
 
     This helper handles dispatch/permute/unpermute (+EP collectives) from
@@ -504,7 +513,7 @@ def moe_mlp(
             padding_skipped=padding_skipped,
         )
 
-    num_experts = int(w_up_gate.shape[0])
+    num_experts = w_up_gate.shape[0]
     if w_down.shape[0] != num_experts:
         raise ValueError(
             f"w_down expert dimension ({w_down.shape[0]}) must match w_up_gate expert dimension ({num_experts})"
@@ -603,7 +612,9 @@ def moe_mlp(
             out_specs=(token_spec, CapacityDrops(sender_dropped=P(), receiver_dropped=P())),
             check_vma=False,
         )
-        out, drops = shard_fn(x, selected_experts, combine_weights, token_valid, w_up_gate, w_down)
+        local_out, drops = shard_fn(x, selected_experts, combine_weights, token_valid, w_up_gate, w_down)
+        # pyrefly: ignore[bad-assignment]  # shard_map returns global [T, D]; its wrapped signature is per-shard.
+        out: jax.Array[[T, D]] = local_out
         if report_capacity_overflow:
             return out, dispatch_counts(drops)
         return out
