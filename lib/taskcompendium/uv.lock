@@ -1303,14 +1303,6 @@ wheels = [
 ]
 
 [[package]]
-name = "nemo-workplace"
-version = "0.1.0"
-source = { git = "https://github.com/marin-community/nemo_workplace?rev=27b39001312617403021635f0492e120abc2cd34#27b39001312617403021635f0492e120abc2cd34" }
-dependencies = [
-    { name = "pandas" },
-]
-
-[[package]]
 name = "numpy"
 version = "2.5.3"
 source = { registry = "https://pypi.org/simple" }
@@ -2298,9 +2290,6 @@ harbor = [
 math = [
     { name = "tasktrove-verify", extra = ["answer"] },
 ]
-workplace = [
-    { name = "nemo-workplace" },
-]
 
 [package.dev-dependencies]
 test = [
@@ -2313,12 +2302,11 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "harbor", marker = "extra == 'harbor'", git = "https://github.com/marin-community/harbor.git?rev=ef1eaf207f41f84eb53d17f9c8bd84c073a9aba5" },
-    { name = "nemo-workplace", marker = "extra == 'workplace'", git = "https://github.com/marin-community/nemo_workplace?rev=27b39001312617403021635f0492e120abc2cd34" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "tasktrove-verify", editable = "../tasktrove-verify" },
     { name = "tasktrove-verify", extras = ["answer"], marker = "extra == 'math'", editable = "../tasktrove-verify" },
 ]
-provides-extras = ["harbor", "workplace", "math"]
+provides-extras = ["harbor", "math"]
 
 [package.metadata.requires-dev]
 test = [

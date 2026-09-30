@@ -190,25 +190,57 @@ The host chat environment exposes no filesystem or shell tools. The custom verif
 
 The package tests use `tests/harbor_replay.py` to feed fixed HTTP responses through the production `ChatAgent` and Harbor trial path. The public launcher requires a model endpoint.
 
-### NeMo Workplace row 0
+### NeMo Workplace Assistant
 
-`taskcompendium.importers.nemo_workplace.select_row_zero` selects row 0 from the [pinned NeMo Gym JSONL source](https://github.com/NVIDIA-NeMo/Gym/blob/1e668906d2e69a9e8ee9aaafc60050a4025d9688/resources_servers/workplace_assistant/data/example.jsonl) supplied by a trusted caller. It checks the bounded full-file digest and returns the exact row bytes, including the newline. `import_row` then verifies the row digest, all 27 source tool schemas, the provider revision, and the immutable CSV seed digest. The `workplace` binding names `NemoWorkplaceProvider` in the [pinned external repository](https://github.com/marin-community/nemo_workplace/tree/27b39001312617403021635f0492e120abc2cd34). A trusted caller supplies that clean checkout when exporting; trials use the staged snapshot without fetching the repository. The spec retains the expected state in its private verifier configuration. Its `ProviderState(provider="workplace")` convention retrieves canonical state without receiving the expected value. The private `structured_exact` verifier compares it with an expected snapshot constructed by applying the source gold action to a separate fresh seed. The model sees only the source request and the provider's 27 tools; the final message ends the trial. Tool errors become observations, so a later valid call can recover in the same trial. To reproduce the source request, set `ChatLaunch(temperature=1.0, parallel_tool_calls=False)`.
+`taskcompendium.importers.nemo_workplace.import_dataset_split(source, split, provider_source)` imports every row from the pinned `train.jsonl` and `validation.jsonl` files in [NVIDIA's NeMo Workplace Assistant dataset](https://huggingface.co/datasets/nvidia/Nemotron-RL-agent-workplace_assistant/tree/c86a908379e0a361a573c395e175d3c1aa128e6c): 1,255 train rows and 545 validation rows, for 1,800 total. A trusted caller supplies the raw split bytes. The importer checks each whole-file SHA256, row count, and split-local ID range, then records the split, row ID, and raw row SHA256 in task provenance. `select_rows` and `import_row` also support all five rows in the [pinned NeMo Gym example file](https://github.com/NVIDIA-NeMo/Gym/blob/1e668906d2e69a9e8ee9aaafc60050a4025d9688/resources_servers/workplace_assistant/data/example.jsonl).
 
-The external provider repository carries NVIDIA's source code, seed files, license, and attribution at the [NeMo Gym source revision](https://github.com/NVIDIA-NeMo/Gym/blob/1e668906d2e69a9e8ee9aaafc60050a4025d9688/resources_servers/workplace_assistant/README.md) (Apache 2.0). TaskCompendium pins the source URL, revision, and digests in the importer and records dataset provenance in the spec. The selected row is passed to the importer by a trusted caller and is not exported. The separate [Hugging Face dataset card at the recorded revision](https://huggingface.co/datasets/nvidia/Nemotron-RL-agent-workplace_assistant/blob/c86a908379e0a361a573c395e175d3c1aa128e6c/README.md) says CC BY 4.0. `import_dataset_split` converts all 1,255 train and 545 validation rows from that pinned revision, including valid no-op rows.
+The `workplace` binding pins `NemoWorkplaceProvider` in the [external provider repository](https://github.com/marin-community/nemo_workplace/tree/27b39001312617403021635f0492e120abc2cd34), its 27 tool schemas, and its immutable CSV seed. A trusted caller supplies a clean checkout of that commit and calls `stage_git_provider(PROVIDER, checkout, provider_source)` before importing. The importer loads this verified snapshot through the Git provider loader; no installed `nemo_workplace` package is required. `workplace_environment_config(provider_source)` loads only the tool binding. Pass the clean checkout to `lower_to_harbor` as `trusted_provider_sources={"workplace": checkout}` when exporting. Trials use the exported snapshot without fetching the repository.
+
+For example, after checking out the pinned provider commit and downloading `train.jsonl` from the pinned dataset revision:
+
+```python
+from pathlib import Path
+
+from taskcompendium.importers.nemo_workplace import PROVIDER, import_dataset_split
+from taskcompendium.lowering import lower_to_harbor
+from taskcompendium.provider_sources import stage_git_provider
+
+checkout = Path("/path/to/nemo_workplace")
+provider_source = Path("/path/to/new-provider-snapshot")
+stage_git_provider(PROVIDER, checkout, provider_source)
+imports = import_dataset_split(Path("train.jsonl").read_bytes(), "train", provider_source)
+specification, convention, binding = imports[0]
+lower_to_harbor(
+    specification,
+    convention,
+    binding,
+    Path("/path/to/new-harbor-task"),
+    trusted_provider_sources={"workplace": checkout},
+)
+```
+
+Both destination directories must be new. Install the provider's runtime dependencies in the import and trial environment; the pinned provider requires `pandas>=2.2`, included in this package's test group.
+
+The private `structured_exact` verifier compares final provider state with a target constructed by applying each row's gold action list to a fresh seed. Empty action lists define unchanged-state targets. `ProviderState(provider="workplace")` retrieves canonical state without receiving the expected value. The model sees only the source request and the provider's tools; the final message ends the trial. Tool errors become observations, so a later valid call can recover. To reproduce the source request, set `ChatLaunch(temperature=1.0, parallel_tool_calls=False)`.
+
+The [dataset card at the pinned revision](https://huggingface.co/datasets/nvidia/Nemotron-RL-agent-workplace_assistant/blob/c86a908379e0a361a573c395e175d3c1aa128e6c/README.md) identifies CC BY 4.0 and NVIDIA Corporation as the owner. It reports 1,260 records; the pinned split files contain 1,800 rows. Imports of Hub rows must retain that attribution and license. The external provider repository separately carries NVIDIA's code, seed files, Apache 2.0 license, and attribution from the [pinned NeMo Gym source](https://github.com/NVIDIA-NeMo/Gym/blob/1e668906d2e69a9e8ee9aaafc60050a4025d9688/resources_servers/workplace_assistant/README.md). Source rows and gold action lists are excluded from exported model context; expected state remains private verifier configuration.
 
 ### Public alpha candidate
 
-`taskcompendium.public_release` writes an agent-visible Workplace candidate to a local directory. It accepts the two pinned Hugging Face JSONL files through a trusted caller, verifies their digests and row counts, and writes `data/train.jsonl`, `data/validation.jsonl`, `manifest.json`, and `README.md`. Each data record is an explicit projection of the private spec: conversation, answer type, environment and provider requirements, final tool definitions, source provenance, ordered source tags, source category, and the final submission instruction. The verifier, expected state, gold actions, provider binding, and convention configuration stay out of data records. The manifest pins the runtime binding and source checksums. A change to the `TaskSpec` field set fails export until the projection is reviewed.
+`taskcompendium.public_release` writes an agent-visible Workplace candidate to a local directory. It accepts the two pinned Hugging Face JSONL files and a verified provider snapshot through a trusted caller, verifies their digests and row counts, and writes `data/train.jsonl`, `data/validation.jsonl`, `manifest.json`, and `README.md`. Each data record is an explicit projection of the private spec: conversation, answer type, environment and provider requirements, final tool definitions, source provenance, ordered source tags, source category, and the final submission instruction. The verifier, expected state, gold actions, provider binding, and convention configuration stay out of data records. The manifest pins the runtime binding and source checksums loaded from that snapshot. The CLI stages a clean, pinned provider checkout before importing and keeps the snapshot outside the public output. A change to the `TaskSpec` field set fails export until the projection is reviewed.
 
 ```bash
 hf download nvidia/Nemotron-RL-agent-workplace_assistant \
   train.jsonl validation.jsonl --type dataset \
   --revision c86a908379e0a361a573c395e175d3c1aa128e6c \
   --local-dir /tmp/taskcompendium-alpha-source
-uv run --project lib/taskcompendium --extra workplace \
+git clone https://github.com/marin-community/nemo_workplace /tmp/taskcompendium-workplace-provider
+git -C /tmp/taskcompendium-workplace-provider checkout --detach 27b39001312617403021635f0492e120abc2cd34
+uv run --project lib/taskcompendium --with 'pandas>=2.2' \
   python -m taskcompendium.public_release \
   --workplace-train /tmp/taskcompendium-alpha-source/train.jsonl \
   --workplace-validation /tmp/taskcompendium-alpha-source/validation.jsonl \
+  --workplace-provider-checkout /tmp/taskcompendium-workplace-provider \
   --output /tmp/taskcompendium-alpha-candidate \
   --builder-revision <full-marin-commit-sha>
 ```
@@ -259,7 +291,7 @@ The candidate is not publication-ready. The mixed release requires measured Task
 Run the package tests from the repository root:
 
 ```bash
-uv run --project lib/taskcompendium --extra harbor --extra workplace --group test pytest lib/taskcompendium/tests -q
+uv run --project lib/taskcompendium --extra harbor --group test pytest lib/taskcompendium/tests -q
 
 # Type-check the package from its own project directory after installing its dependencies.
 cd lib/taskcompendium

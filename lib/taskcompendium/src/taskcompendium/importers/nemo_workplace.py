@@ -4,21 +4,12 @@
 """Import pinned NeMo Workplace Assistant example and dataset rows."""
 
 import hashlib
+import importlib
 import json
+from pathlib import Path
+from types import ModuleType
 from typing import Any, Literal, NamedTuple
 
-from nemo_workplace.provider import (
-    ACTION_INTERFACE,
-    PROVIDER_REVISION,
-    REQUEST_PARALLEL_TOOL_CALLS,
-    REQUEST_TEMPERATURE,
-    SEED_SHA256,
-    TOOL_DEFINITIONS,
-    TOOLS_SHA256,
-    _seed_digest,
-    expected_state_json,
-)
-from nemo_workplace.tools import get_tools
 from taskcompendium.grading import structured_exact
 from taskcompendium.lowering import HarborEnvironmentConfig, ToolBinding
 from taskcompendium.models import (
@@ -30,6 +21,7 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
+from taskcompendium.provider_sources import import_staged_provider
 from taskcompendium.submission import ProviderState, SubmissionConvention
 
 DATASET = "nvidia/Nemotron-RL-agent-workplace_assistant"
@@ -90,9 +82,11 @@ def select_rows(source: bytes) -> tuple[bytes, ...]:
     selected: dict[int, bytes] = {}
     for line in lines:
         row = json.loads(line)
-        if not isinstance(row, dict) or type(row.get("id")) is not int:
+        if not isinstance(row, dict):
             raise ValueError("Workplace example source requires rows with integer IDs")
-        row_id = row["id"]
+        row_id = row.get("id")
+        if not isinstance(row_id, int) or isinstance(row_id, bool):
+            raise ValueError("Workplace example source requires rows with integer IDs")
         if row_id not in ROW_SHA256_BY_ID:
             raise ValueError(f"Unsupported Workplace source row {row_id}")
         if row_id in selected:
@@ -123,9 +117,11 @@ def select_dataset_rows(source: bytes, split: WorkplaceSplit) -> tuple[bytes, ..
     seen: set[int] = set()
     for line in lines:
         row = json.loads(line)
-        if not isinstance(row, dict) or type(row.get("id")) is not int:
+        if not isinstance(row, dict):
             raise ValueError(f"Workplace {split} split requires rows with integer IDs")
-        row_id = row["id"]
+        row_id = row.get("id")
+        if not isinstance(row_id, int) or isinstance(row_id, bool):
+            raise ValueError(f"Workplace {split} split requires rows with integer IDs")
         if row_id in seen:
             raise ValueError(f"Workplace {split} split has duplicate row {row_id}")
         seen.add(row_id)
@@ -135,17 +131,27 @@ def select_dataset_rows(source: bytes, split: WorkplaceSplit) -> tuple[bytes, ..
     return tuple(selected)
 
 
-def workplace_environment_config() -> HarborEnvironmentConfig:
+def _provider_module(provider_source: Path) -> ModuleType:
+    provider = import_staged_provider(PROVIDER, provider_source)
+    return importlib.import_module(provider.__module__)
+
+
+def workplace_environment_config(provider_source: Path) -> HarborEnvironmentConfig:
+    """Load the Workplace tool binding from a verified provider snapshot."""
+    return _environment_config(_provider_module(provider_source))
+
+
+def _environment_config(provider: ModuleType) -> HarborEnvironmentConfig:
     """Select the source provider and its immutable tool surface."""
     return HarborEnvironmentConfig(
         tool_providers={
             PROVIDER_NAME: ToolBinding(
-                action_interface=ACTION_INTERFACE,
-                seed_sha256=SEED_SHA256,
+                action_interface=provider.ACTION_INTERFACE,
+                seed_sha256=provider.SEED_SHA256,
                 provider=PROVIDER,
-                provider_revision=PROVIDER_REVISION,
-                tools_sha256=TOOLS_SHA256,
-                tools=tuple(item["function"]["name"] for item in TOOL_DEFINITIONS),
+                provider_revision=provider.PROVIDER_REVISION,
+                tools_sha256=provider.TOOLS_SHA256,
+                tools=tuple(item["function"]["name"] for item in provider.TOOL_DEFINITIONS),
             )
         },
     )
@@ -179,24 +185,28 @@ def _gold(value: Any) -> list[dict[str, str]]:
     return actions
 
 
-def import_row(data: bytes) -> WorkplaceImport:
+def import_row(data: bytes, provider_source: Path) -> WorkplaceImport:
     """Import the raw row after checking its digest, source tools, and seed."""
     row = json.loads(data)
-    if not isinstance(row, dict) or type(row.get("id")) is not int:
+    if not isinstance(row, dict):
         raise ValueError("Workplace source requires an integer row ID")
-    row_id = row["id"]
+    row_id = row.get("id")
+    if not isinstance(row_id, int) or isinstance(row_id, bool):
+        raise ValueError("Workplace source requires an integer row ID")
     expected_digest = ROW_SHA256_BY_ID.get(row_id)
     if expected_digest is None or hashlib.sha256(data).hexdigest() != expected_digest:
         raise ValueError(f"Workplace row {row_id} does not match its pinned raw digest")
-    if _seed_digest() != SEED_SHA256:
+    provider = _provider_module(provider_source)
+    if provider._seed_digest() != provider.SEED_SHA256:
         raise ValueError("Workplace seed differs from its pinned digest")
-    return _import_row(row, source_row=str(row_id), task_id=f"nemo-workplace-{row_id}")
+    return _import_row(row, provider, source_row=str(row_id), task_id=f"nemo-workplace-{row_id}")
 
 
-def import_dataset_split(source: bytes, split: WorkplaceSplit) -> tuple[WorkplaceImport, ...]:
+def import_dataset_split(source: bytes, split: WorkplaceSplit, provider_source: Path) -> tuple[WorkplaceImport, ...]:
     """Convert every row in one pinned NeMo Workplace dataset split."""
     selected = select_dataset_rows(source, split)
-    if _seed_digest() != SEED_SHA256:
+    provider = _provider_module(provider_source)
+    if provider._seed_digest() != provider.SEED_SHA256:
         raise ValueError("Workplace seed differs from its pinned digest")
     imports = []
     for data in selected:
@@ -207,6 +217,7 @@ def import_dataset_split(source: bytes, split: WorkplaceSplit) -> tuple[Workplac
             imports.append(
                 _import_row(
                     row,
+                    provider,
                     source_row=f"{split}:{row_id}:{row_sha256}",
                     task_id=f"nemo-workplace-{split}-{row_id}",
                 )
@@ -216,7 +227,7 @@ def import_dataset_split(source: bytes, split: WorkplaceSplit) -> tuple[Workplac
     return tuple(imports)
 
 
-def _import_row(row: dict[str, Any], *, source_row: str, task_id: str) -> WorkplaceImport:
+def _import_row(row: dict[str, Any], provider: ModuleType, *, source_row: str, task_id: str) -> WorkplaceImport:
     """Build a TaskSpec from a row already verified against a pinned source."""
     if row.get("environment_name") != "workplace_assistant" or row.get("category") not in SOURCE_CATEGORIES:
         raise ValueError("Workplace source routing metadata differs")
@@ -224,26 +235,30 @@ def _import_row(row: dict[str, Any], *, source_row: str, task_id: str) -> Workpl
     if not isinstance(request, dict) or set(request) != {"input", "tools", "parallel_tool_calls", "temperature"}:
         raise ValueError("Unsupported Workplace source request")
     if (
-        request["parallel_tool_calls"] is not REQUEST_PARALLEL_TOOL_CALLS
-        or request["temperature"] != REQUEST_TEMPERATURE
+        request["parallel_tool_calls"] is not provider.REQUEST_PARALLEL_TOOL_CALLS
+        or request["temperature"] != provider.REQUEST_TEMPERATURE
     ):
         raise ValueError("Unsupported Workplace source tool-call settings")
     schemas = request["tools"]
-    if not isinstance(schemas, list) or schemas != get_tools()["schemas"]:
+    if not isinstance(schemas, list) or schemas != provider.get_tools()["schemas"]:
         raise ValueError("Workplace source tools differ from the pinned provider")
     actions = _gold(row["ground_truth"])
     if any(action["name"] not in {schema["name"] for schema in schemas} for action in actions):
         raise ValueError("Workplace ground truth calls an unavailable tool")
-    expected = json.loads(expected_state_json(actions))
+    expected = json.loads(provider.expected_state_json(actions))
     specification = TaskSpec(
         id=task_id,
         context=_conversation(request["input"]),
         verifier=structured_exact(expected),
         source=Source(dataset=DATASET, revision=DATASET_REVISION, row=source_row, importer_revision=IMPORTER_REVISION),
         environment_requirements=EnvironmentRequirements(),
-        tool_providers={PROVIDER_NAME: ProviderRequirement(action_interface=ACTION_INTERFACE, seed_sha256=SEED_SHA256)},
+        tool_providers={
+            PROVIDER_NAME: ProviderRequirement(
+                action_interface=provider.ACTION_INTERFACE, seed_sha256=provider.SEED_SHA256
+            )
+        },
         answer_type=AnswerType.STATE,
     )
     return WorkplaceImport(
-        specification, ProviderState(id="state", provider=PROVIDER_NAME), workplace_environment_config()
+        specification, ProviderState(id="state", provider=PROVIDER_NAME), _environment_config(provider)
     )
