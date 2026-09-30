@@ -477,7 +477,6 @@ def ingest(
             "id",
             "context",
             "environment_requirements",
-            "tool_providers",
             "final_tools",
             "answer_type",
             "source",

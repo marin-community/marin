@@ -52,7 +52,6 @@ def _candidate(task_id: str) -> dict:
         "id": task_id,
         "context": {},
         "environment_requirements": {},
-        "tool_providers": {},
         "final_tools": [],
         "answer_type": "text",
         "source": {

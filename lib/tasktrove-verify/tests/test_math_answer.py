@@ -19,40 +19,27 @@ def _answer(workspace: Path, text: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "expected, text, reward",
-    [
-        ("0.5", "So the area is one half.\n\\boxed{\\frac{1}{2}}\n", 1.0),
-        ("0.5", "\\boxed{1/2}", 1.0),
-        ("0.5", "\\boxed{0.5}", 1.0),
-        ("0.5", "\\boxed{2}", 0.0),
-        ("2\\sqrt{3}", "\\boxed{2\\sqrt 3}", 1.0),
-        ("2\\sqrt{3}", "\\boxed{3\\sqrt{2}}", 0.0),
-        ("x^2+1", "\\boxed{1 + x^2}", 1.0),
-        # No boxed expression: the last line is the answer.
-        ("42", "First I add the parts.\nThe answer is 42\n", 1.0),
-        ("42", "First I add the parts.\nThe answer is 41\n", 0.0),
-        # The last box wins, as a model that revises itself boxes twice.
-        ("42", "\\boxed{7}\nthat was wrong, actually \\boxed{42}\n", 1.0),
-        # A malformed final box cannot expose an earlier answer to the parser.
-        ("42", "\\boxed{42}\nthat was wrong, actually \\boxed{\n", 0.0),
-        ("42", "\\boxed{42}\nthat was wrong, actually \\boxed{}\n", 0.0),
-        ("42", "$\\boxed{42}$", 1.0),
-        # An unreadable candidate is a scored wrong answer.
-        ("42", "\\boxed{???}", 0.0),
-        ("42", "I have no idea how to do this problem.\n", 0.0),
-    ],
-)
-def test_math_scalar_answers_are_compared_symbolically(tmp_path, expected, text, reward):
-    _answer(tmp_path, text)
-    spec = MathSpec(expected=expected)
-    candidate_result = grade_math.grade_math_candidate(spec, text)
-    assert candidate_result.reward == reward
-    assert grade_math.grade(spec, tmp_path, tmp_path) == candidate_result
-
-
-@pytest.mark.parametrize(
     "expected, math_type, text, reward",
     [
+        ("0.5", MathType.SCALAR, "So the area is one half.\n\\boxed{\\frac{1}{2}}\n", 1.0),
+        ("0.5", MathType.SCALAR, "\\boxed{1/2}", 1.0),
+        ("0.5", MathType.SCALAR, "\\boxed{0.5}", 1.0),
+        ("0.5", MathType.SCALAR, "\\boxed{2}", 0.0),
+        ("2\\sqrt{3}", MathType.SCALAR, "\\boxed{2\\sqrt 3}", 1.0),
+        ("2\\sqrt{3}", MathType.SCALAR, "\\boxed{3\\sqrt{2}}", 0.0),
+        ("x^2+1", MathType.SCALAR, "\\boxed{1 + x^2}", 1.0),
+        # No boxed expression: the last line is the answer.
+        ("42", MathType.SCALAR, "First I add the parts.\nThe answer is 42\n", 1.0),
+        ("42", MathType.SCALAR, "First I add the parts.\nThe answer is 41\n", 0.0),
+        # The last box wins, as a model that revises itself boxes twice.
+        ("42", MathType.SCALAR, "\\boxed{7}\nthat was wrong, actually \\boxed{42}\n", 1.0),
+        # A malformed final box cannot expose an earlier answer to the parser.
+        ("42", MathType.SCALAR, "\\boxed{42}\nthat was wrong, actually \\boxed{\n", 0.0),
+        ("42", MathType.SCALAR, "\\boxed{42}\nthat was wrong, actually \\boxed{}\n", 0.0),
+        ("42", MathType.SCALAR, "$\\boxed{42}$", 1.0),
+        # An unreadable candidate is a scored wrong answer.
+        ("42", MathType.SCALAR, "\\boxed{???}", 0.0),
+        ("42", MathType.SCALAR, "I have no idea how to do this problem.\n", 0.0),
         ("\\{1,2,3\\}", MathType.SET, "\\boxed{\\{3,2,1\\}}", 1.0),
         ("\\{1,2,3\\}", MathType.SET, "\\boxed{\\{1,2\\}}", 0.0),
         ("(1,3]", MathType.INTERVAL, "\\boxed{(1,3]}", 1.0),
@@ -78,7 +65,7 @@ def test_math_scalar_answers_are_compared_symbolically(tmp_path, expected, text,
         ("[(1,2), 3]", MathType.LIST, "\\boxed{[(2,1), 3]}", 0.0),
     ],
 )
-def test_math_typed_answers_use_their_comparison(tmp_path, expected, math_type, text, reward):
+def test_math_answers_are_compared_symbolically(tmp_path, expected, math_type, text, reward):
     _answer(tmp_path, text)
     spec = MathSpec(expected=expected, math_type=math_type)
     candidate_result = grade_math.grade_math_candidate(spec, text)

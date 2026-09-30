@@ -59,7 +59,6 @@ def public_task_record(
         "id": specification.id,
         "context": specification.context.model_dump(mode="json"),
         "environment_requirements": specification.environment_requirements.model_dump(mode="json"),
-        "tool_providers": {key: value.model_dump(mode="json") for key, value in specification.tool_providers.items()},
         "final_tools": [tool.model_dump(mode="json") for tool in specification.final_tools],
         "answer_type": specification.answer_type.value,
         "source": specification.source.model_dump(mode="json"),

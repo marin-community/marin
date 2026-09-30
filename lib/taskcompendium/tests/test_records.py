@@ -46,7 +46,6 @@ def test_catalog_and_public_projection_preserve_tags_and_isolate_verifier():
         "id",
         "context",
         "environment_requirements",
-        "tool_providers",
         "final_tools",
         "answer_type",
         "source",

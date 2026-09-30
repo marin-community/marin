@@ -107,12 +107,10 @@ def _instructions(archive: TaskArchive, converter: str, template_id: str) -> str
         instruction = instruction.replace("Provide your answer in the file answer.txt", "")
         instruction = instruction.replace("## Submitting the answer", "")
         instruction = _NEMOTRON_OUTPUT_PATH.sub("", instruction)
-        if template_id == "5ee94cf985a9":
+        if template_id in {"5ee94cf985a9", _NEMOTRON_V5_TEMPLATE}:
             instruction = _NEMOTRON_FILE_PREAMBLE.sub(".", instruction)
             instruction = _NEMOTRON_BOXED_FILE_FORMAT.sub(lambda _: _NEMOTRON_BOXED_CHAT_FORMAT, instruction)
-        elif template_id == _NEMOTRON_V5_TEMPLATE:
-            instruction = _NEMOTRON_FILE_PREAMBLE.sub(".", instruction)
-            instruction = _NEMOTRON_BOXED_FILE_FORMAT.sub(lambda _: _NEMOTRON_BOXED_CHAT_FORMAT, instruction)
+        if template_id == _NEMOTRON_V5_TEMPLATE:
             match = _NEMOTRON_V5_SUBMISSION_HEADING.search(instruction)
             if match is None or " ".join(instruction[match.start() :].split()) != " ".join(
                 _NEMOTRON_V5_SUBMISSION_TEXT.split()

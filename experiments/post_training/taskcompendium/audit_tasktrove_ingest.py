@@ -34,7 +34,6 @@ PUBLIC_FIELDS = frozenset(
         "id",
         "context",
         "environment_requirements",
-        "tool_providers",
         "final_tools",
         "answer_type",
         "source",
@@ -223,7 +222,6 @@ def audit_artifacts(ledger_path: StoragePath, candidate_path: StoragePath, proof
                 if (
                     not isinstance(candidate.get("context"), dict)
                     or not isinstance(candidate.get("environment_requirements"), dict)
-                    or not isinstance(candidate.get("tool_providers"), dict)
                     or not isinstance(candidate.get("final_tools"), list)
                     or any(not isinstance(tool, dict) for tool in candidate["final_tools"])
                     or not isinstance(candidate.get("source"), dict)

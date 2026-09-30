@@ -252,7 +252,6 @@ async def test_imported_math_grades_correct_and_incorrect_chat_answers():
                 ConversationTrace(
                     events=(*specification.context.events, TextMessage(role="assistant", content=response))
                 ),
-                {},
                 object(),
             ),
         )

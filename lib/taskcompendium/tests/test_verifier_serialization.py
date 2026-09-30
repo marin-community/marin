@@ -61,7 +61,7 @@ specification = TaskSpec.model_validate_json(Path(sys.argv[1]).read_text())
 async def run():
     for answer in sys.argv[2:]:
         trace = ConversationTrace(events=(*specification.context.events, TextMessage(role="assistant", content=answer)))
-        result = await grade_answer(specification, PlainText(id="plain"), GradingAttempt(trace, {}, object()))
+        result = await grade_answer(specification, PlainText(id="plain"), GradingAttempt(trace, object()))
         print(result.status, result.reward)
 asyncio.run(run())
 """
