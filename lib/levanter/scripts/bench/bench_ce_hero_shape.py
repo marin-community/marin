@@ -109,6 +109,11 @@ VARIANTS: tuple[Variant, ...] = (
         bwd_v_block_size=32768,
         note="fwd 32 iters + bwd 4 iters",
     ),
+    # --- production forward tile (b=65536, v=4096) with larger vocab tiles ---
+    Variant("hero-bwdv8192", b_block_size=HERO_B, fast_backward=True, bwd_v_block_size=8192),
+    Variant("hero-v8192", b_block_size=HERO_B, v_block_size=8192, fast_backward=True),
+    Variant("hero-v8192-bwdv16384", b_block_size=HERO_B, v_block_size=8192, fast_backward=True, bwd_v_block_size=16384),
+    Variant("hero-v16384", b_block_size=HERO_B, v_block_size=16384, fast_backward=True),
     # --- the GB10 ladder implementation as shipped, unmodified ---
     Variant("batched_xla", impl="batched_xla", note="existing GB10-keyed ladder; may raise on GB200"),
 )
