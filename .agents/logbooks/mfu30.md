@@ -213,3 +213,16 @@ s/step. Loss will differ at rounding level, so it needs a C-C rerun. Further ker
 forward ~0.1 s, fused backward ~0.1, short-conv backward ~0.08) is deferred. C now owns stacking + PGLE:
 branch `research/mcwitt/mfu30-stack`, PR #9481 conflicts with B's transport changes, trace -> profile ->
 scored rerun.
+
+## M30-009 Stack branch and PGLE tooling (agent C, 2026-09-30)
+
+`research/mcwitt/mfu30-stack` @ 423e8c50e4 (worktree `~/projects/marin.mfu30-stack`, logbook
+`mfu30-stack.md`): campaign base + B's three bitwise-exact commits (always on) + C's norm kernel (switch)
++ PR #9481's six commits. #9481's two transport commits (pipelined expert chunks; mirror transpose
+parameters that remove the offset all-to-alls) conflicted with B's chunk-loop / `_ragged_a2a` VJP rewrite
+and were ported by hand. B's GB200x4 gate passes on the stack (`m30c-stackgate-02`, bitwise-equal to main
+in all six cases). 3-layer rematted scan: main 84.4 ms, stack 77.0 ms (+9.6%; B alone +6.1%). Env
+switches for A's flag, C's triton_gemm flag and PGLE go through `stack/arm.sh --xla`. `pgle_build.sh
+<trace-run>` builds the profile from the rank-0 xplane. Open: B's SonicMoE backward replaces the chunk loop,
+so the #9481 transport ports must be re-folded into it (B to decide). #9481's attention re-gather may be
+redundant with A's H-A4 flag.
