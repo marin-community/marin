@@ -134,3 +134,12 @@ measured -0.35. The only leaf set that fits afterwards is the dense one (embeddi
 leaves, 8.2 GiB, ~0.08 s exposed, ~10 ms/GiB), in the same hazard class and near the noise bar, so it
 is not planned unless the C3' root cause is found. Fidelity ruling recorded: rounding and reassociation
 changes are allowed within the same-code loss band; training-semantics changes are not.
+
+## M30A-009 hmo-01 timed out in the queue; resubmitted as m30a-hmo-02 (2026-09-30 12:05 PT)
+
+`m30a-hmo-01` hit the coordinator's `--timeout 3540` while still gated in Kueue (the timeout counts queue
+time) and never ran. Resubmitted the identical treatment without `--timeout`:
+`/mwittmann/m30a-hmo-02-coord`, port 33101, branch tip `f14d34b279` (program identical to main
+apart from the flag; the `--offload-opt-state` knob defaults to the hero value). Protocol note: same-code
+gcab runs drift ~0.4 MFU down over 330 steps, so main reads ~28.5 in the 55-step screening window; score
+against `mhep-ctx4k-s0-20260930` over the same steps.
